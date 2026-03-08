@@ -1,0 +1,7 @@
+{
+  "name": "@gatewaze-modules/slack-integration",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "description": "Slack notifications and bot integration"
+}

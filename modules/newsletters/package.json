@@ -1,0 +1,7 @@
+{
+  "name": "@gatewaze-modules/newsletters",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "description": "Newsletter creation and distribution"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@gatewaze-modules/ai-search",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "description": "AI-powered semantic search across events and content"
+}

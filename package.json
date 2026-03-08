@@ -1,0 +1,7 @@
+{
+  "name": "gatewaze-modules",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Closed-source modules for Gatewaze"
+}

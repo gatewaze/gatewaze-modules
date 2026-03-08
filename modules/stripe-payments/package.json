@@ -1,0 +1,9 @@
+{
+  "name": "@gatewaze-modules/stripe-payments",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "dependencies": {
+    "stripe": "^17.0.0"
+  }
+}

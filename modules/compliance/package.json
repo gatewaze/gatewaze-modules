@@ -1,0 +1,7 @@
+{
+  "name": "@gatewaze-modules/compliance",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "description": "GDPR, SOC 2, and audit logging tools"
+}
