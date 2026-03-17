@@ -3,5 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Closed-source modules for Gatewaze"
+  "description": "Closed-source modules for Gatewaze",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
 }
