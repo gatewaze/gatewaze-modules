@@ -1,10 +1,10 @@
 {
-  "name": "@gatewaze-modules/compliance",
+  "name": "@gatewaze-modules/bulk-emailing",
   "version": "1.0.0",
   "license": "UNLICENSED",
   "main": "index.ts",
   "types": "index.ts",
-  "description": "GDPR, SOC 2, and audit logging tools",
+  "description": "Ad-hoc bulk email sending to segments and contact lists",
   "exports": {
     ".": "./index.ts",
     "./migrations/*": "./migrations/*"

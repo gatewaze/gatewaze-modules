@@ -3,5 +3,17 @@
   "version": "1.0.0",
   "license": "UNLICENSED",
   "main": "index.ts",
-  "description": "Slack notifications and bot integration"
+  "types": "index.ts",
+  "description": "Slack notifications and bot integration",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
 }

@@ -2,6 +2,8 @@ import type { GatewazeModule } from '@gatewaze/shared';
 
 const stripePaymentsModule: GatewazeModule = {
   id: 'stripe-payments',
+  type: 'integration',
+  visibility: 'public',
   name: 'Stripe Payments',
   description: 'Accept payments for events via Stripe',
   version: '1.0.0',

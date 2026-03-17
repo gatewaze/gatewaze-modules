@@ -1,10 +1,10 @@
 {
-  "name": "@gatewaze-modules/compliance",
+  "name": "@gatewaze-modules/scrapers",
   "version": "1.0.0",
   "license": "UNLICENSED",
   "main": "index.ts",
   "types": "index.ts",
-  "description": "GDPR, SOC 2, and audit logging tools",
+  "description": "Web scraping jobs for event and content discovery",
   "exports": {
     ".": "./index.ts",
     "./migrations/*": "./migrations/*"

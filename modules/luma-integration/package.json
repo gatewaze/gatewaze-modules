@@ -1,10 +1,10 @@
 {
-  "name": "@gatewaze-modules/compliance",
+  "name": "@gatewaze-modules/luma-integration",
   "version": "1.0.0",
   "license": "UNLICENSED",
   "main": "index.ts",
   "types": "index.ts",
-  "description": "GDPR, SOC 2, and audit logging tools",
+  "description": "Luma event platform integration for registrations, webhooks, and discount issuance",
   "exports": {
     ".": "./index.ts",
     "./migrations/*": "./migrations/*"
