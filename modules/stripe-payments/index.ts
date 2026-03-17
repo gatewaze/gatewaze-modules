@@ -22,7 +22,7 @@ const stripePaymentsModule: GatewazeModule = {
     {
       path: '/admin/payments',
       label: 'Payments',
-      icon: 'CreditCard',
+      icon: 'admin.payments',
       requiredFeature: 'payments',
       parentGroup: 'admin',
       order: 15,
