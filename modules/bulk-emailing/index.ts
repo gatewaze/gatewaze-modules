@@ -14,25 +14,9 @@ const bulkEmailingModule: GatewazeModule = {
     'bulk-emailing.tracking',
   ],
 
-  adminRoutes: [
-    {
-      path: 'emails',
-      component: () => import('./admin/pages/index'),
-      requiredFeature: 'emails',
-      guard: 'admin',
-    },
-  ],
-
-  adminNavItems: [
-    {
-      path: '/admin/emails',
-      label: 'Emails',
-      icon: 'Mail',
-      requiredFeature: 'emails',
-      parentGroup: 'admin',
-      order: 28,
-    },
-  ],
+  // No adminRoutes or adminNavItems — bulk emailing enhances the
+  // communications tab in events rather than adding its own admin page.
+  // The core /admin/emails page (templates + logs) is always available.
 
   edgeFunctions: [
     'email-batch-send',
