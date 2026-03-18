@@ -1,125 +1,223 @@
--- Stripe Payments Module: Initial Tables
--- Migration: 001_stripe_tables.sql
+-- ============================================================================
+-- Module: stripe-payments
+-- Migration: 001_stripe_tables
+-- Description: Create Stripe payment data cache tables
+-- ============================================================================
 
--- Stripe customers linked to platform users
-CREATE TABLE IF NOT EXISTS stripe_customers (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  stripe_customer_id TEXT NOT NULL UNIQUE,
-  email TEXT,
-  name TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (user_id)
+-- Stripe customers
+CREATE TABLE IF NOT EXISTS public.payments_stripe_customers (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id            uuid REFERENCES public.accounts (id) ON DELETE SET NULL,
+  stripe_customer_id    text NOT NULL UNIQUE,
+  email                 varchar(255) NOT NULL,
+  name                  varchar(500),
+  description           text,
+  phone                 varchar(50),
+  currency              varchar(10) NOT NULL DEFAULT 'usd',
+  balance               integer NOT NULL DEFAULT 0,
+  metadata              jsonb DEFAULT '{}'::jsonb,
+  is_active             boolean NOT NULL DEFAULT true,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now()
 );
 
--- Stripe products (e.g., event tickets, memberships)
-CREATE TABLE IF NOT EXISTS stripe_products (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  stripe_product_id TEXT NOT NULL UNIQUE,
-  name TEXT NOT NULL,
-  description TEXT,
-  active BOOLEAN NOT NULL DEFAULT true,
-  metadata JSONB DEFAULT '{}',
-  event_id TEXT REFERENCES events(event_id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+COMMENT ON TABLE public.payments_stripe_customers IS 'Cached Stripe customer records synced via webhooks';
+
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_customers_stripe_id
+  ON public.payments_stripe_customers (stripe_customer_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_customers_account
+  ON public.payments_stripe_customers (account_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_customers_email
+  ON public.payments_stripe_customers (email);
+
+CREATE TRIGGER payments_stripe_customers_updated_at
+  BEFORE UPDATE ON public.payments_stripe_customers
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- Stripe products
+CREATE TABLE IF NOT EXISTS public.payments_stripe_products (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id            uuid REFERENCES public.accounts (id) ON DELETE SET NULL,
+  stripe_product_id     text NOT NULL UNIQUE,
+  name                  varchar(500) NOT NULL,
+  description           text,
+  active                boolean NOT NULL DEFAULT true,
+  default_price_id      text,
+  images                text[],
+  metadata              jsonb DEFAULT '{}'::jsonb,
+  unit_label            varchar(100),
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now()
 );
 
--- Stripe prices linked to products
-CREATE TABLE IF NOT EXISTS stripe_prices (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  stripe_price_id TEXT NOT NULL UNIQUE,
-  stripe_product_id TEXT NOT NULL REFERENCES stripe_products(stripe_product_id) ON DELETE CASCADE,
-  currency TEXT NOT NULL DEFAULT 'usd',
-  unit_amount INTEGER NOT NULL,
-  recurring_interval TEXT,
-  active BOOLEAN NOT NULL DEFAULT true,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+COMMENT ON TABLE public.payments_stripe_products IS 'Cached Stripe product records synced via webhooks';
+
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_products_stripe_id
+  ON public.payments_stripe_products (stripe_product_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_products_account
+  ON public.payments_stripe_products (account_id);
+
+CREATE TRIGGER payments_stripe_products_updated_at
+  BEFORE UPDATE ON public.payments_stripe_products
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- Stripe prices
+CREATE TABLE IF NOT EXISTS public.payments_stripe_prices (
+  id                          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id                  uuid REFERENCES public.accounts (id) ON DELETE SET NULL,
+  product_id                  uuid REFERENCES public.payments_stripe_products (id) ON DELETE CASCADE,
+  stripe_price_id             text NOT NULL UNIQUE,
+  stripe_product_id           text NOT NULL,
+  active                      boolean NOT NULL DEFAULT true,
+  currency                    varchar(10) NOT NULL DEFAULT 'usd',
+  unit_amount                 integer,
+  recurring_interval          varchar(20),
+  recurring_interval_count    integer,
+  type                        varchar(20) NOT NULL DEFAULT 'one_time'
+                              CHECK (type IN ('one_time', 'recurring')),
+  billing_scheme              varchar(50) NOT NULL DEFAULT 'per_unit',
+  metadata                    jsonb DEFAULT '{}'::jsonb,
+  created_at                  timestamptz NOT NULL DEFAULT now(),
+  updated_at                  timestamptz NOT NULL DEFAULT now()
 );
 
--- Stripe invoices and payment records
-CREATE TABLE IF NOT EXISTS stripe_invoices (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  stripe_invoice_id TEXT NOT NULL UNIQUE,
-  stripe_customer_id TEXT NOT NULL REFERENCES stripe_customers(stripe_customer_id) ON DELETE CASCADE,
-  stripe_subscription_id TEXT,
-  status TEXT NOT NULL DEFAULT 'draft',
-  currency TEXT NOT NULL DEFAULT 'usd',
-  amount_due INTEGER NOT NULL DEFAULT 0,
-  amount_paid INTEGER NOT NULL DEFAULT 0,
-  hosted_invoice_url TEXT,
-  invoice_pdf TEXT,
-  metadata JSONB DEFAULT '{}',
-  period_start TIMESTAMPTZ,
-  period_end TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+COMMENT ON TABLE public.payments_stripe_prices IS 'Cached Stripe price records synced via webhooks';
+
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_prices_stripe_id
+  ON public.payments_stripe_prices (stripe_price_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_prices_product
+  ON public.payments_stripe_prices (product_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_prices_account
+  ON public.payments_stripe_prices (account_id);
+
+CREATE TRIGGER payments_stripe_prices_updated_at
+  BEFORE UPDATE ON public.payments_stripe_prices
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- Stripe invoices
+CREATE TABLE IF NOT EXISTS public.payments_stripe_invoices (
+  id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id              uuid REFERENCES public.accounts (id) ON DELETE SET NULL,
+  person_id               uuid REFERENCES public.payments_stripe_customers (id) ON DELETE SET NULL,
+  stripe_invoice_id       text NOT NULL UNIQUE,
+  stripe_customer_id      text NOT NULL,
+  invoice_number          varchar(100),
+  status                  varchar(20) NOT NULL DEFAULT 'draft'
+                          CHECK (status IN ('draft', 'open', 'paid', 'uncollectible', 'void')),
+  currency                varchar(10) NOT NULL DEFAULT 'usd',
+  amount_due              integer NOT NULL DEFAULT 0,
+  amount_paid             integer NOT NULL DEFAULT 0,
+  amount_remaining        integer NOT NULL DEFAULT 0,
+  subtotal                integer NOT NULL DEFAULT 0,
+  total                   integer NOT NULL DEFAULT 0,
+  tax                     integer NOT NULL DEFAULT 0,
+  discount_amount         integer NOT NULL DEFAULT 0,
+  description             text,
+  hosted_invoice_url      text,
+  invoice_pdf             text,
+  billing_reason          varchar(100),
+  due_date                timestamptz,
+  paid_at                 timestamptz,
+  period_start            timestamptz,
+  period_end              timestamptz,
+  metadata                jsonb DEFAULT '{}'::jsonb,
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  updated_at              timestamptz NOT NULL DEFAULT now()
 );
 
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_stripe_customers_user_id ON stripe_customers(user_id);
-CREATE INDEX IF NOT EXISTS idx_stripe_customers_stripe_id ON stripe_customers(stripe_customer_id);
-CREATE INDEX IF NOT EXISTS idx_stripe_products_event_id ON stripe_products(event_id);
-CREATE INDEX IF NOT EXISTS idx_stripe_prices_product_id ON stripe_prices(stripe_product_id);
-CREATE INDEX IF NOT EXISTS idx_stripe_invoices_customer_id ON stripe_invoices(stripe_customer_id);
-CREATE INDEX IF NOT EXISTS idx_stripe_invoices_status ON stripe_invoices(status);
+COMMENT ON TABLE public.payments_stripe_invoices IS 'Cached Stripe invoice records synced via webhooks';
 
--- RLS policies
-ALTER TABLE stripe_customers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stripe_products ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stripe_prices ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stripe_invoices ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_invoices_stripe_id
+  ON public.payments_stripe_invoices (stripe_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_invoices_person
+  ON public.payments_stripe_invoices (person_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_invoices_account
+  ON public.payments_stripe_invoices (account_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_invoices_status
+  ON public.payments_stripe_invoices (status);
 
--- Users can read their own customer record
-CREATE POLICY "Users can view own stripe customer"
-  ON stripe_customers FOR SELECT
-  USING (auth.uid() = user_id);
+CREATE TRIGGER payments_stripe_invoices_updated_at
+  BEFORE UPDATE ON public.payments_stripe_invoices
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
--- Public can view active products and prices
-CREATE POLICY "Public can view active products"
-  ON stripe_products FOR SELECT
-  USING (active = true);
+-- Stripe transactions (payment intents)
+CREATE TABLE IF NOT EXISTS public.payments_stripe_transactions (
+  id                          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id                  uuid REFERENCES public.accounts (id) ON DELETE SET NULL,
+  person_id                   uuid REFERENCES public.payments_stripe_customers (id) ON DELETE SET NULL,
+  invoice_id                  uuid REFERENCES public.payments_stripe_invoices (id) ON DELETE SET NULL,
+  stripe_payment_intent_id    text NOT NULL UNIQUE,
+  stripe_customer_id          text,
+  stripe_invoice_id           text,
+  amount                      integer NOT NULL DEFAULT 0,
+  currency                    varchar(10) NOT NULL DEFAULT 'usd',
+  status                      varchar(30) NOT NULL DEFAULT 'requires_payment_method'
+                              CHECK (status IN (
+                                'requires_payment_method', 'requires_confirmation',
+                                'requires_action', 'processing', 'succeeded',
+                                'canceled', 'requires_capture'
+                              )),
+  payment_method_type         varchar(50),
+  description                 text,
+  receipt_email               varchar(255),
+  metadata                    jsonb DEFAULT '{}'::jsonb,
+  error_message               text,
+  succeeded_at                timestamptz,
+  canceled_at                 timestamptz,
+  created_at                  timestamptz NOT NULL DEFAULT now(),
+  updated_at                  timestamptz NOT NULL DEFAULT now()
+);
 
-CREATE POLICY "Public can view active prices"
-  ON stripe_prices FOR SELECT
-  USING (active = true);
+COMMENT ON TABLE public.payments_stripe_transactions IS 'Cached Stripe payment intent records synced via webhooks';
 
--- Users can view their own invoices
-CREATE POLICY "Users can view own invoices"
-  ON stripe_invoices FOR SELECT
-  USING (
-    stripe_customer_id IN (
-      SELECT stripe_customer_id FROM stripe_customers WHERE user_id = auth.uid()
-    )
-  );
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_transactions_stripe_id
+  ON public.payments_stripe_transactions (stripe_payment_intent_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_transactions_person
+  ON public.payments_stripe_transactions (person_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_transactions_invoice
+  ON public.payments_stripe_transactions (invoice_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_transactions_account
+  ON public.payments_stripe_transactions (account_id);
+CREATE INDEX IF NOT EXISTS idx_payments_stripe_transactions_status
+  ON public.payments_stripe_transactions (status);
 
--- Service role has full access (handled by Supabase default)
+CREATE TRIGGER payments_stripe_transactions_updated_at
+  BEFORE UPDATE ON public.payments_stripe_transactions
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
--- Updated_at trigger function
-CREATE OR REPLACE FUNCTION update_stripe_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+-- ============================================================================
+-- RLS
+-- ============================================================================
+ALTER TABLE public.payments_stripe_customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments_stripe_products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments_stripe_prices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments_stripe_invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments_stripe_transactions ENABLE ROW LEVEL SECURITY;
 
-CREATE TRIGGER stripe_customers_updated_at
-  BEFORE UPDATE ON stripe_customers
-  FOR EACH ROW EXECUTE FUNCTION update_stripe_updated_at();
+-- SELECT: authenticated users
+CREATE POLICY "payments_stripe_customers_select" ON public.payments_stripe_customers FOR SELECT TO authenticated USING (true);
+CREATE POLICY "payments_stripe_products_select" ON public.payments_stripe_products FOR SELECT TO authenticated USING (true);
+CREATE POLICY "payments_stripe_prices_select" ON public.payments_stripe_prices FOR SELECT TO authenticated USING (true);
+CREATE POLICY "payments_stripe_invoices_select" ON public.payments_stripe_invoices FOR SELECT TO authenticated USING (true);
+CREATE POLICY "payments_stripe_transactions_select" ON public.payments_stripe_transactions FOR SELECT TO authenticated USING (true);
 
-CREATE TRIGGER stripe_products_updated_at
-  BEFORE UPDATE ON stripe_products
-  FOR EACH ROW EXECUTE FUNCTION update_stripe_updated_at();
+-- INSERT/UPDATE/DELETE: admin only
+CREATE POLICY "payments_stripe_customers_insert" ON public.payments_stripe_customers FOR INSERT TO authenticated WITH CHECK (public.is_admin());
+CREATE POLICY "payments_stripe_customers_update" ON public.payments_stripe_customers FOR UPDATE TO authenticated USING (public.is_admin());
+CREATE POLICY "payments_stripe_customers_delete" ON public.payments_stripe_customers FOR DELETE TO authenticated USING (public.is_admin());
 
-CREATE TRIGGER stripe_prices_updated_at
-  BEFORE UPDATE ON stripe_prices
-  FOR EACH ROW EXECUTE FUNCTION update_stripe_updated_at();
+CREATE POLICY "payments_stripe_products_insert" ON public.payments_stripe_products FOR INSERT TO authenticated WITH CHECK (public.is_admin());
+CREATE POLICY "payments_stripe_products_update" ON public.payments_stripe_products FOR UPDATE TO authenticated USING (public.is_admin());
+CREATE POLICY "payments_stripe_products_delete" ON public.payments_stripe_products FOR DELETE TO authenticated USING (public.is_admin());
 
-CREATE TRIGGER stripe_invoices_updated_at
-  BEFORE UPDATE ON stripe_invoices
-  FOR EACH ROW EXECUTE FUNCTION update_stripe_updated_at();
+CREATE POLICY "payments_stripe_prices_insert" ON public.payments_stripe_prices FOR INSERT TO authenticated WITH CHECK (public.is_admin());
+CREATE POLICY "payments_stripe_prices_update" ON public.payments_stripe_prices FOR UPDATE TO authenticated USING (public.is_admin());
+CREATE POLICY "payments_stripe_prices_delete" ON public.payments_stripe_prices FOR DELETE TO authenticated USING (public.is_admin());
+
+CREATE POLICY "payments_stripe_invoices_insert" ON public.payments_stripe_invoices FOR INSERT TO authenticated WITH CHECK (public.is_admin());
+CREATE POLICY "payments_stripe_invoices_update" ON public.payments_stripe_invoices FOR UPDATE TO authenticated USING (public.is_admin());
+CREATE POLICY "payments_stripe_invoices_delete" ON public.payments_stripe_invoices FOR DELETE TO authenticated USING (public.is_admin());
+
+CREATE POLICY "payments_stripe_transactions_insert" ON public.payments_stripe_transactions FOR INSERT TO authenticated WITH CHECK (public.is_admin());
+CREATE POLICY "payments_stripe_transactions_update" ON public.payments_stripe_transactions FOR UPDATE TO authenticated USING (public.is_admin());
+CREATE POLICY "payments_stripe_transactions_delete" ON public.payments_stripe_transactions FOR DELETE TO authenticated USING (public.is_admin());

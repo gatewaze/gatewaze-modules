@@ -1,40 +1,50 @@
--- Offers Module: Core Tables
--- Migration: 001_offers_tables.sql
+-- ============================================================================
+-- Module: offers
+-- Migration: 001_offers_tables
+-- Description: Create tables for offer interaction tracking
+-- ============================================================================
 
--- 1. Offers
-CREATE TABLE IF NOT EXISTS public.module_offers (
-  id bigserial PRIMARY KEY,
-  title text NOT NULL,
-  description text,
-  offer_type text NOT NULL DEFAULT 'general',
-  status text NOT NULL DEFAULT 'draft', -- draft, active, expired
-  valid_from timestamptz,
-  valid_until timestamptz,
-  max_acceptances integer,
-  current_acceptances integer DEFAULT 0,
-  metadata jsonb DEFAULT '{}'::jsonb,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
+-- Offer interactions (tracking who accepted/viewed general offers)
+CREATE TABLE IF NOT EXISTS public.integrations_offer_interactions (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email               text,
+  customer_cio_id     text NOT NULL,
+  offer_id            text NOT NULL,
+  offer_status        varchar(50) NOT NULL,
+  offer_referrer      text,
+  timestamp           timestamptz NOT NULL DEFAULT now(),
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_module_offers_status ON public.module_offers(status);
+COMMENT ON TABLE public.integrations_offer_interactions IS 'Tracks customer interactions with offers (views, acceptances)';
 
--- 2. Offer acceptances
-CREATE TABLE IF NOT EXISTS public.module_offer_acceptances (
-  id bigserial PRIMARY KEY,
-  offer_id bigint NOT NULL REFERENCES public.module_offers(id) ON DELETE CASCADE,
-  acceptee_email text NOT NULL,
-  acceptee_name text,
-  accepted_at timestamptz DEFAULT now(),
-  metadata jsonb DEFAULT '{}'::jsonb
-);
+CREATE INDEX IF NOT EXISTS idx_integrations_offer_interactions_offer
+  ON public.integrations_offer_interactions (offer_id);
+CREATE INDEX IF NOT EXISTS idx_integrations_offer_interactions_customer
+  ON public.integrations_offer_interactions (customer_cio_id);
+CREATE INDEX IF NOT EXISTS idx_integrations_offer_interactions_status
+  ON public.integrations_offer_interactions (offer_status);
+CREATE INDEX IF NOT EXISTS idx_integrations_offer_interactions_offer_status
+  ON public.integrations_offer_interactions (offer_id, offer_status);
+CREATE INDEX IF NOT EXISTS idx_integrations_offer_interactions_timestamp
+  ON public.integrations_offer_interactions (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_integrations_offer_interactions_email
+  ON public.integrations_offer_interactions (email) WHERE email IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_module_offer_acceptances_offer ON public.module_offer_acceptances(offer_id);
-CREATE INDEX IF NOT EXISTS idx_module_offer_acceptances_email ON public.module_offer_acceptances(acceptee_email);
+CREATE TRIGGER integrations_offer_interactions_updated_at
+  BEFORE UPDATE ON public.integrations_offer_interactions
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
--- 3. RLS
-ALTER TABLE public.module_offers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.module_offer_acceptances ENABLE ROW LEVEL SECURITY;
+-- ============================================================================
+-- RLS
+-- ============================================================================
+ALTER TABLE public.integrations_offer_interactions ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "auth_all_module_offers" ON public.module_offers FOR ALL TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "auth_all_module_offer_acceptances" ON public.module_offer_acceptances FOR ALL TO authenticated USING (true) WITH CHECK (true);
+-- SELECT: authenticated users
+CREATE POLICY "integrations_offer_interactions_select" ON public.integrations_offer_interactions FOR SELECT TO authenticated USING (true);
+
+-- INSERT/UPDATE/DELETE: admin only
+CREATE POLICY "integrations_offer_interactions_insert" ON public.integrations_offer_interactions FOR INSERT TO authenticated WITH CHECK (public.is_admin());
+CREATE POLICY "integrations_offer_interactions_update" ON public.integrations_offer_interactions FOR UPDATE TO authenticated USING (public.is_admin());
+CREATE POLICY "integrations_offer_interactions_delete" ON public.integrations_offer_interactions FOR DELETE TO authenticated USING (public.is_admin());

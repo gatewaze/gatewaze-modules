@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/event-topics",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Event topic taxonomy with hierarchical categories and topic management",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}
