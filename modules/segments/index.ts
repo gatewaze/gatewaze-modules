@@ -17,6 +17,17 @@ const segmentsModule: GatewazeModule = {
     'migrations/001_segments_tables.sql',
   ],
 
+  adminRoutes: [
+    { path: 'segments', component: () => import('./admin/pages/index'), requiredFeature: 'segments', guard: 'none' },
+    { path: 'segments/create', component: () => import('./admin/pages/create'), requiredFeature: 'segments', guard: 'none' },
+    { path: 'segments/:id', component: () => import('./admin/pages/[id]/index'), requiredFeature: 'segments', guard: 'none' },
+    { path: 'segments/:id/edit', component: () => import('./admin/pages/[id]/edit'), requiredFeature: 'segments', guard: 'none' },
+  ],
+
+  adminNavItems: [
+    { path: '/segments', label: 'Segments', icon: 'Filter', requiredFeature: 'segments', order: 14 },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

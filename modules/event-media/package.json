@@ -1,0 +1,18 @@
+{
+  "name": "@gatewaze-modules/event-media",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Photo and video galleries, media uploads, and album management",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}

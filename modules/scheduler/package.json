@@ -1,0 +1,10 @@
+{
+  "name": "@gatewaze-modules/scheduler",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "@gatewaze/shared": "workspace:*"
+  }
+}

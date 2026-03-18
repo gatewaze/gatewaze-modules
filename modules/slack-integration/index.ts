@@ -18,6 +18,13 @@ const slackIntegrationModule: GatewazeModule = {
     'migrations/001_slack_tables.sql',
   ],
 
+  adminRoutes: [
+    { path: 'slack/invitations', component: () => import('./admin/pages/invitations'), requiredFeature: 'slack', guard: 'none' },
+  ],
+  adminNavItems: [
+    { path: '/slack/invitations', label: 'Slack', icon: 'MessageSquare', requiredFeature: 'slack', order: 18 },
+  ],
+
   configSchema: {
     SLACK_BOT_TOKEN: {
       key: 'SLACK_BOT_TOKEN',

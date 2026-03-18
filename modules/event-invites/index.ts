@@ -4,6 +4,7 @@ const eventInvitesModule: GatewazeModule = {
   id: 'event-invites',
   type: 'feature',
   visibility: 'public',
+  group: 'events',
   name: 'Event Invites',
   description: 'Invite people to events with unique RSVP links and track responses',
   version: '1.0.0',

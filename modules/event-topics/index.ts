@@ -4,6 +4,7 @@ const eventTopicsModule: GatewazeModule = {
   id: 'event-topics',
   type: 'feature',
   visibility: 'public',
+  group: 'events',
   name: 'Event Topics',
   description: 'Topic taxonomy with hierarchical categories for organizing and tagging events',
   version: '1.0.0',
@@ -15,6 +16,13 @@ const eventTopicsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_event_topics_tables.sql',
+  ],
+
+  adminRoutes: [
+    { path: 'topics', component: () => import('./admin/pages/topics'), requiredFeature: 'event-topics', guard: 'admin' },
+  ],
+  adminNavItems: [
+    { path: '/admin/topics', label: 'Topics', icon: 'Hash', requiredFeature: 'event-topics', parentGroup: 'admin', order: 23 },
   ],
 
   configSchema: {},

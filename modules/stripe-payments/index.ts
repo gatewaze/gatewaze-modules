@@ -11,8 +11,32 @@ const stripePaymentsModule: GatewazeModule = {
 
   adminRoutes: [
     {
-      path: 'admin/payments',
-      component: () => import('./admin/PaymentsPage'),
+      path: 'payments',
+      component: () => import('./admin/pages/customers'),
+      requiredFeature: 'payments',
+      guard: 'admin',
+    },
+    {
+      path: 'payments/customers',
+      component: () => import('./admin/pages/customers'),
+      requiredFeature: 'payments',
+      guard: 'admin',
+    },
+    {
+      path: 'payments/products',
+      component: () => import('./admin/pages/products'),
+      requiredFeature: 'payments',
+      guard: 'admin',
+    },
+    {
+      path: 'payments/invoices',
+      component: () => import('./admin/pages/invoices'),
+      requiredFeature: 'payments',
+      guard: 'admin',
+    },
+    {
+      path: 'payments/transactions',
+      component: () => import('./admin/pages/transactions'),
       requiredFeature: 'payments',
       guard: 'admin',
     },
@@ -22,10 +46,10 @@ const stripePaymentsModule: GatewazeModule = {
     {
       path: '/admin/payments',
       label: 'Payments',
-      icon: 'admin.payments',
+      icon: 'CreditCard',
       requiredFeature: 'payments',
       parentGroup: 'admin',
-      order: 15,
+      order: 32,
     },
   ],
 

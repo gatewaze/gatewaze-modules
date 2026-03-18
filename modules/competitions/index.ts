@@ -13,6 +13,37 @@ const competitionsModule: GatewazeModule = {
     'competitions.judging',
   ],
 
+  adminRoutes: [
+    {
+      path: 'competitions',
+      component: () => import('./admin/pages/index'),
+      requiredFeature: 'competitions',
+      guard: 'none',
+    },
+    {
+      path: 'competitions/:competitionId/entries',
+      component: () => import('./admin/pages/entries'),
+      requiredFeature: 'competitions',
+      guard: 'none',
+    },
+    {
+      path: 'competitions/:competitionId/detail',
+      component: () => import('./admin/pages/detail'),
+      requiredFeature: 'competitions',
+      guard: 'none',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/competitions',
+      label: 'Competitions',
+      icon: 'Trophy',
+      requiredFeature: 'competitions',
+      order: 10,
+    },
+  ],
+
   edgeFunctions: [
     'events-competition-entry',
   ],

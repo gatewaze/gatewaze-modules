@@ -13,6 +13,37 @@ const discountsModule: GatewazeModule = {
     'discounts.claimants',
   ],
 
+  adminRoutes: [
+    {
+      path: 'discounts',
+      component: () => import('./admin/pages/index'),
+      requiredFeature: 'discounts',
+      guard: 'none',
+    },
+    {
+      path: 'discounts/:eventId/claimants',
+      component: () => import('./admin/pages/claimants'),
+      requiredFeature: 'discounts',
+      guard: 'none',
+    },
+    {
+      path: 'discounts/:eventId/detail',
+      component: () => import('./admin/pages/detail'),
+      requiredFeature: 'discounts',
+      guard: 'none',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/discounts',
+      label: 'Discounts',
+      icon: 'Tag',
+      requiredFeature: 'discounts',
+      order: 11,
+    },
+  ],
+
   migrations: [
     'migrations/001_discounts_tables.sql',
   ],

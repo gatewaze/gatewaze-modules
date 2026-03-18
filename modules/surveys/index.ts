@@ -17,6 +17,14 @@ const surveysModule: GatewazeModule = {
     'migrations/001_surveys_tables.sql',
   ],
 
+  adminRoutes: [
+    { path: 'surveys', component: () => import('./admin/pages/index'), requiredFeature: 'surveys', guard: 'none' },
+    { path: 'surveys/:surveyId', component: () => import('./admin/pages/detail/index'), requiredFeature: 'surveys', guard: 'none' },
+  ],
+  adminNavItems: [
+    { path: '/surveys', label: 'Surveys', icon: 'ClipboardList', requiredFeature: 'surveys', order: 17 },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

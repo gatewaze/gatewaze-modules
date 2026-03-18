@@ -18,6 +18,15 @@ const newslettersModule: GatewazeModule = {
     'migrations/001_newsletters_tables.sql',
   ],
 
+  adminRoutes: [
+    { path: 'newsletters', component: () => import('./admin/pages/index'), requiredFeature: 'newsletters', guard: 'none' },
+    { path: 'newsletters/editor/:id', component: () => import('./admin/pages/editions/[id]'), requiredFeature: 'newsletters', guard: 'none' },
+    { path: 'newsletters/:tab', component: () => import('./admin/pages/index'), requiredFeature: 'newsletters', guard: 'none' },
+  ],
+  adminNavItems: [
+    { path: '/newsletters', label: 'Newsletters', icon: 'Newspaper', requiredFeature: 'newsletters', order: 16 },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

@@ -17,6 +17,44 @@ const redirectsModule: GatewazeModule = {
     'migrations/001_redirects_tables.sql',
   ],
 
+  adminRoutes: [
+    {
+      path: 'redirects',
+      component: () => import('./admin/pages/index'),
+      requiredFeature: 'redirects',
+      guard: 'admin',
+    },
+    {
+      path: 'redirects/shortcodes',
+      component: () => import('./admin/pages/newsletter/ShortcodeConfigTab'),
+      requiredFeature: 'redirects',
+      guard: 'admin',
+    },
+    {
+      path: 'redirects/review',
+      component: () => import('./admin/pages/newsletter/NeedsReviewTab'),
+      requiredFeature: 'redirects',
+      guard: 'admin',
+    },
+    {
+      path: 'redirects/:redirectId/detail',
+      component: () => import('./admin/pages/detail'),
+      requiredFeature: 'redirects',
+      guard: 'admin',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/admin/redirects',
+      label: 'Redirects',
+      icon: 'ArrowRightLeft',
+      requiredFeature: 'redirects',
+      parentGroup: 'admin',
+      order: 31,
+    },
+  ],
+
   configSchema: {
     SHORTIO_API_KEY: {
       key: 'SHORTIO_API_KEY',

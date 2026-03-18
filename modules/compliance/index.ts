@@ -19,6 +19,26 @@ const complianceModule: GatewazeModule = {
     'migrations/001_compliance_tables.sql',
   ],
 
+  adminRoutes: [
+    {
+      path: 'compliance',
+      component: () => import('./admin/pages/index'),
+      requiredFeature: 'compliance',
+      guard: 'admin',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/admin/compliance',
+      label: 'Compliance',
+      icon: 'Shield',
+      requiredFeature: 'compliance',
+      parentGroup: 'admin',
+      order: 30,
+    },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

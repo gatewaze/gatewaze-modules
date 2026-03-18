@@ -17,6 +17,26 @@ const scrapersModule: GatewazeModule = {
     'migrations/001_scrapers_tables.sql',
   ],
 
+  adminRoutes: [
+    {
+      path: 'scrapers',
+      component: () => import('./admin/pages/index'),
+      requiredFeature: 'scrapers',
+      guard: 'admin',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/admin/scrapers',
+      label: 'Scrapers',
+      icon: 'Globe',
+      requiredFeature: 'scrapers',
+      parentGroup: 'admin',
+      order: 29,
+    },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

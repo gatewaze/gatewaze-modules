@@ -13,6 +13,37 @@ const offersModule: GatewazeModule = {
     'offers.tracking',
   ],
 
+  adminRoutes: [
+    {
+      path: 'offers',
+      component: () => import('./admin/pages/index'),
+      requiredFeature: 'offers',
+      guard: 'none',
+    },
+    {
+      path: 'offers/:eventId/accepted',
+      component: () => import('./admin/pages/accepted'),
+      requiredFeature: 'offers',
+      guard: 'none',
+    },
+    {
+      path: 'offers/:eventId/detail',
+      component: () => import('./admin/pages/detail'),
+      requiredFeature: 'offers',
+      guard: 'none',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/offers',
+      label: 'Offers',
+      icon: 'Gift',
+      requiredFeature: 'offers',
+      order: 12,
+    },
+  ],
+
   edgeFunctions: [
     'integrations-track-offer',
   ],

@@ -17,6 +17,13 @@ const blogModule: GatewazeModule = {
     'migrations/001_blog_tables.sql',
   ],
 
+  adminRoutes: [
+    { path: 'blog/posts', component: () => import('./admin/pages/posts/index'), requiredFeature: 'blog', guard: 'none' },
+  ],
+  adminNavItems: [
+    { path: '/blog/posts', label: 'Blog', icon: 'FileText', requiredFeature: 'blog', order: 16 },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

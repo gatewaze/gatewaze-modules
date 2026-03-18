@@ -4,6 +4,7 @@ const eventBudgetModule: GatewazeModule = {
   id: 'event-budget',
   type: 'feature',
   visibility: 'public',
+  group: 'events',
   name: 'Event Budget',
   description: 'Budget management with categories, allocations, line items, suppliers, and revenue tracking for events',
   version: '1.0.0',
@@ -19,6 +20,13 @@ const eventBudgetModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_event_budget_tables.sql',
+  ],
+
+  adminRoutes: [
+    { path: 'budget-categories', component: () => import('./admin/pages/budget-categories'), requiredFeature: 'event-budget', guard: 'admin' },
+  ],
+  adminNavItems: [
+    { path: '/admin/budget-categories', label: 'Budget Categories', icon: 'DollarSign', requiredFeature: 'event-budget', parentGroup: 'admin', order: 22 },
   ],
 
   configSchema: {},

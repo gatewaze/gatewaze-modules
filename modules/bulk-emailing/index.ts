@@ -14,6 +14,26 @@ const bulkEmailingModule: GatewazeModule = {
     'bulk-emailing.tracking',
   ],
 
+  adminRoutes: [
+    {
+      path: 'emails',
+      component: () => import('./admin/pages/index'),
+      requiredFeature: 'emails',
+      guard: 'admin',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/admin/emails',
+      label: 'Emails',
+      icon: 'Mail',
+      requiredFeature: 'emails',
+      parentGroup: 'admin',
+      order: 28,
+    },
+  ],
+
   edgeFunctions: [
     'email-batch-send',
   ],
