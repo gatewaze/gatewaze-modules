@@ -60,7 +60,23 @@ CREATE TRIGGER events_sponsors_updated_at
   EXECUTE FUNCTION public.set_updated_at();
 
 -- ==========================================================================
--- 3. RLS Policies
+-- 3. Conditional FKs: link core tables to sponsors if they exist
+-- ==========================================================================
+
+-- events_contact_scans.event_sponsor_id → events_sponsors
+-- (requires badge-scanning module to be installed first)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'events_contact_scans') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'events_contact_scans_event_sponsor_id_fkey') THEN
+      ALTER TABLE public.events_contact_scans
+        ADD CONSTRAINT events_contact_scans_event_sponsor_id_fkey
+        FOREIGN KEY (event_sponsor_id) REFERENCES public.events_sponsors(id);
+    END IF;
+  END IF;
+END $$;
+
+-- ==========================================================================
+-- 4. RLS Policies
 -- ==========================================================================
 
 ALTER TABLE public.events_sponsor_profiles ENABLE ROW LEVEL SECURITY;

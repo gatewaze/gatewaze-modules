@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/badge-scanning",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Badge printing, QR code scanning, and contact exchange for events",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}

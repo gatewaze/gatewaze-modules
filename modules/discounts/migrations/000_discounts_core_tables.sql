@@ -116,3 +116,42 @@ CREATE POLICY "anon_select_events_discounts"
 CREATE POLICY "auth_all_events_discounts"
   ON public.events_discounts FOR ALL TO authenticated
   USING (true) WITH CHECK (true);
+
+-- ==========================================================================
+-- 5. RPC Functions
+-- ==========================================================================
+
+CREATE OR REPLACE FUNCTION public.events_check_user_existing_code(
+  p_email    text,
+  p_event_id text
+)
+RETURNS TABLE(
+  code      text,
+  status    text,
+  issued_at timestamptz
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+AS $$
+  SELECT dc.code, dc.status, dc.issued_at
+  FROM public.events_discount_codes dc
+  JOIN public.events e ON e.id = dc.event_id
+  WHERE dc.issued_to = lower(p_email)
+    AND e.event_id = p_event_id
+  LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION public.events_get_available_codes_count(p_event_id text)
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+AS $$
+  SELECT COUNT(*)
+  FROM public.events_discount_codes dc
+  JOIN public.events e ON e.id = dc.event_id
+  WHERE e.event_id = p_event_id
+    AND dc.issued = false
+    AND dc.status = 'active';
+$$;

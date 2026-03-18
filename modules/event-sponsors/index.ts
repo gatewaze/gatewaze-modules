@@ -14,6 +14,8 @@ const eventSponsorsModule: GatewazeModule = {
     'event-sponsors.teams',
   ],
 
+  dependencies: ['badge-scanning'],
+
   migrations: [
     'migrations/001_event_sponsors_tables.sql',
   ],
