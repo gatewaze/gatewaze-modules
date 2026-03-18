@@ -14,6 +14,10 @@ const eventTrackingModule: GatewazeModule = {
     'event-tracking.referrals',
   ],
 
+  migrations: [
+    'migrations/001_event_tracking_tables.sql',
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

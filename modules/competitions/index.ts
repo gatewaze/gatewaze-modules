@@ -52,6 +52,8 @@ const competitionsModule: GatewazeModule = {
     'migrations/001_competitions_tables.sql',
   ],
 
+  dependencies: ['event-sponsors', 'discounts'],
+
   configSchema: {},
 
   onInstall: async () => {

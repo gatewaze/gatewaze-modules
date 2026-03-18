@@ -14,6 +14,12 @@ const eventMediaModule: GatewazeModule = {
     'event-media.albums',
   ],
 
+  migrations: [
+    'migrations/001_event_media_tables.sql',
+  ],
+
+  dependencies: ['event-sponsors'],
+
   configSchema: {},
 
   onInstall: async () => {

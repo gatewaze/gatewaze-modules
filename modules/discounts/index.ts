@@ -45,6 +45,7 @@ const discountsModule: GatewazeModule = {
   ],
 
   migrations: [
+    'migrations/000_discounts_core_tables.sql',
     'migrations/001_discounts_tables.sql',
   ],
 

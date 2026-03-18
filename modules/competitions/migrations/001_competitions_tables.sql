@@ -2,8 +2,9 @@
 -- Module: competitions
 -- Migration: 001_competitions_tables
 -- Description: Tables for attendee matching, competitions, communication
---              settings, ad tracking, conversion logging, and email batch jobs.
+--              settings, and email batch jobs.
 -- NOTE: events_interest lives in the event-interest module.
+-- NOTE: Ad tracking tables live in the event-tracking module.
 -- ============================================================================
 
 -- ==========================================================================
@@ -54,7 +55,7 @@ CREATE TABLE IF NOT EXISTS public.events_competitions (
   start_date timestamptz,
   end_date timestamptz,
   max_entries integer,
-  sponsor_id uuid REFERENCES public.events_sponsors(id) ON DELETE SET NULL,
+  sponsor_id uuid,
   rules text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -92,13 +93,35 @@ CREATE TABLE IF NOT EXISTS public.events_competition_winners (
   entry_id uuid NOT NULL REFERENCES public.events_competition_entries(id) ON DELETE CASCADE,
   person_id uuid NOT NULL REFERENCES public.people(id) ON DELETE CASCADE,
   prize_awarded text,
-  discount_code_id uuid REFERENCES public.events_discount_codes(id) ON DELETE SET NULL,
+  discount_code_id uuid,
   notified_at timestamptz,
   claimed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_competition_winners_comp ON public.events_competition_winners (competition_id);
+
+-- Conditional FK: competitions.sponsor_id → events_sponsors (if sponsors module installed)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'events_sponsors') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'events_competitions_sponsor_id_fkey') THEN
+      ALTER TABLE public.events_competitions
+        ADD CONSTRAINT events_competitions_sponsor_id_fkey
+        FOREIGN KEY (sponsor_id) REFERENCES public.events_sponsors(id) ON DELETE SET NULL;
+    END IF;
+  END IF;
+END $$;
+
+-- Conditional FK: competition_winners.discount_code_id → events_discount_codes (if discounts module installed)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'events_discount_codes') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'events_competition_winners_discount_code_id_fkey') THEN
+      ALTER TABLE public.events_competition_winners
+        ADD CONSTRAINT events_competition_winners_discount_code_id_fkey
+        FOREIGN KEY (discount_code_id) REFERENCES public.events_discount_codes(id) ON DELETE SET NULL;
+    END IF;
+  END IF;
+END $$;
 
 -- ==========================================================================
 -- 7. events_communication_settings - Per-event email communication settings
@@ -190,64 +213,8 @@ CREATE TRIGGER events_comm_settings_updated_at
   BEFORE UPDATE ON public.events_communication_settings
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
--- ==========================================================================
--- 8. integrations_ad_tracking_sessions - Ad click tracking sessions
--- ==========================================================================
-CREATE TABLE IF NOT EXISTS public.integrations_ad_tracking_sessions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id text NOT NULL,
-  event_id uuid REFERENCES public.events(id) ON DELETE SET NULL,
-  click_ids jsonb,
-  utm_source text,
-  utm_medium text,
-  utm_campaign text,
-  utm_content text,
-  utm_term text,
-  ip_address text,
-  user_agent text,
-  landing_page text,
-  referrer text,
-  status text DEFAULT 'pending' CHECK (status IN ('pending', 'converted', 'expired')),
-  matched_registration_id uuid REFERENCES public.events_registrations(id) ON DELETE SET NULL,
-  matched_via text,
-  conversions_sent jsonb,
-  expires_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_integrations_tracking_sessions_session ON public.integrations_ad_tracking_sessions (session_id);
-CREATE INDEX IF NOT EXISTS idx_integrations_tracking_sessions_event ON public.integrations_ad_tracking_sessions (event_id);
-
-CREATE TRIGGER integrations_tracking_sessions_updated_at
-  BEFORE UPDATE ON public.integrations_ad_tracking_sessions
-  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
-
--- ==========================================================================
--- 9. integrations_conversion_log - Conversion event log for ad platforms
--- ==========================================================================
-CREATE TABLE IF NOT EXISTS public.integrations_conversion_log (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tracking_session_id uuid REFERENCES public.integrations_ad_tracking_sessions(id) ON DELETE SET NULL,
-  registration_id uuid REFERENCES public.events_registrations(id) ON DELETE SET NULL,
-  event_id uuid REFERENCES public.events(id) ON DELETE SET NULL,
-  platform text NOT NULL,
-  event_name text NOT NULL,
-  dedup_event_id text,
-  request_payload jsonb,
-  request_url text,
-  response_payload jsonb,
-  http_status integer,
-  status text DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'success', 'failed', 'error')),
-  error_message text,
-  sent_at timestamptz,
-  completed_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_integrations_conversion_log_session ON public.integrations_conversion_log (tracking_session_id);
-CREATE INDEX IF NOT EXISTS idx_integrations_conversion_log_event ON public.integrations_conversion_log (event_id);
-CREATE INDEX IF NOT EXISTS idx_integrations_conversion_log_platform ON public.integrations_conversion_log (platform);
+-- NOTE: integrations_ad_tracking_sessions and integrations_conversion_log
+-- have been moved to the event-tracking module.
 
 -- ==========================================================================
 -- 10. email_batch_jobs - Batch email jobs
@@ -322,28 +289,6 @@ ALTER TABLE public.events_communication_settings ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "authenticated_all_events_communication_settings"
   ON public.events_communication_settings FOR ALL TO authenticated
-  USING (true) WITH CHECK (true);
-
--- integrations_ad_tracking_sessions
-ALTER TABLE public.integrations_ad_tracking_sessions ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "authenticated_all_integrations_ad_tracking_sessions"
-  ON public.integrations_ad_tracking_sessions FOR ALL TO authenticated
-  USING (true) WITH CHECK (true);
-
--- Portal creates/updates tracking sessions for anonymous visitors (ad attribution)
-CREATE POLICY "ad_tracking_sessions_insert_anon"
-  ON public.integrations_ad_tracking_sessions FOR INSERT TO anon
-  WITH CHECK (true);
-CREATE POLICY "ad_tracking_sessions_update_anon"
-  ON public.integrations_ad_tracking_sessions FOR UPDATE TO anon
-  USING (true);
-
--- integrations_conversion_log
-ALTER TABLE public.integrations_conversion_log ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "authenticated_all_integrations_conversion_log"
-  ON public.integrations_conversion_log FOR ALL TO authenticated
   USING (true) WITH CHECK (true);
 
 -- email_batch_jobs

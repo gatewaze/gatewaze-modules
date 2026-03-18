@@ -13,6 +13,12 @@ const eventSpeakersModule: GatewazeModule = {
     'event-speakers.manage',
   ],
 
+  migrations: [
+    'migrations/001_event_speakers_tables.sql',
+  ],
+
+  dependencies: ['event-sponsors'],
+
   configSchema: {},
 
   onInstall: async () => {

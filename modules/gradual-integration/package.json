@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/gradual-integration",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Gradual platform integration for syncing registrations, webhooks, and attendance tracking",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}

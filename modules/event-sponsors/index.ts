@@ -14,6 +14,10 @@ const eventSponsorsModule: GatewazeModule = {
     'event-sponsors.teams',
   ],
 
+  migrations: [
+    'migrations/001_event_sponsors_tables.sql',
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

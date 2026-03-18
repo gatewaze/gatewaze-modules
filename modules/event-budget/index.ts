@@ -19,6 +19,7 @@ const eventBudgetModule: GatewazeModule = {
   ],
 
   migrations: [
+    'migrations/000_event_budget_core_tables.sql',
     'migrations/001_event_budget_tables.sql',
   ],
 
