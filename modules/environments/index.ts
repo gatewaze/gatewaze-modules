@@ -52,11 +52,11 @@ const environmentsModule: GatewazeModule = {
 
   adminNavItems: [
     {
-      path: '/environments',
+      path: '/admin/environments',
       label: 'Environments',
-      icon: 'Server',
+      icon: 'ServerStack',
       requiredFeature: 'environments',
-      parentGroup: 'platform',
+      parentGroup: 'admin',
       order: 50,
     },
   ],
