@@ -3,7 +3,8 @@
  * Allows users to manage budget allocations, line items, revenue, and sponsor payments
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useHasModule } from '@/hooks/useModuleFeature';
 import { toast } from 'sonner';
 import {
   PlusIcon,
@@ -43,6 +44,7 @@ interface EventBudgetTabProps {
 type ActiveSection = 'allocations' | 'lineItems' | 'revenue' | 'sponsorPayments' | 'report';
 
 export function EventBudgetTab({ eventId }: EventBudgetTabProps) {
+  const hasSponsors = useHasModule('event-sponsors');
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState<ActiveSection>('allocations');
 
@@ -151,6 +153,7 @@ export function EventBudgetTab({ eventId }: EventBudgetTabProps) {
         budgetService.getEventLineItems(eventId),
         budgetService.getEventRevenue(eventId),
         budgetService.getEventSponsorPayments(eventId),
+        // Soft dependency: event-sponsors module may not be installed
         supabase
           .from('events_sponsors')
           .select(`
@@ -167,7 +170,10 @@ export function EventBudgetTab({ eventId }: EventBudgetTabProps) {
           .eq('event_id', eventId)
           .order('created_at', { ascending: false })
           .then(({ data, error }) => {
-            if (error) throw error;
+            if (error) {
+              console.warn('[event-budget] events_sponsors not available:', error.message);
+              return [];
+            }
             return data || [];
           }),
       ]);
@@ -765,16 +771,18 @@ export function EventBudgetTab({ eventId }: EventBudgetTabProps) {
         >
           Revenue ({revenues.length})
         </button>
-        <button
-          onClick={() => setActiveSection('sponsorPayments')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeSection === 'sponsorPayments'
-              ? 'border-primary-600 text-primary-600 dark:border-primary-400 dark:text-primary-400'
-              : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-          }`}
-        >
-          Sponsor Payments ({sponsorPayments.length})
-        </button>
+        {hasSponsors && (
+          <button
+            onClick={() => setActiveSection('sponsorPayments')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeSection === 'sponsorPayments'
+                ? 'border-primary-600 text-primary-600 dark:border-primary-400 dark:text-primary-400'
+                : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+            }`}
+          >
+            Sponsor Payments ({sponsorPayments.length})
+          </button>
+        )}
         <button
           onClick={() => setActiveSection('report')}
           className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${

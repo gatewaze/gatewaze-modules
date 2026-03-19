@@ -137,7 +137,11 @@ export class EventQrService {
         .eq('event_id', eventId)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        // Soft dependency: event-sponsors module may not be installed
+        console.warn('[badge-scanning] events_sponsors not available:', error.message);
+        return [];
+      }
 
       // If we have sponsors, fetch team member counts and badge scan counts for each
       if (data && data.length > 0) {

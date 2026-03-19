@@ -709,24 +709,33 @@ export function EventAgendaTab({ eventUuid, eventStart, eventEnd, talkDurationOp
   const loadData = async () => {
     try {
       setLoading(true);
-      const [tracksData, entriesData, speakersData, durationCounts, talksData] = await Promise.all([
+      // Core agenda data
+      const [tracksData, entriesData] = await Promise.all([
         AgendaService.getTracksByEvent(eventUuid),
         AgendaService.getEntriesByEvent(eventUuid),
-        SpeakerService.getSpeakersByEvent(eventUuid),
-        SpeakerService.getConfirmedDurationCounts(eventUuid),
-        TalkService.getTalksByEvent(eventUuid),
       ]);
       setTracks(tracksData);
       setEntries(entriesData);
+
+      // Soft dependencies: event-speakers module may not be installed
+      const [speakersData, durationCounts, talksData] = await Promise.all([
+        SpeakerService.getSpeakersByEvent(eventUuid).catch(() => []),
+        SpeakerService.getConfirmedDurationCounts(eventUuid).catch(() => ({})),
+        TalkService.getTalksByEvent(eventUuid).catch(() => []),
+      ]);
       setSpeakers(speakersData);
       setConfirmedDurationCounts(durationCounts);
       setTalks(talksData);
 
-      // Load speakers for all entries
+      // Load speakers for all entries (soft dependency on event-speakers)
       if (entriesData.length > 0) {
-        const entryIds = entriesData.map(e => e.id);
-        const speakersMap = await SpeakerService.getSpeakersForAgendaEntries(entryIds);
-        setEntrySpeakers(speakersMap);
+        try {
+          const entryIds = entriesData.map(e => e.id);
+          const speakersMap = await SpeakerService.getSpeakersForAgendaEntries(entryIds);
+          setEntrySpeakers(speakersMap);
+        } catch {
+          // event-speakers module not available
+        }
       }
 
       // Set default selected track

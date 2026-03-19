@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useMemo, Fragment, useRef } from 'react';
+import { useHasModule } from '@/hooks/useModuleFeature';
 import { toast } from 'sonner';
 import {
   EnvelopeIcon,
@@ -2416,6 +2417,8 @@ function getEmailStatusBadge(log: { bounced_at?: string; opened_at?: string; del
 
 export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: EventCommunicationsTabProps) {
   const { user } = useAuthContext();
+  const hasSpeakers = useHasModule('event-speakers');
+  const hasCompetitions = useHasModule('competitions');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeSubTab, setActiveSubTab] = useState<SubTab>('email');
@@ -3585,8 +3588,8 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
             <div className="flex flex-wrap items-center gap-2 mb-6">
               {([
                 { key: 'audience' as EmailSection, label: 'Audience', icon: UsersIcon },
-                { key: 'speakers' as EmailSection, label: 'Speakers', icon: MicrophoneIcon },
-                { key: 'competitions' as EmailSection, label: 'Competitions & Discounts', icon: null },
+                ...(hasSpeakers ? [{ key: 'speakers' as EmailSection, label: 'Speakers', icon: MicrophoneIcon }] : []),
+                ...(hasCompetitions ? [{ key: 'competitions' as EmailSection, label: 'Competitions & Discounts', icon: null }] : []),
                 { key: 'adhoc' as EmailSection, label: 'Ad-Hoc Email', icon: PaperAirplaneIcon },
               ]).map(({ key, label, icon: Icon }) => (
                 <button

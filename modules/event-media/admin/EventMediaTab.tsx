@@ -811,8 +811,8 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
             </Button>
           )}
 
-          {/* Sponsor Filter Dropdown */}
-          <div className="relative inline-block">
+          {/* Sponsor Filter Dropdown — only shown when event-sponsors module provides data */}
+          {sponsors.length > 0 && <div className="relative inline-block">
             <select
               value={selectedSponsor || ''}
               onChange={(e) => {
@@ -839,7 +839,7 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
               </svg>
             </div>
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* Sponsor Filter Badge */}

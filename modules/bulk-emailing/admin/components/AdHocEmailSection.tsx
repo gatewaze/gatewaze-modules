@@ -4,7 +4,8 @@
  * with filtering by status, checklist progress, and text search.
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useHasModule } from '@/hooks/useModuleFeature';
 import { toast } from 'sonner';
 import {
   PaperAirplaneIcon,
@@ -173,8 +174,11 @@ export function AdHocEmailSection({
   fromAddresses,
   fromOptions,
 }: AdHocEmailSectionProps) {
-  // Audience selection state
-  const [audienceType, setAudienceType] = useState<AudienceType>('speakers');
+  const hasSpeakers = useHasModule('event-speakers');
+  const hasInterest = useHasModule('event-interest');
+
+  // Audience selection state — default to 'audience' if speakers module not installed
+  const [audienceType, setAudienceType] = useState<AudienceType>(hasSpeakers ? 'speakers' : 'audience');
   const [speakerStatuses, setSpeakerStatuses] = useState<Set<SpeakerStatusFilter>>(new Set());
   const [checklistFilters, setChecklistFilters] = useState<Set<ChecklistFilter>>(new Set());
   const [audienceSubTypes, setAudienceSubTypes] = useState<Set<AudienceSubType>>(new Set());
@@ -270,6 +274,7 @@ export function AdHocEmailSection({
         }
 
         // Fetch speakers with their talk data for checklist filtering
+        // Soft dependency: event-speakers module may not be installed
         let query = supabase
           .from('events_speakers_with_details')
           .select('id, people_profile_id, email, full_name, first_name, last_name, company, job_title, status, primary_talk_id, primary_talk_presentation_url, primary_talk_presentation_storage_path')
@@ -277,7 +282,12 @@ export function AdHocEmailSection({
           .in('status', statusArray);
 
         const { data: speakers, error } = await query;
-        if (error) throw error;
+        if (error) {
+          console.warn('[bulk-emailing] events_speakers_with_details not available:', error.message);
+          setAllRecipients([]);
+          setLoadingRecipients(false);
+          return;
+        }
 
         if (speakers && speakers.length > 0) {
           // If checklist filters are active, fetch talk data for those fields
@@ -346,6 +356,7 @@ export function AdHocEmailSection({
         const seenEmails = new Set<string>();
 
         if (subTypes.includes('interest')) {
+          // Soft dependency: event-interest module may not be installed
           const { data, error } = await supabase
             .from('events_interest')
             .select(`
@@ -362,7 +373,9 @@ export function AdHocEmailSection({
             .eq('event_id', eventId)
             .eq('status', 'active');
 
-          if (error) throw error;
+          if (error) {
+            console.warn('[bulk-emailing] events_interest not available:', error.message);
+          }
           if (data) {
             for (const row of data) {
               const customer = (row as any).people_profiles?.people;
@@ -729,21 +742,23 @@ export function AdHocEmailSection({
 
         {/* Audience Type Toggle */}
         <div className="flex items-center gap-2 mb-4">
-          <button
-            type="button"
-            onClick={() => {
-              setAudienceType('speakers');
-              setAudienceSubTypes(new Set());
-            }}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              audienceType === 'speakers'
-                ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 ring-1 ring-purple-300 dark:ring-purple-700'
-                : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-            }`}
-          >
-            <MicrophoneIcon className="h-4 w-4" />
-            Speakers
-          </button>
+          {hasSpeakers && (
+            <button
+              type="button"
+              onClick={() => {
+                setAudienceType('speakers');
+                setAudienceSubTypes(new Set());
+              }}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+                audienceType === 'speakers'
+                  ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 ring-1 ring-purple-300 dark:ring-purple-700'
+                  : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+              }`}
+            >
+              <MicrophoneIcon className="h-4 w-4" />
+              Speakers
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -808,7 +823,7 @@ export function AdHocEmailSection({
               <MultiSelectDropdown<AudienceSubType>
                 label="Select audience types..."
                 options={[
-                  { value: 'interest', label: 'Expressed Interest' },
+                  ...(hasInterest ? [{ value: 'interest' as const, label: 'Expressed Interest' }] : []),
                   { value: 'registrants', label: 'Registrants' },
                   { value: 'attendees', label: 'Attendees (Checked In)' },
                 ]}
