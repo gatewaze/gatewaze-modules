@@ -9,11 +9,11 @@ import { toast } from 'sonner';
 import { Button, Card, Badge, Tabs } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { CohortService, Cohort } from '@/lib/cohorts';
-import { CohortSettingsTab } from '@/components/cohorts/CohortSettingsTab';
-import { CohortWeeksTab } from '@/components/cohorts/CohortWeeksTab';
-import { CohortStudentsTab } from '@/components/cohorts/CohortStudentsTab';
-import { CohortWaitlistTab } from '@/components/cohorts/CohortWaitlistTab';
+import { CohortService, Cohort } from '../lib';
+import { CohortSettingsTab } from '../components/CohortSettingsTab';
+import { CohortWeeksTab } from '../components/CohortWeeksTab';
+import { CohortStudentsTab } from '../components/CohortStudentsTab';
+import { CohortWaitlistTab } from '../components/CohortWaitlistTab';
 
 export default function CohortDetailPage() {
   const { cohortId, tab } = useParams<{ cohortId: string; tab?: string }>();

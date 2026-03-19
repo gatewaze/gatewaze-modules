@@ -17,6 +17,16 @@ const eventSpeakersModule: GatewazeModule = {
     'migrations/001_event_speakers_tables.sql',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/EventSpeakersTab'),
+      order: 20,
+      requiredFeature: 'event-speakers',
+      meta: { tabId: 'speakers', label: 'Speakers', icon: 'MicrophoneIcon' },
+    },
+  ],
+
   dependencies: ['event-sponsors'],
 
   configSchema: {},

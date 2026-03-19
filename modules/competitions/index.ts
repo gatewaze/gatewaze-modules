@@ -44,6 +44,23 @@ const competitionsModule: GatewazeModule = {
     },
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/components/EventCompetitionsTab'),
+      order: 40,
+      requiredFeature: 'competitions',
+      meta: { tabId: 'competitions', label: 'Competitions', icon: 'TrophyIcon' },
+    },
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/components/EventMatchingTab'),
+      order: 100,
+      requiredFeature: 'competitions',
+      meta: { tabId: 'matching', label: 'Matching', icon: 'SwatchIcon' },
+    },
+  ],
+
   edgeFunctions: [
     'events-competition-entry',
   ],

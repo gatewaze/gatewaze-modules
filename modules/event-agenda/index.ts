@@ -17,6 +17,16 @@ const eventAgendaModule: GatewazeModule = {
     'migrations/001_event_agenda_tables.sql',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/EventAgendaTab'),
+      order: 10,
+      requiredFeature: 'event-agenda',
+      meta: { tabId: 'agenda', label: 'Agenda', icon: 'ListBulletIcon' },
+    },
+  ],
+
   dependencies: ['event-speakers'],
 
   configSchema: {},

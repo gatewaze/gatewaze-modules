@@ -36,13 +36,13 @@ import {
   PaginationItems,
 } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { LumaUploadStatus } from '@/components/events/LumaUploadStatus';
-import { Calendar } from '@/lib/services/calendarService';
+import { ModuleSlot } from '@/components/ModuleSlot';
+import { Calendar } from '../services/calendarService';
 import {
   CalendarMembershipService,
   CalendarMember,
-} from '@/lib/services/calendarMembershipService';
-import { CalendarCsvService } from '@/lib/services/calendarCsvService';
+} from '../services/calendarMembershipService';
+import { CalendarCsvService } from '../services/calendarCsvService';
 import { useAuthContext } from '@/app/contexts/auth/context';
 import { getBrandId } from '@/utils/brandUtils';
 
@@ -81,7 +81,7 @@ export function CalendarMembersTab({ calendar }: CalendarMembersTabProps) {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [removeMember, setRemoveMember] = useState<CalendarMember | null>(null);
   const [addingMember, setAddingMember] = useState(false);
-  const [uploadKey, setUploadKey] = useState(0); // To refresh LumaUploadStatus after new upload
+  const [uploadKey, setUploadKey] = useState(0); // To refresh upload status after new upload
 
   // Add member form state
   const [newMemberEmail, setNewMemberEmail] = useState('');
@@ -355,11 +355,7 @@ export function CalendarMembersTab({ calendar }: CalendarMembersTabProps) {
       </div>
 
       {/* Upload Status */}
-      <LumaUploadStatus
-        key={uploadKey}
-        brandId={getBrandId()}
-        calendarId={calendar.id}
-      />
+      <ModuleSlot name="calendar-members:status" props={{ key: uploadKey, brandId: getBrandId(), calendarId: calendar.id }} />
 
       {/* Search */}
       <Card skin="shadow" className="p-4">

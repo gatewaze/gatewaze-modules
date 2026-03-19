@@ -24,6 +24,30 @@ const lumaIntegrationModule: GatewazeModule = {
     'migrations/001_luma_tables.sql',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-registrations:actions',
+      component: () => import('./admin/components/LumaUpload'),
+      order: 10,
+      requiredFeature: 'luma.sync',
+      meta: { label: 'Luma Import' },
+    },
+    {
+      slotName: 'event-registrations:status',
+      component: () => import('./admin/components/LumaUploadStatus'),
+      order: 10,
+      requiredFeature: 'luma.sync',
+      meta: { label: 'Luma Upload Status' },
+    },
+    {
+      slotName: 'calendar-members:status',
+      component: () => import('./admin/components/LumaUploadStatus'),
+      order: 10,
+      requiredFeature: 'luma.sync',
+      meta: { label: 'Luma Upload Status' },
+    },
+  ],
+
   configSchema: {
     LUMA_API_KEY: {
       key: 'LUMA_API_KEY',

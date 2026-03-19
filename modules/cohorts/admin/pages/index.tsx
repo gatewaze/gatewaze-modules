@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { Card, Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { CohortService, EnrollmentStats } from '@/lib/cohorts';
+import { CohortService, EnrollmentStats } from '../lib';
 
 export default function CohortsOverview() {
   const navigate = useNavigate();

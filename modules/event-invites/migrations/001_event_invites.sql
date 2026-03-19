@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS public.calendars_invites (
 CREATE INDEX IF NOT EXISTS idx_calendars_invites_token ON public.calendars_invites(token);
 CREATE INDEX IF NOT EXISTS idx_calendars_invites_event ON public.calendars_invites(event_id);
 
+DROP TRIGGER IF EXISTS calendars_invites_updated_at ON public.calendars_invites;
 CREATE TRIGGER calendars_invites_updated_at
   BEFORE UPDATE ON public.calendars_invites
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -71,5 +72,7 @@ COMMENT ON TABLE public.calendars_interactions IS 'Tracks each visit/click on a 
 ALTER TABLE public.calendars_invites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calendars_interactions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "auth_all_calendars_invites" ON public.calendars_invites;
 CREATE POLICY "auth_all_calendars_invites" ON public.calendars_invites FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "auth_all_calendars_interactions" ON public.calendars_interactions;
 CREATE POLICY "auth_all_calendars_interactions" ON public.calendars_interactions FOR ALL TO authenticated USING (true) WITH CHECK (true);

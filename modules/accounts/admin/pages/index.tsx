@@ -22,10 +22,10 @@ import {
 import { RowActions } from '@/components/shared/table/RowActions';
 import { ScrollableTable } from '@/components/shared/table/ScrollableTable';
 import { Page } from '@/components/shared/Page';
-import { AccountService, CreateAccountData, UpdateAccountData } from '@/utils/accountService';
+import { AccountService, CreateAccountData, UpdateAccountData } from '../utils/accountService';
 import { Account } from '@/lib/supabase';
 import { useAuthContext } from '@/app/contexts/auth/context';
-import { AccountUsersModal } from '@/components/accounts/AccountUsersModal';
+import { AccountUsersModal } from '../components/AccountUsersModal';
 
 interface AccountFormData {
   name: string;

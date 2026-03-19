@@ -18,6 +18,16 @@ const eventTrackingModule: GatewazeModule = {
     'migrations/001_event_tracking_tables.sql',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/EventTrackingTab'),
+      order: 150,
+      requiredFeature: 'event-tracking',
+      meta: { tabId: 'tracking', label: 'Tracking', icon: 'SignalIcon' },
+    },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

@@ -18,6 +18,16 @@ const eventSponsorsModule: GatewazeModule = {
     'migrations/001_event_sponsors_tables.sql',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/EventSponsorsTab'),
+      order: 30,
+      requiredFeature: 'event-sponsors',
+      meta: { tabId: 'sponsors', label: 'Sponsors', icon: 'BuildingOfficeIcon' },
+    },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

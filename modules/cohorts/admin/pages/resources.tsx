@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Card, Button, Badge, Modal, Input } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { CohortService, CohortResource, Cohort } from '@/lib/cohorts';
+import { CohortService, CohortResource, Cohort } from '../lib';
 
 const RESOURCE_TYPES = [
   { value: 'video', label: 'Video' },

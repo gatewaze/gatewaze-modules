@@ -39,7 +39,7 @@ import {
 import { Page } from '@/components/shared/Page';
 import { DataTable } from '@/components/shared/table/DataTable';
 import { RowActions } from '@/components/shared/table/RowActions';
-import { CalendarService, Calendar, CreateCalendarInput } from '@/lib/services/calendarService';
+import { CalendarService, Calendar, CreateCalendarInput } from '../services/calendarService';
 import { useAuthContext } from '@/app/contexts/auth/context';
 import { useForm } from 'react-hook-form';
 

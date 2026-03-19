@@ -18,6 +18,16 @@ const eventMediaModule: GatewazeModule = {
     'migrations/001_event_media_tables.sql',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/EventMediaTab'),
+      order: 140,
+      requiredFeature: 'event-media',
+      meta: { tabId: 'media', label: 'Media', icon: 'PhotoIcon' },
+    },
+  ],
+
   dependencies: ['event-sponsors'],
 
   configSchema: {},

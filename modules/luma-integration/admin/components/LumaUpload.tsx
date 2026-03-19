@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { ArrowUpTrayIcon, InformationCircleIcon, CheckCircleIcon, XCircleIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { Button, Modal, Badge } from '@/components/ui';
-import { LumaUploadService, LumaCsvType, LumaCsvUpload } from '@/utils/lumaUploadService';
+import { LumaUploadService, LumaCsvType, LumaCsvUpload } from '../utils/lumaUploadService';
 import { toast } from 'sonner';
 import { useAuthContext } from '@/app/contexts/auth/context';
 
@@ -395,3 +395,5 @@ export const LumaUpload = ({ eventId, brandId, onComplete }: LumaUploadProps) =>
     </>
   );
 };
+
+export default LumaUpload;

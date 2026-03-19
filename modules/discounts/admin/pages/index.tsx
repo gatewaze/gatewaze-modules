@@ -16,9 +16,9 @@ import { ScrollableTable } from '@/components/shared/table/ScrollableTable';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
 import { EventDiscount, CompetitionDiscountService } from '@/utils/competitionDiscountService';
-import { DiscountCodesStats } from '@/utils/discountService';
+import { DiscountCodesStats } from '../utils/discountService';
 import { useAccountAccess } from '@/hooks/useAccountAccess';
-import { DiscountCodesManagementModal } from '@/components/discounts/DiscountCodesManagementModal';
+import { DiscountCodesManagementModal } from '../components/DiscountCodesManagementModal';
 import { supabase } from '@/lib/supabase';
 
 type TabType = 'current' | 'past';

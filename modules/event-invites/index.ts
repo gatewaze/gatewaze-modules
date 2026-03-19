@@ -38,6 +38,8 @@ const eventInvitesModule: GatewazeModule = {
     'event-invite-rsvp',
   ],
 
+  dependencies: ['calendars'],
+
   migrations: [
     'migrations/001_event_invites.sql',
   ],

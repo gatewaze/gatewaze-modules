@@ -5,14 +5,14 @@ import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
 import { Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { EditionCanvas } from '@/components/newsletters/EditionCanvas';
+import { EditionCanvas } from '../../components/EditionCanvas';
 import { supabase } from '@/lib/supabase';
 import {
   type NewsletterEdition,
   type EditionBlock,
   type BlockTemplate,
   type BrickTemplate,
-} from '@/utils/newsletter';
+} from '../../utils';
 
 interface DbBlockTemplate {
   id: string;

@@ -4,8 +4,8 @@ import { TrashIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 import { CheckCircleIcon as CheckCircleSolidIcon } from '@heroicons/react/24/solid';
 import { Card, Badge, ConfirmModal } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { Cohort, CohortEnrollment, StudentProgress } from '@/lib/cohorts/types';
-import { CohortService } from '@/lib/cohorts';
+import { Cohort, CohortEnrollment, StudentProgress } from '../lib/types';
+import { CohortService } from '../lib';
 import { supabase } from '@/lib/supabase';
 
 interface CohortStudentsTabProps {

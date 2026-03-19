@@ -3,8 +3,8 @@ import { useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { PlusIcon, TrashIcon, PencilIcon, ChevronUpIcon, ChevronDownIcon, ArchiveBoxIcon, CheckCircleIcon, CreditCardIcon } from '@heroicons/react/24/outline';
 import { Card, Button, Input, Modal, ConfirmModal } from '@/components/ui';
-import { Cohort, CohortBenefit, CohortTestimonial } from '@/lib/cohorts/types';
-import { CohortService } from '@/lib/cohorts';
+import { Cohort, CohortBenefit, CohortTestimonial } from '../lib/types';
+import { CohortService } from '../lib';
 import { supabase } from '@/lib/supabase';
 
 interface CohortSettingsTabProps {

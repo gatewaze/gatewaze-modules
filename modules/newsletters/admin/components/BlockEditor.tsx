@@ -34,7 +34,7 @@ import { BrickEditor } from './BrickEditor';
 import {
   uploadNewsletterImage,
   validateNewsletterImage,
-} from '@/utils/newsletter';
+} from '../utils';
 
 export interface BlockTemplate {
   id: string;

@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS public.events_tag_links (
 CREATE TABLE IF NOT EXISTS public.events_topic_categories (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name          text NOT NULL,
+  slug          text UNIQUE,
   parent_id     uuid REFERENCES public.events_topic_categories(id) ON DELETE SET NULL,
   display_order integer DEFAULT 0
 );

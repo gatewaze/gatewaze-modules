@@ -3,7 +3,7 @@ import { EnvelopeIcon, CalendarIcon, GlobeAltIcon } from '@heroicons/react/24/ou
 import { Card, Table, THead, TBody, Tr, Th, Td, Badge } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { supabase } from '@/lib/supabase';
-import { Cohort } from '@/lib/cohorts/types';
+import { Cohort } from '../lib/types';
 
 interface CohortWaitlistTabProps {
   cohort: Cohort;

@@ -37,7 +37,7 @@ import {
   PaginationItems,
 } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { Calendar, CalendarService, CalendarEvent } from '@/lib/services/calendarService';
+import { Calendar, CalendarService, CalendarEvent } from '../services/calendarService';
 import { supabase } from '@/lib/supabase';
 
 interface CalendarEventsTabProps {

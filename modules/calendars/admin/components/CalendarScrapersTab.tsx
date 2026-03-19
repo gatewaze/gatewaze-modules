@@ -17,7 +17,7 @@ import {
   Badge,
 } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { Calendar, CalendarService } from '@/lib/services/calendarService';
+import { Calendar, CalendarService } from '../services/calendarService';
 import { ScraperService } from '@/utils/scraperService';
 import type { Scraper } from '@/utils/scraperService';
 

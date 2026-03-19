@@ -19,6 +19,8 @@ const calendarsModule: GatewazeModule = {
     'calendars-process-csv',
   ],
 
+  dependencies: ['scrapers'],
+
   migrations: [
     'migrations/001_calendars_tables.sql',
   ],

@@ -32,7 +32,7 @@ import {
 } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { DataTable } from '@/components/shared/table/DataTable';
-import { CohortService, CohortEnrollment } from '@/lib/cohorts';
+import { CohortService, CohortEnrollment } from '../lib';
 
 const PAGE_SIZE = 50;
 

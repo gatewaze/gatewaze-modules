@@ -8,7 +8,7 @@ import {
   HeartIcon,
 } from '@heroicons/react/24/outline';
 import { Card } from '@/components/ui';
-import { Calendar, CalendarStats, CalendarService } from '@/lib/services/calendarService';
+import { Calendar, CalendarStats, CalendarService } from '../services/calendarService';
 
 interface CalendarOverviewTabProps {
   calendar: Calendar;

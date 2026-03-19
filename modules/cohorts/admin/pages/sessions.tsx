@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Card, Button, Badge, Modal, Input } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { CohortService, LiveSession, Cohort } from '@/lib/cohorts';
+import { CohortService, LiveSession, Cohort } from '../lib';
 
 export default function CohortSessions() {
   const { cohortId, instructorId } = useParams<{ cohortId: string; instructorId: string }>();

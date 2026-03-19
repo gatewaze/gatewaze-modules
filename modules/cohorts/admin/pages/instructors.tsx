@@ -6,7 +6,7 @@ import { Card, Button, Modal, Input, Badge, Table, THead, TBody, Tr, Th, Td } fr
 import { RowActions } from '@/components/shared/table/RowActions';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { CohortService, InstructorProfile } from '@/lib/cohorts';
+import { CohortService, InstructorProfile } from '../lib';
 import { supabase } from '@/lib/supabase';
 import { PeopleAvatarService } from '@/utils/peopleAvatarService';
 import { PeopleService } from '@/utils/peopleService';

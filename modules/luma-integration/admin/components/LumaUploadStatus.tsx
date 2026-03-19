@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { ArrowPathIcon, CheckCircleIcon, XCircleIcon, ChevronDownIcon, ChevronUpIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import { LumaUploadService, LumaCsvUpload } from '@/utils/lumaUploadService';
+import { LumaUploadService, LumaCsvUpload } from '../utils/lumaUploadService';
 import { formatDistanceToNow } from 'date-fns';
-import { cancelImport } from '@/utils/cancelStuckImports';
+import { cancelImport } from '../utils/cancelStuckImports';
 import { toast } from 'sonner';
 
 interface LumaUploadStatusProps {
@@ -141,6 +141,8 @@ export const LumaUploadStatus = ({ brandId, eventId, calendarId }: LumaUploadSta
     </div>
   );
 };
+
+export default LumaUploadStatus;
 
 const UploadRow = ({ upload }: { upload: LumaCsvUpload }) => {
   const [cancelling, setCancelling] = useState(false);

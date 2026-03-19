@@ -13,7 +13,7 @@ import {
   Select,
   ConfirmModal,
 } from '@/components/ui';
-import { Calendar, CalendarService, UpdateCalendarInput, CalendarLocation } from '@/lib/services/calendarService';
+import { Calendar, CalendarService, UpdateCalendarInput, CalendarLocation } from '../services/calendarService';
 
 interface CalendarSettingsTabProps {
   calendar: Calendar;

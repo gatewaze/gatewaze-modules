@@ -16,7 +16,7 @@ import {
   getEditionLinks,
   type GeneratedLink,
   getFullShortUrl,
-} from '@/utils/newsletter';
+} from '../utils';
 import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
 import { getSupabaseConfig } from '@/config/brands';

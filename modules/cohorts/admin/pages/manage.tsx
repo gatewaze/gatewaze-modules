@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Card, Button, Badge, Modal, Input } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { CohortService, Cohort, InstructorProfile } from '@/lib/cohorts';
+import { CohortService, Cohort, InstructorProfile } from '../lib';
 import { supabase } from '@/lib/supabase';
 
 export default function CohortManagement() {

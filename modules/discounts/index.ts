@@ -44,6 +44,16 @@ const discountsModule: GatewazeModule = {
     },
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/components/EventDiscountsTab'),
+      order: 50,
+      requiredFeature: 'discounts',
+      meta: { tabId: 'discounts', label: 'Discounts', icon: 'TicketIcon' },
+    },
+  ],
+
   migrations: [
     'migrations/000_discounts_core_tables.sql',
     'migrations/001_discounts_tables.sql',

@@ -15,7 +15,7 @@ import {
   ComputerDesktopIcon,
 } from '@heroicons/react/24/outline';
 import { Card, Button, Input, Modal } from '@/components/ui';
-import { Cohort, CohortWeek, CohortModule, CohortResource, LiveSession } from '@/lib/cohorts/types';
+import { Cohort, CohortWeek, CohortModule, CohortResource, LiveSession } from '../lib/types';
 import { supabase } from '@/lib/supabase';
 import { TimezoneSelector } from '@/components/events/TimezoneSelector';
 

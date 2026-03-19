@@ -16,7 +16,7 @@ import { RichTextEditor } from '@/components/ui/RichTextEditor';
 import {
   uploadNewsletterImage,
   validateNewsletterImage,
-} from '@/utils/newsletter';
+} from '../utils';
 
 // Helper to determine if a field name suggests it's an image field
 function isImageField(fieldName: string): boolean {

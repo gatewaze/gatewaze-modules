@@ -9,13 +9,13 @@ import { toast } from 'sonner';
 import { Button, Card, Badge, Tabs } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { CalendarService, Calendar, CalendarStats } from '@/lib/services/calendarService';
-import { CalendarOverviewTab } from '@/components/calendars/CalendarOverviewTab';
-import { CalendarEventsTab } from '@/components/calendars/CalendarEventsTab';
-import { CalendarMembersTab } from '@/components/calendars/CalendarMembersTab';
-import { CalendarScrapersTab } from '@/components/calendars/CalendarScrapersTab';
-import { CalendarPermissionsTab } from '@/components/calendars/CalendarPermissionsTab';
-import { CalendarSettingsTab } from '@/components/calendars/CalendarSettingsTab';
+import { CalendarService, Calendar, CalendarStats } from '../services/calendarService';
+import { CalendarOverviewTab } from '../components/CalendarOverviewTab';
+import { CalendarEventsTab } from '../components/CalendarEventsTab';
+import { CalendarMembersTab } from '../components/CalendarMembersTab';
+import { CalendarScrapersTab } from '../components/CalendarScrapersTab';
+import { CalendarPermissionsTab } from '../components/CalendarPermissionsTab';
+import { CalendarSettingsTab } from '../components/CalendarSettingsTab';
 // Import cancel utility to make it available in browser console
 import '@/utils/cancelStuckImports';
 

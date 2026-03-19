@@ -17,6 +17,16 @@ const eventInterestModule: GatewazeModule = {
     'migrations/001_event_interest_tables.sql',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/EventInterestTab'),
+      order: 60,
+      requiredFeature: 'event-interest',
+      meta: { tabId: 'interest', label: 'Interest', icon: 'HeartIcon' },
+    },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

@@ -13,6 +13,16 @@ const eventReportsModule: GatewazeModule = {
     'event-reports.analytics',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/EventReportsTab'),
+      order: 110,
+      requiredFeature: 'event-reports',
+      meta: { tabId: 'reports', label: 'Reports', icon: 'ChartBarIcon' },
+    },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {

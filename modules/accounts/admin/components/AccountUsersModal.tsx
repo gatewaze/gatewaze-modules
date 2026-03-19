@@ -3,7 +3,7 @@ import { PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 
 import { Modal, Button, Badge, ConfirmModal } from '@/components/ui';
-import { AccountService } from '@/utils/accountService';
+import { AccountService } from '../utils/accountService';
 import { AccountMemberDetail } from '@/lib/supabase';
 import { AdminUserService } from '@/utils/adminUserService';
 import { AdminUser } from '@/lib/supabase';

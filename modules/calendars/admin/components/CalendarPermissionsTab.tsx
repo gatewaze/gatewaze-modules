@@ -34,7 +34,7 @@ import {
   PaginationItems,
 } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { Calendar } from '@/lib/services/calendarService';
+import { Calendar } from '../services/calendarService';
 import { PermissionsService } from '@/lib/permissions/service';
 import {
   AdminCalendarPermission,

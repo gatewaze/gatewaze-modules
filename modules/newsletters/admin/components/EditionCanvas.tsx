@@ -31,7 +31,7 @@ import {
   type GeneratedLink,
   generateEditionShortLinks,
   extractEditionLinks,
-} from '@/utils/newsletter';
+} from '../utils';
 
 interface EditionCanvasProps {
   edition: NewsletterEdition;

@@ -23,6 +23,16 @@ const eventBudgetModule: GatewazeModule = {
     'migrations/001_event_budget_tables.sql',
   ],
 
+  adminSlots: [
+    {
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/EventBudgetTab'),
+      order: 120,
+      requiredFeature: 'event-budget',
+      meta: { tabId: 'budget', label: 'Budget', icon: 'CurrencyDollarIcon' },
+    },
+  ],
+
   adminRoutes: [
     { path: 'budget-categories', component: () => import('./admin/pages/budget-categories'), requiredFeature: 'event-budget', guard: 'admin' },
   ],

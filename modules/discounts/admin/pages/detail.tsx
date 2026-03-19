@@ -17,7 +17,7 @@ import { Card, Button } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { EventService, Event } from '@/utils/eventService';
 import { ActiveDiscountService as DiscountService } from '@/utils/serviceSwitcher';
-import { DiscountCodesStats } from '@/utils/discountService'; // Keep interface import
+import { DiscountCodesStats } from '../utils/discountService'; // Keep interface import
 import { HybridOfferService } from '@/utils/hybridOfferService';
 import { supabase } from '@/lib/supabase';
 import { ConversionFunnelChart } from '@/components/charts/ConversionFunnelChart';

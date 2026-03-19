@@ -38,6 +38,7 @@ COMMENT ON TABLE public.calendars IS 'Curated event calendars';
 CREATE INDEX IF NOT EXISTS idx_calendars_luma    ON public.calendars(luma_calendar_id) WHERE luma_calendar_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_calendars_account ON public.calendars(account_id);
 
+DROP TRIGGER IF EXISTS calendars_updated_at ON public.calendars;
 CREATE TRIGGER calendars_updated_at
   BEFORE UPDATE ON public.calendars
   FOR EACH ROW
@@ -124,6 +125,7 @@ CREATE INDEX IF NOT EXISTS idx_calendars_members_status ON public.calendars_memb
 
 COMMENT ON TABLE public.calendars_members IS 'Tracks who is subscribed/following each calendar';
 
+DROP TRIGGER IF EXISTS calendars_members_updated_at ON public.calendars_members;
 CREATE TRIGGER calendars_members_updated_at
   BEFORE UPDATE ON public.calendars_members
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -168,35 +170,15 @@ CREATE INDEX IF NOT EXISTS idx_admin_calendar_permissions_calendar ON public.adm
 
 COMMENT ON TABLE public.admin_calendar_permissions IS 'Calendar-level admin permissions';
 
+DROP TRIGGER IF EXISTS admin_calendar_permissions_updated_at ON public.admin_calendar_permissions;
 CREATE TRIGGER admin_calendar_permissions_updated_at
   BEFORE UPDATE ON public.admin_calendar_permissions
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 -- ==========================================================================
--- 6. Admin event permissions
+-- 6. Admin event permissions — table & trigger created by base migration
+--    (00006_platform.sql). Only RLS policies are added below in section 11.
 -- ==========================================================================
-CREATE TABLE IF NOT EXISTS public.admin_event_permissions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  admin_id uuid NOT NULL REFERENCES public.admin_profiles(id) ON DELETE CASCADE,
-  event_id varchar(10) NOT NULL REFERENCES public.events(event_id) ON DELETE CASCADE,
-  permission_level text CHECK (permission_level IN ('view', 'edit', 'manage')) DEFAULT 'view',
-  granted_by uuid REFERENCES public.admin_profiles(id),
-  granted_at timestamptz DEFAULT now(),
-  expires_at timestamptz,
-  is_active boolean DEFAULT true,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now(),
-  UNIQUE(admin_id, event_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_admin_event_permissions_admin ON public.admin_event_permissions(admin_id);
-CREATE INDEX IF NOT EXISTS idx_admin_event_permissions_event ON public.admin_event_permissions(event_id);
-
-COMMENT ON TABLE public.admin_event_permissions IS 'Event-level admin permissions';
-
-CREATE TRIGGER admin_event_permissions_updated_at
-  BEFORE UPDATE ON public.admin_event_permissions
-  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 -- ==========================================================================
 -- 7. Calendar invites
@@ -223,6 +205,7 @@ CREATE TABLE IF NOT EXISTS public.calendars_invites (
 CREATE INDEX IF NOT EXISTS idx_calendars_invites_token ON public.calendars_invites(token);
 CREATE INDEX IF NOT EXISTS idx_calendars_invites_event ON public.calendars_invites(event_id);
 
+DROP TRIGGER IF EXISTS calendars_invites_updated_at ON public.calendars_invites;
 CREATE TRIGGER calendars_invites_updated_at
   BEFORE UPDATE ON public.calendars_invites
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -267,6 +250,7 @@ CREATE TABLE IF NOT EXISTS public.calendars_preferences (
   updated_at timestamptz DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS calendars_preferences_updated_at ON public.calendars_preferences;
 CREATE TRIGGER calendars_preferences_updated_at
   BEFORE UPDATE ON public.calendars_preferences
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -480,7 +464,6 @@ COMMENT ON FUNCTION public.calendars_get_event_count(uuid)
 ALTER TABLE public.calendars_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scrapers_calendars ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_calendar_permissions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.admin_event_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calendars_invites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calendars_interactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calendars_preferences ENABLE ROW LEVEL SECURITY;
@@ -570,23 +553,7 @@ CREATE POLICY "admin_calendar_permissions_delete"
   USING (public.is_super_admin());
 
 -- ---- admin_event_permissions ----
-DROP POLICY IF EXISTS "auth_all_admin_event_permissions" ON public.admin_event_permissions;
-
-CREATE POLICY "admin_event_permissions_select"
-  ON public.admin_event_permissions FOR SELECT TO authenticated
-  USING (public.is_super_admin());
-
-CREATE POLICY "admin_event_permissions_insert"
-  ON public.admin_event_permissions FOR INSERT TO authenticated
-  WITH CHECK (public.is_super_admin());
-
-CREATE POLICY "admin_event_permissions_update"
-  ON public.admin_event_permissions FOR UPDATE TO authenticated
-  USING (public.is_super_admin());
-
-CREATE POLICY "admin_event_permissions_delete"
-  ON public.admin_event_permissions FOR DELETE TO authenticated
-  USING (public.is_super_admin());
+-- Policies handled by base migration (00007_rls_policies.sql)
 
 -- ---- calendars_invites ----
 DROP POLICY IF EXISTS "auth_all_calendars_invites" ON public.calendars_invites;
