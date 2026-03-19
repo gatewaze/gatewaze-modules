@@ -8,10 +8,11 @@
  */
 
 import type { Express, Request, Response } from 'express';
+import type { ModuleContext } from '@gatewaze/shared';
 import { resolve, join } from 'path';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 
-const PROJECT_ROOT = resolve(import.meta.dirname ?? __dirname, '../../../..');
+let PROJECT_ROOT = resolve(import.meta.dirname ?? __dirname, '../../../..');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -253,7 +254,7 @@ async function loadModuleMigrations(): Promise<
   Array<{ moduleId: string; moduleName: string; filename: string; sql: string }>
 > {
   const { loadModules } = await import('@gatewaze/shared/modules');
-  const configImport = await import('../../../../gatewaze.config.js');
+  const configImport = await import(resolve(PROJECT_ROOT, 'gatewaze.config.ts'));
   const config = (configImport as any)?.default ?? configImport;
   const modules = await loadModules(config, PROJECT_ROOT);
   const migrations: Array<{ moduleId: string; moduleName: string; filename: string; sql: string }> = [];
@@ -300,7 +301,12 @@ async function getEdgeFunctions(): Promise<Array<{ name: string; sourceDir: stri
 // Route registration
 // ---------------------------------------------------------------------------
 
-export function registerRoutes(app: Express) {
+export function registerRoutes(app: Express, context?: ModuleContext) {
+  // Use context from the module loader when available (works for git/zip sources),
+  // fall back to hardcoded relative path for direct imports during development.
+  if (context?.projectRoot) {
+    PROJECT_ROOT = context.projectRoot;
+  }
 
   // =========================================================================
   // PROVISION — Full deployment to a clean Supabase project
@@ -489,7 +495,7 @@ export function registerRoutes(app: Express) {
           // Reconcile installed_modules table on the target
           addLog('info', 'Syncing module registry to target...');
           const { loadModules } = await import('@gatewaze/shared/modules');
-          const configImport = await import('../../../../gatewaze.config.js');
+          const configImport = await import(resolve(PROJECT_ROOT, 'gatewaze.config.ts'));
           const config = (configImport as any)?.default ?? configImport;
           const modules = await loadModules(config, PROJECT_ROOT);
 

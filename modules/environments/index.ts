@@ -1,5 +1,4 @@
-import type { GatewazeModule } from '@gatewaze/shared';
-import { registerRoutes } from './api';
+import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
 
 const environmentsModule: GatewazeModule = {
   id: 'environments',
@@ -15,7 +14,10 @@ const environmentsModule: GatewazeModule = {
     'environments.sync',
   ],
 
-  apiRoutes: (app: unknown) => registerRoutes(app as any),
+  apiRoutes: async (app: unknown, context?: ModuleContext) => {
+    const { registerRoutes } = await import('./api');
+    registerRoutes(app as any, context);
+  },
 
   migrations: [
     'migrations/001_environments_tables.sql',
