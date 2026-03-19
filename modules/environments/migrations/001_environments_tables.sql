@@ -119,23 +119,11 @@ ALTER TABLE public.environment_sync_operations ENABLE ROW LEVEL SECURITY;
 -- Environments: admins can view, super_admins can manage
 CREATE POLICY environments_select ON public.environments
   FOR SELECT TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.account_users au
-      WHERE au.user_id = auth.uid()
-        AND au.role IN ('admin', 'super_admin')
-    )
-  );
+  USING (public.is_admin());
 
 CREATE POLICY environments_manage ON public.environments
   FOR ALL TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.account_users au
-      WHERE au.user_id = auth.uid()
-        AND au.role = 'super_admin'
-    )
-  );
+  USING (public.is_super_admin());
 
 -- Service role has full access
 CREATE POLICY environments_service ON public.environments
@@ -144,23 +132,11 @@ CREATE POLICY environments_service ON public.environments
 -- Sync profiles: admins can view, super_admins can manage
 CREATE POLICY sync_profiles_select ON public.environment_sync_profiles
   FOR SELECT TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.account_users au
-      WHERE au.user_id = auth.uid()
-        AND au.role IN ('admin', 'super_admin')
-    )
-  );
+  USING (public.is_admin());
 
 CREATE POLICY sync_profiles_manage ON public.environment_sync_profiles
   FOR ALL TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.account_users au
-      WHERE au.user_id = auth.uid()
-        AND au.role = 'super_admin'
-    )
-  );
+  USING (public.is_super_admin());
 
 CREATE POLICY sync_profiles_service ON public.environment_sync_profiles
   FOR ALL TO service_role USING (true) WITH CHECK (true);
@@ -168,23 +144,11 @@ CREATE POLICY sync_profiles_service ON public.environment_sync_profiles
 -- Sync operations: admins can view, super_admins can manage
 CREATE POLICY sync_ops_select ON public.environment_sync_operations
   FOR SELECT TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.account_users au
-      WHERE au.user_id = auth.uid()
-        AND au.role IN ('admin', 'super_admin')
-    )
-  );
+  USING (public.is_admin());
 
 CREATE POLICY sync_ops_manage ON public.environment_sync_operations
   FOR ALL TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.account_users au
-      WHERE au.user_id = auth.uid()
-        AND au.role = 'super_admin'
-    )
-  );
+  USING (public.is_super_admin());
 
 CREATE POLICY sync_ops_service ON public.environment_sync_operations
   FOR ALL TO service_role USING (true) WITH CHECK (true);
