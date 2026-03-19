@@ -40,30 +40,36 @@ async function fetchEnvironment(id: string) {
 /**
  * Execute raw SQL against a remote Supabase instance.
  *
- * Strategy:
- *  1. Try the exec_sql RPC (available after core migrations)
- *  2. Fall back to pg-meta /query endpoint (available on all Supabase projects)
+ * Strategy (tried in order):
+ *  1. exec_sql RPC (available after core migrations applied)
+ *  2. pg-meta /query endpoint (available on all Supabase instances)
+ *  3. Supabase Management API (requires cloud project)
+ *
+ * When `returnRows` is true, attempts to return query result rows (only
+ * supported by pg-meta and management API fallbacks).
  */
 async function executeRemoteSQL(
   supabaseUrl: string,
   serviceRoleKey: string,
   sql: string,
-): Promise<{ success: boolean; error?: string }> {
-  // Try exec_sql RPC first (fastest, available after 00008_rpc_functions.sql)
-  const rpcRes = await fetch(`${supabaseUrl}/rest/v1/rpc/exec_sql`, {
-    method: 'POST',
-    headers: {
-      apikey: serviceRoleKey,
-      Authorization: `Bearer ${serviceRoleKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ sql_text: sql }),
-  });
+  options?: { returnRows?: boolean },
+): Promise<{ success: boolean; rows?: any[]; error?: string }> {
+  // --- 1. exec_sql RPC (void return, fastest) ---
+  if (!options?.returnRows) {
+    const rpcRes = await fetch(`${supabaseUrl}/rest/v1/rpc/exec_sql`, {
+      method: 'POST',
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ sql_text: sql }),
+    });
 
-  if (rpcRes.ok) return { success: true };
+    if (rpcRes.ok) return { success: true };
+  }
 
-  // Fallback: pg-meta query endpoint (available on all Supabase instances)
-  // This endpoint is at the same base URL but on the pg-meta service
+  // --- 2. pg-meta /query endpoint ---
   const pgMetaUrl = supabaseUrl.replace('/rest/v1', '').replace(/\/$/, '');
   const queryRes = await fetch(`${pgMetaUrl}/pg/query`, {
     method: 'POST',
@@ -74,15 +80,24 @@ async function executeRemoteSQL(
     body: JSON.stringify({ query: sql }),
   });
 
-  if (queryRes.ok) return { success: true };
+  if (queryRes.ok) {
+    if (options?.returnRows) {
+      try {
+        const data = await queryRes.json();
+        // pg-meta returns an array of row objects
+        const rows = Array.isArray(data) ? data : [];
+        return { success: true, rows };
+      } catch {
+        return { success: true, rows: [] };
+      }
+    }
+    return { success: true };
+  }
 
-  // Second fallback: Supabase Management API (requires project ref extraction)
-  // Extract project ref from URL: https://<ref>.supabase.co
+  // --- 3. Supabase Management API ---
   const refMatch = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/);
   if (refMatch) {
     const projectRef = refMatch[1];
-    // The management API needs a personal access token — try the service role key
-    // as Authorization (works for self-hosted, may not for cloud without PAT)
     const mgmtRes = await fetch(
       `https://api.supabase.com/v1/projects/${projectRef}/database/query`,
       {
@@ -95,11 +110,123 @@ async function executeRemoteSQL(
       }
     );
 
-    if (mgmtRes.ok) return { success: true };
+    if (mgmtRes.ok) {
+      if (options?.returnRows) {
+        try {
+          const data = await mgmtRes.json();
+          const rows = Array.isArray(data) ? data : [];
+          return { success: true, rows };
+        } catch {
+          return { success: true, rows: [] };
+        }
+      }
+      return { success: true };
+    }
   }
 
-  const errText = await rpcRes.text().catch(() => 'Unknown error');
+  // --- 4. Last resort: try exec_sql even for returnRows ---
+  if (options?.returnRows) {
+    const rpcRes = await fetch(`${supabaseUrl}/rest/v1/rpc/exec_sql`, {
+      method: 'POST',
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ sql_text: sql }),
+    });
+
+    if (rpcRes.ok) return { success: true, rows: [] };
+  }
+
+  // All strategies failed
+  const errText = await queryRes.text().catch(() => 'Unknown error');
   return { success: false, error: `SQL execution failed: ${errText}` };
+}
+
+/**
+ * SQL to bootstrap the migration tracking table on a remote target.
+ * This must run before any tracked migrations.
+ */
+const BOOTSTRAP_TRACKING_SQL = `
+CREATE TABLE IF NOT EXISTS public.gatewaze_migrations (
+  filename TEXT PRIMARY KEY,
+  checksum TEXT NOT NULL,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Ensure service_role can access it
+ALTER TABLE public.gatewaze_migrations ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'gatewaze_migrations' AND policyname = 'gatewaze_migrations_service'
+  ) THEN
+    CREATE POLICY gatewaze_migrations_service ON public.gatewaze_migrations
+      FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+`;
+
+/**
+ * Compute a simple checksum for a SQL string (same SHA-256 approach as module migrations).
+ */
+async function computeChecksum(content: string): Promise<string> {
+  const { createHash } = await import('crypto');
+  return createHash('sha256').update(content).digest('hex').substring(0, 16);
+}
+
+/**
+ * Query which migrations have already been applied on a remote target.
+ * Returns a Map of filename → checksum.
+ */
+async function getAppliedMigrations(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+): Promise<Map<string, string>> {
+  const applied = new Map<string, string>();
+
+  // Try reading from the tracking table via REST API
+  const res = await fetch(
+    `${supabaseUrl}/rest/v1/gatewaze_migrations?select=filename,checksum`,
+    {
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+      },
+    }
+  );
+
+  if (res.ok) {
+    const rows = await res.json();
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        applied.set(row.filename, row.checksum);
+      }
+    }
+  }
+
+  return applied;
+}
+
+/**
+ * Record a migration as applied on the remote target.
+ */
+async function recordMigration(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  filename: string,
+  checksum: string,
+): Promise<void> {
+  await fetch(`${supabaseUrl}/rest/v1/gatewaze_migrations`, {
+    method: 'POST',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    },
+    body: JSON.stringify({ filename, checksum }),
+  });
 }
 
 /**
@@ -251,12 +378,46 @@ export function registerRoutes(app: Express) {
       };
 
       try {
+        // Step 0: Bootstrap migration tracking table on target
+        addLog('info', 'Bootstrapping migration tracking on target...');
+        const bootstrapResult = await executeRemoteSQL(
+          target.supabase_url,
+          target.supabase_service_role_key,
+          BOOTSTRAP_TRACKING_SQL,
+        );
+        if (!bootstrapResult.success) {
+          addLog('warn', `Could not bootstrap tracking table: ${bootstrapResult.error}`);
+          addLog('warn', 'Will proceed without incremental tracking — all migrations will be applied.');
+        }
+
+        // Query which migrations have already been applied on target
+        const appliedMigrations = await getAppliedMigrations(
+          target.supabase_url,
+          target.supabase_service_role_key,
+        );
+        addLog('info', `Target has ${appliedMigrations.size} previously applied migration(s)`);
+
         // Step 1: Core migrations
         if (steps?.coreMigrations !== false) {
-          addLog('info', 'Applying core database migrations...');
+          addLog('info', 'Checking core database migrations...');
           const coreMigrations = loadCoreMigrations();
+          let applied = 0;
+          let skipped = 0;
 
           for (const migration of coreMigrations) {
+            const checksum = await computeChecksum(migration.sql);
+            const existingChecksum = appliedMigrations.get(migration.filename);
+
+            if (existingChecksum === checksum) {
+              addLog('info', `Skipping ${migration.filename} (already applied, checksum matches)`);
+              skipped++;
+              continue;
+            }
+
+            if (existingChecksum && existingChecksum !== checksum) {
+              addLog('warn', `${migration.filename} has changed since last apply — re-applying`);
+            }
+
             addLog('info', `Applying ${migration.filename}...`);
             const result = await executeRemoteSQL(
               target.supabase_url,
@@ -266,22 +427,44 @@ export function registerRoutes(app: Express) {
 
             if (!result.success) {
               addLog('error', `Failed to apply ${migration.filename}: ${result.error}`);
-              // Continue — migrations are idempotent, some may fail due to ordering
-              // but subsequent runs should succeed
             } else {
               addLog('success', `Applied ${migration.filename}`);
+              await recordMigration(
+                target.supabase_url,
+                target.supabase_service_role_key,
+                migration.filename,
+                checksum,
+              );
+              applied++;
             }
           }
 
-          addLog('success', `Core migrations complete (${coreMigrations.length} files)`);
+          addLog('success', `Core migrations: ${applied} applied, ${skipped} skipped (already up-to-date)`);
         }
 
         // Step 2: Module migrations
         if (steps?.moduleMigrations !== false) {
-          addLog('info', 'Applying module migrations...');
+          addLog('info', 'Checking module migrations...');
           const moduleMigrations = await loadModuleMigrations();
+          let applied = 0;
+          let skipped = 0;
 
           for (const migration of moduleMigrations) {
+            // Use a namespaced key to avoid collisions with core migrations
+            const trackingKey = `module:${migration.moduleId}/${migration.filename}`;
+            const checksum = await computeChecksum(migration.sql);
+            const existingChecksum = appliedMigrations.get(trackingKey);
+
+            if (existingChecksum === checksum) {
+              addLog('info', `Skipping ${migration.moduleName}: ${migration.filename} (already applied)`);
+              skipped++;
+              continue;
+            }
+
+            if (existingChecksum && existingChecksum !== checksum) {
+              addLog('warn', `${migration.moduleName}: ${migration.filename} has changed — re-applying`);
+            }
+
             addLog('info', `Applying ${migration.moduleName}: ${migration.filename}...`);
             const result = await executeRemoteSQL(
               target.supabase_url,
@@ -293,11 +476,17 @@ export function registerRoutes(app: Express) {
               addLog('error', `Failed: ${migration.filename}: ${result.error}`);
             } else {
               addLog('success', `Applied ${migration.moduleName}: ${migration.filename}`);
+              await recordMigration(
+                target.supabase_url,
+                target.supabase_service_role_key,
+                trackingKey,
+                checksum,
+              );
+              applied++;
             }
           }
 
-          // Also reconcile the installed_modules table on the target
-          // by inserting module records via the REST API
+          // Reconcile installed_modules table on the target
           addLog('info', 'Syncing module registry to target...');
           const { loadModules } = await import('@gatewaze/shared/modules');
           const configImport = await import('../../../../gatewaze.config.js');
@@ -329,7 +518,7 @@ export function registerRoutes(app: Express) {
             });
           }
 
-          addLog('success', `Module migrations complete (${moduleMigrations.length} files, ${modules.length} modules registered)`);
+          addLog('success', `Module migrations: ${applied} applied, ${skipped} skipped, ${modules.length} modules registered`);
         }
 
         // Step 3: Storage buckets
@@ -447,13 +636,14 @@ export function registerRoutes(app: Express) {
   });
 
   /**
-   * GET /api/environments/provision/preview
+   * GET /api/environments/provision/preview?environmentId=xxx
    *
    * Preview what will be applied during provisioning.
+   * If environmentId is provided, diffs against already-applied migrations.
    */
-  app.get('/api/environments/provision/preview', async (_req: Request, res: Response) => {
+  app.get('/api/environments/provision/preview', async (req: Request, res: Response) => {
     try {
-      const coreMigrations = loadCoreMigrations().map((m) => m.filename);
+      const coreMigrations = loadCoreMigrations();
       const moduleMigrations = await loadModuleMigrations();
       const edgeFunctions = await getEdgeFunctions();
 
@@ -473,15 +663,60 @@ export function registerRoutes(app: Express) {
         }
       }
 
+      // If an environmentId is provided, check what's already applied
+      let appliedMigrations = new Map<string, string>();
+      const environmentId = req.query.environmentId as string | undefined;
+
+      if (environmentId) {
+        try {
+          const env = await fetchEnvironment(environmentId);
+          if (env.supabase_service_role_key) {
+            appliedMigrations = await getAppliedMigrations(
+              env.supabase_url,
+              env.supabase_service_role_key,
+            );
+          }
+        } catch {
+          // Target may not be reachable — that's fine, show all as pending
+        }
+      }
+
+      // Compute status for each migration
+      const coreMigrationsWithStatus = await Promise.all(
+        coreMigrations.map(async (m) => {
+          const checksum = await computeChecksum(m.sql);
+          const existingChecksum = appliedMigrations.get(m.filename);
+          let status: 'pending' | 'applied' | 'changed' = 'pending';
+          if (existingChecksum === checksum) status = 'applied';
+          else if (existingChecksum) status = 'changed';
+          return { filename: m.filename, status };
+        })
+      );
+
+      const moduleMigrationsWithStatus = await Promise.all(
+        moduleMigrations.map(async (m) => {
+          const trackingKey = `module:${m.moduleId}/${m.filename}`;
+          const checksum = await computeChecksum(m.sql);
+          const existingChecksum = appliedMigrations.get(trackingKey);
+          let status: 'pending' | 'applied' | 'changed' = 'pending';
+          if (existingChecksum === checksum) status = 'applied';
+          else if (existingChecksum) status = 'changed';
+          return {
+            moduleId: m.moduleId,
+            moduleName: m.moduleName,
+            filename: m.filename,
+            status,
+          };
+        })
+      );
+
       return res.json({
-        coreMigrations,
-        moduleMigrations: moduleMigrations.map((m) => ({
-          moduleId: m.moduleId,
-          moduleName: m.moduleName,
-          filename: m.filename,
-        })),
+        coreMigrations: coreMigrationsWithStatus,
+        moduleMigrations: moduleMigrationsWithStatus,
         edgeFunctions: edgeFunctions.map((f) => f.name),
         storageBuckets: buckets,
+        targetHasTracking: appliedMigrations.size > 0,
+        appliedCount: appliedMigrations.size,
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });

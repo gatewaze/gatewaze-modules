@@ -35,6 +35,12 @@ const environmentsModule: GatewazeModule = {
       guard: 'admin',
     },
     {
+      path: 'environments/:environmentId/provision',
+      component: () => import('./admin/pages/provision'),
+      requiredFeature: 'environments.manage',
+      guard: 'admin',
+    },
+    {
       path: 'environments/:environmentId/sync',
       component: () => import('./admin/pages/sync'),
       requiredFeature: 'environments.sync',

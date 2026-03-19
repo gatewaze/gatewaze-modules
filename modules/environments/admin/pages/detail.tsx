@@ -10,7 +10,7 @@ import {
   ExclamationTriangleIcon,
   SignalIcon,
   ArrowLeftIcon,
-  PencilIcon,
+  RocketLaunchIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Card, Button, Badge, Tabs } from '@/components/ui';
@@ -217,6 +217,14 @@ export default function EnvironmentDetailPage() {
             >
               <SignalIcon className={`size-4 ${testing ? 'animate-pulse' : ''}`} />
               Test Connection
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => navigate(`/environments/${environment.id}/provision`)}
+              className="gap-2"
+            >
+              <RocketLaunchIcon className="size-4" />
+              Provision
             </Button>
             <Button
               onClick={() => navigate(`/environments/${environment.id}/sync`)}
