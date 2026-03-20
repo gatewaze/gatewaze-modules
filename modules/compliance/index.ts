@@ -3,7 +3,7 @@ import type { GatewazeModule } from '@gatewaze/shared';
 const complianceModule: GatewazeModule = {
   id: 'compliance',
   type: 'feature',
-  visibility: 'hidden',
+  visibility: 'public',
   name: 'Compliance',
   description: 'GDPR, CCPA, and SOC 2 compliance tools — consent records, privacy requests, data breach tracking, and audit logging',
   version: '1.0.0',

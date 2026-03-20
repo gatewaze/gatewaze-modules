@@ -17,6 +17,15 @@ const eventSpeakersModule: GatewazeModule = {
     'migrations/001_event_speakers_tables.sql',
   ],
 
+  edgeFunctions: [
+    'events-speaker-confirm',
+    'events-speaker-submission',
+    'events-speaker-submissions',
+    'events-speaker-tracking-link',
+    'events-speaker-update',
+    'events-speaker-update-notify',
+  ],
+
   adminSlots: [
     {
       slotName: 'event-detail:tab',

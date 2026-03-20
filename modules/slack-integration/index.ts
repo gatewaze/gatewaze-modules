@@ -18,6 +18,12 @@ const slackIntegrationModule: GatewazeModule = {
     'migrations/001_slack_tables.sql',
   ],
 
+  edgeFunctions: [
+    'integrations-slack-list-channels',
+    'integrations-slack-notify',
+    'integrations-slack-oauth-callback',
+  ],
+
   adminRoutes: [
     { path: 'slack/invitations', component: () => import('./admin/pages/invitations'), requiredFeature: 'slack', guard: 'none' },
   ],

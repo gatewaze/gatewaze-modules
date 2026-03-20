@@ -18,6 +18,15 @@ const eventMediaModule: GatewazeModule = {
     'migrations/001_event_media_tables.sql',
   ],
 
+  edgeFunctions: [
+    'media-combine-chunks',
+    'media-get-youtube-upload-url',
+    'media-process-image',
+    'media-process-youtube-uploads',
+    'media-process-zip',
+    'media-upload-youtube',
+  ],
+
   adminSlots: [
     {
       slotName: 'event-detail:tab',

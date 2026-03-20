@@ -17,6 +17,8 @@ const eventInterestModule: GatewazeModule = {
     'migrations/001_event_interest_tables.sql',
   ],
 
+  edgeFunctions: ['events-interest'],
+
   adminSlots: [
     {
       slotName: 'event-detail:tab',
