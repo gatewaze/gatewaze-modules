@@ -220,14 +220,14 @@ export default function EnvironmentDetailPage() {
             </Button>
             <Button
               variant="outlined"
-              onClick={() => navigate(`/environments/${environment.id}/provision`)}
+              onClick={() => navigate(`/admin/environments/${environment.id}/provision`)}
               className="gap-2"
             >
               <RocketLaunchIcon className="size-4" />
               Provision
             </Button>
             <Button
-              onClick={() => navigate(`/environments/${environment.id}/sync`)}
+              onClick={() => navigate(`/admin/environments/${environment.id}/sync`)}
               className="gap-2"
             >
               <ArrowsRightLeftIcon className="size-4" />

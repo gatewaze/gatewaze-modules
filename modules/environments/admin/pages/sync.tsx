@@ -564,7 +564,7 @@ export default function SyncPage() {
         <div className="flex items-center gap-4">
           <Button
             variant="ghost"
-            onClick={() => navigate(`/environments/${environmentId}`)}
+            onClick={() => navigate(`/admin/environments/${environmentId}`)}
             className="gap-1"
           >
             <ArrowLeftIcon className="size-4" />

@@ -219,7 +219,7 @@ export default function ProvisionPage() {
         <div className="flex items-center gap-4">
           <Button
             variant="ghost"
-            onClick={() => navigate(`/environments/${environmentId}`)}
+            onClick={() => navigate(`/admin/environments/${environmentId}`)}
             className="gap-1"
           >
             <ArrowLeftIcon className="size-4" />
@@ -455,7 +455,7 @@ export default function ProvisionPage() {
           {operationStatus === 'completed' && (
             <Button
               variant="outlined"
-              onClick={() => navigate(`/environments/${environmentId}/sync`)}
+              onClick={() => navigate(`/admin/environments/${environmentId}/sync`)}
               className="gap-2"
             >
               Continue to Content Sync

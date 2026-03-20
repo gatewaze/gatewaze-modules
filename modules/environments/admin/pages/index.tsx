@@ -230,7 +230,7 @@ export default function EnvironmentsPage() {
       } else {
         const { error } = await supabase
           .from('environments')
-          .insert({ ...payload, created_by: user?.id });
+          .insert(payload);
         if (error) throw error;
         toast.success('Environment created');
       }
@@ -381,12 +381,12 @@ export default function EnvironmentsPage() {
                 {
                   label: 'View Details',
                   icon: <ServerStackIcon className="size-4" />,
-                  onClick: () => navigate(`/environments/${env.id}`),
+                  onClick: () => navigate(`/admin/environments/${env.id}`),
                 },
                 {
                   label: 'Sync Content',
                   icon: <ArrowsRightLeftIcon className="size-4" />,
-                  onClick: () => navigate(`/environments/${env.id}/sync`),
+                  onClick: () => navigate(`/admin/environments/${env.id}/sync`),
                 },
                 {
                   label: 'Test Connection',
@@ -505,7 +505,7 @@ export default function EnvironmentsPage() {
           <DataTable
             table={table}
             loading={loading}
-            onRowDoubleClick={(env) => navigate(`/environments/${env.id}`)}
+            onRowDoubleClick={(env) => navigate(`/admin/environments/${env.id}`)}
             emptyState={
               <div>
                 <ServerStackIcon className="mx-auto h-12 w-12 text-[var(--gray-a6)]" />
