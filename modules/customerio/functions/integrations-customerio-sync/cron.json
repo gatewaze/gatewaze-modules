@@ -1,4 +1,0 @@
-{
-  "schedule": "0 */15 * * * *",
-  "description": "Sync Customer.io data every 15 minutes"
-}
