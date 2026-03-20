@@ -4,21 +4,42 @@
 -- Description: Create GDPR/CCPA compliance tables
 -- ============================================================================
 
--- Add CCPA columns to people table if not present
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'people' AND column_name = 'do_not_sell'
-  ) THEN
-    ALTER TABLE public.people ADD COLUMN do_not_sell boolean;
-    ALTER TABLE public.people ADD COLUMN do_not_sell_set_at timestamptz;
-    ALTER TABLE public.people ADD COLUMN do_not_share boolean;
-    ALTER TABLE public.people ADD COLUMN do_not_share_set_at timestamptz;
-    ALTER TABLE public.people ADD COLUMN limit_sensitive_data_use boolean;
-    ALTER TABLE public.people ADD COLUMN limit_sensitive_data_use_set_at timestamptz;
-  END IF;
-END $$;
+-- ── Privacy policy & terms acceptance ─────────────────────────────────────────
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS privacy_policy_accepted_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS privacy_policy_version text;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS terms_version text;
+
+-- ── Data lifecycle ───────────────────────────────────────────────────────────
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS data_retention_expires_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS anonymized_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS deletion_requested_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS deletion_scheduled_for timestamptz;
+
+-- ── CCPA / CPRA preferences ─────────────────────────────────────────────────
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS do_not_sell boolean;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS do_not_sell_set_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS do_not_share boolean;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS do_not_share_set_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS limit_sensitive_data_use boolean;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS limit_sensitive_data_use_set_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS ccpa_opt_out_of_financial_incentive boolean;
+
+-- ── Age verification & COPPA ─────────────────────────────────────────────────
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS date_of_birth date;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS age_verified_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS age_verification_method text;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS is_minor boolean;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS parental_consent_given boolean;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS parental_consent_email text;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS parental_consent_verified_at timestamptz;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS coppa_verifiable_parental_consent boolean;
+
+-- ── Jurisdiction & data residency ────────────────────────────────────────────
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS jurisdiction_country text;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS jurisdiction_state text;
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS applicable_privacy_laws text[];
+ALTER TABLE public.people ADD COLUMN IF NOT EXISTS data_residency_requirement text;
 
 -- Consent records
 CREATE TABLE IF NOT EXISTS public.compliance_consent_records (

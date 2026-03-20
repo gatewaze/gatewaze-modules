@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/people-enrichment",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./admin/*": "./admin/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "react": "^18.0.0 || ^19.0.0"
+  }
+}
