@@ -1,94 +1,159 @@
-commit 67779bbc634e29d7f5361c7fecc7f2b89879ddc2
-Author: Dan Baker <me@danb.co>
-Date:   Fri Mar 20 08:21:48 2026 +0000
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 
-    Enhance icon handling and module setup in onboarding process
-    
-    - Updated the icon mapping logic to handle both function and object types, ensuring robustness in icon rendering.
-    - Integrated module context refresh in the onboarding process to immediately reflect changes in navigation items after module setup.
-    - Improved route merging logic to handle lazy loading more effectively, enhancing the routing structure.
-    
-    This commit improves the user experience by ensuring icons are correctly rendered and that the onboarding process reflects module changes promptly.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
 
-diff --git a/packages/admin/src/app/navigation/icons.ts b/packages/admin/src/app/navigation/icons.ts
-index 142a9ed..0bd1ad0 100644
---- a/packages/admin/src/app/navigation/icons.ts
-+++ b/packages/admin/src/app/navigation/icons.ts
-@@ -9,7 +9,8 @@ import SettingIcon from "@/assets/dualicons/setting.svg?react";
- // Strips the "Icon" suffix and maps common Lucide-style aliases used by modules.
- const heroIconsByName: Record<string, ElementType> = {};
- for (const [exportName, component] of Object.entries(HeroOutline)) {
--  if (typeof component !== 'function') continue;
-+  if (typeof component !== 'function' && typeof component !== 'object') continue;
-+  if (!component) continue;
-   // e.g. "EnvelopeIcon" → "Envelope"
-   const shortName = exportName.replace(/Icon$/, '');
-   heroIconsByName[shortName] = component as ElementType;
-diff --git a/packages/admin/src/app/pages/onboarding/ModuleSetupStep.tsx b/packages/admin/src/app/pages/onboarding/ModuleSetupStep.tsx
-index fc37028..db6e8af 100644
---- a/packages/admin/src/app/pages/onboarding/ModuleSetupStep.tsx
-+++ b/packages/admin/src/app/pages/onboarding/ModuleSetupStep.tsx
-@@ -2,12 +2,14 @@ import { useState, useEffect, useRef } from "react";
- import { useNavigate } from "react-router";
- import { CheckCircle2, Loader2, AlertCircle, Package } from "lucide-react";
- import { ModuleService } from "@/utils/moduleService";
-+import { useModulesContext } from "@/app/contexts/modules/context";
- import PixelTrail from "@/components/shared/PixelTrail";
- 
- type SetupStatus = "running" | "done" | "error";
- 
- export default function ModuleSetupStep() {
-   const navigate = useNavigate();
-+  const { refresh: refreshModulesContext } = useModulesContext();
-   const [status, setStatus] = useState<SetupStatus>("running");
-   const [statusText, setStatusText] = useState("Preparing modules...");
-   const [errorMessage, setErrorMessage] = useState("");
-@@ -37,6 +39,9 @@ export default function ModuleSetupStep() {
-         );
-         setStatus("done");
- 
-+        // Refresh module context so nav items appear immediately
-+        await refreshModulesContext();
-+
-         // Update onboarding step via API (service_role) to bypass RLS
-         const apiUrl = import.meta.env.VITE_API_URL ?? "";
-         await fetch(`${apiUrl}/api/modules/settings`, {
-diff --git a/packages/admin/src/app/router/moduleRoutes.tsx b/packages/admin/src/app/router/moduleRoutes.tsx
-index 841fa01..672627d 100644
---- a/packages/admin/src/app/router/moduleRoutes.tsx
-+++ b/packages/admin/src/app/router/moduleRoutes.tsx
-@@ -75,10 +75,13 @@ function collectRoutes(guardFilter: string | undefined): RouteObject[] {
-       // Merge children if we already have a route for this top-level path
-       const existing = topLevel.get(topPath);
-       if (existing) {
--        existing.children = [
--          ...(existing.children ?? []),
--          ...(routeObj.children ?? []),
--        ];
-+        // If the new route has children, merge them in
-+        if (routeObj.children) {
-+          existing.children = [
-+            ...(existing.children ?? []),
-+            ...routeObj.children,
-+          ];
-+        }
-         // If the new route has a lazy loader but no children, it's an index route
-         if (routeObj.lazy && !routeObj.children) {
-           existing.children = [
-@@ -86,6 +89,16 @@ function collectRoutes(guardFilter: string | undefined): RouteObject[] {
-             { index: true, lazy: routeObj.lazy },
-           ];
-         }
-+        // If the existing route had lazy (was first registered as a single-segment
-+        // path), convert it to an index child so the parent becomes a pathless
-+        // wrapper instead of a layout that swallows child renders.
-+        if (existing.lazy) {
-+          existing.children = [
-+            { index: true, lazy: existing.lazy },
-+            ...(existing.children ?? []),
-+          ];
-+          delete existing.lazy;
-+        }
-       } else {
-         topLevel.set(topPath, routeObj);
-       }
+interface TrackOfferInteractionRequest {
+  email: string
+  offer_id: string
+  offer_status: 'viewed' | 'accepted' | 'completed'
+  offer_type?: string
+  offer_partner?: string
+  offer_referrer?: string
+  workspace?: string
+}
+
+Deno.serve(async (req) => {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  try {
+    // Only accept POST requests
+    if (req.method !== 'POST') {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Method not allowed' }),
+        { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Parse request body
+    const body: TrackOfferInteractionRequest = await req.json()
+    const { email, offer_id, offer_status, offer_type, offer_partner, workspace } = body
+
+    // Validate required fields
+    if (!email || !offer_id || !offer_status) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'Missing required fields: email, offer_id, and offer_status are required'
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Validate offer_status
+    const validStatuses = ['viewed', 'accepted', 'completed']
+    if (!validStatuses.includes(offer_status)) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: `Invalid offer_status. Must be one of: ${validStatuses.join(', ')}`
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Create Supabase client with service role key for full access
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false
+        }
+      }
+    )
+
+    console.log(`📊 Tracking offer interaction: ${offer_id} - ${offer_status} for ${email}`)
+
+    // Step 1: Look up the person by email to get their id and cio_id
+    const { data: person, error: personError } = await supabaseClient
+      .from('people')
+      .select('id, cio_id, email')
+      .eq('email', email.toLowerCase())
+      .single()
+
+    if (personError || !person) {
+      // Person not found - cannot track interaction without a person record
+      console.log(`⚠️ Person not found for ${email}`)
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: `Person not found for email: ${email}`
+        }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    console.log(`✅ Found person with id: ${person.id}, cio_id: ${person.cio_id}`)
+
+    // Step 2: Insert the offer interaction record
+    // Use customer_id as the primary foreign key, keep customer_cio_id for backward compatibility
+    const normalizedEmail = email.toLowerCase().trim()
+    const { data: interaction, error: insertError } = await supabaseClient
+      .from('integrations_offer_interactions')
+      .insert([{
+        customer_id: person.id,
+        customer_cio_id: person.cio_id,
+        email: normalizedEmail,
+        offer_id: offer_id,
+        offer_status: offer_status,
+        offer_type: offer_type || null,
+        offer_partner: offer_partner || null,
+        offer_referrer: 'api',
+        workspace: workspace || null,
+        timestamp: new Date().toISOString()
+      }])
+      .select()
+      .single()
+
+    if (insertError) {
+      // Check for duplicate entry (unique constraint violation)
+      if (insertError.code === '23505') {
+        console.log(`⚠️ Duplicate interaction: ${offer_id} - ${offer_status} for ${person.cio_id}`)
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: 'Interaction already recorded',
+            duplicate: true
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      console.error('❌ Error inserting offer interaction:', insertError)
+      throw insertError
+    }
+
+    console.log(`✅ Successfully tracked offer interaction: ${interaction?.id}`)
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: 'Offer interaction tracked successfully',
+        interaction_id: interaction?.id,
+        person_id: person.id,
+        customer_cio_id: person.cio_id
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
+
+  } catch (error) {
+    console.error('❌ Error in track-offer-interaction function:', error)
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: error.message || 'Failed to track offer interaction',
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    )
+  }
+})

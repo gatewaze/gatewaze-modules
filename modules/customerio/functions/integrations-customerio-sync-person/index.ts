@@ -1,94 +1,174 @@
-commit 67779bbc634e29d7f5361c7fecc7f2b89879ddc2
-Author: Dan Baker <me@danb.co>
-Date:   Fri Mar 20 08:21:48 2026 +0000
+/**
+ * Sync Person to Customer.io
+ *
+ * This edge function is called by a database trigger when the people table is updated.
+ * It syncs the person attributes to Customer.io and updates last_synced_at in Supabase.
+ *
+ * Expected payload from pg_net trigger:
+ * {
+ *   email: string,
+ *   attributes: Record<string, any>,
+ *   source?: string  // 'db_trigger' when called from database
+ * }
+ */
 
-    Enhance icon handling and module setup in onboarding process
-    
-    - Updated the icon mapping logic to handle both function and object types, ensuring robustness in icon rendering.
-    - Integrated module context refresh in the onboarding process to immediately reflect changes in navigation items after module setup.
-    - Improved route merging logic to handle lazy loading more effectively, enhancing the routing structure.
-    
-    This commit improves the user experience by ensuring icons are correctly rendered and that the onboarding process reflects module changes promptly.
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 
-diff --git a/packages/admin/src/app/navigation/icons.ts b/packages/admin/src/app/navigation/icons.ts
-index 142a9ed..0bd1ad0 100644
---- a/packages/admin/src/app/navigation/icons.ts
-+++ b/packages/admin/src/app/navigation/icons.ts
-@@ -9,7 +9,8 @@ import SettingIcon from "@/assets/dualicons/setting.svg?react";
- // Strips the "Icon" suffix and maps common Lucide-style aliases used by modules.
- const heroIconsByName: Record<string, ElementType> = {};
- for (const [exportName, component] of Object.entries(HeroOutline)) {
--  if (typeof component !== 'function') continue;
-+  if (typeof component !== 'function' && typeof component !== 'object') continue;
-+  if (!component) continue;
-   // e.g. "EnvelopeIcon" → "Envelope"
-   const shortName = exportName.replace(/Icon$/, '');
-   heroIconsByName[shortName] = component as ElementType;
-diff --git a/packages/admin/src/app/pages/onboarding/ModuleSetupStep.tsx b/packages/admin/src/app/pages/onboarding/ModuleSetupStep.tsx
-index fc37028..db6e8af 100644
---- a/packages/admin/src/app/pages/onboarding/ModuleSetupStep.tsx
-+++ b/packages/admin/src/app/pages/onboarding/ModuleSetupStep.tsx
-@@ -2,12 +2,14 @@ import { useState, useEffect, useRef } from "react";
- import { useNavigate } from "react-router";
- import { CheckCircle2, Loader2, AlertCircle, Package } from "lucide-react";
- import { ModuleService } from "@/utils/moduleService";
-+import { useModulesContext } from "@/app/contexts/modules/context";
- import PixelTrail from "@/components/shared/PixelTrail";
- 
- type SetupStatus = "running" | "done" | "error";
- 
- export default function ModuleSetupStep() {
-   const navigate = useNavigate();
-+  const { refresh: refreshModulesContext } = useModulesContext();
-   const [status, setStatus] = useState<SetupStatus>("running");
-   const [statusText, setStatusText] = useState("Preparing modules...");
-   const [errorMessage, setErrorMessage] = useState("");
-@@ -37,6 +39,9 @@ export default function ModuleSetupStep() {
-         );
-         setStatus("done");
- 
-+        // Refresh module context so nav items appear immediately
-+        await refreshModulesContext();
-+
-         // Update onboarding step via API (service_role) to bypass RLS
-         const apiUrl = import.meta.env.VITE_API_URL ?? "";
-         await fetch(`${apiUrl}/api/modules/settings`, {
-diff --git a/packages/admin/src/app/router/moduleRoutes.tsx b/packages/admin/src/app/router/moduleRoutes.tsx
-index 841fa01..672627d 100644
---- a/packages/admin/src/app/router/moduleRoutes.tsx
-+++ b/packages/admin/src/app/router/moduleRoutes.tsx
-@@ -75,10 +75,13 @@ function collectRoutes(guardFilter: string | undefined): RouteObject[] {
-       // Merge children if we already have a route for this top-level path
-       const existing = topLevel.get(topPath);
-       if (existing) {
--        existing.children = [
--          ...(existing.children ?? []),
--          ...(routeObj.children ?? []),
--        ];
-+        // If the new route has children, merge them in
-+        if (routeObj.children) {
-+          existing.children = [
-+            ...(existing.children ?? []),
-+            ...routeObj.children,
-+          ];
-+        }
-         // If the new route has a lazy loader but no children, it's an index route
-         if (routeObj.lazy && !routeObj.children) {
-           existing.children = [
-@@ -86,6 +89,16 @@ function collectRoutes(guardFilter: string | undefined): RouteObject[] {
-             { index: true, lazy: routeObj.lazy },
-           ];
-         }
-+        // If the existing route had lazy (was first registered as a single-segment
-+        // path), convert it to an index child so the parent becomes a pathless
-+        // wrapper instead of a layout that swallows child renders.
-+        if (existing.lazy) {
-+          existing.children = [
-+            { index: true, lazy: existing.lazy },
-+            ...(existing.children ?? []),
-+          ];
-+          delete existing.lazy;
-+        }
-       } else {
-         topLevel.set(topPath, routeObj);
-       }
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+// Customer.io Track API configuration
+const CIO_TRACK_SITE_ID = Deno.env.get('CUSTOMERIO_SITE_ID')
+const CIO_TRACK_API_KEY = Deno.env.get('CUSTOMERIO_API_KEY')
+
+// Supabase client for updating last_synced_at
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+
+interface SyncRequest {
+  email: string
+  attributes: Record<string, any>
+  source?: string
+}
+
+/**
+ * Update customer in Customer.io
+ */
+async function updateCIOCustomer(email: string, attributes: Record<string, any>): Promise<{ success: boolean; error?: string }> {
+  if (!CIO_TRACK_SITE_ID || !CIO_TRACK_API_KEY) {
+    console.log('Customer.io credentials not configured, skipping CIO update')
+    return { success: false, error: 'CIO credentials not configured' }
+  }
+
+  try {
+    const credentials = btoa(`${CIO_TRACK_SITE_ID}:${CIO_TRACK_API_KEY}`)
+
+    // Use Customer.io Track API to update customer attributes
+    // https://customer.io/docs/api/track/#operation/identify
+    const response = await fetch(`https://track.customer.io/api/v1/customers/${encodeURIComponent(email)}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Basic ${credentials}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        email,
+        ...attributes
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error(`CIO update failed: ${response.status} ${response.statusText} - ${errorText}`)
+      return { success: false, error: `CIO API error: ${response.status}` }
+    }
+
+    console.log(`✅ CIO customer updated: ${email} with attributes: ${Object.keys(attributes).join(', ')}`)
+    return { success: true }
+  } catch (error) {
+    console.error('Failed to update CIO customer:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+  }
+}
+
+Deno.serve(async (req) => {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  try {
+    // Only accept POST requests
+    if (req.method !== 'POST') {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Method not allowed' }),
+        { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Parse request body
+    const body: SyncRequest = await req.json()
+    const { email, attributes, source } = body
+
+    // Validate required fields
+    if (!email) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Email is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (!attributes || Object.keys(attributes).length === 0) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Attributes are required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    console.log(`📤 Syncing person to CIO: ${email} (source: ${source || 'unknown'})`)
+    console.log(`   Attributes: ${JSON.stringify(attributes)}`)
+
+    // Sync to Customer.io
+    const result = await updateCIOCustomer(email, attributes)
+
+    // Update last_synced_at in Supabase if sync was successful
+    if (result.success) {
+      try {
+        const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false
+          }
+        })
+
+        const { error: updateError } = await supabase
+          .from('people')
+          .update({ last_synced_at: new Date().toISOString() })
+          .ilike('email', email)
+
+        if (updateError) {
+          console.error('Failed to update last_synced_at:', updateError)
+        } else {
+          console.log(`✅ Updated last_synced_at for ${email}`)
+        }
+      } catch (dbError) {
+        console.error('Error updating last_synced_at:', dbError)
+        // Don't fail the response - CIO sync was successful
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: 'Person synced to Customer.io',
+          email,
+          attributes_synced: Object.keys(attributes)
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    } else {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: result.error,
+          email
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+  } catch (error) {
+    console.error('Error in sync-person-to-cio function:', error)
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to sync person to CIO',
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    )
+  }
+})
