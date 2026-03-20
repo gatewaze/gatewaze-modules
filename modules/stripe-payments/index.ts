@@ -54,8 +54,9 @@ const stripePaymentsModule: GatewazeModule = {
   ],
 
   edgeFunctions: [
-    'stripe-webhook',
-    'create-event-payment',
+    'integrations-stripe-webhook',
+    'integrations-stripe-sync',
+    'events-create-payment',
   ],
 
   migrations: [
