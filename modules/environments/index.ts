@@ -2,12 +2,12 @@ import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
 
 const environmentsModule: GatewazeModule = {
   id: 'environments',
-  type: 'integration',
+  type: 'feature',
   visibility: 'public',
   name: 'Environments',
   description: 'Push and pull content between Supabase environments — sync database rows, edge functions, storage, and auth configuration across local, cloud, and self-hosted instances',
   version: '1.0.0',
-  group: 'platform',
+  group: 'feature',
   features: [
     'environments',
     'environments.manage',
