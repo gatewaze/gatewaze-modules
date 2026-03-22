@@ -33,12 +33,19 @@ CREATE TABLE IF NOT EXISTS public.scrapers (
   schedule_cron       varchar(100),
   next_scheduled_run  timestamptz,
   object_type         text NOT NULL DEFAULT 'events',
-  account             text
+  account             text,
+  CONSTRAINT scrapers_base_url_unique UNIQUE (base_url)
 );
 
 ALTER TABLE public.scrapers ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon_read_scrapers" ON public.scrapers FOR SELECT TO anon USING (true);
-CREATE POLICY "auth_all_scrapers" ON public.scrapers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  CREATE POLICY "anon_read_scrapers" ON public.scrapers FOR SELECT TO anon USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+  CREATE POLICY "auth_all_scrapers" ON public.scrapers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- ==========================================================================
 -- 2. Scrapers jobs table
@@ -65,8 +72,14 @@ CREATE INDEX IF NOT EXISTS idx_scrapers_jobs_scraper ON public.scrapers_jobs (sc
 CREATE INDEX IF NOT EXISTS idx_scrapers_jobs_status ON public.scrapers_jobs (status);
 
 ALTER TABLE public.scrapers_jobs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon_read_scrapers_jobs" ON public.scrapers_jobs FOR SELECT TO anon USING (true);
-CREATE POLICY "auth_all_scrapers_jobs" ON public.scrapers_jobs FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  CREATE POLICY "anon_read_scrapers_jobs" ON public.scrapers_jobs FOR SELECT TO anon USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+  CREATE POLICY "auth_all_scrapers_jobs" ON public.scrapers_jobs FOR ALL TO authenticated USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- ==========================================================================
 -- 3. Scrapers job logs table
@@ -84,8 +97,14 @@ CREATE TABLE IF NOT EXISTS public.scrapers_job_logs (
 CREATE INDEX IF NOT EXISTS idx_scrapers_job_logs_job ON public.scrapers_job_logs (job_id);
 
 ALTER TABLE public.scrapers_job_logs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon_read_scrapers_job_logs" ON public.scrapers_job_logs FOR SELECT TO anon USING (true);
-CREATE POLICY "auth_all_scrapers_job_logs" ON public.scrapers_job_logs FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  CREATE POLICY "anon_read_scrapers_job_logs" ON public.scrapers_job_logs FOR SELECT TO anon USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+  CREATE POLICY "auth_all_scrapers_job_logs" ON public.scrapers_job_logs FOR ALL TO authenticated USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- ==========================================================================
 -- 4. RPC: events_create

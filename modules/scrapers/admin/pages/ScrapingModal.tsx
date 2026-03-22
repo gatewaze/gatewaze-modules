@@ -125,7 +125,7 @@ export function ScrapingModal({ isOpen, onClose, jobIds, reconnectMode = false }
   const fetchHistoricalLogs = async (jobId: number): Promise<LogEntry[]> => {
     const apiBase = getApiBaseUrl();
     try {
-      const response = await fetch(`${apiBase}/api/scrapers/${jobId}/logs`);
+      const response = await fetch(`${apiBase}/scrapers/${jobId}/logs`);
       if (!response.ok) {
         console.error(`Failed to fetch historical logs for job ${jobId}`);
         return [];
@@ -253,7 +253,7 @@ export function ScrapingModal({ isOpen, onClose, jobIds, reconnectMode = false }
 
     for (const jobId of jobIds) {
       // Connect to the job's log stream
-      const eventSource = new EventSource(`${apiBase}/api/scrapers/${jobId}/stream`);
+      const eventSource = new EventSource(`${apiBase}/scrapers/${jobId}/stream`);
       eventSourcesRef.current.push(eventSource);
 
       eventSource.onmessage = (event) => {
@@ -322,7 +322,7 @@ export function ScrapingModal({ isOpen, onClose, jobIds, reconnectMode = false }
       try {
         // Only start the job if not in reconnect mode
         if (!reconnectMode) {
-          const response = await fetch(`${apiBase}/api/scrapers/${jobId}/start`, {
+          const response = await fetch(`${apiBase}/scrapers/${jobId}/start`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
@@ -337,7 +337,7 @@ export function ScrapingModal({ isOpen, onClose, jobIds, reconnectMode = false }
         }
 
         // Connect to the job's log stream
-        const eventSource = new EventSource(`${apiBase}/api/scrapers/${jobId}/stream`);
+        const eventSource = new EventSource(`${apiBase}/scrapers/${jobId}/stream`);
         eventSourcesRef.current.push(eventSource);
 
         eventSource.onmessage = (event) => {

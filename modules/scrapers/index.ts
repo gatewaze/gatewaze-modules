@@ -1,4 +1,4 @@
-import type { GatewazeModule } from '@gatewaze/shared';
+import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
 
 const scrapersModule: GatewazeModule = {
   id: 'scrapers',
@@ -13,8 +13,14 @@ const scrapersModule: GatewazeModule = {
     'scrapers.schedules',
   ],
 
+  apiRoutes: async (app: unknown, context?: ModuleContext) => {
+    const { registerRoutes } = await import('./api');
+    registerRoutes(app as any, context);
+  },
+
   migrations: [
     'migrations/001_scrapers_tables.sql',
+    'migrations/002_seed_mlops_scrapers.sql',
   ],
 
   adminRoutes: [

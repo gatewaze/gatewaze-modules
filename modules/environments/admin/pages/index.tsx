@@ -9,6 +9,7 @@ import {
   CloudIcon,
   ComputerDesktopIcon,
   ArrowsRightLeftIcon,
+  CircleStackIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import {
@@ -445,6 +446,14 @@ export default function EnvironmentsPage() {
             </p>
           </div>
           <div className="flex gap-3 items-center">
+            <Button
+              onClick={() => navigate('/admin/environments/backup')}
+              variant="outlined"
+              className="gap-2"
+            >
+              <CircleStackIcon className="size-4" />
+              Backup & Restore
+            </Button>
             <Button
               onClick={loadEnvironments}
               variant="outlined"

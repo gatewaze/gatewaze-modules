@@ -1034,6 +1034,374 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
     }
   });
 
+  // =========================================================================
+  // BACKUP / RESTORE — Export & import all tables as a zip file
+  // =========================================================================
+
+  /**
+   * Ordered table list for backup/restore. Parents before children to
+   * respect foreign key constraints on import.
+   */
+  const BACKUP_TABLES = [
+    // Independent / root tables
+    'app_settings',
+    'platform_settings',
+    'admin_profiles',
+    'admin_permission_groups',
+    'categories',
+    'topics',
+    'speakers',
+    'sponsors',
+    'calendars',
+    'customers',
+    'email_templates',
+
+    // Tables that depend on root tables
+    'admin_permissions',
+    'events',
+    'accounts',
+    'people',
+
+    // Junction tables and children of events
+    'event_speakers',
+    'event_categories',
+    'event_topics',
+    'calendar_events',
+    'account_users',
+    'event_registrations',
+    'event_agenda_tracks',
+    'event_media',
+    'event_sponsors',
+    'discount_codes',
+    'event_budget_items',
+    'event_communication_settings',
+
+    // Tables that depend on the above
+    'event_agenda_entries',
+    'event_attendance',
+    'event_interest',
+    'event_talks',
+    'email_logs',
+    'email_batch_jobs',
+    'ad_tracking_sessions',
+    'event_competitions',
+
+    // Deep children
+    'event_agenda_entry_speakers',
+    'event_attendee_matches',
+    'conversion_events_log',
+    'competition_entries',
+
+    // Deepest children
+    'competition_winners',
+
+    // Scrapers (independent)
+    'scrapers',
+  ] as const;
+
+  /**
+   * Generated columns that Postgres won't allow us to insert.
+   * Map of table name -> column names to strip.
+   */
+  const GENERATED_COLUMNS: Record<string, string[]> = {
+    customers: ['full_name'],
+  };
+
+  /**
+   * Maps tables to the column used for "delete all" filtering.
+   * Default is 'id'.
+   */
+  const DELETE_KEY_MAP: Record<string, string> = {
+    app_settings: 'key',
+    platform_settings: 'key',
+    event_speakers: 'event_id',
+    event_categories: 'event_id',
+    event_topics: 'event_id',
+    calendar_events: 'event_id',
+    event_agenda_entry_speakers: 'agenda_entry_id',
+    account_users: 'account_id',
+    admin_permissions: 'group_id',
+  };
+
+  /**
+   * Fetch all rows from a table via the Supabase REST API with pagination.
+   */
+  async function fetchAllRows(
+    supabaseUrl: string,
+    serviceRoleKey: string,
+    table: string,
+  ): Promise<any[]> {
+    const PAGE_SIZE = 1000;
+    const allRows: any[] = [];
+    let offset = 0;
+
+    while (true) {
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/${table}?select=*&offset=${offset}&limit=${PAGE_SIZE}`,
+        {
+          headers: {
+            apikey: serviceRoleKey,
+            Authorization: `Bearer ${serviceRoleKey}`,
+            Prefer: 'count=exact',
+          },
+        }
+      );
+
+      if (!res.ok) break;
+
+      const rows = await res.json();
+      if (!Array.isArray(rows) || rows.length === 0) break;
+
+      allRows.push(...rows);
+      if (rows.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+
+    return allRows;
+  }
+
+  /**
+   * GET /api/environments/backup
+   *
+   * Export all database tables as a gzipped JSON file (.json.gz).
+   * The file contains a single JSON object with a manifest and a
+   * "tables" map of table_name → row_array.
+   */
+  app.get('/api/environments/backup', async (_req: Request, res: Response) => {
+    try {
+      const { url, key } = getLocalSupabaseCredentials();
+      if (!url || !key) {
+        return res.status(500).json({ error: 'Missing Supabase credentials' });
+      }
+
+      // Discover which tables actually exist
+      const schemaRes = await fetch(`${url}/rest/v1/`, {
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+      });
+
+      let availableTables: string[] = [];
+      if (schemaRes.ok) {
+        const schema = await schemaRes.json();
+        availableTables = schema?.paths
+          ? Object.keys(schema.paths)
+              .map((p: string) => p.replace('/', ''))
+              .filter((t: string) => t && !t.startsWith('rpc/'))
+          : [];
+      }
+
+      // Only backup tables that exist in the database
+      const tablesToBackup = BACKUP_TABLES.filter((t) => availableTables.includes(t));
+      // Also include any tables that exist but aren't in BACKUP_TABLES
+      const extraTables = availableTables
+        .filter((t) => !BACKUP_TABLES.includes(t as any))
+        .filter((t) => !['environments', 'environment_sync_profiles', 'environment_sync_operations', 'gatewaze_migrations'].includes(t))
+        .sort();
+
+      const allTables = [...tablesToBackup, ...extraTables];
+
+      const backup: {
+        version: string;
+        created_at: string;
+        table_order: string[];
+        tables: Record<string, any[]>;
+      } = {
+        version: '1.0',
+        created_at: new Date().toISOString(),
+        table_order: [],
+        tables: {},
+      };
+
+      for (const table of allTables) {
+        try {
+          const rows = await fetchAllRows(url, key, table);
+          backup.tables[table] = rows;
+          backup.table_order.push(table);
+          console.log(`[environments:backup] ${table}: ${rows.length} rows`);
+        } catch (err) {
+          console.warn(`[environments:backup] Error reading ${table}:`, err);
+        }
+      }
+
+      // Gzip the JSON
+      const { gzipSync } = await import('zlib');
+      const jsonBuffer = Buffer.from(JSON.stringify(backup));
+      const gzipped = gzipSync(jsonBuffer);
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      res.setHeader('Content-Type', 'application/gzip');
+      res.setHeader('Content-Disposition', `attachment; filename="gatewaze-backup-${timestamp}.json.gz"`);
+      res.setHeader('Content-Length', gzipped.length);
+      res.send(gzipped);
+    } catch (err: any) {
+      console.error('[environments:backup] Error:', err);
+      return res.status(500).json({ error: err.message || 'Backup failed' });
+    }
+  });
+
+  /**
+   * POST /api/environments/restore
+   *
+   * Import a backup .json.gz file. Expects the raw gzipped file as the
+   * request body (Content-Type: application/gzip or application/octet-stream).
+   *
+   * Query params:
+   *   - clearExisting=true (default) — delete existing rows before import
+   */
+  app.post('/api/environments/restore', async (req: Request, res: Response) => {
+    try {
+      const { url, key } = getLocalSupabaseCredentials();
+      if (!url || !key) {
+        return res.status(500).json({ error: 'Missing Supabase credentials' });
+      }
+
+      // Collect raw body
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const body = Buffer.concat(chunks);
+
+      if (body.length === 0) {
+        return res.status(400).json({ error: 'No backup data provided.' });
+      }
+
+      // Decompress
+      const { gunzipSync } = await import('zlib');
+      let backup: any;
+      try {
+        const jsonBuffer = gunzipSync(body);
+        backup = JSON.parse(jsonBuffer.toString('utf-8'));
+      } catch {
+        return res.status(400).json({ error: 'Invalid backup file. Expected a .json.gz file.' });
+      }
+
+      if (!backup.tables || !backup.version) {
+        return res.status(400).json({ error: 'Invalid backup format: missing tables or version.' });
+      }
+
+      const clearExisting = req.query.clearExisting !== 'false';
+
+      // Build ordered list: known BACKUP_TABLES first (in order), then extras
+      const tableNames = backup.table_order ?? Object.keys(backup.tables);
+      const orderedTables: string[] = [];
+      for (const t of BACKUP_TABLES) {
+        if (tableNames.includes(t)) orderedTables.push(t);
+      }
+      for (const t of tableNames) {
+        if (!orderedTables.includes(t)) orderedTables.push(t);
+      }
+
+      const results: Array<{ table: string; rows: number; status: string; error?: string }> = [];
+
+      // Clear existing data in reverse order (children first)
+      if (clearExisting) {
+        const reverseOrder = [...orderedTables].reverse();
+        for (const table of reverseOrder) {
+          try {
+            const deleteColumn = DELETE_KEY_MAP[table] ?? 'id';
+            const nilValue = deleteColumn === 'key' ? ''
+              : table === 'scrapers' ? -1
+              : '00000000-0000-0000-0000-000000000000';
+
+            await fetch(
+              `${url}/rest/v1/${table}?${deleteColumn}=neq.${nilValue}`,
+              {
+                method: 'DELETE',
+                headers: {
+                  apikey: key,
+                  Authorization: `Bearer ${key}`,
+                  Prefer: 'return=minimal',
+                },
+              }
+            );
+          } catch {
+            // Table might not exist — that's fine
+          }
+        }
+      }
+
+      // Insert data in FK-safe order
+      for (const table of orderedTables) {
+        const rows = backup.tables[table];
+        if (!Array.isArray(rows) || rows.length === 0) {
+          results.push({ table, rows: 0, status: 'skipped' });
+          continue;
+        }
+
+        try {
+          const generatedCols = GENERATED_COLUMNS[table];
+          const BATCH_SIZE = 500;
+          let inserted = 0;
+
+          for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+            let batch = rows.slice(i, i + BATCH_SIZE);
+
+            // Strip generated columns
+            if (generatedCols) {
+              batch = batch.map((row: any) => {
+                const clean = { ...row };
+                for (const col of generatedCols) delete clean[col];
+                return clean;
+              });
+            }
+
+            // Try insert first, fall back to upsert
+            const insertRes = await fetch(`${url}/rest/v1/${table}`, {
+              method: 'POST',
+              headers: {
+                apikey: key,
+                Authorization: `Bearer ${key}`,
+                'Content-Type': 'application/json',
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify(batch),
+            });
+
+            if (insertRes.ok) {
+              inserted += batch.length;
+            } else {
+              // Try upsert
+              const upsertRes = await fetch(`${url}/rest/v1/${table}`, {
+                method: 'POST',
+                headers: {
+                  apikey: key,
+                  Authorization: `Bearer ${key}`,
+                  'Content-Type': 'application/json',
+                  Prefer: 'resolution=merge-duplicates,return=minimal',
+                },
+                body: JSON.stringify(batch),
+              });
+
+              if (upsertRes.ok) {
+                inserted += batch.length;
+              } else {
+                const errText = await upsertRes.text();
+                throw new Error(`Batch at row ${i}: ${errText}`);
+              }
+            }
+          }
+
+          results.push({ table, rows: inserted, status: 'ok' });
+        } catch (err: any) {
+          results.push({ table, rows: 0, status: 'error', error: err.message });
+        }
+      }
+
+      return res.json({
+        success: true,
+        backup_version: backup.version,
+        backup_created_at: backup.created_at,
+        tables_restored: results.filter((r) => r.status === 'ok').length,
+        tables_skipped: results.filter((r) => r.status === 'skipped').length,
+        tables_errored: results.filter((r) => r.status === 'error').length,
+        details: results,
+      });
+    } catch (err: any) {
+      console.error('[environments:restore] Error:', err);
+      return res.status(500).json({ error: err.message || 'Restore failed' });
+    }
+  });
+
   /**
    * GET /api/environments/tables
    */
