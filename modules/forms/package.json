@@ -1,0 +1,22 @@
+{
+  "name": "@gatewaze-modules/forms",
+  "version": "1.0.0",
+  "license": "MIT",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Create custom forms, collect submissions, and associate responses with people records",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "next": "*",
+    "react": "*"
+  }
+}

@@ -859,12 +859,31 @@ const BlogManagement: React.FC = () => {
           isOpen={showModal}
           onClose={handleCloseModal}
           title={isEditingPost ? 'Edit Post' : 'Create Post'}
-          size="2xl"
+          size="full"
+          footer={
+            <div className="flex items-center justify-end space-x-4">
+              <Button
+                type="button"
+                variant="outlined"
+                onClick={handleCloseModal}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                form="blog-post-form"
+                disabled={submitting}
+              >
+                {submitting ? 'Saving...' : isEditingPost ? 'Update Post' : 'Create Post'}
+              </Button>
+            </div>
+          }
         >
-          <form onSubmit={postForm.handleSubmit(onPostSubmit)} className="space-y-6">
-            <div className="grid grid-cols-3 gap-6">
+          <form id="blog-post-form" onSubmit={postForm.handleSubmit(onPostSubmit)}>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* Main Content */}
-              <div className="col-span-2 space-y-6">
+              <div className="lg:col-span-2 space-y-6 pr-2">
                 <Input
                   label="Title"
                   placeholder="Enter post title"
@@ -881,6 +900,7 @@ const BlogManagement: React.FC = () => {
                     content={watchedPostContent}
                     onChange={(content) => postForm.setValue('content', content)}
                     placeholder="Write your post content..."
+                    className="min-h-[400px]"
                   />
                   {postForm.formState.errors.content && (
                     <p className="mt-1 text-sm text-red-600 dark:text-red-400">
@@ -898,7 +918,7 @@ const BlogManagement: React.FC = () => {
               </div>
 
               {/* Sidebar */}
-              <div className="space-y-6">
+              <div className="space-y-6 lg:sticky lg:top-0 lg:self-start">
                 {/* Publishing */}
                 <Card className="p-4">
                   <h3 className="font-semibold text-[var(--gray-12)] mb-4">Publishing</h3>
@@ -1134,22 +1154,6 @@ const BlogManagement: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-end space-x-4">
-              <Button
-                type="button"
-                variant="outlined"
-                onClick={handleCloseModal}
-                disabled={submitting}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={submitting}
-              >
-                {submitting ? 'Saving...' : isEditingPost ? 'Update Post' : 'Create Post'}
-              </Button>
-            </div>
           </form>
         </Modal>
       )}
@@ -1161,8 +1165,27 @@ const BlogManagement: React.FC = () => {
           onClose={handleCloseModal}
           title={isEditingCategory ? 'Edit Category' : 'Create Category'}
           size="lg"
+          footer={
+            <div className="flex items-center justify-end space-x-4">
+              <Button
+                type="button"
+                variant="outlined"
+                onClick={handleCloseModal}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                form="blog-category-form"
+                disabled={submitting}
+              >
+                {submitting ? 'Saving...' : isEditingCategory ? 'Update Category' : 'Create Category'}
+              </Button>
+            </div>
+          }
         >
-          <form onSubmit={categoryForm.handleSubmit(onCategorySubmit)} className="space-y-6">
+          <form id="blog-category-form" onSubmit={categoryForm.handleSubmit(onCategorySubmit)} className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="md:col-span-2">
                 <Input
@@ -1250,22 +1273,6 @@ const BlogManagement: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-end space-x-4">
-              <Button
-                type="button"
-                variant="outlined"
-                onClick={handleCloseModal}
-                disabled={submitting}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={submitting}
-              >
-                {submitting ? 'Saving...' : isEditingCategory ? 'Update Category' : 'Create Category'}
-              </Button>
-            </div>
           </form>
         </Modal>
       )}
@@ -1277,8 +1284,27 @@ const BlogManagement: React.FC = () => {
           onClose={handleCloseModal}
           title={isEditingTag ? 'Edit Tag' : 'Create Tag'}
           size="md"
+          footer={
+            <div className="flex items-center justify-end space-x-4">
+              <Button
+                type="button"
+                variant="outlined"
+                onClick={handleCloseModal}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                form="blog-tag-form"
+                disabled={submitting}
+              >
+                {submitting ? 'Saving...' : isEditingTag ? 'Update Tag' : 'Create Tag'}
+              </Button>
+            </div>
+          }
         >
-          <form onSubmit={tagForm.handleSubmit(onTagSubmit)} className="space-y-6">
+          <form id="blog-tag-form" onSubmit={tagForm.handleSubmit(onTagSubmit)} className="space-y-6">
             <div className="space-y-4">
               <Input
                 label="Tag Name"
@@ -1321,22 +1347,6 @@ const BlogManagement: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-end space-x-4">
-              <Button
-                type="button"
-                variant="outlined"
-                onClick={handleCloseModal}
-                disabled={submitting}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={submitting}
-              >
-                {submitting ? 'Saving...' : isEditingTag ? 'Update Tag' : 'Create Tag'}
-              </Button>
-            </div>
           </form>
         </Modal>
       )}

@@ -799,7 +799,7 @@ const BlogManagement: React.FC = () => {
           isOpen={showModal}
           onClose={handleCloseModal}
           title={isEditingPost ? 'Edit Post' : 'Create Post'}
-          size="2xl"
+          size="xl"
         >
           <form onSubmit={postForm.handleSubmit(onPostSubmit)} className="space-y-6">
             <div className="grid grid-cols-3 gap-6">

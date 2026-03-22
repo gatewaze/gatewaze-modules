@@ -6,7 +6,7 @@ const blogModule: GatewazeModule = {
   visibility: 'public',
   name: 'Blog',
   description: 'Publish and manage blog posts, categories, and integrated content',
-  version: '1.0.0',
+  version: '1.2.0',
   features: [
     'blog',
     'blog.posts',
@@ -15,6 +15,7 @@ const blogModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_blog_tables.sql',
+    'migrations/002_blog_embeddings.sql',
   ],
 
   adminRoutes: [
@@ -24,6 +25,18 @@ const blogModule: GatewazeModule = {
     { path: '/blog/posts', label: 'Blog', icon: 'FileText', requiredFeature: 'blog', order: 16 },
   ],
 
+  portalNav: {
+    label: 'Blog',
+    path: '/blog',
+    icon: 'newspaper',
+    order: 20,
+  },
+
+  portalRoutes: [
+    { path: '/blog', component: () => import('./portal/pages/index') },
+    { path: '/blog/:slug', component: () => import('./portal/pages/_slug') },
+  ],
+
   configSchema: {},
 
   onInstall: async () => {
@@ -31,7 +44,7 @@ const blogModule: GatewazeModule = {
   },
 
   onEnable: async () => {
-    console.log('[blog] Module enabled');
+    console.log('[blog] Module enabled — setting portal_nav');
   },
 
   onDisable: async () => {

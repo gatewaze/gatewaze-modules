@@ -14,6 +14,9 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@gatewaze/shared": "*"
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "next": "*",
+    "react": "*"
   }
 }
