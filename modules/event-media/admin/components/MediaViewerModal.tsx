@@ -1,6 +1,6 @@
 import { XMarkIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 import { Modal } from '@/components/ui';
-import { EventMedia, getMediaPublicUrl } from '@/utils/eventMediaService';
+import { EventMedia, getMediaPublicUrl } from '../utils/eventMediaService';
 
 interface MediaViewerModalProps {
   media: EventMedia;

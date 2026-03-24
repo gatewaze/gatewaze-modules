@@ -32,7 +32,7 @@ import { ScrollableTable } from '@/components/shared/table/ScrollableTable';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Event } from '@/utils/eventService';
 import { EventQrService, EventSponsor, Sponsor } from '@/utils/eventQrService';
-import { getSponsorMediaCounts } from '@/utils/eventMediaService';
+import { getSponsorMediaCounts } from '../../event-media/admin/utils/eventMediaService';
 import { SendSponsorEmailModal } from '@/components/emails/SendSponsorEmailModal';
 
 export function EventSponsorsTab({ eventId, event }: { eventId: string; event: Event | null }) {

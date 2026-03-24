@@ -6,7 +6,7 @@ import { Select } from '@/components/ui/Form/Select';
 import { RichTextEditor } from '@/components/ui/RichTextEditor';
 import EmailService from '@/utils/emailService';
 import EmailTemplateService, { EmailTemplate } from '@/utils/emailTemplateService';
-import { SpeakerEmailService } from '@/utils/speakerEmailService';
+import { SpeakerEmailService } from '../../../event-speakers/admin/utils/speakerEmailService';
 import { toast } from 'sonner';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { useAuthContext } from '@/app/contexts/auth/context';
@@ -16,7 +16,7 @@ import {
   findAllVariables,
   type TemplateContext,
 } from '@/utils/templateVariables';
-import type { EventTalkWithSpeakers } from '@/utils/talkService';
+import type { EventTalkWithSpeakers } from '../../../event-agenda/admin/utils/talkService';
 
 interface SendSpeakerEmailModalProps {
   isOpen: boolean;

@@ -34,7 +34,7 @@ import {
   formatFileSize,
   formatDuration,
   getMediaPublicUrl,
-} from '@/utils/eventMediaService';
+} from './utils/eventMediaService';
 import { MediaUploadModal } from './MediaUploadModal';
 import { AlbumManagementModal } from './AlbumManagementModal';
 import { MediaGalleryView } from './MediaGalleryView';

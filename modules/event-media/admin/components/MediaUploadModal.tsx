@@ -16,7 +16,7 @@ import {
   uploadVideoToYouTubeAndCreateRecord,
   validateMediaFile,
   formatFileSize,
-} from '@/utils/eventMediaService';
+} from '../utils/eventMediaService';
 import { isYouTubeConfigured } from '@/utils/youtubeService';
 
 interface MediaUploadModalProps {

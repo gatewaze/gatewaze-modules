@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { Button, Modal } from '@/components/ui';
-import { EventSponsor, addMediaToSponsors } from '@/utils/eventMediaService';
+import { EventSponsor, addMediaToSponsors } from '../../../event-media/admin/utils/eventMediaService';
 
 interface TagSponsorsModalProps {
   isOpen: boolean;

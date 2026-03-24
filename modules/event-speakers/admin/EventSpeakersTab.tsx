@@ -29,14 +29,14 @@ import {
 import { StarIcon as StarIconSolid, CheckCircleIcon, XCircleIcon, ClipboardDocumentListIcon, UserGroupIcon } from '@heroicons/react/24/solid';
 import { Button, Card, Input, Modal, ConfirmModal } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { SpeakerService, EventSpeakerWithDetails, SpeakerStatus } from '@/utils/speakerService';
+import { SpeakerService, EventSpeakerWithDetails, SpeakerStatus } from './utils/speakerService';
 import { trimTransparentPadding } from '@/utils/trimTransparentPadding';
-import { TalkService, EventTalkWithSpeakers, TalkStatus } from '@/utils/talkService';
-import { SpeakerEmailService } from '@/utils/speakerEmailService';
+import { TalkService, EventTalkWithSpeakers, TalkStatus } from '../../event-agenda/admin/utils/talkService';
+import { SpeakerEmailService } from './utils/speakerEmailService';
 import { BulkRegistrationService } from '@/utils/bulkRegistrationService';
 import { PeopleAvatarService } from '@/utils/peopleAvatarService';
 import { EventQrService, EventSponsor } from '@/utils/eventQrService';
-import { SpeakerLinkService, SpeakerTrackingLink } from '@/utils/speakerLinkService';
+import { SpeakerLinkService, SpeakerTrackingLink } from './utils/speakerLinkService';
 import { supabase, supabaseUrl } from '@/lib/supabase';
 import { SendSpeakerEmailModal } from '@/components/emails/SendSpeakerEmailModal';
 

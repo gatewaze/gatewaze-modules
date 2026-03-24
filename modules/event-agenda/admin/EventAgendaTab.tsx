@@ -37,8 +37,8 @@ import { CSS } from '@dnd-kit/utilities';
 import { Button, Card, Input, Modal, ConfirmModal } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { AgendaService, AgendaTrack, AgendaEntry, AgendaEntryType, TimelineConfig, AgendaEntryPosition } from '@/utils/agendaService';
-import { SpeakerService, EventSpeakerWithDetails } from '@/utils/speakerService';
-import { TalkService, EventTalkWithSpeakers, SessionType, TalkStatus, SpeakerRole } from '@/utils/talkService';
+import { SpeakerService, EventSpeakerWithDetails } from '../../event-speakers/admin/utils/speakerService';
+import { TalkService, EventTalkWithSpeakers, SessionType, TalkStatus, SpeakerRole } from './utils/talkService';
 
 export interface TalkDurationOption {
   duration: number;  // minutes

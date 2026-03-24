@@ -39,7 +39,7 @@ import {
   removeSponsorFromMedia,
   updateMediaDisplayOrder,
   updateAlbumItemSortOrder,
-} from '@/utils/eventMediaService';
+} from '../utils/eventMediaService';
 import { toast } from 'sonner';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { Button, Modal } from '@/components/ui';
-import { EventMediaAlbum, addMediaToAlbums } from '@/utils/eventMediaService';
+import { EventMediaAlbum, addMediaToAlbums } from '../utils/eventMediaService';
 
 interface AddToAlbumModalProps {
   isOpen: boolean;

@@ -19,7 +19,7 @@ import {
   getMediaPublicUrl,
   removeMediaFromAlbum,
   removeSponsorFromMedia,
-} from '@/utils/eventMediaService';
+} from '../utils/eventMediaService';
 import { toast } from 'sonner';
 
 interface MediaGalleryViewProps {

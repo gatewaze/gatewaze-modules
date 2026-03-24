@@ -13,7 +13,7 @@ import {
   createEventAlbum,
   updateEventAlbum,
   deleteEventAlbum,
-} from '@/utils/eventMediaService';
+} from '../utils/eventMediaService';
 
 interface AlbumManagementModalProps {
   eventId: string;
