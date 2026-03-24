@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { TalkService, EventTalkWithSpeakers } from './talkService';
+import { TalkService, EventTalkWithSpeakers } from '../../../event-agenda/admin/utils/talkService';
 
 export type SpeakerStatus = 'pending' | 'approved' | 'rejected' | 'reserve' | 'confirmed' | 'placeholder';
 export type ParticipationStatus = 'invited' | 'pending' | 'accepted' | 'declined' | 'confirmed';
