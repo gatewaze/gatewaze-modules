@@ -7,6 +7,8 @@
 
 INSERT INTO public.scrapers (name, description, scraper_type, object_type, event_type, base_url, enabled, account, config, schedule_enabled, schedule_frequency)
 VALUES
+  ('AI Alliance // San Francisco', '', 'LumaICalScraper', 'events', 'mixed', 'https://luma.com/aialliance-sf', true, 'ai-alliance', '{"past": true, "timezone": "UTC", "scrollTimeout": 5000, "maxScrollAttempts": 50}'::jsonb, true, 'daily'),
+  ('AAIF // San Francisco', '', 'LumaICalScraper', 'events', 'mixed', 'https://luma.com/aaif-san-francisco', true, 'aaif', '{"past": true, "timezone": "UTC", "scrollTimeout": 5000, "maxScrollAttempts": 50}'::jsonb, true, 'daily'),
   ('MLOps Community // London', '', 'LumaICalScraper', 'events', 'mixed', 'https://luma.com/london-mlops', true, 'mlops', '{"past": true, "timezone": "UTC", "scrollTimeout": 5000, "maxScrollAttempts": 50}'::jsonb, true, 'daily'),
   ('MLOps Community // New York City', '', 'LumaICalScraper', 'events', 'mixed', 'https://lu.ma/nyc.mlops', true, 'mlops', '{"past": true, "timezone": "UTC", "scrollTimeout": 5000, "maxScrollAttempts": 50}'::jsonb, true, 'daily'),
   ('MLOps Community // Amsterdam', '', 'LumaICalScraper', 'events', 'mixed', 'https://luma.com/amsterdam-mlops', true, 'mlops', '{"past": true, "timezone": "UTC", "scrollTimeout": 5000, "maxScrollAttempts": 50}'::jsonb, true, 'daily'),

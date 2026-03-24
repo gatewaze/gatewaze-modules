@@ -26,7 +26,7 @@ function generateCode(): string {
   return `TT-${suffix}`
 }
 
-Deno.serve(async (req: Request) => {
+export default async function(req: Request) {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
@@ -173,4 +173,4 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }
-})
+}

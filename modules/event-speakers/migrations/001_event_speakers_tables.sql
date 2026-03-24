@@ -270,7 +270,7 @@ CREATE POLICY "speakers_select_public"
     SELECT 1 FROM public.events_speakers es
     JOIN public.events e ON e.id = es.event_uuid
     WHERE es.speaker_id = events_speaker_profiles.id
-      AND e.status = 'published'
+      AND e.is_listed = true
   ));
 
 CREATE POLICY "speakers_select_admin"
@@ -279,7 +279,7 @@ CREATE POLICY "speakers_select_admin"
     SELECT 1 FROM public.events_speakers es
     JOIN public.events e ON e.id = es.event_uuid
     WHERE es.speaker_id = events_speaker_profiles.id
-      AND e.status = 'published'
+      AND e.is_listed = true
   ) OR public.is_admin());
 
 CREATE POLICY "speakers_insert_admin"
@@ -300,7 +300,7 @@ CREATE POLICY "event_speakers_select_public"
   USING (EXISTS (
     SELECT 1 FROM public.events e
     WHERE e.id = events_speakers.event_uuid
-      AND e.status = 'published'
+      AND e.is_listed = true
   ));
 
 CREATE POLICY "event_speakers_select_admin"
@@ -308,7 +308,7 @@ CREATE POLICY "event_speakers_select_admin"
   USING (EXISTS (
     SELECT 1 FROM public.events e
     WHERE e.id = events_speakers.event_uuid
-      AND e.status = 'published'
+      AND e.is_listed = true
   ) OR public.is_admin());
 
 CREATE POLICY "event_speakers_insert_admin"

@@ -38,6 +38,7 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const customerioSiteId = Deno.env.get('CUSTOMERIO_SITE_ID')
 const customerioApiKey = Deno.env.get('CUSTOMERIO_API_KEY')
+const brandId = Deno.env.get('GW_APP_NAME') || 'default'
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
@@ -533,6 +534,7 @@ async function storePendingRegistration(
   const { data: newRecord, error } = await supabase
     .from('integrations_luma_pending_registrations')
     .insert({
+      brand_id: brandId,
       luma_user_id: parsed.lumaUserId || 'unknown',
       luma_event_id: parsed.lumaEventId!,
       user_name: parsed.userName,
@@ -563,7 +565,7 @@ async function storePendingRegistration(
 }
 
 
-Deno.serve(async (req) => {
+export default async function(req: Request) {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -662,7 +664,7 @@ Deno.serve(async (req) => {
     // Look up the event by luma_event_id (may not exist yet)
     const { data: event } = await supabase
       .from('events')
-      .select('event_id, event_city, event_country_code, venue_address, cvent_event_id, cvent_admission_item_id, cvent_sync_enabled')
+      .select('id, event_id, event_city, event_country_code, venue_address')
       .eq('luma_event_id', parsed.lumaEventId)
       .maybeSingle()
 
@@ -713,7 +715,7 @@ Deno.serve(async (req) => {
       const cancellationResult = await sharedCancelRegistration(
         supabase,
         parsed.registrantEmail,
-        event.event_id
+        event.id
       )
 
       // Update pending registration status
@@ -771,12 +773,10 @@ Deno.serve(async (req) => {
     }
 
     const eventData: EventData = {
-      eventId: event.event_id,
+      eventId: event.id,  // UUID primary key for events_registrations FK
       eventCity: event.event_city,
       eventCountryCode: event.event_country_code,
       venueAddress: event.venue_address,
-      cventEventId: event.cvent_sync_enabled ? event.cvent_event_id : null,
-      cventAdmissionItemId: event.cvent_sync_enabled ? event.cvent_admission_item_id : null,
     }
 
     const registrationResult = await sharedCreateFullRegistration(
@@ -806,14 +806,14 @@ Deno.serve(async (req) => {
         status: 'processed',
         processed_at: new Date().toISOString(),
         created_person_id: registrationResult.personId,
-        created_people_profile_id: registrationResult.memberProfileId,
+        created_people_profile_id: registrationResult.peopleProfileId,
         created_registration_id: registrationResult.registrationId,
       })
       .eq('id', pendingReg.id)
 
     console.log('Registration created successfully:', {
       personId: registrationResult.personId,
-      memberProfileId: registrationResult.memberProfileId,
+      peopleProfileId: registrationResult.peopleProfileId,
       registrationId: registrationResult.registrationId,
     })
 
@@ -824,7 +824,7 @@ Deno.serve(async (req) => {
       lumaEventId: parsed.lumaEventId,
       eventId: event.event_id,
       personId: registrationResult.personId,
-      memberProfileId: registrationResult.memberProfileId,
+      peopleProfileId: registrationResult.peopleProfileId,
       registrationId: registrationResult.registrationId,
     }), {
       status: 200,
@@ -841,4 +841,4 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
-})
+}

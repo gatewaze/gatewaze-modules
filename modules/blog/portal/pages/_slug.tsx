@@ -67,12 +67,11 @@ function formatDate(dateStr: string | null): string {
 }
 
 interface Props {
-  params: { path: string[] }
+  params: { slug: string }
 }
 
 export default async function BlogDetailPage({ params }: Props) {
-  // path = ['blog', 'the-slug'] — the slug is the second segment
-  const slug = params.path[1]
+  const slug = params.slug
   if (!slug) notFound()
 
   const post = await getBlogPost(slug)

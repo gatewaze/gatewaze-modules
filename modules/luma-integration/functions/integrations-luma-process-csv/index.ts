@@ -716,7 +716,7 @@ async function matchPendingRegistrations(brandId: string): Promise<number> {
   return matchedCount
 }
 
-Deno.serve(async (req) => {
+export default async function(req: Request) {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -833,4 +833,4 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
-})
+}

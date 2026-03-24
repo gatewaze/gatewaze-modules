@@ -142,7 +142,7 @@ CREATE POLICY "agenda_tracks_select_anon"
   USING (EXISTS (
     SELECT 1 FROM public.events e
     WHERE e.id = events_agenda_tracks.event_uuid
-      AND e.status = 'published'
+      AND e.is_listed = true
   ));
 
 CREATE POLICY "agenda_tracks_select_auth"
@@ -150,7 +150,7 @@ CREATE POLICY "agenda_tracks_select_auth"
   USING (EXISTS (
     SELECT 1 FROM public.events e
     WHERE e.id = events_agenda_tracks.event_uuid
-      AND e.status = 'published'
+      AND e.is_listed = true
   ) OR public.can_admin_event(event_uuid));
 
 CREATE POLICY "agenda_tracks_insert"
@@ -171,7 +171,7 @@ CREATE POLICY "agenda_entries_select_anon"
   USING (EXISTS (
     SELECT 1 FROM public.events e
     WHERE e.id = events_agenda_entries.event_uuid
-      AND e.status = 'published'
+      AND e.is_listed = true
   ));
 
 CREATE POLICY "agenda_entries_select_auth"
@@ -179,7 +179,7 @@ CREATE POLICY "agenda_entries_select_auth"
   USING (EXISTS (
     SELECT 1 FROM public.events e
     WHERE e.id = events_agenda_entries.event_uuid
-      AND e.status = 'published'
+      AND e.is_listed = true
   ) OR public.can_admin_event(event_uuid));
 
 CREATE POLICY "agenda_entries_insert"
