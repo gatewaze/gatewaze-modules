@@ -38,7 +38,7 @@ import { PeopleAvatarService } from '@/utils/peopleAvatarService';
 import { EventQrService, EventSponsor } from '@/utils/eventQrService';
 import { SpeakerLinkService, SpeakerTrackingLink } from './utils/speakerLinkService';
 import { supabase, supabaseUrl } from '@/lib/supabase';
-import { SendSpeakerEmailModal } from '@/components/emails/SendSpeakerEmailModal';
+import { SendSpeakerEmailModal } from '../../bulk-emailing/admin/components/SendSpeakerEmailModal';
 
 interface TalkDurationOption {
   duration: number;  // minutes

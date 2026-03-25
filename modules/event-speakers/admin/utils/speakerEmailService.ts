@@ -4,9 +4,9 @@
  */
 
 import { supabase } from '@/lib/supabase';
-import EmailService from './emailService';
-import EmailTemplateService from './emailTemplateService';
-import { replaceVariables, buildContext, type TemplateContext } from './templateVariables';
+import EmailService from '../../../bulk-emailing/admin/utils/emailService';
+import EmailTemplateService from '../../../bulk-emailing/admin/utils/emailTemplateService';
+import { replaceVariables, buildContext, type TemplateContext } from '@/utils/templateVariables';
 import type { EventSpeakerWithDetails } from './speakerService';
 
 // Get the base URL for the app (for confirmation links)

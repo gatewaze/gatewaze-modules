@@ -7,7 +7,7 @@
 
 import { getApiBaseUrl, getShortLinkDomain } from '@/config/brands';
 import { supabase } from '@/lib/supabase';
-import { stringToSlug } from './stringToSlug';
+import { stringToSlug } from '@/utils/stringToSlug';
 
 export interface SpeakerTrackingLink {
   speakerId: string;
