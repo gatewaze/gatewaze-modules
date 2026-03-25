@@ -3439,3 +3439,5 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
     </div>
   );
 }
+
+export default EventSpeakersTab;

@@ -5287,3 +5287,5 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
     </div>
   );
 }
+
+export default EventCommunicationsTab;

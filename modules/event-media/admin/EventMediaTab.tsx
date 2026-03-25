@@ -1067,3 +1067,5 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
     </div>
   );
 }
+
+export default EventMediaTab;

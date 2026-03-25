@@ -580,3 +580,5 @@ export const EventInterestTab = ({ eventId }: EventInterestTabProps) => {
     </Card>
   );
 };
+
+export default EventInterestTab;

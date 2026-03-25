@@ -1,6 +1,11 @@
 import { supabase } from '@/lib/supabase';
 import { TalkService, EventTalkWithSpeakers } from '../../../event-agenda/admin/utils/talkService';
 
+/** Suppress console noise when a dependent module's table/view doesn't exist in PostgREST */
+function isModuleNotInstalledError(error: { code?: string; message?: string }): boolean {
+  return error.code === 'PGRST200' || error.code === 'PGRST204' || error.message?.includes('schema cache') === true;
+}
+
 export type SpeakerStatus = 'pending' | 'approved' | 'rejected' | 'reserve' | 'confirmed' | 'placeholder';
 export type ParticipationStatus = 'invited' | 'pending' | 'accepted' | 'declined' | 'confirmed';
 
@@ -110,7 +115,9 @@ export class SpeakerService {
     const { data, error } = await query.order('sort_order', { ascending: true });
 
     if (error) {
-      console.error('Error fetching event speakers:', error);
+      if (!isModuleNotInstalledError(error)) {
+        console.error('Error fetching event speakers:', error);
+      }
       throw error;
     }
 
@@ -329,7 +336,9 @@ export class SpeakerService {
       .order('sort_order', { ascending: true });
 
     if (error) {
-      console.error('Error fetching agenda entry speakers:', error);
+      if (!isModuleNotInstalledError(error)) {
+        console.error('Error fetching agenda entry speakers:', error);
+      }
       throw error;
     }
 
@@ -358,7 +367,9 @@ export class SpeakerService {
       .order('sort_order', { ascending: true });
 
     if (error) {
-      console.error('Error fetching agenda entry speakers:', error);
+      if (!isModuleNotInstalledError(error)) {
+        console.error('Error fetching agenda entry speakers:', error);
+      }
       throw error;
     }
 

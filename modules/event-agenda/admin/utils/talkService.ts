@@ -1,5 +1,10 @@
 import { supabase } from '@/lib/supabase';
 
+/** Suppress console noise when a dependent module's table/view doesn't exist in PostgREST */
+function isModuleNotInstalledError(error: { code?: string; message?: string }): boolean {
+  return error.code === 'PGRST200' || error.code === 'PGRST204' || error.message?.includes('schema cache') === true;
+}
+
 // Session/talk types
 export type SessionType = 'talk' | 'panel' | 'workshop' | 'lightning' | 'fireside' | 'keynote';
 export type TalkStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'confirmed' | 'reserve' | 'placeholder';
@@ -111,7 +116,9 @@ export class TalkService {
     const { data, error } = await query.order('sort_order', { ascending: true });
 
     if (error) {
-      console.error('Error fetching event talks:', error);
+      if (!isModuleNotInstalledError(error)) {
+        console.error('Error fetching event talks:', error);
+      }
       throw error;
     }
 
@@ -561,7 +568,9 @@ export class TalkService {
       .not('duration_minutes', 'is', null);
 
     if (error) {
-      console.error('Error fetching confirmed duration counts:', error);
+      if (!isModuleNotInstalledError(error)) {
+        console.error('Error fetching confirmed duration counts:', error);
+      }
       throw error;
     }
 

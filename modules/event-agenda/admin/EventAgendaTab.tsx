@@ -36,6 +36,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Button, Card, Input, Modal, ConfirmModal } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
+import { ModuleDependencyNotice } from '@/components/shared/ModuleDependencyNotice';
 import { AgendaService, AgendaTrack, AgendaEntry, AgendaEntryType, TimelineConfig, AgendaEntryPosition } from '@/utils/agendaService';
 import { SpeakerService, EventSpeakerWithDetails } from '../../event-speakers/admin/utils/speakerService';
 import { TalkService, EventTalkWithSpeakers, SessionType, TalkStatus, SpeakerRole } from './utils/talkService';
@@ -1441,6 +1442,11 @@ export function EventAgendaTab({ eventUuid, eventStart, eventEnd, talkDurationOp
 
   return (
     <div className="space-y-6">
+      <ModuleDependencyNotice
+        moduleId="event-speakers"
+        moduleName="Event Speakers"
+        featureDescription="speaker assignments, talks, and talk duration tracking"
+      />
       {/* Talk Duration Options Section */}
       <Card className="p-4">
         <div className="flex items-center justify-between mb-3">
@@ -2632,3 +2638,5 @@ export function EventAgendaTab({ eventUuid, eventStart, eventEnd, talkDurationOp
     </div>
   );
 }
+
+export default EventAgendaTab;
