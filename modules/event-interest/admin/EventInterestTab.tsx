@@ -13,6 +13,7 @@ import {
 import { Card, Button, ConfirmModal, Badge } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { supabase } from '@/lib/supabase';
+import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
 interface EventInterest {
   id: string;
@@ -42,9 +43,10 @@ const ITEMS_PER_PAGE = 50;
 
 interface EventInterestTabProps {
   eventId: string;
+  eventUuid?: string;
 }
 
-export const EventInterestTab = ({ eventId }: EventInterestTabProps) => {
+export const EventInterestTab = ({ eventId, eventUuid }: EventInterestTabProps) => {
   const navigate = useNavigate();
   const [interests, setInterests] = useState<EventInterest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,15 +65,73 @@ export const EventInterestTab = ({ eventId }: EventInterestTabProps) => {
 
   useEffect(() => {
     loadInterests();
-  }, [eventId]);
+  }, [eventUuid]);
+
+  // Subscribe to real-time changes for event interest
+  useEffect(() => {
+    if (!eventUuid) return;
+
+    const channel = supabase
+      .channel(`event_interest_${eventUuid}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'events_interest',
+          filter: `event_id=eq.${eventUuid}`,
+        },
+        async (payload: RealtimePostgresChangesPayload<EventInterest>) => {
+          if (payload.eventType === 'INSERT') {
+            // Fetch full record from view for joined data
+            const newId = (payload.new as EventInterest).id;
+            const { data } = await supabase
+              .from('events_interest_with_details')
+              .select('*')
+              .eq('id', newId)
+              .single();
+
+            if (data) {
+              setInterests((prev) => {
+                if (prev.some((i) => i.id === data.id)) return prev;
+                return [data as EventInterest, ...prev];
+              });
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedId = (payload.new as EventInterest).id;
+            const { data } = await supabase
+              .from('events_interest_with_details')
+              .select('*')
+              .eq('id', updatedId)
+              .single();
+
+            if (data) {
+              setInterests((prev) =>
+                prev.map((i) => (i.id === data.id ? (data as EventInterest) : i))
+              );
+            }
+          } else if (payload.eventType === 'DELETE') {
+            setInterests((prev) =>
+              prev.filter((i) => i.id !== (payload.old as EventInterest).id)
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [eventUuid]);
 
   const loadInterests = async () => {
+    if (!eventUuid) return;
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from('events_interest_with_details')
         .select('*')
-        .eq('event_id', eventId)
+        .eq('event_id', eventUuid)
         .order('expressed_at', { ascending: false });
 
       if (error) throw error;

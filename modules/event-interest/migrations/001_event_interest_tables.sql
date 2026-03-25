@@ -60,3 +60,9 @@ CREATE POLICY "anon_select_events_interest"
 CREATE POLICY "authenticated_all_events_interest"
   ON public.events_interest FOR ALL TO authenticated
   USING (true) WITH CHECK (true);
+
+-- ==========================================================================
+-- 4. Realtime
+-- ==========================================================================
+ALTER PUBLICATION supabase_realtime ADD TABLE public.events_interest;
+ALTER TABLE public.events_interest REPLICA IDENTITY FULL;
