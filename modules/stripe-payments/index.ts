@@ -83,6 +83,15 @@ const stripePaymentsModule: GatewazeModule = {
       description: 'Stripe publishable key for frontend',
     },
   },
+  onInstall: async () => {
+    console.log('[stripe-payments] Module installed');
+  },
+  onEnable: async () => {
+    console.log('[stripe-payments] Module enabled');
+  },
+  onDisable: async () => {
+    console.log('[stripe-payments] Module disabled');
+  },
 };
 
 export default stripePaymentsModule;
