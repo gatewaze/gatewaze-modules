@@ -28,6 +28,8 @@ const eventSponsorsModule: GatewazeModule = {
     },
   ],
 
+  dependencies: ['events'],
+
   configSchema: {},
 
   onInstall: async () => {

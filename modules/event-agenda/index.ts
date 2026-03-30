@@ -27,7 +27,7 @@ const eventAgendaModule: GatewazeModule = {
     },
   ],
 
-  dependencies: ['event-speakers'],
+  dependencies: ['events', 'event-speakers'],
 
   configSchema: {},
 

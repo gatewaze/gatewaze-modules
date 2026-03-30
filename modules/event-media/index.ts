@@ -37,7 +37,7 @@ const eventMediaModule: GatewazeModule = {
     },
   ],
 
-  dependencies: ['event-sponsors'],
+  dependencies: ['events', 'event-sponsors'],
 
   configSchema: {},
 

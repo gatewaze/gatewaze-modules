@@ -35,7 +35,7 @@ interface TrackingLinkRequest {
   edit_token: string
 }
 
-Deno.serve(async (req) => {
+export default async function(req: Request) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -325,4 +325,4 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }
-})
+}

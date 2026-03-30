@@ -1,4 +1,3 @@
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 /**
@@ -45,7 +44,7 @@ interface NotifyResult {
   sheets: { sent: boolean; error?: string; action?: 'updated' | 'appended' };
 }
 
-serve(async (req) => {
+export default async function(req: Request) {
   try {
     // CORS headers
     if (req.method === 'OPTIONS') {
@@ -278,9 +277,9 @@ serve(async (req) => {
     }, 200);
   } catch (error) {
     console.error('Unexpected error:', error);
-    return jsonResponse({ error: 'Internal server error', details: error.message }, 500);
+    return jsonResponse({ error: 'Internal server error', details: (error as any).message }, 500);
   }
-});
+}
 
 // =============================================================================
 // Helper Functions

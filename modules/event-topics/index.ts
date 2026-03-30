@@ -25,6 +25,8 @@ const eventTopicsModule: GatewazeModule = {
     { path: '/admin/topics', label: 'Topics', icon: 'Hash', requiredFeature: 'event-topics', parentGroup: 'admin', order: 23 },
   ],
 
+  dependencies: ['events'],
+
   configSchema: {},
 
   onInstall: async () => {

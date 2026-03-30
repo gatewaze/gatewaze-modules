@@ -36,7 +36,7 @@ const eventSpeakersModule: GatewazeModule = {
     },
   ],
 
-  dependencies: ['event-sponsors'],
+  dependencies: ['events', 'event-sponsors'],
 
   configSchema: {},
 

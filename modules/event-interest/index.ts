@@ -29,6 +29,8 @@ const eventInterestModule: GatewazeModule = {
     },
   ],
 
+  dependencies: ['events'],
+
   configSchema: {},
 
   onInstall: async () => {

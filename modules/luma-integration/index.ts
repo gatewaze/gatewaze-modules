@@ -63,6 +63,8 @@ const lumaIntegrationModule: GatewazeModule = {
     },
   },
 
+  dependencies: ['events'],
+
   onInstall: async () => {
     console.log('[luma-integration] Module installed');
   },

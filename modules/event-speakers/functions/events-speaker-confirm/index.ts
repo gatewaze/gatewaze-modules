@@ -1,4 +1,3 @@
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
@@ -116,7 +115,7 @@ function htmlResponse(html: string, status: number = 200): Response {
   });
 }
 
-serve(async (req) => {
+export default async function(req: Request) {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -406,4 +405,4 @@ serve(async (req) => {
       500
     );
   }
-});
+}
