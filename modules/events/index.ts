@@ -22,6 +22,7 @@ const eventsModule: GatewazeModule = {
   migrations: [
     'migrations/001_create_events_tables.sql',
     'migrations/002_events_rls_functions.sql',
+    'migrations/003_content_category.sql',
   ],
 
   edgeFunctions: [
