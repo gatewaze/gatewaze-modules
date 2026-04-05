@@ -62,6 +62,15 @@ const eventsModule: GatewazeModule = {
     },
   ],
 
+  adminSlots: [
+    {
+      slotName: 'person-detail:events',
+      component: () => import('./admin/components/PersonEventsTab'),
+      order: 10,
+      requiredFeature: 'events',
+    },
+  ],
+
   portalNav: {
     label: 'Events',
     path: '/events/upcoming',
