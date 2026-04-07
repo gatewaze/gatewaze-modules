@@ -286,4 +286,4 @@ I'll let you all take it from here. Keep me posted how it goes.
 }
 
 export default handler
-if (import.meta.main) Deno.serve(handler)
+Deno.serve(handler)

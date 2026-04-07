@@ -453,4 +453,4 @@ CRITICAL RULES:
 }
 
 export default handler
-if (import.meta.main) Deno.serve(handler)
+Deno.serve(handler)

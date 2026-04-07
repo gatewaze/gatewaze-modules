@@ -339,7 +339,7 @@ async function handler(req: Request) {
 }
 
 export default handler
-if (import.meta.main) Deno.serve(handler)
+Deno.serve(handler)
 
 /**
  * Get IP-based location from ip-api.com (free, no API key required)
