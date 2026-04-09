@@ -132,7 +132,7 @@ async function markAttendance(supabase: any, attendanceData: any) {
     if (badge_printed_on_site !== undefined) updates.badge_printed_on_site = badge_printed_on_site;
     if (sessions_attended.length > 0) updates.sessions_attended = sessions_attended;
     if (badge_printed_on_site === true) updates.badge_printed_at = new Date().toISOString();
-    if (source !== undefined) updates.source = source;
+    if (source !== undefined) updates.registration_source = source;
     if (utm_source !== undefined) updates.utm_source = utm_source;
     if (utm_medium !== undefined) updates.utm_medium = utm_medium;
     if (utm_campaign !== undefined) updates.utm_campaign = utm_campaign;
@@ -166,8 +166,8 @@ async function markAttendance(supabase: any, attendanceData: any) {
   };
 
   if (badge_printed_on_site) insertData.badge_printed_at = new Date().toISOString();
-  if (source) insertData.source = source;
-  else if (utm_source) insertData.source = utm_source;
+  if (source) insertData.registration_source = source;
+  else if (utm_source) insertData.registration_source = utm_source;
   if (utm_source) insertData.utm_source = utm_source;
   if (utm_medium) insertData.utm_medium = utm_medium;
   if (utm_campaign) insertData.utm_campaign = utm_campaign;
