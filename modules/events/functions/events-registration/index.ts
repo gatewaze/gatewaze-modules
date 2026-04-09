@@ -26,9 +26,9 @@ interface EventRegistrationRequest {
   job_title?: string
   phone?: string
   linkedin_url?: string
-  registration_type?: 'free' | 'paid' | 'comp' | 'sponsor' | 'speaker' | 'staff' | 'vip' | 'individual' | 'sponsor_staff'
+  registration_type?: 'free' | 'paid' | 'waived' | 'sponsor' | 'speaker' | 'staff' | 'vip' | 'individual' | 'sponsor_staff'
   ticket_type?: string
-  payment_status?: 'pending' | 'paid' | 'refunded' | 'comp'
+  payment_status?: 'pending' | 'paid' | 'refunded' | 'waived'
   amount_paid?: number
   currency?: string
   sponsor_permission?: boolean
@@ -78,7 +78,7 @@ async function handler(req: Request) {
       linkedin_url,
       registration_type = 'free',
       ticket_type,
-      payment_status = 'comp',
+      payment_status = 'waived',
       amount_paid,
       currency = 'USD',
       sponsor_permission,
@@ -156,7 +156,7 @@ async function handler(req: Request) {
       })
     }
 
-    const resolvedEventId = eventRecord.event_id // Use short event_id for registration
+    const resolvedEventId = eventRecord.id // Use UUID for registration (events_registrations.event_id is uuid)
     console.log(`✅ Event verified: ${eventRecord.event_title} (${resolvedEventId})`)
 
     // Step 2: Get IP-based location (prioritize this over event location)
@@ -236,6 +236,7 @@ async function handler(req: Request) {
     // Step 6: Create registration
     const registrationData: Record<string, any> = {
       event_id: resolvedEventId,
+      person_id: person.id,
       people_profile_id: memberProfile.id,
       registration_type,
       ticket_type: ticket_type || null,
@@ -254,9 +255,9 @@ async function handler(req: Request) {
     }
     // If source is not provided, fall back to utm_source
     if (source) {
-      registrationData.source = source
+      registrationData.registration_source = source
     } else if (utm_source) {
-      registrationData.source = utm_source
+      registrationData.registration_source = utm_source
     }
     // Add UTM tracking fields
     if (utm_source) {
