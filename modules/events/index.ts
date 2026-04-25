@@ -174,6 +174,16 @@ const eventsModule: GatewazeModule = {
       fields: { id: 'event_id', title: 'event_title', date: 'event_start', summary: 'listing_intro' },
       visibilityFilter: [{ column: 'is_listed', eq: true }],
       resourcePath: (row) => `/events/${row.event_id}`,
+      // Mirror PUBLIC_EVENT_FIELDS in public-api.ts — keep in sync when adding fields.
+      fullFields: [
+        'id', 'event_id', 'event_title', 'event_description', 'listing_intro',
+        'event_start', 'event_end', 'event_timezone',
+        'event_city', 'event_country_code', 'event_region', 'event_location',
+        'venue_address', 'event_link', 'event_logo', 'event_type',
+        'event_topics', 'screenshot_url',
+        'enable_registration', 'enable_native_registration',
+        'content_category',
+      ],
     },
   ],
 
