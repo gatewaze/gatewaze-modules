@@ -23,6 +23,8 @@ const eventsModule: GatewazeModule = {
     'migrations/001_create_events_tables.sql',
     'migrations/002_events_rls_functions.sql',
     'migrations/003_content_category.sql',
+    'migrations/004_triage_adapter.sql',
+    'migrations/005_keyword_adapter.sql',
   ],
 
   edgeFunctions: [
@@ -163,6 +165,17 @@ const eventsModule: GatewazeModule = {
       },
     },
   },
+
+  publicContentSources: [
+    {
+      type: 'event',
+      table: 'events',
+      scope: 'events:read',
+      fields: { id: 'id', title: 'event_title', date: 'event_start', summary: 'listing_intro' },
+      visibilityFilter: [{ column: 'is_listed', eq: true }],
+      resourcePath: (row) => `/events/${row.event_id ?? row.id}`,
+    },
+  ],
 
   mcpContributions: () => {
     // Lazy-load to avoid pulling MCP deps into the admin/portal build
