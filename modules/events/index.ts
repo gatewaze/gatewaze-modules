@@ -171,9 +171,9 @@ const eventsModule: GatewazeModule = {
       type: 'event',
       table: 'events',
       scope: 'events:read',
-      fields: { id: 'id', title: 'event_title', date: 'event_start', summary: 'listing_intro' },
+      fields: { id: 'event_id', title: 'event_title', date: 'event_start', summary: 'listing_intro' },
       visibilityFilter: [{ column: 'is_listed', eq: true }],
-      resourcePath: (row) => `/events/${row.event_id ?? row.id}`,
+      resourcePath: (row) => `/events/${row.event_id}`,
     },
   ],
 
