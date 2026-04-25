@@ -8,6 +8,7 @@ export const PUBLIC_EVENT_FIELDS = [
   'venue_address', 'event_link', 'event_logo', 'event_type',
   'event_topics', 'screenshot_url',
   'enable_registration', 'enable_native_registration',
+  'content_category',
 ] as const;
 
 const PUBLIC_SPEAKER_FIELDS = [
@@ -42,6 +43,10 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
       if (req.query.topics) query = query.overlaps('event_topics', req.query.topics.split(','));
       if (req.query.from) query = query.gte('event_start', req.query.from);
       if (req.query.to) query = query.lte('event_start', req.query.to);
+      if (req.query.content_category) {
+        const cats = String(req.query.content_category).split(',').map((s) => s.trim()).filter(Boolean);
+        query = cats.length > 1 ? query.in('content_category', cats) : query.eq('content_category', cats[0]);
+      }
 
       // Filter by calendar via subquery — preserves all other filters
       if (req.query.calendar_id) {
