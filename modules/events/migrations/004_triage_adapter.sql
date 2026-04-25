@@ -173,6 +173,11 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gatewaze_module_writer') THEN
     CREATE ROLE gatewaze_module_writer NOLOGIN;
   END IF;
+  -- Grant the role to the calling user so subsequent ALTER TABLE
+  -- ... OWNER TO gatewaze_module_writer doesn't trip 42501 on
+  -- Supabase Cloud (where postgres isn't a true superuser and needs
+  -- explicit role membership to transfer ownership).
+  EXECUTE format('GRANT gatewaze_module_writer TO %I', current_user);
 
   ALTER FUNCTION public.events_triage_approve(uuid, text[], boolean, uuid) OWNER TO gatewaze_module_writer;
   ALTER FUNCTION public.events_triage_reject(uuid, text, uuid) OWNER TO gatewaze_module_writer;
