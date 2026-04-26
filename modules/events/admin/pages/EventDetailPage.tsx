@@ -934,9 +934,9 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
   const [showMeetupPreview, setShowMeetupPreview] = useState(false);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Main Content */}
-      <div className="lg:col-span-2 space-y-6">
+    <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
+      {/* Main Content (2/3) */}
+      <div className="space-y-6">
         {/* Basic Information - Enhanced card styling */}
         <Card className="overflow-hidden border-0 shadow-sm hover:shadow-md transition-shadow duration-300">
           <div className="p-6">
