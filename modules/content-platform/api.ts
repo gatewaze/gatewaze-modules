@@ -63,8 +63,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
         .select(`
           id, content_type, content_id, status, lifecycle_key,
           assigned_to, assigned_at, team_name, priority, created_at,
-          metadata, applied_categories, suggested_categories,
-          content_sources!left(source_kind, source_ref)
+          metadata, applied_categories, suggested_categories
         `, { count: 'estimated' })
         .in('status', ['pending', 'changes_requested']);
 
@@ -86,12 +85,30 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
         return res.status(500).json({ error: { code: 'internal', message: error.message } });
       }
 
-      // Server-side filtering on JOIN'd columns + jsonb metadata that PostgREST
+      // Fetch matching content_sources rows in one batch (no FK exists between
+      // these tables; both are keyed on the composite (content_type, content_id),
+      // so PostgREST can't infer the join).
+      const triageRows = data ?? [];
+      const sourcesByKey = new Map<string, { source_kind: string; source_ref: string | null; source_meta: any }>();
+      if (triageRows.length > 0) {
+        const types = Array.from(new Set(triageRows.map((r: any) => r.content_type)));
+        const ids = Array.from(new Set(triageRows.map((r: any) => r.content_id)));
+        const { data: sources } = await sb()
+          .from('content_sources')
+          .select('content_type, content_id, source_kind, source_ref, source_meta')
+          .in('content_type', types)
+          .in('content_id', ids);
+        for (const s of sources ?? []) {
+          sourcesByKey.set(`${(s as any).content_type}::${(s as any).content_id}`, s as any);
+        }
+      }
+
+      // Server-side filtering on jsonb metadata + source kind that PostgREST
       // can't easily express. Cheap because we only have up to `limit + 1` rows.
-      let rows = (data ?? []).filter((r: any) => {
+      let rows = triageRows.filter((r: any) => {
         const meta = r.metadata ?? {};
-        const sources = Array.isArray(r.content_sources) ? r.content_sources : [];
-        const sourceKind = sources[0]?.source_kind ?? 'unknown';
+        const src = sourcesByKey.get(`${r.content_type}::${r.content_id}`);
+        const sourceKind = src?.source_kind ?? 'unknown';
         if (sourceKindsRaw && sourceKindsRaw.length) {
           if (!sourceKindsRaw.includes(sourceKind)) return false;
         } else {
@@ -116,8 +133,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
 
       const responseRows = rows.map((r: any) => {
         const meta = r.metadata ?? {};
-        const sources = Array.isArray(r.content_sources) ? r.content_sources : [];
-        const src = sources[0] ?? null;
+        const src = sourcesByKey.get(`${r.content_type}::${r.content_id}`) ?? null;
         return {
           triage_item_id: r.id,
           content_type: r.content_type,

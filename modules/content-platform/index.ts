@@ -55,6 +55,7 @@ const contentPlatformModule: GatewazeModule = {
     {
       path: '/admin/inbox',
       label: 'Inbox',
+      icon: 'admin.inbox',
       group: 'content',
       order: 1,
       requiredFeature: 'content-platform.inbox',
