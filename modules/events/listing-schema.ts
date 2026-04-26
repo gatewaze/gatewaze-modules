@@ -26,6 +26,7 @@ export const eventsListingSchema: ListingSchema = {
       { col: 'event_region', as: 'eventRegion' },
       { col: 'event_type', as: 'eventType' },
       { col: 'is_live_in_production', as: 'isLive' },
+      { col: 'publish_state', as: 'publishState' },
       { col: 'scraped_by', as: 'scrapedBy' },
       { col: 'event_link', as: 'eventLink' },
       { col: 'source_type', as: 'sourceType' },
@@ -140,6 +141,12 @@ export const eventsListingSchema: ListingSchema = {
       kind: 'boolean',
       column: 'is_live_in_production',
     },
+    publishState: {
+      kind: 'enum',
+      column: 'publish_state',
+      values: ['draft', 'pending_review', 'auto_suppressed', 'rejected', 'published', 'unpublished'] as const,
+      multi: true,
+    },
   },
 
   searchable: ['event_title', 'event_city'],
@@ -166,6 +173,7 @@ export const eventsListingSchema: ListingSchema = {
     'event_region',
     'event_type',
     'is_live_in_production',
+    'publish_state',
     'scraped_by',
     'source_type',
     'screenshot_url',
