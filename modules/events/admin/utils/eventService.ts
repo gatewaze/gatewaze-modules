@@ -63,8 +63,10 @@ export interface Event {
   accountId?: string;
   // Beta offer indicator
   offerBeta?: boolean;
-  // Live in production indicator
+  // Live in production indicator (now a generated column from publish_state).
   isLiveInProduction?: boolean;
+  // Full publish state — see spec-content-publishing-pipeline.md §4.2.1.
+  publishState?: 'draft' | 'pending_review' | 'auto_suppressed' | 'rejected' | 'published' | 'unpublished';
   // Event check-in QR code
   checkinQrCode?: string;
   // Registration controls
@@ -517,7 +519,10 @@ static async createEvent(eventData: Omit<Event, 'id' | 'createdAt' | 'updatedAt'
         source_details: sourceDetails,
         account_id: eventData.accountId || null,
         offer_beta: eventData.offerBeta || false,
-        is_live_in_production: eventData.isLiveInProduction !== undefined ? eventData.isLiveInProduction : true, // Default to true for new events
+        // is_live_in_production is now a generated column from publish_state.
+        // Default new admin-created events to 'published' (preserves prior intent).
+        publish_state: eventData.publishState
+          ?? (eventData.isLiveInProduction === false ? 'unpublished' : 'published'),
         recommended_event_id: eventData.recommendedEventId || null,
       };
 
@@ -642,8 +647,32 @@ static async createEvent(eventData: Omit<Event, 'id' | 'createdAt' | 'updatedAt'
       if (eventData.accountId !== undefined) updateData.account_id = eventData.accountId || null;
       if (eventData.offerBeta !== undefined) updateData.offer_beta = eventData.offerBeta || false;
       if (eventData.isLiveInProduction !== undefined) {
-        updateData.is_live_in_production = eventData.isLiveInProduction;
-        console.log('📌 Setting is_live_in_production to:', eventData.isLiveInProduction);
+        // is_live_in_production is now a generated column derived from
+        // publish_state. Map the boolean to a publish_state transition via
+        // the central state-machine RPC. This will fail if the transition
+        // is invalid (e.g. trying to publish a rejected event without first
+        // reopening it), surfacing the error to the admin.
+        const targetState = eventData.isLiveInProduction ? 'published' : 'unpublished';
+        const { error: stateErr } = await supabase.rpc('events_publish_state_set', {
+          p_id: id,
+          p_to: targetState,
+          p_actor: 'admin:ui',
+          p_reason: `admin set isLiveInProduction=${eventData.isLiveInProduction}`,
+        });
+        if (stateErr) {
+          console.error('events_publish_state_set failed:', stateErr);
+          throw new Error(`Failed to set publish state: ${stateErr.message}`);
+        }
+        console.log('📌 Set publish_state to:', targetState);
+      }
+      if (eventData.publishState !== undefined) {
+        const { error: stateErr } = await supabase.rpc('events_publish_state_set', {
+          p_id: id,
+          p_to: eventData.publishState,
+          p_actor: 'admin:ui',
+          p_reason: `admin set publish_state=${eventData.publishState}`,
+        });
+        if (stateErr) throw new Error(`Failed to set publish state: ${stateErr.message}`);
       }
       if (eventData.enableRegistration !== undefined) updateData.enable_registration = eventData.enableRegistration;
       if (eventData.enableNativeRegistration !== undefined) updateData.enable_native_registration = eventData.enableNativeRegistration;
