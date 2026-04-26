@@ -19,12 +19,16 @@ const eventsModule: GatewazeModule = {
     registerRoutes(app as any, context);
   },
 
+  dependencies: ['content-platform'],
+
   migrations: [
     'migrations/001_create_events_tables.sql',
     'migrations/002_events_rls_functions.sql',
     'migrations/003_content_category.sql',
     'migrations/004_triage_adapter.sql',
     'migrations/005_keyword_adapter.sql',
+    'migrations/006_publish_state.sql',
+    'migrations/008_register_with_platform.sql',
   ],
 
   edgeFunctions: [

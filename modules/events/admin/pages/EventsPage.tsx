@@ -59,6 +59,15 @@ const SOURCE_BADGE: Record<string, { color: 'blue' | 'green' | 'purple' | 'gray'
   user_submission: { color: 'purple', label: 'User' },
 };
 
+const PUBLISH_STATE_BADGE: Record<string, { color: 'green' | 'amber' | 'gray' | 'red' | 'blue'; label: string }> = {
+  published:        { color: 'green', label: 'Published' },
+  pending_review:   { color: 'amber', label: 'Pending review' },
+  auto_suppressed:  { color: 'gray',  label: 'Filtered' },
+  rejected:         { color: 'red',   label: 'Rejected' },
+  unpublished:      { color: 'gray',  label: 'Unpublished' },
+  draft:            { color: 'blue',  label: 'Draft' },
+};
+
 interface DistinctValue {
   value: string;
   count?: number;
@@ -542,6 +551,17 @@ export default function EventsPage() {
         },
       }),
 
+      helper.accessor('publishState', {
+        header: 'Status',
+        enableSorting: true,
+        cell: ({ row }) => {
+          const v = (row.original as any).publishState as string | undefined;
+          const meta = PUBLISH_STATE_BADGE[v ?? 'published']
+            ?? { color: 'gray' as const, label: v ?? '—' };
+          return <Badge color={meta.color} variant="soft">{meta.label}</Badge>;
+        },
+      }),
+
       helper.display({
         id: '__actions__',
         header: '',
@@ -700,6 +720,14 @@ export default function EventsPage() {
             options={sourceTypeOptions.values}
             loading={!sourceTypeOptions.loaded}
             renderLabel={(v) => SOURCE_BADGE[v]?.label ?? v}
+          />
+
+          <FilterDropdown
+            label="Status"
+            value={singular(filters.publishState)}
+            onChange={(v) => setFilter('publishState', v ? [v] : undefined)}
+            options={Object.keys(PUBLISH_STATE_BADGE).map((value) => ({ value }))}
+            renderLabel={(v) => PUBLISH_STATE_BADGE[v]?.label ?? v}
           />
 
           <FilterDropdown
