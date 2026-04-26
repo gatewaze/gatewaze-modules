@@ -52,7 +52,9 @@ $$;
 -- and on delete.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.events_ck_enqueue() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
 BEGIN
   IF (TG_OP = 'DELETE') THEN
     INSERT INTO public.content_keyword_match_queue (content_type, content_id, op)
@@ -70,6 +72,7 @@ BEGIN
     RETURN NEW;
   END IF;
 END $$;
+ALTER FUNCTION public.events_ck_enqueue() OWNER TO gatewaze_module_writer;
 
 DROP TRIGGER IF EXISTS events_ck_enqueue_trg ON public.events;
 CREATE TRIGGER events_ck_enqueue_trg
