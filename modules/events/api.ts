@@ -8,9 +8,17 @@
 
 import type { Express, Request, Response } from 'express';
 import type { ModuleContext } from '@gatewaze/shared';
+import {
+  createAdminListingRoute,
+  createAdminDistinctRoute,
+  buildHandlerContext,
+  listingCache,
+  type HandlerContext,
+} from '@gatewaze/shared/listing';
 import { createRequire } from 'module';
 import { join } from 'path';
 import { Readable } from 'stream';
+import { eventsListingSchema } from './listing-schema';
 
 let _supabase: any = null;
 
@@ -254,6 +262,122 @@ function normalizeEventRecord(record: Record<string, string>): Record<string, un
   return normalized;
 }
 
+// ── Admin Listing (shared listing primitive) ───────────────────────────────
+
+const eventsAdminListingHandler = createAdminListingRoute({
+  schema: eventsListingSchema,
+  path: '/api/admin/events/list',
+});
+
+const eventsAdminDistinctHandler = createAdminDistinctRoute({
+  schema: eventsListingSchema,
+  path: '/api/admin/events/distinct/:column',
+});
+
+function buildAdminCtx(req: Request): HandlerContext {
+  return buildHandlerContext({
+    consumer: 'admin',
+    ip: req.ip || '',
+    headers: req.headers as Record<string, string | string[] | undefined>,
+    requestId:
+      (req.headers['x-request-id'] as string | undefined) ||
+      `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    // Admin role is enforced upstream by the platform admin guard.
+  });
+}
+
+function registerEventsAdminListing(app: Express, projectRoot: string) {
+  app.get('/api/admin/events/list', async (req: Request, res: Response) => {
+    try {
+      const supabase = initSupabase(projectRoot);
+      const { status, body } = await eventsAdminListingHandler.handle(
+        { query: req.query as Record<string, unknown>, ctx: buildAdminCtx(req) },
+        supabase
+      );
+      res.status(status).json(body);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: { code: 'LISTING_INTERNAL_ERROR', message } });
+    }
+  });
+
+  app.get('/api/admin/events/distinct/:column', async (req: Request, res: Response) => {
+    try {
+      const supabase = initSupabase(projectRoot);
+      const { status, body } = await eventsAdminDistinctHandler.handle(
+        { column: req.params.column, query: req.query as Record<string, unknown>, ctx: buildAdminCtx(req) },
+        supabase
+      );
+      res.status(status).json(body);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: { code: 'LISTING_INTERNAL_ERROR', message } });
+    }
+  });
+
+  // Bulk-delete by ids (admin-only). Pass-through to EventService-style
+  // delete; the EventsPage wires this to the selection state.
+  app.post('/api/admin/events/bulk-delete', async (req: Request, res: Response) => {
+    try {
+      const supabase = initSupabase(projectRoot);
+      const body = req.body as { ids?: string[]; matchingFilter?: Record<string, unknown> };
+      let ids: string[] = [];
+
+      if (Array.isArray(body.ids) && body.ids.length > 0) {
+        ids = body.ids;
+      } else if (body.matchingFilter && typeof body.matchingFilter === 'object') {
+        // Resolve "select all matching filter" to a concrete id list by
+        // running the same listing query once with a high page size.
+        // For v1 we cap at 5000; beyond that the operator should narrow
+        // their filter or use the legacy bulk-edit page.
+        const listResult = await eventsAdminListingHandler.handle(
+          { query: { ...body.matchingFilter, page: 0, pageSize: 5000 } as never, ctx: buildAdminCtx(req) },
+          supabase
+        );
+        if (listResult.status !== 200 || !('rows' in listResult.body)) {
+          res.status(listResult.status).json(listResult.body);
+          return;
+        }
+        ids = (listResult.body.rows as Array<{ id: string }>).map((r) => r.id).filter(Boolean);
+        if (ids.length >= 5000) {
+          res.status(409).json({
+            error: {
+              code: 'BULK_LIMIT_EXCEEDED',
+              message: 'select-all-matching capped at 5000 rows; please narrow the filter and retry',
+            },
+          });
+          return;
+        }
+      } else {
+        res.status(400).json({ error: { code: 'INVALID_BULK_REQUEST', message: 'either ids[] or matchingFilter required' } });
+        return;
+      }
+
+      if (ids.length === 0) {
+        res.json({ success: true, deleted: 0 });
+        return;
+      }
+
+      const { error, count } = await supabase
+        .from('events')
+        .delete({ count: 'exact' })
+        .in('id', ids);
+
+      if (error) {
+        res.status(500).json({ error: { code: 'DELETE_FAILED', message: error.message } });
+        return;
+      }
+      // Bust admin listing cache for events so the next list call reflects
+      // the deletion immediately. Per spec §14.
+      listingCache.emit({ module: 'events', table: 'events', reason: 'bulk-delete' });
+      res.json({ success: true, deleted: count ?? ids.length });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: { code: 'LISTING_INTERNAL_ERROR', message } });
+    }
+  });
+}
+
 // ── Route Registration ─────────────────────────────────────────────────────────
 
 export function registerRoutes(app: Express, context?: ModuleContext) {
@@ -277,9 +401,17 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
     },
   });
 
+  // ── Admin listing (per spec-platform-listing-pattern.md) ──────────────────
+
+  // The shared listing primitive: paginated, validated, indexed admin
+  // table feed. Replaces the ad-hoc /api/events list call from the
+  // admin EventsPage. The legacy /api/events route below is kept
+  // running for any callers that still depend on it.
+  registerEventsAdminListing(app, projectRoot);
+
   // ── Events ─────────────────────────────────────────────────────────────────
 
-  // List events
+  // List events (legacy — to be removed once all callers migrate)
   app.get('/api/events', async (req: Request, res: Response) => {
     try {
       const supabase = initSupabase(projectRoot);
