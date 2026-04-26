@@ -279,10 +279,16 @@ BEGIN
   END IF;
 
   -- Validate inbox_preview_fn signature if provided.
+  -- Match by argument TYPES (not names): pg_get_function_identity_arguments
+  -- returns "p_id uuid" for a function declared `(p_id uuid)` — including the
+  -- parameter name — so a literal equality check against 'uuid' rejects every
+  -- function that names its argument. Compare against proargtypes instead so
+  -- both `(uuid)` and `(p_id uuid)` are accepted.
   IF p_inbox_preview_fn IS NOT NULL THEN
     PERFORM 1 FROM pg_proc
       WHERE oid = p_inbox_preview_fn::oid
-        AND pg_get_function_identity_arguments(oid) = 'uuid';
+        AND pronargs = 1
+        AND proargtypes[0] = 'uuid'::regtype;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'inbox_preview_fn % must take a single uuid arg', p_inbox_preview_fn;
     END IF;
