@@ -304,6 +304,14 @@ BEGIN
     display_label     = EXCLUDED.display_label,
     inbox_preview_fn  = EXCLUDED.inbox_preview_fn;
 
+  -- Grant the publish_state setter (which runs as gatewaze_module_writer via
+  -- SECURITY DEFINER) UPDATE permission on the registered column. Without
+  -- this, content_publish_state_set raises 42501 on every transition.
+  EXECUTE format(
+    'GRANT SELECT, UPDATE (%I) ON %s TO gatewaze_module_writer',
+    p_publish_state_col, p_table_name
+  );
+
   RETURN jsonb_build_object(
     'content_type', p_content_type,
     'table_name', p_table_name::text,

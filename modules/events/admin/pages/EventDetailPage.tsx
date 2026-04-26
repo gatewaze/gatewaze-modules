@@ -215,16 +215,25 @@ const EventDetailPage = () => {
       { id: 'registrations', label: 'Registrations', icon: <ClipboardDocumentCheckIcon className={ic} />, order: 70 },
       { id: 'attendance', label: 'Attendance', icon: <UsersIcon className={ic} />, order: 80 },
     ];
-    const moduleTabs = moduleTabSlots.map(s => {
-      const Icon = resolveHeroIcon(s.registration.meta?.icon as string);
-      return {
-        id: s.registration.meta?.tabId as string,
-        label: s.registration.meta?.label as string,
-        icon: <Icon className={ic} />,
-        order: s.registration.order ?? 100,
-      };
+    const moduleTabs = moduleTabSlots
+      .filter((s) => typeof s.registration.meta?.tabId === 'string' && s.registration.meta.tabId.length > 0)
+      .map((s) => {
+        const Icon = resolveHeroIcon(s.registration.meta?.icon as string);
+        return {
+          id: s.registration.meta!.tabId as string,
+          label: (s.registration.meta?.label as string) ?? '',
+          icon: <Icon className={ic} />,
+          order: s.registration.order ?? 100,
+        };
+      });
+    // Dedupe by id — first occurrence (lowest order, since we sort below) wins.
+    const merged = [...core, ...moduleTabs].sort((a, b) => a.order - b.order);
+    const seen = new Set<string>();
+    return merged.filter((t) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return true;
     });
-    return [...core, ...moduleTabs].sort((a, b) => a.order - b.order);
   }, [moduleTabSlots]);
 
   // Derive active tab from URL, default to 'settings'

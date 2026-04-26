@@ -53,6 +53,23 @@ ALTER TABLE public.events
 CREATE INDEX IF NOT EXISTS events_publish_state_live
   ON public.events(publish_state) WHERE publish_state = 'published';
 
+-- The triage_reject path writes rejection_reason. The 004_triage_adapter
+-- migration is supposed to add it, but it's gated on content-triage being
+-- installed — ensure it exists here so SECURITY DEFINER fns don't 42703.
+ALTER TABLE public.events ADD COLUMN IF NOT EXISTS rejection_reason text;
+
+-- Grant the platform's SECURITY DEFINER setter (owned by gatewaze_module_writer)
+-- the columns it needs to UPDATE. Without this, content_publish_state_set
+-- raises 42501 on every state transition.
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gatewaze_module_writer') THEN
+    GRANT UPDATE (publish_state, rejection_reason, content_category)
+      ON public.events
+      TO gatewaze_module_writer;
+  END IF;
+END $grants$;
+
 -- ----------------------------------------------------------------------------
 -- Backwards-compat wrapper. Existing call sites (eventService, scraper handler)
 -- continue to work; new code can call the platform RPC directly.
