@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card } from '@/components/ui';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Badge, Button, Card, Tabs } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
+import { useModuleSlots } from '@/hooks/useModuleSlots';
 import {
   inboxService,
   type InboxRow as InboxRowData,
@@ -28,6 +29,8 @@ export default function InboxPage() {
   const [bulkActing, setBulkActing] = useState(false);
   const [bulkResult, setBulkResult] = useState<string | null>(null);
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,6 +38,7 @@ export default function InboxPage() {
     try {
       const r = await inboxService.list({ ...filters, search: search.trim() || undefined, limit: 50 });
       setRows(r.data);
+      setNextCursor(r.page.next_cursor);
       setEstimatedTotal(r.page.estimated_total);
       setSelected(new Set());
     } catch (err: any) {
@@ -44,7 +48,38 @@ export default function InboxPage() {
     }
   }, [filters, search]);
 
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const r = await inboxService.list({
+        ...filters, search: search.trim() || undefined, limit: 50, cursor: nextCursor,
+      });
+      setRows((prev) => [...prev, ...r.data]);
+      setNextCursor(r.page.next_cursor);
+      if (r.page.estimated_total != null) setEstimatedTotal(r.page.estimated_total);
+    } catch (err: any) {
+      setError(err.message ?? String(err));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore, filters, search]);
+
   useEffect(() => { load(); }, [load]);
+
+  // IntersectionObserver-driven infinite scroll: when the sentinel becomes
+  // visible (within 200px of the viewport), fetch the next page.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => { if (entries[0]?.isIntersecting) loadMore(); },
+      { rootMargin: '200px' }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [loadMore]);
 
   const setFilter = <K extends keyof InboxListFilters>(key: K, value: InboxListFilters[K]) => {
     setFilters((f) => {
@@ -95,29 +130,66 @@ export default function InboxPage() {
     }
   };
 
-  const counts = useMemo(() => {
-    const c = { pending_review: 0, auto_suppressed: 0, rejected: 0 };
-    for (const r of rows) {
-      if (r.publish_state && r.publish_state in c) (c as any)[r.publish_state]++;
-    }
-    return c;
-  }, [rows]);
+  // Real totals across the entire inbox, fetched independently of pagination.
+  const [counts, setCounts] = useState({ pending_review: 0, auto_suppressed: 0, rejected: 0 });
+  useEffect(() => {
+    let mounted = true;
+    Promise.all([
+      inboxService.list({ ...filters, publish_state: ['pending_review'], limit: 1 }).then((r) => r.page.estimated_total ?? 0),
+      inboxService.list({ ...filters, publish_state: ['auto_suppressed'], limit: 1 }).then((r) => r.page.estimated_total ?? 0),
+      inboxService.list({ ...filters, publish_state: ['rejected'], limit: 1 }).then((r) => r.page.estimated_total ?? 0),
+    ]).then(([pending_review, auto_suppressed, rejected]) => {
+      if (mounted) setCounts({ pending_review, auto_suppressed, rejected });
+    }).catch(() => {/* leave at 0 */});
+    return () => { mounted = false; };
+    // Recompute when the user changes filters that affect the totals (e.g. type, source).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.content_type, filters.source_kind, filters.member_only]);
+
+  // Inbox tabs: built-in "Triage" + any tabs registered via the
+  // 'content-platform:inbox-tab' adminSlot (e.g. content-pipeline submissions).
+  const extraTabs = useModuleSlots('content-platform:inbox-tab');
+  const tabs = useMemo(() => [
+    { id: 'triage', label: 'Triage', component: null as null | React.LazyExoticComponent<any> },
+    ...extraTabs.map((s) => ({
+      id: (s.registration.meta as any)?.tabId ?? s.moduleId,
+      label: (s.registration.meta as any)?.label ?? s.moduleId,
+      // adminSlots `component` is a () => import('...') thunk; wrap in React.lazy
+      // so React can render it via Suspense.
+      component: lazy(s.registration.component as () => Promise<{ default: React.ComponentType }>),
+    })),
+  ], [extraTabs]);
+  const [activeTab, setActiveTab] = useState<string>('triage');
+  const ActiveTabComp = tabs.find((t) => t.id === activeTab)?.component ?? null;
 
   return (
     <Page title="Content Inbox">
       <div className="p-6">
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold mb-1">Content Inbox</h1>
-            <p className="text-sm text-[var(--gray-11)]">
-              All content awaiting review across types — events, blog, podcasts, AI-discovered, and more.
-            </p>
-          </div>
-          <div className="text-right">
-            <div className="text-xs text-[var(--gray-11)]">Estimated total</div>
-            <div className="text-2xl font-semibold">{estimatedTotal ?? '—'}</div>
-          </div>
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold mb-1">Content Inbox</h1>
+          <p className="text-sm text-[var(--gray-11)]">
+            All content awaiting review across types — events, blog, podcasts, AI-discovered, and more.
+          </p>
         </div>
+
+        {/* Tab bar — same style as the Events dashboard (default Radix-Themes
+            tabs in a bordered card wrapper). */}
+        {tabs.length > 1 && (
+          <div className="mb-4">
+            <Tabs
+              value={activeTab}
+              onChange={setActiveTab}
+              tabs={tabs.map((t) => ({ id: t.id, label: t.label }))}
+            />
+          </div>
+        )}
+
+        {/* Non-triage tabs render the slot's component and stop here */}
+        {ActiveTabComp && activeTab !== 'triage' ? (
+          <Suspense fallback={<div className="p-8 text-center text-sm text-[var(--gray-11)]">Loading…</div>}>
+            <ActiveTabComp />
+          </Suspense>
+        ) : (<>
 
         {/* Summary cards */}
         <div className="grid grid-cols-3 gap-3 mb-4">
@@ -170,7 +242,7 @@ export default function InboxPage() {
             value={(filters.publish_state ?? [''])[0] ?? ''}
             onChange={(e) => setFilter('publish_state', e.target.value ? [e.target.value] : undefined)}
           >
-            <option value="">Pending + suppressed (default)</option>
+            <option value="">Pending review (default)</option>
             {ALL_STATES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
           </select>
           <label className="flex items-center gap-1 text-sm">
@@ -233,7 +305,7 @@ export default function InboxPage() {
                     </th>
                     <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">Title</th>
-                    <th className="px-3 py-2">Source</th>
+                    <th className="px-3 py-2">Matched</th>
                     <th className="px-3 py-2">Category</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Age</th>
@@ -252,18 +324,57 @@ export default function InboxPage() {
                   ))}
                 </tbody>
               </table>
+              {/* Infinite-scroll sentinel + status footer */}
+              <div ref={sentinelRef} className="px-3 py-3 text-center text-xs text-[var(--gray-11)]">
+                {loadingMore
+                  ? 'Loading more…'
+                  : nextCursor
+                    ? `Loaded ${rows.length} of ${estimatedTotal ?? '?'}…`
+                    : rows.length === (estimatedTotal ?? rows.length)
+                      ? `All ${rows.length} loaded`
+                      : ''}
+              </div>
             </div>
           )}
         </Card>
+        </>)}
       </div>
 
-      {openRow && (
-        <InboxDrawer
-          row={openRow}
-          onClose={() => setOpenRow(null)}
-          onActed={() => { setOpenRow(null); load(); }}
-        />
-      )}
+      {openRow && (() => {
+        const idx = rows.findIndex((r) => r.triage_item_id === openRow.triage_item_id);
+        const prev = idx > 0 ? rows[idx - 1] : null;
+        const next = idx >= 0 && idx < rows.length - 1 ? rows[idx + 1] : null;
+        const total = estimatedTotal ?? rows.length;
+        // If we're on the last loaded row but more pages exist, the drawer's
+        // Next button triggers a page-load and re-resolves to the next row
+        // when the new rows arrive.
+        const handleNext = next
+          ? () => setOpenRow(next)
+          : (nextCursor
+              ? async () => { await loadMore(); }  // setOpenRow will resolve after rows update
+              : undefined);
+        return (
+          <InboxDrawer
+            row={openRow}
+            onClose={() => setOpenRow(null)}
+            onActed={() => {
+              if (next) {
+                setOpenRow(next);
+                load();
+              } else if (nextCursor) {
+                loadMore().then(() => {/* user can hit Next once rows arrive */});
+                setOpenRow(null);
+              } else {
+                setOpenRow(null);
+                load();
+              }
+            }}
+            onPrev={prev ? () => setOpenRow(prev) : undefined}
+            onNext={handleNext}
+            position={idx >= 0 ? { current: idx, total } : undefined}
+          />
+        );
+      })()}
     </Page>
   );
 }

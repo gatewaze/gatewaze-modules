@@ -13,8 +13,11 @@ export interface InboxRow {
   title: string | null;
   subtitle: string | null;
   thumbnail_url: string | null;
+  source_url: string | null;
+  portal_url: string | null;
   source: { kind: string; ref: string | null; meta: Record<string, unknown> };
-  matched_member_rules: Array<{ rule_id: string; name: string; tier?: string }>;
+  matched_rules: Array<{ id: string; name: string; kind?: string }>;
+  matched_member_rules: Array<{ id: string; name: string; kind?: string }>;
   submitted_at: string;
   assigned_to: string | null;
   lifecycle_key: number;

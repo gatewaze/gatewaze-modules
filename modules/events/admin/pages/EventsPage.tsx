@@ -29,7 +29,6 @@ import {
 } from '@heroicons/react/24/outline';
 import { EventService, EventIdGenerator, type Event as EventRecord } from '@/utils/eventService';
 
-import { Page } from '@/components/shared/Page';
 import { Button } from '@/components/ui/Button';
 import { Badge, Card, Pagination, PaginationFirst, PaginationItems, PaginationLast, PaginationNext, PaginationPrevious } from '@/components/ui';
 import { DataTable } from '@/components/shared/table/DataTable';
@@ -661,26 +660,22 @@ export default function EventsPage() {
     totalCount > rows.length;
 
   return (
-    <Page title="Events">
-      <div className="p-6 space-y-4">
+    <div className="space-y-4">
         {/* ── Header ─────────────────────────────────────────────── */}
         <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-[var(--gray-12)]">Events</h1>
-            <p className="text-sm text-[var(--gray-11)] mt-1">
-              <span className="font-semibold text-[var(--accent-11)]">
-                {totalPrefix}{totalDisplay.toLocaleString()}
-              </span>{' '}
-              events
-              {filtersActive && (
-                <>
-                  {' · '}
-                  <span className="font-semibold text-[var(--accent-11)]">{rows.length.toLocaleString()}</span>{' '}
-                  on this page
-                </>
-              )}
-            </p>
-          </div>
+          <p className="text-sm text-[var(--gray-11)]">
+            <span className="font-semibold text-[var(--accent-11)]">
+              {totalPrefix}{totalDisplay.toLocaleString()}
+            </span>{' '}
+            events
+            {filtersActive && (
+              <>
+                {' · '}
+                <span className="font-semibold text-[var(--accent-11)]">{rows.length.toLocaleString()}</span>{' '}
+                on this page
+              </>
+            )}
+          </p>
           <Button onClick={() => navigate('/events/new')} variant="solid">
             <PlusIcon className="size-4" />
             Add Event
@@ -856,7 +851,6 @@ export default function EventsPage() {
             </div>
           )}
         </Card>
-      </div>
 
       {/* Screenshot generation modal — same UX as the legacy events page. */}
       <TerminalOutputModal
@@ -871,7 +865,7 @@ export default function EventsPage() {
         showScreenshotPreview
         currentEventId={currentEventId}
       />
-    </Page>
+    </div>
   );
 }
 
