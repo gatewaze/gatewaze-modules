@@ -42,7 +42,19 @@ const eventsModule: GatewazeModule = {
   adminRoutes: [
     {
       path: 'events',
-      component: () => import('./admin/pages/EventsPage'),
+      component: () => import('./admin/pages/EventsShell'),
+      requiredFeature: 'events',
+    },
+    // Static '/events/<tab>' shell routes — matched before the dynamic
+    // ':eventId' below so module-contributed tabs (Hosts, Speakers, etc.) work.
+    {
+      path: 'events/hosts',
+      component: () => import('./admin/pages/EventsShell'),
+      requiredFeature: 'events',
+    },
+    {
+      path: 'events/speakers',
+      component: () => import('./admin/pages/EventsShell'),
       requiredFeature: 'events',
     },
     {

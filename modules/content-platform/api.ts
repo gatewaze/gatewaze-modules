@@ -12,7 +12,7 @@ function sb() {
   return _sb;
 }
 
-const INBOX_DEFAULT_STATES = ['pending_review', 'auto_suppressed'];
+const INBOX_DEFAULT_STATES = ['pending_review'];
 const ALLOWED_PUBLISH_STATES = [
   'draft', 'pending_review', 'auto_suppressed', 'rejected', 'published', 'unpublished',
 ];
@@ -36,6 +36,178 @@ function encodeCursor(ts: string, id: string): string {
   return Buffer.from(JSON.stringify({ ts, id })).toString('base64url');
 }
 
+/**
+ * Sort comparator for the inbox. Future events (event_start >= now) come
+ * first ordered ASC (soonest first); past events come after ordered DESC
+ * (most recent first). Rows without event_start fall through to created_at
+ * DESC at the bottom.
+ */
+function smartEventSort(rows: Array<{ event_start: string | null; submitted_at: string }>) {
+  const nowMs = Date.now();
+  return rows.slice().sort((a, b) => {
+    const aMs = a.event_start ? Date.parse(a.event_start) : NaN;
+    const bMs = b.event_start ? Date.parse(b.event_start) : NaN;
+    const aHas = !Number.isNaN(aMs);
+    const bHas = !Number.isNaN(bMs);
+    // Items without event_start sink to the bottom, ordered by submitted_at DESC.
+    if (!aHas && !bHas) return Date.parse(b.submitted_at) - Date.parse(a.submitted_at);
+    if (!aHas) return 1;
+    if (!bHas) return -1;
+    const aFuture = aMs >= nowMs;
+    const bFuture = bMs >= nowMs;
+    if (aFuture && !bFuture) return -1;
+    if (!aFuture && bFuture) return 1;
+    if (aFuture && bFuture) return aMs - bMs;       // future ASC (soonest first)
+    return bMs - aMs;                                // past DESC (most recent first)
+  });
+}
+
+interface ContentListInput {
+  limit: number;
+  cursor: { ts: string; id: string } | null;
+  contentTypes?: string[];
+  sourceKindsRaw?: string[];
+  publishStates: string[];
+  categories?: string[];
+  memberOnly: boolean;
+  search: string;
+  sort: string;
+}
+
+/**
+ * List path for non-pending states. Queries the underlying content tables
+ * directly via the publish-adapter registry, since closed/auto-suppressed
+ * items don't have open triage rows.
+ *
+ * Currently iterates each registered adapter, queries its table, and merges
+ * results in memory. Acceptable at small scale; replace with a UNION-based
+ * RPC if cross-type performance becomes a concern.
+ */
+async function listFromContentTables(
+  _req: Request,
+  res: Response,
+  input: ContentListInput,
+) {
+  try {
+    // Resolve registered adapters
+    const { data: adapters, error: adErr } = await sb()
+      .from('content_publish_adapters')
+      .select('content_type, table_name, publish_state_col, inbox_preview_fn');
+    if (adErr) {
+      return res.status(500).json({ error: { code: 'internal', message: adErr.message } });
+    }
+
+    const targetAdapters = (adapters ?? []).filter((a: any) =>
+      !input.contentTypes || input.contentTypes.includes(a.content_type)
+    );
+
+    // Per-adapter queries — each fetches up to (limit+1) rows; we'll merge + sort.
+    const allRows: any[] = [];
+    let estimatedTotal = 0;
+    for (const ad of targetAdapters) {
+      // Note: PostgREST .from() expects the table name without schema.
+      // table_name comes back as 'public.events' (regclass) — strip schema.
+      const tableName = String(ad.table_name).replace(/^public\./, '');
+      let q = sb()
+        .from(tableName)
+        .select('id, publish_state, content_category, created_at, updated_at, event_title, event_link, event_logo, screenshot_url, event_city, event_country_code, event_start, event_id, event_slug, scraper_id', { count: 'estimated' })
+        .in('publish_state', input.publishStates);
+      if (input.categories && input.categories.length) {
+        q = q.in('content_category', input.categories);
+      }
+      if (input.memberOnly) q = q.eq('content_category', 'members');
+      if (input.search) q = q.ilike('event_title', `%${input.search}%`);
+
+      // Cursor-based pagination on (created_at desc, id desc)
+      if (input.cursor) {
+        q = q.or(`created_at.lt.${input.cursor.ts},and(created_at.eq.${input.cursor.ts},id.lt.${input.cursor.id})`);
+      }
+      if (input.sort === 'oldest') {
+        q = q.order('created_at', { ascending: true }).order('id', { ascending: true });
+      } else {
+        q = q.order('created_at', { ascending: false }).order('id', { ascending: false });
+      }
+      const { data, error: rowErr, count } = await q.limit(input.limit + 1);
+      if (rowErr) continue; // skip table on error rather than failing the whole list
+
+      estimatedTotal += count ?? 0;
+      for (const r of data ?? []) {
+        allRows.push({ adapter: ad, row: r });
+      }
+    }
+
+    // Sort merged + slice to limit + 1 (so caller knows if there's more)
+    allRows.sort((a, b) => {
+      const cmp = String(b.row.created_at).localeCompare(String(a.row.created_at));
+      return cmp !== 0 ? cmp : String(b.row.id).localeCompare(String(a.row.id));
+    });
+    const paged = allRows.slice(0, input.limit + 1);
+    const hasMore = paged.length > input.limit;
+    const visible = hasMore ? paged.slice(0, input.limit) : paged;
+
+    // Optional: source_kind filter via content_sources lookup
+    let sourcesByKey = new Map<string, any>();
+    if (visible.length > 0) {
+      const types = Array.from(new Set(visible.map((v: any) => v.adapter.content_type)));
+      const ids = Array.from(new Set(visible.map((v: any) => v.row.id)));
+      const { data: sources } = await sb()
+        .from('content_sources')
+        .select('content_type, content_id, source_kind, source_ref, source_meta')
+        .in('content_type', types)
+        .in('content_id', ids);
+      for (const s of sources ?? []) {
+        sourcesByKey.set(`${(s as any).content_type}::${(s as any).content_id}`, s);
+      }
+    }
+
+    const filtered = visible.filter((v: any) => {
+      const sourceKind = sourcesByKey.get(`${v.adapter.content_type}::${v.row.id}`)?.source_kind ?? 'unknown';
+      if (input.sourceKindsRaw && input.sourceKindsRaw.length) {
+        if (!input.sourceKindsRaw.includes(sourceKind)) return false;
+      }
+      return true;
+    });
+
+    const responseRows = filtered.map((v: any) => {
+      const r = v.row;
+      const src = sourcesByKey.get(`${v.adapter.content_type}::${r.id}`) ?? null;
+      const subtitle = [r.event_city, r.event_country_code, r.event_start ? String(r.event_start).slice(0, 10) : null]
+        .filter(Boolean).join(' · ');
+      return {
+        triage_item_id: `${v.adapter.content_type}:${r.id}`,  // synthetic id (no triage row exists)
+        content_type: v.adapter.content_type,
+        content_id: r.id,
+        publish_state: r.publish_state,
+        category: r.content_category ?? null,
+        title: r.event_title ?? null,
+        subtitle: subtitle || null,
+        thumbnail_url: r.event_logo || r.screenshot_url || null,
+        source_url: r.event_link ?? null,
+        event_start: r.event_start ?? null,
+        portal_url: r.event_slug ? `/events/${r.event_slug}` : (r.event_id ? `/e/${r.event_id}` : null),
+        source: src ? { kind: src.source_kind, ref: src.source_ref, meta: {} } : { kind: 'unknown', ref: null, meta: {} },
+        matched_rules: [],
+        matched_member_rules: [],
+        submitted_at: r.created_at,
+        assigned_to: null,
+        lifecycle_key: 0,
+      };
+    });
+
+    const last = responseRows[responseRows.length - 1];
+    const nextCursor = hasMore && last
+      ? Buffer.from(JSON.stringify({ ts: last.submitted_at, id: last.content_id })).toString('base64url')
+      : null;
+
+    return res.json({
+      data: smartEventSort(responseRows),
+      page: { next_cursor: nextCursor, estimated_total: estimatedTotal },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: { code: 'internal', message: err?.message ?? String(err) } });
+  }
+}
+
 export function registerRoutes(app: Express, _ctx?: ModuleContext) {
   // ──────────────────────────────────────────────────────────────────────────
   // Inbox list
@@ -56,6 +228,22 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       const invalid = publishStates.find((s) => !ALLOWED_PUBLISH_STATES.includes(s));
       if (invalid) {
         return res.status(400).json({ error: { code: 'validation', message: `unknown publish_state: ${invalid}` } });
+      }
+
+      // Decide which data source to query. Pending review items live in
+      // content_triage_items (open triage rows). Other states live on the
+      // underlying content tables — for those we query directly via the
+      // adapter registry. Mixing both states in one filter is unusual; we
+      // route on the primary state.
+      const isPendingOnly = publishStates.length === 1 && publishStates[0] === 'pending_review';
+      const isMixedDefault = publishStates.length === 2 &&
+        publishStates.includes('pending_review') && publishStates.includes('auto_suppressed');
+
+      if (!isPendingOnly && !isMixedDefault) {
+        return await listFromContentTables(req, res, {
+          limit, cursor, contentTypes, sourceKindsRaw, publishStates,
+          categories, memberOnly, search, sort,
+        });
       }
 
       let q = sb()
@@ -143,8 +331,16 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
           title: meta.title ?? null,
           subtitle: meta.subtitle ?? null,
           thumbnail_url: meta.thumbnail_url ?? null,
+          source_url: meta.source_url ?? null,
+          event_start: meta.event_start ?? null,
+          portal_url: meta.event_slug
+            ? `/events/${meta.event_slug}`
+            : (meta.event_id ? `/e/${meta.event_id}` : null),
           source: src ? { kind: src.source_kind, ref: src.source_ref, meta: {} } : { kind: 'unknown', ref: null, meta: {} },
-          matched_member_rules: Array.isArray(meta.matched_member_rules) ? meta.matched_member_rules : [],
+          matched_rules: Array.isArray(meta.matched_rules) ? meta.matched_rules : [],
+          matched_member_rules: Array.isArray(meta.matched_rules)
+            ? meta.matched_rules.filter((r: any) => r?.kind === 'membership')
+            : [],
           submitted_at: r.created_at,
           assigned_to: r.assigned_to,
           lifecycle_key: r.lifecycle_key,
@@ -152,7 +348,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       });
 
       res.json({
-        data: responseRows,
+        data: smartEventSort(responseRows),
         page: { next_cursor: nextCursor, estimated_total: count ?? null },
       });
     } catch (err: any) {
@@ -195,9 +391,49 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       const errors: any[] = [];
 
       for (const it of items) {
+        // Synthetic IDs (no triage row, e.g. rows that came from the content
+        // table directly) take the form '<content_type>:<uuid>'. Detect and
+        // route through content_publish_state_set instead of triage_*.
+        if (it.triage_item_id.includes(':')) {
+          const [contentType, contentId] = it.triage_item_id.split(':');
+          try {
+            let target: string | null = null;
+            if (action === 'set_state') {
+              target = String(params?.target_state ?? '');
+              if (!target) throw new Error('target_state required for set_state on synthetic id');
+            } else if (action === 'approve') {
+              target = 'published';
+            } else if (action === 'reject') {
+              target = 'rejected';
+            } else if (action === 'reopen') {
+              target = 'pending_review';
+            } else {
+              throw new Error(`action ${action} unsupported on synthetic id`);
+            }
+            const reason = String(params?.reason ?? params?.notes ?? `admin_ui:${action}`);
+            const { error: rpcErr } = await sb().rpc('content_publish_state_set', {
+              p_content_type: contentType,
+              p_content_id: contentId,
+              p_to: target,
+              p_actor: 'admin:ui',
+              p_reason: reason,
+            });
+            if (rpcErr) throw rpcErr;
+            processed++;
+          } catch (err: any) {
+            failed++;
+            errors.push({
+              triage_item_id: it.triage_item_id,
+              code: 'internal',
+              message: err?.message ?? String(err),
+            });
+          }
+          continue;
+        }
+
         const { data: row, error: lookupErr } = await sb()
           .from('content_triage_items')
-          .select('id, content_type, content_id, status, lifecycle_key, applied_categories, assigned_to')
+          .select('id, content_type, content_id, status, lifecycle_key, applied_categories, assigned_to, updated_at')
           .eq('id', it.triage_item_id)
           .single();
         if (lookupErr || !row) {
@@ -222,14 +458,42 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
         }
 
         try {
+          if (action === 'set_state') {
+            // Real triage row + set_state: route to triage_approve/reject when
+            // target maps to a triage outcome; otherwise fall back to RPC.
+            const target = String(params?.target_state ?? '');
+            if (target === 'published') {
+              const { error } = await sb().rpc('triage_approve', {
+                p_item_id: row.id, p_actor_id: null, p_expected_updated_at: (row as any).updated_at ?? null,
+                p_applied_categories: null, p_featured: false, p_notes: null,
+              });
+              if (error) throw error;
+            } else if (target === 'rejected') {
+              const { error } = await sb().rpc('triage_reject', {
+                p_item_id: row.id, p_actor_id: null, p_expected_updated_at: (row as any).updated_at ?? null,
+                p_reason: String(params?.reason ?? 'admin_ui:reject'),
+              });
+              if (error) throw error;
+            } else {
+              const { error: rpcErr } = await sb().rpc('content_publish_state_set', {
+                p_content_type: row.content_type, p_content_id: row.content_id,
+                p_to: target, p_actor: 'admin:ui', p_reason: 'admin_ui:set_state',
+              });
+              if (rpcErr) throw rpcErr;
+            }
+            processed++;
+            continue;
+          }
           if (action === 'approve') {
             const cats = Array.isArray(params?.categories) ? params.categories : null;
             const featured = !!params?.featured;
             const { error } = await sb().rpc('triage_approve', {
               p_item_id: row.id,
-              p_categories: cats,
-              p_featured: featured,
               p_actor_id: null,
+              p_expected_updated_at: (row as any).updated_at ?? null,
+              p_applied_categories: cats,
+              p_featured: featured,
+              p_notes: null,
             });
             if (error) throw error;
           } else if (action === 'reject') {
@@ -237,8 +501,9 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
             if (!reason) throw new Error('reason required for reject');
             const { error } = await sb().rpc('triage_reject', {
               p_item_id: row.id,
-              p_reason: reason,
               p_actor_id: null,
+              p_expected_updated_at: (row as any).updated_at ?? null,
+              p_reason: reason,
             });
             if (error) throw error;
           } else if (action === 'recategorize') {
@@ -264,14 +529,17 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
             if (!userId) throw new Error('user_id required for assign');
             const { error } = await sb().rpc('triage_assign', {
               p_item_id: row.id,
-              p_assignee: userId,
               p_actor_id: null,
+              p_expected_updated_at: (row as any).updated_at ?? null,
+              p_assigned_to: userId,
+              p_team_name: null,
             });
             if (error) throw error;
           } else if (action === 'reopen') {
             const { error } = await sb().rpc('triage_reopen', {
               p_item_id: row.id,
               p_actor_id: null,
+              p_expected_updated_at: (row as any).updated_at ?? null,
             });
             if (error) throw error;
           } else {

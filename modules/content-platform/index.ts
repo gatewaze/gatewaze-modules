@@ -47,20 +47,13 @@ const contentPlatformModule: GatewazeModule = {
       path: 'inbox',
       component: () => import('./admin/pages/InboxPage'),
       requiredFeature: 'content-platform.inbox',
-      guard: 'admin',
+      guard: 'none',
     },
   ],
 
-  adminNavItems: [
-    {
-      path: '/admin/inbox',
-      label: 'Inbox',
-      icon: 'admin.inbox',
-      group: 'content',
-      order: 1,
-      requiredFeature: 'content-platform.inbox',
-    },
-  ],
+  // Inbox nav lives in the static dashboards segment so it sits at the very top
+  // of the sidebar (above all module-contributed nav items).
+  adminNavItems: [],
 };
 
 export default contentPlatformModule;

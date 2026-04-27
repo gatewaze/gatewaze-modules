@@ -58,18 +58,33 @@ export function InboxRow({
       <td className="px-3 py-2">
         <Badge variant="soft" color="blue" className="capitalize">{row.content_type}</Badge>
       </td>
-      <td className="px-3 py-2">
+      <td className="px-3 py-2 max-w-[420px]">
         <div className="flex items-start gap-3">
           {row.thumbnail_url && (
             <img
               src={row.thumbnail_url}
               alt=""
               className="w-12 h-12 object-cover rounded flex-shrink-0"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
             />
           )}
           <div className="min-w-0 flex-1">
-            <div className="font-medium text-sm truncate" title={row.title ?? ''}>
-              {row.title ?? <span className="text-[var(--gray-10)] italic">untitled</span>}
+            <div className="font-medium text-sm truncate flex items-center gap-1.5" title={row.title ?? ''}>
+              <span className="truncate min-w-0">
+                {row.title ?? <span className="text-[var(--gray-10)] italic">untitled</span>}
+              </span>
+              {row.source_url && (
+                <a
+                  href={row.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-[var(--gray-10)] hover:text-[var(--accent-9)] flex-shrink-0"
+                  title={`Open source: ${row.source_url}`}
+                >
+                  ↗
+                </a>
+              )}
             </div>
             {row.subtitle && (
               <div className="text-xs text-[var(--gray-11)] truncate" title={row.subtitle}>
@@ -79,15 +94,28 @@ export function InboxRow({
           </div>
         </div>
       </td>
-      <td className="px-3 py-2">
-        <button
-          onClick={(e) => { e.stopPropagation(); onSourceFilter(row.source.kind); }}
-          className="text-xs px-2 py-0.5 rounded bg-[var(--gray-a3)] hover:bg-[var(--gray-a5)] transition-colors"
-          title={row.source.ref ?? ''}
-        >
-          {sourceLabel}
-          {row.source.ref && <span className="text-[var(--gray-10)] ml-1">· {row.source.ref}</span>}
-        </button>
+      <td className="px-3 py-2 max-w-[260px]">
+        {row.matched_rules && row.matched_rules.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {row.matched_rules.slice(0, 3).map((m) => (
+              <Badge
+                key={m.id}
+                variant="soft"
+                color={m.kind === 'membership' ? 'green' : 'blue'}
+                title={m.name}
+              >
+                {m.name.length > 28 ? m.name.slice(0, 25) + '…' : m.name}
+              </Badge>
+            ))}
+            {row.matched_rules.length > 3 && (
+              <span className="text-xs text-[var(--gray-10)] self-center">
+                +{row.matched_rules.length - 3}
+              </span>
+            )}
+          </div>
+        ) : (
+          <span className="text-xs text-[var(--gray-10)] italic">no match</span>
+        )}
       </td>
       <td className="px-3 py-2">
         {row.category && (
