@@ -74,6 +74,82 @@ interface ContentListInput {
   sort: string;
 }
 
+interface MatchedRule {
+  id: string;
+  name: string;
+  kind?: string;
+}
+
+/**
+ * Look up the live keyword-evaluation state for a batch of content items
+ * and return matched rules per (content_type, content_id) key.
+ *
+ * The list endpoints used to read `metadata.matched_rules` from the
+ * triage row, but that is a snapshot taken at insertion time — for
+ * adapters that evaluate keywords AFTER the triage row exists (or not at
+ * all on insert) the snapshot is null and the listing showed "no match"
+ * even though `content_keyword_item_state` had matches. The drawer's
+ * /explain endpoint already reads from the live state, which is why the
+ * detail view disagreed with the listing. This helper makes the listing
+ * use the same source of truth.
+ *
+ * Two batched queries: one for state rows, one for rule names+metadata.
+ * Returns an empty map if there's nothing to look up so callers can call
+ * unconditionally.
+ */
+async function loadMatchedRulesByKey(
+  types: string[],
+  ids: string[],
+): Promise<Map<string, MatchedRule[]>> {
+  const out = new Map<string, MatchedRule[]>();
+  if (types.length === 0 || ids.length === 0) return out;
+
+  const { data: states } = await sb()
+    .from('content_keyword_item_state')
+    .select('content_type, content_id, matched_rule_ids')
+    .in('content_type', types)
+    .in('content_id', ids);
+
+  const stateRows = (states ?? []) as Array<{
+    content_type: string;
+    content_id: string;
+    matched_rule_ids: string[] | null;
+  }>;
+
+  const allRuleIds = new Set<string>();
+  for (const s of stateRows) {
+    for (const id of s.matched_rule_ids ?? []) allRuleIds.add(id);
+  }
+
+  const rulesById = new Map<string, { id: string; name: string; metadata: any }>();
+  if (allRuleIds.size > 0) {
+    const { data: rules } = await sb()
+      .from('content_keyword_rules')
+      .select('id, name, metadata')
+      .in('id', Array.from(allRuleIds));
+    for (const r of rules ?? []) {
+      rulesById.set((r as any).id, r as any);
+    }
+  }
+
+  for (const s of stateRows) {
+    const ruleIds = s.matched_rule_ids ?? [];
+    if (ruleIds.length === 0) continue;
+    const rules: MatchedRule[] = [];
+    for (const id of ruleIds) {
+      const rule = rulesById.get(id);
+      if (!rule) continue;
+      rules.push({
+        id: rule.id,
+        name: rule.name,
+        kind: rule.metadata?.kind,
+      });
+    }
+    out.set(`${s.content_type}::${s.content_id}`, rules);
+  }
+  return out;
+}
+
 /**
  * List path for non-pending states. Queries the underlying content tables
  * directly via the publish-adapter registry, since closed/auto-suppressed
@@ -168,11 +244,17 @@ async function listFromContentTables(
       return true;
     });
 
+    const matchedRulesByKey = await loadMatchedRulesByKey(
+      Array.from(new Set(filtered.map((v: any) => v.adapter.content_type))),
+      Array.from(new Set(filtered.map((v: any) => v.row.id))),
+    );
+
     const responseRows = filtered.map((v: any) => {
       const r = v.row;
       const src = sourcesByKey.get(`${v.adapter.content_type}::${r.id}`) ?? null;
       const subtitle = [r.event_city, r.event_country_code, r.event_start ? String(r.event_start).slice(0, 10) : null]
         .filter(Boolean).join(' · ');
+      const matched = matchedRulesByKey.get(`${v.adapter.content_type}::${r.id}`) ?? [];
       return {
         triage_item_id: `${v.adapter.content_type}:${r.id}`,  // synthetic id (no triage row exists)
         content_type: v.adapter.content_type,
@@ -186,8 +268,8 @@ async function listFromContentTables(
         event_start: r.event_start ?? null,
         portal_url: r.event_slug ? `/events/${r.event_slug}` : (r.event_id ? `/e/${r.event_id}` : null),
         source: src ? { kind: src.source_kind, ref: src.source_ref, meta: {} } : { kind: 'unknown', ref: null, meta: {} },
-        matched_rules: [],
-        matched_member_rules: [],
+        matched_rules: matched,
+        matched_member_rules: matched.filter((m) => m.kind === 'membership'),
         submitted_at: r.created_at,
         assigned_to: null,
         lifecycle_key: 0,
@@ -319,9 +401,22 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       const last = rows[rows.length - 1];
       const nextCursor = hasMore && last ? encodeCursor(last.created_at, last.id) : null;
 
+      const matchedRulesByKey = await loadMatchedRulesByKey(
+        Array.from(new Set(rows.map((r: any) => r.content_type))),
+        Array.from(new Set(rows.map((r: any) => r.content_id))),
+      );
+
       const responseRows = rows.map((r: any) => {
         const meta = r.metadata ?? {};
         const src = sourcesByKey.get(`${r.content_type}::${r.content_id}`) ?? null;
+        // Prefer the live keyword state. The triage row's metadata may
+        // hold an older snapshot (or none at all if the adapter inserts
+        // before keyword evaluation runs), which is what produced the
+        // "no match" / detail-view-disagreement bug.
+        const liveMatches = matchedRulesByKey.get(`${r.content_type}::${r.content_id}`);
+        const matched: MatchedRule[] = liveMatches && liveMatches.length > 0
+          ? liveMatches
+          : (Array.isArray(meta.matched_rules) ? meta.matched_rules : []);
         return {
           triage_item_id: r.id,
           content_type: r.content_type,
@@ -337,10 +432,8 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
             ? `/events/${meta.event_slug}`
             : (meta.event_id ? `/e/${meta.event_id}` : null),
           source: src ? { kind: src.source_kind, ref: src.source_ref, meta: {} } : { kind: 'unknown', ref: null, meta: {} },
-          matched_rules: Array.isArray(meta.matched_rules) ? meta.matched_rules : [],
-          matched_member_rules: Array.isArray(meta.matched_rules)
-            ? meta.matched_rules.filter((r: any) => r?.kind === 'membership')
-            : [],
+          matched_rules: matched,
+          matched_member_rules: matched.filter((m: any) => m?.kind === 'membership'),
           submitted_at: r.created_at,
           assigned_to: r.assigned_to,
           lifecycle_key: r.lifecycle_key,
