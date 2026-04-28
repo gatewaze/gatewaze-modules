@@ -454,9 +454,32 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
   // ──────────────────────────────────────────────────────────────────────────
   app.post('/api/admin/inbox/bulk', async (req: Request, res: Response) => {
     try {
+      // Resolve the calling admin's Supabase Auth user id from the
+      // Authorization header. The triage_items_reviewed_consistency
+      // CHECK requires reviewed_by IS NOT NULL on approved/rejected
+      // rows, and triage_check_permission's user-context branch needs
+      // the actor uuid to evaluate assignee/team rules. Without it,
+      // every approve/reject would either FORBIDDEN or violate the
+      // constraint. The header is optional only because action="reopen"
+      // and recategorize don't write reviewed_by.
+      let actorUserId: string | null = null;
+      const authHeader = req.headers.authorization;
+      if (authHeader) {
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        try {
+          const { data, error: authErr } = await sb().auth.getUser(token);
+          if (!authErr && data?.user?.id) actorUserId = data.user.id;
+        } catch {
+          // fall through — actorUserId stays null
+        }
+      }
+
       const { action, selection, params } = req.body ?? {};
       if (!action) return res.status(400).json({ error: { code: 'validation', message: 'action required' } });
       if (!selection?.mode) return res.status(400).json({ error: { code: 'validation', message: 'selection.mode required' } });
+      if ((action === 'approve' || action === 'reject') && !actorUserId) {
+        return res.status(401).json({ error: { code: 'unauthenticated', message: 'approve/reject requires a valid Supabase session' } });
+      }
 
       const items: Array<{ triage_item_id: string; lifecycle_key?: number }> = [];
       if (selection.mode === 'ids') {
@@ -557,13 +580,13 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
             const target = String(params?.target_state ?? '');
             if (target === 'published') {
               const { error } = await sb().rpc('triage_approve', {
-                p_item_id: row.id, p_actor_id: null, p_expected_updated_at: (row as any).updated_at ?? null,
+                p_item_id: row.id, p_actor_id: actorUserId, p_expected_updated_at: (row as any).updated_at ?? null,
                 p_applied_categories: null, p_featured: false, p_notes: null,
               });
               if (error) throw error;
             } else if (target === 'rejected') {
               const { error } = await sb().rpc('triage_reject', {
-                p_item_id: row.id, p_actor_id: null, p_expected_updated_at: (row as any).updated_at ?? null,
+                p_item_id: row.id, p_actor_id: actorUserId, p_expected_updated_at: (row as any).updated_at ?? null,
                 p_reason: String(params?.reason ?? 'admin_ui:reject'),
               });
               if (error) throw error;
@@ -582,7 +605,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
             const featured = !!params?.featured;
             const { error } = await sb().rpc('triage_approve', {
               p_item_id: row.id,
-              p_actor_id: null,
+              p_actor_id: actorUserId,
               p_expected_updated_at: (row as any).updated_at ?? null,
               p_applied_categories: cats,
               p_featured: featured,
@@ -594,7 +617,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
             if (!reason) throw new Error('reason required for reject');
             const { error } = await sb().rpc('triage_reject', {
               p_item_id: row.id,
-              p_actor_id: null,
+              p_actor_id: actorUserId,
               p_expected_updated_at: (row as any).updated_at ?? null,
               p_reason: reason,
             });
@@ -622,7 +645,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
             if (!userId) throw new Error('user_id required for assign');
             const { error } = await sb().rpc('triage_assign', {
               p_item_id: row.id,
-              p_actor_id: null,
+              p_actor_id: actorUserId,
               p_expected_updated_at: (row as any).updated_at ?? null,
               p_assigned_to: userId,
               p_team_name: null,
@@ -631,7 +654,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
           } else if (action === 'reopen') {
             const { error } = await sb().rpc('triage_reopen', {
               p_item_id: row.id,
-              p_actor_id: null,
+              p_actor_id: actorUserId,
               p_expected_updated_at: (row as any).updated_at ?? null,
             });
             if (error) throw error;

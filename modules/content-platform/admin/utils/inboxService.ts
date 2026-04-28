@@ -1,4 +1,5 @@
 import { getApiBaseUrl } from '@/config/brands';
+import { supabase } from '@/lib/supabase';
 
 export type PublishState =
   | 'draft' | 'pending_review' | 'auto_suppressed'
@@ -68,9 +69,21 @@ export interface ExplainResponse {
 const base = () => getApiBaseUrl();
 
 async function jfetch<T>(input: string, init?: RequestInit): Promise<T> {
+  // Forward the admin's Supabase session token so the api can identify
+  // the calling user and attribute triage actions (reviewed_by). The
+  // api shares no parent domain with admin.aaif.live, so cookies don't
+  // ride along — the access token has to go in a header explicitly.
+  const { data: { session } } = await supabase.auth.getSession();
+  const authHeader = session?.access_token
+    ? { Authorization: `Bearer ${session.access_token}` }
+    : {};
   const r = await fetch(`${base()}${input}`, {
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeader,
+      ...(init?.headers ?? {}),
+    },
     ...init,
   });
   if (!r.ok) {
