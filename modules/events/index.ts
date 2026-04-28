@@ -29,6 +29,7 @@ const eventsModule: GatewazeModule = {
     'migrations/005_keyword_adapter.sql',
     'migrations/006_publish_state.sql',
     'migrations/008_register_with_platform.sql',
+    'migrations/009_fix_keyword_trigger_definer.sql',
   ],
 
   edgeFunctions: [
