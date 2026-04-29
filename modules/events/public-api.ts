@@ -1,4 +1,6 @@
 import type { PublicApiContext } from '@gatewaze/shared';
+import type { Router, Request, Response } from 'express';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 /** Fields safe to expose via the public API — never use select('*') */
 export const PUBLIC_EVENT_FIELDS = [
@@ -22,11 +24,11 @@ const PUBLIC_SPONSOR_FIELDS = [
   'tier', 'booth_number', 'is_active',
 ] as const;
 
-export function registerPublicApi(router: any, ctx: PublicApiContext) {
-  const supabase = ctx.supabase as any;
+export function registerPublicApi(router: Router, ctx: PublicApiContext) {
+  const supabase = ctx.supabase as SupabaseClient;
 
   // GET /api/v1/events
-  router.get('/', ctx.requireScope('read'), async (req: any, res: any) => {
+  router.get('/', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
       const { limit, offset } = ctx.parsePagination(req.query);
       const fields = ctx.parseFields(req.query.fields, [...PUBLIC_EVENT_FIELDS], [...PUBLIC_EVENT_FIELDS]);
@@ -54,7 +56,7 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
           .from('calendars_events')
           .select('event_id')
           .eq('calendar_id', req.query.calendar_id);
-        const eventIds = (calEvents ?? []).map((ce: any) => ce.event_id);
+        const eventIds = ((calEvents ?? []) as Array<{ event_id: string }>).map((ce) => ce.event_id);
         if (eventIds.length === 0) {
           ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 300 });
           return res.json({
@@ -79,8 +81,8 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
           ...(hasMore ? { next: `${req.baseUrl}?offset=${offset + limit}&limit=${limit}` } : {}),
         },
       });
-    } catch (err: any) {
-      if (err.code === 'VALIDATION_ERROR') {
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'VALIDATION_ERROR') {
         return res.status(400).json({ error: err });
       }
       console.error('[events] public-api list error:', err);
@@ -89,7 +91,7 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
   });
 
   // GET /api/v1/events/:id
-  router.get('/:id', ctx.requireScope('read'), async (req: any, res: any) => {
+  router.get('/:id', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
       const fields = ctx.parseFields(req.query.fields, [...PUBLIC_EVENT_FIELDS], [...PUBLIC_EVENT_FIELDS]);
       const { data, error } = await supabase
@@ -112,14 +114,14 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
           sponsors: `${req.baseUrl}/${req.params.id}/sponsors`,
         },
       });
-    } catch (err: any) {
+    } catch (err) {
       console.error('[events] public-api get error:', err);
       res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
     }
   });
 
   // GET /api/v1/events/:id/speakers
-  router.get('/:id/speakers', ctx.requireScope('read'), async (req: any, res: any) => {
+  router.get('/:id/speakers', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
       const { data, error } = await supabase
         .from('events_speakers_with_details')
@@ -131,14 +133,14 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
 
       ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 300 });
       res.json({ data, _links: { self: req.originalUrl } });
-    } catch (err: any) {
+    } catch (err) {
       console.error('[events] public-api speakers error:', err);
       res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
     }
   });
 
   // GET /api/v1/events/:id/sponsors
-  router.get('/:id/sponsors', ctx.requireScope('read'), async (req: any, res: any) => {
+  router.get('/:id/sponsors', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
       const { data, error } = await supabase
         .from('events_sponsors')
@@ -151,7 +153,7 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
 
       ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 300 });
       res.json({ data, _links: { self: req.originalUrl } });
-    } catch (err: any) {
+    } catch (err) {
       console.error('[events] public-api sponsors error:', err);
       res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
     }
