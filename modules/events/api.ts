@@ -6,8 +6,9 @@
  * /api/m/events/) for backward compatibility.
  */
 
-import type { Express, Request, Response } from 'express';
+import type { Express, Request, Response, NextFunction } from 'express';
 import type { ModuleContext } from '@gatewaze/shared';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   createAdminListingRoute,
   createAdminDistinctRoute,
@@ -20,7 +21,7 @@ import { join } from 'path';
 import { Readable } from 'stream';
 import { eventsListingSchema } from './listing-schema';
 
-let _supabase: any = null;
+let _supabase: SupabaseClient | null = null;
 
 function initSupabase(projectRoot: string) {
   if (_supabase) return _supabase;
@@ -80,9 +81,9 @@ function generateEventId(): string {
  * inserted row. Throws after MAX_RETRIES (extremely rare).
  */
 async function insertEventWithRetry(
-  supabase: any,
+  supabase: SupabaseClient,
   body: Record<string, unknown>,
-): Promise<any> {
+): Promise<Record<string, unknown>> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < ID_GENERATION_MAX_RETRIES; attempt++) {
     if (!body.event_id) {
@@ -109,7 +110,7 @@ async function insertEventWithRetry(
 
 const VALID_CHECK_IN_METHODS = ['qr_scan', 'manual_entry', 'badge_scan', 'mobile_app', 'sponsor_booth'];
 
-async function ensureRegistration(supabase: any, eventId: string, email: string) {
+async function ensureRegistration(supabase: SupabaseClient, eventId: string, email: string) {
   const { data: customer, error: customerError } = await supabase
     .from('people')
     .select('id')
@@ -145,7 +146,23 @@ async function ensureRegistration(supabase: any, eventId: string, email: string)
   };
 }
 
-async function markAttendance(supabase: any, attendanceData: any) {
+interface AttendanceData {
+  event_id: string;
+  email: string;
+  check_in_method?: string;
+  check_in_location?: string;
+  checked_in_by?: string;
+  badge_printed_on_site?: boolean;
+  sessions_attended?: string[];
+  metadata?: Record<string, unknown>;
+  source?: string;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  referrer?: string;
+}
+
+async function markAttendance(supabase: SupabaseClient, attendanceData: AttendanceData) {
   const {
     event_id,
     email,
@@ -173,7 +190,7 @@ async function markAttendance(supabase: any, attendanceData: any) {
     .maybeSingle();
 
   if (existing) {
-    const updates: any = { attendance_metadata: metadata };
+    const updates: Record<string, unknown> = { attendance_metadata: metadata };
     if (check_in_location !== undefined) updates.check_in_location = check_in_location;
     if (checked_in_by !== undefined) updates.checked_in_by = checked_in_by;
     if (badge_printed_on_site !== undefined) updates.badge_printed_on_site = badge_printed_on_site;
@@ -186,7 +203,7 @@ async function markAttendance(supabase: any, attendanceData: any) {
     if (referrer !== undefined) updates.referrer = referrer;
 
     const { error } = await supabase.from('events_attendance').update(updates).eq('id', existing.id);
-    if (error) throw new Error(`Failed to update attendance: ${error.message}`);
+    if (error) throw new Error(`Failed to update attendance: ${(error instanceof Error ? error.message : String(error))}`);
 
     return {
       success: true,
@@ -199,7 +216,7 @@ async function markAttendance(supabase: any, attendanceData: any) {
   }
 
   // Create new record
-  const insertData: any = {
+  const insertData: Record<string, unknown> = {
     event_id,
     people_profile_id,
     event_registration_id: registration_id,
@@ -226,7 +243,7 @@ async function markAttendance(supabase: any, attendanceData: any) {
     .select()
     .single();
 
-  if (error) throw new Error(`Failed to create attendance: ${error.message}`);
+  if (error) throw new Error(`Failed to create attendance: ${(error instanceof Error ? error.message : String(error))}`);
 
   return {
     success: true,
@@ -240,7 +257,7 @@ async function markAttendance(supabase: any, attendanceData: any) {
 
 // ── CSV Helpers ────────────────────────────────────────────────────────────────
 
-function parseCsvBuffer(csvParse: any, buffer: Buffer): Promise<Record<string, string>[]> {
+function parseCsvBuffer(csvParse: (opts: Record<string, unknown>) => NodeJS.ReadWriteStream, buffer: Buffer): Promise<Record<string, string>[]> {
   return new Promise((resolve, reject) => {
     const records: Record<string, string>[] = [];
     const stream = Readable.from(buffer);
@@ -403,7 +420,7 @@ function registerEventsAdminListing(app: Express, projectRoot: string) {
         .in('id', ids);
 
       if (error) {
-        res.status(500).json({ error: { code: 'DELETE_FAILED', message: error.message } });
+        res.status(500).json({ error: { code: 'DELETE_FAILED', message: (error instanceof Error ? error.message : String(error)) } });
         return;
       }
       // Bust admin listing cache for events so the next list call reflects
@@ -431,7 +448,11 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 },
-    fileFilter: (_req: any, file: any, cb: any) => {
+    fileFilter: (
+      _req: Request,
+      file: Express.Multer.File,
+      cb: (error: Error | null, accept?: boolean) => void,
+    ) => {
       if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
         cb(null, true);
       } else {
@@ -687,8 +708,8 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
 
       const result = await markAttendance(supabase, req.body);
       res.json(result);
-    } catch (error: any) {
-      res.status(400).json({ success: false, error: error.message });
+    } catch (error) {
+      res.status(400).json({ success: false, error: (error instanceof Error ? error.message : String(error)) });
     }
   });
 
@@ -702,13 +723,23 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
       }
 
       const supabase = initSupabase(projectRoot);
-      const results: any[] = [];
+      interface BatchAttendanceResult {
+        email: string;
+        success?: boolean;
+        attendance_id?: string;
+        people_profile_id?: string;
+        registration_id?: string;
+        already_checked_in?: boolean;
+        checked_in_at?: string | null;
+        error?: string;
+      }
+      const results: BatchAttendanceResult[] = [];
       for (const attendee of attendees) {
         try {
           const result = await markAttendance(supabase, attendee);
           results.push({ email: attendee.email, ...result });
-        } catch (error: any) {
-          results.push({ email: attendee.email, success: false, error: error.message });
+        } catch (error) {
+          results.push({ email: attendee.email, success: false, error: (error instanceof Error ? error.message : String(error)) });
         }
       }
 
@@ -716,8 +747,8 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
       const failed = results.filter(r => !r.success).length;
 
       res.json({ success: true, total: attendees.length, succeeded, failed, results });
-    } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error instanceof Error ? error.message : String(error)) });
     }
   });
 
@@ -763,7 +794,7 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
           if (error) {
             errors.push({
               row: i + 2,
-              error: `Batch insert failed: ${error.message}`,
+              error: `Batch insert failed: ${(error instanceof Error ? error.message : String(error))}`,
             });
           } else {
             inserted += count ?? batch.length;
