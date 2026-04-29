@@ -38,34 +38,73 @@ function initSupabase(projectRoot: string) {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 /**
- * Generate 6-character event ID: 3-4 random lowercase letters + remaining
- * digits, shuffled. Checks existing IDs to avoid collisions.
+ * Generate a candidate 6-character event ID: 3-4 random lowercase
+ * letters + remaining digits, shuffled. Pure function — caller must
+ * verify uniqueness against the DB.
+ *
+ * Closes spec PR-H-15. The previous implementation scanned the entire
+ * events table on every event creation to build a set of existing IDs;
+ * that approach is O(n) in event count and unsafe under concurrent
+ * inserts. The events.event_id UNIQUE constraint is the real source
+ * of truth; collisions are rare (36^6 ≈ 2 billion) and handled with
+ * a small retry loop at the insert call site.
  */
-async function generateEventId(supabase: any): Promise<string> {
+function generateCandidateEventId(): string {
   const letters = 'abcdefghijklmnopqrstuvwxyz';
   const numbers = '0123456789';
+  let id = '';
+  const letterCount = 3 + Math.floor(Math.random() * 2); // 3 or 4 letters
+  for (let i = 0; i < letterCount; i++) {
+    id += letters[Math.floor(Math.random() * letters.length)];
+  }
+  const remainingChars = 6 - letterCount;
+  for (let i = 0; i < remainingChars; i++) {
+    id += numbers[Math.floor(Math.random() * numbers.length)];
+  }
+  return id.split('').sort(() => Math.random() - 0.5).join('');
+}
 
-  const { data: existingEvents } = await supabase
-    .from('events')
-    .select('event_id');
-  const existingIds = new Set(existingEvents?.map((e: { event_id: string }) => e.event_id) || []);
+const ID_GENERATION_MAX_RETRIES = 8;
 
-  let id: string;
-  do {
-    id = '';
-    const letterCount = 3 + Math.floor(Math.random() * 2); // 3 or 4 letters
-    for (let i = 0; i < letterCount; i++) {
-      id += letters[Math.floor(Math.random() * letters.length)];
+/**
+ * Generate a candidate event_id; the caller should attempt the insert
+ * and retry on a 23505 (unique violation) error. This helper just
+ * issues new candidates.
+ */
+function generateEventId(): string {
+  return generateCandidateEventId();
+}
+
+/**
+ * Helper: insert an event with retry-on-collision. Returns the
+ * inserted row. Throws after MAX_RETRIES (extremely rare).
+ */
+async function insertEventWithRetry(
+  supabase: any,
+  body: Record<string, unknown>,
+): Promise<any> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < ID_GENERATION_MAX_RETRIES; attempt++) {
+    if (!body.event_id) {
+      body.event_id = generateEventId();
     }
-    const remainingChars = 6 - letterCount;
-    for (let i = 0; i < remainingChars; i++) {
-      id += numbers[Math.floor(Math.random() * numbers.length)];
+    const { data, error } = await supabase
+      .from('events')
+      .insert(body)
+      .select()
+      .single();
+    if (!error) return data;
+    // Postgres unique-violation = 23505. PostgREST surfaces it via
+    // the `code` field on the error object.
+    if (error.code === '23505' && /event_id/.test(error.message ?? '')) {
+      // Collision — clear the candidate so the next loop generates a fresh one.
+      body.event_id = null;
+      lastError = error;
+      continue;
     }
-    // Shuffle the characters
-    id = id.split('').sort(() => Math.random() - 0.5).join('');
-  } while (existingIds.has(id));
-
-  return id;
+    throw error;
+  }
+  throw lastError ?? new Error('event_id collision retries exhausted');
 }
 
 const VALID_CHECK_IN_METHODS = ['qr_scan', 'manual_entry', 'badge_scan', 'mobile_app', 'sponsor_booth'];
@@ -437,23 +476,13 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
     }
   });
 
-  // Create event
+  // Create event — uses insert-with-retry on event_id UNIQUE collision.
+  // No table scan; relies on the events.event_id UNIQUE constraint.
   app.post('/api/events', async (req: Request, res: Response) => {
     try {
       const supabase = initSupabase(projectRoot);
-
       const body = { ...req.body };
-      if (!body.event_id) {
-        body.event_id = await generateEventId(supabase);
-      }
-
-      const { data, error } = await supabase
-        .from('events')
-        .insert(body)
-        .select()
-        .single();
-
-      if (error) throw error;
+      const data = await insertEventWithRetry(supabase, body);
       res.status(201).json(data);
     } catch (err) {
       console.error('Error creating event:', err);
