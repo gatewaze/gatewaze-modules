@@ -1,0 +1,30 @@
+{
+  "name": "@gatewaze-modules/templates",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Shared block/wrapper authoring system: marker grammar, parser, JSON-Schema content forms, source ingest (git/upload/inline), drift monitoring, A/B engine, version pinning. Consumed by newsletters, sites, and future content-bearing modules.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./parser": "./lib/parser/index.ts",
+    "./sources": "./lib/sources/index.ts",
+    "./ab": "./lib/ab/index.ts",
+    "./content-schemas": "./lib/content-schemas/index.ts",
+    "./types": "./types/index.ts",
+    "./admin/*": "./admin/*",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}
