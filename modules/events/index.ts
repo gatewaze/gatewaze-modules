@@ -101,9 +101,11 @@ const eventsModule: GatewazeModule = {
     { action: 'read', description: 'Read public events, including speakers and sponsors via sub-resources' },
   ],
 
-  publicApiRoutes: async (router: unknown, ctx: any) => {
+  publicApiRoutes: async (router, ctx) => {
     const { registerPublicApi } = await import('./public-api');
-    registerPublicApi(router, ctx);
+    // The framework's PublicApiContext type is the source of truth;
+    // registerPublicApi accepts an Express Router and a typed ctx.
+    registerPublicApi(router as Parameters<typeof registerPublicApi>[0], ctx as Parameters<typeof registerPublicApi>[1]);
   },
 
   publicApiSchema: {
