@@ -32,6 +32,8 @@
     "**/__fixtures__/**",
     "lib/parser/tsx-marker-parser-impl.ts",
     "api/register-routes.ts",
-    "workers/cron-handlers.ts"
+    "workers/cron-handlers.ts",
+    "workers/cron-dispatchers.ts",
+    "workers/migrate-existing-sites-to-git.ts"
   ]
 }

@@ -257,12 +257,36 @@ export function createSourceRoutes(deps: SourceRoutesDeps) {
       return;
     }
 
-    // Stub: full implementation pushes both branches to external + drops PAT.
-    // Surfaces 503 until wired.
-    res.status(503).json({
-      error: 'graduate_not_implemented',
-      message: 'Graduate-to-external-git endpoint scaffolded but not yet wired. Track in spec §6.5.',
-    } satisfies ErrorEnvelope);
+    try {
+      // Resolve current internal repo + site row
+      const repo = await resolveSiteRepo(siteId);
+      if (!repo) {
+        res.status(409).json({ error: 'no_internal_repo', message: 'site does not have an internal repo to graduate from' } satisfies ErrorEnvelope);
+        return;
+      }
+      const siteResult = await deps.supabase.from('sites').select('name, slug').eq('id', siteId).single();
+      const site = (siteResult as { data: { name: string; slug: string } | null }).data;
+      if (!site) {
+        res.status(404).json({ error: 'site_not_found', message: 'site not found' } satisfies ErrorEnvelope);
+        return;
+      }
+
+      // Lazy-import to avoid pulling git child_process into the test surface
+      const { graduateToExternal } = await import('../lib/git/graduate-to-external.js');
+      const result = await graduateToExternal(
+        { siteId, externalGitUrl: gitUrl, pat, internalRepo: repo, site },
+        { supabase: deps.supabase, gitServer, fetch: globalThis.fetch, logger },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith('pat_under_scoped:')) {
+        res.status(400).json({ error: 'pat_under_scoped', message: message.replace(/^pat_under_scoped:\s*/, '') } satisfies ErrorEnvelope);
+        return;
+      }
+      logger.error('graduate-git failed', { siteId, error: message });
+      res.status(503).json({ error: 'graduate_failed', message } satisfies ErrorEnvelope);
+    }
   }
 
   return { getDrift, applyTheme, applyThemeResolve, graduateGit };

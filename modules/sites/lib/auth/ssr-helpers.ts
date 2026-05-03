@@ -34,23 +34,17 @@ export interface SsrContext {
   supabase: SsrSupabaseClient;
 }
 
+/**
+ * Why `any` on `from()`: the SSR helpers chain .select().eq().eq().eq()
+ * .ilike().in().order().single() in shapes that can't be expressed in
+ * a narrow interface without re-declaring the entire PostgrestQueryBuilder
+ * type. Same justification as in API routes — the OSS modules don't ship
+ * generated Database types. Per-callsite `as { ... } | null` casts handle
+ * the result shape.
+ */
 export interface SsrSupabaseClient {
-  from(table: string): {
-    select(cols: string): {
-      eq(col: string, val: unknown): {
-        order(col: string, opts?: { ascending: boolean }): {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          [key: string]: any;
-        };
-      };
-      ilike(col: string, val: string): {
-        order(col: string, opts?: { ascending: boolean }): {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          [key: string]: any;
-        };
-      };
-    };
-  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  from(table: string): any;
 }
 
 let currentContext: SsrContext | null = null;
@@ -124,12 +118,94 @@ export interface MenuItem {
  */
 export async function useNavigationMenu(menuSlug: string): Promise<MenuItem[]> {
   const ctx = requireContext('useNavigationMenu');
-  // Stub: full DB query would join navigation_menus → navigation_menu_items
-  // → pages, filter by visibility, build tree. Implementation lives in the
-  // SSR runtime in a follow-up commit (this is the public hook contract).
-  void ctx;
-  void menuSlug;
-  return [];
+  const isAuthenticated = ctx.user !== null;
+
+  // Fetch menu by slug for the current site
+  const menuResult = await ctx.supabase
+    .from('navigation_menus')
+    .select('id')
+    .eq('host_kind', 'site')
+    .eq('host_id', ctx.siteId)
+    .eq('slug', menuSlug)
+    .single();
+  const menu = (menuResult as { data: { id: string } | null }).data;
+  if (!menu) return [];
+
+  // Fetch all items for this menu (RLS filters by visibility for anon; we
+  // post-filter for authenticated to handle the auth-only case).
+  const itemsResult = await ctx.supabase
+    .from('navigation_menu_items')
+    .select('id, parent_id, order_index, label, page_id, external_url, anchor_target, open_in_new_tab, css_classes, visibility')
+    .eq('menu_id', menu.id)
+    .order('order_index', { ascending: true });
+  const items = ((itemsResult as { data: NavigationMenuItemRow[] | null }).data ?? []);
+
+  // Resolve page_id → full_path
+  const pageIds = items.map((i) => i.page_id).filter((id): id is string => id !== null);
+  const pageMap = new Map<string, string>();
+  if (pageIds.length > 0) {
+    const pagesResult = await ctx.supabase
+      .from('pages').select('id, full_path').in('id', pageIds);
+    const pages = ((pagesResult as { data: Array<{ id: string; full_path: string }> | null }).data ?? []);
+    for (const p of pages) pageMap.set(p.id, p.full_path);
+  }
+
+  // Visibility filter
+  const visible = items.filter((i) => {
+    if (i.visibility === 'always') return true;
+    if (i.visibility === 'authenticated_only') return isAuthenticated;
+    if (i.visibility === 'public_only') return !isAuthenticated;
+    return false;
+  });
+
+  // Build tree
+  const byId = new Map<string, MenuItem & { _parentId: string | null; _order: number }>();
+  for (const i of visible) {
+    let url = '#';
+    if (i.page_id) url = pageMap.get(i.page_id) ?? '#';
+    else if (i.external_url) url = i.external_url;
+    else if (i.anchor_target) url = i.anchor_target;
+    byId.set(i.id, {
+      id: i.id, label: i.label, url, openInNewTab: i.open_in_new_tab,
+      cssClasses: i.css_classes, children: [],
+      _parentId: i.parent_id, _order: i.order_index,
+    });
+  }
+  const tree: MenuItem[] = [];
+  for (const item of byId.values()) {
+    if (item._parentId === null) {
+      tree.push(item);
+    } else {
+      const parent = byId.get(item._parentId);
+      if (parent) parent.children.push(item);
+      else tree.push(item); // orphaned: surface at top level
+    }
+  }
+  // Sort children by order at every level
+  const sortRec = (nodes: MenuItem[]) => {
+    nodes.sort((a, b) => (byId.get(a.id)?._order ?? 0) - (byId.get(b.id)?._order ?? 0));
+    nodes.forEach((n) => sortRec(n.children));
+  };
+  sortRec(tree);
+  // Strip internal _parentId / _order before returning
+  const strip = (n: MenuItem & { _parentId?: string | null; _order?: number }): MenuItem => ({
+    id: n.id, label: n.label, url: n.url, openInNewTab: n.openInNewTab,
+    cssClasses: n.cssClasses, children: n.children.map(strip),
+  });
+  return tree.map(strip);
+}
+
+interface NavigationMenuItemRow {
+  id: string;
+  parent_id: string | null;
+  order_index: number;
+  label: string;
+  page_id: string | null;
+  external_url: string | null;
+  anchor_target: string | null;
+  open_in_new_tab: boolean;
+  css_classes: string | null;
+  visibility: 'always' | 'authenticated_only' | 'public_only';
 }
 
 export interface SectionPage {
@@ -145,12 +221,19 @@ export interface UseSectionPagesOptions {
 
 export async function useSectionPages(
   prefix: string,
-  _opts?: UseSectionPagesOptions,
+  opts?: UseSectionPagesOptions,
 ): Promise<SectionPage[]> {
   const ctx = requireContext('useSectionPages');
-  // Stub: DB query for pages with full_path LIKE prefix%, ordered by
-  // section_order then created_at. Implementation in SSR runtime.
-  void ctx;
-  void prefix;
-  return [];
+  const sortCol = opts?.sort === 'created_at' ? 'created_at' : 'section_order';
+
+  // Use ilike for prefix match — RLS handles per-viewer page visibility.
+  const result = await ctx.supabase
+    .from('pages')
+    .select('id, full_path, title, section_order')
+    .eq('host_kind', 'site')
+    .eq('host_id', ctx.siteId)
+    .eq('status', 'published')
+    .ilike('full_path', `${prefix}%`)
+    .order(sortCol, { ascending: true });
+  return ((result as { data: SectionPage[] | null }).data ?? []);
 }
