@@ -60,6 +60,27 @@ const sitesModule: GatewazeModule = {
     'migrations/022_menu_replace_items_rpc.sql',
     'migrations/023_host_media_quota_decrement.sql',
     'migrations/024_host_media_usage_rpcs.sql',
+    'migrations/025_media_reference_triggers.sql',
+  ],
+
+  workers: [
+    {
+      // Routes data.kind=sites:boilerplate-version-poll to the GitHub-Releases poller.
+      name: 'sites:boilerplate-version-poll',
+      handler: './workers/cron-dispatchers.ts',
+    },
+    {
+      name: 'sites:scheduled-republish',
+      handler: './workers/cron-dispatchers.ts',
+    },
+    {
+      name: 'sites:drift-watch',
+      handler: './workers/cron-dispatchers.ts',
+    },
+    {
+      name: 'sites:media-usage-reconcile',
+      handler: './workers/cron-dispatchers.ts',
+    },
   ],
 
   crons: [
@@ -191,6 +212,22 @@ const sitesModule: GatewazeModule = {
     console.log('[sites] Module enabled — registering site / portal page-host kinds');
     // Host registration happens via SQL seed in a follow-up migration once
     // a target Supabase exists; the manifest hook can't run DDL.
+
+    // Register the TSX marker parser with the templates module's parser
+    // registry — extension point per spec §8.2 + parser-registry.ts.
+    // Wrapped in try so a missing templates module doesn't block enable.
+    try {
+      const [registry, parserImpl] = await Promise.all([
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        import('@gatewaze-modules/templates/lib/parser/parser-registry.js' as any),
+        import('./lib/parser/tsx-marker-parser-impl.js'),
+      ]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (registry as any).registerSourceParser('tsx-marker', new (parserImpl as any).TsxMarkerParserImpl());
+      console.log('[sites] TSX marker parser registered');
+    } catch (err) {
+      console.warn('[sites] TSX marker parser registration skipped:', err instanceof Error ? err.message : String(err));
+    }
   },
 
   onDisable: async () => {
