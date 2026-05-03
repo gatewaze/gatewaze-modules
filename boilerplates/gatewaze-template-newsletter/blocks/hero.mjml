@@ -1,0 +1,16 @@
+<!-- @gatewaze:block name="hero" category="hero" description="Headline + subheadline + optional image" -->
+<mj-section padding="20px 0">
+  <mj-column>
+    {{#if image}}
+      <mj-image src="{{image}}" alt="{{image_alt}}" />
+    {{/if}}
+    <mj-text font-size="28px" font-weight="700" line-height="34px" padding="20px 0 8px">
+      {{headline}}
+    </mj-text>
+    {{#if subheadline}}
+      <mj-text color="{{theme.colors.muted}}" font-size="18px">
+        {{subheadline}}
+      </mj-text>
+    {{/if}}
+  </mj-column>
+</mj-section>

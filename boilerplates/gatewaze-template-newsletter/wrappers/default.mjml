@@ -1,0 +1,38 @@
+<!-- @gatewaze:wrapper name="default" role="site" -->
+<!--
+  Default newsletter wrapper. Renders header, body slot, footer.
+  Body slot is filled with composed block instances at send time.
+-->
+<mjml>
+  <mj-head>
+    <mj-title>{{subject}}</mj-title>
+    <mj-preview>{{preheader}}</mj-preview>
+    <mj-attributes>
+      <mj-all font-family="{{theme.typography.body_font}}" />
+      <mj-text color="{{theme.colors.foreground}}" font-size="16px" line-height="24px" />
+      <mj-button background-color="{{theme.colors.primary}}" color="#ffffff" border-radius="8px" />
+    </mj-attributes>
+  </mj-head>
+  <mj-body background-color="{{theme.colors.background}}" width="600px">
+    <mj-section padding="20px 0">
+      <mj-column>
+        <mj-text align="center" color="{{theme.colors.muted}}" font-size="14px">
+          {{list_name}}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+    {{>page_body}}
+
+    <mj-section padding="40px 0 20px">
+      <mj-column>
+        <mj-divider border-color="#e5e5e5" />
+        <mj-text align="center" color="{{theme.colors.muted}}" font-size="12px">
+          You received this email because you subscribed to {{list_name}}.<br/>
+          <a href="{{unsubscribe_url}}" style="color: {{theme.colors.muted}};">Unsubscribe</a> &middot;
+          <a href="{{preferences_url}}" style="color: {{theme.colors.muted}};">Manage preferences</a>
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

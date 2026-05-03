@@ -1,0 +1,17 @@
+<!-- @gatewaze:block kind="ai-generated" name="ai-summary" category="content" cadence="before-publish" model="claude-sonnet" description="AI-generated summary of recent events / blogs / activity" -->
+<!--
+  Block content is produced by the platform's AI worker before publish.
+  At edit time the admin sets the prompt template; the rendered text
+  here is the latest generation.
+-->
+<mj-section>
+  <mj-column>
+    {{#if heading}}
+      <mj-text font-size="20px" font-weight="600" padding-bottom="8px">{{heading}}</mj-text>
+    {{/if}}
+    <mj-text>{{generated_body}}</mj-text>
+    <mj-text color="{{theme.colors.muted}}" font-size="11px" padding-top="4px">
+      Summary generated {{generated_at}}
+    </mj-text>
+  </mj-column>
+</mj-section>

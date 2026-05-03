@@ -1,0 +1,9 @@
+<!-- @gatewaze:block name="text" category="content" description="Block of body text with optional heading" -->
+<mj-section>
+  <mj-column>
+    {{#if heading}}
+      <mj-text font-size="20px" font-weight="600" padding-bottom="8px">{{heading}}</mj-text>
+    {{/if}}
+    <mj-text>{{body}}</mj-text>
+  </mj-column>
+</mj-section>

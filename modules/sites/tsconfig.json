@@ -28,6 +28,7 @@
     "dist",
     "node_modules",
     "**/*.test.ts",
-    "**/__fixtures__/**"
+    "**/__fixtures__/**",
+    "lib/parser/tsx-marker-parser-impl.ts"
   ]
 }
