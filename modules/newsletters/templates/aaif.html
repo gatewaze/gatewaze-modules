@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<title></title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<!--
+  Gatewaze Newsletter Template Export
+  Brand: aaif
+  Exported: 2026-04-05
+  Format: Single-file block/brick template bundle
+
+  Import this file into Gatewaze to populate newsletter_block_templates
+  and newsletter_brick_templates tables.
+-->
+<!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]-->
+<style>
+:root{color-scheme:light dark;supported-color-schemes:light dark}
+body,table,td,a{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}
+table,td{mso-table-lspace:0pt;mso-table-rspace:0pt}
+img{-ms-interpolation-mode:bicubic;border:0;height:auto;line-height:100%;outline:none;text-decoration:none}
+body{margin:0;padding:0;width:100%!important;height:100%!important;background-color:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important;font-size:inherit!important;font-family:inherit!important;font-weight:inherit!important;line-height:inherit!important}
+@media(prefers-color-scheme:dark){
+  body,.bg{background-color:#0d1117!important}
+  .c{background-color:#161b22!important}
+  .h{color:#e6edf3!important}
+  .t{color:#c9d1d9!important}
+  .m{color:#8b949e!important}
+  .d{border-color:#30363d!important}
+  .card{background-color:#1c2128!important;border-color:#30363d!important}
+  .lb{color:#58a6ff!important}
+  a{color:#58a6ff!important}
+  .accent{background-color:#1f3a5f!important;border-color:#1f4f8f!important}
+}
+@media only screen and (max-width:600px){
+  .w{width:100%!important;max-width:100%!important}
+  .mp{padding-left:16px!important;padding-right:16px!important}
+  .sc{display:block!important;width:100%!important}
+  .j{text-align:left!important}
+}
+</style>
+</head>
+<body style="margin:0;padding:0;background-color:#f0f2f5" class="bg">
+
+<div style="display:none;font-size:1px;color:#f0f2f5;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden">{{preheader}}&#847;&zwnj;&nbsp;&#8199;&shy;&#847;&zwnj;&nbsp;&#8199;&shy;&#847;&zwnj;&nbsp;&#8199;&shy;&#847;&zwnj;&nbsp;&#8199;&shy;</div>
+
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f0f2f5" class="bg">
+<tr><td align="center" style="padding:16px 10px">
+
+<!-- BLOCK:view_online | name=View Online | description=Small centered link to view newsletter in browser | has_bricks=false | sort_order=0 -->
+<!-- SCHEMA:{"type":"object","properties":{"view_online_url":{"type":"string","title":"View Online URL","format":"uri"}}} -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="640" class="w" style="max-width:640px">
+  <tr><td style="padding:8px 0;text-align:center;font-size:12px;color:#888" class="m">
+    <a href="{{view_online_url}}" style="color:#888;text-decoration:underline">View online</a>
+  </td></tr>
+</table>
+<!-- /BLOCK:view_online -->
+
+<!-- Main container -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="640" class="w c" style="max-width:640px;background-color:#ffffff;border-radius:12px;overflow:hidden" bgcolor="#ffffff">
+
+<!-- BLOCK:header | name=Header | description=Dark blue banner with newsletter title and edition date | has_bricks=false | sort_order=1 -->
+<!-- SCHEMA:{"type":"object","properties":{"title":{"type":"string","title":"Newsletter Title","default":"AAIF — Executive Director Weekly"},"edition_date":{"type":"string","title":"Edition Date"}}} -->
+<tr><td style="background-color:#003778;padding:28px 36px" class="mp">
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+    <tr>
+      <td style="font-size:20px;font-weight:700;color:#ffffff;letter-spacing:-0.3px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+        {{title}}
+      </td>
+      <td style="text-align:right;font-size:13px;color:#8bb8e8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+        {{edition_date}}
+      </td>
+    </tr>
+  </table>
+</td></tr>
+<!-- /BLOCK:header -->
+
+<!-- BLOCK:editors_note | name=Editor's Note | description=Opening letter from the executive director | has_bricks=false | sort_order=2 -->
+<!-- SCHEMA:{"type":"object","required":["body"],"properties":{"greeting":{"type":"string","title":"Greeting","default":"To the LF Team:"},"body":{"type":"string","title":"Body","format":"html"}}} -->
+<tr><td style="padding:28px 36px 24px" class="mp c">
+  <p style="margin:0 0 14px;font-size:16px;line-height:26px;color:#1a1a2e" class="t">{{greeting}}</p>
+  <div style="font-size:16px;line-height:26px;color:#333;text-align:justify;word-spacing:-0.5px" class="t j">
+    {{body}}
+  </div>
+</td></tr>
+<!-- /BLOCK:editors_note -->
+
+<!-- BLOCK:toc | name=Table of Contents | description=In This Issue navigation card with anchor links | has_bricks=false | sort_order=3 -->
+<!-- SCHEMA:{"type":"object","properties":{"items":{"type":"array","title":"TOC Items","items":{"type":"object","required":["label","anchor"],"properties":{"label":{"type":"string","title":"Label"},"anchor":{"type":"string","title":"Anchor ID"}}}}}} -->
+<tr><td style="padding:16px 36px 20px" class="mp c">
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f6f8fa;border-radius:6px" class="card">
+    <tr><td style="padding:14px 20px">
+      <p style="margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#888" class="m">In This Issue</p>
+      <p style="margin:0;font-size:13px;line-height:22px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+        {{#items}}
+        <a href="#{{anchor}}" style="color:#0066cc;text-decoration:none" class="lb">{{label}}</a>{{^isLast}} &middot; {{/isLast}}
+        {{/items}}
+      </p>
+    </td></tr>
+  </table>
+</td></tr>
+<!-- /BLOCK:toc -->
+
+<!-- BLOCK:news_section | name=News Section | description=A titled section with news items — used for LF News, In The News, etc. Each item has a bold headline, description, and source links | has_bricks=true | sort_order=4 -->
+<!-- SCHEMA:{"type":"object","required":["section_label"],"properties":{"section_id":{"type":"string","title":"Section Anchor ID"},"section_label":{"type":"string","title":"Section Label"},"use_thick_divider":{"type":"boolean","title":"Use Thick Top Divider","default":false},"label_color":{"type":"string","title":"Label Color","default":"#0094FF"}}} -->
+<tr><td style="padding:0 36px" class="mp"><hr style="border:none;border-top:{{#use_thick_divider}}2px solid #003778{{/use_thick_divider}}{{^use_thick_divider}}1px solid #e5e7eb{{/use_thick_divider}};margin:0" class="d"></td></tr>
+<tr><td id="{{section_id}}" style="padding:24px 36px 6px" class="mp c">
+  {{#use_thick_divider}}
+  <p style="margin:0;font-size:13px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#003778" class="h">{{section_label}}</p>
+  {{/use_thick_divider}}
+  {{^use_thick_divider}}
+  <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:{{label_color}}" class="lb">{{section_label}}</p>
+  {{/use_thick_divider}}
+</td></tr>
+<tr><td style="padding:8px 36px 20px" class="mp c">
+  {{bricks}}
+</td></tr>
+
+<!-- BRICK:news_item | name=News Item | sort_order=1 -->
+<!-- SCHEMA:{"type":"object","required":["headline","description"],"properties":{"headline":{"type":"string","title":"Headline"},"description":{"type":"string","title":"Description","format":"html"},"sources":{"type":"array","title":"Source Links","items":{"type":"object","required":["label","url"],"properties":{"label":{"type":"string","title":"Label"},"url":{"type":"string","title":"URL","format":"uri"}}}}}} -->
+<p style="margin:0 0 12px;font-size:15px;line-height:24px;color:#333;text-align:justify;word-spacing:-0.5px" class="t">
+  <strong class="h">{{headline}}</strong> &mdash; {{description}}
+  {{#sources}}
+  <a href="{{url}}" style="color:#0066cc" class="lb">{{label}}</a>{{^isLast}} &middot; {{/isLast}}
+  {{/sources}}
+</p>
+<!-- /BRICK:news_item -->
+
+<!-- BRICK:subsection_header | name=Subsection Header | sort_order=0 -->
+<!-- SCHEMA:{"type":"object","required":["label"],"properties":{"label":{"type":"string","title":"Subsection Label"}}} -->
+<tr><td style="padding:0px 36px 6px" class="mp c">
+  <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#0094FF" class="lb">{{label}}</p>
+</td></tr>
+<!-- /BRICK:subsection_header -->
+
+<!-- /BLOCK:news_section -->
+
+<!-- BLOCK:editorial | name=Editorial | description=Accent card with editorial commentary — uses left-border highlight style | has_bricks=false | sort_order=5 -->
+<!-- SCHEMA:{"type":"object","required":["title","body"],"properties":{"section_id":{"type":"string","title":"Section Anchor ID"},"section_label":{"type":"string","title":"Section Label","default":"Tech News That Matters"},"title":{"type":"string","title":"Title"},"body":{"type":"string","title":"Body","format":"html"}}} -->
+<tr><td style="padding:0 36px" class="mp"><hr style="border:none;border-top:1px solid #e5e7eb;margin:0" class="d"></td></tr>
+<tr><td id="{{section_id}}" style="padding:24px 36px 6px" class="mp c">
+  <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#0094FF" class="lb">{{section_label}}</p>
+</td></tr>
+<tr><td style="padding:8px 36px 20px" class="mp c">
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f0f5ff;border-left:3px solid #003778;border-radius:4px" class="accent">
+    <tr><td style="padding:20px 24px">
+      <p style="margin:0 0 14px;font-size:16px;font-weight:700;line-height:24px;color:#1a1a2e" class="h">{{title}}</p>
+      <div style="font-size:15px;line-height:25px;color:#333;text-align:justify;word-spacing:-0.5px" class="t j">
+        {{body}}
+      </div>
+    </td></tr>
+  </table>
+</td></tr>
+<!-- /BLOCK:editorial -->
+
+<!-- BLOCK:milestone_section | name=Milestones | description=Short milestone announcements — new members, board seats, etc. | has_bricks=true | sort_order=6 -->
+<!-- SCHEMA:{"type":"object","properties":{"section_id":{"type":"string","title":"Section Anchor ID","default":"milestones"},"section_label":{"type":"string","title":"Section Label","default":"Milestones"}}} -->
+<tr><td style="padding:0 36px" class="mp"><hr style="border:none;border-top:1px solid #e5e7eb;margin:0" class="d"></td></tr>
+<tr><td id="{{section_id}}" style="padding:24px 36px 6px" class="mp c">
+  <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#0094FF" class="lb">{{section_label}}</p>
+</td></tr>
+<tr><td style="padding:8px 36px 20px" class="mp c">
+  {{bricks}}
+</td></tr>
+
+<!-- BRICK:milestone_item | name=Milestone Item | sort_order=1 -->
+<!-- SCHEMA:{"type":"object","required":["headline","description"],"properties":{"headline":{"type":"string","title":"Headline"},"description":{"type":"string","title":"Description","format":"html"},"link_label":{"type":"string","title":"Link Label"},"link_url":{"type":"string","title":"Link URL","format":"uri"}}} -->
+<p style="margin:0 0 8px;font-size:15px;line-height:24px;color:#333;text-align:justify;word-spacing:-0.5px" class="t">
+  <strong class="h">{{headline}}</strong> {{description}} {{#link_url}}<a href="{{link_url}}" style="color:#0066cc" class="lb">{{link_label}}</a>{{/link_url}}
+</p>
+<!-- /BRICK:milestone_item -->
+
+<!-- /BLOCK:milestone_section -->
+
+<!-- BLOCK:funding_section | name=Funding | description=Open-source funding announcements with total amount in header | has_bricks=true | sort_order=7 -->
+<!-- SCHEMA:{"type":"object","properties":{"label":{"type":"string","title":"Section Label","default":"Funding"},"total":{"type":"string","title":"Total Amount (e.g. $65M)"}}} -->
+<tr><td style="padding:0px 36px 6px" class="mp c">
+  <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#0094FF" class="lb">{{label}}{{#total}} &mdash; {{total}}{{/total}}</p>
+</td></tr>
+<tr><td style="padding:8px 36px 20px" class="mp c">
+  {{bricks}}
+</td></tr>
+
+<!-- BRICK:funding_item | name=Funding Item | sort_order=1 -->
+<!-- SCHEMA:{"type":"object","required":["company","description"],"properties":{"company":{"type":"string","title":"Company"},"description":{"type":"string","title":"Description","format":"html"},"link_label":{"type":"string","title":"Source Label"},"link_url":{"type":"string","title":"Source URL","format":"uri"}}} -->
+<p style="margin:0 0 8px;font-size:15px;line-height:24px;color:#333;text-align:justify;word-spacing:-0.5px" class="t">
+  <strong class="h">{{company}}</strong> {{description}} {{#link_url}}<a href="{{link_url}}" style="color:#0066cc" class="lb">{{link_label}}</a>{{/link_url}}
+</p>
+<!-- /BRICK:funding_item -->
+
+<!-- /BLOCK:funding_section -->
+
+<!-- BLOCK:short_section | name=Short Section | description=Simple section with a label and rich text body — for Policy, Interesting, Inspiration, etc. | has_bricks=false | sort_order=8 -->
+<!-- SCHEMA:{"type":"object","required":["section_label","body"],"properties":{"section_id":{"type":"string","title":"Section Anchor ID"},"section_label":{"type":"string","title":"Section Label"},"body":{"type":"string","title":"Body","format":"html"}}} -->
+<tr><td style="padding:0 36px" class="mp"><hr style="border:none;border-top:1px solid #e5e7eb;margin:0" class="d"></td></tr>
+<tr><td id="{{section_id}}" style="padding:24px 36px 6px" class="mp c">
+  <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#0094FF" class="lb">{{section_label}}</p>
+</td></tr>
+<tr><td style="padding:8px 36px 20px" class="mp c">
+  <div style="font-size:15px;line-height:24px;color:#333;text-align:justify;word-spacing:-0.5px" class="t j">
+    {{body}}
+  </div>
+</td></tr>
+<!-- /BLOCK:short_section -->
+
+<!-- End main container -->
+</table>
+
+<!-- BLOCK:footer | name=Footer | description=Footer with author name, mailing list info, and unsubscribe link | has_bricks=false | sort_order=99 -->
+<!-- SCHEMA:{"type":"object","properties":{"author_name":{"type":"string","title":"Author Name","default":"Jim Zemlin"},"author_title":{"type":"string","title":"Author Title","default":"CEO, The Linux Foundation"},"list_url":{"type":"string","title":"Mailing List URL","format":"uri"},"unsubscribe_url":{"type":"string","title":"Unsubscribe URL","format":"uri"},"view_online_url":{"type":"string","title":"View Online URL","format":"uri"}}} -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="640" class="w" style="max-width:640px">
+  <tr><td style="padding:20px 36px 8px;text-align:center" class="mp">
+    <p style="margin:0;font-size:13px;line-height:20px;color:#666" class="m">
+      {{author_name}} &middot; {{author_title}}
+    </p>
+  </td></tr>
+  <tr><td style="padding:4px 36px 20px;text-align:center" class="mp">
+    <p style="margin:0;font-size:12px;line-height:18px;color:#999" class="m">
+      Sent to AAIF Governing Board via <a href="{{list_url}}" style="color:#999;text-decoration:underline">lists.aaif.io</a><br>
+      <a href="{{unsubscribe_url}}" style="color:#999;text-decoration:underline">Unsubscribe</a> &middot; <a href="{{view_online_url}}" style="color:#999;text-decoration:underline">View online</a>
+    </p>
+  </td></tr>
+</table>
+<!-- /BLOCK:footer -->
+
+</td></tr>
+</table>
+
+</body>
+</html>

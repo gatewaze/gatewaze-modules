@@ -1,0 +1,36 @@
+{
+  "name": "@gatewaze-modules/sites",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Sites module — multi-site web builder. Pages, page composition, publishing (portal / k8s-internal / external publishers). Consumes @gatewaze-modules/templates.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./types": "./types/index.ts",
+    "./api": "./api/index.ts",
+    "./renderer": "./lib/renderer/index.ts",
+    "./runtime": "./lib/runtime/index.ts",
+    "./publish-jobs": "./lib/publish-jobs/index.ts",
+    "./git-driven-publisher": "./lib/git-driven-publisher/index.ts",
+    "./admin": "./admin/index.ts",
+    "./admin/page-editor": "./admin/page-editor/index.ts",
+    "./admin/schema-editor": "./admin/schema-editor/index.ts",
+    "./admin/*": "./admin/*",
+    "./portal/*": "./portal/*",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@gatewaze-modules/templates": "*",
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0"
+  }
+}

@@ -40,6 +40,12 @@ const templatesModule: GatewazeModule = {
     'migrations/007_templates_ab_helpers.sql',
     'migrations/008_templates_theme_kinds.sql',
     'migrations/009_templates_content_schemas.sql',
+    'migrations/010_fix_can_admin_fn_dispatcher.sql',
+    'migrations/011_writes_via_host.sql',
+    'migrations/012_fix_select_policies_and_grants.sql',
+    'migrations/013_rename_theme_kinds.sql',
+    'migrations/014_block_defs_columns.sql',
+    'migrations/015_wrappers_role.sql',
   ],
 
   // Admin routes land in PR 2+. The skeleton ships migrations + types only.

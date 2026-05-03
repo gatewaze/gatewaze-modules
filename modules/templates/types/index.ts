@@ -19,14 +19,17 @@ export type TemplatesLibraryHostKind =
 
 /**
  * Discriminator added by spec-sites-theme-kinds annex. Flows from source →
- * library → block_def. Immutable after insert. Defaults to 'html' so existing
- * rows are unchanged.
+ * library → block_def. Immutable after insert. Defaults to 'email'.
  *
- * - 'html'  → marker-grammar-parsed templates (the existing flow)
- * - 'nextjs' → schema-driven content authoring + git-driven publishing
- *              (templates_content_schemas instead of block_defs)
+ * - 'email'   → marker-grammar-parsed HTML templates; consumed by newsletters,
+ *               events, calendars, and any other email-shaped output.
+ * - 'website' → schema-driven content authoring + git-driven publishing;
+ *               consumed by sites (templates_content_schemas instead of
+ *               block_defs).
+ *
+ * Renamed from 'html' / 'nextjs' in templates_013_rename_theme_kinds.
  */
-export type ThemeKind = 'html' | 'nextjs';
+export type ThemeKind = 'email' | 'website';
 
 export interface TemplatesLibraryRow {
   id: string;
@@ -74,9 +77,9 @@ export interface TemplatesBlockDefRow {
   version: number;
   is_current: boolean;
   /**
-   * Inherited from library on insert; immutable thereafter. For nextjs-kind
+   * Inherited from library on insert; immutable thereafter. For website-kind
    * libraries this column is unused at the row level (no block_defs are
-   * ingested for nextjs sources — they use templates_content_schemas).
+   * ingested for website sources — they use templates_content_schemas).
    */
   theme_kind: ThemeKind;
   created_at: string;
@@ -139,8 +142,8 @@ export interface TemplatesSourceRow {
   label: string;
   status: SourceStatus;
   /**
-   * 'html' (default) → marker-grammar HTML files; the existing parser path.
-   * 'nextjs' → Next.js theme repo; theme.json + content/schema.{ts,json}.
+   * 'email' (default) → marker-grammar HTML files; the existing parser path.
+   * 'website' → Next.js theme repo; theme.json + content/schema.{ts,json}.
    * Immutable after insert. Per spec-sites-theme-kinds §3.
    */
   theme_kind: ThemeKind;
