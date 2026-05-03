@@ -68,6 +68,7 @@ function validateExactlyOneTarget(item: Partial<MenuItemInput>): string | null {
 }
 
 export interface MenusRoutesDeps {
+  /** Why `any` on `from()`: see internal-git-server-impl.ts dep comment. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: { from(table: string): any; rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }> };
   logger: {

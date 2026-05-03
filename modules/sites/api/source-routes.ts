@@ -24,6 +24,12 @@ interface ErrorEnvelope {
 }
 
 export interface SourceRoutesDeps {
+  /**
+   * Why `any` on `from()`: see internal-git-server-impl.ts dep comment —
+   * the OSS modules workspace doesn't ship generated Database types, and
+   * hand-rolling PostgrestQueryBuilder lookalikes per table is a worse
+   * trade than per-callsite `as { ... } | null` casts.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: { from(table: string): any; rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }> };
   gitServer: InternalGitServer;

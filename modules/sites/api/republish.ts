@@ -28,7 +28,11 @@ interface RepublishSupabaseQuery {
   select(cols: string): RepublishSupabaseQuery;
   insert(values: Record<string, unknown>): RepublishSupabaseQuery;
   update(values: Record<string, unknown>): RepublishSupabaseQuery;
-  eq(col: string, val: unknown): RepublishSupabaseQuery;
+  /**
+   * `.eq()` is also awaitable when terminating an `update()` chain — the
+   * postgrest-js client returns the result envelope directly.
+   */
+  eq(col: string, val: unknown): RepublishSupabaseQuery & PromiseLike<{ data: unknown; error: { message: string } | null }>;
   single<T = Record<string, unknown>>(): Promise<{ data: T | null; error: { message: string } | null }>;
 }
 
@@ -152,8 +156,7 @@ export function createRepublishRoutes(deps: RepublishRoutesDeps) {
     const { error } = await supabase
       .from('sites')
       .update({ republish_webhook_secret: newSecret })
-      .eq('id', siteId)
-      .single();
+      .eq('id', siteId);
     if (error) {
       logger.error('rotate webhook secret failed', { siteId, error: error.message });
       res.status(500).json({ error: 'db_error', message: error.message } satisfies ErrorEnvelope);

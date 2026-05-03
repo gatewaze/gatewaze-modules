@@ -137,7 +137,20 @@ export interface InternalGitServerDeps {
   defaultMaxBytes?: number;
   /** HMAC signing key for signed URLs. Rotates daily via platform pipeline. */
   signingKey: Buffer;
-  /** Supabase service-role client for advisory locks + registry writes. */
+  /**
+   * Supabase service-role client for advisory locks + registry writes.
+   *
+   * Why `any`: the modules workspace doesn't ship a generated Database
+   * type (no Supabase CLI codegen wired into the OSS modules build),
+   * and the chained query-builder shape (.from().select().eq().eq().single())
+   * can't be expressed in a narrow interface that admits all callsite
+   * variations without writing the entire PostgrestQueryBuilder type by
+   * hand. The runtime contract is the postgrest-js client; type-safety
+   * here would require either generated Database types (production
+   * upgrade path) or hand-rolling ~50 lines of PostgrestQueryBuilder
+   * lookalike types per table — a bad trade vs. the per-callsite
+   * `as { ... } | null` cast pattern used at use-sites below.
+   */
   supabase: SupabaseAdvisoryLockClient & {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     from(table: string): any;
