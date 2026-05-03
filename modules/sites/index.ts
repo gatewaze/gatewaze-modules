@@ -62,6 +62,10 @@ const sitesModule: GatewazeModule = {
     'migrations/024_host_media_usage_rpcs.sql',
     'migrations/025_media_reference_triggers.sql',
     'migrations/026_site_drift_state.sql',
+    'migrations/027_signed_media_urls.sql',
+    'migrations/028_mega_menus_and_segments.sql',
+    'migrations/029_brand_assets_library.sql',
+    'migrations/030_i18n_locales.sql',
   ],
 
   workers: [
