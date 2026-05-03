@@ -1,0 +1,81 @@
+-- ============================================================================
+-- Migration: newsletters_022_drop_legacy_template_tables
+-- Status:    DISABLED (rename to .sql to enable)
+-- Description: Drop the legacy newsletter block/brick template tables.
+--              Run AFTER the admin UI is fully cut over to read/write the
+--              templates module's tables (templates_block_defs / templates_brick_defs).
+--
+-- Pre-flight checklist (the operator MUST verify before enabling):
+--   1. PR 16.b commits have landed in the gatewaze admin app:
+--      - admin/utils/htmlUploadParser.ts            (DONE)
+--      - admin/utils/collectionResolver.ts          (DONE)
+--      - admin/utils/htmlExporter.ts                (DONE — PR 16.c)
+--      - admin/components/EditionCanvas.tsx         (DONE — PR 16.c)
+--      - admin/components/BlockEditor.tsx           (DONE — PR 16.c)
+--      - admin/components/BrickEditor.tsx           (DONE — PR 16.c)
+--      - admin/components/NewsletterSetupWizard.tsx (DONE — PR 16.c)
+--      - admin/pages/EditorTab.tsx                  (DONE — PR 16.c)
+--      - admin/pages/detail.tsx                     (DONE — PR 16.c)
+--      - admin/pages/editions/[id].tsx              (DONE — PR 16.c)
+--      - admin/pages/templates/index.tsx            (DONE — PR 16.c)
+--      - admin/pages/templates/block-editor.tsx     (DONE — PR 16.c)
+--      - admin/pages/templates/brick-editor.tsx     (DONE — PR 16.c)
+--      - admin/pages/templates/[collectionSlug].tsx (DONE — PR 16.c)
+--      - functions/newsletter-gdoc-import/*         (DONE — PR 16.c)
+--      - portal/pages/_date.tsx                     (DONE — PR 16.c)
+--      - types/output-adapter.ts comment refresh    (DONE — PR 16.c)
+--
+--   The cutover is functionally complete; the operator should:
+--      a. Run the admin app's E2E flows (HTML import, edition create,
+--         template edit, gdoc-import) against a staging DB
+--      b. Confirm RLS policies on templates_block_defs allow the same
+--         actors who could read newsletters_block_templates
+--      c. Then rename this file to remove the .disabled extension
+--
+--   2. Migration 021 has been applied and ran successfully
+--   3. SELECT count(*) FROM newsletters_block_templates is fully reflected
+--      in SELECT count(*) FROM templates_block_defs
+--   4. SELECT count(*) FROM newsletters_edition_blocks WHERE
+--      templates_block_def_id IS NULL AND block_template_id IS NOT NULL = 0
+--      (every edition_block now points at the new tables)
+--
+-- This is irreversible: data lives only in the templates module's tables
+-- after this migration. Take a backup first.
+-- ============================================================================
+
+-- 1. Drop the FK constraint on newsletters_edition_blocks → legacy
+ALTER TABLE public.newsletters_edition_blocks
+  DROP CONSTRAINT IF EXISTS newsletters_edition_blocks_block_template_id_fkey;
+
+ALTER TABLE public.newsletters_edition_block_bricks
+  DROP CONSTRAINT IF EXISTS newsletters_edition_block_bricks_brick_template_id_fkey;
+
+-- 2. Drop the legacy template_id columns (they are now redundant —
+--    templates_block_def_id / templates_brick_def_id are authoritative)
+ALTER TABLE public.newsletters_edition_blocks
+  DROP COLUMN IF EXISTS block_template_id;
+
+ALTER TABLE public.newsletters_edition_block_bricks
+  DROP COLUMN IF EXISTS brick_template_id;
+
+-- 3. Drop the legacy template tables
+DROP TABLE IF EXISTS public.newsletters_brick_templates CASCADE;
+DROP TABLE IF EXISTS public.newsletters_block_templates CASCADE;
+
+-- 4. (Optional) Drop newsletters_template_collections — only if nothing
+--    else references it. Many pages and the editor still call this table
+--    by name; consider deferring this step indefinitely so the slug-based
+--    routing keeps working.
+--
+-- DROP TABLE IF EXISTS public.newsletters_template_collections CASCADE;
+
+-- 5. Drop the deferred FK shims added in migration 020 (since the
+--    legacy columns are now gone, we can promote the new FKs to NOT NULL)
+ALTER TABLE public.newsletters_edition_blocks
+  ALTER COLUMN templates_block_def_id SET NOT NULL;
+
+ALTER TABLE public.newsletters_edition_block_bricks
+  ALTER COLUMN templates_brick_def_id SET NOT NULL;
+
+COMMENT ON COLUMN public.newsletters_edition_blocks.templates_block_def_id IS
+  'FK to templates_block_defs. Authoritative source after migration 022.';
