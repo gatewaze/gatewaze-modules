@@ -61,6 +61,7 @@ const sitesModule: GatewazeModule = {
     'migrations/023_host_media_quota_decrement.sql',
     'migrations/024_host_media_usage_rpcs.sql',
     'migrations/025_media_reference_triggers.sql',
+    'migrations/026_site_drift_state.sql',
   ],
 
   workers: [

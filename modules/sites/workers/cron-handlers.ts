@@ -135,22 +135,26 @@ export async function runScheduledRepublish(deps: CronHandlerDeps): Promise<{ sc
 // ===========================================================================
 
 /**
- * For each site with external git, fetch upstream main and update the
- * drift status. For internal git, sites' main is local — drift is always
- * 0 unless an admin-bypass push happened.
+ * For each site, detect drift between main and publish.
+ *
+ * For internal git: compares local main vs publish HEAD via getHeadSha.
+ *
+ * For external git (BYO): runs `git fetch origin main` first to pick up
+ * upstream changes pushed since the last poll, then compares fetched
+ * main vs local publish. Failures (deploy key revoked, repo unreachable)
+ * are logged + counted but don't fail the whole tick.
  */
-export async function runDriftWatcher(deps: CronHandlerDeps): Promise<{ checked: number; drifted: number }> {
+export async function runDriftWatcher(deps: CronHandlerDeps): Promise<{ checked: number; drifted: number; fetchFailed: number }> {
   const result = await deps.supabase
     .from('sites')
     .select('id, slug, git_provenance, git_url')
     .eq('status', 'active');
   const sites = (result.data as Array<{ id: string; slug: string; git_provenance: string; git_url: string | null }>) ?? [];
   let drifted = 0;
+  let fetchFailed = 0;
 
   for (const site of sites) {
     try {
-      // For external git, fetch upstream main. For internal, the bare repo
-      // is local — drift is detected by comparing main vs publish HEAD.
       const repoResult = await deps.supabase
         .from('gatewaze_internal_repos')
         .select('host_kind, host_id, bare_path, default_branch')
@@ -166,21 +170,86 @@ export async function runDriftWatcher(deps: CronHandlerDeps): Promise<{ checked:
         defaultBranch: row.default_branch,
       };
 
+      // For external-git sites, fetch upstream main first
+      if (site.git_provenance === 'external' && site.git_url) {
+        try {
+          await fetchExternalMain(repo.barePath, site.id, deps);
+        } catch (err) {
+          fetchFailed++;
+          deps.logger.warn('external git fetch failed', {
+            siteId: site.id,
+            gitUrl: site.git_url,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+      }
+
       const [mainSha, publishSha] = await Promise.all([
         deps.gitServer.getHeadSha(repo, 'main'),
         deps.gitServer.getHeadSha(repo, 'publish'),
       ]);
       if (mainSha && publishSha && mainSha !== publishSha) {
         drifted++;
-        // Could surface to admin via in-app inbox; for v1 we just count.
+        // Surface to admin: insert/update a drift row so the Source tab
+        // can show "X commits ahead" without re-running getHeadSha.
+        await deps.supabase.from('site_drift_state').upsert({
+          site_id: site.id,
+          main_sha: mainSha,
+          publish_sha: publishSha,
+          checked_at: new Date().toISOString(),
+        }).eq('site_id', site.id);
       }
     } catch (err) {
       deps.logger.warn('drift check failed', { siteId: site.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  deps.logger.info('drift watch tick', { checked: sites.length, drifted });
-  return { checked: sites.length, drifted };
+  deps.logger.info('drift watch tick', { checked: sites.length, drifted, fetchFailed });
+  return { checked: sites.length, drifted, fetchFailed };
+}
+
+/**
+ * Fetch upstream main into the bare repo using the per-site deploy key.
+ * Per spec §6.4 — external-git sites use SSH-based deploy key auth.
+ */
+async function fetchExternalMain(barePath: string, siteId: string, deps: CronHandlerDeps): Promise<void> {
+  const { spawn } = await import('node:child_process');
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+
+  // Lookup the deploy key from sites_secrets
+  const secretResult = await deps.supabase
+    .from('sites_secrets')
+    .select('encrypted_value')
+    .eq('site_id', siteId).eq('key', 'deploy_key').single();
+  const deployKey = (secretResult.data as { encrypted_value: string } | null)?.encrypted_value;
+  if (!deployKey) {
+    throw new Error('no deploy key configured for external git site');
+  }
+
+  const tmpDir = await mkdtemp(join(tmpdir(), 'gatewaze-fetch-'));
+  const keyPath = join(tmpDir, 'id');
+  try {
+    await writeFile(keyPath, deployKey, { mode: 0o600 });
+    const sshCommand = `ssh -i ${keyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`;
+
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn('git', ['--git-dir', barePath, 'fetch', 'origin', 'main'], {
+        env: { ...process.env, GIT_SSH_COMMAND: sshCommand, GIT_TERMINAL_PROMPT: '0' },
+      });
+      let stderr = '';
+      proc.stderr.on('data', (c: Buffer) => { stderr += c.toString(); });
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`git fetch exit ${code}: ${stderr}`));
+      });
+    });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 }
 
 // ===========================================================================

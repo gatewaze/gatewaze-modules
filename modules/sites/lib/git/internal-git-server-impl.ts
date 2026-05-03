@@ -531,6 +531,43 @@ export class InternalGitServerImpl implements InternalGitServer {
       if (clone.exitCode !== 0) {
         throw new Error(`boilerplate clone failed: ${clone.stderr}`);
       }
+      // Validate gatewaze.theme.json parser version compatibility per spec §4.4
+      try {
+        const themePath = join(workTree, 'gatewaze.theme.json');
+        const fs = await import('node:fs/promises');
+        const themeRaw = await fs.readFile(themePath, 'utf8');
+        const theme = JSON.parse(themeRaw) as {
+          name?: string;
+          theme_kind?: string;
+          parser?: { marker_prefix?: string; min_parser_version?: string; max_parser_version?: string };
+        };
+        if (!theme.name || !theme.theme_kind || !theme.parser?.marker_prefix) {
+          throw new Error(
+            `gatewaze.theme.json invalid: required fields name, theme_kind, parser.marker_prefix missing`,
+          );
+        }
+        // Parser version compatibility check (§4.4)
+        const platformParserVersion = process.env.GATEWAZE_PARSER_VERSION ?? '1.0.0';
+        const min = theme.parser.min_parser_version;
+        const max = theme.parser.max_parser_version;
+        if (min && !semverGte(platformParserVersion, min)) {
+          throw new Error(
+            `theme requires parser ≥ ${min}; platform is ${platformParserVersion}. Upgrade gatewaze or pin the theme to an earlier compatible tag.`,
+          );
+        }
+        if (max && !semverLt(platformParserVersion, max)) {
+          throw new Error(
+            `theme declares max parser version ${max}; platform is ${platformParserVersion}. Upgrade the theme or downgrade gatewaze.`,
+          );
+        }
+      } catch (err) {
+        // Re-throw if it's a validation error; tolerate file-not-found
+        // (theme.json is only required for sites/newsletters boilerplates)
+        if (err instanceof Error && (err.message.includes('parser') || err.message.includes('theme.json invalid'))) {
+          throw err;
+        }
+        // File missing is OK — older boilerplates / non-theme repos
+      }
       // Customize package.json with the site name (best-effort)
       try {
         const pkgPath = join(workTree, 'package.json');
@@ -705,6 +742,28 @@ export function mountGitSmartProtocol(router: Router, deps: SmartProtocolDeps): 
 // IP CIDR helper (minimal — supports IPv4 /0, /8, /16, /24, /32)
 // Production should swap to a proper CIDR library (cidr-tools, netmask, etc.)
 // ---------------------------------------------------------------------------
+
+/**
+ * Minimal SemVer comparators for parser-version checks. Supports the
+ * standard major.minor.patch shape; throws on malformed input.
+ */
+function parseSemver(v: string): [number, number, number] {
+  const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-.+)?$/);
+  if (!m) throw new Error(`invalid semver: ${v}`);
+  return [parseInt(m[1] ?? '0', 10), parseInt(m[2] ?? '0', 10), parseInt(m[3] ?? '0', 10)];
+}
+
+export function semverGte(a: string, b: string): boolean {
+  const [a1, a2, a3] = parseSemver(a);
+  const [b1, b2, b3] = parseSemver(b);
+  if (a1 !== b1) return a1 > b1;
+  if (a2 !== b2) return a2 > b2;
+  return a3 >= b3;
+}
+
+export function semverLt(a: string, b: string): boolean {
+  return !semverGte(a, b);
+}
 
 function ipMatchesCidr(ip: string, cidr: string): boolean {
   const slash = cidr.indexOf('/');
