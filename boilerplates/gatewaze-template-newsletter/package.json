@@ -1,0 +1,13 @@
+{
+  "name": "gatewaze-template-newsletter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gatewaze default newsletter theme — MJML + 6 marked blocks + 2 wrappers. Forked at list-create time when no external git is configured.",
+  "scripts": {
+    "build": "mjml blocks/*.mjml wrappers/*.mjml -o dist/",
+    "preview": "open previews/sample-edition.html"
+  },
+  "devDependencies": {
+    "mjml": "^4.15.3"
+  }
+}

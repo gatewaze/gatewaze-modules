@@ -40,6 +40,15 @@ const newslettersModule: GatewazeModule = {
       schedule: { every: 60_000 },
       data: { kind: 'newsletter:helix-output-sync' },
     },
+    {
+      // Per spec-content-modules-git-architecture §15.4: snapshot editions
+      // <snapshot_delay_days> days post-send. Job is idempotent; running
+      // every 5 min picks up due editions promptly without spam.
+      name: 'newsletter-edition-snapshot',
+      queue: 'jobs',
+      schedule: { every: 5 * 60_000 },
+      data: { kind: 'newsletter:edition-snapshot' },
+    },
   ],
 
   dependencies: ['content-platform'],

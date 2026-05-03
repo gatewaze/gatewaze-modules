@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schemas.gatewaze.com/theme/v1.json",
+  "name": "Gatewaze Default Newsletter Theme",
+  "version": "1.0.0",
+  "theme_kind": "email",
+  "parser": {
+    "marker_prefix": "@gatewaze",
+    "min_parser_version": "1.0.0",
+    "max_parser_version": "2.0.0"
+  },
+  "tokens": {
+    "colors": {
+      "primary": "#0066ff",
+      "background": "#ffffff",
+      "foreground": "#1a1a1a",
+      "muted": "#737373"
+    },
+    "typography": {
+      "heading_font": "Inter, Helvetica, Arial, sans-serif",
+      "body_font": "Inter, Helvetica, Arial, sans-serif"
+    },
+    "max_email_width": "600px"
+  },
+  "block_categories": ["hero", "content", "cta", "media"],
+  "wrappers": {
+    "site_default": "default"
+  }
+}

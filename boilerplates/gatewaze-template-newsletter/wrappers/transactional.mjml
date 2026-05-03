@@ -1,0 +1,24 @@
+<!-- @gatewaze:wrapper name="transactional" role="site" -->
+<!--
+  Minimal transactional wrapper for system emails (welcome, receipts,
+  notifications). Stripped header/footer; no marketing chrome.
+-->
+<mjml>
+  <mj-head>
+    <mj-title>{{subject}}</mj-title>
+    <mj-attributes>
+      <mj-all font-family="{{theme.typography.body_font}}" />
+      <mj-text color="{{theme.colors.foreground}}" font-size="16px" line-height="24px" />
+    </mj-attributes>
+  </mj-head>
+  <mj-body background-color="#ffffff" width="600px">
+    {{>page_body}}
+    <mj-section padding="40px 0 20px">
+      <mj-column>
+        <mj-text align="center" color="{{theme.colors.muted}}" font-size="11px">
+          {{list_name}} &middot; {{address}}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

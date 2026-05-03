@@ -1,0 +1,13 @@
+<!-- @gatewaze:block name="feature-row" category="content" description="Image + text side-by-side" -->
+<mj-section>
+  <mj-column width="40%">
+    <mj-image src="{{image}}" alt="{{image_alt}}" />
+  </mj-column>
+  <mj-column width="60%" vertical-align="middle">
+    <mj-text font-size="20px" font-weight="600">{{title}}</mj-text>
+    <mj-text>{{description}}</mj-text>
+    {{#if cta_label}}
+      <mj-button href="{{cta_href}}" align="left" padding="10px 0 0 0">{{cta_label}}</mj-button>
+    {{/if}}
+  </mj-column>
+</mj-section>

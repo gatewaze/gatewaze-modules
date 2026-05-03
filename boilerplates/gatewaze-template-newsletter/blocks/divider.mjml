@@ -1,0 +1,6 @@
+<!-- @gatewaze:block name="divider" category="content" description="Horizontal rule separator" -->
+<mj-section padding="10px 0">
+  <mj-column>
+    <mj-divider border-color="#e5e5e5" border-width="1px" />
+  </mj-column>
+</mj-section>
