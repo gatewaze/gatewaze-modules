@@ -11,7 +11,7 @@
  * See spec-sites-module.md.
  */
 
-import type { GatewazeModule } from '@gatewaze/shared';
+import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
 
 const sitesModule: GatewazeModule = {
   id: 'sites',
@@ -57,6 +57,9 @@ const sitesModule: GatewazeModule = {
     'migrations/019_republish_log.sql',
     'migrations/020_boilerplate_versions.sql',
     'migrations/021_repo_advisory_lock.sql',
+    'migrations/022_menu_replace_items_rpc.sql',
+    'migrations/023_host_media_quota_decrement.sql',
+    'migrations/024_host_media_usage_rpcs.sql',
   ],
 
   crons: [
@@ -97,6 +100,12 @@ const sitesModule: GatewazeModule = {
       data: { kind: 'sites:media-usage-reconcile' },
     },
   ],
+
+  apiRoutes: async (app: unknown, context?: ModuleContext) => {
+    const { registerRoutes } = await import('./api/register-routes.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registerRoutes(app as any, context);
+  },
 
   adminRoutes: [
     { path: 'sites', component: () => import('./admin/pages/index'), requiredFeature: 'sites', guard: 'none' },

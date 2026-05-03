@@ -21,6 +21,7 @@
     "types/**/*.ts",
     "lib/**/*.ts",
     "api/**/*.ts",
+    "workers/**/*.ts",
     "admin/page-editor/**/*.tsx",
     "admin/schema-editor/**/*.{ts,tsx}"
   ],
@@ -29,6 +30,8 @@
     "node_modules",
     "**/*.test.ts",
     "**/__fixtures__/**",
-    "lib/parser/tsx-marker-parser-impl.ts"
+    "lib/parser/tsx-marker-parser-impl.ts",
+    "api/register-routes.ts",
+    "workers/cron-handlers.ts"
   ]
 }
