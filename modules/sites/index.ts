@@ -56,6 +56,46 @@ const sitesModule: GatewazeModule = {
     'migrations/018_compliance_columns.sql',
     'migrations/019_republish_log.sql',
     'migrations/020_boilerplate_versions.sql',
+    'migrations/021_repo_advisory_lock.sql',
+  ],
+
+  crons: [
+    {
+      // Per spec-content-modules-git-architecture §14.4: poll boilerplate
+      // GitHub Releases every 6h and cache latest tag in
+      // gatewaze_boilerplate_versions for the apply-theme UX.
+      name: 'sites-boilerplate-version-poll',
+      queue: 'jobs',
+      schedule: { every: 6 * 60 * 60 * 1000 },
+      data: { kind: 'sites:boilerplate-version-poll' },
+    },
+    {
+      // Per spec §6.7: scheduled republish for sites with publish_schedule_cron set.
+      // Job runs every minute; the worker checks each site's cron and triggers
+      // due publishes. Per-site cadence is enforced by the cron expression.
+      name: 'sites-scheduled-republish',
+      queue: 'jobs',
+      schedule: { every: 60_000 },
+      data: { kind: 'sites:scheduled-republish' },
+    },
+    {
+      // Per spec §6.4: drift watcher polls external git for `main` updates.
+      // Default platform-wide cadence is 15 min; per-site cadence configurable
+      // via sites.drift_watch_interval_ms (config TBD).
+      name: 'sites-drift-watcher',
+      queue: 'jobs',
+      schedule: { every: 15 * 60_000 },
+      data: { kind: 'sites:drift-watch' },
+    },
+    {
+      // Per spec §18.4: nightly reconciliation backstop for host_media.used_in
+      // — walks all content and rewrites used_in arrays from scratch. Drift
+      // fires an alert.
+      name: 'sites-media-usage-reconcile',
+      queue: 'jobs',
+      schedule: { every: 24 * 60 * 60 * 1000 },
+      data: { kind: 'sites:media-usage-reconcile' },
+    },
   ],
 
   adminRoutes: [

@@ -1,0 +1,6 @@
+<!-- @gatewaze:block name="button" category="cta" description="CTA button with label + href" -->
+<mj-section padding="10px 0">
+  <mj-column>
+    <mj-button href="{{href}}" font-weight="600">{{label}}</mj-button>
+  </mj-column>
+</mj-section>

@@ -1,0 +1,11 @@
+<!-- @gatewaze:block name="image" category="media" description="Full-width image with optional caption" -->
+<mj-section>
+  <mj-column>
+    <mj-image src="{{src}}" alt="{{alt}}" {{#if href}}href="{{href}}"{{/if}} />
+    {{#if caption}}
+      <mj-text align="center" color="{{theme.colors.muted}}" font-size="13px" padding-top="8px">
+        {{caption}}
+      </mj-text>
+    {{/if}}
+  </mj-column>
+</mj-section>

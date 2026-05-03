@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schemas.gatewaze.com/theme/v1.json",
+  "name": "Gatewaze Default Site Theme",
+  "version": "1.0.0",
+  "theme_kind": "website",
+  "parser": {
+    "marker_prefix": "@gatewaze",
+    "min_parser_version": "1.0.0",
+    "max_parser_version": "2.0.0"
+  },
+  "tokens": {
+    "colors": {
+      "primary": "#0066ff",
+      "primaryHover": "#0052cc",
+      "background": "#ffffff",
+      "foreground": "#0a0a0a",
+      "muted": "#737373",
+      "border": "#e5e5e5"
+    },
+    "typography": {
+      "heading_font": "Inter, system-ui, sans-serif",
+      "body_font": "Inter, system-ui, sans-serif"
+    },
+    "spacing": {
+      "max_content_width": "1200px"
+    }
+  },
+  "block_categories": ["hero", "content", "cta", "footer", "media"],
+  "wrappers": {
+    "site_default": "site",
+    "page_wrapper_defaults": [
+      { "path_prefix": "/docs/", "wrapper": "docs" },
+      { "path_prefix": "/marketing/", "wrapper": "marketing" },
+      { "path_prefix": "/", "wrapper": null }
+    ]
+  },
+  "supported_publishers": ["k8s", "cloudflare-pages", "netlify"]
+}
