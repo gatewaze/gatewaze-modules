@@ -32,6 +32,7 @@ import {
   ChevronUpIcon,
   MicrophoneIcon,
   ClipboardDocumentCheckIcon,
+  ArrowTopRightOnSquareIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { useForm } from 'react-hook-form';
@@ -67,6 +68,7 @@ import { EventQrService, EventRegistration, EventAttendance } from '@/utils/even
 import { useAuthContext } from '@/app/contexts/auth/context';
 import { ModuleSlot } from '@/components/ModuleSlot';
 import { getBrandId } from '@/utils/brandUtils';
+import { getPortalDomain } from '@/config/brands';
 import { AddPersonModal } from '@/components/events/AddPersonModal';
 import { BulkRegistrationUpload } from '@/components/events/BulkRegistrationUpload';
 import { BulkAttendanceUpload } from '@/components/events/BulkAttendanceUpload';
@@ -83,8 +85,36 @@ import { useContentCategories } from '@/hooks/useContentCategories';
 import { useModuleSlots, type ResolvedSlot } from '@/hooks/useModuleSlots';
 import { useModulesContext } from '@/app/contexts/modules/context';
 import { resolveHeroIcon } from '@/utils/heroIconResolver';
+import { EventVenueTab } from '../components/EventVenueTab';
 
 const ITEMS_PER_PAGE = 25;
+
+/**
+ * Image fields on events store one of three shapes:
+ *   1. Full URL — pasted into the URL input mode of EventImageUpload
+ *   2. /-prefixed site-rooted path — legacy values from manual edits
+ *   3. Bare Supabase storage path like "event-logos/n41qex-logo.jpg" —
+ *      what EventImageUpload returns after a successful upload (resolved
+ *      to a full URL at render time via toPublicUrl).
+ *
+ * The validator only rejects strings that look like URLs (contain "://")
+ * but fail to parse — anything else passes, since storage paths have no
+ * scheme and any further restriction would lock out legitimate uploads.
+ *
+ * Why this lives outside the yup schema: yup's `.test()` predicate signature
+ * is `function(value, ctx)` with `this` binding, so reusing the same logic
+ * across four fields needs a plain helper.
+ */
+function isValidImageRef(value: string | null | undefined): boolean {
+  if (!value || value.trim() === '') return true;
+  if (!value.includes('://')) return true; // path or relative URL — accept
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Form validation schema
 const eventSchema = yup.object({
@@ -112,6 +142,11 @@ const eventSchema = yup.object({
   pageContent: yup.string().optional().nullable(),
   venueContent: yup.string().optional().nullable(),
   venueMapImage: yup.string().optional().nullable(),
+  // nearbyHotels is a jsonb array of accommodation entries — validation
+  // happens at the editor level (see EventVenueTab/AddHotelForm). Yup is
+  // permissive here because the shape is best-effort and may evolve.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  nearbyHotels: yup.array().of(yup.mixed<any>()).optional(),
   addedpageContent: yup.string().optional().nullable(),
   addedpageTitle: yup.string().optional().nullable(),
   lumaEventId: yup.string().optional().nullable(),
@@ -121,26 +156,17 @@ const eventSchema = yup.object({
       return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(value.toLowerCase());
     }),
   sourceEventId: yup.string().optional().nullable(),
-  eventLogo: yup.string().optional().test('valid-url-or-path', 'Must be a valid URL or path', function(value) {
-    if (!value || value.trim() === '') return true;
-    if (value.startsWith('/')) return true;
-    try {
-      new URL(value);
-      return true;
-    } catch {
-      return false;
-    }
-  }),
-  badgeLogo: yup.string().optional().test('valid-url-or-path', 'Must be a valid URL or path', function(value) {
-    if (!value || value.trim() === '') return true;
-    if (value.startsWith('/')) return true;
-    try {
-      new URL(value);
-      return true;
-    } catch {
-      return false;
-    }
-  }),
+  // Image fields can hold three shapes (any of which is valid):
+  //   1. Full URL — pasted into the URL input mode of EventImageUpload
+  //   2. /-prefixed site-rooted path — legacy values from manual edits
+  //   3. Bare storage path like "event-logos/n41qex-logo.jpg" — what
+  //      EventImageUpload returns after a successful upload (the
+  //      Supabase storage relative path; resolved to a full URL at
+  //      render time via toPublicUrl).
+  // Reject only strings that look like URLs (contain "://") but fail
+  // to parse — anything else passes (storage paths have no scheme).
+  eventLogo: yup.string().optional().test('valid-image-ref', 'Must be a valid URL or upload path', isValidImageRef),
+  badgeLogo: yup.string().optional().test('valid-image-ref', 'Must be a valid URL or upload path', isValidImageRef),
   eventSlug: yup.string().optional().nullable().test('valid-slug', 'Slug must be lowercase letters, numbers, and hyphens only', function(value) {
     if (!value || value.trim() === '') return true;
     return /^[a-z0-9-]+$/.test(value);
@@ -150,24 +176,9 @@ const eventSchema = yup.object({
   eventLatitude: yup.number().optional().nullable(),
   eventLongitude: yup.number().optional().nullable(),
   eventSource: yup.string().optional(),
-  eventFeaturedImage: yup.string().optional().nullable().test('valid-url-or-empty', 'Must be a valid URL', function(value) {
-    if (!value || value.trim() === '') return true;
-    try {
-      new URL(value);
-      return true;
-    } catch {
-      return false;
-    }
-  }),
-  screenshotUrl: yup.string().optional().nullable().test('valid-url-or-empty', 'Must be a valid URL', function(value) {
-    if (!value || value.trim() === '') return true;
-    try {
-      new URL(value);
-      return true;
-    } catch {
-      return false;
-    }
-  }),
+  // Same shape as eventLogo / badgeLogo — see isValidImageRef.
+  eventFeaturedImage: yup.string().optional().nullable().test('valid-image-ref', 'Must be a valid URL or upload path', isValidImageRef),
+  screenshotUrl: yup.string().optional().nullable().test('valid-image-ref', 'Must be a valid URL or upload path', isValidImageRef),
   accountId: yup.string().optional().nullable(),
   recommendedEventId: yup.string().optional().nullable(),
   gradientColor1: yup.string().optional().nullable().test('valid-hex', 'Must be a valid hex color', function(value) {
@@ -212,6 +223,7 @@ const EventDetailPage = () => {
     const ic = "size-4";
     const core = [
       { id: 'settings', label: 'Settings', icon: <Cog6ToothIcon className={ic} />, order: 0 },
+      { id: 'venue', label: 'Venue', icon: <MapPinIcon className={ic} />, order: 10 },
       { id: 'registrations', label: 'Registrations', icon: <ClipboardDocumentCheckIcon className={ic} />, order: 70 },
       { id: 'attendance', label: 'Attendance', icon: <UsersIcon className={ic} />, order: 80 },
     ];
@@ -415,6 +427,7 @@ const EventDetailPage = () => {
       pageContent: eventData.pageContent || '',
       venueContent: eventData.venueContent || '',
       venueMapImage: eventData.venueMapImage || '',
+      nearbyHotels: eventData.nearbyHotels || [],
       addedpageContent: eventData.addedpageContent || '',
       addedpageTitle: eventData.addedpageTitle || '',
       lumaEventId: eventData.lumaEventId || '',
@@ -425,8 +438,8 @@ const EventDetailPage = () => {
       eventSlug: eventData.eventSlug || '',
       eventLocation: eventData.eventLocation || '',
       venueAddress: eventData.venueAddress || '',
-      eventLatitude: eventData.eventLatitude || null,
-      eventLongitude: eventData.eventLongitude || null,
+      eventLatitude: eventData.eventLatitude ?? null,
+      eventLongitude: eventData.eventLongitude ?? null,
       eventSource: eventData.eventSource || '',
       eventFeaturedImage: eventData.eventFeaturedImage || '',
       screenshotUrl: eventData.screenshotUrl || '',
@@ -476,6 +489,7 @@ const EventDetailPage = () => {
         pageContent: data.pageContent || null,
         venueContent: data.venueContent || null,
         venueMapImage: data.venueMapImage || null,
+        nearbyHotels: (data as { nearbyHotels?: Event['nearbyHotels'] }).nearbyHotels || [],
         addedpageContent: data.addedpageContent || null,
         addedpageTitle: data.addedpageTitle || null,
         lumaEventId: data.lumaEventId || null,
@@ -486,8 +500,8 @@ const EventDetailPage = () => {
         eventSlug: data.eventSlug || null,
         eventLocation: data.eventLocation || null,
         venueAddress: data.venueAddress || null,
-        eventLatitude: data.eventLatitude || null,
-        eventLongitude: data.eventLongitude || null,
+        eventLatitude: data.eventLatitude ?? null,
+        eventLongitude: data.eventLongitude ?? null,
         eventSource: data.eventSource || null,
         eventFeaturedImage: data.eventFeaturedImage || null,
         // Only update screenshotUrl if the value changed from the original
@@ -642,6 +656,29 @@ const EventDetailPage = () => {
           </button>
         </div>
 
+        {/* View on portal — opens the public event page in a new tab.
+            Honours custom domain when set + verified, otherwise falls back
+            to the brand portal at /events/<eventId>. Uses http:// for
+            *.localhost domains so local dev works (no TLS); https://
+            everywhere else. */}
+        <div className="absolute top-6 z-10" style={{ right: 'calc(var(--margin-x) + 1.5rem)' }}>
+          <a
+            href={(() => {
+              const host = event.customDomain && event.customDomainStatus === 'active'
+                ? event.customDomain
+                : `${getPortalDomain()}/events/${event.eventId}`;
+              const isLocal = /(^|\.)localhost(:|$|\/)/.test(host) || host.includes('://localhost');
+              return `${isLocal ? 'http' : 'https'}://${host}`;
+            })()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md bg-white/90 backdrop-blur-md border border-white/40 text-gray-900 shadow-sm hover:bg-white transition-colors"
+          >
+            <ArrowTopRightOnSquareIcon className="size-4" />
+            View on portal
+          </a>
+        </div>
+
         {/* Event Title and Info - Enhanced typography */}
         <div className="absolute bottom-0 left-0 right-0" style={{ padding: '0 calc(var(--margin-x) + 1.5rem) 1.75rem' }}>
           {/* Event type pill */}
@@ -783,6 +820,65 @@ const EventDetailPage = () => {
               qrCodeDataUrl={qrCodeDataUrl}
               eventTypes={eventTypes}
               contentCategories={contentCategories}
+            />
+          </div>
+        )}
+
+        {activeTab === 'venue' && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-gradient-to-br from-green-100 to-green-200 dark:from-green-900/40 dark:to-green-800/40 rounded-xl">
+                  <MapPinIcon className="w-5 h-5 text-[var(--green-11)]" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-[var(--gray-12)] tracking-tight">
+                    Venue
+                  </h3>
+                  <p className="text-sm text-[var(--gray-a11)]">
+                    {isEditMode ? 'Edit venue details, floor plan, and nearby accommodation' : 'Manage venue location, content, and nearby hotels'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                {isEditMode ? (
+                  <>
+                    <Button variant="soft" color="gray" onClick={handleEditToggle} disabled={isSaving}>
+                      <XMarkIcon className="w-4 h-4" />
+                      Cancel
+                    </Button>
+                    <Button variant="solid" onClick={handleSubmit(onSubmit as any, (validationErrors) => {
+                        const firstError = Object.values(validationErrors)[0];
+                        toast.error(firstError?.message || 'Please fix form errors before saving');
+                      })} disabled={isSaving}>
+                      {isSaving ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <CheckIcon className="w-4 h-4" />
+                          Save Changes
+                        </>
+                      )}
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="solid" onClick={handleEditToggle}>
+                    <PencilIcon className="w-4 h-4" />
+                    Edit Venue
+                  </Button>
+                )}
+              </div>
+            </div>
+            <EventVenueTab
+              event={event}
+              isEditMode={isEditMode}
+              register={register}
+              errors={errors}
+              watch={watch}
+              setValue={setValue}
             />
           </div>
         )}
@@ -1043,21 +1139,7 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
                 </div>
               )}
 
-              {isEditMode ? (
-                <Input
-                  label="Venue Address"
-                  {...register('venueAddress')}
-                  error={errors.venueAddress?.message}
-                  placeholder="e.g. Computer History Museum, 1401 N Shoreline Blvd"
-                />
-              ) : (
-                <div>
-                  <label className="block text-sm font-medium text-[var(--gray-11)] mb-1">
-                    Venue Address
-                  </label>
-                  <p className="text-[var(--gray-12)]">{event.venueAddress || 'N/A'}</p>
-                </div>
-              )}
+              {/* Venue Address moved to the Venue tab */}
 
               <div className="grid grid-cols-2 gap-4">
                 {isEditMode ? (
@@ -1327,64 +1409,7 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
           </div>
         </Card>
 
-        {/* Venue Details - Rich Text Editor + Map Image */}
-        <Card className="overflow-hidden border-0 shadow-sm hover:shadow-md transition-shadow duration-300">
-          <div className="p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                <MapPinIcon className="w-5 h-5 text-[var(--green-11)]" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-[var(--gray-12)]">
-                  Venue Details
-                </h3>
-                <span className="text-xs text-[var(--gray-a11)]">
-                  Parking, transport, directions — shown on venue page
-                </span>
-              </div>
-            </div>
-            {isEditMode ? (
-              <>
-                <RichTextEditor
-                  content={watch('venueContent') || ''}
-                  onChange={(content: string) => setValue('venueContent', content, { shouldDirty: true })}
-                  placeholder="Write venue details (parking, transport, accessibility info)..."
-                />
-                <div className="mt-4">
-                  <label className="block text-sm font-medium text-[var(--gray-11)] mb-2">
-                    Indoor Venue Map / Floor Plan
-                  </label>
-                  <EventImageUpload
-                    value={watch('venueMapImage') || undefined}
-                    onChange={(url) => setValue('venueMapImage', url || '', { shouldDirty: true })}
-                    eventId={event.eventId}
-                    type="logo"
-                    label="Upload floor plan image"
-                  />
-                </div>
-              </>
-            ) : (
-              <div>
-                {event.venueContent ? (
-                  <div
-                    className="prose prose-sm max-w-none dark:prose-invert"
-                    dangerouslySetInnerHTML={{ __html: event.venueContent }}
-                  />
-                ) : (
-                  <p className="text-sm text-[var(--gray-a11)] italic">
-                    No venue details configured.
-                  </p>
-                )}
-                {event.venueMapImage && (
-                  <div className="mt-4">
-                    <p className="text-sm font-medium text-[var(--gray-11)] mb-2">Floor Plan</p>
-                    <img src={event.venueMapImage} alt="Venue map" className="max-w-full rounded-lg border border-[var(--gray-a6)]" />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </Card>
+        {/* Venue Details moved to the Venue tab */}
 
         {/* Added Page Content - Rich Text Editor */}
         <Card className="overflow-hidden border-0 shadow-sm hover:shadow-md transition-shadow duration-300">

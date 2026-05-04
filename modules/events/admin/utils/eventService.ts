@@ -128,10 +128,39 @@ export interface Event {
   // Venue page content
   venueContent?: string | null;
   venueMapImage?: string | null;
+  // Nearby accommodation — geocoded at admin save time, rendered on the
+  // venue page sorted ascending by distance from (eventLatitude, eventLongitude).
+  nearbyHotels?: NearbyHotel[] | null;
   // Added page content (configurable title, e.g. Workshops)
   addedpageContent?: string | null;
   addedpageTitle?: string | null;
   eventDescription?: string | null;
+}
+
+/**
+ * One nearby hotel / accommodation entry. Persisted as a JSONB array on
+ * events.nearby_hotels (migration events_012_nearby_hotels).
+ *
+ * lat/lng are populated by Nominatim at save time from `postcode`. driveSeconds
+ * + driveDistanceMeters come from OSRM (best-effort — null if the routing
+ * lookup failed) and represent the route from the hotel to the event venue.
+ */
+export interface NearbyHotel {
+  /** Stable client-generated id (used as React key). */
+  id: string;
+  name: string;
+  /** UK postcode or US ZIP code — geocoder accepts both. */
+  postcode: string;
+  url?: string | null;
+  /** Free-form, e.g. "£70–£120/night" or "$$". */
+  priceRange?: string | null;
+  lat: number | null;
+  lng: number | null;
+  geocodedAt?: string | null;
+  /** Driving time hotel → venue, in seconds. Null when OSRM lookup failed. */
+  driveSeconds?: number | null;
+  /** Driving distance hotel → venue via the road network, in metres. */
+  driveDistanceMeters?: number | null;
 }
 
 export interface EventServiceResponse<T = any> {
@@ -228,6 +257,7 @@ export class EventService {
         recommendedEventId: data.recommended_event_id || null,
         venueContent: data.venue_content || null,
         venueMapImage: (toPublicUrl(data.venue_map_image, BUCKET_URL) ?? undefined),
+        nearbyHotels: Array.isArray(data.nearby_hotels) ? data.nearby_hotels : [],
         addedpageContent: data.addedpage_content || null,
         addedpageTitle: data.addedpage_title || null,
       };
@@ -329,6 +359,7 @@ export class EventService {
         recommendedEventId: data.recommended_event_id || null,
         venueContent: data.venue_content || null,
         venueMapImage: (toPublicUrl(data.venue_map_image, BUCKET_URL) ?? undefined),
+        nearbyHotels: Array.isArray(data.nearby_hotels) ? data.nearby_hotels : [],
         addedpageContent: data.addedpage_content || null,
         addedpageTitle: data.addedpage_title || null,
       };
@@ -654,6 +685,10 @@ static async createEvent(eventData: Omit<Event, 'id' | 'createdAt' | 'updatedAt'
       if (eventData.eventRegion !== undefined) updateData.event_region = eventData.eventRegion || null;
       if (eventLocation !== undefined) updateData.event_location = eventLocation || null;
       if (eventData.venueAddress !== undefined) updateData.venue_address = eventData.venueAddress || null;
+      // Use ?? not || so 0/negative coordinates round-trip (the equator is
+      // a real place, and most of the western/southern hemisphere is < 0).
+      if (eventData.eventLatitude !== undefined) updateData.event_latitude = eventData.eventLatitude ?? null;
+      if (eventData.eventLongitude !== undefined) updateData.event_longitude = eventData.eventLongitude ?? null;
       if (eventData.eventTopicsUpdatedAt !== undefined) updateData.event_topics_updated_at = eventData.eventTopicsUpdatedAt || null;
       if (eventData.eventType !== undefined) updateData.event_type = eventData.eventType || null;
       if (eventData.contentCategory !== undefined) updateData.content_category = eventData.contentCategory || null;
@@ -714,6 +749,7 @@ static async createEvent(eventData: Omit<Event, 'id' | 'createdAt' | 'updatedAt'
       if (eventData.recommendedEventId !== undefined) updateData.recommended_event_id = eventData.recommendedEventId || null;
       if (eventData.venueContent !== undefined) updateData.venue_content = eventData.venueContent || null;
       if (eventData.venueMapImage !== undefined) updateData.venue_map_image = eventData.venueMapImage || null;
+      if (eventData.nearbyHotels !== undefined) updateData.nearby_hotels = eventData.nearbyHotels || [];
       if (eventData.addedpageContent !== undefined) updateData.addedpage_content = eventData.addedpageContent || null;
       if (eventData.addedpageTitle !== undefined) updateData.addedpage_title = eventData.addedpageTitle || null;
 
