@@ -11,6 +11,21 @@ import { EventExportService } from '@/utils/eventExportService';
 // as relative values are resolved through this base at read time.
 const BUCKET_URL = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/media`;
 
+// The events table carries a legacy `custom_domain_status` column that nothing
+// keeps in sync — it gets stamped 'pending' on save and is never advanced. The
+// authoritative state lives in `public.custom_domains` (managed by the
+// custom-domains module + its controller). Look it up by domain string and
+// fall back to the legacy column only when there's no registry row.
+async function loadCustomDomainStatus(domain: string | null | undefined): Promise<string | null> {
+  if (!domain) return null;
+  const { data } = await supabase
+    .from('custom_domains')
+    .select('status')
+    .eq('domain', domain)
+    .maybeSingle();
+  return (data?.status as string | undefined) ?? null;
+}
+
 export interface Event {
   id?: string;
   eventId: string;
@@ -143,6 +158,8 @@ export class EventService {
         return { success: false, error: error.message };
       }
 
+      const liveDomainStatus = await loadCustomDomainStatus(data.custom_domain);
+
       // Map database fields to Event interface
       const event: Event = {
         id: data.id,
@@ -191,7 +208,7 @@ export class EventService {
         enableAgenda: data.enable_agenda || false,
         lumaEventId: data.luma_event_id,
         customDomain: data.custom_domain,
-        customDomainStatus: data.custom_domain_status,
+        customDomainStatus: liveDomainStatus ?? data.custom_domain_status,
         sourceEventId: data.source_event_id,
         eventLatitude: data.event_latitude,
         eventLongitude: data.event_longitude,
@@ -242,6 +259,8 @@ export class EventService {
         return { success: false, error: error.message };
       }
 
+      const liveDomainStatus = await loadCustomDomainStatus(data.custom_domain);
+
       // Map database fields to Event interface
       const event: Event = {
         id: data.id,
@@ -290,7 +309,7 @@ export class EventService {
         enableAgenda: data.enable_agenda || false,
         lumaEventId: data.luma_event_id,
         customDomain: data.custom_domain,
-        customDomainStatus: data.custom_domain_status,
+        customDomainStatus: liveDomainStatus ?? data.custom_domain_status,
         sourceEventId: data.source_event_id,
         eventLatitude: data.event_latitude,
         eventLongitude: data.event_longitude,
@@ -681,7 +700,9 @@ static async createEvent(eventData: Omit<Event, 'id' | 'createdAt' | 'updatedAt'
       if (eventData.enableAgenda !== undefined) updateData.enable_agenda = eventData.enableAgenda;
       if (eventData.lumaEventId !== undefined) updateData.luma_event_id = eventData.lumaEventId || null;
       if (eventData.customDomain !== undefined) updateData.custom_domain = eventData.customDomain || null;
-      if (eventData.customDomainStatus !== undefined) updateData.custom_domain_status = eventData.customDomainStatus || null;
+      // events.custom_domain_status is no longer authoritative — UI reads
+      // status from the custom_domains registry. Don't write the legacy
+      // column from here.
       if (eventData.sourceEventId !== undefined) updateData.source_event_id = eventData.sourceEventId || null;
       if (eventData.eventSlug !== undefined) updateData.event_slug = eventData.eventSlug || null;
       if (eventData.gradientColor1 !== undefined) updateData.gradient_color_1 = eventData.gradientColor1 || null;
