@@ -974,10 +974,22 @@ const getAbsoluteImageUrl = (url: string | undefined): string | undefined => {
     return url;
   }
 
-  // If it's a relative path, prepend the base URL
+  // Leading-slash paths point at the portal site (legacy uploads served
+  // by the portal app, not Supabase storage).
   if (url.startsWith('/')) {
     const portalDomain = import.meta.env.VITE_PORTAL_DOMAIN || 'gatewaze.io';
     return `https://${portalDomain}${url}`;
+  }
+
+  // Bare relative paths like "event-logos/9ej2d3-logo.jpg" are Supabase
+  // storage object keys. eventService maps them through toPublicUrl() at
+  // fetch time, but a few code paths (form-state values, recent uploads)
+  // surface the raw key here. Resolve against the project's public bucket
+  // so the browser doesn't try `${currentOrigin}/<route>/event-logos/...`
+  // and 404 on the SPA shell.
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  if (supabaseUrl) {
+    return `${supabaseUrl}/storage/v1/object/public/media/${url}`;
   }
 
   return url;
