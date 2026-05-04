@@ -14,8 +14,8 @@
 --   - edit    = event admin (single role for now; finer-grained roles later)
 --   - publish = event admin
 --
--- accepted_theme_kinds=['html'] only; events can host HTML-kind page content
--- (block-list editor) but NOT Next.js pages — the schema-driven flow is
+-- accepted_theme_kinds=['email'] only; events host email-kind page content
+-- (block-list editor) but NOT website pages — the schema-driven flow is
 -- gated to top-level sites for now.
 -- ============================================================================
 
@@ -38,7 +38,7 @@ VALUES (
   'public.can_admin_event',
   'public.can_admin_event',
   null,
-  ARRAY['html']::text[],
+  ARRAY['email']::text[],
   true
 )
 ON CONFLICT (host_kind) DO UPDATE SET
