@@ -67,6 +67,15 @@ export function EventVenueTab({ event, isEditMode, register, errors, watch, setV
 
   return (
     <div className="space-y-6">
+      {/*
+        Register `nearbyHotels` as a hidden field so the array round-trips
+        through react-hook-form's submit `data`. setValue() alone updates
+        internal state but RHF only emits values for *registered* fields
+        in the onSubmit payload — without this hidden input, every save
+        wrote `nearby_hotels: []` regardless of what the user added.
+      */}
+      <input type="hidden" {...register('nearbyHotels')} />
+
       {/* Address + coords */}
       <Card className="overflow-hidden border-0 shadow-sm hover:shadow-md transition-shadow duration-300">
         <div className="p-6">
