@@ -480,7 +480,6 @@ const EventDetailPage = () => {
         addedpageTitle: data.addedpageTitle || null,
         lumaEventId: data.lumaEventId || null,
         customDomain: data.customDomain || null,
-        customDomainStatus: (data.customDomain || null) !== (event?.customDomain || null) ? 'pending' : undefined,
         sourceEventId: data.sourceEventId || null,
         eventLogo: data.eventLogo || null,
         badgeLogo: data.badgeLogo || null,
