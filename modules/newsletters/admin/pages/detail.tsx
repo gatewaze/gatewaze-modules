@@ -204,56 +204,394 @@ export default function NewsletterDetailPage() {
   );
 }
 
-// Inline template tab — embeds the existing template management
+/** Narrow shape for the templates_sources rows we read in this tab. Mirrors
+ *  the SELECT in `reload()` below — keep in sync if columns change. */
+interface TemplatesSourceRow {
+  id: string;
+  kind: 'git' | 'upload' | 'inline';
+  label: string;
+  status: 'active' | 'paused' | 'errored';
+  url: string | null;
+  branch: string | null;
+  manifest_path: string | null;
+  installed_git_sha: string | null;
+  available_git_sha: string | null;
+  last_checked_at: string | null;
+  last_check_error: string | null;
+  created_at: string;
+}
+
+// Template tab content. Per spec-content-modules-git-architecture §6, every
+// newsletter is backed by a real git repo (internal or external). The Source
+// section lets the admin configure an external git source; the Block
+// Templates list shows what's currently parsed in (irrespective of the
+// source kind that produced them — git, upload, or inline).
 function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: string; newsletterSlug: string }) {
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<any[]>([]);
+  const [sources, setSources] = useState<TemplatesSourceRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showGitForm, setShowGitForm] = useState(false);
 
-  useEffect(() => {
-    // templates_block_defs uses `key` instead of legacy `block_type`. We
-    // alias it back so the JSX below (and the route navigation) keeps
-    // referencing block.block_type without further changes.
-    supabase.from('templates_block_defs')
-      .select('id, key, name, block_type:key')
-      .eq('library_id', newsletterId)
-      .order('key')
-      .then(({ data }) => { setBlocks(data || []); setLoading(false); });
+  const reload = useCallback(async () => {
+    const [blocksRes, sourcesRes] = await Promise.all([
+      // templates_block_defs uses `key`; alias it back so the click navigation
+      // can keep referencing block.block_type.
+      supabase.from('templates_block_defs')
+        .select('id, key, name, block_type:key')
+        .eq('library_id', newsletterId)
+        .order('key'),
+      supabase.from('templates_sources')
+        .select('id, kind, label, status, url, branch, manifest_path, last_applied_sha, last_check_error, created_at')
+        .eq('library_id', newsletterId)
+        .order('created_at', { ascending: false }),
+    ]);
+    setBlocks(blocksRes.data || []);
+    setSources(sourcesRes.data || []);
+    setLoading(false);
   }, [newsletterId]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  // Realtime: when the drift-monitor worker updates a templates_sources
+  // row (last_checked_at, available_git_sha, installed_git_sha, status,
+  // last_check_error), refresh both lists. Filtered server-side to this
+  // newsletter's library so we don't get a re-render every time another
+  // brand's source ticks.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`templates_sources:library=${newsletterId}`)
+      .on(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // Supabase's .on() overloads narrow `event` to a small union per
+        // the channel kind, but the SDK doesn't expose the discriminator
+        // reliably for `postgres_changes` from realtime-js v2. Cast at the
+        // call site keeps everything else strongly typed.
+        'postgres_changes' as any,
+        { event: '*', schema: 'public', table: 'templates_sources', filter: `library_id=eq.${newsletterId}` },
+        () => { reload(); },
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [newsletterId, reload]);
 
   if (loading) return <div className="flex justify-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--accent-9)]" /></div>;
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-[var(--gray-12)]">Block Templates</h2>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate(`/newsletters/templates/${newsletterSlug}/upload`)}>
-            Upload HTML
-          </Button>
+    <div className="space-y-8">
+      {/* Source section — git repo / uploads provenance */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-lg font-semibold text-[var(--gray-12)]">Source</h2>
+            <p className="text-xs text-[var(--gray-9)] mt-0.5">
+              Where this newsletter&apos;s templates come from. Connect a git repo for version-controlled templates, or upload a one-off HTML file.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowGitForm((v) => !v)}>
+              {showGitForm ? 'Cancel' : 'Connect git repo'}
+            </Button>
+            <Button variant="outline" onClick={() => navigate(`/newsletters/templates/${newsletterSlug}/upload`)}>
+              Upload HTML
+            </Button>
+          </div>
         </div>
-      </div>
 
-      {blocks.length === 0 ? (
-        <div className="text-center py-12 text-[var(--gray-9)]">
-          <RectangleGroupIcon className="h-12 w-12 mx-auto mb-3 text-[var(--gray-8)]" />
-          <p className="mb-2">No templates yet</p>
-          <p className="text-sm">Upload an HTML template to get started.</p>
+        {showGitForm && (
+          <ConfigureGitSourceForm
+            libraryId={newsletterId}
+            onSaved={() => { setShowGitForm(false); reload(); }}
+          />
+        )}
+
+        {sources.length === 0 ? (
+          <div className="text-sm text-[var(--gray-9)] italic mt-3">No sources configured yet.</div>
+        ) : (
+          <ul className="space-y-2 mt-3">
+            {sources.map((s) => (
+              <SourceRow key={s.id} source={s} onChanged={reload} />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Block Templates list (existing) */}
+      <section>
+        <h2 className="text-lg font-semibold text-[var(--gray-12)] mb-3">Block Templates</h2>
+        {blocks.length === 0 ? (
+          <div className="text-center py-12 text-[var(--gray-9)]">
+            <RectangleGroupIcon className="h-12 w-12 mx-auto mb-3 text-[var(--gray-8)]" />
+            <p className="mb-2">No templates yet</p>
+            <p className="text-sm mb-4">Connect a git repo above, upload an HTML template, or start from the Gatewaze boilerplate.</p>
+            <SeedFromBoilerplateButton libraryId={newsletterId} onSeeded={reload} />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {blocks.map(block => (
+              <div
+                key={block.id}
+                className="p-4 border border-[var(--gray-a5)] rounded-lg hover:bg-[var(--gray-a2)] cursor-pointer transition-colors"
+                onClick={() => navigate(`/newsletters/templates/${newsletterSlug}/blocks/${block.block_type}`)}
+              >
+                <p className="text-sm font-medium text-[var(--gray-12)]">{block.name}</p>
+                <p className="text-xs text-[var(--gray-9)] mt-0.5">{block.block_type}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/**
+ * Single-row card for a configured templates source. Shows status, drift
+ * indicator (when cron noticed upstream changes), and per-source actions:
+ * "Check now" forces an immediate poll, "Apply" pulls drifted changes
+ * through to templates_block_defs.
+ */
+function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onChanged: () => void }) {
+  const [busy, setBusy] = useState<'check' | 'apply' | null>(null);
+  const isDrifted = s.kind === 'git' && !!s.available_git_sha && s.available_git_sha !== s.installed_git_sha;
+
+  const callRoute = async (path: string, label: string) => {
+    setBusy(label === 'Checking…' ? 'check' : 'apply');
+    try {
+      const session = await supabase.auth.getSession();
+      const accessToken = session.data.session?.access_token;
+      const res = await fetch(`/api/modules/templates/sources/${s.id}/${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: accessToken ? `Bearer ${accessToken}` : '',
+        },
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(body?.error?.message ?? `Request failed (${res.status})`);
+        return;
+      }
+      toast.success(label === 'Checking…' ? 'Source checked' : 'Applied');
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Request failed');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <li className="p-3 border border-[var(--gray-a5)] rounded-lg flex items-start justify-between gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium text-[var(--gray-12)]">{s.label}</span>
+          <Badge variant="soft" color={s.status === 'active' ? 'green' : s.status === 'errored' ? 'red' : 'gray'}>{s.status}</Badge>
+          <Badge variant="soft">{s.kind}</Badge>
+          {isDrifted && <Badge variant="soft" color="amber">Update available</Badge>}
         </div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {blocks.map(block => (
-            <div
-              key={block.id}
-              className="p-4 border border-[var(--gray-a5)] rounded-lg hover:bg-[var(--gray-a2)] cursor-pointer transition-colors"
-              onClick={() => navigate(`/newsletters/templates/${newsletterSlug}/blocks/${block.block_type}`)}
+        {s.kind === 'git' && s.url && (
+          <p className="text-xs text-[var(--gray-9)] mt-1 truncate">
+            {s.url}{s.branch ? ` · branch ${s.branch}` : ''}{s.manifest_path ? ` · path ${s.manifest_path}` : ''}
+          </p>
+        )}
+        {s.installed_git_sha && (
+          <p className="text-xs text-[var(--gray-a11)] mt-0.5">
+            Installed: <code>{s.installed_git_sha.slice(0, 8)}</code>
+            {isDrifted && <> → available: <code className="text-[var(--amber-11)]">{s.available_git_sha.slice(0, 8)}</code></>}
+          </p>
+        )}
+        {s.last_checked_at && (
+          <p className="text-xs text-[var(--gray-a11)] mt-0.5">
+            Last checked: {new Date(s.last_checked_at).toLocaleString()}
+          </p>
+        )}
+        {s.last_check_error && (
+          <p className="text-xs text-[var(--red-11)] mt-0.5">{s.last_check_error}</p>
+        )}
+      </div>
+      {s.kind === 'git' && (
+        <div className="flex flex-col gap-1.5 shrink-0">
+          <Button
+            variant="outline"
+            size="1"
+            onClick={() => callRoute('check', 'Checking…')}
+            disabled={busy !== null}
+          >
+            {busy === 'check' ? 'Checking…' : 'Check now'}
+          </Button>
+          {isDrifted && (
+            <Button
+              variant="solid"
+              size="1"
+              onClick={() => callRoute('apply', 'Applying…')}
+              disabled={busy !== null}
             >
-              <p className="text-sm font-medium text-[var(--gray-12)]">{block.name}</p>
-              <p className="text-xs text-[var(--gray-9)] mt-0.5">{block.block_type}</p>
-            </div>
-          ))}
+              {busy === 'apply' ? 'Applying…' : 'Apply'}
+            </Button>
+          )}
         </div>
       )}
-    </div>
+    </li>
+  );
+}
+
+/**
+ * One-click seed-from-boilerplate button. Per spec-content-modules-git-
+ * architecture §5: when no source is configured, the admin can clone the
+ * canonical Gatewaze boilerplate (or the operator's override) with a
+ * single click. POSTs to /libraries/:id/seed-from-boilerplate which
+ * dereferences GATEWAZE_NEWSLETTER_BOILERPLATE_URL server-side.
+ */
+function SeedFromBoilerplateButton({ libraryId, onSeeded }: { libraryId: string; onSeeded: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const handleClick = async () => {
+    setBusy(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const accessToken = session.data.session?.access_token;
+      const res = await fetch(`/api/modules/templates/libraries/${libraryId}/seed-from-boilerplate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: accessToken ? `Bearer ${accessToken}` : '',
+        },
+        body: JSON.stringify({ host_kind: 'newsletter' }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(body?.error?.message ?? `Boilerplate seed failed (${res.status})`);
+        return;
+      }
+      toast.success(`Imported ${body?.apply?.artifacts?.length ?? 0} template(s) from boilerplate`);
+      onSeeded();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Boilerplate seed failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button variant="solid" onClick={handleClick} disabled={busy}>
+      {busy ? 'Importing…' : 'Start from boilerplate'}
+    </Button>
+  );
+}
+
+/**
+ * Inline form for connecting a git repo as a templates source.
+ * Calls POST /api/modules/templates/sources with kind='git'.
+ */
+function ConfigureGitSourceForm({ libraryId, onSaved }: { libraryId: string; onSaved: () => void }) {
+  const [url, setUrl] = useState('');
+  const [branch, setBranch] = useState('');
+  const [manifestPath, setManifestPath] = useState('');
+  const [token, setToken] = useState('');
+  const [label, setLabel] = useState('Theme repo');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!url.trim()) {
+      toast.error('Repository URL is required');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const accessToken = session.data.session?.access_token;
+      const res = await fetch('/api/modules/templates/sources', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: accessToken ? `Bearer ${accessToken}` : '',
+        },
+        body: JSON.stringify({
+          library_id: libraryId,
+          kind: 'git',
+          label: label.trim() || 'Theme repo',
+          url: url.trim(),
+          branch: branch.trim() || undefined,
+          manifest_path: manifestPath.trim() || undefined,
+          token: token.trim() || undefined,
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = body?.error?.message ?? `Request failed (${res.status})`;
+        toast.error(message);
+        return;
+      }
+      toast.success(`Connected — ${body?.apply?.artifacts?.length ?? 0} template(s) imported`);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to connect git source');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="p-4 border border-[var(--gray-a5)] rounded-lg space-y-3 mb-3 bg-[var(--gray-a2)]">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-[var(--gray-11)] mb-1">Label</label>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="w-full px-2 py-1.5 text-sm border border-[var(--gray-a6)] rounded bg-[var(--color-background)]"
+            placeholder="Theme repo"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-[var(--gray-11)] mb-1">Repository URL <span className="text-[var(--red-11)]">*</span></label>
+          <input
+            type="text"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            className="w-full px-2 py-1.5 text-sm border border-[var(--gray-a6)] rounded bg-[var(--color-background)]"
+            placeholder="https://github.com/owner/repo.git"
+            required
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-[var(--gray-11)] mb-1">Branch</label>
+          <input
+            type="text"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            className="w-full px-2 py-1.5 text-sm border border-[var(--gray-a6)] rounded bg-[var(--color-background)]"
+            placeholder="main"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-[var(--gray-11)] mb-1">Templates path (optional)</label>
+          <input
+            type="text"
+            value={manifestPath}
+            onChange={(e) => setManifestPath(e.target.value)}
+            className="w-full px-2 py-1.5 text-sm border border-[var(--gray-a6)] rounded bg-[var(--color-background)]"
+            placeholder="templates/email"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-[var(--gray-11)] mb-1">Personal access token (private repos only)</label>
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            className="w-full px-2 py-1.5 text-sm border border-[var(--gray-a6)] rounded bg-[var(--color-background)]"
+            placeholder="ghp_… (leave blank for public repos)"
+            autoComplete="off"
+          />
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Button type="submit" disabled={submitting}>
+          {submitting ? 'Connecting…' : 'Connect repository'}
+        </Button>
+      </div>
+    </form>
   );
 }

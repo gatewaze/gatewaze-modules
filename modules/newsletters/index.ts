@@ -73,6 +73,15 @@ const newslettersModule: GatewazeModule = {
     'migrations/017_keyword_adapter.sql',
     'migrations/018_register_with_platform.sql',
     'migrations/019_edition_blocks_realtime.sql',
+    // Templates module cutover (per spec-templates-module §8):
+    //   020 — add FK columns from edition_blocks → templates_*_defs
+    //   021 — copy legacy block/brick templates into templates_* tables
+    //   023 — drop legacy template tables (with pre-flight assertion)
+    // Migration 022 (.disabled) is the prior manual-checklist version and
+    // has been superseded by 023's in-SQL pre-flight DO block.
+    'migrations/020_link_to_templates_module.sql',
+    'migrations/021_copy_to_templates_module.sql',
+    'migrations/023_drop_legacy_template_tables.sql',
     'migrations/024_editions_snapshot_columns.sql',
   ],
 
