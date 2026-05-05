@@ -36,3 +36,8 @@ export {
   type SerializeContentInput,
   type SerializeContentResult,
 } from './serialize-content.js';
+
+export {
+  createStubGitDrivenPublisher,
+  type StubGitDrivenPublisher,
+} from './stub.js';

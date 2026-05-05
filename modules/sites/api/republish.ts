@@ -19,6 +19,10 @@
 
 import type { Request, Response, Router } from 'express';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  isSitesThemeKindsEnabled,
+  THEME_KINDS_DISABLED_ERROR,
+} from '../lib/feature-flags/index.js';
 
 // ---------------------------------------------------------------------------
 // Narrow Supabase surface for the republish-related tables
@@ -109,6 +113,29 @@ export function createRepublishRoutes(deps: RepublishRoutesDeps) {
     const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : undefined;
     const force = body.force === true;
     const pages = Array.isArray(body.pages) ? body.pages.filter((p: unknown) => typeof p === 'string').slice(0, 100) : undefined;
+
+    // Per spec-sites-theme-kinds §16.1: refuse publish for Next.js sites
+    // unless the flag is on. HTML sites publish to the in-portal renderer
+    // and aren't gated by this flag.
+    const siteRow = await supabase
+      .from('sites')
+      .select('theme_kind')
+      .eq('id', siteId)
+      .single<{ theme_kind: string }>();
+    if (siteRow.data?.theme_kind === 'nextjs') {
+      // Cast: RepublishSupabaseClient and FlagsSupabaseClient overlap in
+      // the call shape we use here (`.from().select().eq().maybeSingle()`)
+      // but have different terminator surfaces in their narrowed types.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const enabled = await isSitesThemeKindsEnabled(supabase as any);
+      if (!enabled) {
+        res.status(400).json({
+          error: THEME_KINDS_DISABLED_ERROR.code,
+          message: THEME_KINDS_DISABLED_ERROR.message,
+        } satisfies ErrorEnvelope);
+        return;
+      }
+    }
 
     try {
       const { publishId, status } = await publishWorker.enqueueRepublish({

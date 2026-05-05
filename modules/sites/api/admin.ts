@@ -44,6 +44,10 @@ import {
   PREVIEW_TOKEN_MAX_TTL_SECONDS,
 } from '../lib/preview-tokens/generate.js';
 import { validateBatchShape } from '../lib/batch-content/validate.js';
+import {
+  isSitesThemeKindsEnabled,
+  THEME_KINDS_DISABLED_ERROR,
+} from '../lib/feature-flags/index.js';
 
 // ---------------------------------------------------------------------------
 // Narrow Supabase surface
@@ -385,6 +389,22 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
     if (!body || typeof body !== 'object') return sendError(res, 400, 'invalid_input', 'body required');
     const publisherId = typeof body.publisherId === 'string' ? body.publisherId.trim() : '';
     if (!publisherId) return sendError(res, 400, 'invalid_input', 'publisherId required');
+
+    // Per spec-sites-theme-kinds §16.1: refuse publisher validation for
+    // Next.js sites unless the flag is on. Look up the site's theme_kind
+    // first; HTML sites publish to the in-portal renderer and don't need
+    // this gate.
+    const siteRow = await deps.supabase
+      .from('sites')
+      .select('theme_kind')
+      .eq('id', siteId)
+      .maybeSingle<{ theme_kind: string }>();
+    if (siteRow.data?.theme_kind === 'nextjs') {
+      const enabled = await isSitesThemeKindsEnabled(deps.supabase);
+      if (!enabled) {
+        return sendError(res, 400, THEME_KINDS_DISABLED_ERROR.code, THEME_KINDS_DISABLED_ERROR.message);
+      }
+    }
 
     // Resolve secrets — either from body (preview a draft) or from the
     // stored row.

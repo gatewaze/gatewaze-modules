@@ -66,6 +66,7 @@ const sitesModule: GatewazeModule = {
     'migrations/028_mega_menus_and_segments.sql',
     'migrations/029_brand_assets_library.sql',
     'migrations/030_i18n_locales.sql',
+    'migrations/031_theme_kinds_feature_flag.sql',
   ],
 
   workers: [
