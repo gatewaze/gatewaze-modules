@@ -142,11 +142,10 @@ const eventSchema = yup.object({
   pageContent: yup.string().optional().nullable(),
   venueContent: yup.string().optional().nullable(),
   venueMapImage: yup.string().optional().nullable(),
-  // nearbyHotels is a jsonb array of accommodation entries — validation
-  // happens at the editor level (see EventVenueTab/AddHotelForm). Yup is
-  // permissive here because the shape is best-effort and may evolve.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  nearbyHotels: yup.array().of(yup.mixed<any>()).optional(),
+  // nearbyHotels is persisted directly from EventVenueTab on each add /
+  // edit / remove and intentionally not tracked in this form. Including
+  // it here would cause the page-level Save to overwrite the column with
+  // [] (since RHF wouldn't have a value), wiping accommodations.
   addedpageContent: yup.string().optional().nullable(),
   addedpageTitle: yup.string().optional().nullable(),
   lumaEventId: yup.string().optional().nullable(),
@@ -427,7 +426,6 @@ const EventDetailPage = () => {
       pageContent: eventData.pageContent || '',
       venueContent: eventData.venueContent || '',
       venueMapImage: eventData.venueMapImage || '',
-      nearbyHotels: eventData.nearbyHotels || [],
       addedpageContent: eventData.addedpageContent || '',
       addedpageTitle: eventData.addedpageTitle || '',
       lumaEventId: eventData.lumaEventId || '',
@@ -489,7 +487,6 @@ const EventDetailPage = () => {
         pageContent: data.pageContent || null,
         venueContent: data.venueContent || null,
         venueMapImage: data.venueMapImage || null,
-        nearbyHotels: (data as { nearbyHotels?: Event['nearbyHotels'] }).nearbyHotels || [],
         addedpageContent: data.addedpageContent || null,
         addedpageTitle: data.addedpageTitle || null,
         lumaEventId: data.lumaEventId || null,
