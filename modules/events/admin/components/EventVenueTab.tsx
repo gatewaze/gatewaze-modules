@@ -3,6 +3,7 @@ import {
   MapPinIcon,
   PlusIcon,
   TrashIcon,
+  PencilSquareIcon,
   ArrowTopRightOnSquareIcon,
   BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
@@ -42,6 +43,7 @@ export function EventVenueTab({ event, isEditMode, register, errors, watch, setV
   // proved fragile (DOM value="" overwriting the array on submit), and
   // direct persistence sidesteps that entirely.
   const [hotels, setHotels] = useState<NearbyHotel[]>(event.nearbyHotels ?? []);
+  const [editingHotelId, setEditingHotelId] = useState<string | null>(null);
   // Re-sync if the parent event prop changes (e.g. after a parent save reload)
   useEffect(() => {
     setHotels(event.nearbyHotels ?? []);
@@ -216,24 +218,43 @@ export function EventVenueTab({ event, isEditMode, register, errors, watch, setV
           )}
 
           <div className="space-y-3">
-            {sortedHotels.map((hotel) => (
-              <HotelRow
-                key={hotel.id}
-                hotel={hotel}
-                venueLat={venueLat}
-                venueLng={venueLng}
-                isEditMode={isEditMode}
-                onRemove={() => removeHotel(hotel.id)}
-              />
-            ))}
+            {sortedHotels.map((hotel) =>
+              editingHotelId === hotel.id ? (
+                <div
+                  key={hotel.id}
+                  className="p-4 rounded-lg border border-[var(--gray-a6)] bg-[var(--color-panel)]"
+                >
+                  <HotelForm
+                    initial={hotel}
+                    venueLat={venueLat}
+                    venueLng={venueLng}
+                    onSubmit={(updated) => {
+                      upsertHotel(updated);
+                      setEditingHotelId(null);
+                    }}
+                    onCancel={() => setEditingHotelId(null)}
+                  />
+                </div>
+              ) : (
+                <HotelRow
+                  key={hotel.id}
+                  hotel={hotel}
+                  venueLat={venueLat}
+                  venueLng={venueLng}
+                  isEditMode={isEditMode}
+                  onRemove={() => removeHotel(hotel.id)}
+                  onEdit={() => setEditingHotelId(hotel.id)}
+                />
+              ),
+            )}
           </div>
 
-          {isEditMode && (
+          {isEditMode && editingHotelId === null && (
             <div className="mt-6 pt-6 border-t border-[var(--gray-a6)]">
-              <AddHotelForm
+              <HotelForm
                 venueLat={venueLat}
                 venueLng={venueLng}
-                onAdd={upsertHotel}
+                onSubmit={upsertHotel}
               />
             </div>
           )}
@@ -284,12 +305,14 @@ function HotelRow({
   venueLng,
   isEditMode,
   onRemove,
+  onEdit,
 }: {
   hotel: NearbyHotel;
   venueLat: number | null;
   venueLng: number | null;
   isEditMode: boolean;
   onRemove: () => void;
+  onEdit: () => void;
 }) {
   const distLabel = formatHotelDistance(hotel, venueLat, venueLng);
   const driveLabel = hotel.driveSeconds != null ? formatDuration(hotel.driveSeconds) : null;
@@ -322,27 +345,37 @@ function HotelRow({
         )}
       </div>
       {isEditMode && (
-        <Button variant="soft" color="red" onClick={onRemove}>
-          <TrashIcon className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="soft" onClick={onEdit} aria-label="Edit accommodation">
+            <PencilSquareIcon className="w-4 h-4" />
+          </Button>
+          <Button variant="soft" color="red" onClick={onRemove} aria-label="Remove accommodation">
+            <TrashIcon className="w-4 h-4" />
+          </Button>
+        </div>
       )}
     </div>
   );
 }
 
-function AddHotelForm({
+function HotelForm({
+  initial,
   venueLat,
   venueLng,
-  onAdd,
+  onSubmit,
+  onCancel,
 }: {
+  initial?: NearbyHotel | null;
   venueLat: number | null;
   venueLng: number | null;
-  onAdd: (hotel: NearbyHotel) => void;
+  onSubmit: (hotel: NearbyHotel) => void;
+  onCancel?: () => void;
 }) {
-  const [name, setName] = useState('');
-  const [postcode, setPostcode] = useState('');
-  const [url, setUrl] = useState('');
-  const [priceRange, setPriceRange] = useState('');
+  const isEdit = !!initial;
+  const [name, setName] = useState(initial?.name ?? '');
+  const [postcode, setPostcode] = useState(initial?.postcode ?? '');
+  const [url, setUrl] = useState(initial?.url ?? '');
+  const [priceRange, setPriceRange] = useState(initial?.priceRange ?? '');
   const [submitting, setSubmitting] = useState(false);
 
   const reset = () => {
@@ -352,7 +385,7 @@ function AddHotelForm({
     setPriceRange('');
   };
 
-  const handleAdd = async () => {
+  const handleSubmit = async () => {
     if (!name.trim()) {
       toast.error('Hotel name is required');
       return;
@@ -363,42 +396,64 @@ function AddHotelForm({
     }
     setSubmitting(true);
     try {
-      const geocoded = await geocodePostcode(postcode.trim());
-      if (!geocoded) {
-        toast.warning(`Couldn't geocode "${postcode}" — added without coordinates`);
-      }
+      // Re-geocode only if the postcode changed (or is missing on the
+      // existing entry); preserve the original coords/drive metrics
+      // otherwise so an unrelated edit (rename, price tweak) doesn't pay
+      // the geocoding round-trip.
+      const postcodeChanged = !initial || initial.postcode.trim() !== postcode.trim();
+      const needsGeocode = postcodeChanged || initial?.lat == null;
 
-      let driveSeconds: number | null = null;
-      let driveDistanceMeters: number | null = null;
-      if (geocoded && venueLat != null && venueLng != null) {
-        const route = await getDrivingRoute(
-          { lat: geocoded.lat, lng: geocoded.lng },
-          { lat: venueLat, lng: venueLng },
-        );
-        if (route) {
-          driveSeconds = route.durationSeconds;
-          driveDistanceMeters = route.distanceMeters;
+      let lat: number | null = initial?.lat ?? null;
+      let lng: number | null = initial?.lng ?? null;
+      let geocodedAt: string | null = initial?.geocodedAt ?? null;
+      let driveSeconds: number | null = initial?.driveSeconds ?? null;
+      let driveDistanceMeters: number | null = initial?.driveDistanceMeters ?? null;
+
+      if (needsGeocode) {
+        const geocoded = await geocodePostcode(postcode.trim());
+        if (!geocoded) {
+          toast.warning(`Couldn't geocode "${postcode}" — saved without coordinates`);
+          lat = null;
+          lng = null;
+          geocodedAt = null;
+          driveSeconds = null;
+          driveDistanceMeters = null;
+        } else {
+          lat = geocoded.lat;
+          lng = geocoded.lng;
+          geocodedAt = new Date().toISOString();
+          if (venueLat != null && venueLng != null) {
+            const route = await getDrivingRoute(
+              { lat: geocoded.lat, lng: geocoded.lng },
+              { lat: venueLat, lng: venueLng },
+            );
+            driveSeconds = route?.durationSeconds ?? null;
+            driveDistanceMeters = route?.distanceMeters ?? null;
+          } else {
+            driveSeconds = null;
+            driveDistanceMeters = null;
+          }
         }
       }
 
-      const newHotel: NearbyHotel = {
-        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `h-${Date.now()}`,
+      const hotel: NearbyHotel = {
+        id: initial?.id ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `h-${Date.now()}`),
         name: name.trim(),
         postcode: postcode.trim(),
         url: url.trim() || null,
         priceRange: priceRange.trim() || null,
-        lat: geocoded?.lat ?? null,
-        lng: geocoded?.lng ?? null,
-        geocodedAt: geocoded ? new Date().toISOString() : null,
+        lat,
+        lng,
+        geocodedAt,
         driveSeconds,
         driveDistanceMeters,
       };
-      onAdd(newHotel);
-      reset();
-      if (geocoded) toast.success(`Added ${newHotel.name}`);
+      onSubmit(hotel);
+      if (!isEdit) reset();
+      if (lat != null) toast.success(isEdit ? `Updated ${hotel.name}` : `Added ${hotel.name}`);
     } catch (err) {
-      console.error('Failed to add hotel', err);
-      toast.error('Failed to add hotel');
+      console.error('Failed to save hotel', err);
+      toast.error('Failed to save accommodation');
     } finally {
       setSubmitting(false);
     }
@@ -406,7 +461,9 @@ function AddHotelForm({
 
   return (
     <div className="space-y-3">
-      <p className="text-sm font-medium text-[var(--gray-11)]">Add accommodation</p>
+      <p className="text-sm font-medium text-[var(--gray-11)]">
+        {isEdit ? 'Edit accommodation' : 'Add accommodation'}
+      </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Input
           label="Hotel name"
@@ -422,24 +479,31 @@ function AddHotelForm({
         />
         <Input
           label="Website"
-          value={url}
+          value={url ?? ''}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://..."
         />
         <Input
           label="Price range"
-          value={priceRange}
+          value={priceRange ?? ''}
           onChange={(e) => setPriceRange(e.target.value)}
           placeholder="£70–£120/night"
         />
       </div>
-      <div className="flex justify-end">
-        <Button variant="solid" onClick={handleAdd} disabled={submitting}>
+      <div className="flex justify-end gap-2">
+        {isEdit && onCancel && (
+          <Button variant="soft" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </Button>
+        )}
+        <Button variant="solid" onClick={handleSubmit} disabled={submitting}>
           {submitting ? (
             <>
               <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Geocoding…
+              {isEdit ? 'Saving…' : 'Geocoding…'}
             </>
+          ) : isEdit ? (
+            <>Save changes</>
           ) : (
             <>
               <PlusIcon className="w-4 h-4" />
