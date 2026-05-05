@@ -48,7 +48,39 @@ const templatesModule: GatewazeModule = {
     'migrations/015_wrappers_role.sql',
   ],
 
-  // Admin routes land in PR 2+. The skeleton ships migrations + types only.
+  // HTTP routes per spec-templates-module §6.9. Mounted under
+  // /api/modules/templates/*. All three source kinds (upload, inline, git)
+  // are live; git ingest clones via the platform's git binary (see
+  // lib/sources/git.ts).
+  apiRoutes: async (app: unknown, context?: unknown) => {
+    const { registerRoutes } = await import('./api/register-routes.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registerRoutes(app as any, context as any);
+  },
+
+  // BullMQ workers — the drift monitor that polls active git sources for
+  // upstream changes. Per spec-templates-module §6.5 + spec-module-git-
+  // update-monitoring.md.
+  workers: [
+    {
+      name: 'templates:check-source-updates',
+      handler: './workers/cron-dispatchers.ts',
+    },
+  ],
+
+  // Cron schedule. Default: poll every 15 min. Operators can lower this in
+  // platform settings via the `git_check_interval_ms` configSchema entry
+  // below; the schedule here is the floor.
+  crons: [
+    {
+      name: 'templates-check-source-updates',
+      queue: 'jobs',
+      schedule: { every: 15 * 60 * 1000 },
+      data: { kind: 'templates:check-source-updates' },
+    },
+  ],
+
+  // Admin UI routes land in PR 2+. The skeleton ships migrations + types only.
   adminRoutes: [],
   adminNavItems: [],
 
