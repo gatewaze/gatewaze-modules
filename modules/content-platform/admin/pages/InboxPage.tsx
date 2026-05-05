@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Badge, Button, Card, Tabs } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { useModuleSlots } from '@/hooks/useModuleSlots';
+import { supabase } from '@/lib/supabase';
 import {
   inboxService,
   type InboxRow as InboxRowData,
@@ -132,6 +133,29 @@ export default function InboxPage() {
 
   // Real totals across the entire inbox, fetched independently of pagination.
   const [counts, setCounts] = useState({ pending_review: 0, auto_suppressed: 0, rejected: 0 });
+
+  // "Reconsider rejected" signal per spec-unified-content-management §8:
+  // count keyword rules added in the last 7 days. When > 0 AND there are
+  // rejected items, surface a banner so the admin knows newly-added rules
+  // may have changed which content should stay rejected. We don't compute
+  // "exactly which 3 items would change" — that requires re-running the
+  // keyword evaluation per row, which is the bidirectional re-eval system's
+  // job. The banner is the operational nudge: click → filter → admin
+  // reviews case-by-case.
+  const [recentRulesCount, setRecentRulesCount] = useState(0);
+  useEffect(() => {
+    let mounted = true;
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    supabase
+      .from('content_keyword_rules')
+      .select('id', { count: 'exact', head: true })
+      .gte('created_at', sevenDaysAgo)
+      .eq('is_active', true)
+      .then(({ count }) => {
+        if (mounted) setRecentRulesCount(count ?? 0);
+      });
+    return () => { mounted = false; };
+  }, []);
   useEffect(() => {
     let mounted = true;
     Promise.all([
@@ -190,6 +214,30 @@ export default function InboxPage() {
             <ActiveTabComp />
           </Suspense>
         ) : (<>
+
+        {/* "Reconsider rejected" banner per spec §8. Shown when there are
+            both rejected items AND keyword rules added/updated in the last
+            7 days — the rules change might justify reviewing previously-
+            rejected content. Click filters to rejected; admin reviews
+            case-by-case. */}
+        {counts.rejected > 0 && recentRulesCount > 0 && (
+          <Card className="p-3 mb-4 border-l-4 border-l-amber-500 bg-amber-50 dark:bg-amber-950/20">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm text-[var(--gray-12)]">
+                <strong>{recentRulesCount}</strong> keyword rule{recentRulesCount === 1 ? '' : 's'} added in the last 7 days.{' '}
+                <strong>{counts.rejected}</strong> rejected item{counts.rejected === 1 ? '' : 's'} may now match.
+                Worth re-reviewing.
+              </div>
+              <Button
+                size="2"
+                variant="soft"
+                onClick={() => setFilter('publish_state', ['rejected'])}
+              >
+                Review rejected
+              </Button>
+            </div>
+          </Card>
+        )}
 
         {/* Summary cards */}
         <div className="grid grid-cols-3 gap-3 mb-4">
