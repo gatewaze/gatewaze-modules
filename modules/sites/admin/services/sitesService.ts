@@ -15,6 +15,10 @@ import type {
   SiteConfig,
   SitesPublishJobRow,
 } from '../../types';
+import {
+  isSitesThemeKindsEnabled,
+  THEME_KINDS_DISABLED_ERROR,
+} from '../../lib/feature-flags/index.js';
 
 // ---------------------------------------------------------------------------
 // Sites
@@ -62,6 +66,14 @@ export const SitesService = {
     theme_kind: ThemeKind;
     config?: SiteConfig;
   }): Promise<{ site: SiteRow | null; error: string | null }> {
+    // Per spec-sites-theme-kinds §16.1: refuse Next.js sites unless the
+    // platform_settings.sites_theme_kinds_enabled flag is on. Operators
+    // flip it after verifying migrations + publisher infra in each env.
+    if (args.theme_kind === 'nextjs') {
+      const enabled = await isSitesThemeKindsEnabled(supabase);
+      if (!enabled) return { site: null, error: THEME_KINDS_DISABLED_ERROR.message };
+    }
+
     const { data, error } = await supabase
       .from('sites')
       .insert({
