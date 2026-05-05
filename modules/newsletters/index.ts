@@ -83,6 +83,7 @@ const newslettersModule: GatewazeModule = {
     'migrations/021_copy_to_templates_module.sql',
     'migrations/023_drop_legacy_template_tables.sql',
     'migrations/024_editions_snapshot_columns.sql',
+    'migrations/025_register_category_adapter.sql',
   ],
 
   adminRoutes: [
