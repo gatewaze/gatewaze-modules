@@ -16,7 +16,7 @@ import {
   formatDuration,
   haversineMeters,
 } from '../../lib/geocoding';
-import type { Event, NearbyHotel } from '@/utils/eventService';
+import { EventService, type Event, type NearbyHotel } from '@/utils/eventService';
 import { toast } from 'sonner';
 
 interface EventVenueTabProps {
@@ -36,43 +36,58 @@ interface EventVenueTabProps {
 }
 
 export function EventVenueTab({ event, isEditMode, register, errors, watch, setValue }: EventVenueTabProps) {
-  // Register `nearbyHotels` programmatically (no DOM input). A hidden <input>
-  // doesn't work for non-string values: its DOM value is the empty string,
-  // so on submit RHF reads "" from the DOM and overwrites the array set via
-  // setValue(), causing every save to wipe the field. Registering this way
-  // keeps RHF's internal state authoritative and round-trips the array
-  // through the onSubmit payload.
+  // Accommodation list persists directly to events.nearby_hotels on each
+  // add/remove rather than riding the parent form's submit. Round-tripping
+  // a JSONB array through react-hook-form's hidden-input/setValue plumbing
+  // proved fragile (DOM value="" overwriting the array on submit), and
+  // direct persistence sidesteps that entirely.
+  const [hotels, setHotels] = useState<NearbyHotel[]>(event.nearbyHotels ?? []);
+  // Re-sync if the parent event prop changes (e.g. after a parent save reload)
   useEffect(() => {
-    register('nearbyHotels');
-  }, [register]);
+    setHotels(event.nearbyHotels ?? []);
+  }, [event.nearbyHotels]);
 
-  const watchedHotels = (watch('nearbyHotels') as NearbyHotel[] | undefined) ?? event.nearbyHotels ?? [];
-  // Sort for display: ascending by drive distance (fall back to haversine, then name)
   const venueLat = event.eventLatitude ?? null;
   const venueLng = event.eventLongitude ?? null;
-  const sortedHotels = sortHotelsByProximity(watchedHotels, venueLat, venueLng);
+  const sortedHotels = sortHotelsByProximity(hotels, venueLat, venueLng);
 
-  const updateHotels = useCallback(
-    (next: NearbyHotel[]) => {
-      setValue('nearbyHotels', next, { shouldDirty: true });
+  const persistHotels = useCallback(
+    async (next: NearbyHotel[]) => {
+      const previous = hotels;
+      setHotels(next); // optimistic
+      if (!event.id) {
+        toast.error('Save the event first before adding accommodation');
+        setHotels(previous);
+        return;
+      }
+      try {
+        const result = await EventService.updateEvent(event.id, { nearbyHotels: next });
+        if (!result.success) {
+          throw new Error(result.error || 'update failed');
+        }
+      } catch (err) {
+        console.error('Failed to persist nearby hotels', err);
+        toast.error('Failed to save accommodation');
+        setHotels(previous);
+      }
     },
-    [setValue],
+    [event.id, hotels],
   );
 
   const removeHotel = useCallback(
     (id: string) => {
-      updateHotels(watchedHotels.filter((h) => h.id !== id));
+      void persistHotels(hotels.filter((h) => h.id !== id));
     },
-    [watchedHotels, updateHotels],
+    [hotels, persistHotels],
   );
 
   const upsertHotel = useCallback(
     (hotel: NearbyHotel) => {
-      const idx = watchedHotels.findIndex((h) => h.id === hotel.id);
-      if (idx === -1) updateHotels([...watchedHotels, hotel]);
-      else updateHotels(watchedHotels.map((h) => (h.id === hotel.id ? hotel : h)));
+      const idx = hotels.findIndex((h) => h.id === hotel.id);
+      const next = idx === -1 ? [...hotels, hotel] : hotels.map((h) => (h.id === hotel.id ? hotel : h));
+      void persistHotels(next);
     },
-    [watchedHotels, updateHotels],
+    [hotels, persistHotels],
   );
 
   return (
