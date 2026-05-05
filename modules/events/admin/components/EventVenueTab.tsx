@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   MapPinIcon,
   PlusIcon,
@@ -36,6 +36,16 @@ interface EventVenueTabProps {
 }
 
 export function EventVenueTab({ event, isEditMode, register, errors, watch, setValue }: EventVenueTabProps) {
+  // Register `nearbyHotels` programmatically (no DOM input). A hidden <input>
+  // doesn't work for non-string values: its DOM value is the empty string,
+  // so on submit RHF reads "" from the DOM and overwrites the array set via
+  // setValue(), causing every save to wipe the field. Registering this way
+  // keeps RHF's internal state authoritative and round-trips the array
+  // through the onSubmit payload.
+  useEffect(() => {
+    register('nearbyHotels');
+  }, [register]);
+
   const watchedHotels = (watch('nearbyHotels') as NearbyHotel[] | undefined) ?? event.nearbyHotels ?? [];
   // Sort for display: ascending by drive distance (fall back to haversine, then name)
   const venueLat = event.eventLatitude ?? null;
@@ -67,15 +77,6 @@ export function EventVenueTab({ event, isEditMode, register, errors, watch, setV
 
   return (
     <div className="space-y-6">
-      {/*
-        Register `nearbyHotels` as a hidden field so the array round-trips
-        through react-hook-form's submit `data`. setValue() alone updates
-        internal state but RHF only emits values for *registered* fields
-        in the onSubmit payload — without this hidden input, every save
-        wrote `nearby_hotels: []` regardless of what the user added.
-      */}
-      <input type="hidden" {...register('nearbyHotels')} />
-
       {/* Address + coords */}
       <Card className="overflow-hidden border-0 shadow-sm hover:shadow-md transition-shadow duration-300">
         <div className="p-6">
