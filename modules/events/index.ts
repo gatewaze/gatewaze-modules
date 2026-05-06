@@ -7,7 +7,7 @@ const eventsModule: GatewazeModule = {
   group: 'events',
   name: 'Events',
   description: 'Core events management - create, manage, and run events with registrations, attendance tracking, and check-in',
-  version: '1.0.0',
+  version: '1.1.0',
   features: [
     'events',
     'events.registrations',
@@ -31,6 +31,7 @@ const eventsModule: GatewazeModule = {
     'migrations/008_register_with_platform.sql',
     'migrations/009_fix_keyword_trigger_definer.sql',
     'migrations/012_nearby_hotels.sql',
+    'migrations/013_speakers_extracted_at.sql',
   ],
 
   edgeFunctions: [
