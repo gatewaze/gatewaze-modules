@@ -8,15 +8,20 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { ArrowLeftIcon, DocumentIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, DocumentIcon, ChartBarIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
-import { Button, Card } from '@/components/ui';
+import { Button, Card, Tabs } from '@/components/ui';
+import type { Tab } from '@/components/ui/Tabs';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
 import { PageEditor, type PageEditorContentSchema } from '../page-editor';
+import { PageAnalytics } from './PageAnalytics';
 import { SitesService, PagesService } from '../services/sitesService';
 import type { PageRow, SiteRow } from '../../types';
 import { supabase } from '@/lib/supabase';
+
+const VALID_TABS = ['editor', 'analytics'] as const;
+type TabKey = (typeof VALID_TABS)[number];
 
 export default function PageEditorPage() {
   const { siteSlug, pageId } = useParams<{ siteSlug: string; pageId: string }>();
@@ -26,6 +31,7 @@ export default function PageEditorPage() {
   const [page, setPage] = useState<PageRow | null>(null);
   const [contentSchema, setContentSchema] = useState<PageEditorContentSchema | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabKey>('editor');
 
   useEffect(() => {
     let cancelled = false;
@@ -103,32 +109,47 @@ export default function PageEditorPage() {
           </div>
         </Card>
 
-        <Card>
-          <div className="p-4">
-            <PageEditor
-              site={{ id: site.id, slug: site.slug, theme_kind: site.theme_kind }}
-              page={{
-                id: page.id,
-                full_path: page.full_path,
-                content: page.content,
-                content_schema_version: page.content_schema_version,
-              }}
-              contentSchema={contentSchema}
-              baseCommitSha={null}
-              HtmlBlockListEditor={() => (
-                <div className="p-6 rounded-lg border border-[var(--gray-a5)] bg-[var(--gray-a2)] text-sm">
-                  <p className="font-medium mb-2">HTML block-list editor not yet wired here</p>
-                  <p className="text-[var(--gray-a8)]">
-                    For theme_kind=html, the block-list editor lives in the gatewaze admin app at{' '}
-                    <span className="font-mono">/newsletters/editor</span> (which now uses the same
-                    <span className="font-mono"> templates_block_defs</span> the sites module reads
-                    from). A site-specific block editor is a follow-up.
-                  </p>
-                </div>
-              )}
-            />
-          </div>
-        </Card>
+        <Tabs
+          value={activeTab}
+          onChange={(t: string) => setActiveTab(t as TabKey)}
+          tabs={[
+            { id: 'editor', label: 'Editor', icon: <PencilSquareIcon className="size-4" /> },
+            { id: 'analytics', label: 'Analytics', icon: <ChartBarIcon className="size-4" /> },
+          ] as Tab[]}
+        />
+
+        {activeTab === 'editor' && (
+          <Card>
+            <div className="p-4">
+              <PageEditor
+                site={{ id: site.id, slug: site.slug, theme_kind: site.theme_kind }}
+                page={{
+                  id: page.id,
+                  full_path: page.full_path,
+                  content: page.content,
+                  content_schema_version: page.content_schema_version,
+                }}
+                contentSchema={contentSchema}
+                baseCommitSha={null}
+                HtmlBlockListEditor={() => (
+                  <div className="p-6 rounded-lg border border-[var(--gray-a5)] bg-[var(--gray-a2)] text-sm">
+                    <p className="font-medium mb-2">HTML block-list editor not yet wired here</p>
+                    <p className="text-[var(--gray-a8)]">
+                      For theme_kind=html, the block-list editor lives in the gatewaze admin app at{' '}
+                      <span className="font-mono">/newsletters/editor</span> (which now uses the same
+                      <span className="font-mono"> templates_block_defs</span> the sites module reads
+                      from). A site-specific block editor is a follow-up.
+                    </p>
+                  </div>
+                )}
+              />
+            </div>
+          </Card>
+        )}
+
+        {activeTab === 'analytics' && (
+          <PageAnalytics siteId={site.id} pagePath={page.full_path} />
+        )}
       </div>
     </Page>
   );
