@@ -41,9 +41,7 @@ DROP POLICY IF EXISTS eau_admin_read ON public.external_api_usage;
 CREATE POLICY eau_admin_read ON public.external_api_usage
   FOR SELECT TO authenticated
   USING (
-    EXISTS (
-      SELECT 1 FROM public.admin_users WHERE admin_users.id = auth.uid()
-    )
+    public.is_super_admin()
   );
 
 -- ==========================================================================
@@ -69,16 +67,16 @@ DROP POLICY IF EXISTS eab_admin_read ON public.external_api_budgets;
 CREATE POLICY eab_admin_read ON public.external_api_budgets
   FOR SELECT TO authenticated
   USING (
-    EXISTS (SELECT 1 FROM public.admin_users WHERE admin_users.id = auth.uid())
+    public.is_super_admin()
   );
 DROP POLICY IF EXISTS eab_admin_write ON public.external_api_budgets;
 CREATE POLICY eab_admin_write ON public.external_api_budgets
   FOR ALL TO authenticated
   USING (
-    EXISTS (SELECT 1 FROM public.admin_users WHERE admin_users.id = auth.uid())
+    public.is_super_admin()
   )
   WITH CHECK (
-    EXISTS (SELECT 1 FROM public.admin_users WHERE admin_users.id = auth.uid())
+    public.is_super_admin()
   );
 
 -- ==========================================================================
