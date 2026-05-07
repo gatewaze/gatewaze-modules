@@ -83,10 +83,10 @@ describe('publishSite (manual trigger)', () => {
   it('returns 202 with publishId on success', async () => {
     const deps = makeStubDeps();
     const routes = createRepublishRoutes(deps);
-    const req = { params: { id: 'site-1' }, user: { id: 'admin-1' }, body: { reason: 'test publish' } } as unknown as Request;
+    const req = { params: { id: 'site-1' }, userId: 'admin-1', body: { reason: 'test publish' } } as unknown as Request;
     const { res, status, json } = makeRes();
 
-    await routes.publishSite(req as Request & { user: { id: string } }, res);
+    await routes.publishSite(req as Request & { userId: string }, res);
 
     expect(status).toHaveBeenCalledWith(202);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({
@@ -104,10 +104,10 @@ describe('publishSite (manual trigger)', () => {
   it('returns 400 when site_id param missing', async () => {
     const deps = makeStubDeps();
     const routes = createRepublishRoutes(deps);
-    const req = { params: {}, user: { id: 'admin-1' }, body: {} } as unknown as Request;
+    const req = { params: {}, userId: 'admin-1', body: {} } as unknown as Request;
     const { res, status, json } = makeRes();
 
-    await routes.publishSite(req as Request & { user: { id: string } }, res);
+    await routes.publishSite(req as Request & { userId: string }, res);
 
     expect(status).toHaveBeenCalledWith(400);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'missing_site_id' }));
@@ -116,10 +116,10 @@ describe('publishSite (manual trigger)', () => {
   it('returns 409 when publish_in_progress is thrown', async () => {
     const deps = makeStubDeps({ enqueueError: new Error('publish_in_progress: another publish for this repo is in flight') });
     const routes = createRepublishRoutes(deps);
-    const req = { params: { id: 'site-1' }, user: { id: 'admin-1' }, body: {} } as unknown as Request;
+    const req = { params: { id: 'site-1' }, userId: 'admin-1', body: {} } as unknown as Request;
     const { res, status, json } = makeRes();
 
-    await routes.publishSite(req as Request & { user: { id: string } }, res);
+    await routes.publishSite(req as Request & { userId: string }, res);
 
     expect(status).toHaveBeenCalledWith(409);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'publish_in_progress' }));
@@ -129,10 +129,10 @@ describe('publishSite (manual trigger)', () => {
     const deps = makeStubDeps();
     const routes = createRepublishRoutes(deps);
     const longReason = 'X'.repeat(1000);
-    const req = { params: { id: 'site-1' }, user: { id: 'admin-1' }, body: { reason: longReason } } as unknown as Request;
+    const req = { params: { id: 'site-1' }, userId: 'admin-1', body: { reason: longReason } } as unknown as Request;
     const { res } = makeRes();
 
-    await routes.publishSite(req as Request & { user: { id: string } }, res);
+    await routes.publishSite(req as Request & { userId: string }, res);
 
     const call = (deps.publishWorker.enqueueRepublish as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(call.reason.length).toBe(500);
@@ -248,10 +248,10 @@ describe('rotateWebhookSecret', () => {
   it('returns 200 with newSecret', async () => {
     const deps = makeStubDeps();
     const routes = createRepublishRoutes(deps);
-    const req = { params: { id: 'site-1' }, user: { id: 'admin-1' } } as unknown as Request;
+    const req = { params: { id: 'site-1' }, userId: 'admin-1' } as unknown as Request;
     const { res, status, json } = makeRes();
 
-    await routes.rotateWebhookSecret(req as Request & { user: { id: string } }, res);
+    await routes.rotateWebhookSecret(req as Request & { userId: string }, res);
 
     expect(status).toHaveBeenCalledWith(200);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ newSecret: expect.any(String) }));

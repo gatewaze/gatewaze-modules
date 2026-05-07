@@ -27,7 +27,7 @@ import type { Request, Response, Router } from 'express';
 import { createHash } from 'node:crypto';
 
 interface RequestWithUser extends Request {
-  user?: { id: string };
+  userId?: string;
 }
 
 interface ErrorEnvelope {
@@ -189,7 +189,7 @@ export function createMediaRoutes(deps: MediaRoutesDeps) {
           height: file.height,
           variants,
           in_repo: inRepo,
-          uploaded_by: req.user?.id ?? null,
+          uploaded_by: req.userId ?? null,
         }).select().single();
 
         if (inserted.error) {
@@ -264,10 +264,82 @@ export function createMediaRoutes(deps: MediaRoutesDeps) {
     res.status(204).end();
   }
 
-  return { uploadMedia, deleteMedia };
+  // -------------------------------------------------------------------------
+  // GET /admin/<hostKind>/:hostId/media
+  // List media for a host (paginated; default 100). Returns:
+  //   { items: [{ id, filename, mime_type, bytes, cdn_url, used_in: [], … }] }
+  // cdn_url is synthesised from storage_path via Supabase Storage; the table
+  // doesn't persist it because the bucket base is environment-dependent.
+  // The `used_in` array carries downstream references (page_blocks, brick
+  // content, SEO) populated by media-reference triggers; v1 returns whatever
+  // the table holds (empty unless the trigger has populated it).
+  // -------------------------------------------------------------------------
+  async function listMedia(req: RequestWithUser, res: Response): Promise<void> {
+    const hostKind = paramAs(req.params.hostKind);
+    const hostId = paramAs(req.params.hostId);
+    if (!hostKind || !hostId) {
+      res.status(400).json({ error: 'missing_params', message: 'hostKind and hostId required' } satisfies ErrorEnvelope);
+      return;
+    }
+    if (hostKind !== 'site' && hostKind !== 'list') {
+      res.status(400).json({ error: 'invalid_host_kind', message: `hostKind must be 'site' or 'list' (got: ${hostKind})` } satisfies ErrorEnvelope);
+      return;
+    }
+
+    const limit = Math.min(Number((req.query as Record<string, unknown>)['limit'] ?? 100), 500);
+    const filter = paramAs(req.query['filter']) ?? 'all';
+
+    let query = deps.supabase
+      .from('host_media')
+      .select('id, host_kind, host_id, storage_path, filename, mime_type, bytes, variants, in_repo, used_in, uploaded_by, width, height, created_at')
+      .eq('host_kind', hostKind)
+      .eq('host_id', hostId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (filter === 'photo') query = query.like('mime_type', 'image/%');
+    else if (filter === 'video') query = query.like('mime_type', 'video/%');
+
+    const result = await query;
+    if ((result as { error: { message: string } | null }).error) {
+      const errMsg = (result as { error: { message: string } }).error.message;
+      deps.logger.error('media list failed', { hostKind, hostId, error: errMsg });
+      res.status(500).json({ error: 'list_failed', message: errMsg } satisfies ErrorEnvelope);
+      return;
+    }
+
+    // Synthesise cdn_url from storage_path. The Supabase Storage public URL
+    // is the canonical address consumed by the Media tab; the table itself
+    // doesn't persist it (storage_path is the source of truth, the bucket
+    // base is environment-dependent).
+    interface Row {
+      id: string; host_kind: string; host_id: string; storage_path: string;
+      filename: string; mime_type: string; bytes: number; variants: Record<string, string> | null;
+      in_repo: boolean; used_in: Array<{ type: string; id: string; name: string }>;
+      uploaded_by: string | null; width: number | null; height: number | null; created_at: string;
+    }
+    const rows = ((result as { data: Row[] | null }).data ?? []);
+    const items = rows.map((r) => {
+      const { data } = deps.supabase.storage.from('gatewaze-media').getPublicUrl(r.storage_path);
+      return { ...r, cdn_url: (data as { publicUrl: string }).publicUrl };
+    });
+
+    res.status(200).json({ items });
+  }
+
+  return { uploadMedia, deleteMedia, listMedia };
 }
 
-export function mountMediaRoutes(router: Router, routes: ReturnType<typeof createMediaRoutes>): void {
-  router.post('/:hostKind/:hostId/media', routes.uploadMedia);
+export function mountMediaRoutes(
+  router: Router,
+  routes: ReturnType<typeof createMediaRoutes>,
+  uploadMiddleware?: import('express').RequestHandler,
+): void {
+  router.get('/:hostKind/:hostId/media', routes.listMedia);
+  if (uploadMiddleware) {
+    router.post('/:hostKind/:hostId/media', uploadMiddleware, routes.uploadMedia);
+  } else {
+    router.post('/:hostKind/:hostId/media', routes.uploadMedia);
+  }
   router.delete('/:hostKind/:hostId/media/:mediaId', routes.deleteMedia);
 }
