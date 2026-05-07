@@ -64,7 +64,10 @@ WITH html_variants AS (
     bt.id AS legacy_id,
     bt.name,
     bt.description,
-    bt.has_bricks,
+    -- has_bricks lives inside the content JSONB (per migration 005), not
+    -- as a column. Pull it out with the same coalesce pattern used for
+    -- the html/schema fields below.
+    COALESCE((bt.content->>'has_bricks')::boolean, false) AS has_bricks,
     bt.created_at,
     bt.updated_at,
     -- Legacy `content` jsonb canonically holds { html_template, schema, ... }

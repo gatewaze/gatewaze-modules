@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS public.pages_nextjs_drafts (
 CREATE INDEX IF NOT EXISTS pages_nextjs_drafts_page_idx     ON public.pages_nextjs_drafts (page_id);
 CREATE INDEX IF NOT EXISTS pages_nextjs_drafts_editor_idx   ON public.pages_nextjs_drafts (editor_id);
 
+DROP TRIGGER IF EXISTS pages_nextjs_drafts_set_updated_at ON public.pages_nextjs_drafts;
 CREATE TRIGGER pages_nextjs_drafts_set_updated_at
   BEFORE UPDATE ON public.pages_nextjs_drafts
   FOR EACH ROW EXECUTE FUNCTION public.sites_set_updated_at();
@@ -113,6 +114,7 @@ CREATE INDEX IF NOT EXISTS pages_content_variants_match_context_gin
   ON public.pages_content_variants USING gin (match_context jsonb_path_ops);
 
 -- updated_at bump trigger — used in §7.6 tiebreaker for variant precedence
+DROP TRIGGER IF EXISTS pages_content_variants_set_updated_at ON public.pages_content_variants;
 CREATE TRIGGER pages_content_variants_set_updated_at
   BEFORE UPDATE ON public.pages_content_variants
   FOR EACH ROW EXECUTE FUNCTION public.sites_set_updated_at();
@@ -216,6 +218,7 @@ CREATE INDEX IF NOT EXISTS sites_publish_jobs_stuck_running_idx
   ON public.sites_publish_jobs (heartbeat_at NULLS FIRST)
   WHERE status IN ('preparing','committing','awaiting_build','build_started','finalizing','cancelling');
 
+DROP TRIGGER IF EXISTS sites_publish_jobs_set_updated_at ON public.sites_publish_jobs;
 CREATE TRIGGER sites_publish_jobs_set_updated_at
   BEFORE UPDATE ON public.sites_publish_jobs
   FOR EACH ROW EXECUTE FUNCTION public.sites_set_updated_at();
@@ -252,6 +255,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS sites_publish_jobs_check_transition ON public.sites_publish_jobs;
 CREATE TRIGGER sites_publish_jobs_check_transition
   BEFORE UPDATE OF status ON public.sites_publish_jobs
   FOR EACH ROW EXECUTE FUNCTION public.sites_publish_jobs_check_transition();
