@@ -128,20 +128,10 @@ export default function PageEditorPage() {
                   full_path: page.full_path,
                   content: page.content,
                   content_schema_version: page.content_schema_version,
+                  composition_mode: page.composition_mode,
                 }}
                 contentSchema={contentSchema}
                 baseCommitSha={null}
-                HtmlBlockListEditor={() => (
-                  <div className="p-6 rounded-lg border border-[var(--gray-a5)] bg-[var(--gray-a2)] text-sm">
-                    <p className="font-medium mb-2">HTML block-list editor not yet wired here</p>
-                    <p className="text-[var(--gray-a8)]">
-                      For theme_kind=html, the block-list editor lives in the gatewaze admin app at{' '}
-                      <span className="font-mono">/newsletters/editor</span> (which now uses the same
-                      <span className="font-mono"> templates_block_defs</span> the sites module reads
-                      from). A site-specific block editor is a follow-up.
-                    </p>
-                  </div>
-                )}
               />
             </div>
           </Card>

@@ -2,6 +2,7 @@ import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
 
 const listsModule: GatewazeModule = {
   id: 'lists',
+  group: 'content',
   type: 'feature',
   visibility: 'public',
   name: 'Lists',

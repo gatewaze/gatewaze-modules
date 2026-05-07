@@ -2,7 +2,8 @@ import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
 
 const contentPlatformModule: GatewazeModule = {
   id: 'content-platform',
-  type: 'core',
+  group: 'content',
+  type: 'feature',
   visibility: 'hidden',
   name: 'Content Platform',
   description: 'Cross-content-type publishing, categorization, source tracking, and the unified Content Inbox.',

@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowUturnLeftIcon } from '@heroicons/react/24/outline';
+import { ArrowUturnLeftIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
 import { Badge, Button, Card, Select } from '@/components/ui';
 import { SchemaEditor } from '../schema-editor';
 import { SitesService, PublishJobsService, type PublishJobSummary } from '../services/sitesService';
@@ -37,8 +37,8 @@ interface PublisherEntry {
 async function loadPublisherRegistry(): Promise<PublisherEntry[]> {
   const entries: PublisherEntry[] = [];
   const candidates = [
-    { id: 'sites-publisher-cloudflare-pages', mod: () => import(/* @vite-ignore */ '@premium-gatewaze-modules/sites-publisher-cloudflare-pages') },
-    { id: 'sites-publisher-netlify',          mod: () => import(/* @vite-ignore */ '@premium-gatewaze-modules/sites-publisher-netlify') },
+    { id: 'sites-publisher-cloudflare-pages', mod: () => import('@premium-gatewaze-modules/sites-publisher-cloudflare-pages') },
+    { id: 'sites-publisher-netlify',          mod: () => import('@premium-gatewaze-modules/sites-publisher-netlify') },
   ];
   for (const c of candidates) {
     try {
@@ -334,6 +334,8 @@ const STATUS_COLOR: Record<string, 'success' | 'error' | 'warning' | 'neutral' |
 function RolloutsCard({ siteId }: { siteId: string }) {
   const [jobs, setJobs] = useState<PublishJobSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rollingBackId, setRollingBackId] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
 
   const reload = async () => {
     setLoading(true);
@@ -345,14 +347,44 @@ function RolloutsCard({ siteId }: { siteId: string }) {
 
   useEffect(() => { reload(); }, [siteId]);
 
+  const handlePublish = async () => {
+    setPublishing(true);
+    const { publishId, error } = await PublishJobsService.publishSite(siteId, { reason: 'admin-triggered' });
+    setPublishing(false);
+    if (error || !publishId) {
+      toast.error(`Publish failed: ${error ?? 'unknown'}`);
+      return;
+    }
+    toast.success(`Publish queued — job ${publishId.slice(0, 8)}…`);
+    await reload();
+  };
+
+  const handleRollback = async (jobId: string) => {
+    setRollingBackId(jobId);
+    const { newJobId, error } = await PublishJobsService.rollback(siteId, jobId);
+    setRollingBackId(null);
+    if (error || !newJobId) {
+      toast.error(`Rollback failed: ${error ?? 'unknown'}`);
+      return;
+    }
+    toast.success(`Rollback queued — job ${newJobId.slice(0, 8)}…`);
+    await reload();
+  };
+
   return (
     <Card>
       <div className="p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-[var(--gray-12)]">Rollouts</h3>
-          <Button size="sm" variant="outlined" onClick={reload} disabled={loading}>
-            {loading ? 'Loading…' : 'Refresh'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outlined" onClick={reload} disabled={loading}>
+              {loading ? 'Loading…' : 'Refresh'}
+            </Button>
+            <Button size="sm" onClick={handlePublish} disabled={publishing}>
+              <RocketLaunchIcon className="size-4" />
+              {publishing ? 'Queuing…' : 'Publish'}
+            </Button>
+          </div>
         </div>
         {jobs.length === 0 ? (
           <p className="text-sm text-[var(--gray-a8)]">
@@ -393,12 +425,10 @@ function RolloutsCard({ siteId }: { siteId: string }) {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() =>
-                        toast.message(
-                          'Rollback affordance: pending API endpoint (POST /admin/sites/:id/publish-jobs/:job/rollback). The DB row already preserves the prior content snapshot.',
-                        )
-                      }
+                      disabled={rollingBackId === j.id}
+                      onClick={() => handleRollback(j.id)}
                       aria-label="Roll back to this version"
+                      title="Re-publish this version"
                     >
                       <ArrowUturnLeftIcon className="size-4" />
                     </Button>

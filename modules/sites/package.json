@@ -8,6 +8,7 @@
   "exports": {
     ".": "./index.ts",
     "./types": "./types/index.ts",
+    "./client-types": "./client-types/index.ts",
     "./api": "./api/index.ts",
     "./renderer": "./lib/renderer/index.ts",
     "./runtime": "./lib/runtime/index.ts",

@@ -2,7 +2,8 @@ import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
 
 const costGovernanceModule: GatewazeModule = {
   id: 'cost-governance',
-  type: 'core',
+  group: 'platform',
+  type: 'feature',
   visibility: 'hidden',
   name: 'Cost Governance',
   description:

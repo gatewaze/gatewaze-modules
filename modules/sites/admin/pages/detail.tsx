@@ -17,6 +17,7 @@ import {
   Bars3Icon,
   RocketLaunchIcon,
   Cog6ToothIcon,
+  BeakerIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Badge, Tabs } from '@/components/ui';
@@ -30,9 +31,10 @@ import { SitePagesTab } from '../components/SitePagesTab';
 import { SiteMediaTab } from '../components/SiteMediaTab';
 import { SiteMenusTab } from '../components/SiteMenusTab';
 import { SitePublishingTab } from '../components/SitePublishingTab';
+import { SiteAbTestsTab } from '../components/SiteAbTestsTab';
 import { SiteSettingsTab } from '../components/SiteSettingsTab';
 
-const VALID_TABS = ['pages', 'source', 'media', 'menus', 'publishing', 'settings'] as const;
+const VALID_TABS = ['pages', 'source', 'media', 'menus', 'publishing', 'experiments', 'settings'] as const;
 type TabKey = (typeof VALID_TABS)[number];
 
 export default function SiteDetailPage() {
@@ -101,6 +103,7 @@ export default function SiteDetailPage() {
           { id: 'menus', label: 'Menus', icon: <Bars3Icon className={ic} /> },
         ]),
     { id: 'publishing', label: 'Publishing', icon: <RocketLaunchIcon className={ic} /> },
+    ...(isPortalSite ? [] : [{ id: 'experiments', label: 'Experiments', icon: <BeakerIcon className={ic} /> }]),
     { id: 'settings', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
   ];
 
@@ -151,6 +154,7 @@ export default function SiteDetailPage() {
         {activeTab === 'media' && !isPortalSite && <SiteMediaTab site={site} />}
         {activeTab === 'menus' && !isPortalSite && <SiteMenusTab site={site} />}
         {activeTab === 'publishing' && <SitePublishingTab site={site} onSiteUpdated={(s) => setSite(s)} />}
+        {activeTab === 'experiments' && !isPortalSite && <SiteAbTestsTab site={site} />}
         {activeTab === 'settings' && <SiteSettingsTab site={site} onSiteUpdated={(s) => setSite(s)} />}
       </div>
     </Page>

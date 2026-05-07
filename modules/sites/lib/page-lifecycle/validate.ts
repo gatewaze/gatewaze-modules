@@ -11,7 +11,7 @@
  * pattern this enforces.
  */
 
-import type { HostKind, PageStatus, ThemeKind } from '../../types/index.js';
+import type { CompositionMode, HostKind, PageStatus, ThemeKind } from '../../types/index.js';
 import { normalizeRoute, joinRoute, type RouteValidationResult } from './route-validation.js';
 
 // ---------------------------------------------------------------------------
@@ -28,6 +28,7 @@ export const PAGE_CREATE_FIELDS = [
   'title',
   'template_def_id',
   'wrapper_def_id',
+  'composition_mode',
   'status',
   'publish_at',
   'unpublish_at',
@@ -70,6 +71,7 @@ export interface CreatePageInput {
   title: string;
   template_def_id: string | null;
   wrapper_def_id: string | null;
+  composition_mode: CompositionMode;
   status: PageStatus;
   publish_at: string | null;
   unpublish_at: string | null;
@@ -193,6 +195,10 @@ export function validateCreatePage(body: unknown): ValidationResult<CreatePageIn
   if (!VALID_STATUSES.includes(status)) {
     return fail('status', 'invalid_enum', String(picked.status));
   }
+  const compositionMode = (picked.composition_mode ?? 'schema') as CompositionMode;
+  if (compositionMode !== 'schema' && compositionMode !== 'blocks') {
+    return fail('composition_mode', 'invalid_enum', String(picked.composition_mode));
+  }
   if (picked.publish_at !== null && picked.publish_at !== undefined && !isIsoDateString(picked.publish_at)) {
     return fail('publish_at', 'must_be_iso_date_or_null');
   }
@@ -220,6 +226,7 @@ export function validateCreatePage(body: unknown): ValidationResult<CreatePageIn
       title: picked.title,
       template_def_id: (picked.template_def_id as string | null | undefined) ?? null,
       wrapper_def_id: (picked.wrapper_def_id as string | null | undefined) ?? null,
+      composition_mode: compositionMode,
       status,
       publish_at: (picked.publish_at as string | null | undefined) ?? null,
       unpublish_at: (picked.unpublish_at as string | null | undefined) ?? null,

@@ -13,6 +13,7 @@ import type { GatewazeModule } from '@gatewaze/shared';
 
 const templatesModule: GatewazeModule = {
   id: 'templates',
+  group: 'sites',
   type: 'feature',
   visibility: 'public',
   name: 'Templates',
@@ -46,6 +47,7 @@ const templatesModule: GatewazeModule = {
     'migrations/013_rename_theme_kinds.sql',
     'migrations/014_block_defs_columns.sql',
     'migrations/015_wrappers_role.sql',
+    'migrations/016_canvas_block_def_columns.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under

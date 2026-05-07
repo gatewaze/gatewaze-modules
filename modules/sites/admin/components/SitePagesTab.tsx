@@ -34,6 +34,7 @@ interface CreatePageForm {
   full_path: string;
   templates_library_id: string;
   is_homepage: boolean;
+  composition_mode: 'schema' | 'blocks';
 }
 
 const columnHelper = createColumnHelper<PageSummary>();
@@ -60,21 +61,32 @@ export function SitePagesTab({ site }: { site: SiteRow }) {
       full_path: '',
       templates_library_id: site.templates_library_id ?? '',
       is_homepage: false,
+      composition_mode: 'blocks',
     },
   });
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = form;
 
-  // Auto-derive slug + full_path from title
+  // Auto-derive slug + full_path from title.
+  // When `is_homepage` is checked, force full_path to '/' since the
+  // server validator rejects homepage rows whose route isn't root
+  // (lib/page-lifecycle/validate.ts:213 — homepage_requires_root_path).
   const watchTitle = watch('title');
   const watchSlug = watch('slug');
+  const watchIsHomepage = watch('is_homepage');
   useEffect(() => {
+    if (watchIsHomepage) {
+      setValue('full_path', '/');
+      return;
+    }
     if (!watchTitle) return;
     const auto = slugify(watchTitle);
     if (!watchSlug || watchSlug === slugify(watchTitle.slice(0, watchTitle.length - 1))) {
       setValue('slug', auto);
       setValue('full_path', `/${auto}`);
+    } else {
+      setValue('full_path', `/${watchSlug}`);
     }
-  }, [watchTitle, watchSlug, setValue]);
+  }, [watchTitle, watchSlug, watchIsHomepage, setValue]);
 
   const load = async () => {
     setLoading(true);
@@ -191,6 +203,7 @@ export function SitePagesTab({ site }: { site: SiteRow }) {
       full_path: data.full_path,
       title: data.title,
       is_homepage: data.is_homepage,
+      composition_mode: data.composition_mode,
     });
     setSubmitting(false);
     if (error || !page) {
@@ -338,10 +351,26 @@ export function SitePagesTab({ site }: { site: SiteRow }) {
               ...libraries.map((l) => ({ value: l.id, label: l.name })),
             ]}
           />
+          <Select
+            label="How is this page authored?"
+            {...register('composition_mode')}
+            data={[
+              { value: 'blocks', label: 'Visual canvas — drag-and-drop blocks (WYSIWYG)' },
+              { value: 'schema', label: 'Schema form — typed fields per route' },
+            ]}
+          />
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" {...register('is_homepage')} />
             <span>Make this the homepage (path /)</span>
           </label>
+          {watchIsHomepage && (() => {
+            const existing = pages.find((p) => p.is_homepage);
+            return existing ? (
+              <p className="text-xs text-[var(--orange-11)] -mt-1">
+                Will replace <span className="font-mono">{existing.full_path}</span> ({existing.title}) as the homepage.
+              </p>
+            ) : null;
+          })()}
         </div>
       </Modal>
 

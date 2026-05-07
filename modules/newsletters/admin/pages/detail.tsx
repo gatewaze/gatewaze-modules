@@ -8,7 +8,9 @@ import {
   ChartBarIcon,
   DocumentArrowDownIcon,
   ChatBubbleLeftRightIcon,
+  PhotoIcon,
 } from '@heroicons/react/24/outline';
+import { HostMediaTab } from '@gatewaze-modules/host-media/admin';
 import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
 import { Badge, Button } from '@/components/ui';
@@ -40,7 +42,7 @@ interface Newsletter {
   edition_count?: number;
 }
 
-type NewsletterTab = 'details' | 'template' | 'editions' | 'import' | 'replies' | 'stats';
+type NewsletterTab = 'details' | 'template' | 'editions' | 'media' | 'import' | 'replies' | 'stats';
 
 export default function NewsletterDetailPage() {
   const { slug, tab: tabFromUrl } = useParams<{ slug: string; tab?: string }>();
@@ -117,6 +119,7 @@ export default function NewsletterDetailPage() {
     { id: 'details', label: 'Details', icon: <Cog6ToothIcon className={ic} /> },
     { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
     { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
+    { id: 'media', label: 'Media', icon: <PhotoIcon className={ic} /> },
     { id: 'import', label: 'Import', icon: <DocumentArrowDownIcon className={ic} /> },
     ...(hasBulkEmailing ? [
       { id: 'replies', label: 'Replies', icon: <ChatBubbleLeftRightIcon className={ic} /> },
@@ -180,6 +183,21 @@ export default function NewsletterDetailPage() {
       {activeTab === 'editions' && (
         <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
           <EditorTab newsletterId={newsletter.id} newsletterSlug={newsletter.slug} setupComplete={newsletter.setup_complete} />
+        </div>
+      )}
+
+      {activeTab === 'media' && (
+        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+          <HostMediaTab
+            hostId={newsletter.id}
+            consumer={{
+              hostKind: 'newsletter',
+              enableAlbums: false,
+              enableSponsorTagging: false,
+              enableYouTube: false,
+              enableZipUnpack: false,
+            }}
+          />
         </div>
       )}
 

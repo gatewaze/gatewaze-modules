@@ -14,7 +14,8 @@ import type { InternalGitServer, InternalRepoRef } from '../lib/git/internal-git
 import type { PublishWorker } from '../lib/publish-worker/publish-worker.js';
 
 interface RequestWithUser extends Request {
-  user?: { id: string; email?: string };
+  userId?: string;
+  jwtClaims?: { email?: string; [key: string]: unknown };
 }
 
 interface ErrorEnvelope {
@@ -106,7 +107,7 @@ export function createSourceRoutes(deps: SourceRoutesDeps) {
       res.status(400).json({ error: 'missing_site_id', message: 'site id required' } satisfies ErrorEnvelope);
       return;
     }
-    const userId = req.user?.id;
+    const userId = req.userId;
     if (!userId) {
       res.status(401).json({ error: 'unauthorized', message: 'admin JWT required' } satisfies ErrorEnvelope);
       return;
@@ -217,7 +218,7 @@ export function createSourceRoutes(deps: SourceRoutesDeps) {
 
     // Re-attempt the apply
     try {
-      const result = await publishWorker.applyTheme({ siteId, fastTrack: false, triggeredBy: req.user?.id ?? '' });
+      const result = await publishWorker.applyTheme({ siteId, fastTrack: false, triggeredBy: req.userId ?? '' });
       if (result.conflicts.length > 0) {
         // If still conflicts after fixups → return 409 again
         res.status(409).json({

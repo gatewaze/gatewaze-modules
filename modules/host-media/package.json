@@ -1,0 +1,34 @@
+{
+  "name": "@gatewaze-modules/host-media",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Host-media module — shared media management (table, API, admin tab, upload pipeline) for sites/events/newsletters/blog/podcasts. Consumers register a host_kind via hostMediaConsumer in their module manifest.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./types": "./types/index.ts",
+    "./client-types": "./client-types/index.ts",
+    "./api": "./api/index.ts",
+    "./admin": "./admin/index.ts",
+    "./admin/*": "./admin/*",
+    "./lib/*": "./lib/*",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "echo 'no lint configured'"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vitest": "^4.0.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0"
+  }
+}

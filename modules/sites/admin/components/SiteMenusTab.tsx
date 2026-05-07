@@ -86,10 +86,14 @@ export function SiteMenusTab({ site }: { site: SiteRow }) {
   };
 
   const loadPages = async () => {
+    // pages uses the polymorphic host model — host_kind + host_id —
+    // not a direct site_id column. The PostgREST schema cache returns 400
+    // for unknown columns so the column-name needs to match the schema.
     const { data } = await supabase
       .from('pages')
       .select('id, full_path, title')
-      .eq('site_id', site.id)
+      .eq('host_kind', 'site')
+      .eq('host_id', site.id)
       .order('full_path');
     setPages((data as PageOption[]) ?? []);
   };

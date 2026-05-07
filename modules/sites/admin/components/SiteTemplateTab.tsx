@@ -13,7 +13,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Badge, Button, Card } from '@/components/ui';
+import { ArrowPathIcon, KeyIcon } from '@heroicons/react/24/outline';
+import { toast } from 'sonner';
+import { Badge, Button, Card, Input, Modal } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import type { SiteRow } from '../../types';
 
@@ -155,35 +157,161 @@ export function SiteTemplateTab({
           ) : (
             <ul className="space-y-2">
               {sources.map((s) => (
-                <li
-                  key={s.id}
-                  className="flex items-center justify-between gap-3 px-3 py-2 rounded-md bg-[var(--gray-a2)]"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Badge color={s.status === 'active' ? 'success' : s.status === 'errored' ? 'error' : 'neutral'}>
-                      {s.kind}
-                    </Badge>
-                    <span className="text-sm font-medium text-[var(--gray-12)] truncate">{s.label}</span>
-                    {s.url && (
-                      <span className="text-xs text-[var(--gray-a8)] font-mono truncate">{s.url}</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 text-xs text-[var(--gray-a8)] shrink-0">
-                    {s.installed_git_sha && (
-                      <span className="font-mono">{s.installed_git_sha.slice(0, 7)}</span>
-                    )}
-                    {s.available_git_sha && s.available_git_sha !== s.installed_git_sha && (
-                      <Badge color="warning">drift</Badge>
-                    )}
-                    {s.last_check_error && <Badge color="error">error</Badge>}
-                  </div>
-                </li>
+                <SourceRow key={s.id} source={s} siteId={site.id} onChanged={() => {
+                  // Re-fetch sources after a refresh / rotate. Cheaper than
+                  // full panel reload; keeps the library card stable.
+                  if (!site.templates_library_id) return;
+                  supabase
+                    .from('templates_sources')
+                    .select('id, kind, label, status, url, branch, installed_git_sha, available_git_sha, last_checked_at, last_check_error')
+                    .eq('library_id', site.templates_library_id)
+                    .order('created_at', { ascending: false })
+                    .then((r) => setSources(((r.data ?? []) as unknown) as SourceSummary[]));
+                }} />
               ))}
             </ul>
           )}
         </div>
       </Card>
     </div>
+  );
+}
+
+function SourceRow({
+  source,
+  siteId,
+  onChanged,
+}: {
+  source: SourceSummary;
+  siteId: string;
+  onChanged: () => void;
+}) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [showRotate, setShowRotate] = useState(false);
+  const [newPat, setNewPat] = useState('');
+  const [rotating, setRotating] = useState(false);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const apiUrl = (import.meta as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      const res = await fetch(
+        `${apiUrl}/api/modules/sites/admin/sites/${siteId}/source/${source.id}/refresh-git`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(body?.error?.message ?? `Refresh failed (${res.status})`);
+        return;
+      }
+      toast.success(`Pulled ${body.mainSha?.slice(0, 7)} on ${body.branch} → schema v${body.schemaVersion}`);
+      onChanged();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleRotate = async () => {
+    if (!newPat.trim()) {
+      toast.error('PAT required');
+      return;
+    }
+    setRotating(true);
+    try {
+      const apiUrl = (import.meta as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      const secretKey = `git_pat_${source.id.replace(/-/g, '_').slice(0, 50)}`;
+      const res = await fetch(`${apiUrl}/api/modules/sites/admin/sites/${siteId}/secrets`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ key: secretKey, values: { pat: newPat.trim() } }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body?.error?.message ?? `Rotate failed (${res.status})`);
+        return;
+      }
+      toast.success('PAT rotated. Next refresh will use the new token.');
+      setShowRotate(false);
+      setNewPat('');
+    } finally {
+      setRotating(false);
+    }
+  };
+
+  return (
+    <li className="flex items-center justify-between gap-3 px-3 py-2 rounded-md bg-[var(--gray-a2)]">
+      <div className="flex items-center gap-3 min-w-0">
+        <Badge color={source.status === 'active' ? 'success' : source.status === 'errored' ? 'error' : 'neutral'}>
+          {source.kind}
+        </Badge>
+        <span className="text-sm font-medium text-[var(--gray-12)] truncate">{source.label}</span>
+        {source.url && (
+          <span className="text-xs text-[var(--gray-a8)] font-mono truncate">{source.url}</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 text-xs text-[var(--gray-a8)] shrink-0">
+        {source.installed_git_sha && (
+          <span className="font-mono">{source.installed_git_sha.slice(0, 7)}</span>
+        )}
+        {source.available_git_sha && source.available_git_sha !== source.installed_git_sha && (
+          <Badge color="warning">drift</Badge>
+        )}
+        {source.last_check_error && <Badge color="error">error</Badge>}
+        {source.kind === 'git' && (
+          <>
+            <Button size="sm" variant="ghost" onClick={handleRefresh} disabled={refreshing} title="Pull latest from upstream">
+              <ArrowPathIcon className={`size-4 ${refreshing ? 'animate-spin' : ''}`} />
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setShowRotate(true)} title="Rotate PAT">
+              <KeyIcon className="size-4" />
+            </Button>
+          </>
+        )}
+      </div>
+
+      <Modal
+        isOpen={showRotate}
+        onClose={() => { setShowRotate(false); setNewPat(''); }}
+        title="Rotate PAT"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="outlined" onClick={() => { setShowRotate(false); setNewPat(''); }} disabled={rotating}>
+              Cancel
+            </Button>
+            <Button onClick={handleRotate} disabled={rotating}>
+              {rotating ? 'Saving…' : 'Rotate'}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-[var(--gray-a8)]">
+            Replaces the stored PAT for <span className="font-mono">{source.label}</span>. The new
+            token is encrypted and used for the next refresh / pull.
+          </p>
+          <Input
+            label="New PAT"
+            type="password"
+            placeholder="github_pat_..."
+            value={newPat}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewPat(e.target.value)}
+          />
+        </div>
+      </Modal>
+    </li>
   );
 }
 

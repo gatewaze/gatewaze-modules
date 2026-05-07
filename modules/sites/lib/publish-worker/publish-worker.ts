@@ -196,15 +196,61 @@ export class PublishWorker {
     const repo = await this.deps.resolveSiteRepo(args.siteId);
     if (!repo) throw new Error('site has no git repo');
 
+    // Pre-merge JSON-lock check (per spec-sites-wysiwyg-builder §5.5).
+    // Reject if any wysiwyg_locked page would be modified by a non-worker
+    // commit in the merge range.
+    const preMerge = await this.runPreMergeCheck(args.siteId, repo);
+    if (!preMerge.ok) {
+      // Surface as a "conflict" with the pre-merge details. The caller
+      // (source-routes apply-theme) translates the result into a 409 with
+      // structured error envelope.
+      return {
+        appliedCommit: null,
+        filesChanged: 0,
+        conflicts: preMerge.rejection.details.map((d) => ({
+          path: d.file,
+          reason: `apply.locked_content_modified: commit ${d.commitSha} (slug=${d.slug})`,
+        })),
+      };
+    }
+
     const result = await this.deps.gitServer.applyMerge({
       repo,
       fromBranch: 'main',
       toBranch: 'publish',
       message: args.fastTrack ? 'Fast-track theme apply' : 'Apply theme update',
       author: { name: 'gatewaze', email: 'noreply@gatewaze.local' },
-      failOnConflict: args.fastTrack, // fast-track rejects on any conflict per spec §6.2
+      failOnConflict: args.fastTrack,
     });
 
     return result;
+  }
+
+  /**
+   * Runs the JSON-lock pre-merge check against the proposed main → publish
+   * merge. Lazy-imports the hook module so the worker bundle stays small
+   * for environments that don't enable the WYSIWYG canvas.
+   */
+  private async runPreMergeCheck(siteId: string, _repo: InternalRepoRef) {
+    const { preMergeCheck } = await import('../git/pre-merge-hook.js');
+    return preMergeCheck(
+      {
+        // Production wires real git inspection; the StubInternalGitServer
+        // env returns no inspections so the hook is a no-op.
+        inspectCommits: async () => [],
+        fetchPageLocks: async (slugs) => {
+          if (slugs.length === 0) return [];
+          const res = await this.deps.supabase
+            .from('pages')
+            .select('slug, wysiwyg_locked')
+            .eq('host_kind', 'site')
+            .eq('host_id', siteId)
+            .in('slug', slugs);
+          const rows = ((res as { data: Array<{ slug: string; wysiwyg_locked: boolean }> | null }).data ?? []);
+          return rows.map((r) => ({ slug: r.slug, wysiwygLocked: r.wysiwyg_locked }));
+        },
+      },
+      { fromBranch: 'main', toBranch: 'publish' },
+    );
   }
 }
