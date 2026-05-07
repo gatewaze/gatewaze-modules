@@ -42,6 +42,7 @@
 -- templates_libraries
 -- ==========================================================================
 -- INSERT — caller must be able to admin (host_kind, host_id) of NEW row
+DROP POLICY IF EXISTS "templates_libraries_insert_via_host" ON public.templates_libraries;
 CREATE POLICY "templates_libraries_insert_via_host"
   ON public.templates_libraries
   FOR INSERT
@@ -50,6 +51,7 @@ CREATE POLICY "templates_libraries_insert_via_host"
 
 -- UPDATE — caller must admin BOTH old and new (host_kind, host_id)
 -- (i.e., re-homing a library across hosts requires admin on both ends)
+DROP POLICY IF EXISTS "templates_libraries_update_via_host" ON public.templates_libraries;
 CREATE POLICY "templates_libraries_update_via_host"
   ON public.templates_libraries
   FOR UPDATE
@@ -57,6 +59,7 @@ CREATE POLICY "templates_libraries_update_via_host"
   USING (templates.can_read_host(host_kind, host_id))
   WITH CHECK (templates.can_read_host(host_kind, host_id));
 
+DROP POLICY IF EXISTS "templates_libraries_delete_via_host" ON public.templates_libraries;
 CREATE POLICY "templates_libraries_delete_via_host"
   ON public.templates_libraries
   FOR DELETE
@@ -66,12 +69,14 @@ CREATE POLICY "templates_libraries_delete_via_host"
 -- ==========================================================================
 -- templates_block_defs
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_block_defs_insert_via_host" ON public.templates_block_defs;
 CREATE POLICY "templates_block_defs_insert_via_host"
   ON public.templates_block_defs
   FOR INSERT
   TO authenticated
   WITH CHECK (templates.can_read_library(library_id));
 
+DROP POLICY IF EXISTS "templates_block_defs_update_via_host" ON public.templates_block_defs;
 CREATE POLICY "templates_block_defs_update_via_host"
   ON public.templates_block_defs
   FOR UPDATE
@@ -79,6 +84,7 @@ CREATE POLICY "templates_block_defs_update_via_host"
   USING (templates.can_read_library(library_id))
   WITH CHECK (templates.can_read_library(library_id));
 
+DROP POLICY IF EXISTS "templates_block_defs_delete_via_host" ON public.templates_block_defs;
 CREATE POLICY "templates_block_defs_delete_via_host"
   ON public.templates_block_defs
   FOR DELETE
@@ -93,6 +99,7 @@ CREATE POLICY "templates_block_defs_delete_via_host"
 -- still exists at the moment the brick_defs row is being deleted, so the
 -- subquery resolves correctly during cascade.
 
+DROP POLICY IF EXISTS "templates_brick_defs_insert_via_host" ON public.templates_brick_defs;
 CREATE POLICY "templates_brick_defs_insert_via_host"
   ON public.templates_brick_defs
   FOR INSERT
@@ -101,6 +108,7 @@ CREATE POLICY "templates_brick_defs_insert_via_host"
     (SELECT library_id FROM public.templates_block_defs WHERE id = templates_brick_defs.block_def_id)
   ));
 
+DROP POLICY IF EXISTS "templates_brick_defs_update_via_host" ON public.templates_brick_defs;
 CREATE POLICY "templates_brick_defs_update_via_host"
   ON public.templates_brick_defs
   FOR UPDATE
@@ -112,6 +120,7 @@ CREATE POLICY "templates_brick_defs_update_via_host"
     (SELECT library_id FROM public.templates_block_defs WHERE id = templates_brick_defs.block_def_id)
   ));
 
+DROP POLICY IF EXISTS "templates_brick_defs_delete_via_host" ON public.templates_brick_defs;
 CREATE POLICY "templates_brick_defs_delete_via_host"
   ON public.templates_brick_defs
   FOR DELETE
@@ -123,12 +132,14 @@ CREATE POLICY "templates_brick_defs_delete_via_host"
 -- ==========================================================================
 -- templates_wrappers
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_wrappers_insert_via_host" ON public.templates_wrappers;
 CREATE POLICY "templates_wrappers_insert_via_host"
   ON public.templates_wrappers
   FOR INSERT
   TO authenticated
   WITH CHECK (templates.can_read_library(library_id));
 
+DROP POLICY IF EXISTS "templates_wrappers_update_via_host" ON public.templates_wrappers;
 CREATE POLICY "templates_wrappers_update_via_host"
   ON public.templates_wrappers
   FOR UPDATE
@@ -136,6 +147,7 @@ CREATE POLICY "templates_wrappers_update_via_host"
   USING (templates.can_read_library(library_id))
   WITH CHECK (templates.can_read_library(library_id));
 
+DROP POLICY IF EXISTS "templates_wrappers_delete_via_host" ON public.templates_wrappers;
 CREATE POLICY "templates_wrappers_delete_via_host"
   ON public.templates_wrappers
   FOR DELETE
@@ -145,12 +157,14 @@ CREATE POLICY "templates_wrappers_delete_via_host"
 -- ==========================================================================
 -- templates_definitions
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_definitions_insert_via_host" ON public.templates_definitions;
 CREATE POLICY "templates_definitions_insert_via_host"
   ON public.templates_definitions
   FOR INSERT
   TO authenticated
   WITH CHECK (templates.can_read_library(library_id));
 
+DROP POLICY IF EXISTS "templates_definitions_update_via_host" ON public.templates_definitions;
 CREATE POLICY "templates_definitions_update_via_host"
   ON public.templates_definitions
   FOR UPDATE
@@ -158,6 +172,7 @@ CREATE POLICY "templates_definitions_update_via_host"
   USING (templates.can_read_library(library_id))
   WITH CHECK (templates.can_read_library(library_id));
 
+DROP POLICY IF EXISTS "templates_definitions_delete_via_host" ON public.templates_definitions;
 CREATE POLICY "templates_definitions_delete_via_host"
   ON public.templates_definitions
   FOR DELETE
@@ -167,12 +182,14 @@ CREATE POLICY "templates_definitions_delete_via_host"
 -- ==========================================================================
 -- templates_sources
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_sources_insert_via_host" ON public.templates_sources;
 CREATE POLICY "templates_sources_insert_via_host"
   ON public.templates_sources
   FOR INSERT
   TO authenticated
   WITH CHECK (templates.can_read_library(library_id));
 
+DROP POLICY IF EXISTS "templates_sources_update_via_host" ON public.templates_sources;
 CREATE POLICY "templates_sources_update_via_host"
   ON public.templates_sources
   FOR UPDATE
@@ -180,6 +197,7 @@ CREATE POLICY "templates_sources_update_via_host"
   USING (templates.can_read_library(library_id))
   WITH CHECK (templates.can_read_library(library_id));
 
+DROP POLICY IF EXISTS "templates_sources_delete_via_host" ON public.templates_sources;
 CREATE POLICY "templates_sources_delete_via_host"
   ON public.templates_sources
   FOR DELETE
@@ -189,6 +207,7 @@ CREATE POLICY "templates_sources_delete_via_host"
 -- ==========================================================================
 -- templates_source_artifacts (parented by source_id)
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_source_artifacts_insert_via_host" ON public.templates_source_artifacts;
 CREATE POLICY "templates_source_artifacts_insert_via_host"
   ON public.templates_source_artifacts
   FOR INSERT
@@ -197,6 +216,7 @@ CREATE POLICY "templates_source_artifacts_insert_via_host"
     (SELECT library_id FROM public.templates_sources WHERE id = templates_source_artifacts.source_id)
   ));
 
+DROP POLICY IF EXISTS "templates_source_artifacts_update_via_host" ON public.templates_source_artifacts;
 CREATE POLICY "templates_source_artifacts_update_via_host"
   ON public.templates_source_artifacts
   FOR UPDATE
@@ -208,6 +228,7 @@ CREATE POLICY "templates_source_artifacts_update_via_host"
     (SELECT library_id FROM public.templates_sources WHERE id = templates_source_artifacts.source_id)
   ));
 
+DROP POLICY IF EXISTS "templates_source_artifacts_delete_via_host" ON public.templates_source_artifacts;
 CREATE POLICY "templates_source_artifacts_delete_via_host"
   ON public.templates_source_artifacts
   FOR DELETE
@@ -219,6 +240,7 @@ CREATE POLICY "templates_source_artifacts_delete_via_host"
 -- ==========================================================================
 -- templates_source_previews (parented by source_id)
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_source_previews_insert_via_host" ON public.templates_source_previews;
 CREATE POLICY "templates_source_previews_insert_via_host"
   ON public.templates_source_previews
   FOR INSERT
@@ -227,6 +249,7 @@ CREATE POLICY "templates_source_previews_insert_via_host"
     (SELECT library_id FROM public.templates_sources WHERE id = templates_source_previews.source_id)
   ));
 
+DROP POLICY IF EXISTS "templates_source_previews_update_via_host" ON public.templates_source_previews;
 CREATE POLICY "templates_source_previews_update_via_host"
   ON public.templates_source_previews
   FOR UPDATE
@@ -238,6 +261,7 @@ CREATE POLICY "templates_source_previews_update_via_host"
     (SELECT library_id FROM public.templates_sources WHERE id = templates_source_previews.source_id)
   ));
 
+DROP POLICY IF EXISTS "templates_source_previews_delete_via_host" ON public.templates_source_previews;
 CREATE POLICY "templates_source_previews_delete_via_host"
   ON public.templates_source_previews
   FOR DELETE
@@ -249,12 +273,14 @@ CREATE POLICY "templates_source_previews_delete_via_host"
 -- ==========================================================================
 -- templates_ab_tests (host_kind/host_id direct)
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_ab_tests_insert_via_host" ON public.templates_ab_tests;
 CREATE POLICY "templates_ab_tests_insert_via_host"
   ON public.templates_ab_tests
   FOR INSERT
   TO authenticated
   WITH CHECK (templates.can_read_host(host_kind, host_id));
 
+DROP POLICY IF EXISTS "templates_ab_tests_update_via_host" ON public.templates_ab_tests;
 CREATE POLICY "templates_ab_tests_update_via_host"
   ON public.templates_ab_tests
   FOR UPDATE
@@ -262,6 +288,7 @@ CREATE POLICY "templates_ab_tests_update_via_host"
   USING (templates.can_read_host(host_kind, host_id))
   WITH CHECK (templates.can_read_host(host_kind, host_id));
 
+DROP POLICY IF EXISTS "templates_ab_tests_delete_via_host" ON public.templates_ab_tests;
 CREATE POLICY "templates_ab_tests_delete_via_host"
   ON public.templates_ab_tests
   FOR DELETE
@@ -271,6 +298,7 @@ CREATE POLICY "templates_ab_tests_delete_via_host"
 -- ==========================================================================
 -- templates_ab_assignments (parented by test_id)
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_ab_assignments_insert_via_host" ON public.templates_ab_assignments;
 CREATE POLICY "templates_ab_assignments_insert_via_host"
   ON public.templates_ab_assignments
   FOR INSERT
@@ -280,6 +308,7 @@ CREATE POLICY "templates_ab_assignments_insert_via_host"
     (SELECT host_id   FROM public.templates_ab_tests WHERE id = templates_ab_assignments.test_id)
   ));
 
+DROP POLICY IF EXISTS "templates_ab_assignments_update_via_host" ON public.templates_ab_assignments;
 CREATE POLICY "templates_ab_assignments_update_via_host"
   ON public.templates_ab_assignments
   FOR UPDATE
@@ -293,6 +322,7 @@ CREATE POLICY "templates_ab_assignments_update_via_host"
     (SELECT host_id   FROM public.templates_ab_tests WHERE id = templates_ab_assignments.test_id)
   ));
 
+DROP POLICY IF EXISTS "templates_ab_assignments_delete_via_host" ON public.templates_ab_assignments;
 CREATE POLICY "templates_ab_assignments_delete_via_host"
   ON public.templates_ab_assignments
   FOR DELETE
@@ -305,6 +335,7 @@ CREATE POLICY "templates_ab_assignments_delete_via_host"
 -- ==========================================================================
 -- templates_ab_events (parented by test_id)
 -- ==========================================================================
+DROP POLICY IF EXISTS "templates_ab_events_insert_via_host" ON public.templates_ab_events;
 CREATE POLICY "templates_ab_events_insert_via_host"
   ON public.templates_ab_events
   FOR INSERT
@@ -314,6 +345,7 @@ CREATE POLICY "templates_ab_events_insert_via_host"
     (SELECT host_id   FROM public.templates_ab_tests WHERE id = templates_ab_events.test_id)
   ));
 
+DROP POLICY IF EXISTS "templates_ab_events_update_via_host" ON public.templates_ab_events;
 CREATE POLICY "templates_ab_events_update_via_host"
   ON public.templates_ab_events
   FOR UPDATE
@@ -327,6 +359,7 @@ CREATE POLICY "templates_ab_events_update_via_host"
     (SELECT host_id   FROM public.templates_ab_tests WHERE id = templates_ab_events.test_id)
   ));
 
+DROP POLICY IF EXISTS "templates_ab_events_delete_via_host" ON public.templates_ab_events;
 CREATE POLICY "templates_ab_events_delete_via_host"
   ON public.templates_ab_events
   FOR DELETE
