@@ -16,7 +16,36 @@ const eventsModule: GatewazeModule = {
   ],
 
   apiRoutes: async (app: unknown, context?: ModuleContext) => {
+    // Register events as a host-media consumer so the shared
+    // <HostMediaTab> + /api/admin/event/:id/media routes know the kind.
+    // YouTube + ZIP unpack + albums + sponsor tagging are all enabled
+    // (events is the historical home of these features; host-media
+    // generalises them).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { registerHostMediaConsumer } = await import('../host-media/lib/registry.js' as any);
+    registerHostMediaConsumer({
+      hostKind: 'event',
+      enableAlbums: true,
+      enableSponsorTagging: true,
+      enableYouTube: true,
+      enableZipUnpack: true,
+      contentTables: [
+        // Event descriptions reference media via embedded HTML/jsonb;
+        // the used-in-rebuild cron walks here to keep host_media.used_in
+        // in sync.
+        {
+          table: 'events',
+          staticHostKind: 'event',
+          hostIdColumn: 'id',
+          contentColumn: 'description',
+          consumerType: 'event',
+          idColumn: 'id',
+          nameColumn: 'name',
+        },
+      ],
+    });
     const { registerRoutes } = await import('./api');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     registerRoutes(app as any, context);
   },
 
@@ -33,6 +62,7 @@ const eventsModule: GatewazeModule = {
     'migrations/009_fix_keyword_trigger_definer.sql',
     'migrations/012_nearby_hotels.sql',
     'migrations/013_speakers_extracted_at.sql',
+    'migrations/014_register_event_host_media.sql',
   ],
 
   edgeFunctions: [

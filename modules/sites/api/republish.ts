@@ -72,7 +72,7 @@ export interface RepublishRoutesDeps {
 }
 
 interface RequestWithUser extends Request {
-  user?: { id: string };
+  userId?: string;
 }
 
 interface PublishResponseSuccess {
@@ -108,7 +108,7 @@ export function createRepublishRoutes(deps: RepublishRoutesDeps) {
       res.status(400).json({ error: 'missing_site_id', message: 'site id required' } satisfies ErrorEnvelope);
       return;
     }
-    const userId = req.user?.id ?? null;
+    const userId = req.userId ?? null;
     const body = req.body ?? {};
     const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : undefined;
     const force = body.force === true;

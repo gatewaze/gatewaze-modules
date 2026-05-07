@@ -15,6 +15,7 @@ import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
 
 const sitesModule: GatewazeModule = {
   id: 'sites',
+  group: 'sites',
   type: 'feature',
   visibility: 'public',
   name: 'Sites',
@@ -50,7 +51,10 @@ const sitesModule: GatewazeModule = {
     'migrations/012_pages_composition_mode.sql',
     'migrations/013_git_provenance.sql',
     'migrations/014_internal_repos.sql',
-    'migrations/015_host_media.sql',
+    // 015_host_media.sql: ownership transferred to @gatewaze-modules/host-media
+    // (Phase 2 of spec-host-media-module). The table itself stays where it
+    // is in existing dev DBs; fresh installs get it via host-media's own
+    // migrations 001 + 008 instead.
     'migrations/016_navigation_menus.sql',
     'migrations/017_auth_columns.sql',
     'migrations/018_compliance_columns.sql',
@@ -58,15 +62,22 @@ const sitesModule: GatewazeModule = {
     'migrations/020_boilerplate_versions.sql',
     'migrations/021_repo_advisory_lock.sql',
     'migrations/022_menu_replace_items_rpc.sql',
-    'migrations/023_host_media_quota_decrement.sql',
-    'migrations/024_host_media_usage_rpcs.sql',
-    'migrations/025_media_reference_triggers.sql',
+    // 023_host_media_quota_decrement, 024_host_media_usage_rpcs,
+    // 025_media_reference_triggers, 027_signed_media_urls: ownership
+    // transferred to @gatewaze-modules/host-media (Phase 2 of
+    // spec-host-media-module). On fresh installs, host-media's
+    // migrations 005-006/009/011 cover these. The
+    // page-content-write triggers from sites_025 are replaced by a
+    // single trigger calling host-media's `host_media_sync_refs()`,
+    // installed via sites_035 below.
     'migrations/026_site_drift_state.sql',
-    'migrations/027_signed_media_urls.sql',
     'migrations/028_mega_menus_and_segments.sql',
     'migrations/029_brand_assets_library.sql',
     'migrations/030_i18n_locales.sql',
     'migrations/031_theme_kinds_feature_flag.sql',
+    'migrations/032_canvas_tables.sql',
+    'migrations/033_canvas_apply_ops.sql',
+    'migrations/034_canvas_layout_primitives.sql',
   ],
 
   workers: [
@@ -129,6 +140,36 @@ const sitesModule: GatewazeModule = {
   ],
 
   apiRoutes: async (app: unknown, context?: ModuleContext) => {
+    // Register sites as a host-media consumer BEFORE mounting routes,
+    // so the host-media admin tab/API see the kind as known by the
+    // time first request arrives. host-media's apiRoutes hook itself
+    // is a separate registration; the registry is shared in-process.
+    // Relative path — container bind-mounts /gatewaze-modules without
+    // a node_modules tree, so the bare specifier @gatewaze-modules/host-media
+    // doesn't resolve. The host-media module is always co-located.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { registerHostMediaConsumer } = await import('../host-media/lib/registry.js' as any);
+    registerHostMediaConsumer({
+      hostKind: 'site',
+      enableAlbums: false,
+      enableSponsorTagging: false,
+      enableYouTube: false,
+      enableZipUnpack: false,
+      contentTables: [
+        // pages.content jsonb references media via `image`, `src`, etc.
+        // host-media's used-in-rebuild cron + the page-write triggers
+        // (sites_025) walk this.
+        {
+          table: 'pages',
+          hostKindColumn: 'host_kind',
+          hostIdColumn: 'host_id',
+          contentColumn: 'content',
+          consumerType: 'page',
+          idColumn: 'id',
+          nameColumn: 'title',
+        },
+      ],
+    });
     const { registerRoutes } = await import('./api/register-routes.js');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     registerRoutes(app as any, context);

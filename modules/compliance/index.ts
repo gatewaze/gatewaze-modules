@@ -2,6 +2,7 @@ import type { GatewazeModule } from '@gatewaze/shared';
 
 const complianceModule: GatewazeModule = {
   id: 'compliance',
+  group: 'platform',
   type: 'feature',
   visibility: 'public',
   name: 'Compliance',
