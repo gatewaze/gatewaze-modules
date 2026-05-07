@@ -44,7 +44,22 @@ export interface SiteThemeConfig {
 
 export interface SiteAnalyticsConfig {
   provider: 'plausible' | 'fathom' | 'umami' | 'ga4' | 'none';
+  /** Generic provider site identifier — used by plausible / fathom / ga4 etc. */
   siteId?: string;
+  /**
+   * Per-provider config blocks. The umami block is now sourced canonically
+   * from the analytics module's `analytics_properties` table (see the
+   * auto-provision trigger in analytics/migrations/00006); the field
+   * remains here as a denormalised cache for the renderer's wrapper step
+   * and is populated by `POST /admin/sites/:id/integrations:provision`.
+   * Always optional on read; the renderer skips injection when absent.
+   */
+  umami?: {
+    /** Umami `website_id`. Mirrored from analytics_properties.website_uuid. */
+    umamiWebsiteId: string;
+    /** Optional read-only share id; populated when share-token rotation is enabled. */
+    umamiShareId?: string | null;
+  };
 }
 
 export interface SiteConfig {

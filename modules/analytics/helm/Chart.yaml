@@ -1,0 +1,13 @@
+apiVersion: v2
+name: gatewaze-analytics
+description: Self-hosted Umami analytics for Gatewaze. Single-replica Deployment + retention CronJob + pre-install bootstrap Job.
+type: application
+version: 0.1.0
+appVersion: "2.x"
+keywords:
+  - analytics
+  - umami
+  - first-party
+maintainers:
+  - name: Gatewaze
+icon: https://umami.is/favicon.ico

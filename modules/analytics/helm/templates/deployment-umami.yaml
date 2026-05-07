@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gatewaze-analytics.fullname" . }}-umami
+  labels:
+    {{- include "gatewaze-analytics.labels" . | nindent 4 }}
+    component: umami
+spec:
+  replicas: {{ .Values.umami.replicas }}
+  selector:
+    matchLabels:
+      {{- include "gatewaze-analytics.selectorLabels" . | nindent 6 }}
+      component: umami
+  strategy:
+    type: Recreate  # Single-replica per spec §10.1; Recreate avoids brief downtime via overlap
+  template:
+    metadata:
+      labels:
+        {{- include "gatewaze-analytics.selectorLabels" . | nindent 8 }}
+        component: umami
+    spec:
+      containers:
+        - name: umami
+          image: "{{ .Values.umami.image.repository }}:{{ .Values.umami.image.tag }}"
+          imagePullPolicy: {{ .Values.umami.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.umami.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "gatewaze-analytics.fullname" . }}-env
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.umamiDsnSecretRef.name }}
+                  key: {{ .Values.database.umamiDsnSecretRef.key }}
+            # v3 unified the postgres + mysql images — DATABASE_TYPE
+            # tells the runtime which driver to use. Required for v3+;
+            # ignored on v2 so safe across the upgrade.
+            - name: DATABASE_TYPE
+              value: postgresql
+            - name: APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appSecretRef.name }}
+                  key: {{ .Values.appSecretRef.key }}
+          readinessProbe:
+            httpGet:
+              path: /api/heartbeat
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/heartbeat
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.umami.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # Umami writes to /tmp on first request
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
