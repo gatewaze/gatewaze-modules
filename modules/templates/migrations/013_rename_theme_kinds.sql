@@ -79,14 +79,17 @@ ALTER TABLE public.templates_block_defs ENABLE TRIGGER templates_block_defs_them
 -- 3. Add new CHECK constraints (with the renamed vocabulary)
 -- ==========================================================================
 
+ALTER TABLE public.templates_sources    DROP CONSTRAINT IF EXISTS templates_sources_theme_kind_check;
 ALTER TABLE public.templates_sources
   ADD CONSTRAINT templates_sources_theme_kind_check
   CHECK (theme_kind IN ('email', 'website'));
 
+ALTER TABLE public.templates_libraries  DROP CONSTRAINT IF EXISTS templates_libraries_theme_kind_check;
 ALTER TABLE public.templates_libraries
   ADD CONSTRAINT templates_libraries_theme_kind_check
   CHECK (theme_kind IN ('email', 'website'));
 
+ALTER TABLE public.templates_block_defs DROP CONSTRAINT IF EXISTS templates_block_defs_theme_kind_check;
 ALTER TABLE public.templates_block_defs
   ADD CONSTRAINT templates_block_defs_theme_kind_check
   CHECK (theme_kind IN ('email', 'website'));

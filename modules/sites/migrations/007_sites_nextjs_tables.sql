@@ -262,6 +262,8 @@ CREATE TRIGGER sites_publish_jobs_check_transition
 
 -- Now backfill the FK from pages_content_versions.source_publish_job_id
 ALTER TABLE public.pages_content_versions
+  DROP CONSTRAINT IF EXISTS pages_content_versions_publish_job_fkey;
+ALTER TABLE public.pages_content_versions
   ADD CONSTRAINT pages_content_versions_publish_job_fkey
   FOREIGN KEY (source_publish_job_id)
   REFERENCES public.sites_publish_jobs(id)
@@ -337,6 +339,7 @@ ALTER TABLE public.sites_runtime_api_keys     ENABLE ROW LEVEL SECURITY;
 
 -- pages_nextjs_drafts: an editor reads their own drafts on sites they can edit;
 -- site admins read any draft on their site (for the "stale draft cleanup" UI).
+DROP POLICY IF EXISTS "pages_nextjs_drafts_self_or_admin_read" ON public.pages_nextjs_drafts;
 CREATE POLICY "pages_nextjs_drafts_self_or_admin_read"
   ON public.pages_nextjs_drafts FOR SELECT
   TO authenticated
@@ -352,6 +355,7 @@ CREATE POLICY "pages_nextjs_drafts_self_or_admin_read"
 
 -- pages_content_variants: same access model as page_blocks (cascade through
 -- page access). Authenticated readers AND anon-on-published.
+DROP POLICY IF EXISTS "pages_content_variants_via_page" ON public.pages_content_variants;
 CREATE POLICY "pages_content_variants_via_page"
   ON public.pages_content_variants FOR SELECT
   TO authenticated
@@ -363,6 +367,7 @@ CREATE POLICY "pages_content_variants_via_page"
        )
   ));
 
+DROP POLICY IF EXISTS "pages_content_variants_anon_published" ON public.pages_content_variants;
 CREATE POLICY "pages_content_variants_anon_published"
   ON public.pages_content_variants FOR SELECT
   TO anon
@@ -373,6 +378,7 @@ CREATE POLICY "pages_content_variants_anon_published"
   ));
 
 -- pages_content_versions: site admins read; service-role only writes
+DROP POLICY IF EXISTS "pages_content_versions_admin_read" ON public.pages_content_versions;
 CREATE POLICY "pages_content_versions_admin_read"
   ON public.pages_content_versions FOR SELECT
   TO authenticated
@@ -382,6 +388,7 @@ CREATE POLICY "pages_content_versions_admin_read"
   ));
 
 -- sites_publish_jobs: site admins read
+DROP POLICY IF EXISTS "sites_publish_jobs_admin_read" ON public.sites_publish_jobs;
 CREATE POLICY "sites_publish_jobs_admin_read"
   ON public.sites_publish_jobs FOR SELECT
   TO authenticated
@@ -394,6 +401,7 @@ CREATE POLICY "sites_publish_jobs_admin_read"
 -- created_at, rate_limit_rps, revoked_at). The key_hash is sensitive and the
 -- cleartext key is never stored. The handler projects only the metadata
 -- columns; RLS doesn't filter columns, so the API layer is responsible.
+DROP POLICY IF EXISTS "sites_runtime_api_keys_admin_read" ON public.sites_runtime_api_keys;
 CREATE POLICY "sites_runtime_api_keys_admin_read"
   ON public.sites_runtime_api_keys FOR SELECT
   TO authenticated
