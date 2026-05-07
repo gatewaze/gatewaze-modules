@@ -1,0 +1,87 @@
+# Self-hosted Umami for Gatewaze.
+# Per spec-analytics-module §10.
+
+umami:
+  image:
+    # v3 lives on Docker Hub, not GHCR; the v3 release unified the
+    # postgres + mysql builds (you pick via DATABASE_TYPE), so the
+    # `postgresql-` tag prefix went away. v3 → v2 schema is one-way;
+    # back up gatewaze_umami before upgrading.
+    repository: docker.io/umamisoftware/umami
+    # Pin explicitly. `latest` exists but the codebase standard
+    # (values-autodb.yaml) avoids :latest tags because k8s caches the
+    # first-pulled content per node and produces ghost rollbacks.
+    # Bump on each release we want rolled.
+    tag: "3.1.0"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Service-level config — applied via the configmap
+  trackerScriptName: script
+  hostname: 0.0.0.0
+  port: 3000
+
+# Connection to the existing platform Postgres. The pre-install Job
+# creates a dedicated `gatewaze_umami` database + `gatewaze_umami_role`
+# role using the platform service-role connection from this Secret.
+database:
+  # Secret containing the platform Postgres connection string. Same Secret
+  # the api uses; we don't duplicate credentials.
+  dsnSecretRef:
+    name: gatewaze-platform-postgres
+    key: dsn
+  bootstrapDatabase: gatewaze_umami
+  bootstrapRole: gatewaze_umami_role
+  # Generated at install time by the pre-install Job and stored in
+  # gatewaze-analytics-umami-db. Umami reads this for its DATABASE_URL.
+  umamiDsnSecretRef:
+    name: gatewaze-analytics-umami-db
+    key: dsn
+
+# Umami's internal session-signing key. Generate with `openssl rand -hex 32`
+# and supply via `--set umami.appSecret=...` or pre-create the Secret.
+appSecretRef:
+  name: gatewaze-analytics-secret
+  key: app-secret
+
+# Initial admin credentials for Umami's API. Used by the analytics
+# module's analyticsService and provisioning worker. Never logged.
+adminCredentialsRef:
+  name: gatewaze-analytics-admin
+  keys:
+    username: username
+    password: password
+
+retention:
+  # Days of pageview/event data to retain. Default 13 months.
+  days: 395
+  # Cron schedule for the prune CronJob. Default: 03:30 UTC daily.
+  schedule: "30 3 * * *"
+
+ingest:
+  perIpRateLimit:
+    requests: 200
+    windowMs: 60000
+  perPropertyRateLimit:
+    requests: 5000
+    windowMs: 60000
+
+embed:
+  scriptCacheMaxAgeSeconds: 300
+
+# Service exposure. ClusterIP only — Umami's admin UI is NOT publicly
+# exposed. The Gatewaze admin UI proxies dashboard reads via the
+# /api/analytics/* surface.
+service:
+  type: ClusterIP
+  port: 3000
+
+# No Ingress in v1 — see hard rule §10.1.
+ingress:
+  enabled: false

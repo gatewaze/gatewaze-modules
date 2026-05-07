@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gatewaze-analytics.fullname" . }}-umami
+  labels:
+    {{- include "gatewaze-analytics.labels" . | nindent 4 }}
+    component: umami
+spec:
+  # ClusterIP only — Umami's admin UI is NOT publicly exposed.
+  # The Gatewaze admin UI proxies dashboards via the platform API.
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "gatewaze-analytics.selectorLabels" . | nindent 4 }}
+    component: umami

@@ -1,0 +1,59 @@
+{{/*
+Daily retention CronJob — prunes Umami's `event` and `event_data` rows
+older than retention.days.
+
+Per spec-analytics-module §10.4. Default 13 months (395 days) — operators
+typically want a year-over-year comparison + a month of buffer.
+
+The job runs psql against gatewaze_umami with the `gatewaze_umami_role`
+credentials provisioned by job-bootstrap-db.yaml. ON_ERROR_STOP so a
+prune failure surfaces in the CronJob's status.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "gatewaze-analytics.fullname" . }}-retention
+  labels:
+    {{- include "gatewaze-analytics.labels" . | nindent 4 }}
+    component: retention
+spec:
+  schedule: {{ .Values.retention.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "gatewaze-analytics.selectorLabels" . | nindent 12 }}
+            component: retention
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: prune
+              image: postgres:16-alpine
+              env:
+                - name: UMAMI_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.database.umamiDsnSecretRef.name }}
+                      key: {{ .Values.database.umamiDsnSecretRef.key }}
+                - name: RETENTION_DAYS
+                  value: {{ .Values.retention.days | quote }}
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  CUTOFF=$(date -u -d "${RETENTION_DAYS} days ago" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+                    || date -u -v-${RETENTION_DAYS}d '+%Y-%m-%d %H:%M:%S')
+                  echo "[analytics:retention] pruning rows older than $CUTOFF"
+                  psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
+                    "DELETE FROM event_data
+                       WHERE event_id IN (
+                         SELECT event_id FROM event WHERE created_at < '${CUTOFF}'
+                       )"
+                  psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
+                    "DELETE FROM event WHERE created_at < '${CUTOFF}'"
+                  echo "[analytics:retention] complete"
