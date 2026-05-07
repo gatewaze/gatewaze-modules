@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gatewaze-analytics.fullname" . }}-env
+  labels:
+    {{- include "gatewaze-analytics.labels" . | nindent 4 }}
+data:
+  # Umami's runtime environment. DATABASE_URL + APP_SECRET come from
+  # Secrets, mounted via envFrom in the Deployment.
+  TRACKER_SCRIPT_NAME: {{ .Values.umami.trackerScriptName | quote }}
+  HOSTNAME: {{ .Values.umami.hostname | quote }}
+  PORT: {{ .Values.umami.port | quote }}
+  # Disable Umami's telemetry (privacy-by-default per spec §14.5)
+  DISABLE_TELEMETRY: "1"
+  # Umami expects this when running behind a same-origin proxy
+  PROXY_TRUST: "1"
