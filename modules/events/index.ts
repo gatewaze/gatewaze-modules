@@ -1,4 +1,5 @@
 import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
+import { getEventsMcpContributions } from './mcp.js';
 
 const eventsModule: GatewazeModule = {
   id: 'events',
@@ -208,11 +209,7 @@ const eventsModule: GatewazeModule = {
     },
   ],
 
-  mcpContributions: () => {
-    // Lazy-load to avoid pulling MCP deps into the admin/portal build
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return require('./mcp').getEventsMcpContributions();
-  },
+  mcpContributions: () => getEventsMcpContributions(),
 
   dependencies: [],
 

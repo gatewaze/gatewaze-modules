@@ -228,33 +228,33 @@ WHERE eb.templates_block_def_id IS NULL
   AND eb.block_template_id = legacy_bt.id;
 
 -- ============================================================================
--- 6. (Optional) Backfill brick FKs on newsletters_edition_block_bricks
+-- 6. (Optional) Backfill brick FKs on newsletters_edition_bricks
 -- ============================================================================
--- newsletters_edition_block_bricks has brick_template_id (legacy). The
+-- newsletters_edition_bricks has brick_template_id (legacy). The
 -- complementary FK column to templates_brick_defs is added below.
 
-ALTER TABLE public.newsletters_edition_block_bricks
+ALTER TABLE public.newsletters_edition_bricks
   ADD COLUMN IF NOT EXISTS templates_brick_def_id uuid;
 
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
-    WHERE conname = 'newsletters_edition_block_bricks_templates_brick_def_fk'
+    WHERE conname = 'newsletters_edition_bricks_templates_brick_def_fk'
   ) THEN
-    ALTER TABLE public.newsletters_edition_block_bricks
-      ADD CONSTRAINT newsletters_edition_block_bricks_templates_brick_def_fk
+    ALTER TABLE public.newsletters_edition_bricks
+      ADD CONSTRAINT newsletters_edition_bricks_templates_brick_def_fk
         FOREIGN KEY (templates_brick_def_id)
         REFERENCES public.templates_brick_defs(id) ON DELETE SET NULL
         DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END$$;
 
-CREATE INDEX IF NOT EXISTS newsletters_edition_block_bricks_templates_brick_def_idx
-  ON public.newsletters_edition_block_bricks (templates_brick_def_id);
+CREATE INDEX IF NOT EXISTS newsletters_edition_bricks_templates_brick_def_idx
+  ON public.newsletters_edition_bricks (templates_brick_def_id);
 
 -- Backfill where the legacy brick_template_id maps directly.
-UPDATE public.newsletters_edition_block_bricks ebb
+UPDATE public.newsletters_edition_bricks ebb
 SET templates_brick_def_id = ebb.brick_template_id
 WHERE ebb.templates_brick_def_id IS NULL
   AND ebb.brick_template_id IS NOT NULL
