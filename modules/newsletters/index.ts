@@ -2,6 +2,7 @@ import type { GatewazeModule } from '@gatewaze/shared';
 
 const newslettersModule: GatewazeModule = {
   id: 'newsletters',
+  group: 'content',
   type: 'feature',
   visibility: 'public',
   name: 'Newsletters',
@@ -84,7 +85,36 @@ const newslettersModule: GatewazeModule = {
     'migrations/023_drop_legacy_template_tables.sql',
     'migrations/024_editions_snapshot_columns.sql',
     'migrations/025_register_category_adapter.sql',
+    'migrations/026_fix_keyword_trigger_definer.sql',
   ],
+
+  // Hook to register newsletters as a host-media consumer at apiRoutes
+  // load time. Newsletters didn't previously expose any API routes;
+  // this hook does nothing else. The DB-side dispatch fn already
+  // includes a `newsletter` branch (host-media migration 008).
+  apiRoutes: async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { registerHostMediaConsumer } = await import('../host-media/lib/registry.js' as any);
+    registerHostMediaConsumer({
+      hostKind: 'newsletter',
+      enableAlbums: false,
+      enableSponsorTagging: false,
+      enableYouTube: false,
+      enableZipUnpack: false,
+      contentTables: [
+        // Edition body content references media via embedded HTML/jsonb.
+        {
+          table: 'newsletters_editions',
+          staticHostKind: 'newsletter',
+          hostIdColumn: 'newsletter_id',
+          contentColumn: 'content',
+          consumerType: 'edition',
+          idColumn: 'id',
+          nameColumn: 'subject',
+        },
+      ],
+    });
+  },
 
   adminRoutes: [
     // Newsletter list & creation

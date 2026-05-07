@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/site-runtime",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Tiny React runtime that operator themes import to inject the gatewaze-emitted analytics + A/B engine into their <head>. Works for schema-mode sites where the publish-worker doesn't replace the operator's app/layout.tsx.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./head": "./GatewazeHead.tsx"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  }
+}
