@@ -29,12 +29,16 @@ export const MyBlocksPanel: FC<MyBlocksPanelProps> = ({ open, mode, edition, reg
   const userBlocks = useUserBlocks();
   const [label, setLabel] = useState('');
   const [description, setDescription] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Reset form when the modal opens with a new pendingSave tree.
   useEffect(() => {
     if (mode === 'save' && open) {
       setLabel('');
       setDescription('');
+      setSaving(false);
+      setSaveError(null);
     }
   }, [mode, open, userBlocks.pendingSave]);
 
@@ -54,26 +58,48 @@ export const MyBlocksPanel: FC<MyBlocksPanelProps> = ({ open, mode, edition, reg
             setLabel={setLabel}
             description={description}
             setDescription={setDescription}
-            onCancel={onClose}
-            onSubmit={() => {
-              const tree = userBlocks.pendingSave;
-              if (!tree || !label.trim()) return;
-              userBlocks.saveBlock({ label: label.trim(), description: description.trim(), tree });
+            saving={saving}
+            saveError={saveError}
+            onCancel={() => {
               userBlocks.clearPendingSave();
               onClose();
             }}
-            disabled={!userBlocks.pendingSave || !label.trim()}
+            onSubmit={async () => {
+              const tree = userBlocks.pendingSave;
+              if (!tree || !label.trim() || saving) return;
+              setSaving(true);
+              setSaveError(null);
+              try {
+                await userBlocks.saveBlock({ label: label.trim(), description: description.trim(), tree });
+                userBlocks.clearPendingSave();
+                onClose();
+              } catch (e) {
+                setSaveError(e instanceof Error ? e.message : String(e));
+              } finally {
+                setSaving(false);
+              }
+            }}
+            disabled={!userBlocks.pendingSave || !label.trim() || saving}
           />
         ) : (
           <BrowseBody
             blocks={userBlocks.blocks}
+            loadState={userBlocks.loadState}
+            loadError={userBlocks.loadError}
             registry={registry}
             onInsert={(block) => {
               const next = applyUserBlockToEdition(edition, block, registry);
               onApply(next);
               onClose();
             }}
-            onDelete={(id) => userBlocks.deleteBlock(id)}
+            onDelete={async (id) => {
+              try {
+                await userBlocks.deleteBlock(id);
+              } catch (e) {
+                // eslint-disable-next-line no-console
+                console.error('[user-blocks] delete failed:', e);
+              }
+            }}
           />
         )}
       </div>
@@ -89,6 +115,8 @@ function SaveBody({
   onSubmit,
   onCancel,
   disabled,
+  saving,
+  saveError,
 }: {
   label: string;
   setLabel: (v: string) => void;
@@ -97,6 +125,8 @@ function SaveBody({
   onSubmit: () => void;
   onCancel: () => void;
   disabled: boolean;
+  saving: boolean;
+  saveError: string | null;
 }): ReactNode {
   return (
     <div style={{ padding: '16px 20px' }}>
@@ -109,6 +139,7 @@ function SaveBody({
         onChange={(e) => setLabel(e.target.value)}
         placeholder="e.g. Three-column highlight row"
         autoFocus
+        disabled={saving}
         style={inputStyle}
       />
       <label style={{ display: 'block', fontSize: 13, fontWeight: 500, margin: '12px 0 4px' }}>
@@ -119,12 +150,16 @@ function SaveBody({
         onChange={(e) => setDescription(e.target.value)}
         placeholder="Where should I use this?"
         rows={3}
+        disabled={saving}
         style={{ ...inputStyle, resize: 'vertical' }}
       />
+      {saveError && (
+        <p style={{ margin: '12px 0 0', fontSize: 13, color: '#b42318' }}>{saveError}</p>
+      )}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-        <button type="button" onClick={onCancel} style={ghostBtnStyle}>Cancel</button>
+        <button type="button" onClick={onCancel} disabled={saving} style={ghostBtnStyle}>Cancel</button>
         <button type="button" onClick={onSubmit} disabled={disabled} style={disabled ? ghostBtnStyle : primaryBtnStyle}>
-          Save block
+          {saving ? 'Saving…' : 'Save block'}
         </button>
       </div>
     </div>
@@ -133,15 +168,30 @@ function SaveBody({
 
 function BrowseBody({
   blocks,
+  loadState,
+  loadError,
   registry,
   onInsert,
   onDelete,
 }: {
   blocks: ReadonlyArray<UserBlock>;
+  loadState: 'idle' | 'loading' | 'ready' | 'error';
+  loadError: string | null;
   registry: EmailBlockRegistry;
   onInsert: (block: UserBlock) => void;
   onDelete: (id: string) => void;
 }): ReactNode {
+  if (loadState === 'loading') {
+    return <div style={{ padding: '32px 20px', textAlign: 'center', color: '#666' }}>Loading saved blocks…</div>;
+  }
+  if (loadState === 'error') {
+    return (
+      <div style={{ padding: '32px 20px', textAlign: 'center', color: '#b42318' }}>
+        <p style={{ margin: '0 0 8px', fontWeight: 500 }}>Couldn&apos;t load saved blocks</p>
+        <p style={{ margin: 0, fontSize: 13 }}>{loadError}</p>
+      </div>
+    );
+  }
   if (blocks.length === 0) {
     return (
       <div style={{ padding: '32px 20px', textAlign: 'center', color: '#666' }}>

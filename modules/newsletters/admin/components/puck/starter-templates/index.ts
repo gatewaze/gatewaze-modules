@@ -22,10 +22,18 @@ export interface StarterTemplate {
   category: 'Onboarding' | 'Marketing' | 'Transactional' | 'Plain';
   /**
    * Top-level block sequence. Each entry's `type` is a registry
-   * componentId; `props` carries the field defaults (no id).
+   * componentId; `props` carries the field defaults (no id). Slot
+   * containers carry their nested children recursively in `props.children`.
    */
   blocks: ReadonlyArray<{ type: string; props: Record<string, unknown> }>;
 }
+
+// Re-export the Barebone-derived starters so callers get them via the
+// same module surface. The trees in `barebone-trees.generated.ts` are
+// produced by `tsx-decomposer/build-barebone-trees.ts` — run that
+// script whenever the boilerplate's TSX templates change.
+import { BAREBONE_STARTER_TEMPLATES } from './barebone-trees.generated.js';
+export { BAREBONE_STARTER_TEMPLATES } from './barebone-trees.generated.js';
 
 export const STARTERS: ReadonlyArray<StarterTemplate> = [
   {
@@ -178,6 +186,15 @@ export const STARTERS: ReadonlyArray<StarterTemplate> = [
   },
 ];
 
+/**
+ * Combined list — hand-built starters (curated, written using the
+ * composite blocks) followed by the decomposed Barebone trees
+ * (auto-generated, structurally faithful to the boilerplate's TSX).
+ * The picker shows them in this order so the curated entries appear
+ * first; the Barebone entries are clearly suffixed with "(Barebone)".
+ */
+export const ALL_STARTERS: ReadonlyArray<StarterTemplate> = [...STARTERS, ...BAREBONE_STARTER_TEMPLATES];
+
 export function getStarter(slug: string): StarterTemplate | undefined {
-  return STARTERS.find((s) => s.slug === slug);
+  return ALL_STARTERS.find((s) => s.slug === slug);
 }
