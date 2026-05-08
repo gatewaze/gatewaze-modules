@@ -320,12 +320,16 @@ async function loadValidationContext(
   deps: OpHandlerDeps,
   pageId: string,
 ): Promise<{ page: PageRow; site: SiteRow; blockDefsByKey: Map<string, BlockDefRow>; blockDefsById: Map<string, BlockDefRow>; brickDefsByBlockAndKey: Map<string, BrickDefRow> } | { error: ApplyOpsResult }> {
+  // pages uses host_kind/host_id not site_id; narrow to host_kind='site'
+  // and re-shape the row into the legacy PageRow contract.
   const pageRes = await deps.supabase
     .from('pages')
-    .select('id, site_id, composition_mode, wrapper_id, content, title, full_path, version, wysiwyg_locked')
+    .select('id, host_id, host_kind, composition_mode, wrapper_id, content, title, full_path, version, wysiwyg_locked')
     .eq('id', pageId)
+    .eq('host_kind', 'site')
     .maybeSingle();
-  const page = (pageRes as { data: PageRow | null }).data;
+  const pageRaw = (pageRes as { data: (Omit<PageRow, 'site_id'> & { host_id: string; host_kind: string }) | null }).data;
+  const page: PageRow | null = pageRaw ? ({ ...pageRaw, site_id: pageRaw.host_id } as PageRow) : null;
   if (!page) {
     return { error: { ok: false, httpStatus: 404, code: 'not_found', message: 'page not found' } };
   }
@@ -561,12 +565,16 @@ async function rerenderPage(
   pageId: string,
 ): Promise<{ render: RenderResult } | { error: ApplyOpsResult }> {
   // Fetch the post-apply tree.
+  // pages uses host_kind/host_id not site_id; narrow to host_kind='site'
+  // and re-shape the row into the legacy PageRow contract.
   const pageRes = await deps.supabase
     .from('pages')
-    .select('id, site_id, composition_mode, wrapper_id, content, title, full_path, version, wysiwyg_locked')
+    .select('id, host_id, host_kind, composition_mode, wrapper_id, content, title, full_path, version, wysiwyg_locked')
     .eq('id', pageId)
+    .eq('host_kind', 'site')
     .maybeSingle();
-  const page = (pageRes as { data: PageRow | null }).data;
+  const pageRaw = (pageRes as { data: (Omit<PageRow, 'site_id'> & { host_id: string; host_kind: string }) | null }).data;
+  const page: PageRow | null = pageRaw ? ({ ...pageRaw, site_id: pageRaw.host_id } as PageRow) : null;
   if (!page) {
     return { error: { ok: false, httpStatus: 500, code: 'internal', message: 'page disappeared after apply' } };
   }

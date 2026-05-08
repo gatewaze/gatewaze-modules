@@ -338,13 +338,14 @@ export function SiteSourceTab({ site, onSiteUpdated }: SiteSourceTabProps) {
       >
         <div className="space-y-4">
           <p className="text-sm text-[var(--gray-a8)]">
-            Clone an external Next.js theme repo and ingest its <span className="font-mono">content/schema.json</span>{' '}
-            into this site's library. The PAT is consumed once for the clone, then stored encrypted under{' '}
-            <span className="font-mono">git_pat_&lt;source_id&gt;</span> for future pulls.
+            Clone a theme repo and ingest its blocks (<span className="font-mono">source.html</span>{' '}
+            with marker grammar) and/or content schema (<span className="font-mono">content/schema.json</span>){' '}
+            into this site's library. PAT is only required for private repos —{' '}
+            <span className="font-mono">github.com/gatewaze/*</span> are public and clone anonymously.
           </p>
           <Input
             label="HTTPS git URL"
-            placeholder="https://github.com/your-org/your-theme.git"
+            placeholder="https://github.com/gatewaze/gatewaze-template-blocks.git"
             {...importForm.register('git_url', {
               required: 'Required',
               pattern: { value: /^https:\/\/.+/, message: 'Must be https://' },
@@ -352,10 +353,10 @@ export function SiteSourceTab({ site, onSiteUpdated }: SiteSourceTabProps) {
             error={importForm.formState.errors.git_url?.message}
           />
           <Input
-            label="Personal access token"
+            label="Personal access token (optional — leave blank for public repos)"
             type="password"
-            placeholder="github_pat_..."
-            {...importForm.register('pat', { required: 'Required' })}
+            placeholder="github_pat_... (leave blank for public)"
+            {...importForm.register('pat')}
             error={importForm.formState.errors.pat?.message}
           />
           <div className="grid grid-cols-2 gap-3">

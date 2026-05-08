@@ -149,13 +149,18 @@ async function fetchPageTree(deps: CanvasRoutesDeps, pageId: string): Promise<{
   brickDefs: Map<string, BrickDefRow>;
   wrappers: Map<string, WrapperRow>;
 } | { notFound: true }> {
+  // pages table uses host_kind/host_id (polymorphic owner) not site_id.
+  // We narrow to host_kind='site' here — canvas is sites-only for v1.
   const pageRes = await deps.supabase
     .from('pages')
-    .select('id, site_id, composition_mode, wrapper_id, content, title, full_path, version, wysiwyg_locked')
+    .select('id, host_id, host_kind, composition_mode, wrapper_id, content, title, full_path, version, wysiwyg_locked')
     .eq('id', pageId)
+    .eq('host_kind', 'site')
     .maybeSingle();
-  const page = (pageRes as { data: PageRow | null }).data;
-  if (!page) return { notFound: true };
+  const pageRaw = (pageRes as { data: (Omit<PageRow, 'site_id'> & { host_id: string; host_kind: string }) | null }).data;
+  if (!pageRaw) return { notFound: true };
+  // Re-shape to the legacy PageRow contract callers expect.
+  const page: PageRow = { ...pageRaw, site_id: pageRaw.host_id } as PageRow;
 
   const siteRes = await deps.supabase
     .from('sites')
@@ -493,12 +498,13 @@ export function createCanvasRoutes(deps: CanvasRoutesDeps) {
     // is heavier than we need; a single-row pages.site_id select suffices.
     const pageRes = await deps.supabase
       .from('pages')
-      .select('site_id')
+      .select('host_id, host_kind')
       .eq('id', pageId)
+      .eq('host_kind', 'site')
       .maybeSingle();
-    const siteIdRow = (pageRes as { data: { site_id: string } | null }).data;
+    const siteIdRow = (pageRes as { data: { host_id: string; host_kind: string } | null }).data;
     if (!siteIdRow) return sendError(res, 404, 'not_found', 'page not found');
-    const auth = await assertCanAdminSite(deps, userId, siteIdRow.site_id);
+    const auth = await assertCanAdminSite(deps, userId, siteIdRow.host_id);
     if (!auth.ok) return sendError(res, auth.httpStatus, auth.code, auth.message);
 
     const v = validateEnvelope(req.body);
@@ -544,12 +550,13 @@ export function createCanvasRoutes(deps: CanvasRoutesDeps) {
 
     const pageRes = await deps.supabase
       .from('pages')
-      .select('site_id')
+      .select('host_id, host_kind')
       .eq('id', pageId)
+      .eq('host_kind', 'site')
       .maybeSingle();
-    const pageRow = (pageRes as { data: { site_id: string } | null }).data;
+    const pageRow = (pageRes as { data: { host_id: string; host_kind: string } | null }).data;
     if (!pageRow) return sendError(res, 404, 'not_found', 'page not found');
-    const auth = await assertCanAdminSite(deps, userId, pageRow.site_id);
+    const auth = await assertCanAdminSite(deps, userId, pageRow.host_id);
     if (!auth.ok) return sendError(res, auth.httpStatus, auth.code, auth.message);
 
     // Lazy reap stale locks before attempting upsert.

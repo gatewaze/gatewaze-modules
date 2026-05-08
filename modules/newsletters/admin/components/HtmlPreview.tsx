@@ -223,19 +223,35 @@ export function HtmlPreview({ edition, redirectsReady = false, generatedLinks = 
         let copyHtml = html;
         try {
           const sortedBlocks = [...edition.blocks].sort((a, b) => a.sort_order - b.sort_order);
-          const outputBlocks = sortedBlocks.map(block => ({
-            block_type: block.block_template.block_type,
-            template: (block.block_template.content as any)?.html_template || '',
-            content: block.content as Record<string, string>,
-            has_bricks: !!(block.block_template.content as any)?.has_bricks,
-            bricks: block.bricks.sort((a, b) => a.sort_order - b.sort_order).map(brick => ({
-              brick_type: brick.brick_template.brick_type,
-              template: (brick.brick_template.content as any)?.html_template || '',
-              content: brick.content as Record<string, string>,
-              sort_order: brick.sort_order,
-            })),
-            sort_order: block.sort_order,
-          }));
+          const outputBlocks = sortedBlocks.map(block => {
+            // Per spec-builder-evaluation §3.6 (extended). The loader at
+            // editions/[id].tsx selects render_kind + component_id from
+            // templates_block_defs and surfaces them on the (DbBlockTemplate
+            // & BlockTemplate) intersection that's now passed into edit
+            // editions. Read them off the block_template so OutputBlock
+            // carries them through to the adapter's dispatcher.
+            const tpl = block.block_template as unknown as {
+              render_kind?: 'mustache' | 'react-email';
+              component_id?: string | null;
+            };
+            return {
+              id: block.id,
+              block_type: block.block_template.block_type,
+              template: (block.block_template.content as any)?.html_template || '',
+              content: block.content as Record<string, string>,
+              has_bricks: !!(block.block_template.content as any)?.has_bricks,
+              bricks: block.bricks.sort((a, b) => a.sort_order - b.sort_order).map(brick => ({
+                id: brick.id,
+                brick_type: brick.brick_template.brick_type,
+                template: (brick.brick_template.content as any)?.html_template || '',
+                content: brick.content as Record<string, string>,
+                sort_order: brick.sort_order,
+              })),
+              sort_order: block.sort_order,
+              ...(tpl.render_kind ? { render_kind: tpl.render_kind } : {}),
+              ...(tpl.component_id ? { component_id: tpl.component_id } : {}),
+            };
+          });
 
           const activeLinks = generatedLinks.length > 0 ? generatedLinks : editionLinks;
           const linksMap = new Map<string, string>();

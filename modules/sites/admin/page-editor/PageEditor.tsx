@@ -12,7 +12,8 @@ import * as React from 'react';
 import type { PageRow, SiteRow } from '../../types/index.js';
 import { SchemaEditor, type SchemaEditorProps } from '../schema-editor/SchemaEditor.js';
 import type { FieldRendererMap, SchemaNode } from '../schema-editor/index.js';
-import { SiteCanvasEditor } from '../components/canvas/SiteCanvasEditor.js';
+import { CanvasEditor } from '../components/canvas/CanvasEditor.js';
+import type { SitesSettingsLike, CanvasEngine } from '../components/canvas/canvas-engine.js';
 
 export interface PageEditorContentSchema {
   /** templates_content_schemas.schema_json — the JSON Schema for `pages.content`. */
@@ -35,6 +36,15 @@ export interface PageEditorProps {
   onSave?: SchemaEditorProps['onSave'];
   /** Optional callback when user clicks "Personalize" on a field. The admin app opens its variant editor. */
   onPersonalize?: (pointer: string) => void;
+  /**
+   * Per-site settings bag. Currently used only for `canvas.engine` to
+   * select between the legacy and Puck editors. Per
+   * spec-builder-evaluation §3.7. Pass null to fall back to the platform
+   * default + DEFAULT_ENGINE.
+   */
+  siteSettings?: SitesSettingsLike | null;
+  /** Platform-level default engine, surfaced by the feature-flags endpoint. */
+  canvasEngineDefault?: CanvasEngine;
 }
 
 export const PageEditor: React.FC<PageEditorProps> = ({
@@ -45,6 +55,8 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   renderers,
   onSave,
   onPersonalize,
+  siteSettings,
+  canvasEngineDefault,
 }) => {
   if (site.theme_kind !== 'website') {
     return (
@@ -55,7 +67,14 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   }
 
   if (page.composition_mode === 'blocks') {
-    return <SiteCanvasEditor pageId={page.id} siteSlug={site.slug} />;
+    return (
+      <CanvasEditor
+        pageId={page.id}
+        siteSlug={site.slug}
+        siteSettings={siteSettings ?? null}
+        platformDefault={canvasEngineDefault}
+      />
+    );
   }
 
   // composition_mode === 'schema'

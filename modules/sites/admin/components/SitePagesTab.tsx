@@ -61,7 +61,11 @@ export function SitePagesTab({ site }: { site: SiteRow }) {
       full_path: '',
       templates_library_id: site.templates_library_id ?? '',
       is_homepage: false,
-      composition_mode: 'blocks',
+      // Default to schema mode — works out of the box on the auto-provisioned
+      // starter library (hero/sections content_schema). Blocks mode requires
+      // template_block_defs which aren't populated until an operator connects
+      // a theme git repo via the Source tab.
+      composition_mode: 'schema',
     },
   });
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = form;
@@ -355,10 +359,19 @@ export function SitePagesTab({ site }: { site: SiteRow }) {
             label="How is this page authored?"
             {...register('composition_mode')}
             data={[
-              { value: 'blocks', label: 'Visual canvas — drag-and-drop blocks (WYSIWYG)' },
-              { value: 'schema', label: 'Schema form — typed fields per route' },
+              { value: 'schema', label: 'Schema form — typed fields (default; works on a fresh site)' },
+              { value: 'blocks', label: 'Visual canvas — drag-and-drop blocks (requires a theme repo)' },
             ]}
           />
+          {watch('composition_mode') === 'blocks' && (() => {
+            // Warn if the site's library has no block_defs yet — visual canvas
+            // would be blank otherwise.
+            return (
+              <p className="text-xs text-[var(--orange-11)] -mt-1">
+                The visual canvas needs a theme repo with template blocks. Use the Source tab to import one (e.g. <span className="font-mono">gatewaze-template-blocks</span>) before authoring in this mode.
+              </p>
+            );
+          })()}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" {...register('is_homepage')} />
             <span>Make this the homepage (path /)</span>

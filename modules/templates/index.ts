@@ -48,6 +48,7 @@ const templatesModule: GatewazeModule = {
     'migrations/014_block_defs_columns.sql',
     'migrations/015_wrappers_role.sql',
     'migrations/016_canvas_block_def_columns.sql',
+    'migrations/017_unify_theme_kinds.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under

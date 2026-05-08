@@ -11,6 +11,7 @@
  */
 
 import { renderTemplate } from './templateParser';
+import { renderViaEditionEmail, hasReactEmailBlocks } from './renderViaEditionEmail.js';
 import type {
   INewsletterOutputAdapter,
   OutputRenderContext,
@@ -277,15 +278,26 @@ export const HtmlOutputAdapter: INewsletterOutputAdapter = {
   supportsBlockComments: true,
 
   async render(context: OutputRenderContext, options?: OutputRenderOptions): Promise<string> {
+    // Per spec-builder-evaluation §3.6 (extended). When ANY block in the
+    // edition has render_kind='react-email' we route through EditionEmail
+    // for the WHOLE document — one `await render(...)` call replaces the
+    // per-block-Mustache + boilerplate-concat + juice path. react-email's
+    // components carry their own MSO ghosts and inline-styled tables, so
+    // post-processing here is just our existing email-safe replacement
+    // pass; juice can be skipped (the components have already inlined).
+    //
+    // When all blocks are pure Mustache the legacy path runs untouched —
+    // bit-for-bit identical output for existing libraries.
+    if (hasReactEmailBlocks(context)) {
+      const html = await renderViaEditionEmail({ context, format: 'email' });
+      return processEmailHtml(html);
+    }
+
     const { edition, blocks } = context;
-
     const sortedBlocks = [...blocks].sort((a, b) => a.sort_order - b.sort_order);
-
     const preheaderText = edition.preheader || extractPreheaderText(sortedBlocks);
-
     const renderedBlocks = sortedBlocks.map(block => renderBlock(block, options));
     const blockContent = renderedBlocks.join(BLOCK_SPACER);
-
     const rawHtml = getEmailBoilerplateStart(preheaderText) + blockContent + EMAIL_BOILERPLATE_END;
     return processEmailHtml(rawHtml);
   },

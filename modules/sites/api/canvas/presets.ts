@@ -156,12 +156,16 @@ export function createPresetsRoutes(deps: PresetsRoutesDeps) {
     const block = (blockRes as { data: BlockRow | null }).data;
     if (!block) return sendError(res, 404, 'not_found', `block ${fromBlockId} not found`);
 
+    // pages uses host_kind/host_id; the equivalent of "site_id" is host_id
+    // for host_kind='site' rows. Re-shape into a PageRow for downstream use.
     const pageRes = await deps.supabase
       .from('pages')
-      .select('id, site_id')
+      .select('id, host_id, host_kind')
       .eq('id', block.page_id)
+      .eq('host_kind', 'site')
       .maybeSingle();
-    const page = (pageRes as { data: PageRow | null }).data;
+    const pageRaw = (pageRes as { data: { id: string; host_id: string; host_kind: string } | null }).data;
+    const page = pageRaw ? ({ id: pageRaw.id, site_id: pageRaw.host_id } as PageRow) : null;
     if (!page || page.site_id !== site.id) {
       return sendError(res, 403, 'forbidden', 'block does not belong to this site');
     }

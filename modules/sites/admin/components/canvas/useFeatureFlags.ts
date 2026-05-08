@@ -16,6 +16,8 @@ export interface FeatureFlags {
   canvasOpBatchMax: number;
   canvasBlockCountMax: number;
   canvasLockTtlSeconds: number;
+  /** Per spec-builder-evaluation §3.7. */
+  canvasEngineDefault: 'legacy' | 'puck';
 }
 
 export interface FeatureFlagsState {
@@ -29,6 +31,7 @@ interface FeatureFlagsResponse {
   canvas_op_batch_max: number;
   canvas_block_count_max: number;
   canvas_lock_ttl_seconds: number;
+  canvas_engine_default?: 'legacy' | 'puck';
 }
 
 let cached: FeatureFlags | null = null;
@@ -38,10 +41,22 @@ async function fetchFlagsOnce(): Promise<FeatureFlags> {
   if (cached) return cached;
   if (inflight) return inflight;
   inflight = (async () => {
+    // Match canvas-service's auth pattern — pull the JWT from the
+    // supabase session and attach as Bearer. The platform's
+    // requireJwt middleware reads `Authorization`, not cookies; without
+    // this the endpoint returns 401 and the fail-open path below
+    // defaults canvasEngineDefault to 'legacy', which then mounts the
+    // wrong editor across the admin.
+    const { supabase } = await import('@/lib/supabase');
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
     const res = await fetch('/api/admin/feature-flags', {
       method: 'GET',
       credentials: 'include',
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     });
     if (!res.ok) {
       throw new Error(`feature-flags fetch failed: ${res.status}`);
@@ -52,6 +67,7 @@ async function fetchFlagsOnce(): Promise<FeatureFlags> {
       canvasOpBatchMax: body.canvas_op_batch_max,
       canvasBlockCountMax: body.canvas_block_count_max,
       canvasLockTtlSeconds: body.canvas_lock_ttl_seconds,
+      canvasEngineDefault: body.canvas_engine_default ?? 'legacy',
     };
     return cached;
   })();
@@ -89,6 +105,7 @@ export function useFeatureFlags(): FeatureFlagsState {
             canvasOpBatchMax: 100,
             canvasBlockCountMax: 200,
             canvasLockTtlSeconds: 90,
+            canvasEngineDefault: 'legacy',
           },
           loading: false,
           error: msg,

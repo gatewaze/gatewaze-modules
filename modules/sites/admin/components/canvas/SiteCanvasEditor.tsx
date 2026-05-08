@@ -24,6 +24,8 @@ import { useFeatureFlags } from './useFeatureFlags.js';
 import { CanvasService, type BlockSelection } from './canvas-service.js';
 import { Button, Input, Modal } from '@/components/ui';
 import { CanvasToolbar, VIEWPORT_WIDTHS, type Viewport } from './CanvasToolbar.js';
+import { AddBlockModal } from './AddBlockModal.js';
+import { PlusIcon } from '@heroicons/react/24/outline';
 import { BlockPalette } from './BlockPalette.js';
 import { PropertiesPanel } from './PropertiesPanel.js';
 import { VariantPicker } from './VariantPicker.js';
@@ -85,6 +87,7 @@ export function SiteCanvasEditor({ pageId, siteSlug }: SiteCanvasEditorProps) {
   const [stackVersion, setStackVersion] = useState(0); // bumps to trigger toolbar re-render
   const lastEditedFieldsRef = useRef(new Map<string, unknown>()); // for inverse derivation
   const [presetsRefreshKey, setPresetsRefreshKey] = useState(0);
+  const [addBlockModalOpen, setAddBlockModalOpen] = useState(false);
   const [savePresetForm, setSavePresetForm] = useState<SavePresetForm>({
     open: false, name: '', description: '', saving: false, error: null,
   });
@@ -445,6 +448,26 @@ export function SiteCanvasEditor({ pageId, siteSlug }: SiteCanvasEditorProps) {
 
   return (
     <div className="space-y-3">
+      {libraryId && (
+        <AddBlockModal
+          isOpen={addBlockModalOpen}
+          onClose={() => setAddBlockModalOpen(false)}
+          libraryId={libraryId}
+          onInsert={insertBlockAtEnd}
+          disabled={ops.submitting}
+        />
+      )}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setAddBlockModalOpen(true)}
+          disabled={!libraryId || ops.submitting}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[var(--accent-9)] text-white text-sm font-medium hover:bg-[var(--accent-10)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+        >
+          <PlusIcon className="size-4" />
+          Add Block
+        </button>
+      </div>
       <Card>
         <CanvasToolbar
           viewport={viewport}
@@ -496,6 +519,18 @@ export function SiteCanvasEditor({ pageId, siteSlug }: SiteCanvasEditorProps) {
               className="w-full min-h-[600px] border-0 rounded-lg bg-white"
               style={{ width: VIEWPORT_WIDTHS[viewport] }}
             />
+            {(!ops.html || ops.html.replace(/\s/g, '').length === 0) && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="max-w-sm text-center px-4 py-3 rounded-md bg-[var(--gray-a2)]/95 border border-dashed border-[var(--gray-a5)] pointer-events-auto">
+                  <p className="text-sm font-medium text-[var(--gray-12)]">No blocks yet</p>
+                  <p className="mt-1 text-xs text-[var(--gray-a9)]">
+                    Add blocks from the palette on the left. If the palette is empty, connect a theme git
+                    repo via the Source tab (e.g. <span className="font-mono">gatewaze-template-blocks</span>) to
+                    populate this site's block library.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </Card>
 

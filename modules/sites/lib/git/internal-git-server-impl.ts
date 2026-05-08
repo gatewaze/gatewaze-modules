@@ -194,7 +194,7 @@ export class InternalGitServerImpl implements InternalGitServer {
         | null;
       if (existing) {
         return {
-          hostKind: existing.host_kind as 'site' | 'list',
+          hostKind: existing.host_kind as 'site' | 'list' | 'newsletter',
           hostId: existing.host_id,
           slug: args.slug,
           barePath: existing.bare_path,
@@ -246,7 +246,7 @@ export class InternalGitServerImpl implements InternalGitServer {
     });
   }
 
-  async lookupRepo(hostKind: 'site' | 'list', hostId: string): Promise<InternalRepoRef | null> {
+  async lookupRepo(hostKind: 'site' | 'list' | 'newsletter', hostId: string): Promise<InternalRepoRef | null> {
     const result = await this.deps.supabase
       .from('gatewaze_internal_repos')
       .select('host_kind, host_id, bare_path, default_branch')
@@ -260,7 +260,7 @@ export class InternalGitServerImpl implements InternalGitServer {
     // Slug is derived from path; it's the basename without .git
     const slug = data.bare_path.split('/').pop()?.replace(/\.git$/, '') ?? '';
     return {
-      hostKind: data.host_kind as 'site' | 'list',
+      hostKind: data.host_kind as 'site' | 'list' | 'newsletter',
       hostId: data.host_id,
       slug,
       barePath: data.bare_path,
@@ -601,7 +601,7 @@ export class InternalGitServerImpl implements InternalGitServer {
   // Helpers
   // ---------------------------------------------------------------------
 
-  private barePathFor(hostKind: 'site' | 'list', slug: string): string {
+  private barePathFor(hostKind: 'site' | 'list' | 'newsletter', slug: string): string {
     if (!/^[a-z0-9-]+$/.test(slug)) {
       throw new Error(`invalid slug: ${slug}`);
     }
@@ -616,7 +616,7 @@ export class InternalGitServerImpl implements InternalGitServer {
 export interface SmartProtocolDeps {
   server: InternalGitServerImpl;
   /** Resolve repo by URL params. Returns null if not found. */
-  lookupRepo: (hostKind: 'site' | 'list', slug: string) => Promise<InternalRepoRef | null>;
+  lookupRepo: (hostKind: 'site' | 'list' | 'newsletter', slug: string) => Promise<InternalRepoRef | null>;
   /** True if requesting JWT identifies an admin for the given repo. */
   isAdminForRepo: (req: Request, repo: InternalRepoRef) => Promise<boolean>;
   /** True if JWT is service-role (bypass auth checks). */

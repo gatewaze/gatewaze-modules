@@ -54,24 +54,32 @@ export async function assertCanAdminSite(
   siteId: string,
 ): Promise<CanvasAuthResult> {
   // Primary path: SQL function. The platform owns the policy.
+  // Signature: can_admin_site(p_site_id uuid) — the function reads
+  // the caller via `auth.uid()`. **Important caveat**: when the
+  // canvas API client uses the service-role key (the default for
+  // backend-mounted RPCs), `auth.uid()` returns NULL inside the
+  // function and `can_admin_site` returns false even for legitimate
+  // platform admins. We therefore treat RPC=false as inconclusive
+  // and fall through to the explicit admin_profiles check using the
+  // JWT userId from requireJwt — same shape as the original error
+  // fallback.
   try {
     const rpc = await deps.supabase.rpc('can_admin_site', {
-      p_user_id: userId,
       p_site_id: siteId,
     });
-    if (!rpc.error) {
-      const allowed = rpc.data === true;
-      if (allowed) return { ok: true };
-      deps.logger.warn('canvas.auth.denied', { userId, siteId, reason: 'can_admin_site=false' });
-      return { ok: false, httpStatus: 403, code: 'forbidden', message: 'caller cannot admin this site' };
+    if (!rpc.error && rpc.data === true) {
+      return { ok: true };
     }
-    // RPC reported error — fall through to fallback path.
-    deps.logger.warn('canvas.auth.rpc_error', { userId, siteId, error: rpc.error.message });
+    if (rpc.error) {
+      deps.logger.warn('canvas.auth.rpc_error', { userId, siteId, error: rpc.error.message });
+    }
   } catch (err) {
     deps.logger.warn('canvas.auth.rpc_threw', { userId, siteId, err: err instanceof Error ? err.message : String(err) });
   }
 
-  // Fallback: super_admin only. Fail-closed for site-scoped admins.
+  // Fallback: explicit super_admin check via admin_profiles using the
+  // JWT userId. This is the canonical path under service-role clients,
+  // since `auth.uid()` does not work in that context.
   const adminRes = await deps.supabase
     .from('admin_profiles')
     .select('user_id')
@@ -81,6 +89,6 @@ export async function assertCanAdminSite(
   const isSuperAdmin = (adminRes as { data: { user_id: string } | null }).data !== null;
   if (isSuperAdmin) return { ok: true };
 
-  deps.logger.warn('canvas.auth.denied_fallback', { userId, siteId, reason: 'no can_admin_site rpc + not super_admin' });
+  deps.logger.warn('canvas.auth.denied', { userId, siteId, reason: 'rpc_false_and_not_super_admin' });
   return { ok: false, httpStatus: 403, code: 'forbidden', message: 'caller cannot admin this site' };
 }
