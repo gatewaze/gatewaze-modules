@@ -86,19 +86,20 @@ export function createUnlockContentRoute(deps: UnlockContentDeps) {
         `confirmation must equal '${expected}'`);
     }
 
-    // Resolve site slug for the audit log.
+    // Resolve site slug for the audit log. pages uses host_kind/host_id.
     const pageRes = await deps.supabase
       .from('pages')
-      .select('id, site_id, wysiwyg_locked')
+      .select('id, host_id, host_kind, wysiwyg_locked')
       .eq('id', pageId)
+      .eq('host_kind', 'site')
       .maybeSingle();
-    const page = (pageRes as { data: { id: string; site_id: string; wysiwyg_locked: boolean } | null }).data;
+    const page = (pageRes as { data: { id: string; host_id: string; host_kind: string; wysiwyg_locked: boolean } | null }).data;
     if (!page) return sendError(res, 404, 'not_found', 'page not found');
 
     const siteRes = await deps.supabase
       .from('sites')
       .select('slug')
-      .eq('id', page.site_id)
+      .eq('id', page.host_id)
       .maybeSingle();
     const siteSlug = (siteRes as { data: { slug: string } | null }).data?.slug ?? '<unknown>';
 

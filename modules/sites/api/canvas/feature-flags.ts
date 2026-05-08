@@ -24,6 +24,8 @@ export interface FeatureFlagsResponse {
   canvas_op_batch_max: number;
   canvas_block_count_max: number;
   canvas_lock_ttl_seconds: number;
+  /** Per spec-builder-evaluation §3.7. */
+  canvas_engine_default: 'legacy' | 'puck';
 }
 
 export function createFeatureFlagsRoute() {
@@ -38,6 +40,7 @@ export function createFeatureFlagsRoute() {
       canvas_op_batch_max: canvasConfig.opBatchMax,
       canvas_block_count_max: canvasConfig.blockCountMax,
       canvas_lock_ttl_seconds: canvasConfig.lockTtlSeconds,
+      canvas_engine_default: canvasConfig.engineDefault,
     };
     res.setHeader('Cache-Control', 'private, max-age=60');
     res.status(200).json(body);

@@ -59,12 +59,80 @@ export interface BlockDefSummary {
   thumbnail_url: string | null;
   has_bricks: boolean;
   schema: Record<string, unknown>;
+  /** Mustache template HTML — needed by the Puck client renderer. */
+  html: string;
+  /** 'website' | 'email' — channel discriminator. */
+  theme_kind: 'website' | 'email';
   /** Brick keys when has_bricks=true. */
   brick_slots: ReadonlyArray<{ key: string; label: string }>;
 }
 
 export type ListBlockDefsResult =
   | { ok: true; blockDefs: ReadonlyArray<BlockDefSummary> }
+  | { ok: false; error: CanvasError };
+
+/**
+ * Brick_def view returned by listBrickDefs. The Puck adapter needs the
+ * parent_block_def_key + key to build Slot `allow` lists, plus the schema
+ * to render the brick's field form.
+ */
+export interface BrickDefView {
+  id: string;
+  key: string;
+  name: string;
+  parent_block_def_id: string;
+  parent_block_def_key: string;
+  schema: Record<string, unknown>;
+  /** Mustache template HTML for the brick body. */
+  html: string;
+  theme_kind: 'website' | 'email';
+}
+
+export type ListBrickDefsResult =
+  | { ok: true; brickDefs: ReadonlyArray<BrickDefView> }
+  | { ok: false; error: CanvasError };
+
+/**
+ * Full structured load of a blocks-mode page. Used by PuckCanvasEditor
+ * to build initial PuckData and the diff baseline. Per
+ * spec-builder-evaluation §3.3 (load path).
+ *
+ * Note: this duplicates a small amount of work that the legacy editor
+ * does indirectly (it fetches rendered HTML + uses postMessage for
+ * structure). Pulling the structured rows directly is cleaner for the
+ * Puck path and keeps the diff baseline cache fresh.
+ */
+export interface PageTreeView {
+  page: {
+    id: string;
+    wrapper_key: string | null;
+    root_meta: Record<string, unknown>;
+    wysiwyg_locked: boolean;
+    version: number;
+  };
+  topLevel: ReadonlyArray<{
+    id: string;
+    block_def_id: string;
+    block_def_key: string;
+    parent_brick_id: string | null;
+    sort_order: number;
+    variant_key: string;
+    has_bricks: boolean;
+    content: Record<string, unknown>;
+  }>;
+  bricks: ReadonlyArray<{
+    id: string;
+    page_block_id: string;
+    brick_def_id: string;
+    brick_def_key: string;
+    sort_order: number;
+    variant_key: string;
+    content: Record<string, unknown>;
+  }>;
+}
+
+export type LoadPageTreeResult =
+  | { ok: true; tree: PageTreeView }
   | { ok: false; error: CanvasError };
 
 export interface PresetSummary {
@@ -178,7 +246,7 @@ export const CanvasService = {
     try {
       const { data, error } = await supabase
         .from('templates_block_defs')
-        .select('id, key, name, description, thumbnail_url, has_bricks, schema')
+        .select('id, key, name, description, thumbnail_url, has_bricks, schema, html, theme_kind')
         .eq('library_id', libraryId)
         .eq('is_current', true)
         .eq('canvas_validated', true)
@@ -194,6 +262,8 @@ export const CanvasService = {
         thumbnail_url: string | null;
         has_bricks: boolean;
         schema: Record<string, unknown>;
+        html: string;
+        theme_kind: 'website' | 'email';
       }>;
 
       // Bulk-fetch brick slots for the has_bricks defs.
@@ -220,6 +290,8 @@ export const CanvasService = {
         thumbnail_url: d.thumbnail_url,
         has_bricks: d.has_bricks,
         schema: d.schema,
+        html: d.html ?? '',
+        theme_kind: d.theme_kind ?? 'website',
         brick_slots: brickByBlock.get(d.id) ?? [],
       }));
       return { ok: true, blockDefs: result };
@@ -332,6 +404,166 @@ export const CanvasService = {
     });
     if (!res.ok && res.status !== 204) return { ok: false, error: await parseError(res) };
     return { ok: true };
+  },
+
+  /**
+   * List brick_defs for a library, for the Puck adapter's slot allowlists.
+   * Mirrors listBlockDefs's PostgREST-direct pattern.
+   */
+  async listBrickDefs(libraryId: string): Promise<ListBrickDefsResult> {
+    try {
+      // brick_defs are linked to block_defs; we need the parent block's key.
+      // templates_brick_defs has no theme_kind OR is_current column —
+      // bricks inherit both from their parent block_def. We pull both
+      // via the templates_block_defs join and filter on the parent's
+      // is_current=true (so deprecated parent's bricks don't surface).
+      const { data, error } = await supabase
+        .from('templates_brick_defs')
+        .select('id, key, name, schema, html, block_def_id, templates_block_defs!inner(key, library_id, theme_kind, is_current)')
+        .eq('templates_block_defs.library_id', libraryId)
+        .eq('templates_block_defs.is_current', true)
+        .order('name');
+      if (error) {
+        return { ok: false, error: { code: 'brick_defs_fetch_failed', message: error.message, status: 500 } };
+      }
+      type Row = {
+        id: string;
+        key: string;
+        name: string;
+        schema: Record<string, unknown>;
+        html: string;
+        block_def_id: string;
+        templates_block_defs: { key: string; library_id: string; theme_kind: 'website' | 'email'; is_current: boolean };
+      };
+      const rows = (data ?? []) as ReadonlyArray<Row>;
+      const brickDefs: BrickDefView[] = rows.map((r) => ({
+        id: r.id,
+        key: r.key,
+        name: r.name,
+        schema: r.schema,
+        html: r.html ?? '',
+        // Bricks have no own theme_kind column — inherit from parent block.
+        theme_kind: r.templates_block_defs.theme_kind ?? 'website',
+        parent_block_def_id: r.block_def_id,
+        parent_block_def_key: r.templates_block_defs.key,
+      }));
+      return { ok: true, brickDefs };
+    } catch (err) {
+      return {
+        ok: false,
+        error: { code: 'brick_defs_fetch_failed', message: err instanceof Error ? err.message : String(err), status: 500 },
+      };
+    }
+  },
+
+  /**
+   * Load the full structured tree for a page. PostgREST-direct so it
+   * picks up the same RLS as the rest of the canvas surface.
+   *
+   * Three queries (page + page_blocks + page_block_bricks) — kept simple
+   * and parallelised. The query count doesn't grow with tree size.
+   */
+  async loadPageTree(pageId: string): Promise<LoadPageTreeResult> {
+    try {
+      // First fetch page + blocks (page_block_bricks needs the block ids).
+      const [pageRes, blocksRes] = await Promise.all([
+        supabase
+          .from('pages')
+          .select('id, wrapper_id, content, version, wysiwyg_locked, templates_wrappers!pages_wrapper_id_fkey(key)')
+          .eq('id', pageId)
+          .maybeSingle(),
+        supabase
+          .from('page_blocks')
+          .select('id, block_def_id, parent_brick_id, sort_order, variant_key, content, templates_block_defs!inner(key, has_bricks)')
+          .eq('page_id', pageId)
+          .order('sort_order', { ascending: true }),
+      ]);
+
+      const blockIdsForBricks = (blocksRes.data ?? [])
+        .filter((b) => (b as { templates_block_defs: { has_bricks: boolean } }).templates_block_defs.has_bricks)
+        .map((b) => (b as { id: string }).id);
+      const bricksRes = blockIdsForBricks.length > 0
+        ? await supabase
+            .from('page_block_bricks')
+            .select('id, page_block_id, brick_def_id, sort_order, variant_key, content, templates_brick_defs!inner(key)')
+            .in('page_block_id', blockIdsForBricks)
+            .order('sort_order', { ascending: true })
+        : { data: [] as Array<unknown>, error: null as { message: string } | null };
+
+      if (pageRes.error || !pageRes.data) {
+        return { ok: false, error: { code: 'page_not_found', message: pageRes.error?.message ?? 'page not found', status: 404 } };
+      }
+      if (blocksRes.error) {
+        return { ok: false, error: { code: 'blocks_fetch_failed', message: blocksRes.error.message, status: 500 } };
+      }
+      if (bricksRes.error) {
+        return { ok: false, error: { code: 'bricks_fetch_failed', message: bricksRes.error.message, status: 500 } };
+      }
+
+      const pageRow = pageRes.data as {
+        id: string;
+        wrapper_id: string | null;
+        content: Record<string, unknown> | null;
+        version: number;
+        wysiwyg_locked: boolean;
+        templates_wrappers: { key: string } | null;
+      };
+      const blockRows = (blocksRes.data ?? []) as ReadonlyArray<{
+        id: string;
+        block_def_id: string;
+        parent_brick_id: string | null;
+        sort_order: number;
+        variant_key: string;
+        content: Record<string, unknown>;
+        templates_block_defs: { key: string; has_bricks: boolean };
+      }>;
+      const brickRows = (bricksRes.data ?? []) as ReadonlyArray<{
+        id: string;
+        page_block_id: string;
+        brick_def_id: string;
+        sort_order: number;
+        variant_key: string;
+        content: Record<string, unknown>;
+        templates_brick_defs: { key: string };
+      }>;
+
+      return {
+        ok: true,
+        tree: {
+          page: {
+            id: pageRow.id,
+            wrapper_key: pageRow.templates_wrappers?.key ?? null,
+            root_meta: pageRow.content ?? {},
+            wysiwyg_locked: pageRow.wysiwyg_locked,
+            version: pageRow.version,
+          },
+          topLevel: blockRows.map((r) => ({
+            id: r.id,
+            block_def_id: r.block_def_id,
+            block_def_key: r.templates_block_defs.key,
+            parent_brick_id: r.parent_brick_id,
+            sort_order: r.sort_order,
+            variant_key: r.variant_key,
+            has_bricks: r.templates_block_defs.has_bricks,
+            content: r.content,
+          })),
+          bricks: brickRows.map((r) => ({
+            id: r.id,
+            page_block_id: r.page_block_id,
+            brick_def_id: r.brick_def_id,
+            brick_def_key: r.templates_brick_defs.key,
+            sort_order: r.sort_order,
+            variant_key: r.variant_key,
+            content: r.content,
+          })),
+        },
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: { code: 'page_tree_fetch_failed', message: err instanceof Error ? err.message : String(err), status: 500 },
+      };
+    }
   },
 
   /** POST /api/admin/pages/:id/canvas */

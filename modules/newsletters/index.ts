@@ -86,13 +86,15 @@ const newslettersModule: GatewazeModule = {
     'migrations/024_editions_snapshot_columns.sql',
     'migrations/025_register_category_adapter.sql',
     'migrations/026_fix_keyword_trigger_definer.sql',
+    'migrations/027_collection_git_provenance.sql',
+    'migrations/028_enable_host_registration.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
   // load time. Newsletters didn't previously expose any API routes;
   // this hook does nothing else. The DB-side dispatch fn already
   // includes a `newsletter` branch (host-media migration 008).
-  apiRoutes: async () => {
+  apiRoutes: async (app, context) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { registerHostMediaConsumer } = await import('../host-media/lib/registry.js' as any);
     registerHostMediaConsumer({
@@ -114,6 +116,69 @@ const newslettersModule: GatewazeModule = {
         },
       ],
     });
+
+    // Edition publish-to-git endpoint. Per spec-builder-evaluation
+    // §3.6 (extended). Wires the gitServer dependency on demand —
+    // the sites module owns the InternalGitServer impl and the api
+    // server resolves it via context.deps.
+    try {
+      const ctx = context as unknown as {
+        app?: { use?: (path: string, router: unknown) => void; post?: (path: string, ...handlers: unknown[]) => void };
+        deps?: {
+          supabase?: import('@supabase/supabase-js').SupabaseClient;
+          gitServer?: unknown;
+          requireJwt?: unknown;
+        };
+      } | undefined;
+      const expressApp = ctx?.app ?? (app as unknown as { post?: (path: string, ...handlers: unknown[]) => void });
+      if (!ctx?.deps?.supabase || !expressApp?.post) {
+        return;
+      }
+      const { createPublishToGitRoute, createInitRepoRoute, createGraduateToExternalRoute, createDriftRoute, createManifestRoute, createDeleteCollectionRoute } =
+        await import('./api/index.js');
+      const requireJwt = ctx.deps.requireJwt as
+        | ((req: unknown, res: unknown, next: unknown) => void)
+        | undefined;
+
+      const publishHandler = createPublishToGitRoute({
+        supabase: ctx.deps.supabase,
+        ...(ctx.deps.gitServer ? { gitServer: ctx.deps.gitServer as never } : {}),
+        boilerplateUrl: process.env.NEWSLETTERS_BOILERPLATE_URL ?? null,
+        boilerplateBranch: process.env.NEWSLETTERS_BOILERPLATE_BRANCH ?? 'main',
+      });
+      const gitRoutesDeps = {
+        supabase: ctx.deps.supabase,
+        ...(ctx.deps.gitServer ? { gitServer: ctx.deps.gitServer as never } : {}),
+        boilerplateUrl: process.env.NEWSLETTERS_BOILERPLATE_URL ?? null,
+        boilerplateBranch: process.env.NEWSLETTERS_BOILERPLATE_BRANCH ?? 'main',
+      };
+      const initRepoHandler = createInitRepoRoute(gitRoutesDeps);
+      const graduateHandler = createGraduateToExternalRoute(gitRoutesDeps);
+      const driftHandler = createDriftRoute(gitRoutesDeps);
+      const manifestHandler = createManifestRoute(gitRoutesDeps);
+      const deleteCollectionHandler = createDeleteCollectionRoute({
+        supabase: ctx.deps.supabase,
+        ...(ctx.deps.gitServer ? { gitServer: ctx.deps.gitServer as never } : {}),
+      });
+
+      const mount = (method: 'post' | 'get' | 'delete', path: string, handler: unknown) => {
+        if (requireJwt) {
+          (expressApp as unknown as { [k: string]: (...a: unknown[]) => void })[method](path, requireJwt as never, handler);
+        } else {
+          (expressApp as unknown as { [k: string]: (...a: unknown[]) => void })[method](path, handler);
+        }
+      };
+
+      mount('post', '/api/admin/newsletters/editions/:editionId/publish-to-git', publishHandler);
+      mount('post', '/api/admin/newsletters/collections/:collectionId/init-repo', initRepoHandler);
+      mount('post', '/api/admin/newsletters/collections/:collectionId/graduate-to-external', graduateHandler);
+      mount('get', '/api/admin/newsletters/collections/:collectionId/drift', driftHandler);
+      mount('get', '/api/admin/newsletters/collections/:collectionId/manifest', manifestHandler);
+      mount('delete', '/api/admin/newsletters/collections/:collectionId', deleteCollectionHandler);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[newsletters] publish-to-git route registration failed:', err);
+    }
   },
 
   adminRoutes: [

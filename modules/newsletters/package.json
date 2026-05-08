@@ -15,5 +15,10 @@
   },
   "peerDependencies": {
     "@gatewaze/shared": "*"
+  },
+  "dependencies": {
+    "@puckeditor/core": "~0.21.2",
+    "@react-email/components": "^1.0.12",
+    "@react-email/render": "^2.0.8"
   }
 }

@@ -24,6 +24,16 @@ function readPositiveInt(name: string, fallback: number, min = 1, max = Number.M
   return n;
 }
 
+function readEngine(name: string, fallback: 'legacy' | 'puck'): 'legacy' | 'puck' {
+  const raw = process.env[name];
+  if (raw === 'legacy' || raw === 'puck') return raw;
+  if (raw !== undefined && raw !== '') {
+    // eslint-disable-next-line no-console
+    console.warn(`[sites] env var ${name}='${raw}' is not 'legacy' | 'puck' — using default ${fallback}`);
+  }
+  return fallback;
+}
+
 function readBool(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -61,6 +71,13 @@ export const canvasConfig = {
    * falls back to assuming enabled if the platform doesn't expose it.
    */
   enabled: readBool('CANVAS_ENABLED', true),
+
+  /**
+   * Default canvas editor engine when a site has no explicit
+   * `sites.settings.canvas.engine` value. Per
+   * spec-builder-evaluation §3.7. 'legacy' | 'puck'.
+   */
+  engineDefault: readEngine('SITES_CANVAS_ENGINE_DEFAULT', 'legacy'),
 } as const;
 
 export type CanvasConfig = typeof canvasConfig;

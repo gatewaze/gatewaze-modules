@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui';
 import { Tabs } from '@/components/ui';
 import type { Tab } from '@/components/ui/Tabs';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { EditionCanvas } from '../../components/EditionCanvas';
+import { NewsletterCanvasEditor } from '../../components/puck/NewsletterCanvasEditor';
 import { EditionSendingTab } from '../../components/EditionSendingTab';
 import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
@@ -153,7 +153,7 @@ export default function EditionEditorPage() {
       // library-wide ordering); we fall back to ordering by `key`.
       let blocksQuery = supabase
         .from('templates_block_defs')
-        .select('id, key, name, description, schema, html, rich_text_template, has_bricks, block_type:key')
+        .select('id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key')
         .order('key');
       // Bricks: filter by parent block_def's library via inner-embed join.
       let bricksQuery = supabase
@@ -222,7 +222,19 @@ export default function EditionEditorPage() {
         status: editionData.status,
         blocks: (blocksData || []).map((block: DbEditionBlock) => ({
           id: block.id,
-          block_template: block.block_template,
+          // Per spec-builder-evaluation §3.6 (extended). When the row has
+          // no joined block_template (registry-driven block — saved with
+          // templates_block_def_id=NULL), synthesise a BlockTemplate
+          // shaped like a Mustache one but with `id: ''` so the editor
+          // recognises it as a registry block. The downstream Puck
+          // adapter looks up `block_type` (= the registry componentId)
+          // against the registry to mount the right JSX component.
+          block_template: block.block_template ?? {
+            id: '',
+            name: block.block_type,
+            block_type: block.block_type,
+            content: { html_template: '', schema: {}, has_bricks: false },
+          },
           content: block.content || {},
           sort_order: block.sort_order,
           bricks: bricksData
@@ -321,12 +333,21 @@ export default function EditionEditorPage() {
         if (deleteErr) { console.error('Delete blocks error:', deleteErr); throw deleteErr; }
 
         for (const block of edition.blocks) {
+          // Registry blocks (render_kind='react-email') carry a synthesised
+          // BlockTemplate with `id: ''` from puckDataToEdition — there's no
+          // matching `templates_block_defs` row to point at. Persist as
+          // NULL templates_block_def_id; `block_type` carries the registry
+          // componentId so the load path can synthesise the template back.
+          // Per spec-builder-evaluation §3.6 (extended).
+          const tplDefId = block.block_template.id && block.block_template.id !== ''
+            ? block.block_template.id
+            : null;
           const { data: blockRows, error: blockInsertErr } = await supabase
             .from('newsletters_edition_blocks')
             .insert({
               id: block.id,
               edition_id: edition.id,
-              templates_block_def_id: block.block_template.id,
+              templates_block_def_id: tplDefId,
               block_type: block.block_template.block_type,
               content: stripStorageUrlsInJson(block.content),
               sort_order: block.sort_order,
@@ -352,6 +373,44 @@ export default function EditionEditorPage() {
           }
         }
         if (!options?.silent) toast.success('Edition saved');
+
+        // Per spec-builder-evaluation §3.6 (extended). After the DB
+        // round-trip succeeds, fire the publish-to-git endpoint to
+        // commit a rendered HTML snapshot to the newsletter's
+        // internal repo. The endpoint is tolerant: if NEWSLETTERS_
+        // BOILERPLATE_URL isn't set OR the gitServer dep isn't wired,
+        // it returns 200 { kind: 'skipped' } and the editor flow
+        // continues unchanged. Failures here MUST NOT bubble up — the
+        // DB save is authoritative; the git mirror is best-effort.
+        if (!options?.silent) {
+          void fetch(`/api/admin/newsletters/editions/${edition.id}/publish-to-git`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(await (async () => {
+                const { data } = await supabase.auth.getSession();
+                const token = data.session?.access_token;
+                return token ? { Authorization: `Bearer ${token}` } : {};
+              })()),
+            },
+          })
+            .then(async (res) => {
+              if (!res.ok) {
+                console.warn('[publish-to-git] non-2xx response', res.status, await res.text().catch(() => ''));
+                return;
+              }
+              const body = (await res.json().catch(() => null)) as { kind?: string; commitSha?: string; reason?: string } | null;
+              if (body?.kind === 'published' && body.commitSha) {
+                toast.success(`Published to git (${body.commitSha.slice(0, 7)})`);
+              } else if (body?.kind === 'skipped' && body.reason) {
+                console.info('[publish-to-git] skipped:', body.reason);
+              }
+            })
+            .catch((e: unknown) => {
+              console.warn('[publish-to-git] request failed:', e);
+            });
+        }
       }
     } catch (error) {
       console.error('Error saving edition:', error);
@@ -421,11 +480,25 @@ export default function EditionEditorPage() {
       {/* Tab Content */}
       {activeTab === 'editor' && (
         <div className="-mx-(--margin-x)" style={{ padding: '1rem calc(var(--margin-x) + 1.5rem)' }}>
-          <EditionCanvas
+          <NewsletterCanvasEditor
             edition={edition}
             blockTemplates={blockTemplates}
             brickTemplates={brickTemplates}
             collectionMetadata={collectionMetadata}
+            // Per spec-builder-evaluation §3.6 (extended). When the bound
+            // library has explicit `render_kind='react-email'` rows, surface
+            // ONLY those component_ids (production opt-in pattern). When
+            // the library has zero such rows yet, omit the prop entirely
+            // — the merge helper then exposes the FULL platform registry
+            // as a sensible default so a fresh edition has email-safe
+            // blocks available out of the box. Mustache rows still appear
+            // alongside whichever registry surface is active.
+            {...(() => {
+              const explicit = (blockTemplates as Array<{ render_kind?: string; component_id?: string | null }>)
+                .filter((t) => t.render_kind === 'react-email' && typeof t.component_id === 'string' && t.component_id.length > 0)
+                .map((t) => t.component_id as string);
+              return explicit.length > 0 ? { enabledRegistryComponentIds: explicit } : {};
+            })()}
             onChange={setEdition}
             onSave={handleSave}
             onStatusChange={async (newStatus) => {

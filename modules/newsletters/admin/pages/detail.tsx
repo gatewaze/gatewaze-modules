@@ -20,6 +20,7 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
 import { NewsletterDetailsForm } from '../components/NewsletterDetailsForm';
+import { DeleteNewsletterCard } from '../components/DeleteNewsletterCard';
 import { NewsletterStatsTab } from '../components/NewsletterStatsTab';
 import { NewsletterRepliesTab } from '../components/NewsletterRepliesTab';
 import { GDocImportTab } from '../components/GDocImportTab';
@@ -169,8 +170,9 @@ export default function NewsletterDetailPage() {
 
       {/* Tab Content */}
       {activeTab === 'details' && (
-        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="-mx-(--margin-x) py-6 space-y-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
           <NewsletterDetailsForm newsletter={newsletter} onSave={loadNewsletter} />
+          <DeleteNewsletterCard newsletterId={newsletter.id} newsletterName={newsletter.name} />
         </div>
       )}
 
