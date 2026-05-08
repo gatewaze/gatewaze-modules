@@ -39,6 +39,22 @@ export interface OutputBlock {
   template: string; // The resolved template HTML for this adapter's variant
   has_bricks: boolean;
   bricks: OutputBrick[];
+  /**
+   * Per-block render path discriminator. Per spec-builder-evaluation
+   * §3.6 (extended). Default 'mustache' for backwards compatibility:
+   * adapters use the existing renderTemplate path.
+   *
+   * 'react-email' opts the block into JSX-component-based rendering via
+   * the registry (resolved by `component_id`); the HTML adapter then
+   * uses `@react-email/render` against the registry component instead
+   * of running Mustache against the `template` string.
+   */
+  render_kind?: 'mustache' | 'react-email';
+  /**
+   * When render_kind='react-email', the registry key resolved server-
+   * side via the email-blocks registry. Ignored otherwise.
+   */
+  component_id?: string;
 }
 
 export interface OutputBrick {

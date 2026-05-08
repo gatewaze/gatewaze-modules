@@ -1,0 +1,81 @@
+/**
+ * Footer email block — small footer text + optional unsubscribe link.
+ *
+ * Mirrors the legacy "Footer" block created by the Newsletter Setup
+ * Wizard's Basic Template option. The unsubscribe pair (text + link)
+ * is rendered only when both fields are populated, matching the
+ * `{{#unsubscribe_text}}...{{/unsubscribe_text}}` Mustache section.
+ */
+
+import { Section, Text } from '@react-email/components';
+import type { EmailBlockEntry } from '../registry-types.js';
+
+interface FooterProps extends Record<string, unknown> {
+  footer_text: string;
+  unsubscribe_text: string;
+  unsubscribe_link: string;
+}
+
+const SAFE_HREF = /^(https?:|mailto:|\/)/i;
+
+function safeHref(value: unknown): string {
+  return typeof value === 'string' && SAFE_HREF.test(value) ? value : '#';
+}
+
+export const FooterBlock: EmailBlockEntry<FooterProps> = {
+  componentId: 'footer',
+  label: 'Footer',
+  category: 'Navigation',
+  fields: {
+    footer_text: { type: 'textarea', label: 'Footer text' },
+    unsubscribe_text: { type: 'text', label: 'Unsubscribe link text (optional)' },
+    unsubscribe_link: { type: 'text', label: 'Unsubscribe URL (optional)' },
+  },
+  defaultProps: {
+    footer_text: 'You are receiving this email because you subscribed.',
+    unsubscribe_text: 'Unsubscribe',
+    unsubscribe_link: '{{unsubscribe_url}}',
+  },
+  Component: ({ footer_text, unsubscribe_text, unsubscribe_link }) => (
+    <Section
+      style={{
+        padding: '20px 40px',
+        backgroundColor: '#f8f9fa',
+        textAlign: 'center',
+        fontSize: '13px',
+        color: '#999',
+      }}
+    >
+      <Text style={{ margin: 0 }}>{footer_text}</Text>
+      {unsubscribe_text ? (
+        <Text style={{ margin: '8px 0 0' }}>
+          <a href={safeHref(unsubscribe_link)} style={{ color: '#666' }}>
+            {unsubscribe_text}
+          </a>
+        </Text>
+      ) : null}
+    </Section>
+  ),
+  formats: {
+    substack: ({ footer_text, unsubscribe_text, unsubscribe_link }) => (
+      <>
+        <p style={{ textAlign: 'center', color: '#999' }}>{footer_text}</p>
+        {unsubscribe_text ? (
+          <p style={{ textAlign: 'center' }}>
+            <a href={safeHref(unsubscribe_link)}>{unsubscribe_text}</a>
+          </p>
+        ) : null}
+      </>
+    ),
+    beehiiv: ({ footer_text, unsubscribe_text, unsubscribe_link }) => (
+      <>
+        <p style={{ textAlign: 'center', color: '#999' }}>{footer_text}</p>
+        {unsubscribe_text ? (
+          <p style={{ textAlign: 'center' }}>
+            <a href={safeHref(unsubscribe_link)}>{unsubscribe_text}</a>
+          </p>
+        ) : null}
+      </>
+    ),
+  },
+};

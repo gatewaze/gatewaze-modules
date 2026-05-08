@@ -822,9 +822,7 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
     if (!/^https:\/\/[a-zA-Z0-9._-]+\/[\w./-]+(\.git)?$/.test(gitUrl)) {
       return sendError(res, 400, 'invalid_input', 'git_url must be an https:// URL to a git repo');
     }
-    if (!pat) {
-      return sendError(res, 400, 'invalid_input', 'pat required');
-    }
+    // PAT is optional — for public repos, anonymous clone works.
     if (!/^[\w./-]{1,255}$/.test(branch)) {
       return sendError(res, 400, 'invalid_input', 'branch contains invalid characters');
     }
@@ -846,10 +844,13 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
     if (siteErr) return sendError(res, 500, 'internal', siteErr.message);
     if (!site) return sendError(res, 404, 'not_found', 'site not found');
 
-    // Inject the PAT into the clone URL via x-access-token convention so
-    // we never echo the token to logs (the URL is consumed once and the
-    // tmp dir is rm -rf'd before this handler returns).
-    const authedUrl = gitUrl.replace(/^https:\/\//, `https://x-access-token:${encodeURIComponent(pat)}@`);
+    // For public repos, clone anonymously (no PAT). For private repos, the
+    // PAT is injected via x-access-token convention so it never echoes to
+    // logs (the URL is consumed once and the tmp dir is rm -rf'd before
+    // this handler returns).
+    const authedUrl = pat
+      ? gitUrl.replace(/^https:\/\//, `https://x-access-token:${encodeURIComponent(pat)}@`)
+      : gitUrl;
 
     // Lazy-import node:fs + node:child_process so the rest of admin.ts
     // doesn't pull them in (these run server-side only).
@@ -864,8 +865,15 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
     const tmpDir = pathMod.join(osMod.tmpdir(), `gatewaze-import-${siteId.slice(0, 8)}-${Date.now()}`);
     fsMod.mkdirSync(tmpDir, { recursive: true });
 
-    let schemaJson: Record<string, unknown>;
-    let schemaHash: string;
+    // Two ingest paths the importer handles, additively:
+    //   (a) content/schema.json → templates_content_schemas (Next.js theme path)
+    //   (b) source.html (marker grammar) → templates_block_defs/brick_defs/wrappers
+    //       (HTML/blocks theme path)
+    // Boilerplates may have one or both; we require AT LEAST one to be
+    // present and successfully parsed, otherwise return 422.
+    let schemaJson: Record<string, unknown> | null = null;
+    let schemaHash: string | null = null;
+    let sourceHtml: string | null = null;
     let mainSha: string;
     try {
       // Shallow clone the requested branch only.
@@ -878,20 +886,29 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
         tmpDir,
       ], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 });
 
+      // (a) content_schema (optional)
       const fullSchemaPath = pathMod.join(tmpDir, schemaPath);
-      if (!fsMod.existsSync(fullSchemaPath)) {
-        return sendError(res, 422, 'schema_not_found', `${schemaPath} not found in repo at branch ${branch}`);
-      }
-      try {
-        schemaJson = await loadSchemaFromFile(fullSchemaPath, fsMod, dynImport);
-      } catch (err) {
-        return sendError(res, 422, 'schema_parse_failed', (err as Error).message);
-      }
-      if (typeof schemaJson !== 'object' || Array.isArray(schemaJson)) {
-        return sendError(res, 422, 'schema_invalid', 'schema_json must be a JSON object');
+      if (fsMod.existsSync(fullSchemaPath)) {
+        try {
+          schemaJson = await loadSchemaFromFile(fullSchemaPath, fsMod, dynImport);
+        } catch (err) {
+          return sendError(res, 422, 'schema_parse_failed', (err as Error).message);
+        }
+        if (typeof schemaJson !== 'object' || Array.isArray(schemaJson)) {
+          return sendError(res, 422, 'schema_invalid', 'schema_json must be a JSON object');
+        }
+        schemaHash = cryptoMod.createHash('sha256').update(JSON.stringify(schemaJson)).digest('hex');
       }
 
-      schemaHash = cryptoMod.createHash('sha256').update(JSON.stringify(schemaJson)).digest('hex');
+      // (b) marker-grammar source.html (optional)
+      const fullSourceHtmlPath = pathMod.join(tmpDir, 'source.html');
+      if (fsMod.existsSync(fullSourceHtmlPath)) {
+        sourceHtml = fsMod.readFileSync(fullSourceHtmlPath, 'utf-8');
+      }
+
+      if (!schemaJson && !sourceHtml) {
+        return sendError(res, 422, 'no_ingestable_files', `repo at branch ${branch} has neither ${schemaPath} nor source.html`);
+      }
 
       // Resolve the cloned HEAD SHA — used as the source's installed_git_sha
       // so drift checks against the upstream are well-defined.
@@ -1020,61 +1037,116 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
     }
 
     // Store the PAT for future pulls. Encrypted-at-rest semantics match
-    // putSiteSecret. Key matches the convention git_pat_<source_id>.
-    const secretKey = `git_pat_${sourceId.replace(/-/g, '_').slice(0, 50)}`;
-    const patBytes = Buffer.from(JSON.stringify({ pat }), 'utf-8');
-    await deps.supabase
-      .from('sites_secrets')
-      .upsert(
-        { site_id: siteId, key: secretKey, encrypted_value: patBytes, created_by: userId },
-        { onConflict: 'site_id,key' },
-      );
+    // Only persist the PAT secret when one was supplied (private repos).
+    if (pat) {
+      const secretKey = `git_pat_${sourceId.replace(/-/g, '_').slice(0, 50)}`;
+      const patBytes = Buffer.from(JSON.stringify({ pat }), 'utf-8');
+      await deps.supabase
+        .from('sites_secrets')
+        .upsert(
+          { site_id: siteId, key: secretKey, encrypted_value: patBytes, created_by: userId },
+          { onConflict: 'site_id,key' },
+        );
 
-    await deps.supabase
-      .from('templates_sources')
-      .update({ token_secret_ref: secretKey })
-      .eq('id', sourceId);
+      await deps.supabase
+        .from('templates_sources')
+        .update({ token_secret_ref: secretKey })
+        .eq('id', sourceId);
+    }
 
-    // Bump prior is_current=true rows to false, then insert the new schema.
-    await deps.supabase
-      .from('templates_content_schemas')
-      .update({ is_current: false })
-      .eq('library_id', libraryId)
-      .eq('is_current', true);
+    // (a) content_schema ingest — only when schema.json was found.
+    let schemaId: string | null = null;
+    let schemaVersion: number | null = null;
+    if (schemaJson && schemaHash) {
+      // Bump prior is_current=true rows to false, then insert the new schema.
+      await deps.supabase
+        .from('templates_content_schemas')
+        .update({ is_current: false })
+        .eq('library_id', libraryId)
+        .eq('is_current', true);
 
-    interface VersionRow { version: number; }
-    const { data: maxVer } = await deps.supabase
-      .from('templates_content_schemas')
-      .select('version')
-      .eq('library_id', libraryId)
-      .order('version', { ascending: false })
-      .limit(1)
-      .maybeSingle<VersionRow>();
-    const nextVersion = (maxVer?.version ?? 0) + 1;
+      interface VersionRow { version: number; }
+      const { data: maxVer } = await deps.supabase
+        .from('templates_content_schemas')
+        .select('version')
+        .eq('library_id', libraryId)
+        .order('version', { ascending: false })
+        .limit(1)
+        .maybeSingle<VersionRow>();
+      const nextVersion = (maxVer?.version ?? 0) + 1;
 
-    const { data: created, error: schemaErr } = await deps.supabase
-      .from('templates_content_schemas')
-      .insert({
-        source_id: sourceId,
-        library_id: libraryId,
-        version: nextVersion,
-        is_current: true,
-        schema_format: 'json',
-        schema_hash: schemaHash,
-        schema_json: schemaJson,
-        applied_at: new Date().toISOString(),
-        applied_by: userId,
-      })
-      .select('id, version')
-      .single<{ id: string; version: number }>();
-    if (schemaErr || !created) {
-      return sendError(res, 500, 'internal', `content schema insert failed: ${schemaErr?.message ?? 'no_data'}`);
+      const { data: created, error: schemaErr } = await deps.supabase
+        .from('templates_content_schemas')
+        .insert({
+          source_id: sourceId,
+          library_id: libraryId,
+          version: nextVersion,
+          is_current: true,
+          schema_format: 'json',
+          schema_hash: schemaHash,
+          schema_json: schemaJson,
+          applied_at: new Date().toISOString(),
+          applied_by: userId,
+        })
+        .select('id, version')
+        .single<{ id: string; version: number }>();
+      if (schemaErr || !created) {
+        return sendError(res, 500, 'internal', `content schema insert failed: ${schemaErr?.message ?? 'no_data'}`);
+      }
+      schemaId = created.id;
+      schemaVersion = created.version;
+    }
+
+    // (b) marker-grammar source.html ingest — populate templates_block_defs /
+    //     templates_brick_defs / templates_wrappers via the templates parser.
+    //     This is what gives the visual canvas its block palette.
+    let blockDefCount = 0;
+    let brickDefCount = 0;
+    let wrapperCount = 0;
+    if (sourceHtml) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { parse } = await dynImport('../../templates/lib/parser/parse.js') as { parse: (html: string, opts?: { sourcePath?: string }) => any };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { applySource } = await dynImport('../../templates/lib/sources/apply.js') as { applySource: (supabase: any, sourceId: string, parsed: any, opts: { sourceSha: string; dryRun?: boolean }) => Promise<{ artifacts: { blockDefs?: unknown[]; brickDefs?: unknown[]; wrappers?: unknown[] }; errors: unknown[] }> };
+
+        // Update the source row's inline_html so applySource can re-derive
+        // on retry, AND so drift checks have a baseline.
+        const sourceShaHex = cryptoMod.createHash('sha256').update(sourceHtml).digest('hex');
+        await deps.supabase
+          .from('templates_sources')
+          .update({ inline_html: sourceHtml, inline_sha: sourceShaHex })
+          .eq('id', sourceId);
+
+        const parsed = parse(sourceHtml, { sourcePath: `gitsource-${sourceId}` });
+        if (parsed.errors && parsed.errors.length > 0) {
+          return sendError(res, 422, 'source_parse_failed', 'source.html contains parse errors', { errors: parsed.errors });
+        }
+
+        const apply = await applySource(deps.supabase, sourceId, parsed, { sourceSha: sourceShaHex, dryRun: false });
+        if (apply.errors.length > 0) {
+          return sendError(res, 500, 'internal', 'apply source failed', { errors: apply.errors });
+        }
+        blockDefCount = apply.artifacts.blockDefs?.length ?? 0;
+        brickDefCount = apply.artifacts.brickDefs?.length ?? 0;
+        wrapperCount  = apply.artifacts.wrappers?.length  ?? 0;
+      } catch (err) {
+        deps.logger.error('admin.import_git.source_apply_failed', {
+          siteId, sourceId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return sendError(res, 500, 'internal', `source.html parse/apply failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     res.status(200).json({
       sourceId,
       libraryId,
-      schemaId: created.id,
+      schemaId,
+      schemaVersion,
+      blockDefCount,
+      brickDefCount,
+      wrapperCount,
       schemaVersion: created.version,
       mainSha,
       branch,
@@ -1464,25 +1536,6 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
     }
   }
 
-  return {
-    createPage,
-    updatePage,
-    archivePage,
-    listPages,
-    createPreviewToken,
-    revokePreviewToken,
-    batchSaveContent,
-    putSiteSecret,
-    validatePublisher,
-    rollbackPublishJob,
-    provisionIntegrations,
-    importGit,
-    ensureInternalRepo,
-    provisionStarterLibrary,
-    archiveSite,
-    refreshGit,
-  };
-
   // -------------------------------------------------------------------------
   // POST /admin/sites/:siteId/library:provision-starter
   //
@@ -1513,25 +1566,46 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
     if (siteErr) return sendError(res, 500, 'internal', siteErr.message);
     if (!site) return sendError(res, 404, 'not_found', 'site not found');
 
+    // Re-runnable: the library + wrapper + source + schema rows are created
+    // only if the site doesn't already have a library_id. The auto-import
+    // block lower down runs every time so subsequent calls can heal a site
+    // whose initial provision missed the boilerplate import (e.g. the
+    // SITES_DEFAULT_BLOCKS_URL env var was added after the site was made).
+    let libraryId: string;
+    let sourceId: string;
     if (site.templates_library_id) {
-      return res.status(200).json({ libraryId: site.templates_library_id, created: false }) as unknown as void;
+      // Resolve the existing library + its inline source row.
+      libraryId = site.templates_library_id;
+      const { data: existingSource } = await deps.supabase
+        .from('templates_sources')
+        .select('id')
+        .eq('library_id', libraryId)
+        .eq('kind', 'inline')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle<{ id: string }>();
+      if (!existingSource) {
+        return sendError(res, 500, 'internal', 'site has a library but no inline source — manual fix required');
+      }
+      sourceId = existingSource.id;
+    } else {
+      const { data: lib, error: libErr } = await deps.supabase
+        .from('templates_libraries')
+        .insert({
+          host_kind: 'site',
+          host_id: site.id,
+          name: `${site.name} library`,
+          description: `Auto-provisioned starter library for site ${site.name}.`,
+          theme_kind: site.theme_kind,
+        })
+        .select('id')
+        .single<{ id: string }>();
+      if (libErr || !lib) return sendError(res, 500, 'internal', `library insert failed: ${libErr?.message ?? 'no_data'}`);
+      libraryId = lib.id;
     }
 
-    const { data: lib, error: libErr } = await deps.supabase
-      .from('templates_libraries')
-      .insert({
-        host_kind: 'site',
-        host_id: site.id,
-        name: `${site.name} library`,
-        description: `Auto-provisioned starter library for site ${site.name}.`,
-        theme_kind: site.theme_kind,
-      })
-      .select('id')
-      .single<{ id: string }>();
-    if (libErr || !lib) return sendError(res, 500, 'internal', `library insert failed: ${libErr?.message ?? 'no_data'}`);
-    const libraryId = lib.id;
-
-    const wrapperHtml = `<!doctype html>
+    if (!site.templates_library_id) {
+      const wrapperHtml = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -1545,65 +1619,328 @@ export function createAdminRoutes(deps: AdminRoutesDeps) {
   </main>
 </body>
 </html>`;
-    const { error: wrapperErr } = await deps.supabase
-      .from('templates_wrappers')
-      .insert({ library_id: libraryId, key: 'default', name: 'Default wrapper', html: wrapperHtml });
-    if (wrapperErr) return sendError(res, 500, 'internal', `wrapper insert failed: ${wrapperErr.message}`);
+      const { error: wrapperErr } = await deps.supabase
+        .from('templates_wrappers')
+        .insert({ library_id: libraryId, key: 'default', name: 'Default wrapper', html: wrapperHtml });
+      if (wrapperErr) return sendError(res, 500, 'internal', `wrapper insert failed: ${wrapperErr.message}`);
 
-    // Inline source with sha256(empty) so the templates_sources_inline_fields CHECK passes.
-    const inlineSha = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-    const { data: source, error: sourceErr } = await deps.supabase
-      .from('templates_sources')
-      .insert({
-        library_id: libraryId,
-        kind: 'inline',
-        label: 'Inline starter',
-        status: 'active',
-        theme_kind: site.theme_kind,
-        inline_html: '',
-        inline_sha: inlineSha,
-        auto_apply: false,
-      })
-      .select('id')
-      .single<{ id: string }>();
-    if (sourceErr || !source) return sendError(res, 500, 'internal', `source insert failed: ${sourceErr?.message ?? 'no_data'}`);
+      // Inline source with sha256(empty) so the templates_sources_inline_fields CHECK passes.
+      const inlineSha = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+      const { data: source, error: sourceErr } = await deps.supabase
+        .from('templates_sources')
+        .insert({
+          library_id: libraryId,
+          kind: 'inline',
+          label: 'Inline starter',
+          status: 'active',
+          theme_kind: site.theme_kind,
+          inline_html: '',
+          inline_sha: inlineSha,
+          auto_apply: false,
+        })
+        .select('id')
+        .single<{ id: string }>();
+      if (sourceErr || !source) return sendError(res, 500, 'internal', `source insert failed: ${sourceErr?.message ?? 'no_data'}`);
+      sourceId = source.id;
 
-    const schemaJson = {
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      title: 'Starter page',
-      type: 'object',
-      properties: {
-        heroTitle: { type: 'string', title: 'Hero heading' },
-        heroBody: { type: 'string', format: 'html', title: 'Hero body' },
-        sections: { type: 'array', title: 'Sections', items: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string', format: 'html' } }, required: ['title'] } },
-      },
-    } as const;
-    const schemaJsonString = JSON.stringify(schemaJson);
-    const schemaHash = await (async () => {
-      const { createHash } = await import('node:crypto');
-      return createHash('sha256').update(schemaJsonString).digest('hex');
-    })();
-    const { error: schemaErr } = await deps.supabase
-      .from('templates_content_schemas')
-      .insert({
-        source_id: source.id,
-        library_id: libraryId,
-        version: 1,
-        is_current: true,
-        schema_format: 'json',
-        schema_hash: schemaHash,
-        schema_json: schemaJson,
-      });
-    if (schemaErr) return sendError(res, 500, 'internal', `content schema insert failed: ${schemaErr.message}`);
+      const schemaJson = {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        title: 'Starter page',
+        type: 'object',
+        properties: {
+          heroTitle: { type: 'string', title: 'Hero heading' },
+          heroBody: { type: 'string', format: 'html', title: 'Hero body' },
+          sections: { type: 'array', title: 'Sections', items: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string', format: 'html' } }, required: ['title'] } },
+        },
+      } as const;
+      const schemaJsonString = JSON.stringify(schemaJson);
+      const schemaHash = await (async () => {
+        const { createHash } = await import('node:crypto');
+        return createHash('sha256').update(schemaJsonString).digest('hex');
+      })();
+      const { error: schemaErr } = await deps.supabase
+        .from('templates_content_schemas')
+        .insert({
+          source_id: sourceId,
+          library_id: libraryId,
+          version: 1,
+          is_current: true,
+          schema_format: 'json',
+          schema_hash: schemaHash,
+          schema_json: schemaJson,
+        });
+      if (schemaErr) return sendError(res, 500, 'internal', `content schema insert failed: ${schemaErr.message}`);
 
-    const { error: linkErr } = await deps.supabase
-      .from('sites')
-      .update({ templates_library_id: libraryId })
-      .eq('id', site.id);
-    if (linkErr) return sendError(res, 500, 'internal', `site link failed: ${linkErr.message}`);
+      const { error: linkErr } = await deps.supabase
+        .from('sites')
+        .update({ templates_library_id: libraryId })
+        .eq('id', site.id);
+      if (linkErr) return sendError(res, 500, 'internal', `site link failed: ${linkErr.message}`);
+    }
 
-    res.status(201).json({ libraryId, created: true });
+    // Auto-import the default site boilerplate so the visual canvas has
+    // a populated palette + a real home page out of the box. Driven by
+    // SITES_BOILERPLATE_URL env var (a unified repo containing source.html
+    // for blocks AND content/pages/*.json for starter pages, plus optional
+    // Next.js scaffolding for the publish-time renderer). Unset → skip
+    // (operator can still import manually via the Source tab).
+    // Public-repo clone, no PAT needed.
+    let autoImport: { blockDefCount: number; brickDefCount: number; wrapperCount: number } | null = null;
+    const defaultBlocksUrl = process.env['SITES_BOILERPLATE_URL'];
+    const defaultBlocksBranch = process.env['SITES_BOILERPLATE_TAG'] ?? process.env['SITES_DEFAULT_BLOCKS_BRANCH'] ?? 'main';
+    if (defaultBlocksUrl) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval
+        const dynImport = (Function('s', 'return import(s)') as (s: string) => Promise<unknown>);
+        const fsMod = await dynImport('node:fs') as typeof import('node:fs');
+        const pathMod = await dynImport('node:path') as typeof import('node:path');
+        const osMod = await dynImport('node:os') as typeof import('node:os');
+        const cryptoMod = await dynImport('node:crypto') as typeof import('node:crypto');
+        const childProcessMod = await dynImport('node:child_process') as typeof import('node:child_process');
+
+        const tmpDir = pathMod.join(osMod.tmpdir(), `gatewaze-bootstrap-blocks-${site.id.slice(0, 8)}-${Date.now()}`);
+        fsMod.mkdirSync(tmpDir, { recursive: true });
+
+        try {
+          childProcessMod.execFileSync('git', [
+            'clone', '--depth=1', '--single-branch', '--branch', defaultBlocksBranch,
+            defaultBlocksUrl, tmpDir,
+          ], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 });
+
+          const sourceHtmlPath = pathMod.join(tmpDir, 'source.html');
+          if (!fsMod.existsSync(sourceHtmlPath)) {
+            deps.logger.warn('admin.library_provision.blocks_no_source_html', { defaultBlocksUrl });
+          } else {
+            const sourceHtml = fsMod.readFileSync(sourceHtmlPath, 'utf-8');
+            const sourceShaHex = cryptoMod.createHash('sha256').update(sourceHtml).digest('hex');
+
+            // Re-use the inline source row we just created (its inline_html is empty)
+            // to anchor the parsed block_defs/brick_defs/wrappers.
+            await deps.supabase
+              .from('templates_sources')
+              .update({ inline_html: sourceHtml, inline_sha: sourceShaHex })
+              .eq('id', sourceId);
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { parse } = await dynImport('../../templates/lib/parser/parse.js') as { parse: (html: string, opts?: { sourcePath?: string }) => any };
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { applySource } = await dynImport('../../templates/lib/sources/apply.js') as { applySource: (supabase: any, sourceId: string, parsed: any, opts: { sourceSha: string; dryRun?: boolean }) => Promise<{ artifacts: { blockDefs?: unknown[]; brickDefs?: unknown[]; wrappers?: unknown[] }; errors: unknown[] }> };
+
+            const parsed = parse(sourceHtml, { sourcePath: `default-blocks-${site.id}` });
+            if (parsed.errors && parsed.errors.length > 0) {
+              deps.logger.warn('admin.library_provision.blocks_parse_errors', { defaultBlocksUrl, errors: parsed.errors });
+            } else {
+              const apply = await applySource(deps.supabase, sourceId, parsed, { sourceSha: sourceShaHex, dryRun: false });
+              if (apply.errors.length > 0) {
+                deps.logger.warn('admin.library_provision.blocks_apply_errors', { defaultBlocksUrl, errors: apply.errors });
+              } else {
+                autoImport = {
+                  blockDefCount: apply.artifacts.blockDefs?.length ?? 0,
+                  brickDefCount: apply.artifacts.brickDefs?.length ?? 0,
+                  wrapperCount:  apply.artifacts.wrappers?.length  ?? 0,
+                };
+                deps.logger.info('admin.library_provision.blocks_imported', { siteId: site.id, ...autoImport });
+              }
+            }
+          }
+
+          // -----------------------------------------------------------------
+          // Import starter pages from content/pages/*.json — gives a fresh
+          // site a real home page (and any other pages the boilerplate
+          // includes) so the operator opens the editor with content rather
+          // than an empty pages list. The publish-worker writes pages BACK
+          // to content/pages/<slug>.json on publish, so this is the
+          // authoritative round-trip directory.
+          // -----------------------------------------------------------------
+          const pagesDir = pathMod.join(tmpDir, 'content', 'pages');
+          if (fsMod.existsSync(pagesDir) && fsMod.statSync(pagesDir).isDirectory()) {
+            const pageFiles = fsMod.readdirSync(pagesDir).filter((f: string) => f.endsWith('.json'));
+            // Resolve block_def + brick_def name→id maps once, scoped to
+            // THIS library, so each page's blocks/bricks can reference defs
+            // by name and we look up the FK id at insert time.
+            const blockDefMap = new Map<string, string>();
+            const brickDefMap = new Map<string, string>();
+            const { data: blockDefRows } = await deps.supabase
+              .from('templates_block_defs')
+              .select('id, key')
+              .eq('library_id', libraryId);
+            for (const r of (blockDefRows ?? []) as Array<{ id: string; key: string }>) {
+              blockDefMap.set(r.key, r.id);
+            }
+            const { data: brickDefRows } = await deps.supabase
+              .from('templates_brick_defs')
+              .select('id, key, block_def_id')
+              .in('block_def_id', Array.from(blockDefMap.values()));
+            for (const r of (brickDefRows ?? []) as Array<{ id: string; key: string; block_def_id: string }>) {
+              brickDefMap.set(r.key, r.id);
+            }
+
+            // Resolve wrapper id once.
+            const { data: wrapperRow } = await deps.supabase
+              .from('templates_wrappers')
+              .select('id')
+              .eq('library_id', libraryId)
+              .eq('key', 'default')
+              .maybeSingle<{ id: string }>();
+            const defaultWrapperId = wrapperRow?.id ?? null;
+
+            let pagesImported = 0;
+            for (const pageFile of pageFiles) {
+              try {
+                const raw = fsMod.readFileSync(pathMod.join(pagesDir, pageFile), 'utf-8');
+                const pageJson = JSON.parse(raw) as {
+                  slug: string;
+                  full_path: string;
+                  title: string;
+                  is_homepage?: boolean;
+                  composition_mode?: 'schema' | 'blocks';
+                  wrapper_key?: string;
+                  seo?: Record<string, unknown>;
+                  content?: Record<string, unknown>;
+                  blocks?: Array<{
+                    block_def_name: string;
+                    variant_key?: string;
+                    sort_order?: number;
+                    content?: Record<string, unknown>;
+                    bricks?: Array<{
+                      brick_def_name: string;
+                      variant_key?: string;
+                      sort_order?: number;
+                      content?: Record<string, unknown>;
+                    }>;
+                  }>;
+                };
+                if (!pageJson.slug || !pageJson.full_path || !pageJson.title) {
+                  deps.logger.warn('admin.library_provision.page_missing_required', { pageFile });
+                  continue;
+                }
+                const composition_mode = pageJson.composition_mode ?? 'schema';
+
+                // Insert page (skip if already exists at this path).
+                const { data: existing } = await deps.supabase
+                  .from('pages')
+                  .select('id')
+                  .eq('host_kind', 'site')
+                  .eq('host_id', site.id)
+                  .eq('full_path', pageJson.full_path)
+                  .neq('status', 'archived')
+                  .maybeSingle<{ id: string }>();
+                if (existing) continue;
+
+                const insertRow: Record<string, unknown> = {
+                  host_kind: 'site',
+                  host_id: site.id,
+                  templates_library_id: libraryId,
+                  slug: pageJson.slug,
+                  full_path: pageJson.full_path,
+                  title: pageJson.title,
+                  is_homepage: Boolean(pageJson.is_homepage),
+                  composition_mode,
+                  status: 'draft',
+                  seo: pageJson.seo ?? {},
+                  wrapper_id: defaultWrapperId,
+                };
+                if (composition_mode === 'schema' && pageJson.content) {
+                  insertRow['content'] = pageJson.content;
+                }
+                const { data: createdPage, error: pageErr } = await deps.supabase
+                  .from('pages')
+                  .insert(insertRow)
+                  .select('id')
+                  .single<{ id: string }>();
+                if (pageErr || !createdPage) {
+                  deps.logger.warn('admin.library_provision.page_insert_failed', { pageFile, error: pageErr?.message });
+                  continue;
+                }
+                const pageId = createdPage.id;
+
+                // For blocks-mode, INSERT page_blocks + page_block_bricks
+                // rows, looking up def ids by name from the maps above.
+                if (composition_mode === 'blocks' && Array.isArray(pageJson.blocks)) {
+                  for (const b of pageJson.blocks) {
+                    const blockDefId = blockDefMap.get(b.block_def_name);
+                    if (!blockDefId) {
+                      deps.logger.warn('admin.library_provision.unknown_block_def', { pageFile, name: b.block_def_name });
+                      continue;
+                    }
+                    const { data: createdBlock, error: blockErr } = await deps.supabase
+                      .from('page_blocks')
+                      .insert({
+                        page_id: pageId,
+                        block_def_id: blockDefId,
+                        sort_order: b.sort_order ?? 1000,
+                        variant_key: b.variant_key ?? 'default',
+                        content: b.content ?? {},
+                      })
+                      .select('id')
+                      .single<{ id: string }>();
+                    if (blockErr || !createdBlock) {
+                      deps.logger.warn('admin.library_provision.page_block_insert_failed', { pageFile, name: b.block_def_name, error: blockErr?.message });
+                      continue;
+                    }
+                    if (Array.isArray(b.bricks)) {
+                      for (const br of b.bricks) {
+                        const brickDefId = brickDefMap.get(br.brick_def_name);
+                        if (!brickDefId) {
+                          deps.logger.warn('admin.library_provision.unknown_brick_def', { pageFile, name: br.brick_def_name });
+                          continue;
+                        }
+                        await deps.supabase.from('page_block_bricks').insert({
+                          page_block_id: createdBlock.id,
+                          brick_def_id: brickDefId,
+                          sort_order: br.sort_order ?? 1000,
+                          variant_key: br.variant_key ?? 'default',
+                          content: br.content ?? {},
+                        });
+                      }
+                    }
+                  }
+                }
+                pagesImported += 1;
+              } catch (err) {
+                deps.logger.warn('admin.library_provision.page_file_failed', { pageFile, error: err instanceof Error ? err.message : String(err) });
+              }
+            }
+            if (pagesImported > 0) {
+              deps.logger.info('admin.library_provision.pages_imported', { siteId: site.id, count: pagesImported });
+            }
+          }
+        } finally {
+          // Best-effort tmp cleanup
+          try { fsMod.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* swallow */ }
+        }
+      } catch (err) {
+        // Non-fatal — site still gets created, just with an empty palette.
+        // Operator can retry via the Source tab if they want blocks.
+        deps.logger.warn('admin.library_provision.default_blocks_failed', {
+          siteId: site.id,
+          defaultBlocksUrl,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    res.status(201).json({ libraryId, created: true, autoImport });
   }
+
+  return {
+    createPage,
+    updatePage,
+    archivePage,
+    listPages,
+    createPreviewToken,
+    revokePreviewToken,
+    batchSaveContent,
+    putSiteSecret,
+    validatePublisher,
+    rollbackPublishJob,
+    provisionIntegrations,
+    importGit,
+    ensureInternalRepo,
+    provisionStarterLibrary,
+    archiveSite,
+    refreshGit,
+  };
 }
 
 interface PageRowMin {
