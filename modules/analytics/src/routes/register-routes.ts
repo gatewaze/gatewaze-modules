@@ -16,7 +16,8 @@
  * the admin api server.
  */
 
-import type { Express, Request } from 'express';
+import { Router, type Express, type Request } from 'express';
+import { createClient } from '@supabase/supabase-js';
 import { createPropertiesRoutes, mountPropertiesRoutes } from './properties.js';
 import { createDashboardsRoutes, mountDashboardsRoutes } from './dashboards.js';
 import { createSitesConvenienceRoutes, mountSitesConvenienceRoutes } from './sites-convenience.js';
@@ -53,24 +54,44 @@ function getEnvNumber(name: string, fallback: number): number {
 }
 
 export function registerRoutes(app: Express, context?: ModuleContext): void {
-  if (!context?.supabase) {
-    // eslint-disable-next-line no-console
-    console.warn('[analytics] registerRoutes: no supabase in context; skipping route mount');
-    return;
+  const logger = context?.logger ?? noopLogger;
+
+  // The platform's loader doesn't populate context.supabase for module
+  // apiRoutes hooks (passes null), which used to make this fn early-return
+  // and silently leave every /api/analytics/* + /api/modules/analytics/*
+  // route unmounted. Build a service-role client locally as a fallback —
+  // same pattern sites/host-media use.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let supabaseClient: any = context?.supabase;
+  if (!supabaseClient) {
+    const supabaseUrl = process.env['SUPABASE_URL'] ?? '';
+    const serviceRoleKey = process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '';
+    if (!supabaseUrl || !serviceRoleKey) {
+      // eslint-disable-next-line no-console
+      console.warn('[analytics] registerRoutes: SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY not set; skipping route mount');
+      return;
+    }
+    supabaseClient = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
   }
-  const logger = context.logger ?? noopLogger;
-  const serviceRoleClient = context.serviceRoleSupabase ?? context.supabase;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const serviceRoleClient: any = (context as { serviceRoleSupabase?: unknown })?.serviceRoleSupabase ?? supabaseClient;
+  // Shadow `context.supabase` references below by binding to local symbols.
+  const ctx = { ...(context ?? {}), supabase: supabaseClient } as ModuleContext;
+  void ctx;
 
   // -------- properties + dashboards (JWT-protected admin routes) --------
-  const jwtRouter = context.labeledRouter ? context.labeledRouter('jwt') : app;
+  const jwtRouter = context?.labeledRouter ? context.labeledRouter('jwt') : app;
 
   const propertiesRoutes = createPropertiesRoutes({
-    supabase: context.supabase,
-    encryptSecret: context.encryptSecret ?? ((s: string) => Buffer.from(s, 'utf-8')),
+    supabase: supabaseClient,
+    encryptSecret: context?.encryptSecret ?? ((s: string) => Buffer.from(s, 'utf-8')),
     logger,
     getUserId: (req: Request) => {
-      const user = (req as Request & { user?: { id?: string } }).user;
-      return user?.id ?? null;
+      // The platform's requireJwt() middleware sets `req.userId` (string).
+      // Some older middleware paths set `req.user.id` (object) instead;
+      // accept both so the module works with either auth wiring.
+      const r = req as Request & { userId?: string; user?: { id?: string } };
+      return r.userId ?? r.user?.id ?? null;
     },
   });
 
@@ -97,8 +118,11 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     service: analyticsService,
     logger,
     getUserId: (req: Request) => {
-      const user = (req as Request & { user?: { id?: string } }).user;
-      return user?.id ?? null;
+      // The platform's requireJwt() middleware sets `req.userId` (string).
+      // Some older middleware paths set `req.user.id` (object) instead;
+      // accept both so the module works with either auth wiring.
+      const r = req as Request & { userId?: string; user?: { id?: string } };
+      return r.userId ?? r.user?.id ?? null;
     },
   });
 
@@ -111,27 +135,33 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     supabase: serviceRoleClient,
     logger,
     getUserId: (req: Request) => {
-      const user = (req as Request & { user?: { id?: string } }).user;
-      return user?.id ?? null;
+      // The platform's requireJwt() middleware sets `req.userId` (string).
+      // Some older middleware paths set `req.user.id` (object) instead;
+      // accept both so the module works with either auth wiring.
+      const r = req as Request & { userId?: string; user?: { id?: string } };
+      return r.userId ?? r.user?.id ?? null;
     },
   });
 
-  if (context.labeledRouter) {
+  if (context?.labeledRouter) {
     mountPropertiesRoutes(jwtRouter, propertiesRoutes);
     mountDashboardsRoutes(jwtRouter, dashboardsRoutes);
     mountSitesConvenienceRoutes(jwtRouter, sitesConvenienceRoutes);
   } else {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- express.Router() return shape isn't load-bearing; the typed routes mount via mountSourcesRoutes
-    const express = require('express') as { Router(): any };
-    const sub = express.Router();
+    const sub = Router();
     mountPropertiesRoutes(sub, propertiesRoutes);
     mountDashboardsRoutes(sub, dashboardsRoutes);
     mountSitesConvenienceRoutes(sub, sitesConvenienceRoutes);
+    // Mount under /api/modules/analytics — the frontend (sites/admin/
+    // pages/PageAnalytics.tsx) hits this prefix, and the platform's
+    // /api/modules router already applies requireJwt() upstream.
+    // /api/analytics/* is kept as a parallel mount for any legacy callers.
+    app.use('/api/modules/analytics', sub);
     app.use('/api/analytics', sub);
   }
 
   // -------- public ingest routes ('/a/*') --------
-  const publicRouter = context.labeledRouter ? context.labeledRouter('public') : app;
+  const publicRouter = context?.labeledRouter ? context.labeledRouter('public') : app;
 
   const ingestRoutes = createIngestRoutes({
     supabase: serviceRoleClient,
@@ -144,8 +174,8 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       });
       return { ok: res.ok, status: res.status };
     },
-    decryptSecret: context.decryptSecret ?? ((b: Buffer | string) => Buffer.isBuffer(b) ? b.toString('utf-8') : (b as string)),
-    rateLimit: context.rateLimit ?? (async () => ({ allowed: true, resetAt: Date.now() + 60_000 })),
+    decryptSecret: context?.decryptSecret ?? ((b: Buffer | string) => Buffer.isBuffer(b) ? b.toString('utf-8') : (b as string)),
+    rateLimit: context?.rateLimit ?? (async () => ({ allowed: true, resetAt: Date.now() + 60_000 })),
     logger,
     perIpRpm: getEnvNumber('ANALYTICS_INGEST_PER_IP_RPM', 200),
     perPropertyRpm: getEnvNumber('ANALYTICS_INGEST_PER_PROPERTY_RPM', 5000),
@@ -155,9 +185,7 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
   if (context.labeledRouter) {
     mountIngestRoutes(publicRouter, ingestRoutes);
   } else {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- express.Router() return shape isn't load-bearing; the typed routes mount via mountSourcesRoutes
-    const express = require('express') as { Router(): any };
-    const sub = express.Router();
+    const sub = Router();
     mountIngestRoutes(sub, ingestRoutes);
     app.use('/', sub);
   }
