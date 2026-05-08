@@ -17,7 +17,7 @@
 import { type FC, type ReactNode, useState } from 'react';
 import type { NewsletterEdition, EditionBlock } from '../../utils/types.js';
 import type { EmailBlockRegistry } from './email-blocks/registry-types.js';
-import { STARTERS, type StarterTemplate } from './starter-templates/index.js';
+import { ALL_STARTERS, type StarterTemplate } from './starter-templates/index.js';
 
 export interface StarterTemplatePickerProps {
   open: boolean;
@@ -40,13 +40,25 @@ export const StarterTemplatePicker: FC<StarterTemplatePickerProps> = ({
   if (!open) return null;
 
   const isEmpty = edition.blocks.length === 0;
-  const visible = STARTERS.filter((s) => s.blocks.every((b) => registry.has(b.type)));
+  // A Barebone-derived starter may include nested registry types in
+  // its tree — only check the top-level `type` of each block here;
+  // the recursive apply path will surface a fallback for any deeper
+  // unknown types.
+  const visible = ALL_STARTERS.filter((s) => s.blocks.every((b) => registry.has(b.type)));
 
   const apply = (starter: StarterTemplate) => {
     const next: NewsletterEdition = {
       ...edition,
       blocks: starter.blocks.map<EditionBlock>((entry, idx) => {
         const reg = registry.get(entry.type)!;
+        // Stamp fresh ids recursively into the nested children tree —
+        // saved starter trees don't carry ids (stripped on generation),
+        // and reusing stale ids would confuse Puck's identity tracking
+        // when the same starter is applied twice.
+        const stamped = stampIdsRecursively(entry);
+        const { children, ...flatProps } = stamped.props as Record<string, unknown>;
+        const content: Record<string, unknown> = { ...flatProps };
+        if (Array.isArray(children)) content.children = children;
         return {
           id: freshUuid(),
           block_template: {
@@ -55,7 +67,7 @@ export const StarterTemplatePicker: FC<StarterTemplatePickerProps> = ({
             block_type: reg.componentId,
             content: { html_template: '', schema: {}, has_bricks: false },
           },
-          content: { ...entry.props },
+          content,
           sort_order: (idx + 1) * 1000,
           bricks: [],
         };
@@ -65,6 +77,16 @@ export const StarterTemplatePicker: FC<StarterTemplatePickerProps> = ({
     setPendingApply(null);
     onClose();
   };
+
+  function stampIdsRecursively(node: { type: string; props: Record<string, unknown> }): { type: string; props: Record<string, unknown> } {
+    const props: Record<string, unknown> = { ...node.props, id: freshUuid() };
+    if (Array.isArray(props.children)) {
+      props.children = (props.children as Array<{ type: string; props: Record<string, unknown> }>).map((c) =>
+        stampIdsRecursively(c),
+      );
+    }
+    return { type: node.type, props };
+  }
 
   const onPick = (starter: StarterTemplate) => {
     if (isEmpty) {
