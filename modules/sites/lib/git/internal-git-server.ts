@@ -21,7 +21,7 @@
  */
 
 export interface InternalRepoRef {
-  hostKind: 'site' | 'list';
+  hostKind: 'site' | 'list' | 'newsletter';
   hostId: string;
   slug: string;
   barePath: string; // /var/gatewaze/git/<host_kind>/<slug>.git
@@ -29,7 +29,7 @@ export interface InternalRepoRef {
 }
 
 export interface CreateRepoArgs {
-  hostKind: 'site' | 'list';
+  hostKind: 'site' | 'list' | 'newsletter';
   hostId: string;
   slug: string;
   /** Optional: clone from a boilerplate at this URL+tag. */
@@ -93,7 +93,7 @@ export interface InternalGitServer {
   /**
    * Lookup a repo by host. Returns null if not found.
    */
-  lookupRepo(hostKind: 'site' | 'list', hostId: string): Promise<InternalRepoRef | null>;
+  lookupRepo(hostKind: 'site' | 'list' | 'newsletter', hostId: string): Promise<InternalRepoRef | null>;
 
   /**
    * Soft-delete the repo (sets `deleted_at`; bare directory is retained for

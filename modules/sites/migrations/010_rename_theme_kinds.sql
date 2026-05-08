@@ -53,6 +53,12 @@ ALTER TABLE public.sites ENABLE TRIGGER sites_theme_kind_immutable;
 -- 3. Add new CHECK and DEFAULT on sites.theme_kind (website only)
 -- ==========================================================================
 
+-- DROP IF EXISTS first so this migration is idempotent across retries —
+-- otherwise a partial-rerun (e.g. after a downstream migration in the chain
+-- failed and the operator hand-applied this constraint) trips
+-- "constraint already exists" and the chain stalls again.
+ALTER TABLE public.sites
+  DROP CONSTRAINT IF EXISTS sites_theme_kind_check;
 ALTER TABLE public.sites
   ADD CONSTRAINT sites_theme_kind_check
   CHECK (theme_kind = 'website');

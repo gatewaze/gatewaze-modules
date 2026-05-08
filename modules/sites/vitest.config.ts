@@ -22,6 +22,14 @@ export default defineConfig({
     alias: {
       '@gatewaze/shared/sanitisers': resolve(sharedRoot, 'sanitisers/index.ts'),
       '@gatewaze/shared': resolve(sharedRoot, 'index.ts'),
+      // Stub the admin app's `@/components/ui` barrel — referenced by
+      // the puck/ field components but resolved only in the admin app's
+      // Vite build. The stub keeps tests pure-node. The subpath alias
+      // (`/RichTextEditor`) is needed because Vite resolves named-export
+      // imports against the most-specific match first; without it the
+      // barrel alias would not match `@/components/ui/RichTextEditor`.
+      '@/components/ui/RichTextEditor': resolve(__dirname, 'admin/components/canvas/puck/__tests__/__stubs__/admin-components-ui.ts'),
+      '@/components/ui': resolve(__dirname, 'admin/components/canvas/puck/__tests__/__stubs__/admin-components-ui.ts'),
     },
   },
 });
