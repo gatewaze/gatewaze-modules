@@ -485,6 +485,7 @@ export default function EditionEditorPage() {
             blockTemplates={blockTemplates}
             brickTemplates={brickTemplates}
             collectionMetadata={collectionMetadata}
+            {...(collectionId ? { collectionId } : {})}
             // Per spec-builder-evaluation §3.6 (extended). When the bound
             // library has explicit `render_kind='react-email'` rows, surface
             // ONLY those component_ids (production opt-in pattern). When
