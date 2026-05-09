@@ -206,9 +206,57 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   const [previewMode, setPreviewMode] = useState<'light' | 'dark'>('light');
   const [exportBusy, setExportBusy] = useState<null | 'email' | 'substack' | 'beehiiv'>(null);
   const [exportToast, setExportToast] = useState<string | null>(null);
-  const [myBlocksOpen, setMyBlocksOpen] = useState(false);
+  // Toggles between the WYSIWYG Puck canvas and a read-only HTML view
+  // (the same email-safe markup the recipient would see). Useful for
+  // operators who want to inspect / copy the source without leaving
+  // the editor. State lives here so flipping doesn't unmount Puck —
+  // we keep the WYSIWYG node rendered but visually hidden and overlay
+  // a code panel on top of it; that way switching back doesn't lose
+  // selection / undo history / scroll position.
+  const [view, setView] = useState<'wysiwyg' | 'html'>('wysiwyg');
+  const [htmlSource, setHtmlSource] = useState<string>('');
+  const [htmlBuilding, setHtmlBuilding] = useState(false);
 
   const userBlocks = useUserBlocks();
+
+  // Layer the saved user-blocks into the Puck Config as synthetic
+  // components under a "My blocks" category so they appear in the
+  // left drawer alongside the platform's blocks. Each synthetic
+  // renders null in the canvas — when the operator drops one, the
+  // onChange handler below rewrites the inserted node into its real
+  // saved subtree (with fresh ids stamped recursively), so the
+  // synthetic never persists in the edition's data.
+  //
+  // This avoids needing publish-side awareness of the synthetic
+  // type: the saved tree's outer `type` is always a real registry
+  // componentId (Section / Container / Hero / …), so once expanded
+  // the edition is indistinguishable from one composed by hand.
+  const configWithUserBlocks = useMemo(() => {
+    if (userBlocks.blocks.length === 0) return config;
+    const cfg = config.config as Config;
+    const components = { ...(cfg.components ?? {}) } as Record<string, Config['components'][string]>;
+    const myBlocksIds: string[] = [];
+    for (const ub of userBlocks.blocks) {
+      const id = `user::${ub.id}`;
+      myBlocksIds.push(id);
+      components[id] = {
+        label: ub.label,
+        fields: {},
+        defaultProps: {},
+        // Render nothing — the synthetic is replaced via onChange the
+        // moment it lands in the data tree. If the replace doesn't
+        // happen for some reason (race / stale data), null is a
+        // benign no-op.
+        render: () => null,
+      } as Config['components'][string];
+    }
+    const categoriesRaw = (cfg as { categories?: Record<string, { components?: string[]; title?: string; defaultExpanded?: boolean }> }).categories ?? {};
+    const categories = {
+      ...categoriesRaw,
+      myBlocks: { components: myBlocksIds, title: 'My blocks', defaultExpanded: true },
+    };
+    return { ...config, config: { ...cfg, components, categories } as Config };
+  }, [config, userBlocks.blocks]);
 
   // Re-sync from upstream when the parent edition changes by id
   // (e.g. user navigates to a different edition).
@@ -296,14 +344,50 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           color: 'inherit',
         }}
       >
-        <button
-          type="button"
-          onClick={() => setMyBlocksOpen(true)}
-          style={toolbarBtn()}
-          title="Insert a block you previously saved"
-        >
-          ★ My blocks{userBlocks.blocks.length > 0 ? ` (${userBlocks.blocks.length})` : ''}
-        </button>
+        {/* WYSIWYG ↔ HTML view toggle. Switching to 'html' renders
+            the same email-safe markup the recipient would see, in a
+            read-only preformatted block; the WYSIWYG canvas stays
+            mounted underneath so flipping back doesn't lose selection
+            / undo history. */}
+        <div role="group" aria-label="View mode" style={toolbarSegment()}>
+          <button
+            type="button"
+            onClick={() => setView('wysiwyg')}
+            style={toolbarSegmentBtn(view === 'wysiwyg')}
+            aria-pressed={view === 'wysiwyg'}
+            title="Visual editor"
+          >
+            ✎ Editor
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              setHtmlBuilding(true);
+              try {
+                const html = await exportEditionHtml({
+                  edition,
+                  format: 'email',
+                  blockMeta: buildBlockMeta(),
+                  pretty: true,
+                });
+                setHtmlSource(html);
+                setView('html');
+              } catch (e) {
+                // eslint-disable-next-line no-console
+                console.error('[newsletter-puck] html-view render failed:', e);
+                setHtmlSource(`<!-- failed to render: ${e instanceof Error ? e.message : String(e)} -->`);
+                setView('html');
+              } finally {
+                setHtmlBuilding(false);
+              }
+            }}
+            style={toolbarSegmentBtn(view === 'html', htmlBuilding)}
+            aria-pressed={view === 'html'}
+            title="View the rendered email HTML source"
+          >
+            {htmlBuilding ? '…HTML' : '<> HTML'}
+          </button>
+        </div>
 
         {/* Preview-iframe-only light / dark toggle. The active button
             is highlighted; the segment itself stays light-themed. */}
@@ -424,19 +508,77 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           }}
         />
       </div>
+      {/* MyBlocksPanel now only opens for the "Save current selection
+          as block" flow — operators browse + insert via the Puck
+          drawer's "My blocks" category (synthesised above). The save
+          flow is fired by the in-canvas "★ Save block" action button
+          which sets pendingSave; we open the modal in 'save' mode
+          when that happens. */}
       <MyBlocksPanel
-        open={myBlocksOpen || userBlocks.pendingSave !== null}
-        mode={userBlocks.pendingSave !== null ? 'save' : 'browse'}
+        open={userBlocks.pendingSave !== null}
+        mode="save"
         edition={edition}
         registry={emailBlockRegistry}
         onApply={onChange}
         onClose={() => {
-          setMyBlocksOpen(false);
           userBlocks.clearPendingSave();
         }}
       />
+      {/* HTML source view — appears when the operator clicks "<> HTML"
+          on the toolbar. The Puck canvas stays mounted in the
+          sibling div below (display:none) so undo history + selection
+          state survive the toggle. */}
+      {view === 'html' && (
+        <div
+          className="newsletter-puck-html-view"
+          style={{
+            background: '#0e0f12',
+            color: '#e5e7eb',
+            padding: 0,
+            minHeight: 480,
+            position: 'relative',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #23262d' }}>
+            <span style={{ fontSize: 12, color: '#9ca3af' }}>Rendered email HTML — read-only.</span>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(htmlSource);
+                  setExportToast('HTML copied to clipboard.');
+                  setTimeout(() => setExportToast(null), 3000);
+                } catch (e) {
+                  setExportToast(e instanceof Error ? e.message : 'Copy failed');
+                  setTimeout(() => setExportToast(null), 3000);
+                }
+              }}
+              style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #2a2d34', background: '#1f2227', color: '#e5e7eb', cursor: 'pointer', fontSize: 12 }}
+            >
+              Copy
+            </button>
+          </div>
+          <pre
+            style={{
+              margin: 0,
+              padding: '12px 16px',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              fontSize: 12,
+              lineHeight: 1.5,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              overflow: 'auto',
+              maxHeight: 'calc(100vh - 280px)',
+            }}
+          >
+            {htmlSource}
+          </pre>
+        </div>
+      )}
+
+      <div style={{ display: view === 'wysiwyg' ? 'block' : 'none' }}>
       <Puck
-        config={config.config as never}
+        config={configWithUserBlocks.config as never}
         data={data as never}
         // `metadata` propagates to the canvas root.render and to every
         // component as `puck.metadata`. We only need previewMode there
@@ -444,8 +586,14 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         // card chrome dynamically.
         metadata={{ previewMode }}
         viewports={[
-          { width: 600, height: 'auto' as const, label: 'Desktop' },
-          { width: 375, height: 'auto' as const, label: 'Mobile' },
+          // Puck v0.21 ships built-in Monitor / Smartphone / Tablet
+          // glyphs and renders them in the viewport-switcher row above
+          // the canvas. Without `icon`, Puck falls back to its generic
+          // device shape (which read identically for desktop vs mobile
+          // — the visual difference between the two icons was
+          // imperceptible in the live editor).
+          { width: 600, height: 'auto' as const, label: 'Desktop', icon: 'Monitor' },
+          { width: 375, height: 'auto' as const, label: 'Mobile', icon: 'Smartphone' },
         ]}
         iframe={{ enabled: true }}
         overrides={{
@@ -465,7 +613,20 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         onChange={(nextData) => {
           // Convert + emit upstream. Cast through unknown because Puck's
           // `Data` type widens props to its own shape; ours is a subset.
-          const nextPuck = nextData as unknown as ReturnType<typeof editionToPuckData>;
+          let nextPuck = nextData as unknown as ReturnType<typeof editionToPuckData>;
+
+          // Drawer-inserted "My blocks" components arrive with
+          // type='user::<id>' and an empty props object. Walk the tree
+          // and replace each one with the saved tree (real registry
+          // type + recursively-stamped fresh ids). This is the moment
+          // the synthetic ceases to exist — every downstream consumer
+          // (puckDataToEdition, the publish renderer, the EditionEmail
+          // composer) sees only the expanded type.
+          const expanded = expandUserBlockSynthetics(nextPuck, userBlocks.blocks);
+          if (expanded !== nextPuck) {
+            nextPuck = expanded;
+          }
+
           setData(nextPuck);
           try {
             const nextEdition = puckDataToEdition({
@@ -487,12 +648,81 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           if (onSave) await onSave();
         }}
       />
+      </div>
     </div>
     </NewsletterEditingProvider>
   );
 };
 
 export default NewsletterPuckCanvas;
+
+// ---------------------------------------------------------------------------
+// User-block synthetic expansion. The drawer's "My blocks" category
+// inserts a placeholder of type `user::<saved-block-id>`; this helper
+// walks Puck's content tree (recursing into slot children) and
+// replaces any such placeholder with the saved tree's real
+// componentId + props. Fresh ids are stamped at every level so the
+// same saved block can be inserted multiple times in one session
+// without colliding on Puck's identity tracking. Returns the same
+// reference when nothing changes so React's setData skips re-renders.
+// ---------------------------------------------------------------------------
+
+interface UserBlockLite {
+  id: string;
+  tree: { type: string; props: Record<string, unknown> };
+}
+
+function expandUserBlockSynthetics(
+  data: ReturnType<typeof editionToPuckData>,
+  userBlocks: ReadonlyArray<UserBlockLite>,
+): ReturnType<typeof editionToPuckData> {
+  if (userBlocks.length === 0) return data;
+  let mutated = false;
+
+  function freshUuid(): string {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+    const hex = '0123456789abcdef';
+    let s = '';
+    for (let i = 0; i < 32; i++) s += hex[Math.floor(Math.random() * 16)];
+    return `${s.slice(0, 8)}-${s.slice(8, 12)}-4${s.slice(13, 16)}-${s.slice(16, 20)}-${s.slice(20, 32)}`;
+  }
+
+  function stampIdsRecursive(node: { type: string; props: Record<string, unknown> }): { type: string; props: Record<string, unknown> } {
+    const props: Record<string, unknown> = { ...node.props, id: freshUuid() };
+    if (Array.isArray(props.children)) {
+      props.children = (props.children as Array<{ type: string; props: Record<string, unknown> }>).map((c) =>
+        stampIdsRecursive(c),
+      );
+    }
+    return { type: node.type, props };
+  }
+
+  function expandOne(entry: { type: string; props: Record<string, unknown> }): { type: string; props: Record<string, unknown> } {
+    if (typeof entry.type === 'string' && entry.type.startsWith('user::')) {
+      const slug = entry.type.slice(6);
+      const ub = userBlocks.find((b) => b.id === slug);
+      if (ub) {
+        mutated = true;
+        return stampIdsRecursive(ub.tree);
+      }
+    }
+    // Recurse into nested children (slot containers like Section / Row /
+    // Column / Container store their tree under props.children).
+    if (Array.isArray(entry.props.children)) {
+      const nextChildren = (entry.props.children as Array<{ type: string; props: Record<string, unknown> }>).map((c) =>
+        expandOne(c),
+      );
+      if (nextChildren.some((c, i) => c !== (entry.props.children as unknown[])[i])) {
+        return { type: entry.type, props: { ...entry.props, children: nextChildren } };
+      }
+    }
+    return entry;
+  }
+
+  const nextContent = data.content.map((b) => expandOne(b as never)) as typeof data.content;
+  if (!mutated) return data;
+  return { ...data, content: nextContent };
+}
 
 // ---------------------------------------------------------------------------
 // Canvas root — replaces Puck's default root.render. Wraps children in
