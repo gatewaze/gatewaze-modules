@@ -117,64 +117,20 @@ const newslettersModule: GatewazeModule = {
       ],
     });
 
-    // Edition publish-to-git endpoint. Per spec-builder-evaluation
-    // §3.6 (extended). Wires the gitServer dependency on demand —
-    // the sites module owns the InternalGitServer impl and the api
-    // server resolves it via context.deps.
+    // Edition publish-to-git + collection init/graduate/drift/manifest/
+    // delete endpoints. The earlier draft of this hook expected the
+    // api server to expose `context.deps.{supabase, gitServer,
+    // requireJwt}` and silently no-op'd when those weren't present —
+    // which was always: the api server's runtime context exposes
+    // `supabase: null` and no `deps` block at all.
+    //
+    // Mirrors host-media's pattern: own supabase client built from
+    // env vars, own requireJwt middleware, own Router mounted at
+    // /api/admin. See modules/newsletters/api/register-routes.ts.
     try {
-      const ctx = context as unknown as {
-        app?: { use?: (path: string, router: unknown) => void; post?: (path: string, ...handlers: unknown[]) => void };
-        deps?: {
-          supabase?: import('@supabase/supabase-js').SupabaseClient;
-          gitServer?: unknown;
-          requireJwt?: unknown;
-        };
-      } | undefined;
-      const expressApp = ctx?.app ?? (app as unknown as { post?: (path: string, ...handlers: unknown[]) => void });
-      if (!ctx?.deps?.supabase || !expressApp?.post) {
-        return;
-      }
-      const { createPublishToGitRoute, createInitRepoRoute, createGraduateToExternalRoute, createDriftRoute, createManifestRoute, createDeleteCollectionRoute } =
-        await import('./api/index.js');
-      const requireJwt = ctx.deps.requireJwt as
-        | ((req: unknown, res: unknown, next: unknown) => void)
-        | undefined;
-
-      const publishHandler = createPublishToGitRoute({
-        supabase: ctx.deps.supabase,
-        ...(ctx.deps.gitServer ? { gitServer: ctx.deps.gitServer as never } : {}),
-        boilerplateUrl: process.env.NEWSLETTERS_BOILERPLATE_URL ?? null,
-        boilerplateBranch: process.env.NEWSLETTERS_BOILERPLATE_BRANCH ?? 'main',
-      });
-      const gitRoutesDeps = {
-        supabase: ctx.deps.supabase,
-        ...(ctx.deps.gitServer ? { gitServer: ctx.deps.gitServer as never } : {}),
-        boilerplateUrl: process.env.NEWSLETTERS_BOILERPLATE_URL ?? null,
-        boilerplateBranch: process.env.NEWSLETTERS_BOILERPLATE_BRANCH ?? 'main',
-      };
-      const initRepoHandler = createInitRepoRoute(gitRoutesDeps);
-      const graduateHandler = createGraduateToExternalRoute(gitRoutesDeps);
-      const driftHandler = createDriftRoute(gitRoutesDeps);
-      const manifestHandler = createManifestRoute(gitRoutesDeps);
-      const deleteCollectionHandler = createDeleteCollectionRoute({
-        supabase: ctx.deps.supabase,
-        ...(ctx.deps.gitServer ? { gitServer: ctx.deps.gitServer as never } : {}),
-      });
-
-      const mount = (method: 'post' | 'get' | 'delete', path: string, handler: unknown) => {
-        if (requireJwt) {
-          (expressApp as unknown as { [k: string]: (...a: unknown[]) => void })[method](path, requireJwt as never, handler);
-        } else {
-          (expressApp as unknown as { [k: string]: (...a: unknown[]) => void })[method](path, handler);
-        }
-      };
-
-      mount('post', '/api/admin/newsletters/editions/:editionId/publish-to-git', publishHandler);
-      mount('post', '/api/admin/newsletters/collections/:collectionId/init-repo', initRepoHandler);
-      mount('post', '/api/admin/newsletters/collections/:collectionId/graduate-to-external', graduateHandler);
-      mount('get', '/api/admin/newsletters/collections/:collectionId/drift', driftHandler);
-      mount('get', '/api/admin/newsletters/collections/:collectionId/manifest', manifestHandler);
-      mount('delete', '/api/admin/newsletters/collections/:collectionId', deleteCollectionHandler);
+      const { registerRoutes } = await import('./api/register-routes.js');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await registerRoutes(app as any, context);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn('[newsletters] publish-to-git route registration failed:', err);
