@@ -274,15 +274,16 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     >
     <div
       className={`newsletter-puck-canvas puck-canvas-email puck-preview-${previewMode}`}
-      style={{
-        // Preview-only chrome: changes the background AROUND the email
-        // iframe so operators can see how their email looks against a
-        // light or dark mail-client backdrop. Doesn't affect the
-        // exported HTML.
-        background: previewMode === 'dark' ? '#0e0f12' : '#fafbfc',
-        transition: 'background 0.15s ease',
-      }}
+      style={{ background: '#fafbfc' }}
     >
+      {/*
+        Toolbar + edition-metadata bar always render against the
+        admin's light theme — earlier draft echoed the light/dark
+        toggle into them too, but operators only want the toggle to
+        affect the email preview iframe (it simulates the recipient's
+        mail-client backdrop). The chrome around it stays consistent
+        with the rest of the admin UI.
+      */}
       <div
         className="newsletter-puck-toolbar"
         style={{
@@ -290,26 +291,27 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           alignItems: 'center',
           gap: 8,
           padding: '8px 12px',
-          borderBottom: previewMode === 'dark' ? '1px solid #23262d' : '1px solid #eee',
-          background: previewMode === 'dark' ? '#1a1c20' : '#fff',
-          color: previewMode === 'dark' ? '#e5e7eb' : 'inherit',
+          borderBottom: '1px solid #eee',
+          background: '#fff',
+          color: 'inherit',
         }}
       >
         <button
           type="button"
           onClick={() => setMyBlocksOpen(true)}
-          style={toolbarBtn(previewMode)}
+          style={toolbarBtn()}
           title="Insert a block you previously saved"
         >
           ★ My blocks{userBlocks.blocks.length > 0 ? ` (${userBlocks.blocks.length})` : ''}
         </button>
 
-        {/* Preview mode toggle — light / dark */}
-        <div role="group" aria-label="Preview background" style={toolbarSegment(previewMode)}>
+        {/* Preview-iframe-only light / dark toggle. The active button
+            is highlighted; the segment itself stays light-themed. */}
+        <div role="group" aria-label="Preview background" style={toolbarSegment()}>
           <button
             type="button"
             onClick={() => setPreviewMode('light')}
-            style={toolbarSegmentBtn(previewMode === 'light', previewMode)}
+            style={toolbarSegmentBtn(previewMode === 'light')}
             aria-pressed={previewMode === 'light'}
             title="Preview against a light mail-client background"
           >
@@ -318,7 +320,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           <button
             type="button"
             onClick={() => setPreviewMode('dark')}
-            style={toolbarSegmentBtn(previewMode === 'dark', previewMode)}
+            style={toolbarSegmentBtn(previewMode === 'dark')}
             aria-pressed={previewMode === 'dark'}
             title="Preview against a dark mail-client background"
           >
@@ -329,12 +331,12 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         <div style={{ flex: 1 }} />
 
         {/* Output format dropdown */}
-        <div style={toolbarSegment(previewMode)}>
+        <div style={toolbarSegment()}>
           <button
             type="button"
             onClick={() => handleExport('email')}
             disabled={exportBusy !== null}
-            style={toolbarSegmentBtn(false, previewMode, exportBusy === 'email')}
+            style={toolbarSegmentBtn(false, exportBusy === 'email')}
             title="Download as email-safe HTML (full document)"
           >
             {exportBusy === 'email' ? 'Exporting…' : 'Email HTML'}
@@ -343,7 +345,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             type="button"
             onClick={() => handleExport('substack')}
             disabled={exportBusy !== null}
-            style={toolbarSegmentBtn(false, previewMode, exportBusy === 'substack')}
+            style={toolbarSegmentBtn(false, exportBusy === 'substack')}
             title="Render as Substack rich text and copy to clipboard"
           >
             {exportBusy === 'substack' ? 'Exporting…' : 'Substack'}
@@ -352,7 +354,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             type="button"
             onClick={() => handleExport('beehiiv')}
             disabled={exportBusy !== null}
-            style={toolbarSegmentBtn(false, previewMode, exportBusy === 'beehiiv')}
+            style={toolbarSegmentBtn(false, exportBusy === 'beehiiv')}
             title="Render as Beehiiv rich text and copy to clipboard"
           >
             {exportBusy === 'beehiiv' ? 'Exporting…' : 'Beehiiv'}
@@ -365,8 +367,8 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           role="status"
           style={{
             padding: '8px 12px',
-            background: previewMode === 'dark' ? '#1f3a2a' : '#ecfdf3',
-            color: previewMode === 'dark' ? '#a7e8c4' : '#065f46',
+            background: '#ecfdf3',
+            color: '#065f46',
             fontSize: 13,
             borderBottom: '1px solid rgba(0,0,0,0.05)',
           }}
@@ -388,9 +390,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           gridTemplateColumns: '1fr 160px',
           gap: 8,
           padding: '10px 12px',
-          background: previewMode === 'dark' ? '#1a1c20' : '#fff',
-          color: previewMode === 'dark' ? '#e5e7eb' : 'inherit',
-          borderBottom: previewMode === 'dark' ? '1px solid #23262d' : '1px solid #eee',
+          background: '#fff',
+          color: 'inherit',
+          borderBottom: '1px solid #eee',
         }}
       >
         <input
@@ -399,14 +401,14 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           value={edition.subject ?? ''}
           onChange={(e) => onChange({ ...edition, subject: e.target.value })}
           placeholder="Edition title — also the email subject line"
-          style={metaInputStyle(previewMode)}
+          style={metaInputStyle()}
         />
         <input
           type="date"
           aria-label="Edition date"
           value={edition.edition_date ?? ''}
           onChange={(e) => onChange({ ...edition, edition_date: e.target.value })}
-          style={metaInputStyle(previewMode)}
+          style={metaInputStyle()}
         />
         <textarea
           aria-label="Preheader (preview text shown next to the subject in inboxes)"
@@ -415,7 +417,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           placeholder="Preheader — short preview text shown in the inbox next to the subject (recommended ~80 chars)"
           rows={2}
           style={{
-            ...metaInputStyle(previewMode),
+            ...metaInputStyle(),
             gridColumn: '1 / -1',
             resize: 'vertical',
             fontFamily: 'inherit',
@@ -572,55 +574,49 @@ const CANVAS_DARK_CSS = `
 // stylesheet. Style polishing can later move these to a CSS file.
 // ---------------------------------------------------------------------------
 
-function toolbarBtn(mode: 'light' | 'dark'): React.CSSProperties {
+function toolbarBtn(): React.CSSProperties {
   return {
     padding: '6px 12px',
     borderRadius: 4,
-    border: mode === 'dark' ? '1px solid #2a2d34' : '1px solid #ccc',
-    background: mode === 'dark' ? '#1f2227' : '#fff',
-    color: mode === 'dark' ? '#e5e7eb' : 'inherit',
+    border: '1px solid #ccc',
+    background: '#fff',
+    color: 'inherit',
     cursor: 'pointer',
     fontSize: 13,
   };
 }
 
-function toolbarSegment(mode: 'light' | 'dark'): React.CSSProperties {
+function toolbarSegment(): React.CSSProperties {
   return {
     display: 'inline-flex',
-    border: mode === 'dark' ? '1px solid #2a2d34' : '1px solid #ccc',
+    border: '1px solid #ccc',
     borderRadius: 4,
     overflow: 'hidden',
-    background: mode === 'dark' ? '#1f2227' : '#fff',
+    background: '#fff',
   };
 }
 
-function metaInputStyle(mode: 'light' | 'dark'): React.CSSProperties {
+function metaInputStyle(): React.CSSProperties {
   return {
     width: '100%',
     padding: '8px 12px',
-    border: mode === 'dark' ? '1px solid #2a2d34' : '1px solid #d0d5dd',
+    border: '1px solid #d0d5dd',
     borderRadius: 6,
-    background: mode === 'dark' ? '#0e0f12' : '#fff',
-    color: mode === 'dark' ? '#e5e7eb' : '#14171E',
+    background: '#fff',
+    color: '#14171E',
     fontSize: 14,
     boxSizing: 'border-box',
     outline: 'none',
   };
 }
 
-function toolbarSegmentBtn(
-  active: boolean,
-  mode: 'light' | 'dark',
-  busy = false,
-): React.CSSProperties {
+function toolbarSegmentBtn(active: boolean, busy = false): React.CSSProperties {
   return {
     padding: '6px 12px',
     border: 'none',
-    borderRight: mode === 'dark' ? '1px solid #2a2d34' : '1px solid #eee',
-    background: active
-      ? (mode === 'dark' ? '#2a2d34' : '#eef2f7')
-      : 'transparent',
-    color: mode === 'dark' ? '#e5e7eb' : 'inherit',
+    borderRight: '1px solid #eee',
+    background: active ? '#eef2f7' : 'transparent',
+    color: 'inherit',
     cursor: busy ? 'wait' : 'pointer',
     fontSize: 13,
     opacity: busy ? 0.7 : 1,
