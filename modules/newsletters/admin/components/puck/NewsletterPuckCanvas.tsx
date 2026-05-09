@@ -374,6 +374,54 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           {exportToast}
         </div>
       )}
+
+      {/* Edition metadata — subject (the inbox subject line, also used
+          as the edition's title in lists), date (the publish/edition
+          date the edition is logically associated with), and preheader
+          (the snippet that appears next to or below the subject in
+          most email clients). All three persist via the parent's
+          existing onChange→handleSave plumbing on the editions page. */}
+      <div
+        className="newsletter-puck-edition-meta"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 160px',
+          gap: 8,
+          padding: '10px 12px',
+          background: previewMode === 'dark' ? '#1a1c20' : '#fff',
+          color: previewMode === 'dark' ? '#e5e7eb' : 'inherit',
+          borderBottom: previewMode === 'dark' ? '1px solid #23262d' : '1px solid #eee',
+        }}
+      >
+        <input
+          type="text"
+          aria-label="Edition title / subject"
+          value={edition.subject ?? ''}
+          onChange={(e) => onChange({ ...edition, subject: e.target.value })}
+          placeholder="Edition title — also the email subject line"
+          style={metaInputStyle(previewMode)}
+        />
+        <input
+          type="date"
+          aria-label="Edition date"
+          value={edition.edition_date ?? ''}
+          onChange={(e) => onChange({ ...edition, edition_date: e.target.value })}
+          style={metaInputStyle(previewMode)}
+        />
+        <textarea
+          aria-label="Preheader (preview text shown next to the subject in inboxes)"
+          value={edition.preheader ?? ''}
+          onChange={(e) => onChange({ ...edition, preheader: e.target.value })}
+          placeholder="Preheader — short preview text shown in the inbox next to the subject (recommended ~80 chars)"
+          rows={2}
+          style={{
+            ...metaInputStyle(previewMode),
+            gridColumn: '1 / -1',
+            resize: 'vertical',
+            fontFamily: 'inherit',
+          }}
+        />
+      </div>
       <MyBlocksPanel
         open={myBlocksOpen || userBlocks.pendingSave !== null}
         mode={userBlocks.pendingSave !== null ? 'save' : 'browse'}
@@ -543,6 +591,20 @@ function toolbarSegment(mode: 'light' | 'dark'): React.CSSProperties {
     borderRadius: 4,
     overflow: 'hidden',
     background: mode === 'dark' ? '#1f2227' : '#fff',
+  };
+}
+
+function metaInputStyle(mode: 'light' | 'dark'): React.CSSProperties {
+  return {
+    width: '100%',
+    padding: '8px 12px',
+    border: mode === 'dark' ? '1px solid #2a2d34' : '1px solid #d0d5dd',
+    borderRadius: 6,
+    background: mode === 'dark' ? '#0e0f12' : '#fff',
+    color: mode === 'dark' ? '#e5e7eb' : '#14171E',
+    fontSize: 14,
+    boxSizing: 'border-box',
+    outline: 'none',
   };
 }
 
