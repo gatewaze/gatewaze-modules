@@ -21,6 +21,7 @@ import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
 import { NewsletterDetailsForm } from '../components/NewsletterDetailsForm';
 import { DeleteNewsletterCard } from '../components/DeleteNewsletterCard';
+import { DefaultEditionTemplateCard } from '../components/DefaultEditionTemplateCard';
 import { NewsletterStatsTab } from '../components/NewsletterStatsTab';
 import { NewsletterRepliesTab } from '../components/NewsletterRepliesTab';
 import { GDocImportTab } from '../components/GDocImportTab';
@@ -299,6 +300,13 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
 
   return (
     <div className="space-y-8">
+      {/* Default edition template — picked once at the newsletter level
+          so each new edition starts from the same layout. Operators can
+          still customise per-edition; this just sets the starting point. */}
+      <section>
+        <DefaultEditionTemplateCard newsletterId={newsletterId} />
+      </section>
+
       {/* Source section — git repo / uploads provenance */}
       <section>
         <div className="flex items-center justify-between mb-3">
