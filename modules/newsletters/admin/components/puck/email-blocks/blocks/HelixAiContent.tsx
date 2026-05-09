@@ -21,19 +21,19 @@
  * Renaming the on-disk file/symbol/label is cosmetic.
  */
 
-import { lazy, Suspense, type ReactNode } from 'react';
 import { Heading, Section } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { HelixAiFieldAdapter } from '../helix-ai-field-adapter.js';
 
-// Lazy-load the field adapter so node-only test runs (the registry
-// shape tests, the export-edition-html tests, etc.) don't pull
-// `react-dom`/`@/components/ui/RichTextEditor` into the import graph
-// at module-load time. The adapter renders only when Puck mounts the
-// custom field — i.e. inside the editor (browser env), where the
-// admin's deps are present.
-const HelixAiFieldAdapterLazy = lazy(() =>
-  import('../helix-ai-field-adapter.js').then((m) => ({ default: m.HelixAiFieldAdapter })),
-);
+// Import the adapter eagerly. An earlier draft used React.lazy + a
+// Suspense boundary so the registry's import graph stayed node-test-
+// friendly (the adapter pulls AiContentField → react-dom which the
+// node-env vitest run can't resolve). That broke Puck v0.21's
+// AutoFieldInternal: its useMemo for FieldComponent doesn't tolerate
+// a child throwing a Promise during the first render of a custom
+// field, and threw `Field type for custom did not exist`. The
+// import-graph concern is now handled at the test layer instead
+// (vitest.config.ts aliases react-dom → a flushSync-noop stub).
 
 interface HelixAiContentProps extends Record<string, unknown> {
   title: string;
@@ -49,11 +49,7 @@ export const HelixAiContentBlock: EmailBlockEntry<HelixAiContentProps> = {
     ai_body: {
       type: 'custom',
       label: 'Body (Helix AI-generated)',
-      render: (props: { value: unknown; onChange: (v: unknown) => void; name?: string; id?: string }): ReactNode => (
-        <Suspense fallback={null}>
-          <HelixAiFieldAdapterLazy {...props} />
-        </Suspense>
-      ),
+      render: HelixAiFieldAdapter as never,
     },
   },
   defaultProps: {
