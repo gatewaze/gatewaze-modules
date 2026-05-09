@@ -19,8 +19,17 @@
  * EditionCanvas doesn't have them either).
  */
 
-import { useEffect, useMemo, useState, type FC, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode } from 'react';
 import { Puck, type Config } from '@puckeditor/core';
+import {
+  PencilSquareIcon,
+  CodeBracketIcon,
+  SunIcon,
+  MoonIcon,
+  ArrowUpTrayIcon,
+  ArrowDownTrayIcon,
+  ClipboardDocumentIcon,
+} from '@heroicons/react/24/outline';
 import {
   buildPuckConfig,
   type PuckRenderHost,
@@ -216,6 +225,22 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   const [view, setView] = useState<'wysiwyg' | 'html'>('wysiwyg');
   const [htmlSource, setHtmlSource] = useState<string>('');
   const [htmlBuilding, setHtmlBuilding] = useState(false);
+  // Three export targets (HTML download / Substack copy / Beehiiv
+  // copy) collapse into a single dropdown so the toolbar stays
+  // visually quiet — three side-by-side buttons with similar
+  // iconography were hard to scan.
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [exportMenuOpen]);
 
   const userBlocks = useUserBlocks();
 
@@ -475,15 +500,17 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           // PUCK_RADIX_THEME_CSS (a [class*=PuckLayout-title] rule).
           headerActions: ({ children }) => (
             <>
+              {/* Editor / HTML view toggle */}
               <div role="group" aria-label="View mode" style={toolbarSegment()}>
                 <button
                   type="button"
                   onClick={() => setView('wysiwyg')}
-                  style={toolbarSegmentBtn(view === 'wysiwyg')}
+                  style={toolbarIconBtn(view === 'wysiwyg')}
                   aria-pressed={view === 'wysiwyg'}
+                  aria-label="Visual editor"
                   title="Visual editor"
                 >
-                  ✎ Editor
+                  <PencilSquareIcon className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
@@ -507,61 +534,96 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                       setHtmlBuilding(false);
                     }
                   }}
-                  style={toolbarSegmentBtn(view === 'html', htmlBuilding)}
+                  style={toolbarIconBtn(view === 'html', htmlBuilding)}
                   aria-pressed={view === 'html'}
+                  aria-label="View HTML source"
                   title="View the rendered email HTML source"
                 >
-                  {htmlBuilding ? '…HTML' : '<> HTML'}
+                  <CodeBracketIcon className="w-4 h-4" />
                 </button>
               </div>
+
+              {/* Light / Dark preview-iframe backdrop toggle */}
               <div role="group" aria-label="Preview background" style={toolbarSegment()}>
                 <button
                   type="button"
                   onClick={() => setPreviewMode('light')}
-                  style={toolbarSegmentBtn(previewMode === 'light')}
+                  style={toolbarIconBtn(previewMode === 'light')}
                   aria-pressed={previewMode === 'light'}
+                  aria-label="Light background preview"
                   title="Preview against a light mail-client background"
                 >
-                  ☀ Light
+                  <SunIcon className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
                   onClick={() => setPreviewMode('dark')}
-                  style={toolbarSegmentBtn(previewMode === 'dark')}
+                  style={toolbarIconBtn(previewMode === 'dark')}
                   aria-pressed={previewMode === 'dark'}
+                  aria-label="Dark background preview"
                   title="Preview against a dark mail-client background"
                 >
-                  ☾ Dark
+                  <MoonIcon className="w-4 h-4" />
                 </button>
               </div>
-              <div style={toolbarSegment()}>
+
+              {/* Export menu — single share button opens a dropdown
+                  with the three destinations. Three icon-only buttons
+                  side-by-side were too easy to confuse since
+                  Substack and Beehiiv share copy semantics. */}
+              <div ref={exportMenuRef} style={{ position: 'relative' }}>
                 <button
                   type="button"
-                  onClick={() => handleExport('email')}
+                  onClick={() => setExportMenuOpen((v) => !v)}
                   disabled={exportBusy !== null}
-                  style={toolbarSegmentBtn(false, exportBusy === 'email')}
-                  title="Download as email-safe HTML (full document)"
+                  style={toolbarIconBtn(exportMenuOpen, exportBusy !== null)}
+                  aria-haspopup="menu"
+                  aria-expanded={exportMenuOpen}
+                  aria-label="Export"
+                  title="Export — download HTML or copy for Substack / Beehiiv"
                 >
-                  {exportBusy === 'email' ? 'Exporting…' : 'Email HTML'}
+                  <ArrowUpTrayIcon className="w-4 h-4" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleExport('substack')}
-                  disabled={exportBusy !== null}
-                  style={toolbarSegmentBtn(false, exportBusy === 'substack')}
-                  title="Render as Substack rich text and copy to clipboard"
-                >
-                  {exportBusy === 'substack' ? 'Exporting…' : 'Substack'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleExport('beehiiv')}
-                  disabled={exportBusy !== null}
-                  style={toolbarSegmentBtn(false, exportBusy === 'beehiiv')}
-                  title="Render as Beehiiv rich text and copy to clipboard"
-                >
-                  {exportBusy === 'beehiiv' ? 'Exporting…' : 'Beehiiv'}
-                </button>
+                {exportMenuOpen && (
+                  <div role="menu" style={exportMenuStyle}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => { setExportMenuOpen(false); void handleExport('email'); }}
+                      style={exportMenuItemStyle}
+                    >
+                      <ArrowDownTrayIcon className="w-4 h-4 shrink-0" />
+                      <span style={{ flex: 1, textAlign: 'left' }}>
+                        <span style={{ display: 'block', fontWeight: 500 }}>Download HTML</span>
+                        <span style={{ display: 'block', fontSize: 11, color: 'var(--gray-9, #888)' }}>Email-safe full document</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => { setExportMenuOpen(false); void handleExport('substack'); }}
+                      style={exportMenuItemStyle}
+                    >
+                      <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
+                      <span style={{ flex: 1, textAlign: 'left' }}>
+                        <span style={{ display: 'block', fontWeight: 500 }}>Copy for Substack</span>
+                        <span style={{ display: 'block', fontSize: 11, color: 'var(--gray-9, #888)' }}>Rich-text — paste into Substack editor</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => { setExportMenuOpen(false); void handleExport('beehiiv'); }}
+                      style={exportMenuItemStyle}
+                    >
+                      <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
+                      <span style={{ flex: 1, textAlign: 'left' }}>
+                        <span style={{ display: 'block', fontWeight: 500 }}>Copy for Beehiiv</span>
+                        <span style={{ display: 'block', fontSize: 11, color: 'var(--gray-9, #888)' }}>Rich-text — paste into Beehiiv editor</span>
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
               {children}
             </>
@@ -801,12 +863,12 @@ const PUCK_RADIX_THEME_CSS = `
   --puck-color-green-09: var(--green-4, #b8e8bf);
 }
 
-/* Hide Puck's default "Page" header title — we don't have meaningful
-   page-level metadata to surface there, and the header row is busier
-   with our action buttons now. The class hash changes between Puck
-   builds, so target via a substring-prefix attribute selector
-   ([class*="PuckLayout-title"]). */
-.newsletter-puck-canvas [class*="PuckLayout-title"] {
+/* Hide Puck's default "Page" header title. The class on Puck v0.21
+   is _PuckHeader-title_<hash> (an earlier pass guessed
+   PuckLayout-title — wrong; the title lives in PuckHeader). The
+   hash changes between builds, so target via a substring-prefix
+   attribute selector. */
+.newsletter-puck-canvas [class*="PuckHeader-title"] {
   display: none;
 }
 `;
@@ -821,18 +883,52 @@ function toolbarSegment(): React.CSSProperties {
   };
 }
 
-function toolbarSegmentBtn(active: boolean, busy = false): React.CSSProperties {
+function toolbarIconBtn(active: boolean, busy = false): React.CSSProperties {
   return {
-    padding: '6px 12px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 32,
+    height: 28,
     border: 'none',
-    borderRight: '1px solid #eee',
-    background: active ? '#eef2f7' : 'transparent',
-    color: 'inherit',
+    borderRight: '1px solid var(--gray-a4, #eee)',
+    background: active ? 'var(--accent-a3, #eef2f7)' : 'transparent',
+    color: active ? 'var(--accent-11, #14171E)' : 'var(--gray-12, inherit)',
     cursor: busy ? 'wait' : 'pointer',
-    fontSize: 13,
     opacity: busy ? 0.7 : 1,
   };
 }
+
+const exportMenuStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 'calc(100% + 6px)',
+  right: 0,
+  minWidth: 280,
+  background: 'var(--color-surface, #fff)',
+  border: '1px solid var(--gray-a5, #e5e7eb)',
+  borderRadius: 8,
+  boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+  padding: 4,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  zIndex: 100,
+};
+
+const exportMenuItemStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+  padding: '8px 10px',
+  border: 'none',
+  background: 'transparent',
+  borderRadius: 6,
+  color: 'var(--gray-12, #14171E)',
+  cursor: 'pointer',
+  fontSize: 13,
+  textAlign: 'left',
+  width: '100%',
+};
 
 /**
  * Copy an HTML string to the clipboard as **rich content** (so paste
