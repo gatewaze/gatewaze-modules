@@ -263,7 +263,14 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
         .eq('library_id', newsletterId)
         .order('key'),
       supabase.from('templates_sources')
-        .select('id, kind, label, status, url, branch, manifest_path, last_applied_sha, last_check_error, created_at')
+        // The interface (TemplatesSourceRow) tracks the real columns
+        // — `installed_git_sha` + `available_git_sha` + `last_checked_at`
+        // — which were emitted by migration 002 of the templates module.
+        // An earlier draft of this query asked for `last_applied_sha`,
+        // which doesn't exist on the table; PostgREST returned 400 and
+        // the whole Template tab failed to render. Keep this list aligned
+        // with the interface above.
+        .select('id, kind, label, status, url, branch, manifest_path, installed_git_sha, available_git_sha, last_checked_at, last_check_error, created_at')
         .eq('library_id', newsletterId)
         .order('created_at', { ascending: false }),
     ]);
