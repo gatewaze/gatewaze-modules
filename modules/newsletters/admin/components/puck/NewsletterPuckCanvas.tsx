@@ -461,112 +461,110 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
               <SaveAsBlockAction />
             </>
           ),
-          // Replace Puck's default header with one that puts our
-          // editor controls (Editor / HTML view, Light / Dark, the
-          // export buttons) on the same row as Puck's "Page" label
-          // and Publish button. Per operator feedback: the custom
-          // toolbar above the canvas felt redundant with Puck's own
-          // header — consolidating saves vertical space and keeps
-          // every action one click away.
-          header: ({ actions, children }) => (
-            <div style={puckHeaderStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, color: '#14171E', whiteSpace: 'nowrap' }}>
-                  {children}
-                </div>
-                <div role="group" aria-label="View mode" style={toolbarSegment()}>
-                  <button
-                    type="button"
-                    onClick={() => setView('wysiwyg')}
-                    style={toolbarSegmentBtn(view === 'wysiwyg')}
-                    aria-pressed={view === 'wysiwyg'}
-                    title="Visual editor"
-                  >
-                    ✎ Editor
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setHtmlBuilding(true);
-                      try {
-                        const html = await exportEditionHtml({
-                          edition,
-                          format: 'email',
-                          blockMeta: buildBlockMeta(),
-                          pretty: true,
-                        });
-                        setHtmlSource(html);
-                        setView('html');
-                      } catch (e) {
-                        // eslint-disable-next-line no-console
-                        console.error('[newsletter-puck] html-view render failed:', e);
-                        setHtmlSource(`<!-- failed to render: ${e instanceof Error ? e.message : String(e)} -->`);
-                        setView('html');
-                      } finally {
-                        setHtmlBuilding(false);
-                      }
-                    }}
-                    style={toolbarSegmentBtn(view === 'html', htmlBuilding)}
-                    aria-pressed={view === 'html'}
-                    title="View the rendered email HTML source"
-                  >
-                    {htmlBuilding ? '…HTML' : '<> HTML'}
-                  </button>
-                </div>
-                <div role="group" aria-label="Preview background" style={toolbarSegment()}>
-                  <button
-                    type="button"
-                    onClick={() => setPreviewMode('light')}
-                    style={toolbarSegmentBtn(previewMode === 'light')}
-                    aria-pressed={previewMode === 'light'}
-                    title="Preview against a light mail-client background"
-                  >
-                    ☀ Light
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPreviewMode('dark')}
-                    style={toolbarSegmentBtn(previewMode === 'dark')}
-                    aria-pressed={previewMode === 'dark'}
-                    title="Preview against a dark mail-client background"
-                  >
-                    ☾ Dark
-                  </button>
-                </div>
-                <div style={toolbarSegment()}>
-                  <button
-                    type="button"
-                    onClick={() => handleExport('email')}
-                    disabled={exportBusy !== null}
-                    style={toolbarSegmentBtn(false, exportBusy === 'email')}
-                    title="Download as email-safe HTML (full document)"
-                  >
-                    {exportBusy === 'email' ? 'Exporting…' : 'Email HTML'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleExport('substack')}
-                    disabled={exportBusy !== null}
-                    style={toolbarSegmentBtn(false, exportBusy === 'substack')}
-                    title="Render as Substack rich text and copy to clipboard"
-                  >
-                    {exportBusy === 'substack' ? 'Exporting…' : 'Substack'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleExport('beehiiv')}
-                    disabled={exportBusy !== null}
-                    style={toolbarSegmentBtn(false, exportBusy === 'beehiiv')}
-                    title="Render as Beehiiv rich text and copy to clipboard"
-                  >
-                    {exportBusy === 'beehiiv' ? 'Exporting…' : 'Beehiiv'}
-                  </button>
-                </div>
+          // headerActions inserts our buttons into the right-side
+          // actions slot of Puck's native header — alongside the
+          // Publish button. This keeps Puck's left-side chrome
+          // (sidebar toggles + undo/redo) intact and avoids the
+          // duplicate-Publish issue an earlier `header` override
+          // produced (Puck passes the FULL default header — including
+          // its own actions slot — as `children`, plus a separate
+          // `actions` prop for the Publish button; rendering both
+          // doubled the button up).
+          //
+          // The "Page" title is hidden via the CSS in
+          // PUCK_RADIX_THEME_CSS (a [class*=PuckLayout-title] rule).
+          headerActions: ({ children }) => (
+            <>
+              <div role="group" aria-label="View mode" style={toolbarSegment()}>
+                <button
+                  type="button"
+                  onClick={() => setView('wysiwyg')}
+                  style={toolbarSegmentBtn(view === 'wysiwyg')}
+                  aria-pressed={view === 'wysiwyg'}
+                  title="Visual editor"
+                >
+                  ✎ Editor
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setHtmlBuilding(true);
+                    try {
+                      const html = await exportEditionHtml({
+                        edition,
+                        format: 'email',
+                        blockMeta: buildBlockMeta(),
+                        pretty: true,
+                      });
+                      setHtmlSource(html);
+                      setView('html');
+                    } catch (e) {
+                      // eslint-disable-next-line no-console
+                      console.error('[newsletter-puck] html-view render failed:', e);
+                      setHtmlSource(`<!-- failed to render: ${e instanceof Error ? e.message : String(e)} -->`);
+                      setView('html');
+                    } finally {
+                      setHtmlBuilding(false);
+                    }
+                  }}
+                  style={toolbarSegmentBtn(view === 'html', htmlBuilding)}
+                  aria-pressed={view === 'html'}
+                  title="View the rendered email HTML source"
+                >
+                  {htmlBuilding ? '…HTML' : '<> HTML'}
+                </button>
               </div>
-              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-                {actions}
+              <div role="group" aria-label="Preview background" style={toolbarSegment()}>
+                <button
+                  type="button"
+                  onClick={() => setPreviewMode('light')}
+                  style={toolbarSegmentBtn(previewMode === 'light')}
+                  aria-pressed={previewMode === 'light'}
+                  title="Preview against a light mail-client background"
+                >
+                  ☀ Light
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewMode('dark')}
+                  style={toolbarSegmentBtn(previewMode === 'dark')}
+                  aria-pressed={previewMode === 'dark'}
+                  title="Preview against a dark mail-client background"
+                >
+                  ☾ Dark
+                </button>
               </div>
-            </div>
+              <div style={toolbarSegment()}>
+                <button
+                  type="button"
+                  onClick={() => handleExport('email')}
+                  disabled={exportBusy !== null}
+                  style={toolbarSegmentBtn(false, exportBusy === 'email')}
+                  title="Download as email-safe HTML (full document)"
+                >
+                  {exportBusy === 'email' ? 'Exporting…' : 'Email HTML'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExport('substack')}
+                  disabled={exportBusy !== null}
+                  style={toolbarSegmentBtn(false, exportBusy === 'substack')}
+                  title="Render as Substack rich text and copy to clipboard"
+                >
+                  {exportBusy === 'substack' ? 'Exporting…' : 'Substack'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExport('beehiiv')}
+                  disabled={exportBusy !== null}
+                  style={toolbarSegmentBtn(false, exportBusy === 'beehiiv')}
+                  title="Render as Beehiiv rich text and copy to clipboard"
+                >
+                  {exportBusy === 'beehiiv' ? 'Exporting…' : 'Beehiiv'}
+                </button>
+              </div>
+              {children}
+            </>
           ),
         }}
         onChange={(nextData) => {
@@ -802,15 +800,16 @@ const PUCK_RADIX_THEME_CSS = `
   --puck-color-green-04: var(--green-9, #0c680c);
   --puck-color-green-09: var(--green-4, #b8e8bf);
 }
-`;
 
-const puckHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  width: '100%',
-  padding: '6px 16px',
-};
+/* Hide Puck's default "Page" header title — we don't have meaningful
+   page-level metadata to surface there, and the header row is busier
+   with our action buttons now. The class hash changes between Puck
+   builds, so target via a substring-prefix attribute selector
+   ([class*="PuckLayout-title"]). */
+.newsletter-puck-canvas [class*="PuckLayout-title"] {
+  display: none;
+}
+`;
 
 function toolbarSegment(): React.CSSProperties {
   return {
