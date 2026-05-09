@@ -19,8 +19,8 @@
  * EditionCanvas doesn't have them either).
  */
 
-import { useEffect, useMemo, useState, type FC, type ReactElement } from 'react';
-import { Puck } from '@puckeditor/core';
+import { useEffect, useMemo, useState, type FC, type ReactElement, type ReactNode } from 'react';
+import { Puck, type Config } from '@puckeditor/core';
 import {
   buildPuckConfig,
   type PuckRenderHost,
@@ -40,7 +40,6 @@ import { emailBlockRegistry } from './email-blocks/index.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
 import { NewsletterEditingProvider } from './NewsletterEditingContext.js';
-import { StarterTemplatePicker } from './StarterTemplatePicker.js';
 import { UserBlocksProvider, useUserBlocks } from './user-blocks/UserBlocksContext.js';
 import { SaveAsBlockAction } from './user-blocks/SaveAsBlockAction.js';
 import { MyBlocksPanel } from './user-blocks/MyBlocksPanel.js';
@@ -181,11 +180,29 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       registry: emailBlockRegistry,
       ...(enabledSet ? { enabledComponentIds: enabledSet } : {}),
     });
-    return { ...base, config: merged.config, registryCollisions: merged.collisions };
+    // Replace the canvas root.render with a newsletter-specific shell
+    // that:
+    //   - injects baseline CSS into the Puck iframe (font-family,
+    //     html/body reset, the 600px-max white "email card" with a
+    //     subtle shadow, padding around it)
+    //   - reads `previewMode` from Puck's metadata at render time so
+    //     a light↔dark toggle is picked up without rebuilding the
+    //     Config (rebuilding would re-mount Puck and lose selection).
+    //   - wraps the canvas children in `<div class="gw-email-card">`
+    //     so the inserted blocks visually sit inside the email frame
+    //     the operator is composing.
+    const cfg = merged.config as Config;
+    const finalConfig: Config = {
+      ...cfg,
+      root: {
+        ...((cfg.root ?? {}) as Record<string, unknown>),
+        render: NewsletterCanvasRoot as never,
+      },
+    } as Config;
+    return { ...base, config: finalConfig, registryCollisions: merged.collisions };
   }, [edition.id, blockDefs, brickDefs, renderHost, enabledRegistryComponentIds]);
 
   const [data, setData] = useState(() => editionToPuckData(edition, emailBlockRegistry));
-  const [starterPickerOpen, setStarterPickerOpen] = useState(false);
   const [previewMode, setPreviewMode] = useState<'light' | 'dark'>('light');
   const [exportBusy, setExportBusy] = useState<null | 'email' | 'substack' | 'beehiiv'>(null);
   const [exportToast, setExportToast] = useState<string | null>(null);
@@ -280,13 +297,6 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       >
         <button
           type="button"
-          onClick={() => setStarterPickerOpen(true)}
-          style={toolbarBtn(previewMode)}
-        >
-          Start from template…
-        </button>
-        <button
-          type="button"
           onClick={() => setMyBlocksOpen(true)}
           style={toolbarBtn(previewMode)}
           title="Insert a block you previously saved"
@@ -364,13 +374,6 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           {exportToast}
         </div>
       )}
-      <StarterTemplatePicker
-        open={starterPickerOpen}
-        edition={edition}
-        registry={emailBlockRegistry}
-        onApply={onChange}
-        onClose={() => setStarterPickerOpen(false)}
-      />
       <MyBlocksPanel
         open={myBlocksOpen || userBlocks.pendingSave !== null}
         mode={userBlocks.pendingSave !== null ? 'save' : 'browse'}
@@ -385,6 +388,11 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       <Puck
         config={config.config as never}
         data={data as never}
+        // `metadata` propagates to the canvas root.render and to every
+        // component as `puck.metadata`. We only need previewMode there
+        // — the canvas root reads it to switch light/dark backdrop +
+        // card chrome dynamically.
+        metadata={{ previewMode }}
         viewports={[
           { width: 600, height: 'auto' as const, label: 'Desktop' },
           { width: 375, height: 'auto' as const, label: 'Mobile' },
@@ -435,6 +443,80 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
 };
 
 export default NewsletterPuckCanvas;
+
+// ---------------------------------------------------------------------------
+// Canvas root — replaces Puck's default root.render. Wraps children in
+// an email-shape "card" so the iframe shows what the operator is
+// actually composing (centered 600px max-width, white card on a
+// light/dark backdrop, paddings + shadow + base typography).
+// previewMode comes through Puck's metadata so the canvas re-renders
+// when the toolbar toggle flips, without us having to rebuild the
+// whole Puck Config (which would lose selection).
+// ---------------------------------------------------------------------------
+
+interface RootProps {
+  children?: ReactNode;
+  puck?: {
+    metadata?: {
+      previewMode?: 'light' | 'dark';
+    };
+  };
+}
+
+function NewsletterCanvasRoot(props: RootProps) {
+  const mode = props.puck?.metadata?.previewMode ?? 'light';
+  const css = mode === 'dark' ? CANVAS_DARK_CSS : CANVAS_LIGHT_CSS;
+  return (
+    <>
+      <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
+      <div className="gw-email-card">{props.children}</div>
+    </>
+  );
+}
+
+const BASE_CANVAS_CSS = `
+  html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+    transition: background-color 0.15s ease;
+  }
+  body {
+    padding: 32px 16px;
+    box-sizing: border-box;
+  }
+  .gw-email-card {
+    max-width: 600px;
+    margin: 0 auto;
+    border-radius: 6px;
+    overflow: hidden;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  /* Reset table defaults for react-email components so authored padding
+     / backgroundColor styles render predictably in the editor iframe. */
+  table {
+    border-collapse: collapse;
+    border-spacing: 0;
+  }
+  /* Make sure embedded Img blocks behave like email-safe images. */
+  img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
+`;
+
+const CANVAS_LIGHT_CSS = `
+  body { background-color: #fafbfc; color: #14171E; }
+  .gw-email-card { background-color: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06); }
+`;
+
+const CANVAS_DARK_CSS = `
+  body { background-color: #0e0f12; color: #e5e7eb; }
+  .gw-email-card { background-color: #1a1c20; box-shadow: 0 0 0 1px rgba(255,255,255,0.06); }
+`;
 
 // ---------------------------------------------------------------------------
 // Toolbar helpers — small inline-style factories so the dark/light theme

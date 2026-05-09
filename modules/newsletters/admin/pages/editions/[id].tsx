@@ -111,7 +111,7 @@ export default function EditionEditorPage() {
     navigate(`${basePath}/${id}/${tab}`, { replace: true });
   };
 
-  const loadCollection = useCallback(async (cId: string) => {
+  const loadCollection = useCallback(async (cId: string): Promise<Record<string, unknown> | null> => {
     const { data } = await supabase
       .from('newsletters_template_collections')
       .select('*')
@@ -120,11 +120,12 @@ export default function EditionEditorPage() {
 
     if (data) {
       const collInfo: CollectionInfo = { ...data };
-      setCollectionMetadata({
+      const metadata = {
         ...(data.metadata || {}),
         from_name: data.from_name || null,
         from_email: data.from_email || null,
-      });
+      };
+      setCollectionMetadata(metadata);
 
       if (data.list_id) {
         try {
@@ -143,7 +144,9 @@ export default function EditionEditorPage() {
       }
 
       setCollection(collInfo);
+      return data.metadata as Record<string, unknown> | null;
     }
+    return null;
   }, []);
 
   const loadTemplates = useCallback(async (filterCollectionId?: string | null) => {
@@ -180,8 +183,40 @@ export default function EditionEditorPage() {
       const collParam = searchParams.get('collection');
       if (!collParam) { toast.error('Please select a template first'); navigate(newsletterSlug ? `/newsletters/${newsletterSlug}` : '/newsletters'); return; }
       setCollectionId(collParam);
-      await loadCollection(collParam);
-      setEdition({ id: 'new', edition_date: new Date().toISOString().split('T')[0], subject: '', preheader: '', blocks: [] });
+      const meta = await loadCollection(collParam);
+      // Apply the newsletter-level default edition template if set.
+      // The Default Edition Template card on the newsletter detail
+      // page persists the chosen slug to
+      // newsletters_template_collections.metadata.default_edition_template_slug.
+      // We resolve it here so a new edition starts with the same
+      // layout edition-after-edition without the operator clicking
+      // anything per-edition.
+      const slug = (meta && typeof meta === 'object' ? (meta as Record<string, unknown>).default_edition_template_slug : undefined);
+      let initialBlocks: NewsletterEdition['blocks'] = [];
+      if (typeof slug === 'string' && slug.length > 0) {
+        try {
+          const { ALL_STARTERS } = await import('../../components/puck/starter-templates/index.js');
+          const starter = ALL_STARTERS.find((s) => s.slug === slug);
+          if (starter) {
+            initialBlocks = starter.blocks.map((b, idx) => ({
+              id: freshUuid(),
+              block_template: {
+                id: '',
+                name: b.type,
+                block_type: b.type,
+                content: { html_template: '', schema: {}, has_bricks: false },
+              },
+              content: stampIdsRecursive({ ...b.props }),
+              sort_order: (idx + 1) * 1000,
+              bricks: [],
+            } as never));
+          }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('[edition-new] failed to apply default template:', e);
+        }
+      }
+      setEdition({ id: 'new', edition_date: new Date().toISOString().split('T')[0], subject: '', preheader: '', blocks: initialBlocks });
       setLoading(false);
       return;
     }
@@ -536,4 +571,30 @@ export default function EditionEditorPage() {
       )}
     </Page>
   );
+}
+
+function freshUuid(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  const hex = '0123456789abcdef';
+  let s = '';
+  for (let i = 0; i < 32; i++) s += hex[Math.floor(Math.random() * 16)];
+  return `${s.slice(0, 8)}-${s.slice(8, 12)}-4${s.slice(13, 16)}-${s.slice(16, 20)}-${s.slice(20, 32)}`;
+}
+
+/**
+ * Walk a starter-template's content + nested children, stamping fresh
+ * UUIDs at every level. The saved trees strip ids on generation
+ * (`build-barebone-trees.ts`) and the curated starters never had ids;
+ * minting fresh ones at apply-time keeps Puck's identity tracking
+ * correct when the same starter is applied across multiple editions.
+ */
+function stampIdsRecursive(content: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...content };
+  if (Array.isArray(out.children)) {
+    out.children = (out.children as Array<{ type: string; props: Record<string, unknown> }>).map((c) => ({
+      type: c.type,
+      props: stampIdsRecursive({ ...c.props, id: freshUuid() }),
+    }));
+  }
+  return out;
 }
