@@ -322,130 +322,29 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     >
     <div
       className={`newsletter-puck-canvas puck-canvas-email puck-preview-${previewMode}`}
-      style={{ background: '#fafbfc' }}
+      style={{ background: '#fafbfc', height: '100%', display: 'flex', flexDirection: 'column' }}
     >
-      {/*
-        Toolbar + edition-metadata bar always render against the
-        admin's light theme — earlier draft echoed the light/dark
-        toggle into them too, but operators only want the toggle to
-        affect the email preview iframe (it simulates the recipient's
-        mail-client backdrop). The chrome around it stays consistent
-        with the rest of the admin UI.
-      */}
-      <div
-        className="newsletter-puck-toolbar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '8px 12px',
-          borderBottom: '1px solid #eee',
-          background: '#fff',
-          color: 'inherit',
-        }}
-      >
-        {/* WYSIWYG ↔ HTML view toggle. Switching to 'html' renders
-            the same email-safe markup the recipient would see, in a
-            read-only preformatted block; the WYSIWYG canvas stays
-            mounted underneath so flipping back doesn't lose selection
-            / undo history. */}
-        <div role="group" aria-label="View mode" style={toolbarSegment()}>
-          <button
-            type="button"
-            onClick={() => setView('wysiwyg')}
-            style={toolbarSegmentBtn(view === 'wysiwyg')}
-            aria-pressed={view === 'wysiwyg'}
-            title="Visual editor"
-          >
-            ✎ Editor
-          </button>
-          <button
-            type="button"
-            onClick={async () => {
-              setHtmlBuilding(true);
-              try {
-                const html = await exportEditionHtml({
-                  edition,
-                  format: 'email',
-                  blockMeta: buildBlockMeta(),
-                  pretty: true,
-                });
-                setHtmlSource(html);
-                setView('html');
-              } catch (e) {
-                // eslint-disable-next-line no-console
-                console.error('[newsletter-puck] html-view render failed:', e);
-                setHtmlSource(`<!-- failed to render: ${e instanceof Error ? e.message : String(e)} -->`);
-                setView('html');
-              } finally {
-                setHtmlBuilding(false);
-              }
-            }}
-            style={toolbarSegmentBtn(view === 'html', htmlBuilding)}
-            aria-pressed={view === 'html'}
-            title="View the rendered email HTML source"
-          >
-            {htmlBuilding ? '…HTML' : '<> HTML'}
-          </button>
-        </div>
+      {/* Map Puck's internal CSS variables onto the admin's Radix
+          theme tokens so the editor inherits gatewaze's accent +
+          neutral palette instead of Puck's default azure/grey scales.
+          Puck's scale runs darkest (01) → lightest (12); Radix runs
+          the opposite way (1 → 12), so step N on Puck maps to step
+          (13 - N) on Radix.
 
-        {/* Preview-iframe-only light / dark toggle. The active button
-            is highlighted; the segment itself stays light-themed. */}
-        <div role="group" aria-label="Preview background" style={toolbarSegment()}>
-          <button
-            type="button"
-            onClick={() => setPreviewMode('light')}
-            style={toolbarSegmentBtn(previewMode === 'light')}
-            aria-pressed={previewMode === 'light'}
-            title="Preview against a light mail-client background"
-          >
-            ☀ Light
-          </button>
-          <button
-            type="button"
-            onClick={() => setPreviewMode('dark')}
-            style={toolbarSegmentBtn(previewMode === 'dark')}
-            aria-pressed={previewMode === 'dark'}
-            title="Preview against a dark mail-client background"
-          >
-            ☾ Dark
-          </button>
-        </div>
-
-        <div style={{ flex: 1 }} />
-
-        {/* Output format dropdown */}
-        <div style={toolbarSegment()}>
-          <button
-            type="button"
-            onClick={() => handleExport('email')}
-            disabled={exportBusy !== null}
-            style={toolbarSegmentBtn(false, exportBusy === 'email')}
-            title="Download as email-safe HTML (full document)"
-          >
-            {exportBusy === 'email' ? 'Exporting…' : 'Email HTML'}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExport('substack')}
-            disabled={exportBusy !== null}
-            style={toolbarSegmentBtn(false, exportBusy === 'substack')}
-            title="Render as Substack rich text and copy to clipboard"
-          >
-            {exportBusy === 'substack' ? 'Exporting…' : 'Substack'}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExport('beehiiv')}
-            disabled={exportBusy !== null}
-            style={toolbarSegmentBtn(false, exportBusy === 'beehiiv')}
-            title="Render as Beehiiv rich text and copy to clipboard"
-          >
-            {exportBusy === 'beehiiv' ? 'Exporting…' : 'Beehiiv'}
-          </button>
-        </div>
-      </div>
-
+          Scoped to .newsletter-puck-canvas so it doesn't bleed into
+          sites' Puck canvas (which keeps the default theme until
+          sites is themed too). */}
+      <style dangerouslySetInnerHTML={{ __html: PUCK_RADIX_THEME_CSS }} />
+      {/* The custom toolbar + edition-metadata bar that used to sit
+          above Puck have moved:
+            - Subject / date / preheader live on the edition's
+              "Details" tab (editions/[id].tsx).
+            - Editor / HTML, Light / Dark, and Email HTML / Substack
+              / Beehiiv buttons are injected into Puck's `header`
+              override below so they share a row with Puck's own
+              "Page" label and Publish button.
+          The export-toast still surfaces here as a thin strip when
+          relevant. */}
       {exportToast && (
         <div
           role="status"
@@ -461,53 +360,6 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         </div>
       )}
 
-      {/* Edition metadata — subject (the inbox subject line, also used
-          as the edition's title in lists), date (the publish/edition
-          date the edition is logically associated with), and preheader
-          (the snippet that appears next to or below the subject in
-          most email clients). All three persist via the parent's
-          existing onChange→handleSave plumbing on the editions page. */}
-      <div
-        className="newsletter-puck-edition-meta"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 160px',
-          gap: 8,
-          padding: '10px 12px',
-          background: '#fff',
-          color: 'inherit',
-          borderBottom: '1px solid #eee',
-        }}
-      >
-        <input
-          type="text"
-          aria-label="Edition title / subject"
-          value={edition.subject ?? ''}
-          onChange={(e) => onChange({ ...edition, subject: e.target.value })}
-          placeholder="Edition title — also the email subject line"
-          style={metaInputStyle()}
-        />
-        <input
-          type="date"
-          aria-label="Edition date"
-          value={edition.edition_date ?? ''}
-          onChange={(e) => onChange({ ...edition, edition_date: e.target.value })}
-          style={metaInputStyle()}
-        />
-        <textarea
-          aria-label="Preheader (preview text shown next to the subject in inboxes)"
-          value={edition.preheader ?? ''}
-          onChange={(e) => onChange({ ...edition, preheader: e.target.value })}
-          placeholder="Preheader — short preview text shown in the inbox next to the subject (recommended ~80 chars)"
-          rows={2}
-          style={{
-            ...metaInputStyle(),
-            gridColumn: '1 / -1',
-            resize: 'vertical',
-            fontFamily: 'inherit',
-          }}
-        />
-      </div>
       {/* MyBlocksPanel now only opens for the "Save current selection
           as block" flow — operators browse + insert via the Puck
           drawer's "My blocks" category (synthesised above). The save
@@ -608,6 +460,113 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
               {children}
               <SaveAsBlockAction />
             </>
+          ),
+          // Replace Puck's default header with one that puts our
+          // editor controls (Editor / HTML view, Light / Dark, the
+          // export buttons) on the same row as Puck's "Page" label
+          // and Publish button. Per operator feedback: the custom
+          // toolbar above the canvas felt redundant with Puck's own
+          // header — consolidating saves vertical space and keeps
+          // every action one click away.
+          header: ({ actions, children }) => (
+            <div style={puckHeaderStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: '#14171E', whiteSpace: 'nowrap' }}>
+                  {children}
+                </div>
+                <div role="group" aria-label="View mode" style={toolbarSegment()}>
+                  <button
+                    type="button"
+                    onClick={() => setView('wysiwyg')}
+                    style={toolbarSegmentBtn(view === 'wysiwyg')}
+                    aria-pressed={view === 'wysiwyg'}
+                    title="Visual editor"
+                  >
+                    ✎ Editor
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setHtmlBuilding(true);
+                      try {
+                        const html = await exportEditionHtml({
+                          edition,
+                          format: 'email',
+                          blockMeta: buildBlockMeta(),
+                          pretty: true,
+                        });
+                        setHtmlSource(html);
+                        setView('html');
+                      } catch (e) {
+                        // eslint-disable-next-line no-console
+                        console.error('[newsletter-puck] html-view render failed:', e);
+                        setHtmlSource(`<!-- failed to render: ${e instanceof Error ? e.message : String(e)} -->`);
+                        setView('html');
+                      } finally {
+                        setHtmlBuilding(false);
+                      }
+                    }}
+                    style={toolbarSegmentBtn(view === 'html', htmlBuilding)}
+                    aria-pressed={view === 'html'}
+                    title="View the rendered email HTML source"
+                  >
+                    {htmlBuilding ? '…HTML' : '<> HTML'}
+                  </button>
+                </div>
+                <div role="group" aria-label="Preview background" style={toolbarSegment()}>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewMode('light')}
+                    style={toolbarSegmentBtn(previewMode === 'light')}
+                    aria-pressed={previewMode === 'light'}
+                    title="Preview against a light mail-client background"
+                  >
+                    ☀ Light
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewMode('dark')}
+                    style={toolbarSegmentBtn(previewMode === 'dark')}
+                    aria-pressed={previewMode === 'dark'}
+                    title="Preview against a dark mail-client background"
+                  >
+                    ☾ Dark
+                  </button>
+                </div>
+                <div style={toolbarSegment()}>
+                  <button
+                    type="button"
+                    onClick={() => handleExport('email')}
+                    disabled={exportBusy !== null}
+                    style={toolbarSegmentBtn(false, exportBusy === 'email')}
+                    title="Download as email-safe HTML (full document)"
+                  >
+                    {exportBusy === 'email' ? 'Exporting…' : 'Email HTML'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExport('substack')}
+                    disabled={exportBusy !== null}
+                    style={toolbarSegmentBtn(false, exportBusy === 'substack')}
+                    title="Render as Substack rich text and copy to clipboard"
+                  >
+                    {exportBusy === 'substack' ? 'Exporting…' : 'Substack'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExport('beehiiv')}
+                    disabled={exportBusy !== null}
+                    style={toolbarSegmentBtn(false, exportBusy === 'beehiiv')}
+                    title="Render as Beehiiv rich text and copy to clipboard"
+                  >
+                    {exportBusy === 'beehiiv' ? 'Exporting…' : 'Beehiiv'}
+                  </button>
+                </div>
+              </div>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                {actions}
+              </div>
+            </div>
           ),
         }}
         onChange={(nextData) => {
@@ -804,39 +763,62 @@ const CANVAS_DARK_CSS = `
 // stylesheet. Style polishing can later move these to a CSS file.
 // ---------------------------------------------------------------------------
 
-function toolbarBtn(): React.CSSProperties {
-  return {
-    padding: '6px 12px',
-    borderRadius: 4,
-    border: '1px solid #ccc',
-    background: '#fff',
-    color: 'inherit',
-    cursor: 'pointer',
-    fontSize: 13,
-  };
+// Puck's azure (accent) + grey scales remapped to Radix tokens. Puck
+// uses 01 (darkest) → 12 (lightest); Radix uses 1 (lightest) → 12
+// (darkest), hence the inverted mapping. The scoped `.newsletter-
+// puck-canvas` class keeps this isolated to the newsletter editor.
+const PUCK_RADIX_THEME_CSS = `
+.newsletter-puck-canvas {
+  --puck-color-azure-01: var(--accent-12);
+  --puck-color-azure-02: var(--accent-11);
+  --puck-color-azure-03: var(--accent-10);
+  --puck-color-azure-04: var(--accent-9);
+  --puck-color-azure-05: var(--accent-8);
+  --puck-color-azure-06: var(--accent-7);
+  --puck-color-azure-07: var(--accent-6);
+  --puck-color-azure-08: var(--accent-5);
+  --puck-color-azure-09: var(--accent-4);
+  --puck-color-azure-10: var(--accent-3);
+  --puck-color-azure-11: var(--accent-2);
+  --puck-color-azure-12: var(--accent-1);
+
+  --puck-color-grey-01: var(--gray-12);
+  --puck-color-grey-02: var(--gray-11);
+  --puck-color-grey-03: var(--gray-10);
+  --puck-color-grey-04: var(--gray-9);
+  --puck-color-grey-05: var(--gray-8);
+  --puck-color-grey-06: var(--gray-7);
+  --puck-color-grey-07: var(--gray-6);
+  --puck-color-grey-08: var(--gray-5);
+  --puck-color-grey-09: var(--gray-4);
+  --puck-color-grey-10: var(--gray-3);
+  --puck-color-grey-11: var(--gray-2);
+  --puck-color-grey-12: var(--gray-1);
+
+  --puck-color-red-04: var(--red-9, #ac1f35);
+  --puck-color-red-05: var(--red-8, #bf5366);
+  --puck-color-red-09: var(--red-4, #f3c8d2);
+
+  --puck-color-green-04: var(--green-9, #0c680c);
+  --puck-color-green-09: var(--green-4, #b8e8bf);
 }
+`;
+
+const puckHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  width: '100%',
+  padding: '6px 16px',
+};
 
 function toolbarSegment(): React.CSSProperties {
   return {
     display: 'inline-flex',
-    border: '1px solid #ccc',
+    border: '1px solid var(--gray-a6, #ccc)',
     borderRadius: 4,
     overflow: 'hidden',
-    background: '#fff',
-  };
-}
-
-function metaInputStyle(): React.CSSProperties {
-  return {
-    width: '100%',
-    padding: '8px 12px',
-    border: '1px solid #d0d5dd',
-    borderRadius: 6,
-    background: '#fff',
-    color: '#14171E',
-    fontSize: 14,
-    boxSizing: 'border-box',
-    outline: 'none',
+    background: 'var(--color-surface, #fff)',
   };
 }
 
