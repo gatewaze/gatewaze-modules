@@ -102,7 +102,7 @@ export default function EditionEditorPage() {
   const [collectionId, setCollectionId] = useState<string | null>(null);
   const [collection, setCollection] = useState<CollectionInfo | null>(null);
   const [collectionMetadata, setCollectionMetadata] = useState<Record<string, unknown>>({});
-  const validTabs: EditionTab[] = ['editor', ...(hasBulkEmailing ? ['sending' as EditionTab] : [])];
+  const validTabs: EditionTab[] = ['editor', 'details', ...(hasBulkEmailing ? ['sending' as EditionTab] : [])];
   const defaultTab: EditionTab = 'editor';
   const activeTab: EditionTab = validTabs.includes(tabFromUrl as EditionTab) ? (tabFromUrl as EditionTab) : defaultTab;
 
@@ -471,6 +471,7 @@ export default function EditionEditorPage() {
   const ic = 'size-4';
   const tabs: Tab[] = [
     { id: 'editor', label: 'Editor', icon: <PencilSquareIcon className={ic} /> },
+    { id: 'details', label: 'Details', icon: <Cog6ToothIcon className={ic} /> },
     ...(hasBulkEmailing ? [{ id: 'sending', label: 'Sending', icon: <PaperAirplaneIcon className={ic} /> }] : []),
   ];
 
@@ -514,7 +515,13 @@ export default function EditionEditorPage() {
 
       {/* Tab Content */}
       {activeTab === 'editor' && (
-        <div className="-mx-(--margin-x)" style={{ padding: '1rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div
+          className="-mx-(--margin-x)"
+          // Edge-to-edge so Puck owns the full white area below the
+          // tab bar. min-height fills the remaining viewport so the
+          // canvas isn't a short letterbox.
+          style={{ minHeight: 'calc(100vh - 220px)' }}
+        >
           <NewsletterCanvasEditor
             edition={edition}
             blockTemplates={blockTemplates}
@@ -546,6 +553,76 @@ export default function EditionEditorPage() {
             }}
             isSaving={saving}
           />
+        </div>
+      )}
+
+      {activeTab === 'details' && (
+        <div
+          className="-mx-(--margin-x) py-6"
+          style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}
+        >
+          <div className="max-w-2xl space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-[var(--gray-12)] mb-1.5">
+                Edition title / subject
+              </label>
+              <input
+                type="text"
+                value={edition.subject ?? ''}
+                onChange={(e) => setEdition({ ...edition, subject: e.target.value })}
+                placeholder="Edition title — also the email subject line"
+                className="w-full px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)] text-sm text-[var(--gray-12)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-8)]"
+              />
+              <p className="text-xs text-[var(--gray-9)] mt-1">
+                The subject line shown in the recipient&apos;s inbox. Also used as the
+                edition&apos;s display name in lists.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-[var(--gray-12)] mb-1.5">
+                Edition date
+              </label>
+              <input
+                type="date"
+                value={edition.edition_date ?? ''}
+                onChange={(e) => setEdition({ ...edition, edition_date: e.target.value })}
+                className="px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)] text-sm text-[var(--gray-12)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-8)]"
+              />
+              <p className="text-xs text-[var(--gray-9)] mt-1">
+                The date this edition is logically associated with — used for ordering
+                and for the public archive page.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-[var(--gray-12)] mb-1.5">
+                Preheader
+              </label>
+              <textarea
+                value={edition.preheader ?? ''}
+                onChange={(e) => setEdition({ ...edition, preheader: e.target.value })}
+                placeholder="Preheader — short preview text shown in the inbox next to the subject (recommended ~80 chars)"
+                rows={3}
+                className="w-full px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)] text-sm text-[var(--gray-12)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-8)] resize-y"
+              />
+              <p className="text-xs text-[var(--gray-9)] mt-1">
+                The short snippet most email clients show next to or below the subject.
+                Recommended length: ~80 characters.
+              </p>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => handleSave()}
+                disabled={saving}
+                className="px-4 py-2 bg-[var(--accent-9)] hover:bg-[var(--accent-10)] disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors"
+              >
+                {saving ? 'Saving…' : 'Save details'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
