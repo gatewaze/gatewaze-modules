@@ -517,14 +517,14 @@ export default function EditionEditorPage() {
       {activeTab === 'editor' && (
         <div
           className="-mx-(--margin-x)"
-          // Match the hero header's horizontal padding so the editor
-          // chrome (Puck header + sidebars) lines up vertically with
-          // the title above. min-height fills the remaining viewport
-          // so the canvas isn't a short letterbox.
-          style={{
-            minHeight: 'calc(100vh - 220px)',
-            padding: '1rem calc(var(--margin-x) + 1.5rem)',
-          }}
+          // Edge-to-edge so Puck's drawer + canvas + sidebar chrome
+          // extends full white-area width. An earlier draft padded the
+          // wrapper to align with the hero, but Puck's borders were
+          // visibly cutting off — the chrome expects to own its own
+          // horizontal layout. The email-card inside Puck stays
+          // centered (max-width 600 + margin auto) so the actual
+          // email content still aligns with the hero text width-wise.
+          style={{ minHeight: 'calc(100vh - 220px)' }}
         >
           <NewsletterCanvasEditor
             edition={edition}

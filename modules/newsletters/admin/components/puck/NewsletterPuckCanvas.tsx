@@ -19,14 +19,13 @@
  * EditionCanvas doesn't have them either).
  */
 
-import { useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FC, type ReactElement, type ReactNode } from 'react';
 import { Puck, type Config } from '@puckeditor/core';
 import {
   PencilSquareIcon,
   CodeBracketIcon,
   SunIcon,
   MoonIcon,
-  ArrowUpTrayIcon,
   ArrowDownTrayIcon,
   ClipboardDocumentIcon,
 } from '@heroicons/react/24/outline';
@@ -225,22 +224,6 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   const [view, setView] = useState<'wysiwyg' | 'html'>('wysiwyg');
   const [htmlSource, setHtmlSource] = useState<string>('');
   const [htmlBuilding, setHtmlBuilding] = useState(false);
-  // Three export targets (HTML download / Substack copy / Beehiiv
-  // copy) collapse into a single dropdown so the toolbar stays
-  // visually quiet — three side-by-side buttons with similar
-  // iconography were hard to scan.
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  const exportMenuRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!exportMenuOpen) return;
-    function onDocClick(e: MouseEvent) {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
-        setExportMenuOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [exportMenuOpen]);
 
   const userBlocks = useUserBlocks();
 
@@ -567,64 +550,41 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                 </button>
               </div>
 
-              {/* Export menu — single share button opens a dropdown
-                  with the three destinations. Three icon-only buttons
-                  side-by-side were too easy to confuse since
-                  Substack and Beehiiv share copy semantics. */}
-              <div ref={exportMenuRef} style={{ position: 'relative' }}>
-                <button
-                  type="button"
-                  onClick={() => setExportMenuOpen((v) => !v)}
-                  disabled={exportBusy !== null}
-                  style={toolbarIconBtn(exportMenuOpen, exportBusy !== null)}
-                  aria-haspopup="menu"
-                  aria-expanded={exportMenuOpen}
-                  aria-label="Export"
-                  title="Export — download HTML or copy for Substack / Beehiiv"
-                >
-                  <ArrowUpTrayIcon className="w-4 h-4" />
-                </button>
-                {exportMenuOpen && (
-                  <div role="menu" style={exportMenuStyle}>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => { setExportMenuOpen(false); void handleExport('email'); }}
-                      style={exportMenuItemStyle}
-                    >
-                      <ArrowDownTrayIcon className="w-4 h-4 shrink-0" />
-                      <span style={{ flex: 1, textAlign: 'left' }}>
-                        <span style={{ display: 'block', fontWeight: 500 }}>Download HTML</span>
-                        <span style={{ display: 'block', fontSize: 11, color: 'var(--gray-9, #888)' }}>Email-safe full document</span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => { setExportMenuOpen(false); void handleExport('substack'); }}
-                      style={exportMenuItemStyle}
-                    >
-                      <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
-                      <span style={{ flex: 1, textAlign: 'left' }}>
-                        <span style={{ display: 'block', fontWeight: 500 }}>Copy for Substack</span>
-                        <span style={{ display: 'block', fontSize: 11, color: 'var(--gray-9, #888)' }}>Rich-text — paste into Substack editor</span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => { setExportMenuOpen(false); void handleExport('beehiiv'); }}
-                      style={exportMenuItemStyle}
-                    >
-                      <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
-                      <span style={{ flex: 1, textAlign: 'left' }}>
-                        <span style={{ display: 'block', fontWeight: 500 }}>Copy for Beehiiv</span>
-                        <span style={{ display: 'block', fontSize: 11, color: 'var(--gray-9, #888)' }}>Rich-text — paste into Beehiiv editor</span>
-                      </span>
-                    </button>
-                  </div>
-                )}
-              </div>
+              {/* Three explicit destination buttons. Each pairs an
+                  intent icon (download for the file export, clipboard
+                  for the copy-to-paste exports) with a short
+                  destination label so operators can scan + click
+                  without a tooltip dance. */}
+              <button
+                type="button"
+                onClick={() => handleExport('email')}
+                disabled={exportBusy !== null}
+                style={destinationBtnStyle(exportBusy === 'email')}
+                title="Download as email-safe HTML (full document)"
+              >
+                <ArrowDownTrayIcon className="w-4 h-4 shrink-0" />
+                <span>{exportBusy === 'email' ? 'Exporting…' : 'HTML'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExport('substack')}
+                disabled={exportBusy !== null}
+                style={destinationBtnStyle(exportBusy === 'substack')}
+                title="Render as Substack rich text and copy to clipboard"
+              >
+                <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
+                <span>{exportBusy === 'substack' ? 'Copying…' : 'Substack'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExport('beehiiv')}
+                disabled={exportBusy !== null}
+                style={destinationBtnStyle(exportBusy === 'beehiiv')}
+                title="Render as Beehiiv rich text and copy to clipboard"
+              >
+                <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
+                <span>{exportBusy === 'beehiiv' ? 'Copying…' : 'Beehiiv'}</span>
+              </button>
               {children}
             </>
           ),
@@ -899,36 +859,22 @@ function toolbarIconBtn(active: boolean, busy = false): React.CSSProperties {
   };
 }
 
-const exportMenuStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 'calc(100% + 6px)',
-  right: 0,
-  minWidth: 280,
-  background: 'var(--color-surface, #fff)',
-  border: '1px solid var(--gray-a5, #e5e7eb)',
-  borderRadius: 8,
-  boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-  padding: 4,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
-  zIndex: 100,
-};
-
-const exportMenuItemStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: 10,
-  padding: '8px 10px',
-  border: 'none',
-  background: 'transparent',
-  borderRadius: 6,
-  color: 'var(--gray-12, #14171E)',
-  cursor: 'pointer',
-  fontSize: 13,
-  textAlign: 'left',
-  width: '100%',
-};
+function destinationBtnStyle(busy: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 10px',
+    border: '1px solid var(--gray-a6, #ccc)',
+    borderRadius: 6,
+    background: 'var(--color-surface, #fff)',
+    color: 'var(--gray-12, #14171E)',
+    cursor: busy ? 'wait' : 'pointer',
+    fontSize: 13,
+    opacity: busy ? 0.7 : 1,
+    whiteSpace: 'nowrap',
+  };
+}
 
 /**
  * Copy an HTML string to the clipboard as **rich content** (so paste
