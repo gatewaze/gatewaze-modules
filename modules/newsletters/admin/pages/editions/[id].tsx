@@ -517,10 +517,14 @@ export default function EditionEditorPage() {
       {activeTab === 'editor' && (
         <div
           className="-mx-(--margin-x)"
-          // Edge-to-edge so Puck owns the full white area below the
-          // tab bar. min-height fills the remaining viewport so the
-          // canvas isn't a short letterbox.
-          style={{ minHeight: 'calc(100vh - 220px)' }}
+          // Match the hero header's horizontal padding so the editor
+          // chrome (Puck header + sidebars) lines up vertically with
+          // the title above. min-height fills the remaining viewport
+          // so the canvas isn't a short letterbox.
+          style={{
+            minHeight: 'calc(100vh - 220px)',
+            padding: '1rem calc(var(--margin-x) + 1.5rem)',
+          }}
         >
           <NewsletterCanvasEditor
             edition={edition}
