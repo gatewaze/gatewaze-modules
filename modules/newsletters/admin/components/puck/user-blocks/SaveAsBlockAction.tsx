@@ -11,7 +11,7 @@
  * Puck's context — `usePuck()` works there, and the affordance is
  * visually attached to whichever block the operator clicked.
  */
-import { usePuck } from '@puckeditor/core';
+import { useGetPuck } from '@puckeditor/core';
 import { useUserBlocks } from './UserBlocksContext.js';
 
 interface PuckItem {
@@ -20,10 +20,16 @@ interface PuckItem {
 }
 
 export function SaveAsBlockAction() {
-  const puck = usePuck();
+  // useGetPuck (vs usePuck) returns a getter so we read appState only
+  // at click time. usePuck would subscribe to every Puck state change
+  // — re-rendering this button on every keystroke in the canvas.
+  // Puck's dev-mode warning ("usePuck without a selector — unnecessary
+  // re-renders") flagged this on the live editor.
+  const getPuck = useGetPuck();
   const userBlocks = useUserBlocks();
 
   const onClick = () => {
+    const puck = getPuck();
     const selected = puck.selectedItem as PuckItem | null | undefined;
     if (!selected || typeof selected.type !== 'string') return;
     const props = selected.props && typeof selected.props === 'object'
