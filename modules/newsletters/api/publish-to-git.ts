@@ -141,7 +141,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
           hostId: newsletterId,
           slug: newsletterSlug,
           boilerplateUrl: deps.boilerplateUrl,
-          boilerplateBranch: deps.boilerplateBranch ?? 'main',
+          boilerplateBranch: deps.boilerplateBranch ?? 'theme',
         });
       }
 
