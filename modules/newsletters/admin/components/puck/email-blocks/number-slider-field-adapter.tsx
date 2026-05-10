@@ -22,7 +22,7 @@
  * we render whatever UI we want, and emit string values back.
  */
 
-import { useEffect, useRef, useState, type ChangeEvent, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
 interface PuckCustomFieldProps {
   value: unknown;
@@ -201,31 +201,27 @@ function PxSlider({
   parse: (raw: unknown) => number;
   emit: (n: number) => string;
 }): ReactElement {
-  // Paranoid implementation. React 19 reconciling an
-  // `<input type="range">` mid-drag breaks the browser's implicit
-  // pointer capture on the thumb, stalling the drag after 1-2px.
-  // To avoid that we:
+  // This component does NOT use React's synthetic event system for
+  // the input. The drag interaction is wired up imperatively via
+  // native addEventListener in a useEffect, and the input is fully
+  // uncontrolled (no value prop, no React onChange). Reasoning:
   //
-  //   1. Use an UNCONTROLLED input (defaultValue + ref) — React
-  //      never owns the input's current value, only its mount-time
-  //      default.
-  //   2. Capture `defaultValue` once via a ref so the prop value
-  //      is stable across renders (changing `defaultValue` would
-  //      cause React to update the attribute, which is enough to
-  //      kill the drag).
-  //   3. Update the px readout IMPERATIVELY via textContent on a
-  //      ref — no React state changes during drag, so the input
-  //      reconciler is never touched between pointer events.
+  //   - React 19 reconciling an <input type="range"> during a drag
+  //     breaks the browser's implicit pointer capture on the thumb.
+  //     The drag stalls after 1-2 pixels.
+  //   - Even with an uncontrolled input + stable defaultValue,
+  //     ANY React state change during drag forces a render of this
+  //     component, and the React reconciler still touches the
+  //     input's prop bag enough to disrupt the pointer capture.
+  //   - Going fully native bypasses React's render cycle for the
+  //     drag. The browser handles the slider, our 'input' listener
+  //     reads the new value, and we call Puck's onChange via a
+  //     ref-stored reference so the listener identity is stable.
   //
   // External resets (undo, programmatic) still flow through: the
-  // useEffect imperatively writes `inputRef.current.value` when
-  // the external `value` differs from the input's current value,
-  // but only when the operator isn't actively dragging. The
-  // operator's drag wins until they release the pointer.
-  //
-  // Document-level pointerup tears down `draggingRef` even if the
-  // cursor leaves the thumb during a drag — native range inputs
-  // don't always re-fire pointerup on the input itself.
+  // second useEffect imperatively syncs `inputRef.current.value`
+  // when the prop changes, but only when the operator isn't
+  // actively dragging.
 
   const initialRef = useRef<number | null>(null);
   if (initialRef.current === null) {
@@ -237,9 +233,51 @@ function PxSlider({
   const readoutRef = useRef<HTMLSpanElement>(null);
   const draggingRef = useRef(false);
 
+  // Keep latest callbacks accessible to the native event listener
+  // without needing to re-attach it (which would happen on every
+  // render of the parent given the inline lambdas it passes).
+  const onChangeRef = useRef(onChange);
+  const emitRef = useRef(emit);
+  onChangeRef.current = onChange;
+  emitRef.current = emit;
+
   const parsed = parse(value);
   const externalNum = Number.isFinite(parsed) ? parsed : fallback;
 
+  // Native input listener — attached once on mount, never re-attached.
+  // 'input' fires on every value change, including during a drag.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const onInput = () => {
+      const v = Number(input.value);
+      if (readoutRef.current) {
+        readoutRef.current.textContent = `${v}px`;
+      }
+      onChangeRef.current(emitRef.current(v));
+    };
+    input.addEventListener('input', onInput);
+    return () => input.removeEventListener('input', onInput);
+  }, []);
+
+  // Drag-state tracking + document-level pointerup teardown.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const onDown = () => { draggingRef.current = true; };
+    input.addEventListener('pointerdown', onDown);
+    const stopDrag = () => { draggingRef.current = false; };
+    document.addEventListener('pointerup', stopDrag);
+    document.addEventListener('pointercancel', stopDrag);
+    return () => {
+      input.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('pointerup', stopDrag);
+      document.removeEventListener('pointercancel', stopDrag);
+    };
+  }, []);
+
+  // External sync — write input.value imperatively when the prop
+  // changes and the operator isn't currently dragging.
   useEffect(() => {
     if (draggingRef.current) return;
     const input = inputRef.current;
@@ -251,21 +289,8 @@ function PxSlider({
     }
   }, [externalNum]);
 
-  useEffect(() => {
-    const stopDrag = () => { draggingRef.current = false; };
-    document.addEventListener('pointerup', stopDrag);
-    document.addEventListener('pointercancel', stopDrag);
-    return () => {
-      document.removeEventListener('pointerup', stopDrag);
-      document.removeEventListener('pointercancel', stopDrag);
-    };
-  }, []);
-
   return (
-    <div
-      style={ROW_STYLE}
-      onPointerDown={() => { draggingRef.current = true; }}
-    >
+    <div style={ROW_STYLE}>
       <input
         ref={inputRef}
         type="range"
@@ -273,13 +298,6 @@ function PxSlider({
         max={max}
         step={step}
         defaultValue={initialRef.current}
-        onChange={(e: ChangeEvent<HTMLInputElement>) => {
-          const v = Number(e.target.value);
-          if (readoutRef.current) {
-            readoutRef.current.textContent = `${v}px`;
-          }
-          onChange(emit(v));
-        }}
         style={RANGE_STYLE}
       />
       <span ref={readoutRef} style={READOUT_STYLE}>
