@@ -15,11 +15,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Request, Response, Router } from 'express';
+import { createClient } from '@supabase/supabase-js';
 
 import type {
   ApplyMergeArgs,
@@ -788,4 +789,85 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
                | (netParts[3] ?? 0);
   const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
   return (ipInt & mask) === (netInt & mask);
+}
+
+// ---------------------------------------------------------------------------
+// Process-wide singleton accessor.
+//
+// Multiple modules (sites + newsletters today, more later) need to talk to
+// the same internal-git server: they share a `gatewaze_internal_repos`
+// registry table and use postgres advisory locks to serialise writes
+// against the same bare repo. Constructing parallel `InternalGitServerImpl`
+// instances from each module would split that lock surface and risk
+// concurrent-commit corruption on the shared bare paths under
+// `SITES_INTERNAL_GIT_ROOT`.
+//
+// Sites' api hook used to instantiate directly via `new
+// InternalGitServerImpl({...})`. Newsletters' api hook tried to
+// dynamic-import a `getInternalGitServer()` factory that didn't exist
+// yet — the import fell through the catch and `gitServer` ended up
+// `null`, which silently downgraded the publish-to-git path to a
+// DB-only no-op. This factory closes that gap: both modules call
+// `getInternalGitServer()` and share one instance for the process'
+// lifetime.
+//
+// Required env vars:
+//   - SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY  (advisory locks +
+//     internal-repo registry)
+//   - SITES_INTERNAL_GIT_ROOT (defaults to /var/gatewaze/git)
+//   - SITES_GIT_SIGNING_KEY (32-byte hex; ephemeral fallback warns)
+// ---------------------------------------------------------------------------
+
+let _internalGitServerSingleton: InternalGitServerImpl | null = null;
+
+export interface InternalGitServerLogger {
+  info: (msg: string, meta?: Record<string, unknown>) => void;
+  warn: (msg: string, meta?: Record<string, unknown>) => void;
+  error: (msg: string, meta?: Record<string, unknown>) => void;
+}
+
+function defaultLogger(): InternalGitServerLogger {
+  return {
+    info: (msg, meta) => console.log(`[internal-git] ${msg}`, meta ?? ''),
+    warn: (msg, meta) => console.warn(`[internal-git] ${msg}`, meta ?? ''),
+    error: (msg, meta) => console.error(`[internal-git] ${msg}`, meta ?? ''),
+  };
+}
+
+export function getInternalGitServer(opts?: { logger?: InternalGitServerLogger }): InternalGitServerImpl {
+  if (_internalGitServerSingleton) return _internalGitServerSingleton;
+
+  const supabaseUrl = process.env.SUPABASE_URL ?? '';
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error('getInternalGitServer: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY must be set');
+  }
+  const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  const rootDir = process.env.SITES_INTERNAL_GIT_ROOT ?? '/var/gatewaze/git';
+
+  const signingKeyHex = process.env.SITES_GIT_SIGNING_KEY ?? randomBytes(32).toString('hex');
+  if (!process.env.SITES_GIT_SIGNING_KEY) {
+    (opts?.logger ?? defaultLogger()).warn(
+      'SITES_GIT_SIGNING_KEY not set — using ephemeral signing key (regenerated each restart; signed URLs invalidate on reboot)',
+    );
+  }
+
+  const logger = opts?.logger ?? defaultLogger();
+
+  _internalGitServerSingleton = new InternalGitServerImpl({
+    rootDir,
+    signingKey: Buffer.from(signingKeyHex, 'hex'),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase: supabase as any,
+    logger,
+  });
+  return _internalGitServerSingleton;
+}
+
+/** Test-only — clear the singleton between unit-test runs. */
+export function __resetInternalGitServerSingleton(): void {
+  _internalGitServerSingleton = null;
 }
