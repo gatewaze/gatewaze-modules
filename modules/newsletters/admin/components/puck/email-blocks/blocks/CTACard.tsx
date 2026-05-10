@@ -11,6 +11,7 @@
 
 import { Button, Img, Section, Text } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 
 interface CTACardProps extends Record<string, unknown> {
   logo_url: string;
@@ -25,7 +26,7 @@ export const CTACardBlock: EmailBlockEntry<CTACardProps> = {
   label: 'CTA card',
   category: 'Action',
   fields: {
-    logo_url: { type: 'text', label: 'Logo URL (optional)' },
+    logo_url: { type: 'custom', label: 'Logo (optional)', render: NewsletterImageFieldAdapter as never },
     headline: { type: 'textarea', label: 'Headline' },
     cta_label: { type: 'text', label: 'Button label' },
     cta_url: { type: 'text', label: 'Button URL' },

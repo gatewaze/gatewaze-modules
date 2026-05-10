@@ -10,6 +10,7 @@
 
 import { Column, Heading, Img, Row, Section, Text } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 
 interface TwoColumnFeaturesProps extends Record<string, unknown> {
   left_image: string;
@@ -25,10 +26,10 @@ export const TwoColumnFeaturesBlock: EmailBlockEntry<TwoColumnFeaturesProps> = {
   label: 'Two-column features',
   category: 'Content',
   fields: {
-    left_image: { type: 'text', label: 'Left image URL' },
+    left_image: { type: 'custom', label: 'Left image', render: NewsletterImageFieldAdapter as never },
     left_title: { type: 'text', label: 'Left title' },
     left_body: { type: 'textarea', label: 'Left body' },
-    right_image: { type: 'text', label: 'Right image URL' },
+    right_image: { type: 'custom', label: 'Right image', render: NewsletterImageFieldAdapter as never },
     right_title: { type: 'text', label: 'Right title' },
     right_body: { type: 'textarea', label: 'Right body' },
   },
