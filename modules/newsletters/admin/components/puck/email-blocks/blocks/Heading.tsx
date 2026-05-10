@@ -2,17 +2,18 @@
  * Heading email block — wraps `@react-email/components`'s `Heading`.
  * Per spec-builder-evaluation §3.6 (extended).
  *
- * The `text` field is `type: 'richtext'` so Puck v0.21 mounts an
- * inline TipTap editor on the canvas — operators click the heading
- * text and edit it directly, like the puckeditor.com demo. The
- * stored value is HTML; the renderer writes it via
- * `dangerouslySetInnerHTML`.
+ * The `text` field is `type: 'text'` with `contentEditable: true`.
+ * Puck v0.21 routes that combination through the inline-text field
+ * transform: at render time, the plain string `value` is replaced
+ * with an `<InlineTextField>` span that becomes contentEditable
+ * (plaintext-only) when the operator hovers / clicks it. Edits
+ * dispatch back through Puck's setItem path. No richtext / TipTap —
+ * heading text stays plain.
  *
- * Backward compatibility: existing editions store the heading as a
- * plain string ("Hello world"). dangerouslySetInnerHTML accepts
- * plain text as-is, so legacy values render correctly. The first
- * inline edit by an operator round-trips the value back through
- * Puck's richtext serializer (HTML).
+ * The component MUST render the value as children (`{text}`) for
+ * Puck's transform to wrap it; using `dangerouslySetInnerHTML`
+ * bypasses the transform and leaves the heading non-editable
+ * (which was the bug in the previous draft).
  */
 
 import { Heading } from '@react-email/components';
@@ -41,10 +42,7 @@ export const HeadingBlock: EmailBlockEntry<HeadingProps> = {
   label: 'Heading',
   category: 'Content',
   fields: {
-    // richtext makes Puck mount an inline TipTap editor on the
-    // rendered heading in the canvas; clicking the text turns it
-    // into a contentEditable surface.
-    text: { type: 'richtext', label: 'Text' },
+    text: { type: 'text', label: 'Text', contentEditable: true },
     level: { type: 'select', label: 'Level', options: HEADING_LEVELS },
     align: { type: 'radio', label: 'Alignment', options: ALIGN_OPTIONS },
   },
@@ -54,11 +52,9 @@ export const HeadingBlock: EmailBlockEntry<HeadingProps> = {
     align: 'left',
   },
   Component: ({ text, level, align }) => (
-    <Heading
-      as={level}
-      style={{ textAlign: align, margin: '0 0 16px' }}
-      dangerouslySetInnerHTML={{ __html: typeof text === 'string' ? text : '' }}
-    />
+    <Heading as={level} style={{ textAlign: align, margin: '0 0 16px' }}>
+      {text}
+    </Heading>
   ),
   // Substack + Beehiiv: simple semantic heading, no inline styles —
   // both platforms strip styling aggressively and apply their own
@@ -66,11 +62,11 @@ export const HeadingBlock: EmailBlockEntry<HeadingProps> = {
   formats: {
     substack: ({ text, level }) => {
       const Tag = level;
-      return <Tag dangerouslySetInnerHTML={{ __html: typeof text === 'string' ? text : '' }} />;
+      return <Tag>{text}</Tag>;
     },
     beehiiv: ({ text, level }) => {
       const Tag = level;
-      return <Tag dangerouslySetInnerHTML={{ __html: typeof text === 'string' ? text : '' }} />;
+      return <Tag>{text}</Tag>;
     },
   },
 };
