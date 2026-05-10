@@ -21,8 +21,10 @@ import {
   type NewsletterEdition,
   type BlockTemplate,
   type BrickTemplate,
-  generateNewsletterHtml,
 } from '../../utils';
+import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
+import { emailBlockRegistry } from '../../components/puck/email-blocks';
+import type { BlockRenderMeta } from '../../components/puck/email-blocks/EditionEmail';
 
 /** Shape of a templates_block_defs row, with `block_type` aliased from `key`. */
 interface DbBlockTemplate {
@@ -639,15 +641,29 @@ export default function EditionEditorPage() {
             subject={edition.subject || ''}
             collection={collection}
             newsletterSlug={newsletterSlug}
-            renderedHtml={edition ? generateNewsletterHtml(
-              edition,
-              'html',
-              collectionMetadata.boilerplateStart || collectionMetadata.boilerplateEnd
-                ? { start: (collectionMetadata.boilerplateStart as string) || '', end: (collectionMetadata.boilerplateEnd as string) || '' }
-                : undefined,
-              // Resolve relative storage paths for the final rendered HTML that recipients see.
-              `${(import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? ''}/storage/v1/object/public/media`,
-            ) : undefined}
+            getRenderedHtml={edition
+              ? async () => {
+                  // Build per-block render metadata: react-email blocks
+                  // route through the registry's Component, legacy
+                  // Mustache blocks fall back to renderTemplate of the
+                  // block_template's html_template. Both paths compose
+                  // into the same EditionEmail tree and produce one
+                  // email-safe HTML document via @react-email/render.
+                  const blockMeta = new Map<string, BlockRenderMeta>();
+                  for (const block of edition.blocks) {
+                    const componentId = block.block_template.block_type;
+                    if (emailBlockRegistry.has(componentId)) {
+                      blockMeta.set(block.id, { render_kind: 'react-email', component_id: componentId });
+                    } else {
+                      blockMeta.set(block.id, {
+                        render_kind: 'mustache',
+                        mustache_html: block.block_template.content.html_template ?? '',
+                      });
+                    }
+                  }
+                  return exportEditionHtml({ edition, format: 'email', blockMeta, pretty: false });
+                }
+              : undefined}
           />
         </div>
       )}
