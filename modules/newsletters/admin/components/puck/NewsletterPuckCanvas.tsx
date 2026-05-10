@@ -25,7 +25,7 @@ import {
   Puck,
   type Config,
   fieldsPlugin,
-  useGetPuck,
+  createUsePuck,
 } from '@puckeditor/core';
 import {
   PencilSquareIcon,
@@ -831,70 +831,55 @@ interface RootProps {
   };
 }
 
+// Module-level Puck hook — `createUsePuck()` returns a selector-aware
+// hook (the parameterless `usePuck` re-renders on every state change
+// and prints a dev warning). Reading `selectedItem` lets us subscribe
+// to selection changes without re-rendering for unrelated state.
+const usePuckSelected = createUsePuck();
+
+// Watches the Puck selection and switches the left sidebar to the
+// Fields tab whenever a new block is selected. This replaces an
+// earlier doc-level click listener that didn't work because Puck's
+// DraggableComponent click handler calls e.stopPropagation() — the
+// click never reached the document, so we never knew a selection
+// had happened. Subscribing to selectedItem in-context bypasses the
+// event pipeline entirely and works for every selection path: click,
+// inline-text focus, breadcrumb, programmatic, undo/redo.
+function FieldsAutoSwitcher(): null {
+  const selectedId = usePuckSelected((s) => s.selectedItem?.props?.id ?? null);
+  const dispatch = usePuckSelected((s) => s.dispatch);
+  const lastIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (selectedId && selectedId !== lastIdRef.current) {
+      dispatch({
+        type: 'setUi',
+        ui: { plugin: { current: 'fields' }, leftSideBarVisible: true },
+      });
+    }
+    lastIdRef.current = selectedId;
+  }, [selectedId, dispatch]);
+
+  return null;
+}
+
 function NewsletterCanvasRoot(props: RootProps) {
   const mode = props.puck?.metadata?.previewMode ?? 'light';
   const css = mode === 'dark' ? CANVAS_DARK_CSS : CANVAS_LIGHT_CSS;
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const getPuck = useGetPuck();
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
-    // wrapperRef lives inside the Puck iframe (the canvas root portals
-    // its DOM into the iframe document), so ownerDocument here is the
-    // iframe document — which is exactly where the InlineTextField
-    // spans + Puck's actionBar overlay both end up. Listening at this
-    // document captures both without needing Puck's internal useFrame.
-    const doc = wrapper.ownerDocument;
-    if (!doc) return;
-
-    // Switch the left sidebar to the Fields tab whenever the
-    // operator selects a block — either by clicking anywhere in
-    // its bounding box (Puck marks every component root with
-    // `data-puck-component=<id>`) or by focusing into an inline
-    // text field. Puck's own click + InlineTextField handlers set
-    // `itemSelector` for us; we just need to surface the matching
-    // Fields panel so the operator sees the block's settings
-    // without manually clicking the Fields tab.
-    //
-    // We attach to the iframe document because every interactive
-    // canvas element lives there (including the InlineTextField
-    // spans + the data-puck-component overlays that Puck portals
-    // around each rendered block).
-    const switchToFields = () => {
-      getPuck().dispatch({
-        type: 'setUi',
-        ui: { plugin: { current: 'fields' }, leftSideBarVisible: true },
-      });
-    };
-    const onFocusIn = (e: FocusEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      const isInline =
-        (target.matches && target.matches('[class*="InlineTextField"]')) ||
-        !!(target.closest && target.closest('[class*="InlineTextField"]'));
-      if (!isInline) return;
-      switchToFields();
-    };
-    const onClickInCanvas = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      const componentEl = target.closest && target.closest('[data-puck-component]');
-      if (!componentEl) return;
-      // Defer one tick so Puck's own click handler — which sets
-      // `itemSelector` — fires first; otherwise our setUi call
-      // can race ahead of the selection change and we'd render
-      // the previous block's fields for a frame.
-      setTimeout(switchToFields, 0);
-    };
-    doc.addEventListener('focusin', onFocusIn);
-    doc.addEventListener('click', onClickInCanvas);
-
-    // Strip the native browser title="..." tooltip that Puck sets on
-    // every default action-bar button (Duplicate / Delete / Select
-    // parent). The native bubble is unstyleable and clashes with the
+    // wrapperRef lives inside the Puck iframe, so ownerDocument here
+    // is the iframe document — that's where Puck's actionBar overlay
+    // is portaled. Used to strip the native browser title="..."
+    // tooltip on every default action-bar button (Duplicate / Delete
+    // / Select parent), which is unstyleable and clashes with the
     // editor chrome. Re-run on every DOM mutation because the action
     // bar is portaled in/out around selection changes.
+    const doc = wrapper.ownerDocument;
+    if (!doc) return;
     const stripTitles = () => {
       doc.querySelectorAll<HTMLElement>('[class*="ActionBarAction"][title]').forEach((el) => {
         el.removeAttribute('title');
@@ -903,17 +888,13 @@ function NewsletterCanvasRoot(props: RootProps) {
     stripTitles();
     const obs = new MutationObserver(stripTitles);
     obs.observe(doc.body, { childList: true, subtree: true });
-
-    return () => {
-      doc.removeEventListener('focusin', onFocusIn);
-      doc.removeEventListener('click', onClickInCanvas);
-      obs.disconnect();
-    };
-  }, [getPuck]);
+    return () => obs.disconnect();
+  }, []);
 
   return (
     <>
       <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
+      <FieldsAutoSwitcher />
       <div ref={wrapperRef} className="gw-email-card">{props.children}</div>
     </>
   );
