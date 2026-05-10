@@ -10,6 +10,7 @@
 
 import { Column, Img, Row, Section, Text } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 
 interface LogoHeaderProps extends Record<string, unknown> {
   logo_url: string;
@@ -22,7 +23,7 @@ export const LogoHeaderBlock: EmailBlockEntry<LogoHeaderProps> = {
   label: 'Logo header',
   category: 'Navigation',
   fields: {
-    logo_url: { type: 'text', label: 'Logo URL' },
+    logo_url: { type: 'custom', label: 'Logo', render: NewsletterImageFieldAdapter as never },
     brand_label: { type: 'text', label: 'Brand label (right side)' },
     logo_width: { type: 'text', label: 'Logo width (px)' },
   },
