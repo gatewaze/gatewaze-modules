@@ -113,9 +113,13 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   brickTemplates,
   onChange,
   onSave,
+  isSaving,
   enabledRegistryComponentIds,
   collectionMetadata,
 }) => {
+  // Default false so the Publish button renders enabled when the
+  // parent doesn't thread the saving state through.
+  const isSavingNow = isSaving ?? false;
   // Adapt newsletter templates → sites' BlockDefRow / BrickDefRow shape
   // so we can reuse the existing Puck Config builder. Memoised — these
   // change rarely (only when the library reloads).
@@ -415,11 +419,11 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
               }
             }
           }}
-          disabled={isSaving}
-          style={publishBtnStyle(isSaving)}
+          disabled={isSavingNow}
+          style={publishBtnStyle(isSavingNow)}
         >
           <GlobeAltIcon className="w-4 h-4 shrink-0" />
-          <span>{isSaving ? 'Publishing…' : 'Publish'}</span>
+          <span>{isSavingNow ? 'Publishing…' : 'Publish'}</span>
         </button>
       </div>
 
