@@ -17,9 +17,20 @@ interface FooterProps extends Record<string, unknown> {
 }
 
 const SAFE_HREF = /^(https?:|mailto:|\/)/i;
+const TEMPLATE_TOKEN = /^\{\{[^}]+\}\}$/;
 
 function safeHref(value: unknown): string {
-  return typeof value === 'string' && SAFE_HREF.test(value) ? value : '#';
+  if (typeof value !== 'string') return '#';
+  const trimmed = value.trim();
+  // Mustache-style template tokens like `{{unsubscribe_url}}` are
+  // substituted by the send pipeline (newsletter-send replaces
+  // {{unsubscribe_url}} with the HMAC-signed unsubscribe URL before
+  // each recipient sees the email). Pass them through unchanged so
+  // the substitution finds the token in the rendered HTML — the
+  // trust boundary is upheld server-side where the real URL is
+  // generated, not here.
+  if (TEMPLATE_TOKEN.test(trimmed)) return value;
+  return SAFE_HREF.test(trimmed) ? value : '#';
 }
 
 export const FooterBlock: EmailBlockEntry<FooterProps> = {
