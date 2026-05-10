@@ -10,6 +10,10 @@
 import { Container } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { renderSlot } from '../render-slot.js';
+import {
+  NewsletterMaxWidthSliderField,
+  NewsletterPaddingSliderField,
+} from '../number-slider-field-adapter.js';
 
 interface ContainerProps extends Record<string, unknown> {
   maxWidth: string;
@@ -23,8 +27,16 @@ export const ContainerBlock: EmailBlockEntry<ContainerProps> = {
   label: 'Container',
   category: 'Layout',
   fields: {
-    maxWidth: { type: 'text', label: 'Max width (px)' },
-    padding: { type: 'text', label: 'Padding (CSS)' },
+    maxWidth: {
+      type: 'custom',
+      label: 'Max width',
+      render: NewsletterMaxWidthSliderField as never,
+    },
+    padding: {
+      type: 'custom',
+      label: 'Padding',
+      render: NewsletterPaddingSliderField as never,
+    },
     background: { type: 'text', label: 'Background colour' },
     children: { type: 'slot', label: 'Contents' },
   },
