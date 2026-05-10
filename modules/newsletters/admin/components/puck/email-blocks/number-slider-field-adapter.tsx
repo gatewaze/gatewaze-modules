@@ -201,19 +201,53 @@ function PxSlider({
   parse: (raw: unknown) => number;
   emit: (n: number) => string;
 }): ReactElement {
+  // Paranoid implementation. React 19 reconciling an
+  // `<input type="range">` mid-drag breaks the browser's implicit
+  // pointer capture on the thumb, stalling the drag after 1-2px.
+  // To avoid that we:
+  //
+  //   1. Use an UNCONTROLLED input (defaultValue + ref) — React
+  //      never owns the input's current value, only its mount-time
+  //      default.
+  //   2. Capture `defaultValue` once via a ref so the prop value
+  //      is stable across renders (changing `defaultValue` would
+  //      cause React to update the attribute, which is enough to
+  //      kill the drag).
+  //   3. Update the px readout IMPERATIVELY via textContent on a
+  //      ref — no React state changes during drag, so the input
+  //      reconciler is never touched between pointer events.
+  //
+  // External resets (undo, programmatic) still flow through: the
+  // useEffect imperatively writes `inputRef.current.value` when
+  // the external `value` differs from the input's current value,
+  // but only when the operator isn't actively dragging. The
+  // operator's drag wins until they release the pointer.
+  //
+  // Document-level pointerup tears down `draggingRef` even if the
+  // cursor leaves the thumb during a drag — native range inputs
+  // don't always re-fire pointerup on the input itself.
+
+  const initialRef = useRef<number | null>(null);
+  if (initialRef.current === null) {
+    const p = parse(value);
+    initialRef.current = Number.isFinite(p) ? p : fallback;
+  }
+
+  const inputRef = useRef<HTMLInputElement>(null);
+  const readoutRef = useRef<HTMLSpanElement>(null);
+  const draggingRef = useRef(false);
+
   const parsed = parse(value);
   const externalNum = Number.isFinite(parsed) ? parsed : fallback;
 
-  const inputRef = useRef<HTMLInputElement>(null);
-  const draggingRef = useRef(false);
-  const [draft, setDraft] = useState(externalNum);
-
   useEffect(() => {
     if (draggingRef.current) return;
-    setDraft(externalNum);
-    const el = inputRef.current;
-    if (el && Number(el.value) !== externalNum) {
-      el.value = String(externalNum);
+    const input = inputRef.current;
+    const readout = readoutRef.current;
+    if (!input) return;
+    if (Number(input.value) !== externalNum) {
+      input.value = String(externalNum);
+      if (readout) readout.textContent = `${externalNum}px`;
     }
   }, [externalNum]);
 
@@ -227,12 +261,6 @@ function PxSlider({
     };
   }, []);
 
-  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const v = Number(e.target.value);
-    setDraft(v);
-    onChange(emit(v));
-  };
-
   return (
     <div
       style={ROW_STYLE}
@@ -244,11 +272,19 @@ function PxSlider({
         min={min}
         max={max}
         step={step}
-        defaultValue={externalNum}
-        onChange={handleChange}
+        defaultValue={initialRef.current}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => {
+          const v = Number(e.target.value);
+          if (readoutRef.current) {
+            readoutRef.current.textContent = `${v}px`;
+          }
+          onChange(emit(v));
+        }}
         style={RANGE_STYLE}
       />
-      <span style={READOUT_STYLE}>{draft}px</span>
+      <span ref={readoutRef} style={READOUT_STYLE}>
+        {initialRef.current}px
+      </span>
     </div>
   );
 }
