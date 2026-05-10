@@ -949,6 +949,24 @@ const PUCK_RADIX_THEME_CSS = `
    itself defines the inset — padding inside Puck would create a
    visible gutter against the panel's rounded border, which looks
    worse than flush chrome. Removed. */
+
+/* Puck draws a 2px selection / hover outline on the DraggableComponent
+   overlay with outline-offset: -2px, so the outline sits INSIDE the
+   block's edge and overlaps text being inline-edited. Shift the
+   outline OUTSIDE the block (positive offset) so the contentEditable
+   span has visual breathing room from the selection chrome. */
+.newsletter-puck-canvas [class*="DraggableComponent-overlay"] {
+  outline-offset: 4px !important;
+}
+
+/* Puck's InlineTextField span gets the browser's default focus ring
+   (a thick blue outline) when contentEditable is active. The Puck
+   selection chrome is already visually communicating "this is
+   editable", so the browser ring is redundant — drop it. */
+.newsletter-puck-canvas [class*="InlineTextField"]:focus,
+.newsletter-puck-canvas [class*="InlineTextField"]:focus-visible {
+  outline: none !important;
+}
 `;
 
 function toolbarSegment(): React.CSSProperties {
