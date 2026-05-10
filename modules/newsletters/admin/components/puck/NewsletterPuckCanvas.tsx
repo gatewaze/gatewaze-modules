@@ -848,12 +848,25 @@ function NewsletterCanvasRoot(props: RootProps) {
     const doc = wrapper.ownerDocument;
     if (!doc) return;
 
-    // When an inline text field gains focus, auto-switch the left
-    // sidebar to the Fields tab + ensure it's open. Puck's
-    // InlineTextField onClickCapture already calls setUi({ itemSelector
-    // }) so the right block is selected; switching the active plugin
-    // makes the typed text visibly highlight in the Fields panel
-    // alongside the canvas edit, which is what operators expect.
+    // Switch the left sidebar to the Fields tab whenever the
+    // operator selects a block — either by clicking anywhere in
+    // its bounding box (Puck marks every component root with
+    // `data-puck-component=<id>`) or by focusing into an inline
+    // text field. Puck's own click + InlineTextField handlers set
+    // `itemSelector` for us; we just need to surface the matching
+    // Fields panel so the operator sees the block's settings
+    // without manually clicking the Fields tab.
+    //
+    // We attach to the iframe document because every interactive
+    // canvas element lives there (including the InlineTextField
+    // spans + the data-puck-component overlays that Puck portals
+    // around each rendered block).
+    const switchToFields = () => {
+      getPuck().dispatch({
+        type: 'setUi',
+        ui: { plugin: { current: 'fields' }, leftSideBarVisible: true },
+      });
+    };
     const onFocusIn = (e: FocusEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target) return;
@@ -861,12 +874,21 @@ function NewsletterCanvasRoot(props: RootProps) {
         (target.matches && target.matches('[class*="InlineTextField"]')) ||
         !!(target.closest && target.closest('[class*="InlineTextField"]'));
       if (!isInline) return;
-      getPuck().dispatch({
-        type: 'setUi',
-        ui: { plugin: { current: 'fields' }, leftSideBarVisible: true },
-      });
+      switchToFields();
+    };
+    const onClickInCanvas = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const componentEl = target.closest && target.closest('[data-puck-component]');
+      if (!componentEl) return;
+      // Defer one tick so Puck's own click handler — which sets
+      // `itemSelector` — fires first; otherwise our setUi call
+      // can race ahead of the selection change and we'd render
+      // the previous block's fields for a frame.
+      setTimeout(switchToFields, 0);
     };
     doc.addEventListener('focusin', onFocusIn);
+    doc.addEventListener('click', onClickInCanvas);
 
     // Strip the native browser title="..." tooltip that Puck sets on
     // every default action-bar button (Duplicate / Delete / Select
@@ -884,6 +906,7 @@ function NewsletterCanvasRoot(props: RootProps) {
 
     return () => {
       doc.removeEventListener('focusin', onFocusIn);
+      doc.removeEventListener('click', onClickInCanvas);
       obs.disconnect();
     };
   }, [getPuck]);
