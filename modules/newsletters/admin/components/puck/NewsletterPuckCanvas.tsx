@@ -20,7 +20,13 @@
  */
 
 import { useEffect, useMemo, useState, type FC, type ReactElement, type ReactNode } from 'react';
-import { Puck, type Config } from '@puckeditor/core';
+import {
+  Puck,
+  type Config,
+  blocksPlugin,
+  fieldsPlugin,
+  outlinePlugin,
+} from '@puckeditor/core';
 import {
   PencilSquareIcon,
   CodeBracketIcon,
@@ -28,6 +34,7 @@ import {
   MoonIcon,
   ArrowDownTrayIcon,
   ClipboardDocumentIcon,
+  GlobeAltIcon,
 } from '@heroicons/react/24/outline';
 import {
   buildPuckConfig,
@@ -339,106 +346,29 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     >
     <div
       className={`newsletter-puck-canvas puck-canvas-email puck-preview-${previewMode}`}
-      style={{ background: '#fafbfc', height: '100%', display: 'flex', flexDirection: 'column' }}
+      style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}
     >
       {/* Map Puck's internal CSS variables onto the admin's Radix
-          theme tokens so the editor inherits gatewaze's accent +
-          neutral palette instead of Puck's default azure/grey scales.
-          Puck's scale runs darkest (01) → lightest (12); Radix runs
-          the opposite way (1 → 12), so step N on Puck maps to step
-          (13 - N) on Radix.
-
-          Scoped to .newsletter-puck-canvas so it doesn't bleed into
-          sites' Puck canvas (which keeps the default theme until
-          sites is themed too). */}
+          theme tokens — see PUCK_RADIX_THEME_CSS for details. */}
       <style dangerouslySetInnerHTML={{ __html: PUCK_RADIX_THEME_CSS }} />
 
-      {/* Persistent toolbar — view toggle / preview backdrop / export
-          buttons. Lives ABOVE Puck (not inside Puck's headerActions)
-          so it stays visible when the operator switches into HTML
-          view; otherwise the only way back to the editor would be a
-          page reload. The Publish button stays in Puck's native
-          header (still visible in WYSIWYG mode; not relevant in
-          HTML mode since it's a read-only inspection view).
-          Status messages surface via sonner toasts (toast.success
-          / toast.error) — same library the rest of the admin uses. */}
+      {/* Page-level actions row. Sits ABOVE the curved-corner panel,
+          right-aligned. These four buttons (download HTML, copy for
+          Substack / Beehiiv, Publish) act on the whole edition — they
+          aren't editor-internal, so they belong outside the Puck
+          chrome. The view-toggle (Editor / HTML) and the Light /
+          Dark preview-backdrop toggle stay INSIDE the panel because
+          they only affect what's rendered on the canvas. */}
       <div
-        className="newsletter-puck-editor-toolbar"
+        className="newsletter-puck-page-actions"
         style={{
           display: 'flex',
+          justifyContent: 'flex-end',
           alignItems: 'center',
-          gap: 10,
-          padding: '8px 12px',
-          background: 'var(--color-surface, #fff)',
-          borderBottom: '1px solid var(--gray-a4, #eee)',
+          gap: 8,
           flexWrap: 'wrap',
         }}
       >
-        <div role="group" aria-label="View mode" style={toolbarSegment()}>
-          <button
-            type="button"
-            onClick={() => setView('wysiwyg')}
-            style={toolbarIconBtn(view === 'wysiwyg')}
-            aria-pressed={view === 'wysiwyg'}
-            aria-label="Visual editor"
-            title="Visual editor"
-          >
-            <PencilSquareIcon className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={async () => {
-              setHtmlBuilding(true);
-              try {
-                const html = await exportEditionHtml({
-                  edition,
-                  format: 'email',
-                  blockMeta: buildBlockMeta(),
-                  pretty: true,
-                });
-                setHtmlSource(html);
-                setView('html');
-              } catch (e) {
-                // eslint-disable-next-line no-console
-                console.error('[newsletter-puck] html-view render failed:', e);
-                setHtmlSource(`<!-- failed to render: ${e instanceof Error ? e.message : String(e)} -->`);
-                setView('html');
-              } finally {
-                setHtmlBuilding(false);
-              }
-            }}
-            style={toolbarIconBtn(view === 'html', htmlBuilding)}
-            aria-pressed={view === 'html'}
-            aria-label="View HTML source"
-            title="View the rendered email HTML source"
-          >
-            <CodeBracketIcon className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div role="group" aria-label="Preview background" style={toolbarSegment()}>
-          <button
-            type="button"
-            onClick={() => setPreviewMode('light')}
-            style={toolbarIconBtn(previewMode === 'light')}
-            aria-pressed={previewMode === 'light'}
-            aria-label="Light background preview"
-            title="Preview against a light mail-client background"
-          >
-            <SunIcon className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setPreviewMode('dark')}
-            style={toolbarIconBtn(previewMode === 'dark')}
-            aria-pressed={previewMode === 'dark'}
-            aria-label="Dark background preview"
-            title="Preview against a dark mail-client background"
-          >
-            <MoonIcon className="w-4 h-4" />
-          </button>
-        </div>
-
         <button
           type="button"
           onClick={() => handleExport('email')}
@@ -473,6 +403,24 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             <span>{exportBusy === 'beehiiv' ? 'Copying…' : 'Beehiiv'}</span>
           </button>
         )}
+        <button
+          type="button"
+          onClick={async () => {
+            if (onSave) {
+              try {
+                await onSave();
+                toast.success('Edition published.');
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : 'Publish failed');
+              }
+            }
+          }}
+          disabled={isSaving}
+          style={publishBtnStyle(isSaving)}
+        >
+          <GlobeAltIcon className="w-4 h-4 shrink-0" />
+          <span>{isSaving ? 'Publishing…' : 'Publish'}</span>
+        </button>
       </div>
 
       {/* MyBlocksPanel now only opens for the "Save current selection
@@ -491,58 +439,163 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           userBlocks.clearPendingSave();
         }}
       />
-      {/* HTML source view — appears when the operator clicks "<> HTML"
-          on the toolbar. The Puck canvas stays mounted in the
-          sibling div below (display:none) so undo history + selection
-          state survive the toggle. */}
-      {view === 'html' && (
+
+      {/* Curved-corner panel that contains the editor itself. Mirrors
+          the look of the admin's table panels (border + radius + a
+          subtle shadow). The internal toolbar (view-toggle + light/
+          dark) sits above the editor inside the panel since it
+          affects what the panel displays — not the page as a
+          whole. */}
+      <div
+        className="newsletter-puck-panel"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--color-surface, #fff)',
+          border: '1px solid var(--gray-a5, #e5e7eb)',
+          borderRadius: 12,
+          overflow: 'hidden',
+          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+        }}
+      >
+        {/* Editor-internal toolbar (always visible inside the panel,
+            both in WYSIWYG and HTML view) — view toggle + preview
+            backdrop. Both only affect what the panel displays, so
+            they belong on the panel chrome rather than above it. */}
         <div
-          className="newsletter-puck-html-view"
+          className="newsletter-puck-editor-toolbar"
           style={{
-            background: '#0e0f12',
-            color: '#e5e7eb',
-            padding: 0,
-            minHeight: 480,
-            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 12px',
+            background: 'var(--color-surface, #fff)',
+            borderBottom: '1px solid var(--gray-a4, #eee)',
+            flexWrap: 'wrap',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #23262d' }}>
-            <span style={{ fontSize: 12, color: '#9ca3af' }}>Rendered email HTML — read-only.</span>
+          <div role="group" aria-label="View mode" style={toolbarSegment()}>
+            <button
+              type="button"
+              onClick={() => setView('wysiwyg')}
+              style={toolbarIconBtn(view === 'wysiwyg')}
+              aria-pressed={view === 'wysiwyg'}
+              aria-label="Visual editor"
+              title="Visual editor"
+            >
+              <PencilSquareIcon className="w-4 h-4" />
+            </button>
             <button
               type="button"
               onClick={async () => {
+                setHtmlBuilding(true);
                 try {
-                  await navigator.clipboard.writeText(htmlSource);
-                  toast.success('HTML copied to clipboard.');
+                  const html = await exportEditionHtml({
+                    edition,
+                    format: 'email',
+                    blockMeta: buildBlockMeta(),
+                    pretty: true,
+                  });
+                  setHtmlSource(html);
+                  setView('html');
                 } catch (e) {
-                  toast.error(e instanceof Error ? e.message : 'Copy failed');
+                  // eslint-disable-next-line no-console
+                  console.error('[newsletter-puck] html-view render failed:', e);
+                  setHtmlSource(`<!-- failed to render: ${e instanceof Error ? e.message : String(e)} -->`);
+                  setView('html');
+                } finally {
+                  setHtmlBuilding(false);
                 }
               }}
-              style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #2a2d34', background: '#1f2227', color: '#e5e7eb', cursor: 'pointer', fontSize: 12 }}
+              style={toolbarIconBtn(view === 'html', htmlBuilding)}
+              aria-pressed={view === 'html'}
+              aria-label="View HTML source"
+              title="View the rendered email HTML source"
             >
-              Copy
+              <CodeBracketIcon className="w-4 h-4" />
             </button>
           </div>
-          <pre
+
+          <div role="group" aria-label="Preview background" style={toolbarSegment()}>
+            <button
+              type="button"
+              onClick={() => setPreviewMode('light')}
+              style={toolbarIconBtn(previewMode === 'light')}
+              aria-pressed={previewMode === 'light'}
+              aria-label="Light background preview"
+              title="Preview against a light mail-client background"
+            >
+              <SunIcon className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewMode('dark')}
+              style={toolbarIconBtn(previewMode === 'dark')}
+              aria-pressed={previewMode === 'dark'}
+              aria-label="Dark background preview"
+              title="Preview against a dark mail-client background"
+            >
+              <MoonIcon className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* HTML source view — appears when the operator clicks the
+            <> button on the toolbar. Puck stays mounted underneath
+            (display:none) so undo history + selection state survive
+            the toggle. */}
+        {view === 'html' && (
+          <div
+            className="newsletter-puck-html-view"
             style={{
-              margin: 0,
-              padding: '12px 16px',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-              fontSize: 12,
-              lineHeight: 1.5,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              overflow: 'auto',
-              maxHeight: 'calc(100vh - 280px)',
+              background: '#0e0f12',
+              color: '#e5e7eb',
+              padding: 0,
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
             }}
           >
-            {htmlSource}
-          </pre>
-        </div>
-      )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #23262d' }}>
+              <span style={{ fontSize: 12, color: '#9ca3af' }}>Rendered email HTML — read-only.</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(htmlSource);
+                    toast.success('HTML copied to clipboard.');
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Copy failed');
+                  }
+                }}
+                style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #2a2d34', background: '#1f2227', color: '#e5e7eb', cursor: 'pointer', fontSize: 12 }}
+              >
+                Copy
+              </button>
+            </div>
+            <pre
+              style={{
+                margin: 0,
+                padding: '12px 16px',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                fontSize: 12,
+                lineHeight: 1.5,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                overflow: 'auto',
+                flex: 1,
+              }}
+            >
+              {htmlSource}
+            </pre>
+          </div>
+        )}
 
-      <div style={{ display: view === 'wysiwyg' ? 'block' : 'none' }}>
-      <Puck
+        <div style={{ display: view === 'wysiwyg' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+        <Puck
         config={configWithUserBlocks.config as never}
         data={data as never}
         // `metadata` propagates to the canvas root.render and to every
@@ -561,6 +614,19 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           { width: 375, height: 'auto' as const, label: 'Mobile', icon: 'Smartphone' },
         ]}
         iframe={{ enabled: true }}
+        plugins={[
+          // Puck v0.21 plugins control which tabs appear in the left
+          // icon strip. The `fieldsPlugin({ desktopSideBar: 'left' })`
+          // pulls the field-edit panel out of the right sidebar and
+          // mounts it as a third tab next to Blocks / Outline. When
+          // an item is selected on the canvas, Puck auto-switches to
+          // the Fields tab. This matches the puckeditor.com demo
+          // layout — the right sidebar disappears so the canvas gets
+          // more horizontal room.
+          blocksPlugin(),
+          outlinePlugin(),
+          fieldsPlugin({ desktopSideBar: 'left' }),
+        ]}
         overrides={{
           // Inject "★ Save block" alongside Puck's default
           // delete/duplicate buttons in the contextual action bar that
@@ -574,6 +640,11 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
               <SaveAsBlockAction />
             </>
           ),
+          // Hide Puck's native Publish button — we render our own
+          // outside the curved panel as a page-level action,
+          // alongside the export buttons. Returning null here makes
+          // the actions slot in Puck's header empty.
+          headerActions: () => null,
         }}
         onChange={(nextData) => {
           // Convert + emit upstream. Cast through unknown because Puck's
@@ -613,6 +684,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           if (onSave) await onSave();
         }}
       />
+        </div>
       </div>
     </div>
     </NewsletterEditingProvider>
@@ -818,24 +890,12 @@ const PUCK_RADIX_THEME_CSS = `
   display: none;
 }
 
-/* Inset Puck's left icon strip + right field sidebar so their
-   CONTENTS line up with the admin's hero-text margin. Puck's chrome
-   (backgrounds + dividing borders) stays flush with the white-area
-   edges; only the inner icons / form fields shift inward. The trick
-   is to widen the cell via --puck-side-nav-width and let
-   padding-left / padding-inline-end push the contents inside. Class
-   hashes change between builds, so use substring selectors. */
-.newsletter-puck-canvas [class*="PuckLayout-inner"] {
-  --puck-side-nav-width: calc(var(--margin-x, 1rem) + 1.5rem + 68px);
-}
-.newsletter-puck-canvas [class*="PuckLayout-nav"] {
-  padding-left: calc(var(--margin-x, 1rem) + 1.5rem);
-  box-sizing: border-box;
-}
-.newsletter-puck-canvas [class*="Sidebar--right"] {
-  padding-inline-end: calc(var(--margin-x, 1rem) + 1.5rem);
-  box-sizing: border-box;
-}
+/* The previous draft used padding on PuckLayout-nav and Sidebar--
+   right to push their contents inward to align with the hero text.
+   Now that the editor lives inside a curved-corner panel, the panel
+   itself defines the inset — padding inside Puck would create a
+   visible gutter against the panel's rounded border, which looks
+   worse than flush chrome. Removed. */
 `;
 
 function toolbarSegment(): React.CSSProperties {
@@ -861,6 +921,24 @@ function toolbarIconBtn(active: boolean, busy = false): React.CSSProperties {
     color: active ? 'var(--accent-11, #14171E)' : 'var(--gray-12, inherit)',
     cursor: busy ? 'wait' : 'pointer',
     opacity: busy ? 0.7 : 1,
+  };
+}
+
+function publishBtnStyle(busy: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '7px 14px',
+    border: '1px solid var(--accent-9, #14171E)',
+    borderRadius: 6,
+    background: 'var(--accent-9, #14171E)',
+    color: 'var(--accent-contrast, #fff)',
+    cursor: busy ? 'wait' : 'pointer',
+    fontSize: 13,
+    fontWeight: 500,
+    opacity: busy ? 0.7 : 1,
+    whiteSpace: 'nowrap',
   };
 }
 
