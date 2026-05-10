@@ -22,7 +22,7 @@
  * we render whatever UI we want, and emit string values back.
  */
 
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type ReactElement } from 'react';
 
 interface PuckCustomFieldProps {
   value: unknown;
@@ -69,49 +69,17 @@ const TEXT_INPUT_STYLE: React.CSSProperties = {
 };
 
 export function NewsletterMaxWidthSliderField({ value, onChange }: PuckCustomFieldProps): ReactElement {
-  // Container.tsx renders `${maxWidth}px`, so we keep the storage
-  // shape as a string — Number() coerces existing edition data.
-  const num = typeof value === 'number' ? value : Number(value) || 600;
-  // Local optimistic state so the slider tracks the operator's
-  // pointer instantly. Puck's createOnChange is async — the value
-  // we emit only flows back through `value` after a dispatch round-
-  // trip. Without local state the slider rubber-bands to whatever
-  // value Puck has finished processing while the operator is still
-  // mid-drag.
-  //
-  // The drag-tracking ref is the second half of that fix: if we
-  // unconditionally synced `draft <- num` in a useEffect, every
-  // returning prop update during an active drag would yank the
-  // slider back to the last-committed value (single-increment jump
-  // pattern). Sync ONLY when the pointer isn't actively dragging,
-  // so external resets (undo, multi-field reset, programmatic) still
-  // flow through but in-flight self-echoes don't.
-  const [draft, setDraft] = useState(num);
-  const draggingRef = useRef(false);
-  useEffect(() => {
-    if (!draggingRef.current) setDraft(num);
-  }, [num]);
-
   return (
-    <div style={ROW_STYLE}>
-      <input
-        type="range"
-        min={320}
-        max={800}
-        step={1}
-        value={draft}
-        onPointerDown={() => { draggingRef.current = true; }}
-        onPointerUp={() => { draggingRef.current = false; }}
-        onPointerCancel={() => { draggingRef.current = false; }}
-        onChange={(e) => {
-          const v = Number(e.target.value);
-          setDraft(v);
-          onChange(String(v));
-        }}
-        style={RANGE_STYLE}
-      />
-      <span style={READOUT_STYLE}>{draft}px</span>
-    </div>
+    <PxSlider
+      value={value}
+      onChange={onChange}
+      min={320}
+      max={800}
+      step={1}
+      fallback={600}
+      emit={(v) => String(v)}
+      parse={(raw) => (typeof raw === 'number' ? raw : Number(raw))}
+    />
   );
 }
 
@@ -122,19 +90,8 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
   // goes into advanced mode.
   const uniformMatch = str.trim().match(/^(\d+(?:\.\d+)?)px$/);
   const isUniform = !!uniformMatch;
-  const num = uniformMatch ? Number(uniformMatch[1]) : 24;
 
   const [advanced, setAdvanced] = useState(!isUniform);
-  // Same local-state + drag-ref pattern as the maxWidth slider — see
-  // comments there. Without skipping the sync during active drag,
-  // every async value-echo from Puck rubber-bands the slider back to
-  // the last-committed step, which reads as "it only jumps in single
-  // increments".
-  const [draft, setDraft] = useState(num);
-  const draggingRef = useRef(false);
-  useEffect(() => {
-    if (!draggingRef.current) setDraft(num);
-  }, [num]);
 
   if (advanced) {
     return (
@@ -167,25 +124,20 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={ROW_STYLE}>
-        <input
-          type="range"
-          min={0}
-          max={80}
-          step={1}
-          value={draft}
-          onPointerDown={() => { draggingRef.current = true; }}
-          onPointerUp={() => { draggingRef.current = false; }}
-          onPointerCancel={() => { draggingRef.current = false; }}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            setDraft(v);
-            onChange(`${v}px`);
-          }}
-          style={RANGE_STYLE}
-        />
-        <span style={READOUT_STYLE}>{draft}px</span>
-      </div>
+      <PxSlider
+        value={value}
+        onChange={onChange}
+        min={0}
+        max={80}
+        step={1}
+        fallback={24}
+        emit={(v) => `${v}px`}
+        parse={(raw) => {
+          if (typeof raw === 'number') return raw;
+          const m = (typeof raw === 'string' ? raw : '').trim().match(/^(\d+(?:\.\d+)?)px$/);
+          return m ? Number(m[1]) : NaN;
+        }}
+      />
       <button
         type="button"
         onClick={() => setAdvanced(true)}
@@ -193,6 +145,98 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
       >
         Advanced (CSS shorthand)
       </button>
+    </div>
+  );
+}
+
+/**
+ * Internal px-slider primitive used by both Container slider fields.
+ *
+ * Why a primitive instead of two copy-pasted implementations: getting
+ * the sync logic right is the whole point of this file, and we want
+ * one source of truth. The behaviour:
+ *
+ *   - The input is a fully controlled React `<input type="range">`.
+ *   - `value` derives the displayed position via `parse(value)` →
+ *     numeric, or `fallback` if the parse fails.
+ *   - On every change we call `onChange(emit(v))` so Puck gets the
+ *     formatted external value (`"42"` for width, `"42px"` for
+ *     padding) AND we update local `draft` state immediately so the
+ *     thumb tracks the pointer without waiting for Puck's async
+ *     dispatch to round-trip.
+ *   - `draft` only re-syncs from `value` when the user is NOT
+ *     actively dragging (`draggingRef`). Otherwise every async
+ *     echo from Puck would yank the thumb back to the last
+ *     committed value — read as "only jumps in single increments"
+ *     when the operator tries to drag continuously.
+ *   - We listen for pointerdown on the `wrapperRef` (the row that
+ *     contains the input + the px readout) AND a global
+ *     pointerup/pointercancel on the document. Native range
+ *     inputs don't always re-fire pointerup if the operator's
+ *     cursor leaves the thumb during a drag, so document-level
+ *     teardown is safer than relying on the input's own events.
+ */
+function PxSlider({
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  fallback,
+  parse,
+  emit,
+}: {
+  value: unknown;
+  onChange: (next: unknown) => void;
+  min: number;
+  max: number;
+  step: number;
+  fallback: number;
+  parse: (raw: unknown) => number;
+  emit: (n: number) => string;
+}): ReactElement {
+  const parsed = parse(value);
+  const externalNum = Number.isFinite(parsed) ? parsed : fallback;
+
+  const [draft, setDraft] = useState(externalNum);
+  const draggingRef = useRef(false);
+
+  useEffect(() => {
+    if (!draggingRef.current) setDraft(externalNum);
+  }, [externalNum]);
+
+  // Document-level drag teardown — see component-level docblock.
+  useEffect(() => {
+    const stopDrag = () => { draggingRef.current = false; };
+    document.addEventListener('pointerup', stopDrag);
+    document.addEventListener('pointercancel', stopDrag);
+    return () => {
+      document.removeEventListener('pointerup', stopDrag);
+      document.removeEventListener('pointercancel', stopDrag);
+    };
+  }, []);
+
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const v = Number(e.target.value);
+    setDraft(v);
+    onChange(emit(v));
+  };
+
+  return (
+    <div
+      style={ROW_STYLE}
+      onPointerDown={() => { draggingRef.current = true; }}
+    >
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        onChange={handleChange}
+        style={RANGE_STYLE}
+      />
+      <span style={READOUT_STYLE}>{draft}px</span>
     </div>
   );
 }
