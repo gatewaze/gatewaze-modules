@@ -929,6 +929,65 @@ const BASE_CANVAS_CSS = `
     display: block;
   }
 
+  /* ==========================================================
+     Email-client default reset.
+
+     Puck's CopyHostStyles ports the admin's Tailwind preflight
+     (and any other parent stylesheet) into this iframe. Email
+     clients DON'T have Tailwind preflight — they apply user-agent
+     defaults. Without this counter-reset every <h1>/<h2>/<h3>,
+     <ul>/<ol>, <a>, <blockquote> etc. inherits the admin reset
+     and renders flat in the canvas, even though the same markup
+     composes correctly when sent.
+
+     Inline styles on blocks always win in cascade, so this only
+     affects elements that DON'T have an explicit style — exactly
+     the same as how a real recipient's mail client would render
+     them. The goal: edit-time canvas matches recipient view byte
+     for visible byte.
+
+     Using em units for size so the cascade stays proportional
+     (the Heading block's explicit px values still override these).
+     ========================================================== */
+
+  h1 { font-size: 2em; font-weight: bold; margin: 0.67em 0; line-height: 1.25; }
+  h2 { font-size: 1.5em; font-weight: bold; margin: 0.83em 0; line-height: 1.25; }
+  h3 { font-size: 1.17em; font-weight: bold; margin: 1em 0; line-height: 1.25; }
+  h4 { font-size: 1em; font-weight: bold; margin: 1.33em 0; }
+  h5 { font-size: 0.83em; font-weight: bold; margin: 1.67em 0; }
+  h6 { font-size: 0.67em; font-weight: bold; margin: 2.33em 0; }
+
+  p { margin: 1em 0; }
+
+  /* Default link colour matches the typical Outlook / Gmail blue.
+     Most email designs override per-link via inline color, so this
+     is just the "no inline style" fallback. */
+  a { color: #0563C1; text-decoration: underline; cursor: pointer; }
+
+  b, strong { font-weight: bold; }
+  em, i { font-style: italic; }
+  small { font-size: 80%; }
+
+  ul, ol { margin: 1em 0; padding-left: 40px; }
+  ul { list-style: disc outside; }
+  ol { list-style: decimal outside; }
+  ul ul, ol ul { list-style: circle outside; }
+  ul ul ul, ol ol ul { list-style: square outside; }
+  li { display: list-item; }
+
+  blockquote { margin: 1em 40px; }
+  hr { border: 0; border-top: 1px solid #ccc; margin: 1em 0; }
+
+  /* Tailwind preflight sets box-sizing: border-box on all elements.
+     Email clients use content-box for tables (the historical default).
+     react-email's table-based layouts assume content-box widths;
+     border-box subtly shifts cell widths when padding is applied,
+     which makes hero/CTA cards render narrower in the canvas than
+     in the inbox. Restore content-box for table-layout elements. */
+  table, tr, td, th, tbody, thead, tfoot {
+    box-sizing: content-box;
+  }
+
   /* Inline-edit chrome — these rules ALSO live in the iframe-side
      CSS (this file) because Puck renders the DraggableComponent
      overlays + InlineTextField spans inside the canvas iframe.
