@@ -12,6 +12,7 @@
  * visually attached to whichever block the operator clicked.
  */
 import { useGetPuck } from '@puckeditor/core';
+import { BookmarkIcon } from '@heroicons/react/24/outline';
 import { useUserBlocks } from './UserBlocksContext.js';
 
 interface PuckItem {
@@ -46,21 +47,22 @@ export function SaveAsBlockAction() {
     <button
       type="button"
       onClick={onClick}
+      aria-label="Save block to My Blocks"
       title="Save this block (and its contents) to My Blocks"
       style={{
         background: 'transparent',
         border: 'none',
         color: 'inherit',
-        fontSize: 12,
         cursor: 'pointer',
-        padding: '0 6px',
-        height: '100%',
+        padding: 0,
+        width: 28,
+        height: 28,
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 4,
+        justifyContent: 'center',
       }}
     >
-      ★ Save block
+      <BookmarkIcon style={{ width: 16, height: 16 }} />
     </button>
   );
 }
