@@ -47,6 +47,8 @@ import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js'
 import { emailBlockRegistry } from './email-blocks/index.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+import { useHasModule } from '@/hooks/useModuleFeature';
 import { NewsletterEditingProvider } from './NewsletterEditingContext.js';
 import { UserBlocksProvider, useUserBlocks } from './user-blocks/UserBlocksContext.js';
 import { SaveAsBlockAction } from './user-blocks/SaveAsBlockAction.js';
@@ -224,6 +226,14 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   const [view, setView] = useState<'wysiwyg' | 'html'>('wysiwyg');
   const [htmlSource, setHtmlSource] = useState<string>('');
   const [htmlBuilding, setHtmlBuilding] = useState(false);
+  // The Substack / Beehiiv copy buttons only make sense when the
+  // corresponding output-adapter module is installed (those modules
+  // own the per-platform render variants we copy to clipboard).
+  // The HTML download button is always available — every newsletter
+  // has email-safe HTML to download regardless of which third-party
+  // platforms the operator publishes to.
+  const hasSubstackOutput = useHasModule('newsletters-output-substack');
+  const hasBeehiivOutput = useHasModule('newsletters-output-beehiiv');
 
   const userBlocks = useUserBlocks();
 
@@ -565,26 +575,30 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                 <ArrowDownTrayIcon className="w-4 h-4 shrink-0" />
                 <span>{exportBusy === 'email' ? 'Exporting…' : 'HTML'}</span>
               </button>
-              <button
-                type="button"
-                onClick={() => handleExport('substack')}
-                disabled={exportBusy !== null}
-                style={destinationBtnStyle(exportBusy === 'substack')}
-                title="Render as Substack rich text and copy to clipboard"
-              >
-                <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
-                <span>{exportBusy === 'substack' ? 'Copying…' : 'Substack'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleExport('beehiiv')}
-                disabled={exportBusy !== null}
-                style={destinationBtnStyle(exportBusy === 'beehiiv')}
-                title="Render as Beehiiv rich text and copy to clipboard"
-              >
-                <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
-                <span>{exportBusy === 'beehiiv' ? 'Copying…' : 'Beehiiv'}</span>
-              </button>
+              {hasSubstackOutput && (
+                <button
+                  type="button"
+                  onClick={() => handleExport('substack')}
+                  disabled={exportBusy !== null}
+                  style={destinationBtnStyle(exportBusy === 'substack')}
+                  title="Render as Substack rich text and copy to clipboard"
+                >
+                  <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
+                  <span>{exportBusy === 'substack' ? 'Copying…' : 'Substack'}</span>
+                </button>
+              )}
+              {hasBeehiivOutput && (
+                <button
+                  type="button"
+                  onClick={() => handleExport('beehiiv')}
+                  disabled={exportBusy !== null}
+                  style={destinationBtnStyle(exportBusy === 'beehiiv')}
+                  title="Render as Beehiiv rich text and copy to clipboard"
+                >
+                  <ClipboardDocumentIcon className="w-4 h-4 shrink-0" />
+                  <span>{exportBusy === 'beehiiv' ? 'Copying…' : 'Beehiiv'}</span>
+                </button>
+              )}
               {children}
             </>
           ),
