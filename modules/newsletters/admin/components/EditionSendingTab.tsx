@@ -52,7 +52,19 @@ interface EditionSendingTabProps {
   subject: string;
   collection: CollectionInfo | null;
   newsletterSlug?: string;
-  renderedHtml?: string;
+  /**
+   * Async renderer that produces the final email-safe HTML for the
+   * edition. Called at send time (not eagerly) so the heavy
+   * `@react-email/render` pass only runs when the operator commits to
+   * a send, not on every edition-page render.
+   *
+   * Replaces the previous `renderedHtml: string` prop, which was
+   * computed eagerly via `generateNewsletterHtml` — that path only
+   * understood Mustache block templates and produced empty content
+   * for blocks authored in the Puck / react-email registry, so sends
+   * went out with a blank body.
+   */
+  getRenderedHtml?: () => Promise<string>;
 }
 
 const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
@@ -73,7 +85,7 @@ function formatTime(dateStr: string | null): string {
   });
 }
 
-export function EditionSendingTab({ editionId, editionDate, subject, collection, newsletterSlug, renderedHtml }: EditionSendingTabProps) {
+export function EditionSendingTab({ editionId, editionDate, subject, collection, newsletterSlug, getRenderedHtml }: EditionSendingTabProps) {
   const [sends, setSends] = useState<SendRecord[]>([]);
   const [sendLog, setSendLog] = useState<SendLogEntry[]>([]);
   const [selectedSendId, setSelectedSendId] = useState<string | null>(null);
@@ -136,7 +148,11 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         ? `${portalProtocol}//${portalDomain}/newsletters/${newsletterSlug}--${editionDate}`
         : `${portalProtocol}//${portalDomain}/newsletters`;
 
-      let finalHtml = renderedHtml || null;
+      // Render the edition's HTML on demand via the parent-supplied
+      // async renderer. Doing it here (instead of eagerly on every
+      // edition-page render) keeps `@react-email/render` off the
+      // hot path and means the send always uses the freshest content.
+      let finalHtml = getRenderedHtml ? await getRenderedHtml() : null;
       if (finalHtml) {
         finalHtml = finalHtml
           .replace(/\{\{web_version\}\}/g, webVersionUrl)
