@@ -21,6 +21,13 @@ export default defineConfig({
         __dirname,
         './admin/__test-stubs__/helix-ai-field-adapter.tsx',
       ),
+      // Same reasoning for the image-field adapter — pulls
+      // host-media's uploadHostMedia (→ supabase) + heroicons +
+      // sonner. Registry shape tests don't render it.
+      '../image-field-adapter.js': resolve(
+        __dirname,
+        './admin/__test-stubs__/image-field-adapter.tsx',
+      ),
     },
   },
 });

@@ -6,6 +6,7 @@
 
 import { Img } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 
 interface ImgProps extends Record<string, unknown> {
   src: string;
@@ -25,7 +26,7 @@ export const ImgBlock: EmailBlockEntry<ImgProps> = {
   label: 'Image',
   category: 'Content',
   fields: {
-    src: { type: 'text', label: 'Image URL' },
+    src: { type: 'custom', label: 'Image', render: NewsletterImageFieldAdapter as never },
     alt: { type: 'text', label: 'Alt text' },
     width: { type: 'text', label: 'Width (px)' },
     align: { type: 'radio', label: 'Alignment', options: ALIGN_OPTIONS },
