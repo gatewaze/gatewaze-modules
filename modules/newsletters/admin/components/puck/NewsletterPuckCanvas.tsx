@@ -873,6 +873,40 @@ const BASE_CANVAS_CSS = `
     height: auto;
     display: block;
   }
+
+  /* Inline-edit chrome — these rules ALSO live in the iframe-side
+     CSS (this file) because Puck renders the DraggableComponent
+     overlays + InlineTextField spans inside the canvas iframe.
+     Parent-document <style> tags don't reach them. */
+
+  /* Push Puck's selection / hover outline OUTSIDE the block's edge
+     so the contentEditable text doesn't overlap with the chrome. */
+  [class*="DraggableComponent-overlay"] {
+    outline-offset: 4px !important;
+  }
+
+  /* Drop the browser default contentEditable focus ring on the
+     InlineTextField span. */
+  [class*="InlineTextField"]:focus,
+  [class*="InlineTextField"]:focus-visible {
+    outline: none !important;
+  }
+
+  /* When an InlineTextField has focus, hide the block's selection
+     outline entirely. The :has() selector finds the
+     DraggableComponent ancestor, then the descendant combinator
+     hits the overlay element. As soon as focus leaves, the outline
+     reappears so the operator can see what's selected. */
+  [class*="DraggableComponent"]:has([class*="InlineTextField"]:focus) [class*="DraggableComponent-overlay"] {
+    outline: none !important;
+  }
+  /* :focus-within fallback for older Safari (Safari pre-15.4 lacks
+     :has support). Slightly broader scope but the visual outcome is
+     the same: typing in any text input descendant hides the block
+     outline. */
+  [class*="DraggableComponent"]:focus-within [class*="DraggableComponent-overlay"] {
+    outline: none !important;
+  }
 `;
 
 const CANVAS_LIGHT_CSS = `
