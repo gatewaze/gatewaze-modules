@@ -1,10 +1,13 @@
 /**
  * Text email block — wraps `@react-email/components`'s `Text`.
  *
- * Body paragraph with standard email-safe styling. The `body` field is a
- * plain string (not RTE) for v1 — adding inline formatting (bold/italic/
- * link) means swapping in a richtext field which is a follow-up. For
- * now, a single paragraph with optional alignment.
+ * The `body` field is `type: 'richtext'` so Puck v0.21 mounts an
+ * inline TipTap editor directly on the rendered text in the canvas
+ * (puckeditor.com-style click-to-edit). Stored value is HTML and
+ * rendered via `dangerouslySetInnerHTML`. Backward compat: legacy
+ * editions store plain strings, which dangerouslySetInnerHTML
+ * accepts as-is — first inline edit round-trips through Puck's
+ * richtext serializer to HTML.
  */
 
 import { Text } from '@react-email/components';
@@ -26,20 +29,25 @@ export const TextBlock: EmailBlockEntry<TextProps> = {
   label: 'Text',
   category: 'Content',
   fields: {
-    body: { type: 'textarea', label: 'Body' },
+    body: { type: 'richtext', label: 'Body' },
     align: { type: 'radio', label: 'Alignment', options: ALIGN_OPTIONS },
   },
   defaultProps: {
-    body: 'Body text. Edit me in the right-hand panel.',
+    body: 'Body text. Click here to edit inline.',
     align: 'left',
   },
   Component: ({ body, align }) => (
-    <Text style={{ textAlign: align, margin: '0 0 16px', lineHeight: 1.6 }}>
-      {body}
-    </Text>
+    <Text
+      style={{ textAlign: align, margin: '0 0 16px', lineHeight: 1.6 }}
+      dangerouslySetInnerHTML={{ __html: typeof body === 'string' ? body : '' }}
+    />
   ),
   formats: {
-    substack: ({ body }) => <p>{body}</p>,
-    beehiiv: ({ body }) => <p>{body}</p>,
+    substack: ({ body }) => (
+      <div dangerouslySetInnerHTML={{ __html: typeof body === 'string' ? body : '' }} />
+    ),
+    beehiiv: ({ body }) => (
+      <div dangerouslySetInnerHTML={{ __html: typeof body === 'string' ? body : '' }} />
+    ),
   },
 };

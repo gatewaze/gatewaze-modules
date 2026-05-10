@@ -22,6 +22,16 @@ import { createContext, useContext, type ReactNode } from 'react';
 export interface NewsletterEditingValue {
   /** Per-newsletter overrides — `helix_project_id` etc. */
   collectionMetadata: Record<string, unknown>;
+  /**
+   * The newsletter collection's id (uuid). Inline image fields use
+   * it to scope host-media uploads — `uploadHostMedia('newsletter',
+   * collectionId, files)` writes the image into the newsletter's
+   * Supabase Storage bucket and returns a CDN URL we store in the
+   * block's content. Undefined when the canvas is mounted without
+   * a saved collection (rare — typically only on a fresh new
+   * edition before the parent has resolved the collection).
+   */
+  collectionId: string | undefined;
   /** Persists the current edition. AI field calls this before starting
    *  a Helix task so the edge function can find the block row. */
   onSaveEdition: (() => Promise<void> | void) | undefined;
@@ -42,7 +52,7 @@ export function NewsletterEditingProvider({
 export function useNewsletterEditing(): NewsletterEditingValue {
   const v = useContext(NewsletterEditingContext);
   if (!v) {
-    return { collectionMetadata: {}, onSaveEdition: undefined };
+    return { collectionMetadata: {}, collectionId: undefined, onSaveEdition: undefined };
   }
   return v;
 }

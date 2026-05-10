@@ -117,6 +117,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   isSaving,
   enabledRegistryComponentIds,
   collectionMetadata,
+  collectionId,
 }) => {
   // Default false so the Publish button renders enabled when the
   // parent doesn't thread the saving state through.
@@ -399,6 +400,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     <NewsletterEditingProvider
       value={{
         collectionMetadata: collectionMetadata ?? {},
+        collectionId,
         onSaveEdition: onSave ? (async () => { await onSave({ silent: true }); }) : undefined,
       }}
     >
@@ -530,7 +532,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             disabled={isSavingNow}
             style={saveBtnStyle(isSavingNow)}
           >
-            <span>{isSavingNow ? 'Saving…' : 'Save draft'}</span>
+            <span>{isSavingNow ? 'Saving…' : 'Save Draft'}</span>
           </button>
 
           {/* Publish — confirm with the operator first, then save +
