@@ -9,6 +9,7 @@
 
 import { Button, Heading, Img, Section, Text } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 
 interface HeroProps extends Record<string, unknown> {
   image_url: string;
@@ -25,7 +26,11 @@ export const HeroBlock: EmailBlockEntry<HeroProps> = {
   label: 'Hero',
   category: 'Introduction',
   fields: {
-    image_url: { type: 'text', label: 'Image URL (optional)' },
+    image_url: {
+      type: 'custom',
+      label: 'Image (optional)',
+      render: NewsletterImageFieldAdapter as never,
+    },
     eyebrow: { type: 'text', label: 'Eyebrow (small text above title)' },
     title: { type: 'text', label: 'Title' },
     body: { type: 'textarea', label: 'Body' },
