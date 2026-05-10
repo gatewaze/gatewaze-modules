@@ -96,13 +96,7 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
   if (advanced) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <input
-          type="text"
-          value={str}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g. 24px or 40px 16px"
-          style={TEXT_INPUT_STYLE}
-        />
+        <AdvancedPaddingInput value={str} onChange={onChange} />
         <button
           type="button"
           onClick={() => {
@@ -182,6 +176,67 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
  * leaves the thumb mid-gesture (native range inputs don't always
  * fire pointerup on the input element in that case).
  */
+/**
+ * Advanced padding text input. Same uncontrolled-with-focus-aware-sync
+ * pattern as PxSlider, for the same reason: a controlled `value={...}`
+ * input loses the user's keystroke on every onChange because Puck's
+ * dispatch is async — by the time React commits, the value prop is
+ * still the old string and React resets the DOM value. The reset is
+ * harsh enough that focus is lost (the operator can only type one
+ * character before having to re-click).
+ *
+ * Uncontrolled input + ref-based imperative sync only when the input
+ * isn't currently focused. The operator's typing always wins until
+ * they tab/click away; external resets (going back to slider mode
+ * and back) sync the new value into the field.
+ */
+function AdvancedPaddingInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: unknown) => void;
+}): ReactElement {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const initialRef = useRef<string | null>(null);
+  if (initialRef.current === null) initialRef.current = value;
+
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    // Don't fight the operator's typing — only sync when they're
+    // not focused on the input. External resets (mode-switch,
+    // undo, programmatic) land outside an active typing session.
+    if (document.activeElement === input) return;
+    if (input.value !== value) {
+      input.value = value;
+    }
+  }, [value]);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const onInput = () => {
+      onChangeRef.current(input.value);
+    };
+    input.addEventListener('input', onInput);
+    return () => input.removeEventListener('input', onInput);
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      defaultValue={initialRef.current}
+      placeholder="e.g. 24px or 40px 16px"
+      style={TEXT_INPUT_STYLE}
+    />
+  );
+}
+
 function PxSlider({
   value,
   onChange,
