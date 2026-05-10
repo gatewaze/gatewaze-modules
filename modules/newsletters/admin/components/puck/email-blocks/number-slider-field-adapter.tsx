@@ -152,29 +152,35 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
 /**
  * Internal px-slider primitive used by both Container slider fields.
  *
- * Why a primitive instead of two copy-pasted implementations: getting
- * the sync logic right is the whole point of this file, and we want
- * one source of truth. The behaviour:
+ * The input is UNCONTROLLED (defaultValue + ref) instead of controlled
+ * (value={...}). The history that forced this:
  *
- *   - The input is a fully controlled React `<input type="range">`.
- *   - `value` derives the displayed position via `parse(value)` →
- *     numeric, or `fallback` if the parse fails.
- *   - On every change we call `onChange(emit(v))` so Puck gets the
- *     formatted external value (`"42"` for width, `"42px"` for
- *     padding) AND we update local `draft` state immediately so the
- *     thumb tracks the pointer without waiting for Puck's async
- *     dispatch to round-trip.
- *   - `draft` only re-syncs from `value` when the user is NOT
- *     actively dragging (`draggingRef`). Otherwise every async
- *     echo from Puck would yank the thumb back to the last
- *     committed value — read as "only jumps in single increments"
- *     when the operator tries to drag continuously.
- *   - We listen for pointerdown on the `wrapperRef` (the row that
- *     contains the input + the px readout) AND a global
- *     pointerup/pointercancel on the document. Native range
- *     inputs don't always re-fire pointerup if the operator's
- *     cursor leaves the thumb during a drag, so document-level
- *     teardown is safer than relying on the input's own events.
+ *   - We started with `value={draft}` and synced draft<-prop in a
+ *     useEffect. Fast drags rubber-banded because Puck's async
+ *     onChange echoed back stale values mid-drag.
+ *   - Added a draggingRef to skip the sync during active drags.
+ *     The rubber-band stopped but the drag itself stalled after 1-2
+ *     pixels: React 19's reconciler sets `value` on the DOM element
+ *     on every render, and doing so on `<input type="range">` while
+ *     the browser holds implicit pointer capture on the thumb
+ *     breaks the capture — the drag silently ends. Each pointer
+ *     move starts a tiny new drag, hence "moves 1-2px and stops".
+ *
+ * Uncontrolled inputs avoid the issue entirely. React never touches
+ * the input's `value` after mount; the browser owns the drag from
+ * start to finish. Two extra pieces:
+ *
+ *   - The px readout next to the slider has its own `draft` state so
+ *     it can update on every onChange without rerendering the
+ *     input. Updating the span doesn't disturb the drag.
+ *   - For external resets (undo, reset, programmatic), a useEffect
+ *     imperatively writes `inputRef.current.value` when the prop
+ *     changes — but only when not currently dragging, so undo
+ *     mid-drag doesn't fight the operator.
+ *
+ * Document-level pointerup tears down draggingRef even if the cursor
+ * leaves the thumb mid-gesture (native range inputs don't always
+ * fire pointerup on the input element in that case).
  */
 function PxSlider({
   value,
@@ -198,14 +204,19 @@ function PxSlider({
   const parsed = parse(value);
   const externalNum = Number.isFinite(parsed) ? parsed : fallback;
 
-  const [draft, setDraft] = useState(externalNum);
+  const inputRef = useRef<HTMLInputElement>(null);
   const draggingRef = useRef(false);
+  const [draft, setDraft] = useState(externalNum);
 
   useEffect(() => {
-    if (!draggingRef.current) setDraft(externalNum);
+    if (draggingRef.current) return;
+    setDraft(externalNum);
+    const el = inputRef.current;
+    if (el && Number(el.value) !== externalNum) {
+      el.value = String(externalNum);
+    }
   }, [externalNum]);
 
-  // Document-level drag teardown — see component-level docblock.
   useEffect(() => {
     const stopDrag = () => { draggingRef.current = false; };
     document.addEventListener('pointerup', stopDrag);
@@ -228,11 +239,12 @@ function PxSlider({
       onPointerDown={() => { draggingRef.current = true; }}
     >
       <input
+        ref={inputRef}
         type="range"
         min={min}
         max={max}
         step={step}
-        value={draft}
+        defaultValue={externalNum}
         onChange={handleChange}
         style={RANGE_STYLE}
       />
