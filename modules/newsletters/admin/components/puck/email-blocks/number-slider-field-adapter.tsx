@@ -22,7 +22,7 @@
  * we render whatever UI we want, and emit string values back.
  */
 
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
 interface PuckCustomFieldProps {
   value: unknown;
@@ -72,14 +72,25 @@ export function NewsletterMaxWidthSliderField({ value, onChange }: PuckCustomFie
   // Container.tsx renders `${maxWidth}px`, so we keep the storage
   // shape as a string — Number() coerces existing edition data.
   const num = typeof value === 'number' ? value : Number(value) || 600;
-  // Local optimistic state. Puck's createOnChange awaits
-  // resolveComponentData before the new value reaches us back via
-  // useFieldStore, so a controlled `value={num}` would snap a tick
-  // behind every drag — the slider feels stuck. Drive the slider
-  // off `draft` and sync `draft <- num` when the prop changes
-  // externally (undo, multi-field reset, etc.).
+  // Local optimistic state so the slider tracks the operator's
+  // pointer instantly. Puck's createOnChange is async — the value
+  // we emit only flows back through `value` after a dispatch round-
+  // trip. Without local state the slider rubber-bands to whatever
+  // value Puck has finished processing while the operator is still
+  // mid-drag.
+  //
+  // The drag-tracking ref is the second half of that fix: if we
+  // unconditionally synced `draft <- num` in a useEffect, every
+  // returning prop update during an active drag would yank the
+  // slider back to the last-committed value (single-increment jump
+  // pattern). Sync ONLY when the pointer isn't actively dragging,
+  // so external resets (undo, multi-field reset, programmatic) still
+  // flow through but in-flight self-echoes don't.
   const [draft, setDraft] = useState(num);
-  useEffect(() => { setDraft(num); }, [num]);
+  const draggingRef = useRef(false);
+  useEffect(() => {
+    if (!draggingRef.current) setDraft(num);
+  }, [num]);
 
   return (
     <div style={ROW_STYLE}>
@@ -87,8 +98,11 @@ export function NewsletterMaxWidthSliderField({ value, onChange }: PuckCustomFie
         type="range"
         min={320}
         max={800}
-        step={10}
+        step={1}
         value={draft}
+        onPointerDown={() => { draggingRef.current = true; }}
+        onPointerUp={() => { draggingRef.current = false; }}
+        onPointerCancel={() => { draggingRef.current = false; }}
         onChange={(e) => {
           const v = Number(e.target.value);
           setDraft(v);
@@ -111,11 +125,16 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
   const num = uniformMatch ? Number(uniformMatch[1]) : 24;
 
   const [advanced, setAdvanced] = useState(!isUniform);
-  // Same local-state trick as the maxWidth slider — see comment
-  // there. Without this, fast drags lag because the controlled
-  // `value` only updates after Puck's async dispatch resolves.
+  // Same local-state + drag-ref pattern as the maxWidth slider — see
+  // comments there. Without skipping the sync during active drag,
+  // every async value-echo from Puck rubber-bands the slider back to
+  // the last-committed step, which reads as "it only jumps in single
+  // increments".
   const [draft, setDraft] = useState(num);
-  useEffect(() => { setDraft(num); }, [num]);
+  const draggingRef = useRef(false);
+  useEffect(() => {
+    if (!draggingRef.current) setDraft(num);
+  }, [num]);
 
   if (advanced) {
     return (
@@ -155,6 +174,9 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
           max={80}
           step={1}
           value={draft}
+          onPointerDown={() => { draggingRef.current = true; }}
+          onPointerUp={() => { draggingRef.current = false; }}
+          onPointerCancel={() => { draggingRef.current = false; }}
           onChange={(e) => {
             const v = Number(e.target.value);
             setDraft(v);
