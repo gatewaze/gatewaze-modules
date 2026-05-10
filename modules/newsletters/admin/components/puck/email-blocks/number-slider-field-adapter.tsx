@@ -22,7 +22,7 @@
  * we render whatever UI we want, and emit string values back.
  */
 
-import { useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 
 interface PuckCustomFieldProps {
   value: unknown;
@@ -72,6 +72,15 @@ export function NewsletterMaxWidthSliderField({ value, onChange }: PuckCustomFie
   // Container.tsx renders `${maxWidth}px`, so we keep the storage
   // shape as a string — Number() coerces existing edition data.
   const num = typeof value === 'number' ? value : Number(value) || 600;
+  // Local optimistic state. Puck's createOnChange awaits
+  // resolveComponentData before the new value reaches us back via
+  // useFieldStore, so a controlled `value={num}` would snap a tick
+  // behind every drag — the slider feels stuck. Drive the slider
+  // off `draft` and sync `draft <- num` when the prop changes
+  // externally (undo, multi-field reset, etc.).
+  const [draft, setDraft] = useState(num);
+  useEffect(() => { setDraft(num); }, [num]);
+
   return (
     <div style={ROW_STYLE}>
       <input
@@ -79,25 +88,34 @@ export function NewsletterMaxWidthSliderField({ value, onChange }: PuckCustomFie
         min={320}
         max={800}
         step={10}
-        value={num}
-        onChange={(e) => onChange(String(Number(e.target.value)))}
+        value={draft}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          setDraft(v);
+          onChange(String(v));
+        }}
         style={RANGE_STYLE}
       />
-      <span style={READOUT_STYLE}>{num}px</span>
+      <span style={READOUT_STYLE}>{draft}px</span>
     </div>
   );
 }
 
 export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFieldProps): ReactElement {
   const str = typeof value === 'string' ? value : '24px';
-  // Match a value of the form `Npx` (single number, single unit) —
-  // anything else (`40px 16px`, `2em`, `var(--gap)`, `calc(...)`)
+  // Match a value of the form Npx (single number, single unit) —
+  // anything else ("40px 16px", "2em", "var(--gap)", "calc(...)")
   // goes into advanced mode.
   const uniformMatch = str.trim().match(/^(\d+(?:\.\d+)?)px$/);
   const isUniform = !!uniformMatch;
   const num = uniformMatch ? Number(uniformMatch[1]) : 24;
 
   const [advanced, setAdvanced] = useState(!isUniform);
+  // Same local-state trick as the maxWidth slider — see comment
+  // there. Without this, fast drags lag because the controlled
+  // `value` only updates after Puck's async dispatch resolves.
+  const [draft, setDraft] = useState(num);
+  useEffect(() => { setDraft(num); }, [num]);
 
   if (advanced) {
     return (
@@ -136,11 +154,15 @@ export function NewsletterPaddingSliderField({ value, onChange }: PuckCustomFiel
           min={0}
           max={80}
           step={1}
-          value={num}
-          onChange={(e) => onChange(`${Number(e.target.value)}px`)}
+          value={draft}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setDraft(v);
+            onChange(`${v}px`);
+          }}
           style={RANGE_STYLE}
         />
-        <span style={READOUT_STYLE}>{num}px</span>
+        <span style={READOUT_STYLE}>{draft}px</span>
       </div>
       <button
         type="button"
