@@ -201,27 +201,25 @@ function PxSlider({
   parse: (raw: unknown) => number;
   emit: (n: number) => string;
 }): ReactElement {
-  // This component does NOT use React's synthetic event system for
-  // the input. The drag interaction is wired up imperatively via
-  // native addEventListener in a useEffect, and the input is fully
-  // uncontrolled (no value prop, no React onChange). Reasoning:
+  // Commit-on-release implementation. Calling Puck's onChange on
+  // every pointermove kicks off resolveComponentData + dispatch +
+  // subscribers re-rendering the whole canvas/fields panel — that
+  // chain runs on the main thread, and the time it takes per move
+  // event is longer than the time between moves on a fast drag.
+  // Pointer events queue, the browser starves the slider, the drag
+  // appears to stall after 1-2 pixels.
   //
-  //   - React 19 reconciling an <input type="range"> during a drag
-  //     breaks the browser's implicit pointer capture on the thumb.
-  //     The drag stalls after 1-2 pixels.
-  //   - Even with an uncontrolled input + stable defaultValue,
-  //     ANY React state change during drag forces a render of this
-  //     component, and the React reconciler still touches the
-  //     input's prop bag enough to disrupt the pointer capture.
-  //   - Going fully native bypasses React's render cycle for the
-  //     drag. The browser handles the slider, our 'input' listener
-  //     reads the new value, and we call Puck's onChange via a
-  //     ref-stored reference so the listener identity is stable.
+  // The fix is to let the browser own the drag entirely: the slider
+  // updates its own position natively, the readout updates via
+  // textContent on every input event, but we only commit the final
+  // value to Puck on pointerup. Trade-off: no live canvas preview
+  // during drag, but the slider is fully responsive and the canvas
+  // updates the instant the operator releases.
   //
-  // External resets (undo, programmatic) still flow through: the
-  // second useEffect imperatively syncs `inputRef.current.value`
-  // when the prop changes, but only when the operator isn't
-  // actively dragging.
+  // The input is uncontrolled with a stable defaultValue captured
+  // once via a ref. External resets (undo, programmatic) sync the
+  // input value imperatively, gated on the not-currently-dragging
+  // state.
 
   const initialRef = useRef<number | null>(null);
   if (initialRef.current === null) {
@@ -232,10 +230,8 @@ function PxSlider({
   const inputRef = useRef<HTMLInputElement>(null);
   const readoutRef = useRef<HTMLSpanElement>(null);
   const draggingRef = useRef(false);
+  const pendingValueRef = useRef<number | null>(null);
 
-  // Keep latest callbacks accessible to the native event listener
-  // without needing to re-attach it (which would happen on every
-  // render of the parent given the inline lambdas it passes).
   const onChangeRef = useRef(onChange);
   const emitRef = useRef(emit);
   onChangeRef.current = onChange;
@@ -244,40 +240,49 @@ function PxSlider({
   const parsed = parse(value);
   const externalNum = Number.isFinite(parsed) ? parsed : fallback;
 
-  // Native input listener — attached once on mount, never re-attached.
-  // 'input' fires on every value change, including during a drag.
   useEffect(() => {
     const input = inputRef.current;
     if (!input) return;
     const onInput = () => {
       const v = Number(input.value);
+      pendingValueRef.current = v;
       if (readoutRef.current) {
         readoutRef.current.textContent = `${v}px`;
       }
+    };
+    const commit = () => {
+      const v = pendingValueRef.current;
+      pendingValueRef.current = null;
+      draggingRef.current = false;
+      if (v === null) return;
       onChangeRef.current(emitRef.current(v));
     };
-    input.addEventListener('input', onInput);
-    return () => input.removeEventListener('input', onInput);
-  }, []);
-
-  // Drag-state tracking + document-level pointerup teardown.
-  useEffect(() => {
-    const input = inputRef.current;
-    if (!input) return;
     const onDown = () => { draggingRef.current = true; };
+    const onKey = (e: KeyboardEvent) => {
+      // Keyboard nudges (arrow keys / page up/down / home/end)
+      // commit immediately — there's no "release" gesture.
+      if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End' || e.key === 'PageUp' || e.key === 'PageDown') {
+        queueMicrotask(() => {
+          const v = Number(input.value);
+          onChangeRef.current(emitRef.current(v));
+          pendingValueRef.current = null;
+        });
+      }
+    };
+    input.addEventListener('input', onInput);
     input.addEventListener('pointerdown', onDown);
-    const stopDrag = () => { draggingRef.current = false; };
-    document.addEventListener('pointerup', stopDrag);
-    document.addEventListener('pointercancel', stopDrag);
+    document.addEventListener('pointerup', commit);
+    document.addEventListener('pointercancel', commit);
+    input.addEventListener('keyup', onKey);
     return () => {
+      input.removeEventListener('input', onInput);
       input.removeEventListener('pointerdown', onDown);
-      document.removeEventListener('pointerup', stopDrag);
-      document.removeEventListener('pointercancel', stopDrag);
+      document.removeEventListener('pointerup', commit);
+      document.removeEventListener('pointercancel', commit);
+      input.removeEventListener('keyup', onKey);
     };
   }, []);
 
-  // External sync — write input.value imperatively when the prop
-  // changes and the operator isn't currently dragging.
   useEffect(() => {
     if (draggingRef.current) return;
     const input = inputRef.current;
