@@ -31,10 +31,15 @@ export const HeroBlock: EmailBlockEntry<HeroProps> = {
       label: 'Image (optional)',
       render: NewsletterImageFieldAdapter as never,
     },
-    eyebrow: { type: 'text', label: 'Eyebrow (small text above title)' },
-    title: { type: 'text', label: 'Title' },
-    body: { type: 'textarea', label: 'Body' },
-    cta_label: { type: 'text', label: 'CTA button label' },
+    // contentEditable: true makes Puck's getInlineTextTransform wrap
+    // these values in <InlineTextField> spans so the operator can edit
+    // them directly on the canvas. The component renders each value
+    // as children of its react-email element (NOT via
+    // dangerouslySetInnerHTML) which is what the transform requires.
+    eyebrow: { type: 'text', label: 'Eyebrow (small text above title)', contentEditable: true },
+    title: { type: 'text', label: 'Title', contentEditable: true },
+    body: { type: 'textarea', label: 'Body', contentEditable: true },
+    cta_label: { type: 'text', label: 'CTA button label', contentEditable: true },
     cta_url: { type: 'text', label: 'CTA URL' },
     background: { type: 'text', label: 'Background colour' },
   },

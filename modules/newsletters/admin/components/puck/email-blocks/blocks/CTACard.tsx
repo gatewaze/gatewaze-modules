@@ -27,8 +27,8 @@ export const CTACardBlock: EmailBlockEntry<CTACardProps> = {
   category: 'Action',
   fields: {
     logo_url: { type: 'custom', label: 'Logo (optional)', render: NewsletterImageFieldAdapter as never },
-    headline: { type: 'textarea', label: 'Headline' },
-    cta_label: { type: 'text', label: 'Button label' },
+    headline: { type: 'textarea', label: 'Headline', contentEditable: true },
+    cta_label: { type: 'text', label: 'Button label', contentEditable: true },
     cta_url: { type: 'text', label: 'Button URL' },
     background: { type: 'text', label: 'Background colour' },
   },
