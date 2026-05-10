@@ -517,15 +517,15 @@ export default function EditionEditorPage() {
       {activeTab === 'editor' && (
         <div
           className="-mx-(--margin-x)"
-          // Edge-to-edge so Puck's drawer + canvas + right sidebar
-          // chrome (and their dividing borders) extend the full
-          // white-area width. The hero-matching horizontal alignment
-          // happens INSIDE Puck via CSS rules in
-          // PUCK_RADIX_THEME_CSS — they pad the left drawer's
-          // contents (Blocks / Outline icons) and the right
-          // sidebar's contents inward, leaving the chrome flush
-          // with the admin's edges.
-          style={{ minHeight: 'calc(100vh - 220px)' }}
+          // The curved-corner panel inside NewsletterPuckCanvas sits
+          // inside the same hero-matching horizontal padding as
+          // every other admin page chrome — so the panel's left
+          // edge lines up with the "Editor" tab text and its right
+          // edge lines up with the admin's right margin.
+          style={{
+            minHeight: 'calc(100vh - 220px)',
+            padding: '1rem calc(var(--margin-x) + 1.5rem)',
+          }}
         >
           <NewsletterCanvasEditor
             edition={edition}
