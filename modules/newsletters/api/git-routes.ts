@@ -112,7 +112,7 @@ export function createInitRepoRoute(deps: GitRoutesDeps) {
         hostId: coll.id,
         slug: coll.slug,
         boilerplateUrl: deps.boilerplateUrl,
-        boilerplateBranch: deps.boilerplateBranch ?? 'main',
+        boilerplateBranch: deps.boilerplateBranch ?? 'theme',
       });
 
       res.status(200).json({

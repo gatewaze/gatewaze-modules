@@ -71,7 +71,12 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     supabase,
     ...(gitServer ? { gitServer } : {}),
     boilerplateUrl: process.env.NEWSLETTERS_BOILERPLATE_URL ?? null,
-    boilerplateBranch: process.env.NEWSLETTERS_BOILERPLATE_BRANCH ?? 'main',
+    // The boilerplate repo's theme content lives on the `theme` branch
+    // (renamed from `main` so the per-newsletter internal repos can
+    // distinguish theme/source from publish/output cleanly). Override
+    // via NEWSLETTERS_BOILERPLATE_BRANCH if a tenant ships their
+    // theme on a different branch.
+    boilerplateBranch: process.env.NEWSLETTERS_BOILERPLATE_BRANCH ?? 'theme',
   } as never;
 
   const publishHandler = createPublishToGitRoute(baseDeps);
