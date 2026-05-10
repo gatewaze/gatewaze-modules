@@ -1,13 +1,16 @@
 /**
  * Text email block — wraps `@react-email/components`'s `Text`.
  *
- * The `body` field is `type: 'richtext'` so Puck v0.21 mounts an
- * inline TipTap editor directly on the rendered text in the canvas
- * (puckeditor.com-style click-to-edit). Stored value is HTML and
- * rendered via `dangerouslySetInnerHTML`. Backward compat: legacy
- * editions store plain strings, which dangerouslySetInnerHTML
- * accepts as-is — first inline edit round-trips through Puck's
- * richtext serializer to HTML.
+ * The `body` field is `type: 'textarea'` with `contentEditable: true`.
+ * Puck routes that through its inline-text field transform: clicking
+ * the rendered paragraph turns it into a contentEditable
+ * (plaintext-only) span and edits dispatch back through Puck's
+ * setItem path. Multiline allowed (textarea path doesn't have the
+ * disableLineBreaks the `text` path enforces).
+ *
+ * The component must render the value as children — using
+ * `dangerouslySetInnerHTML` bypasses the field transform and leaves
+ * the paragraph non-editable.
  */
 
 import { Text } from '@react-email/components';
@@ -29,7 +32,7 @@ export const TextBlock: EmailBlockEntry<TextProps> = {
   label: 'Text',
   category: 'Content',
   fields: {
-    body: { type: 'richtext', label: 'Body' },
+    body: { type: 'textarea', label: 'Body', contentEditable: true },
     align: { type: 'radio', label: 'Alignment', options: ALIGN_OPTIONS },
   },
   defaultProps: {
@@ -37,17 +40,12 @@ export const TextBlock: EmailBlockEntry<TextProps> = {
     align: 'left',
   },
   Component: ({ body, align }) => (
-    <Text
-      style={{ textAlign: align, margin: '0 0 16px', lineHeight: 1.6 }}
-      dangerouslySetInnerHTML={{ __html: typeof body === 'string' ? body : '' }}
-    />
+    <Text style={{ textAlign: align, margin: '0 0 16px', lineHeight: 1.6 }}>
+      {body}
+    </Text>
   ),
   formats: {
-    substack: ({ body }) => (
-      <div dangerouslySetInnerHTML={{ __html: typeof body === 'string' ? body : '' }} />
-    ),
-    beehiiv: ({ body }) => (
-      <div dangerouslySetInnerHTML={{ __html: typeof body === 'string' ? body : '' }} />
-    ),
+    substack: ({ body }) => <p>{body}</p>,
+    beehiiv: ({ body }) => <p>{body}</p>,
   },
 };
