@@ -37,6 +37,22 @@ const ALIGN_OPTIONS: Array<{ label: string; value: HeadingProps['align'] }> = [
   { label: 'Right', value: 'right' },
 ];
 
+// Explicit per-level type so the canvas matches the email-client
+// rendering. The admin app loads Tailwind, whose preflight reset
+// strips h1/h2/h3 default font-size/weight; Puck's CopyHostStyles
+// then propagates that reset into the canvas iframe, so without
+// these inline styles every level renders identical to body text.
+// Picking absolute px values (rather than ems) keeps the editor
+// preview pixel-stable regardless of any inherited base size.
+const HEADING_STYLES: Record<
+  HeadingProps['level'],
+  { fontSize: number; fontWeight: number }
+> = {
+  h1: { fontSize: 32, fontWeight: 700 },
+  h2: { fontSize: 24, fontWeight: 600 },
+  h3: { fontSize: 20, fontWeight: 600 },
+};
+
 export const HeadingBlock: EmailBlockEntry<HeadingProps> = {
   componentId: 'heading',
   label: 'Heading',
@@ -52,7 +68,15 @@ export const HeadingBlock: EmailBlockEntry<HeadingProps> = {
     align: 'left',
   },
   Component: ({ text, level, align }) => (
-    <Heading as={level} style={{ textAlign: align, margin: '0 0 16px' }}>
+    <Heading
+      as={level}
+      style={{
+        textAlign: align,
+        margin: '0 0 16px',
+        lineHeight: 1.25,
+        ...HEADING_STYLES[level],
+      }}
+    >
       {text}
     </Heading>
   ),
