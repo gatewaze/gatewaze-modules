@@ -27,11 +27,11 @@ export const TwoColumnFeaturesBlock: EmailBlockEntry<TwoColumnFeaturesProps> = {
   category: 'Content',
   fields: {
     left_image: { type: 'custom', label: 'Left image', render: NewsletterImageFieldAdapter as never },
-    left_title: { type: 'text', label: 'Left title' },
-    left_body: { type: 'textarea', label: 'Left body' },
+    left_title: { type: 'text', label: 'Left title', contentEditable: true },
+    left_body: { type: 'textarea', label: 'Left body', contentEditable: true },
     right_image: { type: 'custom', label: 'Right image', render: NewsletterImageFieldAdapter as never },
-    right_title: { type: 'text', label: 'Right title' },
-    right_body: { type: 'textarea', label: 'Right body' },
+    right_title: { type: 'text', label: 'Right title', contentEditable: true },
+    right_body: { type: 'textarea', label: 'Right body', contentEditable: true },
   },
   defaultProps: {
     left_image: '',

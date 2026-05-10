@@ -19,12 +19,13 @@
  * EditionCanvas doesn't have them either).
  */
 
-import { useEffect, useMemo, useState, type FC, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Puck,
   type Config,
   fieldsPlugin,
+  useGetPuck,
 } from '@puckeditor/core';
 import {
   PencilSquareIcon,
@@ -833,10 +834,64 @@ interface RootProps {
 function NewsletterCanvasRoot(props: RootProps) {
   const mode = props.puck?.metadata?.previewMode ?? 'light';
   const css = mode === 'dark' ? CANVAS_DARK_CSS : CANVAS_LIGHT_CSS;
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const getPuck = useGetPuck();
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    // wrapperRef lives inside the Puck iframe (the canvas root portals
+    // its DOM into the iframe document), so ownerDocument here is the
+    // iframe document — which is exactly where the InlineTextField
+    // spans + Puck's actionBar overlay both end up. Listening at this
+    // document captures both without needing Puck's internal useFrame.
+    const doc = wrapper.ownerDocument;
+    if (!doc) return;
+
+    // When an inline text field gains focus, auto-switch the left
+    // sidebar to the Fields tab + ensure it's open. Puck's
+    // InlineTextField onClickCapture already calls setUi({ itemSelector
+    // }) so the right block is selected; switching the active plugin
+    // makes the typed text visibly highlight in the Fields panel
+    // alongside the canvas edit, which is what operators expect.
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const isInline =
+        (target.matches && target.matches('[class*="InlineTextField"]')) ||
+        !!(target.closest && target.closest('[class*="InlineTextField"]'));
+      if (!isInline) return;
+      getPuck().dispatch({
+        type: 'setUi',
+        ui: { plugin: { current: 'fields' }, leftSideBarVisible: true },
+      });
+    };
+    doc.addEventListener('focusin', onFocusIn);
+
+    // Strip the native browser title="..." tooltip that Puck sets on
+    // every default action-bar button (Duplicate / Delete / Select
+    // parent). The native bubble is unstyleable and clashes with the
+    // editor chrome. Re-run on every DOM mutation because the action
+    // bar is portaled in/out around selection changes.
+    const stripTitles = () => {
+      doc.querySelectorAll<HTMLElement>('[class*="ActionBarAction"][title]').forEach((el) => {
+        el.removeAttribute('title');
+      });
+    };
+    stripTitles();
+    const obs = new MutationObserver(stripTitles);
+    obs.observe(doc.body, { childList: true, subtree: true });
+
+    return () => {
+      doc.removeEventListener('focusin', onFocusIn);
+      obs.disconnect();
+    };
+  }, [getPuck]);
+
   return (
     <>
       <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
-      <div className="gw-email-card">{props.children}</div>
+      <div ref={wrapperRef} className="gw-email-card">{props.children}</div>
     </>
   );
 }
@@ -975,6 +1030,14 @@ const PUCK_RADIX_THEME_CSS = `
    needed. */
 .newsletter-puck-canvas [class*="PuckLayout-header"] {
   display: none !important;
+}
+
+/* Puck's left tab strip ships with padding-top: 32px on .Nav-list
+   to push the first plugin button below the (now-hidden) header row.
+   Since the header is hidden the gap reads as a stray empty zone
+   above "Blocks". Drop it. */
+.newsletter-puck-canvas [class*="Nav-list"] {
+  padding-top: 0 !important;
 }
 
 /* The previous draft used padding on PuckLayout-nav and Sidebar--

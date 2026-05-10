@@ -35,15 +35,23 @@ export const ContainerBlock: EmailBlockEntry<ContainerProps> = {
     children: [],
   },
   Component: ({ maxWidth, padding, background, children }) => (
+    // react-email's Container renders as a <table> + <tbody> + <tr> +
+    // <td>; applying `padding` to the outer table style lands on the
+    // <table> element, which doesn't push the inner <td> content
+    // inward visually. Move the padding onto a wrapper around the
+    // slot's children so the spacing actually surrounds the rendered
+    // content (canvas + production HTML stay aligned). The wrapper is
+    // a plain <div> — supported in every modern mail client; Outlook
+    // (which wants tables) is unaffected because we're inside the
+    // Container's <td> already.
     <Container
       style={{
         maxWidth: `${maxWidth}px`,
         margin: '0 auto',
-        padding,
         backgroundColor: background,
       }}
     >
-      {renderSlot(children)}
+      <div style={{ padding }}>{renderSlot(children)}</div>
     </Container>
   ),
 };
