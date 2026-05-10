@@ -967,6 +967,16 @@ const PUCK_RADIX_THEME_CSS = `
 .newsletter-puck-canvas [class*="InlineTextField"]:focus-visible {
   outline: none !important;
 }
+
+/* While the operator is actively typing in an InlineTextField, hide
+   Puck's block selection outline entirely. Two competing borders
+   (block selection + the InlineTextField active-state ring) made
+   the canvas look noisy during edit. The :has() selector targets
+   the DraggableComponent ancestor when an InlineTextField inside
+   it has focus. */
+.newsletter-puck-canvas [class*="DraggableComponent"]:has([class*="InlineTextField"]:focus) [class*="DraggableComponent-overlay"] {
+  outline: none !important;
+}
 `;
 
 function toolbarSegment(): React.CSSProperties {
