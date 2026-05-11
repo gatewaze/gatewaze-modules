@@ -14,6 +14,9 @@
 // @ts-nocheck
 
 import type { Express, Request } from 'express';
+import { createClient } from '@supabase/supabase-js';
+import { Router } from 'express';
+import { requireJwt } from '../../newsletters/lib/require-jwt.js';
 import { createSourcesRoutes, mountSourcesRoutes } from './sources.js';
 
 // ModuleContext shape mirrors what `gatewaze/packages/api` passes when
@@ -31,42 +34,58 @@ interface ModuleContext {
 }
 
 export function registerRoutes(app: Express, context?: ModuleContext): void {
-  if (!context?.supabase) {
+  // The api server's ModuleRuntimeContext exposes `supabase: null` —
+  // it doesn't pass a pre-built service-role client. Earlier drafts
+  // of this hook expected one and silently no-op'd, so /api/modules/
+  // templates/* never mounted and the admin's Connect Repository
+  // button hit Express's default 404. Build our own client from env
+  // vars (same pattern as modules/newsletters/api/register-routes.ts).
+  const supabaseUrl = process.env.SUPABASE_URL ?? '';
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  const supabase = context?.supabase
+    ?? (supabaseUrl && supabaseServiceKey
+      ? createClient(supabaseUrl, supabaseServiceKey, {
+          auth: { autoRefreshToken: false, persistSession: false },
+        })
+      : null);
+  if (!supabase) {
     // eslint-disable-next-line no-console
-    console.warn('[templates] registerRoutes: no supabase in context; skipping route mount');
+    console.warn('[templates] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — skipping route mount');
     return;
   }
 
-  const logger = context.logger ?? {
+  const logger = context?.logger ?? {
     info: () => undefined,
     warn: () => undefined,
     error: () => undefined,
   };
 
-  // Use the platform's JWT-protected router if available; fall back to the
-  // raw app for module-context shapes that don't expose labeledRouter.
-  const router = context.labeledRouter ? context.labeledRouter('jwt') : app;
-
   const sourcesRoutes = createSourcesRoutes({
-    supabase: context.supabase,
+    supabase,
     logger,
     getUserId: (req: Request) => {
-      const user = (req as Request & { user?: { id?: string } }).user;
-      return user?.id ?? null;
+      // requireJwt() sets req.userId (no `user` object). Fall back to
+      // the older shape just in case the platform middleware ever
+      // wraps the request the other way.
+      const r = req as Request & { userId?: string; user?: { id?: string } };
+      return r.userId ?? r.user?.id ?? null;
     },
   });
 
   // Wrap the inner router so all routes mount at /api/modules/templates/*.
-  // Some platform glue mounts the labeled router itself at /api/modules/<id>;
-  // others expect us to call app.use() with the prefix here. Branch on
-  // whether labeledRouter handed us a router that's already mounted.
-  if (context.labeledRouter) {
+  // labeledRouter is the platform's preferred path — when present, it
+  // mounts under the right prefix automatically. When absent (current
+  // api server runtime), build our own Router with requireJwt() and
+  // mount it under the expected path so each handler sees req.userId.
+  if (context?.labeledRouter) {
+    const router = context.labeledRouter('jwt');
     mountSourcesRoutes(router, sourcesRoutes);
   } else {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const express = require('express') as { Router(): any };
-    const sub = express.Router();
+    const sub = Router();
+    sub.use(requireJwt());
     mountSourcesRoutes(sub, sourcesRoutes);
     app.use('/api/modules/templates', sub);
   }
+  // eslint-disable-next-line no-console
+  console.log('[templates] routes registered (/api/modules/templates/sources/*)');
 }
