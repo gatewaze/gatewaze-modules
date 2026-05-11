@@ -691,6 +691,16 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         <Puck
         config={configWithUserBlocks.config as never}
         data={data as never}
+        // Inherit height from our flex-sized wrapper instead of
+        // Puck's default `100dvh` (which forced the editor to be
+        // the full viewport, ignoring our wrapper sizing). Combined
+        // with the `_PuckLayout { height: 100% !important }` rule
+        // in PUCK_RADIX_THEME_CSS, this lets the inner grid actually
+        // resolve to a concrete pixel height; without the height
+        // prop on the outer .Puck div, the inner 100% had nothing
+        // to inherit from and Puck collapsed to its content
+        // (cropping at the icon bar).
+        height="100%"
         // `metadata` propagates to the canvas root.render and to every
         // component as `puck.metadata`. We only need previewMode there
         // — the canvas root reads it to switch light/dark backdrop +
