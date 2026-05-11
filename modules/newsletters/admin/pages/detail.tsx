@@ -229,6 +229,7 @@ export default function NewsletterDetailPage() {
  *  the SELECT in `reload()` below — keep in sync if columns change. */
 interface TemplatesSourceRow {
   id: string;
+  library_id: string;
   kind: 'git' | 'upload' | 'inline';
   label: string;
   status: 'active' | 'paused' | 'errored';
@@ -270,7 +271,7 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
         // which doesn't exist on the table; PostgREST returned 400 and
         // the whole Template tab failed to render. Keep this list aligned
         // with the interface above.
-        .select('id, kind, label, status, url, branch, manifest_path, installed_git_sha, available_git_sha, last_checked_at, last_check_error, created_at')
+        .select('id, library_id, kind, label, status, url, branch, manifest_path, installed_git_sha, available_git_sha, last_checked_at, last_check_error, created_at')
         .eq('library_id', newsletterId)
         .order('created_at', { ascending: false }),
     ]);
@@ -387,8 +388,33 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
  * through to templates_block_defs.
  */
 function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onChanged: () => void }) {
-  const [busy, setBusy] = useState<'check' | 'apply' | null>(null);
+  const [busy, setBusy] = useState<'check' | 'apply' | 'delete' | null>(null);
+  const [editing, setEditing] = useState(false);
   const isDrifted = s.kind === 'git' && !!s.available_git_sha && s.available_git_sha !== s.installed_git_sha;
+
+  const handleDelete = async () => {
+    if (!confirm(`Delete source "${s.label}"? This won't remove any blocks already imported from it — they stay in the library.`)) return;
+    setBusy('delete');
+    try {
+      const session = await supabase.auth.getSession();
+      const accessToken = session.data.session?.access_token;
+      const res = await fetch(`/api/modules/templates/sources/${s.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: accessToken ? `Bearer ${accessToken}` : '' },
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(body?.error?.message ?? `Delete failed (${res.status})`);
+        return;
+      }
+      toast.success('Source deleted');
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Delete failed');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const callRoute = async (path: string, label: string) => {
     setBusy(label === 'Checking…' ? 'check' : 'apply');
@@ -465,6 +491,32 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
               {busy === 'apply' ? 'Applying…' : 'Apply'}
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="1"
+            onClick={() => setEditing((v) => !v)}
+            disabled={busy !== null}
+          >
+            {editing ? 'Cancel' : 'Edit'}
+          </Button>
+          <Button
+            variant="outline"
+            color="red"
+            size="1"
+            onClick={handleDelete}
+            disabled={busy !== null}
+          >
+            {busy === 'delete' ? 'Deleting…' : 'Delete'}
+          </Button>
+        </div>
+      )}
+      {editing && s.kind === 'git' && (
+        <div className="w-full mt-2 basis-full">
+          <ConfigureGitSourceForm
+            libraryId={s.library_id ?? ''}
+            existing={s}
+            onSaved={() => { setEditing(false); onChanged(); }}
+          />
         </div>
       )}
     </li>
@@ -514,15 +566,29 @@ function SeedFromBoilerplateButton({ libraryId, onSeeded }: { libraryId: string;
 }
 
 /**
- * Inline form for connecting a git repo as a templates source.
- * Calls POST /api/modules/templates/sources with kind='git'.
+ * Inline form for connecting OR editing a git templates source.
+ * Defaults to POST /api/modules/templates/sources (create flow). If
+ * `existing` is passed, switches to PATCH /sources/:id (edit flow):
+ * the form is pre-populated from the row, the token input is left
+ * blank by design so the operator only sends a new PAT when they
+ * want to rotate it, and the URL field is read-only because URL
+ * changes effectively make a new source.
  */
-function ConfigureGitSourceForm({ libraryId, onSaved }: { libraryId: string; onSaved: () => void }) {
-  const [url, setUrl] = useState('');
-  const [branch, setBranch] = useState('');
-  const [manifestPath, setManifestPath] = useState('');
+function ConfigureGitSourceForm({
+  libraryId,
+  existing,
+  onSaved,
+}: {
+  libraryId: string;
+  existing?: TemplatesSourceRow;
+  onSaved: () => void;
+}) {
+  const isEdit = !!existing;
+  const [url, setUrl] = useState(existing?.url ?? '');
+  const [branch, setBranch] = useState(existing?.branch ?? '');
+  const [manifestPath, setManifestPath] = useState(existing?.manifest_path ?? '');
   const [token, setToken] = useState('');
-  const [label, setLabel] = useState('Theme repo');
+  const [label, setLabel] = useState(existing?.label ?? 'Theme repo');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -535,32 +601,50 @@ function ConfigureGitSourceForm({ libraryId, onSaved }: { libraryId: string; onS
     try {
       const session = await supabase.auth.getSession();
       const accessToken = session.data.session?.access_token;
-      const res = await fetch('/api/modules/templates/sources', {
-        method: 'POST',
+      const endpoint = isEdit
+        ? `/api/modules/templates/sources/${existing!.id}`
+        : '/api/modules/templates/sources';
+      // Edit path: PATCH only the fields the operator could have changed.
+      // Leave token out unless they typed a new one (don't accidentally
+      // clear the stored PAT when they leave the field blank).
+      const body = isEdit
+        ? {
+            label: label.trim() || 'Theme repo',
+            branch: branch.trim() || null,
+            manifest_path: manifestPath.trim() || null,
+            ...(token.trim() ? { token: token.trim() } : {}),
+          }
+        : {
+            library_id: libraryId,
+            kind: 'git',
+            label: label.trim() || 'Theme repo',
+            url: url.trim(),
+            branch: branch.trim() || undefined,
+            manifest_path: manifestPath.trim() || undefined,
+            token: token.trim() || undefined,
+          };
+      const res = await fetch(endpoint, {
+        method: isEdit ? 'PATCH' : 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: accessToken ? `Bearer ${accessToken}` : '',
         },
-        body: JSON.stringify({
-          library_id: libraryId,
-          kind: 'git',
-          label: label.trim() || 'Theme repo',
-          url: url.trim(),
-          branch: branch.trim() || undefined,
-          manifest_path: manifestPath.trim() || undefined,
-          token: token.trim() || undefined,
-        }),
+        body: JSON.stringify(body),
       });
-      const body = await res.json().catch(() => null);
+      const respBody = await res.json().catch(() => null);
       if (!res.ok) {
-        const message = body?.error?.message ?? `Request failed (${res.status})`;
+        const message = respBody?.error?.message ?? `Request failed (${res.status})`;
         toast.error(message);
         return;
       }
-      toast.success(`Connected — ${body?.apply?.artifacts?.length ?? 0} template(s) imported`);
+      toast.success(
+        isEdit
+          ? 'Source updated'
+          : `Connected — ${respBody?.apply?.artifacts?.length ?? 0} template(s) imported`,
+      );
       onSaved();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to connect git source');
+      toast.error(err instanceof Error ? err.message : 'Failed to save git source');
     } finally {
       setSubmitting(false);
     }
@@ -585,9 +669,11 @@ function ConfigureGitSourceForm({ libraryId, onSaved }: { libraryId: string; onS
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            className="w-full px-2 py-1.5 text-sm border border-[var(--gray-a6)] rounded bg-[var(--color-background)]"
+            disabled={isEdit}
+            className="w-full px-2 py-1.5 text-sm border border-[var(--gray-a6)] rounded bg-[var(--color-background)] disabled:bg-[var(--gray-a3)] disabled:text-[var(--gray-10)] disabled:cursor-not-allowed"
             placeholder="https://github.com/owner/repo.git"
             required
+            title={isEdit ? 'Repository URL is immutable; delete and reconnect to change it' : ''}
           />
         </div>
         <div>
@@ -611,20 +697,24 @@ function ConfigureGitSourceForm({ libraryId, onSaved }: { libraryId: string; onS
           />
         </div>
         <div className="md:col-span-2">
-          <label className="block text-xs font-medium text-[var(--gray-11)] mb-1">Personal access token (private repos only)</label>
+          <label className="block text-xs font-medium text-[var(--gray-11)] mb-1">
+            Personal access token {isEdit ? '(leave blank to keep the current token)' : '(private repos only)'}
+          </label>
           <input
             type="password"
             value={token}
             onChange={(e) => setToken(e.target.value)}
             className="w-full px-2 py-1.5 text-sm border border-[var(--gray-a6)] rounded bg-[var(--color-background)]"
-            placeholder="ghp_… (leave blank for public repos)"
+            placeholder={isEdit ? 'ghp_… (only fill in to rotate the token)' : 'ghp_… (leave blank for public repos)'}
             autoComplete="off"
           />
         </div>
       </div>
       <div className="flex justify-end">
         <Button type="submit" disabled={submitting}>
-          {submitting ? 'Connecting…' : 'Connect repository'}
+          {submitting
+            ? (isEdit ? 'Saving…' : 'Connecting…')
+            : (isEdit ? 'Save changes' : 'Connect repository')}
         </Button>
       </div>
     </form>
