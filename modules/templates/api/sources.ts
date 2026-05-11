@@ -434,6 +434,79 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
   const unpauseSource = (req: Request, res: Response) => setStatus(req, res, 'active');
 
   // -------------------------------------------------------------------------
+  // PATCH /sources/:id
+  //
+  // Updates a subset of mutable columns: label, url, branch,
+  // manifest_path, token (persisted as token_secret_ref), auto_apply.
+  // Immutable: kind, library_id, installed_git_sha (set by ingest).
+  // -------------------------------------------------------------------------
+  async function updateSource(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+
+    const sourceId = req.params['id'];
+    if (!sourceId || !/^[0-9a-f-]{36}$/i.test(sourceId)) {
+      return sendError(res, 400, 'validation_failed', 'id must be a uuid', { field: 'id' });
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    if (typeof body['label'] === 'string') patch['label'] = body['label'];
+    if (typeof body['url'] === 'string') patch['url'] = body['url'];
+    if (typeof body['branch'] === 'string' || body['branch'] === null) patch['branch'] = body['branch'];
+    if (typeof body['manifest_path'] === 'string' || body['manifest_path'] === null) patch['manifest_path'] = body['manifest_path'];
+    if (typeof body['auto_apply'] === 'boolean') patch['auto_apply'] = body['auto_apply'];
+    // Token: only update when the caller explicitly supplied it. An
+    // empty string means "clear the stored token"; undefined means
+    // "leave it alone" (the form leaves the field blank when the
+    // operator doesn't want to rotate the PAT).
+    if (typeof body['token'] === 'string') {
+      patch['token_secret_ref'] = body['token'].length > 0 ? body['token'] : null;
+    }
+    if (Object.keys(patch).length === 0) {
+      return sendError(res, 400, 'validation_failed', 'no patchable fields supplied');
+    }
+
+    const result = await deps.supabase
+      .from('templates_sources')
+      .update(patch)
+      .eq('id', sourceId)
+      .select('id, kind, label, status, url, branch, manifest_path, installed_git_sha, available_git_sha, last_checked_at, last_check_error, created_at')
+      .maybeSingle();
+    if (result.error) return sendError(res, 500, 'internal_error', result.error.message);
+    if (!result.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
+    res.status(200).json({ source: result.data });
+  }
+
+  // -------------------------------------------------------------------------
+  // DELETE /sources/:id
+  //
+  // Hard-deletes the row. RLS enforces tenancy; the DB cascades to
+  // any rows whose FK references this source (e.g. templates_block_defs
+  // with source_id pointing here remain — the FK is ON DELETE SET NULL
+  // so block defs aren't orphan-deleted alongside their source).
+  // -------------------------------------------------------------------------
+  async function deleteSource(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+
+    const sourceId = req.params['id'];
+    if (!sourceId || !/^[0-9a-f-]{36}$/i.test(sourceId)) {
+      return sendError(res, 400, 'validation_failed', 'id must be a uuid', { field: 'id' });
+    }
+
+    const result = await deps.supabase
+      .from('templates_sources')
+      .delete()
+      .eq('id', sourceId)
+      .select('id')
+      .maybeSingle();
+    if (result.error) return sendError(res, 500, 'internal_error', result.error.message);
+    if (!result.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
+    res.status(200).json({ deleted: result.data.id });
+  }
+
+  // -------------------------------------------------------------------------
   // GET /libraries/:id/block-defs
   // -------------------------------------------------------------------------
   async function listBlockDefs(req: Request, res: Response): Promise<void> {
@@ -544,6 +617,8 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     applyEndpoint,
     pauseSource,
     unpauseSource,
+    updateSource,
+    deleteSource,
     listBlockDefs,
     seedFromBoilerplate,
   };
@@ -552,6 +627,8 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
 export function mountSourcesRoutes(router: Router, routes: ReturnType<typeof createSourcesRoutes>): void {
   router.post('/sources', routes.createSource);
   router.get('/sources/:id', routes.getSource);
+  router.patch('/sources/:id', routes.updateSource);
+  router.delete('/sources/:id', routes.deleteSource);
   router.post('/sources/:id/check', routes.checkSource);
   router.post('/sources/:id/apply', routes.applyEndpoint);
   router.post('/sources/:id/pause', routes.pauseSource);
