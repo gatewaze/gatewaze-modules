@@ -328,7 +328,14 @@ export async function ingestGit(
         url: input.url,
         branch: input.branch ?? null,
         manifest_path: input.manifest_path ?? null,
-        token_secret_ref: input.token ? '<redacted>' : null,
+        // Local-dev stop-gap: store the raw token in token_secret_ref
+        // so the check / apply endpoints can re-authenticate against
+        // private repos. The proper path is a secrets-store dereference
+        // (a tenant-scoped pgsodium / KMS pointer rather than the
+        // plaintext PAT) — that's pending. For now the column carries
+        // the actual token; responses MUST strip it before sending
+        // to the client.
+        token_secret_ref: input.token ?? null,
         auto_apply: input.auto_apply ?? false,
         status: 'error',
         last_check_error: `parse failed: ${parsed.errors[0]?.message ?? 'unknown'}`,

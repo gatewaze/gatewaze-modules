@@ -323,10 +323,15 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
 
     const sourceQ = await deps.supabase
       .from('templates_sources')
-      .select('id, kind, status, url, branch, manifest_path, installed_git_sha')
+      .select('id, kind, status, url, branch, manifest_path, installed_git_sha, token_secret_ref')
       .eq('id', sourceId)
-      .maybeSingle<{ id: string; kind: string; status: string; url: string | null; branch: string | null; manifest_path: string | null; installed_git_sha: string | null }>();
+      .maybeSingle<{ id: string; kind: string; status: string; url: string | null; branch: string | null; manifest_path: string | null; installed_git_sha: string | null; token_secret_ref: string | null }>();
     if (!sourceQ.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
+
+    // Strip the secret from anything we send back to the client. The
+    // column currently carries the plaintext token (local-dev stop-gap
+    // until a real secrets resolver lands — see lib/sources/git.ts).
+    const { token_secret_ref: persistedToken, ...sourcePublic } = sourceQ.data;
 
     if (sourceQ.data.kind === 'git') {
       // Manual drift check — clones/updates the cached repo and reports
@@ -341,9 +346,13 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
           branch: sourceQ.data.branch,
           installed_git_sha: sourceQ.data.installed_git_sha,
           manifest_path: sourceQ.data.manifest_path,
+          // Pass the persisted token if the create flow recorded one.
+          // Sentinel '<redacted>' from old rows is treated as no token
+          // — the operator needs to re-create the source to populate.
+          token: persistedToken && persistedToken !== '<redacted>' ? persistedToken : null,
         });
         res.status(200).json({
-          source: sourceQ.data,
+          source: sourcePublic,
           preview: probe.hasChanges ? { headSha: probe.headSha, previousSha: probe.previousSha } : null,
         });
         return;
@@ -355,7 +364,7 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
 
     // For upload + inline sources, the source content is captured at create
     // time and never drifts — the check is a no-op success.
-    res.status(200).json({ source: sourceQ.data, preview: null });
+    res.status(200).json({ source: sourcePublic, preview: null });
   }
 
   // -------------------------------------------------------------------------
