@@ -272,6 +272,19 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       if (onSave) {
         await onSave({ silent: true });
       }
+      // Render the edition HTML client-side. The publish-to-git
+      // endpoint used to render server-side via EditionEmail, but
+      // that path pulls the admin's email-blocks barrel — which
+      // transitively requires Puck + heroicons + sonner + the admin's
+      // RichTextEditor (via the `@/` alias), none of which resolve
+      // in the API container. Producing the HTML here uses the same
+      // exportEditionHtml path as the Send and HTML-export buttons.
+      const publishHtml = await exportEditionHtml({
+        edition,
+        format: 'email',
+        blockMeta: buildBlockMeta(),
+        pretty: false,
+      });
       const { url } = getSupabaseConfig();
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not signed in');
@@ -281,7 +294,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ html: publishHtml }),
       });
       // The publish-to-git endpoint uses 200 + `kind: 'skipped'` to
       // signal a graceful no-op (e.g. newsletter still on the

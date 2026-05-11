@@ -23,8 +23,15 @@
 
 import type { Router, Response, NextFunction } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { render } from '@react-email/render';
-import { EditionEmail, type BlockRenderMeta } from '../admin/components/puck/email-blocks/EditionEmail.js';
+
+// NOTE: This endpoint used to import EditionEmail + @react-email/render and
+// render the HTML server-side. That pulled the admin's email-blocks barrel
+// which transitively requires the field adapters (Puck, @heroicons/react,
+// sonner, the admin's RichTextEditor via the `@/` alias) — none of which
+// resolve in the API container. The editor already produces the rendered
+// HTML via `exportEditionHtml` (the same path the Send and HTML-export
+// buttons use), so the client now POSTs it in the request body. The
+// endpoint just commits it to git.
 
 interface RequestWithUser {
   userId?: string;
@@ -194,8 +201,27 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         });
       }
 
-      // 4. Load blocks + per-block render metadata (render_kind +
-      //    component_id from templates_block_defs).
+      // 4. Take the rendered HTML from the request body (produced
+      //    client-side via exportEditionHtml — same path the editor's
+      //    Send and HTML-export buttons use). We also still load the
+      //    blocks so we can persist a content-stable JSON snapshot
+      //    alongside the HTML; the join to templates_block_defs is
+      //    only used to record render_kind / component_id on each
+      //    block row in the JSON output, so external consumers know
+      //    how the HTML was produced.
+      const html = typeof req.body?.html === 'string' ? req.body.html : '';
+      if (!html) {
+        res.status(400).json({
+          error: {
+            code: 'missing_rendered_html',
+            message:
+              'publish-to-git requires the editor-rendered HTML in the request body (`html` field). ' +
+              'The server no longer renders editions — exportEditionHtml runs client-side.',
+          },
+        });
+        return;
+      }
+
       const blocksRes = await deps.supabase
         .from('newsletters_edition_blocks')
         .select(`
@@ -213,53 +239,6 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         templates_block_def_id: string | null;
         block_template: { id: string; html: string | null; render_kind: 'mustache' | 'react-email'; component_id: string | null } | null;
       }>;
-
-      const blockMeta = new Map<string, BlockRenderMeta>();
-      const editionBlocks = blockRows.map((row) => {
-        const tpl = row.block_template;
-        // Per spec §3.6 (extended). Rows where the joined template has
-        // render_kind='react-email' route through the registry. Rows
-        // without a template (legacy / registry-only) fall back to
-        // detecting the registry by block_type. Otherwise Mustache.
-        let meta: BlockRenderMeta;
-        if (tpl?.render_kind === 'react-email' && tpl.component_id) {
-          meta = { render_kind: 'react-email', component_id: tpl.component_id };
-        } else if (!tpl) {
-          // No joined template — registry block saved with NULL
-          // templates_block_def_id (the editor side does this for
-          // platform-default registry components).
-          meta = { render_kind: 'react-email', component_id: row.block_type };
-        } else {
-          meta = { render_kind: 'mustache', mustache_html: tpl.html ?? '' };
-        }
-        blockMeta.set(row.id, meta);
-        return {
-          id: row.id,
-          block_template: {
-            id: tpl?.id ?? '',
-            name: row.block_type,
-            block_type: row.block_type,
-            content: { html_template: tpl?.html ?? '' },
-          },
-          content: row.content ?? {},
-          sort_order: row.sort_order,
-          bricks: [],
-        };
-      });
-
-      const editionView = {
-        id: ed.id,
-        edition_date: ed.edition_date,
-        ...(ed.title ? { subject: ed.title } : {}),
-        ...(ed.preheader ? { preheader: ed.preheader } : {}),
-        blocks: editionBlocks,
-      };
-
-      // 5. Render once via EditionEmail.
-      const html = await render(
-        EditionEmail({ edition: editionView as never, format: 'email', blockMeta }),
-        { pretty: false },
-      );
 
       // 6. Commit to the configured publish branch (collection.git_branch
       //    defaults to 'publish' per migration 027). The output files
