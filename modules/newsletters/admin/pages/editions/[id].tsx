@@ -494,43 +494,14 @@ export default function EditionEditorPage() {
         }
         if (!options?.silent) toast.success('Edition saved');
 
-        // Per spec-builder-evaluation §3.6 (extended). After the DB
-        // round-trip succeeds, fire the publish-to-git endpoint to
-        // commit a rendered HTML snapshot to the newsletter's
-        // internal repo. The endpoint is tolerant: if NEWSLETTERS_
-        // BOILERPLATE_URL isn't set OR the gitServer dep isn't wired,
-        // it returns 200 { kind: 'skipped' } and the editor flow
-        // continues unchanged. Failures here MUST NOT bubble up — the
-        // DB save is authoritative; the git mirror is best-effort.
-        if (!options?.silent) {
-          void fetch(`/api/admin/newsletters/editions/${edition.id}/publish-to-git`, {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(await (async () => {
-                const { data } = await supabase.auth.getSession();
-                const token = data.session?.access_token;
-                return token ? { Authorization: `Bearer ${token}` } : {};
-              })()),
-            },
-          })
-            .then(async (res) => {
-              if (!res.ok) {
-                console.warn('[publish-to-git] non-2xx response', res.status, await res.text().catch(() => ''));
-                return;
-              }
-              const body = (await res.json().catch(() => null)) as { kind?: string; commitSha?: string; reason?: string } | null;
-              if (body?.kind === 'published' && body.commitSha) {
-                toast.success(`Published to git (${body.commitSha.slice(0, 7)})`);
-              } else if (body?.kind === 'skipped' && body.reason) {
-                console.info('[publish-to-git] skipped:', body.reason);
-              }
-            })
-            .catch((e: unknown) => {
-              console.warn('[publish-to-git] request failed:', e);
-            });
-        }
+        // Note: previously this path also fired publish-to-git as
+        // best-effort after every save. That's been removed — Publish
+        // is now an explicit operator action (the canvas's Publish
+        // button) that renders the HTML client-side via
+        // exportEditionHtml and POSTs it to publish-to-git directly.
+        // Auto-firing here pushed git noise on every keystroke and
+        // also tried to render server-side, which couldn't resolve
+        // the admin chain anyway.
       }
     } catch (error) {
       console.error('Error saving edition:', error);
