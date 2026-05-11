@@ -1158,6 +1158,30 @@ const PUCK_RADIX_THEME_CSS = `
   padding-top: 0 !important;
 }
 
+/* Puck's outer PuckLayout wrapper ships with height: 100dvh, which
+   forces the editor to be the FULL viewport height regardless of how
+   tall its actual container (our editorHeight-constrained wrapper)
+   is. The wrapper's overflow: hidden clips Puck visually, but
+   internally Puck's grid still allocates a 100dvh row to the
+   Sidebar — so when the operator scrolls the Fields drawer, scroll
+   events bubble through a Sidebar that thinks it has more vertical
+   space than it does, and the whole layout (icon menu included)
+   appears to scroll together.
+
+   Force PuckLayout to inherit the wrapper's height, and tell its
+   internal scrollable areas to contain their scroll instead of
+   chaining up to ancestors. The "_PuckLayout_" attribute selector
+   (with the trailing underscore) matches only the outer class, not
+   the _PuckLayout-inner_ / _PuckLayout--mounted_ variants. */
+.newsletter-puck-canvas [class*="_PuckLayout_"] {
+  height: 100% !important;
+}
+.newsletter-puck-canvas [class*="_Sidebar_"],
+.newsletter-puck-canvas [class*="_Nav_"],
+.newsletter-puck-canvas [class*="_PuckPluginTab_"] {
+  overscroll-behavior: contain;
+}
+
 /* The previous draft used padding on PuckLayout-nav and Sidebar--
    right to push their contents inward to align with the hero text.
    Now that the editor lives inside a curved-corner panel, the panel
