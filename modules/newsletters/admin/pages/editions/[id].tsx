@@ -211,8 +211,32 @@ export default function EditionEditorPage() {
       const [blocksRes, bricksRes] = await Promise.all([blocksQuery, bricksQuery]);
       if (blocksRes.error) throw blocksRes.error;
       if (bricksRes.error) throw bricksRes.error;
-      setBlockTemplates(blocksRes.data || []);
-      setBrickTemplates(bricksRes.data || []);
+      // The DB rows have flat columns (schema, html, rich_text_template,
+      // has_bricks); the canvas-facing BlockTemplate / BrickTemplate
+      // shape nests them under `.content` (and renames html →
+      // html_template). Adapt at the boundary so NewsletterPuckCanvas's
+      // `t.content.schema` etc. resolve. Before any git source was
+      // connected the result set was empty and the map never ran, so
+      // this latent mismatch only surfaces once real rows exist.
+      const adaptedBlocks = (blocksRes.data ?? []).map((r) => ({
+        ...r,
+        content: {
+          html_template: r.html ?? '',
+          rich_text_template: r.rich_text_template ?? null,
+          has_bricks: r.has_bricks ?? false,
+          schema: r.schema ?? {},
+        },
+      }));
+      const adaptedBricks = (bricksRes.data ?? []).map((r) => ({
+        ...r,
+        content: {
+          html_template: r.html ?? '',
+          rich_text_template: r.rich_text_template ?? null,
+          schema: r.schema ?? {},
+        },
+      }));
+      setBlockTemplates(adaptedBlocks);
+      setBrickTemplates(adaptedBricks);
     } catch (error) {
       console.error('Error loading templates:', error);
       toast.error('Failed to load templates');
