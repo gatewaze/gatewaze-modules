@@ -1170,10 +1170,12 @@ const PUCK_RADIX_THEME_CSS = `
 
 /* Puck's left tab strip ships with padding-top: 32px on .Nav-list
    to push the first plugin button below the (now-hidden) header row.
-   Since the header is hidden the gap reads as a stray empty zone
-   above "Blocks". Drop it. */
+   With our header hidden the 32px gap read as a stray empty zone,
+   but zero padding made the first tab's blue active-state indicator
+   sit flush against the panel's top edge. 8px is just enough to
+   tuck the indicator inside the curved corner of the panel. */
 .newsletter-puck-canvas [class*="Nav-list"] {
-  padding-top: 0 !important;
+  padding-top: 8px !important;
 }
 
 /* Puck's ViewportControls-actionsInner has overflow: hidden. Our
