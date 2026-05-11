@@ -283,11 +283,28 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         },
         body: JSON.stringify({}),
       });
+      // The publish-to-git endpoint uses 200 + `kind: 'skipped'` to
+      // signal a graceful no-op (e.g. newsletter still on the
+      // platform boilerplate with no external git repo connected).
+      // Treat that as a warning, not a success — recipients won't
+      // see anything different until the operator connects a real
+      // git remote.
+      const body = (await res.json().catch(() => null)) as
+        | {
+            kind?: 'published' | 'skipped';
+            reason?: string;
+            message?: string;
+            error?: { message?: string };
+          }
+        | null;
       if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
         throw new Error(body?.error?.message ?? `publish-to-git ${res.status}`);
       }
-      toast.success('Edition published.');
+      if (body?.kind === 'skipped') {
+        toast.warning(body.message ?? 'Edition saved to the database, but no external git repo is connected — nothing published to git.');
+      } else {
+        toast.success('Edition published.');
+      }
       // The supabase URL var goes unused once the fetch is direct —
       // referenced here so the import doesn't get dropped if a
       // future caller routes through the supabase functions
