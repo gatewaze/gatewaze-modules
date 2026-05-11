@@ -335,6 +335,31 @@ export default function EditionEditorPage() {
   useEffect(() => { loadEdition(); }, [loadEdition]);
   useEffect(() => { if (collectionId) loadTemplates(collectionId); }, [collectionId, loadTemplates]);
 
+  // Auto-create the DB row for a fresh edition as soon as loadEdition
+  // finishes building the in-memory state. Without this, the row only
+  // exists once the operator clicks "Save Draft" — which means the
+  // /editions/new route renders with edition.id === 'new', and any
+  // feature that reads from newsletters_editions (AI copilot's
+  // generate endpoint, publish-to-git, sends) 404s until the first
+  // explicit save. handleSave({ silent: true }) flips edition.id to
+  // the real uuid and replaces the URL via history.replaceState, so
+  // the page doesn't remount and the operator's typing isn't
+  // interrupted.
+  const autoCreatedRef = useRef(false);
+  useEffect(() => {
+    if (
+      isNew &&
+      edition &&
+      edition.id === 'new' &&
+      collectionId &&
+      !saving &&
+      !autoCreatedRef.current
+    ) {
+      autoCreatedRef.current = true;
+      void handleSave({ silent: true });
+    }
+  }, [isNew, edition, collectionId, saving]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSave = async (options?: { silent?: boolean }) => {
     if (!edition) return;
     setSaving(true);
