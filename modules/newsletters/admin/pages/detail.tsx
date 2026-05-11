@@ -407,6 +407,20 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
         toast.error(body?.error?.message ?? `Delete failed (${res.status})`);
         return;
       }
+      // Reset the collection's publish target back to internal — the
+      // source we mirrored onto git_url is gone. Without this, the
+      // publish gate would keep trying to write to a now-unreferenced
+      // git URL on subsequent publishes.
+      if (s.kind === 'git' && s.library_id) {
+        const { error: collErr } = await supabase
+          .from('newsletters_template_collections')
+          .update({ git_provenance: 'internal', git_url: null })
+          .eq('id', s.library_id);
+        if (collErr) {
+          // eslint-disable-next-line no-console
+          console.warn('[newsletter-source] could not reset collection git config:', collErr);
+        }
+      }
       toast.success('Source deleted');
       onChanged();
     } catch (err) {
@@ -637,6 +651,29 @@ function ConfigureGitSourceForm({
         toast.error(message);
         return;
       }
+
+      // Mirror the source's git URL onto the newsletter collection so
+      // publish-to-git can write into it. templates_sources is where
+      // theme files COME FROM; newsletters_template_collections.git_url
+      // is where rendered editions GO. The common case is the same
+      // repo, with theme on the `theme` branch and output on `publish`
+      // — flip git_provenance to 'external' and record the URL so the
+      // publish gate (api/publish-to-git.ts) lets the commit through.
+      // The collection's git_branch keeps its 'publish' default from
+      // migration 027. Failure here doesn't fail the source create —
+      // operator can fix via the newsletter settings tab if needed.
+      const { error: collErr } = await supabase
+        .from('newsletters_template_collections')
+        .update({
+          git_provenance: 'external',
+          git_url: url.trim(),
+        })
+        .eq('id', libraryId);
+      if (collErr) {
+        // eslint-disable-next-line no-console
+        console.warn('[newsletter-source] could not sync git_url to collection:', collErr);
+      }
+
       toast.success(
         isEdit
           ? 'Source updated'
