@@ -122,14 +122,32 @@ export default function NewsletterSetupWizard({ isOpen = true, onClose }: Wizard
       // 021's mapping, library.id == collection.id == library.host_id.
       // host_kind='newsletter' so the templates RLS hooks know which
       // can_admin_* helper to invoke.
-      await supabase.from('templates_libraries').insert({
-        id: newsletter.id,
-        host_kind: 'newsletter',
-        host_id: newsletter.id,
-        name: data.name,
-        description: data.description || null,
-        theme_kind: 'email',
-      });
+      //
+      // Previously this insert had no error handling — if RLS denied
+      // it (e.g., the can_admin_newsletter helper hadn't seen the new
+      // collection row yet), the wizard reported success but every
+      // downstream operation that joins through templates_libraries
+      // (creating a source, seeding from boilerplate, listing block
+      // defs) would FK-violation. Surface the failure here so the
+      // operator either gets a real error toast or the wizard
+      // restarts cleanly.
+      const { error: libraryError } = await supabase
+        .from('templates_libraries')
+        .insert({
+          id: newsletter.id,
+          host_kind: 'newsletter',
+          host_id: newsletter.id,
+          name: data.name,
+          description: data.description || null,
+          theme_kind: 'email',
+        });
+      if (libraryError) {
+        // eslint-disable-next-line no-console
+        console.error('[newsletter-setup] templates_libraries insert failed:', libraryError);
+        throw new Error(
+          `Failed to provision template library for newsletter: ${libraryError.message}`,
+        );
+      }
 
       // Per spec-builder-evaluation §3.6 (extended). Every newsletter is
       // created with the four "basic template" react-email blocks
