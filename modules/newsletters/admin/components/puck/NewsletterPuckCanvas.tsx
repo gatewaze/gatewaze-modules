@@ -1168,6 +1168,15 @@ const PUCK_RADIX_THEME_CSS = `
   padding-top: 0 !important;
 }
 
+/* Puck's ViewportControls-actionsInner has overflow: hidden. Our
+   ViewportLightDarkPortal portals Sun + Moon buttons into that row
+   so they sit next to Desktop / Mobile / Zoom; without this rule
+   the buttons get visually clipped when the row's flex layout runs
+   out of width. */
+.newsletter-puck-canvas [class*="ViewportControls-actionsInner"] {
+  overflow: visible !important;
+}
+
 /* Puck's outer PuckLayout wrapper ships with height: 100dvh, which
    forces the editor to be the FULL viewport height regardless of how
    tall its actual container (our editorHeight-constrained wrapper)
@@ -1259,30 +1268,45 @@ function ViewportLightDarkPortal({
   const [target, setTarget] = useState<Element | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    function tryFind() {
-      if (cancelled) return;
+    function find(): HTMLElement | null {
+      // Target the actionsInner flex row that holds Desktop / Mobile
+      // / Zoom controls so our Sun + Moon buttons sit alongside them.
+      // The inner has `overflow: hidden` in Puck's default CSS — the
+      // PUCK_RADIX_THEME_CSS block below relaxes that to `visible`
+      // so our portal children aren't clipped.
       const candidates = document.querySelectorAll<HTMLElement>(
         '.newsletter-puck-canvas [class*="ViewportControls-actionsInner"]',
       );
-      const node = candidates[candidates.length - 1] ?? null;
-      if (node) {
-        setTarget(node);
-        return;
-      }
-      // Re-poll on the next animation frame until Puck mounts the
-      // viewport row. Bounded by useEffect's cleanup so we stop on
-      // unmount.
-      requestAnimationFrame(tryFind);
+      return candidates[candidates.length - 1] ?? null;
     }
-    tryFind();
-    return () => { cancelled = true; };
+
+    // Initial probe; the row may not exist yet on first render.
+    setTarget(find());
+
+    // MutationObserver catches both the initial mount of Puck's
+    // ViewportControls and any future replacement (e.g., when Puck
+    // re-renders the row). The previous rAF-polling version stopped
+    // as soon as it found ONE node — if that node was later detached
+    // (Puck re-rendered the controls), the portal silently broke and
+    // the Light/Dark buttons disappeared.
+    const obs = new MutationObserver(() => {
+      const next = find();
+      setTarget((prev) => {
+        if (next === prev) return prev;
+        // If the previous target was detached, swap to the new one.
+        if (prev && !prev.isConnected) return next;
+        // Otherwise stick with prev unless a different node appeared.
+        return next ?? prev;
+      });
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
   }, []);
 
   if (!target) return null;
 
   return createPortal(
-    <div role="group" aria-label="Preview background" style={{ display: 'inline-flex', marginLeft: 8 }}>
+    <div role="group" aria-label="Preview background" style={{ display: 'inline-flex', alignItems: 'center', marginLeft: 8 }}>
       <button
         type="button"
         onClick={() => setPreviewMode('light')}
