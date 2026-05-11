@@ -57,10 +57,17 @@ interface MinimalGitServer {
   publishCommit(args: {
     repo: { id: string; barePath: string };
     branch: string;
-    files: Array<{ path: string; content: string }>;
+    /**
+     * Map of relative path → file contents. The impl iterates
+     * via `for (const [path, contents] of args.files)`; an array
+     * of `{path, content}` objects would silently destructure to
+     * `undefined, undefined` and fail with "for is not iterable"
+     * (the impl expects a Map per sites/lib/git/internal-git-server.ts).
+     */
+    files: Map<string, Buffer | string>;
     message: string;
     author: { name: string; email: string };
-  }): Promise<{ commitSha: string }>;
+  }): Promise<{ sha: string; diffBytes: number; filesChanged: number }>;
 }
 
 export interface PublishToGitDeps {
@@ -245,27 +252,31 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
       //    live at the repo root under `editions/`, NOT under a
       //    `published/` subfolder.
       const publishBranch = collection.git_branch || 'publish';
+      // publishCommit expects a Map<path, contents>, not an array of
+      // {path, content} objects — see the MinimalGitServer interface
+      // above and the iteration in
+      // modules/sites/lib/git/internal-git-server-impl.ts.
+      const files = new Map<string, string>();
+      files.set(`editions/${ed.id}.html`, html);
+      files.set(`editions/${ed.id}.json`, JSON.stringify({
+        id: ed.id,
+        edition_date: ed.edition_date,
+        subject: ed.title,
+        preheader: ed.preheader,
+        status: ed.status,
+        blocks: blockRows.map((b) => ({
+          id: b.id,
+          block_type: b.block_type,
+          content: b.content,
+          sort_order: b.sort_order,
+          render_kind: b.block_template?.render_kind ?? 'react-email',
+          component_id: b.block_template?.component_id ?? b.block_type,
+        })),
+      }, null, 2));
       const result = await deps.gitServer.publishCommit({
         repo: { id: repo.id, barePath: repo.barePath },
         branch: publishBranch,
-        files: [
-          { path: `editions/${ed.id}.html`, content: html },
-          { path: `editions/${ed.id}.json`, content: JSON.stringify({
-            id: ed.id,
-            edition_date: ed.edition_date,
-            subject: ed.title,
-            preheader: ed.preheader,
-            status: ed.status,
-            blocks: blockRows.map((b) => ({
-              id: b.id,
-              block_type: b.block_type,
-              content: b.content,
-              sort_order: b.sort_order,
-              render_kind: b.block_template?.render_kind ?? 'react-email',
-              component_id: b.block_template?.component_id ?? b.block_type,
-            })),
-          }, null, 2) },
-        ],
+        files,
         message: `Publish edition ${ed.title ?? ed.edition_date}`,
         author: { name: 'gatewaze-publisher', email: 'noreply@gatewaze' },
       });
@@ -274,7 +285,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         kind: 'published',
         editionId: ed.id,
         repoId: repo.id,
-        commitSha: result.commitSha,
+        commitSha: result.sha,
         branch: publishBranch,
         files: [`editions/${ed.id}.html`, `editions/${ed.id}.json`],
       });
