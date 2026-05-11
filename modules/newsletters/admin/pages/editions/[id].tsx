@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   ArrowLeftIcon,
@@ -104,6 +104,45 @@ export default function EditionEditorPage() {
   const [collectionId, setCollectionId] = useState<string | null>(null);
   const [collection, setCollection] = useState<CollectionInfo | null>(null);
   const [collectionMetadata, setCollectionMetadata] = useState<Record<string, unknown>>({});
+
+  // Pin the editor wrapper to the available viewport space below the
+  // hero + tab bar. Hard-coding a calc() offset (e.g. `100vh - 220px`)
+  // breaks whenever the chrome above changes height; measure the
+  // wrapper's top with a ref instead and set its height = viewport
+  // bottom - top. Updates on resize. Using ResizeObserver on the
+  // wrapper itself catches the case where the hero grows (long
+  // subject line wraps to two lines, etc.).
+  const editorWrapperRef = useRef<HTMLDivElement | null>(null);
+  const [editorHeight, setEditorHeight] = useState<number | null>(null);
+  useEffect(() => {
+    function measure() {
+      const el = editorWrapperRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // Visual viewport when available — handles mobile address bars
+      // / iframes that don't reflect their height in window.innerHeight.
+      const viewportH = window.visualViewport?.height ?? window.innerHeight;
+      // Bottom gutter so the panel doesn't touch the viewport edge
+      // — feels less like the canvas is being clipped and gives the
+      // Puck viewport-controls row + status chrome space to breathe.
+      // 8px wasn't enough; the operator reported the editor reading
+      // as slightly too tall.
+      const bottomGutter = 32;
+      const next = Math.max(320, Math.floor(viewportH - top - bottomGutter));
+      setEditorHeight((cur) => (cur !== next ? next : cur));
+    }
+    measure();
+    window.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('resize', measure);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (ro && editorWrapperRef.current) ro.observe(editorWrapperRef.current);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('resize', measure);
+      ro?.disconnect();
+    };
+  }, []);
+
   const validTabs: EditionTab[] = ['editor', 'details', ...(hasBulkEmailing ? ['sending' as EditionTab] : [])];
   const defaultTab: EditionTab = 'editor';
   const activeTab: EditionTab = validTabs.includes(tabFromUrl as EditionTab) ? (tabFromUrl as EditionTab) : defaultTab;
@@ -317,12 +356,19 @@ export default function EditionEditorPage() {
         if (!newEdition) throw new Error('Edition created but not returned — try saving again');
 
         for (const block of edition.blocks) {
+          // Registry blocks/bricks (render_kind='react-email') carry a
+          // synthesised template with id='' — see the update path below
+          // for the full rationale. Normalize empty to NULL on both
+          // levels so PG doesn't reject '' as an invalid uuid.
+          const tplDefId = block.block_template.id && block.block_template.id !== ''
+            ? block.block_template.id
+            : null;
           const { data: blockRows, error: blockError } = await supabase
             .from('newsletters_edition_blocks')
             .insert({
               id: block.id,
               edition_id: newEdition.id,
-              templates_block_def_id: block.block_template.id,
+              templates_block_def_id: tplDefId,
               block_type: block.block_template.block_type,
               content: stripStorageUrlsInJson(block.content),
               sort_order: block.sort_order,
@@ -332,10 +378,13 @@ export default function EditionEditorPage() {
           const newBlock = blockRows?.[0];
           if (newBlock) {
             for (const brick of block.bricks) {
+              const brickDefId = brick.brick_template.id && brick.brick_template.id !== ''
+                ? brick.brick_template.id
+                : null;
               const { error: brickErr } = await supabase.from('newsletters_edition_bricks').insert({
                 id: brick.id,
                 block_id: newBlock.id,
-                templates_brick_def_id: brick.brick_template.id,
+                templates_brick_def_id: brickDefId,
                 brick_type: brick.brick_template.brick_type,
                 content: stripStorageUrlsInJson(brick.content),
                 sort_order: brick.sort_order,
@@ -397,10 +446,19 @@ export default function EditionEditorPage() {
           const newBlock = blockRows?.[0];
           if (newBlock) {
             for (const brick of block.bricks) {
+              // Same empty-id → null normalization as the block-level
+              // tplDefId above: registry bricks (render_kind='react-email')
+              // carry a synthesised BrickTemplate with id='' because no
+              // templates_brick_defs row backs them. Sending '' to a uuid
+              // column triggers PG 22P02; persist NULL so the load path
+              // can re-synthesise from `brick_type`.
+              const brickDefId = brick.brick_template.id && brick.brick_template.id !== ''
+                ? brick.brick_template.id
+                : null;
               const { error: brickInsertErr } = await supabase.from('newsletters_edition_bricks').insert({
                 id: brick.id,
                 block_id: newBlock.id,
-                templates_brick_def_id: brick.brick_template.id,
+                templates_brick_def_id: brickDefId,
                 brick_type: brick.brick_template.brick_type,
                 content: stripStorageUrlsInJson(brick.content),
                 sort_order: brick.sort_order,
@@ -518,15 +576,25 @@ export default function EditionEditorPage() {
       {/* Tab Content */}
       {activeTab === 'editor' && (
         <div
+          ref={editorWrapperRef}
           className="-mx-(--margin-x)"
           // The curved-corner panel inside NewsletterPuckCanvas sits
           // inside the same hero-matching horizontal padding as
           // every other admin page chrome — so the panel's left
           // edge lines up with the "Editor" tab text and its right
           // edge lines up with the admin's right margin.
+          //
+          // Height is measured dynamically (see editorHeight effect
+          // above) so the editor fills exactly the viewport space
+          // remaining below the hero + tab bar — no page-level
+          // scroll. `overflow: hidden` keeps Puck's tall internal
+          // panels from leaking out; each Puck pane scrolls on its
+          // own inside the curved-corner shell.
           style={{
-            minHeight: 'calc(100vh - 220px)',
+            height: editorHeight != null ? `${editorHeight}px` : 'calc(100vh - 240px)',
             padding: '1rem calc(var(--margin-x) + 1.5rem)',
+            overflow: 'hidden',
+            boxSizing: 'border-box',
           }}
         >
           <NewsletterCanvasEditor
