@@ -432,7 +432,15 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         // stable identifier to hang per-newsletter quota / context off.
         hostId: collectionId ?? edition.id,
         targetId: edition.id,
-        enabled: hasEditorAi,
+        // Disable AI on unsaved editions — the generate endpoint
+        // looks up the edition row in newsletters_editions to build
+        // its prompt context (library, blocks, preheader), and would
+        // 404 with `newsletter_edition_not_found` otherwise. Save
+        // the draft first, then come back to the AI tab.
+        enabled: hasEditorAi && edition.id !== 'new',
+        disabledReason: edition.id === 'new'
+          ? 'Save the edition first, then come back to use AI to generate content.'
+          : undefined,
         blockDefs: aiBlockDefs,
       }}
     >
