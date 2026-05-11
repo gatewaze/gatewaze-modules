@@ -87,9 +87,30 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         .from('newsletters_editions')
         .select('id, title, edition_date, preheader, status, collection_id')
         .eq('id', editionId)
-        .single();
+        .maybeSingle();
       if (editionRes.error || !editionRes.data) {
-        res.status(404).json({ error: { code: 'edition_not_found', message: editionRes.error?.message ?? '' } });
+        // eslint-disable-next-line no-console
+        console.warn('[newsletters publish-to-git] edition lookup failed', {
+          editionId,
+          supabaseError: editionRes.error?.message ?? null,
+          supabaseDetails: editionRes.error?.details ?? null,
+          hasData: !!editionRes.data,
+        });
+        res.status(404).json({
+          error: {
+            code: 'edition_not_found',
+            // Surface the actual lookup parameters in the message so
+            // the editor's toast tells the operator exactly which
+            // edition the server couldn't find. Previously the
+            // message was the bare supabase error (empty string when
+            // .single() returned 0 rows), which read like a route-
+            // not-found from the network tab.
+            message: editionRes.error?.message
+              ? `Edition lookup failed: ${editionRes.error.message} (editionId=${editionId})`
+              : `No newsletters_editions row with id=${editionId}. Has the edition been saved to the database yet?`,
+            editionId,
+          },
+        });
         return;
       }
       const ed = editionRes.data as {
