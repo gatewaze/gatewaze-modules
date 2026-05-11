@@ -111,7 +111,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
       }
       const collRes = await deps.supabase
         .from('newsletters_template_collections')
-        .select('id, slug, name')
+        .select('id, slug, name, git_provenance, git_url, git_branch')
         .eq('id', ed.collection_id)
         .maybeSingle();
       if (collRes.error || !collRes.data) {
@@ -122,9 +122,37 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         });
         return;
       }
-      const collection = collRes.data as { id: string; slug: string; name: string };
+      const collection = collRes.data as {
+        id: string;
+        slug: string;
+        name: string;
+        git_provenance: 'internal' | 'external';
+        git_url: string | null;
+        git_branch: string | null;
+      };
       const newsletterId = collection.id;
       const newsletterSlug = collection.slug;
+
+      // Gate: only publish to git when the newsletter has graduated
+      // to an EXTERNAL git repo. While git_provenance='internal' the
+      // platform's lazy-cloned boilerplate is the only thing on the
+      // PVC — committing edition output there pollutes the
+      // gatewaze-template-email starting point and confuses the
+      // graduate-to-external flow later. Return a 200/skipped so the
+      // editor can surface a clear "no external repo connected"
+      // warning instead of an opaque error.
+      if (collection.git_provenance !== 'external' || !collection.git_url) {
+        res.status(200).json({
+          kind: 'skipped',
+          reason: 'no_external_git_repo',
+          message:
+            'This newsletter is using the platform boilerplate template. ' +
+            'Connect an external git repo (Settings → Git) before publishing — ' +
+            'editions are still saved to the database.',
+          editionId,
+        });
+        return;
+      }
 
       // 3. Lookup or lazy-create the internal repo for the newsletter.
       let repo = await deps.gitServer.lookupRepo('newsletter', newsletterId);
@@ -212,10 +240,14 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         { pretty: false },
       );
 
-      // 6. Commit to publish branch.
+      // 6. Commit to the configured publish branch (collection.git_branch
+      //    defaults to 'publish' per migration 027). The output files
+      //    live at the repo root under `editions/`, NOT under a
+      //    `published/` subfolder.
+      const publishBranch = collection.git_branch || 'publish';
       const result = await deps.gitServer.publishCommit({
         repo: { id: repo.id, barePath: repo.barePath },
-        branch: 'publish',
+        branch: publishBranch,
         files: [
           { path: `editions/${ed.id}.html`, content: html },
           { path: `editions/${ed.id}.json`, content: JSON.stringify({
@@ -243,7 +275,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         editionId: ed.id,
         repoId: repo.id,
         commitSha: result.commitSha,
-        branch: 'publish',
+        branch: publishBranch,
         files: [`editions/${ed.id}.html`, `editions/${ed.id}.json`],
       });
     } catch (err) {
