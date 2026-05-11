@@ -364,7 +364,18 @@ export default function EditionEditorPage() {
     if (!edition) return;
     setSaving(true);
     try {
-      if (isNew) {
+      // Branch on the LIVE edition.id, not the route's `isNew` flag.
+      // Auto-create uses history.replaceState() to swap /new → /<uuid>
+      // without remounting (preserves iframe + selection); React Router
+      // doesn't observe replaceState, so useParams keeps returning
+      // `new` and `isNew` stays true even after the row exists. The
+      // second handleSave call (e.g., from Publish → onSave) would
+      // then re-INSERT the same edition + blocks and fail with
+      // "duplicate key value violates unique constraint
+      // newsletters_edition_blocks_pkey". `edition.id === 'new'` reads
+      // the local state which we DO flip to the real uuid after a
+      // successful auto-create.
+      if (edition.id === 'new') {
         const { data: rows, error: createError } = await supabase
           .from('newsletters_editions')
           .insert({
