@@ -24,6 +24,9 @@ import { createPortal } from 'react-dom';
 import {
   Puck,
   type Config,
+  ActionBar,
+  blocksPlugin,
+  outlinePlugin,
   fieldsPlugin,
   createUsePuck,
 } from '@puckeditor/core';
@@ -54,6 +57,9 @@ import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js'
 import { emailBlockRegistry } from './email-blocks/index.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
+import { getCanvasPuckPlugins } from '../../../../sites/admin/components/canvas/puck/canvas-puck-plugin-registry.js';
+import { CanvasPluginHostContext } from '../../../../sites/admin/components/canvas/puck/canvas-plugin-host-context.js';
+import { buildAiBlockDefs } from './email-blocks/build-ai-block-defs.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import { useHasModule } from '@/hooks/useModuleFeature';
 import { toast } from 'sonner';
@@ -301,6 +307,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   // platforms the operator publishes to.
   const hasSubstackOutput = useHasModule('newsletters-output-substack');
   const hasBeehiivOutput = useHasModule('newsletters-output-beehiiv');
+  const hasEditorAi = useHasModule('editor-ai-copilot');
 
   const userBlocks = useUserBlocks();
 
@@ -397,7 +404,38 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     }
   };
 
+  // The AI plugin (editor-ai-copilot) needs the available block defs
+  // to constrain its output. For newsletters those come from BOTH the
+  // DB-backed Mustache templates AND the react-email registry; the
+  // copilot's default DB query against `templates_block_defs` returns
+  // nothing because email registry blocks have no DB rows. We compute
+  // the merged set here and supply it via the host context — the
+  // copilot will skip its DB query when this is present.
+  const aiBlockDefs = useMemo(
+    () =>
+      buildAiBlockDefs({
+        blockTemplates,
+        registry: emailBlockRegistry,
+        ...(enabledRegistryComponentIds
+          ? { enabledRegistryComponentIds: new Set(enabledRegistryComponentIds) }
+          : {}),
+      }) as unknown as ReadonlyArray<Record<string, unknown>>,
+    [blockTemplates, enabledRegistryComponentIds],
+  );
+
   return (
+    <CanvasPluginHostContext.Provider
+      value={{
+        hostKind: 'newsletter',
+        // hostId = newsletter (collection) id when known, otherwise
+        // fall back to the edition id so the AI endpoint still has a
+        // stable identifier to hang per-newsletter quota / context off.
+        hostId: collectionId ?? edition.id,
+        targetId: edition.id,
+        enabled: hasEditorAi,
+        blockDefs: aiBlockDefs,
+      }}
+    >
     <NewsletterEditingProvider
       value={{
         collectionMetadata: collectionMetadata ?? {},
@@ -670,26 +708,42 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         ]}
         iframe={{ enabled: true }}
         plugins={[
-          // Puck auto-includes blocksPlugin() + outlinePlugin() when
-          // they aren't passed explicitly, so we only need to pass
-          // fieldsPlugin to override its default `desktopSideBar:
-          // 'right'` and put fields in the left tab strip alongside
-          // Blocks / Outline. Puck auto-switches to the Fields tab
-          // when an item is selected on the canvas.
+          // Plugin order = sidebar tab order. Puck always prepends
+          // blocksPlugin() + outlinePlugin() internally; when a user
+          // plugin shares a name with one of those defaults, Puck's
+          // tab registration walks `delete details[name]; details[name]
+          // = …` — i.e. the second occurrence pushes the entry to the
+          // END of the insertion order. We exploit that here to put
+          // contributed plugins (e.g. AI) FIRST: spread them before
+          // the explicit blocks/outline/fields entries, then re-pass
+          // the defaults so they get bumped past the contributed tabs.
+          ...getCanvasPuckPlugins(),
+          blocksPlugin(),
+          outlinePlugin(),
           fieldsPlugin({ desktopSideBar: 'left' }),
         ]}
         overrides={{
-          // Inject "★ Save block" alongside Puck's default
+          // Inject "Save block" alongside Puck's default
           // delete/duplicate buttons in the contextual action bar that
-          // appears around the selected component. Inside this
-          // override, `usePuck()` resolves to the active Puck context
-          // so SaveAsBlockAction can read the selected item directly.
-          actionBar: ({ children, parentAction }) => (
-            <>
-              {parentAction}
-              {children}
-              <SaveAsBlockAction />
-            </>
+          // appears around the selected component. The previous draft
+          // returned a bare fragment which dropped the <ActionBar>
+          // chrome (the dark pill container, padding, white text);
+          // the icons rendered naked on the canvas. Rebuild the
+          // default DefaultActionBar shape — <ActionBar> wrapper +
+          // two <ActionBar.Group> sections (parentAction+label,
+          // children+SaveAsBlockAction) — so the result matches the
+          // puckeditor.com reference.
+          actionBar: ({ children, parentAction, label }) => (
+            <ActionBar>
+              <ActionBar.Group>
+                {parentAction}
+                {label ? <ActionBar.Label label={label} /> : null}
+              </ActionBar.Group>
+              <ActionBar.Group>
+                {children}
+                <SaveAsBlockAction />
+              </ActionBar.Group>
+            </ActionBar>
           ),
           // Hide Puck's native Publish button — we render our own
           // outside the curved panel as a page-level action,
@@ -739,6 +793,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       </div>
     </div>
     </NewsletterEditingProvider>
+    </CanvasPluginHostContext.Provider>
   );
 };
 

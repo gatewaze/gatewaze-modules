@@ -11,7 +11,7 @@
  * Puck's context — `usePuck()` works there, and the affordance is
  * visually attached to whichever block the operator clicked.
  */
-import { useGetPuck } from '@puckeditor/core';
+import { ActionBar, useGetPuck } from '@puckeditor/core';
 import { BookmarkIcon } from '@heroicons/react/24/outline';
 import { useUserBlocks } from './UserBlocksContext.js';
 
@@ -43,26 +43,15 @@ export function SaveAsBlockAction() {
     userBlocks.requestSave({ type: selected.type, props: rest });
   };
 
+  // Use ActionBar.Action so the button inherits the same dark-pill
+  // styling as Duplicate / Delete — visually consistent with the
+  // puckeditor.com reference. The native title attribute is stripped
+  // at runtime by the MutationObserver in NewsletterCanvasRoot so it
+  // doesn't pop a stark native tooltip; the aria-label remains for
+  // screen readers.
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label="Save block to My Blocks"
-      title="Save this block (and its contents) to My Blocks"
-      style={{
-        background: 'transparent',
-        border: 'none',
-        color: 'inherit',
-        cursor: 'pointer',
-        padding: 0,
-        width: 28,
-        height: 28,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <BookmarkIcon style={{ width: 16, height: 16 }} />
-    </button>
+    <ActionBar.Action onClick={onClick} label="Save to My Blocks">
+      <BookmarkIcon style={{ width: 16, height: 16 }} aria-label="Save block to My Blocks" />
+    </ActionBar.Action>
   );
 }
