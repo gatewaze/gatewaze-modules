@@ -26,6 +26,10 @@ import { randomBytes } from 'node:crypto';
 import { createRepublishRoutes, mountRepublishRoutes } from './republish.js';
 import { createSourceRoutes, mountSourceRoutes } from './source-routes.js';
 import { createMenusRoutes, mountMenusRoutes } from './menus-routes.js';
+import { createPublicMenusRoutes, mountPublicMenusRoutes } from './public-menus-routes.js';
+import { createPersonasRoutes, mountPersonasRoutes } from './personas-routes.js';
+import { createPageVariantsRoutes, mountPageVariantsRoutes } from './page-variants-routes.js';
+import { createRuntimeRoutes, mountRuntimeRoutes } from './runtime-routes.js';
 import { createMediaRoutes, mountMediaRoutes, type MediaUploadInput } from './media-routes.js';
 import { createAdminRoutes, mountAdminRoutes } from './admin.js';
 import { createCanvasRoutes, mountCanvasRoutes } from './canvas/index.js';
@@ -127,8 +131,14 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
   const buildSiteContentFiles = async (
     siteId: string,
     onlyPagePaths?: string[],
-  ): Promise<Map<string, Buffer | string>> => {
+  ): Promise<{ files: Map<string, Buffer | string>; removals: string[]; replaceTree: boolean }> => {
     const out = new Map<string, Buffer | string>();
+    const removals: string[] = [];
+    // Computed once the site config is loaded: when a theme overlay is
+    // configured, the publish branch must be exactly (theme + platform
+    // deltas) — so old files (e.g. dropped from the theme between tags)
+    // need to be pruned. See publishCommit.replaceTree.
+    let replaceTree = false;
 
     // Lazy-import the emitter — keeps the route file lean for callers
     // that don't trigger publishes (admin endpoints etc.)
@@ -146,7 +156,7 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       .eq('id', siteId)
       .single();
     const site = (siteRes as { data: SiteRow | null }).data;
-    if (!site) return out;
+    if (!site) return { files: out, removals, replaceTree };
 
     interface PageRow {
       id: string;
@@ -172,24 +182,137 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     const pagesRes = await pageQuery;
     const pages = ((pagesRes as { data: PageRow[] | null }).data ?? []);
 
-    // 1a. Write content/pages/<slug>.json for schema-mode pages.
-    for (const p of pages) {
-      if (p.composition_mode === 'schema') {
-        out.set(
-          `content/pages/${p.slug}.json`,
-          JSON.stringify(
-            {
-              slug: p.slug,
-              full_path: p.full_path,
-              title: p.title,
-              content: p.content ?? {},
-              schema_version: p.content_schema_version,
-            },
-            null,
-            2,
-          ),
+    // Per-site config flag — defaults to false for backwards compatibility.
+    // When true, the media-url-rewriter emits binaries for in_repo=true items
+    // into public/media/ and references them via relative paths instead of
+    // CDN URLs. Per spec-content-modules-git-architecture §14.3.
+    const siteConfig = (site.config ?? {}) as {
+      publish?: { embed_media_in_git?: boolean };
+      theme?: { url?: string; ref?: string; subdir?: string; owns_routing?: boolean };
+    };
+    const embedMediaInGit = siteConfig.publish?.embed_media_in_git === true;
+    const themeConfig = siteConfig.theme;
+    // When the theme owns routing, the theme repo's own `app/` (or
+    // `src/app/`) tree is authoritative. The platform still emits
+    // `content/pages/*.json` and `public/_gatewaze/*.json` so the theme
+    // can consume them as it migrates each page; but we skip the
+    // `app/layout.tsx` + per-page `app/<slug>/page.tsx` stubs because
+    // a) they would shadow the theme's routes (root `app/` wins over
+    // `src/app/`), and b) the platform-emitted blocks page uses a
+    // template-literal dynamic import that Turbopack rejects in
+    // production builds.
+    const themeOwnsRouting = themeConfig?.owns_routing === true;
+
+    // Overlay the theme tree FIRST so platform-emitted files (page route
+    // stubs, content JSON, site-config) added later in this function win
+    // any path collisions. Without a theme config the publish branch only
+    // contains the platform deltas — the operator's deploy target needs
+    // to supply the rest separately.
+    if (themeConfig?.url && themeConfig.ref) {
+      const { applyThemeOverlay } = await import('../lib/publish-worker/theme-overlay.js');
+      try {
+        await applyThemeOverlay(
+          { url: themeConfig.url, ref: themeConfig.ref, subdir: themeConfig.subdir },
+          out,
+          { logger },
         );
+        // Theme overlay succeeded — the file map now represents the
+        // full intended publish tree, so prune anything not in it.
+        replaceTree = true;
+      } catch (err) {
+        logger.warn('theme overlay failed — publish continues with platform-only deltas', {
+          siteId,
+          themeUrl: themeConfig.url,
+          ref: themeConfig.ref,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
+    }
+
+    // Lazy-import the media-url-rewriter and walkPageVariants helpers — they
+    // only run when there's published content to walk.
+    const { rewriteMediaUrlsInContent } = await import('../lib/publish-worker/media-url-rewriter.js');
+
+    // Track emit jobs across every page so we download each binary once.
+    const mediaEmitJobsByPath = new Map<string, {
+      storagePath: string;
+      gitRelativePath: string;
+      mimeType: string;
+      bytes: number;
+    }>();
+
+    // Canonical single bucket per spec-relative-storage-paths.md.
+    // Override via STORAGE_BUCKET env var when migrating to S3 — see
+    // §4 of the spec for the storage_bucket_url setting.
+    const STORAGE_BUCKET = process.env.STORAGE_BUCKET ?? 'media';
+    // Browser-facing URL base. SUPABASE_URL is the internal docker
+    // hostname (http://supabase-kong:8000) for server-to-server calls;
+    // images served to browsers need the EXTERNAL hostname from
+    // SUPABASE_PUBLIC_URL.
+    const publicSupabaseUrl = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+    const buildPublicUrl = (storagePath: string): string =>
+      `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
+
+    const mediaRewriterDeps = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabase: supabase as any,
+      bunnyRewriter: null,
+      resolveMediaUrl: (storagePath: string) => buildPublicUrl(storagePath),
+      logger,
+      embedMediaInGit,
+    };
+
+    // 1a. Write content/pages/<slug>.json for schema-mode pages.
+    //     Includes a __variants sidecar when page_variants rows exist so
+    //     themes can resolve per-persona overlays client-side or via the
+    //     runtime API. Per spec-example-theme-deliverable §5.2.
+    for (const p of pages) {
+      if (p.composition_mode !== 'schema') continue;
+
+      const rawContent = (p.content ?? {}) as Record<string, unknown>;
+      const rewrite = await rewriteMediaUrlsInContent('site', siteId, rawContent, mediaRewriterDeps);
+      for (const job of rewrite.emitJobs) {
+        mediaEmitJobsByPath.set(job.gitRelativePath, job);
+      }
+
+      // Load the page's variants (page_variants) so the published JSON
+      // carries a __variants sidecar that themes apply via walkPageVariants.
+      const variantsRes = await supabase
+        .from('page_variants')
+        .select('id, field_path, match_context, value, priority, updated_at')
+        .eq('page_id', p.id);
+      const variantRows = ((variantsRes as { data: Array<{
+        id: string;
+        field_path: string;
+        match_context: Record<string, unknown>;
+        value: unknown;
+        priority: number;
+        updated_at: string;
+      }> | null }).data) ?? [];
+      const variantsByField: Record<string, unknown[]> = {};
+      for (const v of variantRows) {
+        const arr = (variantsByField[v.field_path] ?? []) as unknown[];
+        arr.push({
+          id: v.id,
+          match_context: v.match_context,
+          value: v.value,
+          priority: v.priority,
+          updated_at: v.updated_at,
+        });
+        variantsByField[v.field_path] = arr;
+      }
+
+      const payload: Record<string, unknown> = {
+        slug: p.slug,
+        full_path: p.full_path,
+        title: p.title,
+        content: rewrite.rewrittenContent,
+        schema_version: p.content_schema_version,
+      };
+      if (Object.keys(variantsByField).length > 0) {
+        payload['__variants'] = variantsByField;
+      }
+      out.set(`content/pages/${p.slug}.json`, JSON.stringify(payload, null, 2));
     }
 
     // 1b. Write content/pages/<slug>.json for blocks-mode pages by
@@ -266,42 +389,97 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       }
 
       for (const page of blocksPages) {
-        const blocksForPage = pageBlocks
-          .filter((pb) => pb.page_id === page.id)
-          .map((pb) => {
-            const def = blockDefById.get(pb.block_def_id);
-            const bricks = bricksByBlockId.get(pb.id);
-            const blockOut: Record<string, unknown> = {
-              block_def_name: def?.key ?? null,
-              sort_order: pb.sort_order,
-              variant_key: pb.variant_key,
-              content: pb.content,
-            };
-            if (bricks) {
-              blockOut.bricks = bricks.map((b) => ({
-                brick_def_name: brickDefById.get(b.brick_def_id)?.key ?? null,
-                sort_order: b.sort_order,
-                variant_key: b.variant_key,
-                content: b.content,
-              }));
-            }
-            return blockOut;
-          });
+        const blocksForPage = await Promise.all(
+          pageBlocks
+            .filter((pb) => pb.page_id === page.id)
+            .map(async (pb) => {
+              const def = blockDefById.get(pb.block_def_id);
+              const bricks = bricksByBlockId.get(pb.id);
 
-        out.set(
-          `content/pages/${page.slug}.json`,
-          JSON.stringify(
-            {
-              slug: page.slug,
-              full_path: page.full_path,
-              title: page.title,
-              composition_mode: 'blocks',
-              blocks: blocksForPage,
-            },
-            null,
-            2,
-          ),
+              // Rewrite media URLs in this block's content + each of its
+              // bricks. Media in blocks-mode is referenced just like in
+              // schema-mode (via `/media/<storage_path>` placeholders).
+              const blockContentRewrite = await rewriteMediaUrlsInContent(
+                'site',
+                siteId,
+                pb.content,
+                mediaRewriterDeps,
+              );
+              for (const job of blockContentRewrite.emitJobs) {
+                mediaEmitJobsByPath.set(job.gitRelativePath, job);
+              }
+
+              const blockOut: Record<string, unknown> = {
+                // Include the page_blocks row id so per-block variants
+                // (`<block-id>.<prop>` field_path) can target it.
+                id: pb.id,
+                block_def_name: def?.key ?? null,
+                sort_order: pb.sort_order,
+                variant_key: pb.variant_key,
+                content: blockContentRewrite.rewrittenContent,
+              };
+              if (bricks) {
+                blockOut.bricks = await Promise.all(bricks.map(async (b) => {
+                  const brickRewrite = await rewriteMediaUrlsInContent(
+                    'site',
+                    siteId,
+                    b.content,
+                    mediaRewriterDeps,
+                  );
+                  for (const job of brickRewrite.emitJobs) {
+                    mediaEmitJobsByPath.set(job.gitRelativePath, job);
+                  }
+                  return {
+                    id: b.id,
+                    brick_def_name: brickDefById.get(b.brick_def_id)?.key ?? null,
+                    sort_order: b.sort_order,
+                    variant_key: b.variant_key,
+                    content: brickRewrite.rewrittenContent,
+                  };
+                }));
+              }
+              return blockOut;
+            }),
         );
+
+        // Variants sidecar (page_variants) — themes resolve via
+        // walkBlockVariants client-side or via the runtime API.
+        const variantsRes = await supabase
+          .from('page_variants')
+          .select('id, field_path, match_context, value, priority, updated_at')
+          .eq('page_id', page.id);
+        const variantRows = ((variantsRes as { data: Array<{
+          id: string;
+          field_path: string;
+          match_context: Record<string, unknown>;
+          value: unknown;
+          priority: number;
+          updated_at: string;
+        }> | null }).data) ?? [];
+        const variantsByField: Record<string, unknown[]> = {};
+        for (const v of variantRows) {
+          const arr = (variantsByField[v.field_path] ?? []) as unknown[];
+          arr.push({
+            id: v.id,
+            match_context: v.match_context,
+            value: v.value,
+            priority: v.priority,
+            updated_at: v.updated_at,
+          });
+          variantsByField[v.field_path] = arr;
+        }
+
+        const blocksPayload: Record<string, unknown> = {
+          slug: page.slug,
+          full_path: page.full_path,
+          title: page.title,
+          composition_mode: 'blocks',
+          blocks: blocksForPage,
+        };
+        if (Object.keys(variantsByField).length > 0) {
+          blocksPayload['__variants'] = variantsByField;
+        }
+        out.set(`content/pages/${page.slug}.json`, JSON.stringify(blocksPayload, null, 2));
       }
     }
 
@@ -386,35 +564,58 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       (process.env.API_URL as string | undefined) ??
       null;
 
-    // 5. Emit the Next.js route + layout files.
+    // 5. Emit the Next.js route + layout files — but only when the
+    //    theme has NOT claimed routing. With `theme.owns_routing=true`
+    //    the theme's own app/ tree handles routes and the platform
+    //    sticks to content/ + public/_gatewaze/ deltas.
     const analytics = ((site.config ?? {}) as { analytics?: { provider?: string; umami?: { umamiWebsiteId?: string; umamiShareId?: string | null } } }).analytics ?? null;
 
-    const routeFiles = await emitNextjsRoutes(
-      pages.map((p) => ({
-        slug: p.slug,
-        full_path: p.full_path,
-        wrapper_id: p.wrapper_id,
-        composition_mode: p.composition_mode,
-      })),
-      {
-        supabase,
-        site: {
-          id: site.id,
-          wrapper_id: site.wrapper_id,
-          analytics: analytics
-            ? {
-                provider: analytics.provider as 'plausible' | 'fathom' | 'umami' | 'ga4' | 'none' | undefined,
-                umami: analytics.umami,
-              }
-            : null,
+    if (!themeOwnsRouting) {
+      const routeFiles = await emitNextjsRoutes(
+        pages.map((p) => ({
+          slug: p.slug,
+          full_path: p.full_path,
+          wrapper_id: p.wrapper_id,
+          composition_mode: p.composition_mode,
+        })),
+        {
+          supabase,
+          site: {
+            id: site.id,
+            wrapper_id: site.wrapper_id,
+            analytics: analytics
+              ? {
+                  provider: analytics.provider as 'plausible' | 'fathom' | 'umami' | 'ga4' | 'none' | undefined,
+                  umami: analytics.umami,
+                }
+              : null,
+          },
+          integrations: { umamiUrl },
+          apiOrigin,
+          abTestsByRoute,
+          logger,
         },
-        integrations: { umamiUrl },
-        apiOrigin,
-        abTestsByRoute,
-        logger,
-      },
-    );
-    for (const [path, content] of routeFiles) out.set(path, content);
+      );
+      for (const [path, content] of routeFiles) out.set(path, content);
+    } else {
+      // Compute the paths the route emitter WOULD have produced and add
+      // them to removals so prior publishes' platform-emitted `app/*`
+      // tree gets cleaned out of the publish branch. Without this the
+      // stale stubs persist on example-publish:main and continue to shadow
+      // the theme's `src/app/` routes (and break Turbopack builds).
+      removals.push('app/layout.tsx');
+      const blocksPagesForRemoval = pages.filter((p) => p.composition_mode === 'blocks');
+      for (const p of blocksPagesForRemoval) {
+        const routePath = p.wrapper_id
+          ? null  // wrapper-routed pages get more complex paths; deletion not strictly necessary
+          : `app${p.full_path === '/' ? '/(home)' : p.full_path}/page.tsx`;
+        if (routePath) removals.push(routePath);
+      }
+      logger.info('skipping emitNextjsRoutes: theme.owns_routing=true', {
+        siteId,
+        removalsQueued: removals.length,
+      });
+    }
 
     // Site-runtime config — read by @gatewaze-modules/site-runtime's
     // <GatewazeHead /> component when the operator's theme owns its layout
@@ -440,14 +641,44 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       ),
     );
 
+    // 6. Download + emit any media binaries collected during the page walk.
+    //    Only runs when site.config.publish.embed_media_in_git is true AND
+    //    the rewriter produced emit jobs. Each binary is downloaded once
+    //    (Map dedupes across pages) and written to public/media/<file>.
+    if (embedMediaInGit && mediaEmitJobsByPath.size > 0) {
+      logger.info('buildSiteContentFiles.embedding_media', {
+        siteId,
+        count: mediaEmitJobsByPath.size,
+      });
+      for (const job of mediaEmitJobsByPath.values()) {
+        try {
+          const buffer = await mediaAdapter.download(job.storagePath);
+          out.set(job.gitRelativePath, buffer);
+        } catch (err) {
+          logger.warn('media download failed at publish — referencing CDN instead', {
+            storagePath: job.storagePath,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          // We don't rewrite the URL back to CDN here — the content
+          // already references the relative path. A broken image is
+          // visible at publish time so editors can fix the asset before
+          // re-publishing. Severity considered acceptable for v1; future
+          // work could fall back to CDN URLs on download failure.
+        }
+      }
+    }
+
     logger.info('buildSiteContentFiles', {
       siteId,
       pagesCount: pages.length,
       abTestsCount: Object.keys(abTestsByRoute).length,
       filesEmitted: out.size,
+      removals: removals.length,
+      replaceTree,
+      mediaEmbedded: embedMediaInGit ? mediaEmitJobsByPath.size : 0,
     });
 
-    return out;
+    return { files: out, removals, replaceTree };
   };
 
   const publishWorker = new PublishWorker({
@@ -460,21 +691,40 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     logger,
   });
 
-  // Default media adapter (Supabase Storage)
+  // Default media adapter (Supabase Storage). Uses the canonical single
+  // `media` bucket per spec-relative-storage-paths.md; cdn_url uses the
+  // external SUPABASE_PUBLIC_URL so browsers can resolve the hostname
+  // (SUPABASE_URL is the internal docker DNS name).
+  const ADAPTER_BUCKET = process.env.STORAGE_BUCKET ?? 'media';
+  const adapterPublicSupabaseUrl = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+  const adapterBuildPublicUrl = (storagePath: string): string =>
+    `${adapterPublicSupabaseUrl}/storage/v1/object/public/${ADAPTER_BUCKET}/${storagePath}`;
+
   const mediaAdapter = {
     async upload(args: { hostKind: string; hostId: string; filename: string; mimeType: string; buffer: Buffer }) {
       const path = `${args.hostKind}s/${args.hostId}/media/${args.filename}`;
-      const { error } = await supabase.storage.from('gatewaze-media').upload(path, args.buffer, {
+      const { error } = await supabase.storage.from(ADAPTER_BUCKET).upload(path, args.buffer, {
         contentType: args.mimeType,
         upsert: true,
       });
       if (error) throw new Error(`storage upload failed: ${error.message}`);
-      const { data } = supabase.storage.from('gatewaze-media').getPublicUrl(path);
-      return { storagePath: path, cdnUrl: data.publicUrl };
+      return { storagePath: path, cdnUrl: adapterBuildPublicUrl(path) };
     },
     async delete(storagePath: string) {
-      const { error } = await supabase.storage.from('gatewaze-media').remove([storagePath]);
+      const { error } = await supabase.storage.from(ADAPTER_BUCKET).remove([storagePath]);
       if (error) throw new Error(`storage delete failed: ${error.message}`);
+    },
+    // Download binary for the publish-worker's media-in-git emission step.
+    // Per spec-content-modules-git-architecture §14.3: when site.config
+    // .publish.embed_media_in_git is true AND host_media.in_repo is true,
+    // the publish-worker reads the binary here and writes it under
+    // public/media/<filename> in the published git tree.
+    async download(storagePath: string): Promise<Buffer> {
+      const { data, error } = await supabase.storage.from(ADAPTER_BUCKET).download(storagePath);
+      if (error) throw new Error(`storage download failed: ${error.message}`);
+      if (!data) throw new Error(`storage download returned no body for ${storagePath}`);
+      const arrayBuf = await data.arrayBuffer();
+      return Buffer.from(arrayBuf);
     },
     // generateVariants intentionally absent — wired by event-media-style edge
     // function in a follow-up. When bunny-cdn is enabled, the renderer
@@ -530,6 +780,41 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     logger,
   });
   mountMenusRoutes(adminRouter, menusRoutes);
+
+  // Public navigation + settings endpoints — themes call these from their
+  // server components (no JWT). See public-menus-routes.ts.
+  const publicMenusRoutes = createPublicMenusRoutes({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase: supabase as any,
+    logger,
+    supabasePublicUrl: process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL || '',
+    storageBucket: process.env.STORAGE_BUCKET ?? 'media',
+  });
+  mountPublicMenusRoutes(publicRouter, publicMenusRoutes);
+
+  // Personas (per spec-example-theme-deliverable §5.2) — editor-managed
+  // segment definitions with resolution rules. Mounted on the admin
+  // router because authoring is admin-only; the actual resolution at
+  // request time happens in the runtime API endpoint (which uses the
+  // same `resolvePersonaFromContext` helper exported from personas-routes).
+  const personasRoutes = createPersonasRoutes({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase: supabase as any,
+    logger,
+  });
+  mountPersonasRoutes(adminRouter, personasRoutes);
+
+  // Page-variants CRUD — sidecar overlay table edited from the page
+  // editor's "Personalize" affordance. Resolution happens in the runtime
+  // API (which loads the same rows + walkPageVariants); these endpoints
+  // exist purely so the admin UI can author them. Mounted on adminRouter
+  // → requires JWT.
+  const pageVariantsRoutes = createPageVariantsRoutes({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase: supabase as any,
+    logger,
+  });
+  mountPageVariantsRoutes(adminRouter, pageVariantsRoutes);
 
   // Media routes moved to @gatewaze-modules/host-media (per
   // spec-host-media-module Phase 2). The host-media module mounts
@@ -666,6 +951,35 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     logger,
   });
   mountAbRoutes(publicRouter, abRoutes);
+
+  // Runtime content API (per spec-example-theme-deliverable §7) — read
+  // endpoint themes call from their middleware / RSC to get personalised
+  // content. Per-site Bearer API keys, NOT JWT. Mounted on the public
+  // router so external Next.js servers can reach it without admin auth.
+  //
+  // Pepper comes from env. In production the operator MUST set
+  // SITES_RUNTIME_API_PEPPER (32+ random bytes, base64). For local dev
+  // we accept an unset value and fall back to a constant dev pepper
+  // (the request will still fail because no API keys hash against the
+  // dev pepper — operators must generate keys via the admin route
+  // before they can read content via this endpoint).
+  const peppperRaw = process.env.SITES_RUNTIME_API_PEPPER ?? '';
+  let pepper: Uint8Array;
+  if (peppperRaw.length === 0) {
+    logger.warn('runtime.api.no_pepper_configured', {
+      hint: 'set SITES_RUNTIME_API_PEPPER (32+ random bytes, base64) to enable runtime API key validation',
+    });
+    pepper = new TextEncoder().encode('local-dev-pepper-not-secure-do-not-use-in-production-aaaaaaaaaaaaaa');
+  } else {
+    pepper = Buffer.from(peppperRaw, 'base64');
+  }
+  const runtimeRoutes = createRuntimeRoutes({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase: supabase as any,
+    logger,
+    pepper,
+  });
+  mountRuntimeRoutes(publicRouter, runtimeRoutes);
 
   // Mount on the express app. The platform applies requireJwt to /admin/*
   // (per the established pattern); webhook receiver is on /api/webhooks/*
