@@ -25,6 +25,7 @@ import { toast } from 'sonner';
 import { useForm } from 'react-hook-form';
 import { supabase } from '@/lib/supabase';
 import type { SiteRow } from '../../types';
+import { SitesService } from '../services/sitesService';
 import { SiteTemplateTab } from './SiteTemplateTab';
 
 interface DriftStatus {
@@ -55,6 +56,7 @@ export function SiteSourceTab({ site, onSiteUpdated }: SiteSourceTabProps) {
   const [showImport, setShowImport] = useState(false);
   const [importing, setImporting] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [graduating, setGraduating] = useState(false);
 
   const importForm = useForm<ImportGitForm>({
     defaultValues: { git_url: '', pat: '', branch: 'main', schema_path: 'content/schema.json' },
@@ -195,6 +197,7 @@ export function SiteSourceTab({ site, onSiteUpdated }: SiteSourceTabProps) {
     if (!url) return;
     const pat = window.prompt('One-time PAT with required scopes (will be dropped after key provisioning):');
     if (!pat) return;
+    setGraduating(true);
     try {
       const apiUrl = (import.meta as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
       const { data: session } = await supabase.auth.getSession();
@@ -207,15 +210,30 @@ export function SiteSourceTab({ site, onSiteUpdated }: SiteSourceTabProps) {
         },
         body: JSON.stringify({ git_url: url, pat }),
       });
-      const body = await resp.json();
+      const body = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        toast.error(body.message ?? 'Graduate failed');
+        toast.error(body?.message ?? 'Graduate failed');
         return;
       }
       toast.success('Graduated to external git');
-      onSiteUpdated({ ...site, git_provenance: 'external', git_url: body.git_url } as SiteRow);
+      // Refetch the canonical site row so git_provenance + git_url (and any
+      // other server-side changes) flow back into the parent and the tab
+      // re-renders with the "external" badge + URL without a manual page
+      // reload. The previous merge-from-response approach read `body.git_url`
+      // which the API does not actually return (the field is `externalGitUrl`),
+      // leaving the badge stuck on "internal" until the user refreshed.
+      const { site: refreshed, error: refreshError } = await SitesService.getSite(site.slug);
+      if (refreshError || !refreshed) {
+        // Fall back to an optimistic local merge using the values we just
+        // submitted — the DB write already committed server-side.
+        onSiteUpdated({ ...site, git_provenance: 'external', git_url: url } as SiteRow);
+        return;
+      }
+      onSiteUpdated(refreshed);
     } catch (err) {
-      toast.error('Graduate failed (endpoint not yet implemented)');
+      toast.error(`Graduate failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGraduating(false);
     }
   };
 
@@ -239,8 +257,9 @@ export function SiteSourceTab({ site, onSiteUpdated }: SiteSourceTabProps) {
                 <ArrowDownTrayIcon className="size-4" /> Import from git repo
               </Button>
               {provenance === 'internal' && (
-                <Button variant="outlined" onClick={onGraduateToExternal}>
-                  <ArrowsRightLeftIcon className="size-4" /> Move to my own git repo
+                <Button variant="outlined" onClick={onGraduateToExternal} disabled={graduating}>
+                  <ArrowsRightLeftIcon className="size-4" />
+                  {graduating ? 'Moving…' : 'Move to my own git repo'}
                 </Button>
               )}
             </div>
