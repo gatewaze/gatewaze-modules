@@ -78,6 +78,10 @@ const sitesModule: GatewazeModule = {
     'migrations/032_canvas_tables.sql',
     'migrations/033_canvas_apply_ops.sql',
     'migrations/034_canvas_layout_primitives.sql',
+    'migrations/035_canvas_block_variants.sql',
+    'migrations/036_canvas_engine.sql',
+    'migrations/037_site_personas_and_page_variants.sql',
+    'migrations/038_allow_page_blocks_for_website_sites.sql',
   ],
 
   workers: [
