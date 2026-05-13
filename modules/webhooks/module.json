@@ -1,0 +1,8 @@
+{
+  "id": "webhooks",
+  "group": "platform",
+  "type": "feature",
+  "name": "Webhooks",
+  "description": "Mutation-driven outbound webhooks. Fires signed HTTP POSTs to deployed-theme /api/revalidate handlers when content rows change, per spec-api-cache-and-revalidation (Layer 2).",
+  "version": "1.0.0"
+}
