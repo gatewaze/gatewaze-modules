@@ -22,6 +22,8 @@
  * Per spec-example-theme-deliverable §7 (public read APIs for themes).
  */
 
+import { createHash } from 'node:crypto';
+
 import type { Request, Response, Router } from 'express';
 
 interface ErrorEnvelope {
@@ -100,8 +102,36 @@ function isValidSlug(s: string): boolean {
   return /^[a-zA-Z0-9_-]+$/.test(s) && s.length <= 128;
 }
 
-function setPublicCacheHeaders(res: Response): void {
-  res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
+const CACHE_HEADER = 'public, max-age=60, s-maxage=300, stale-if-error=86400';
+
+/**
+ * Emit a cacheable response with the headers the Layer-3 CDN expects:
+ *
+ *   Cache-Control:  public, max-age=60, s-maxage=300, stale-if-error=86400
+ *   Surrogate-Key:  <topic> [<topic>:<id-or-slug> ...]
+ *   ETag:           W/"<sha256(body)[0:16]>"
+ *
+ * Spec: §5.4 of spec-api-cache-and-revalidation.md.
+ *
+ * If the client's `If-None-Match` matches the computed ETag we return
+ * 304 with no body (origin bandwidth save inside the max-age window).
+ */
+function sendCacheable(
+  req: Request,
+  res: Response,
+  body: unknown,
+  surrogateKeys: string[],
+): void {
+  const json = JSON.stringify(body);
+  const etag = `W/"${createHash('sha256').update(json).digest('hex').slice(0, 16)}"`;
+  res.setHeader('Cache-Control', CACHE_HEADER);
+  res.setHeader('Surrogate-Key', surrogateKeys.join(' '));
+  res.setHeader('ETag', etag);
+  if (req.headers['if-none-match'] === etag) {
+    res.status(304).end();
+    return;
+  }
+  res.status(200).type('application/json').send(json);
 }
 
 export interface PublicMenusRoutesDeps {
@@ -257,11 +287,15 @@ export function createPublicMenusRoutes(deps: PublicMenusRoutesDeps) {
 
     const tree = buildTree(items, pagesById);
 
-    setPublicCacheHeaders(res);
-    res.status(200).json({
-      menu: { id: menu.id, slug: menu.slug, name: menu.name },
-      items: tree,
-    });
+    sendCacheable(
+      req,
+      res,
+      {
+        menu: { id: menu.id, slug: menu.slug, name: menu.name },
+        items: tree,
+      },
+      ['navigation', `navigation:${siteSlug}:${menuSlug}`],
+    );
   }
 
   /**
@@ -383,17 +417,21 @@ export function createPublicMenusRoutes(deps: PublicMenusRoutesDeps) {
         : `© ${new Date().getUTCFullYear()} ${site.name}`;
     const copyright = branding.copyright ?? defaultCopyright;
 
-    setPublicCacheHeaders(res);
-    res.status(200).json({
-      site: { id: site.id, slug: site.slug, name: site.name },
-      logo: resolvedHeaderLogo,
-      footer_logo: resolvedFooterLogo,
-      favicon: resolvedFavicon,
-      socials,
-      copyright,
-      linux_foundation_banner:
-        branding.linux_foundation_banner ?? (siteSlug === 'example'),
-    });
+    sendCacheable(
+      req,
+      res,
+      {
+        site: { id: site.id, slug: site.slug, name: site.name },
+        logo: resolvedHeaderLogo,
+        footer_logo: resolvedFooterLogo,
+        favicon: resolvedFavicon,
+        socials,
+        copyright,
+        linux_foundation_banner:
+          branding.linux_foundation_banner ?? (siteSlug === 'example'),
+      },
+      ['site_settings', `site_settings:${siteSlug}`],
+    );
 
     void logger; // reserved for future audit log emission
   }
