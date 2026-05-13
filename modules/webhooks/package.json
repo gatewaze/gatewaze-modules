@@ -1,0 +1,33 @@
+{
+  "name": "@gatewaze-modules/webhooks",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "description": "Mutation-driven outbound webhooks (Layer 2 of spec-api-cache-and-revalidation). LISTEN gatewaze.mutation → debounce → fan-out signed POSTs + best-effort Cloudflare purge.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./api": "./api/admin-routes.ts",
+    "./lib/webhook-hub": "./lib/webhook-hub.ts",
+    "./lib/listen-worker": "./lib/listen-worker.ts",
+    "./lib/hmac": "./lib/hmac.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  },
+  "dependencies": {
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0"
+  }
+}
