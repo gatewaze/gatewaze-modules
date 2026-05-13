@@ -21,13 +21,36 @@ const webhooksModule: GatewazeModule = {
   id: 'webhooks',
   group: 'platform',
   type: 'feature',
-  visibility: 'hidden', // platform plumbing — admin tab is a follow-up
+  visibility: 'public',
   name: 'Webhooks',
   description:
     'Mutation-driven outbound webhooks. Fires signed HTTP POSTs to deployed-theme /api/revalidate handlers when content rows change. Layer 2 of spec-api-cache-and-revalidation.',
   version: '1.0.0',
 
-  features: ['webhooks'],
+  features: ['webhooks', 'webhooks.manage'],
+
+  adminRoutes: [
+    {
+      path: 'webhooks',
+      component: () => import('./admin/components/WebhooksTab'),
+      requiredFeature: 'webhooks',
+      guard: 'none',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/webhooks',
+      label: 'Webhooks',
+      // `Bolt` is a Heroicon ("flash of lightning") — distinguishes the
+      // entry from other plumbing tabs and reads as "fires on change".
+      icon: 'Bolt',
+      requiredFeature: 'webhooks',
+      order: 90, // bottom of the nav — operator plumbing, not content
+    },
+  ],
+
+  configSchema: {},
 
   // No hard dependency on sites — global topics (e.g. blog_posts) don't
   // require sites to exist. Modules that wire site-scoped triggers
