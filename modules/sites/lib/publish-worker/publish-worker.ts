@@ -21,6 +21,20 @@
 
 import type { InternalGitServer, InternalRepoRef, CommitResult } from '../git/internal-git-server.js';
 
+/**
+ * PostgREST renders bytea columns as the string "\\x<hex>" by default.
+ * sites_secrets.deploy_key was written as ASCII PEM bytes (OpenSSH private
+ * key); decoding the hex round-trips back to the original PEM text. Falls
+ * through unchanged for values that aren't in the bytea hex shape so the
+ * helper is safe to call on already-decoded inputs (tests, future schema
+ * changes).
+ */
+function decodeSupabaseBytea(value: string): string {
+  if (typeof value !== 'string') return value;
+  if (!value.startsWith('\\x')) return value;
+  return Buffer.from(value.slice(2), 'hex').toString('utf8');
+}
+
 export interface PublishWorkerSupabase {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   from(table: string): any;
@@ -39,7 +53,24 @@ export interface PublishWorkerDeps {
    * pages assembles content/pages/<slug>.json from page_blocks rows; for
    * schema-mode pages writes the pages.content JSONB document.
    */
-  buildSiteContentFiles: (siteId: string, pages?: string[]) => Promise<Map<string, Buffer | string>>;
+  buildSiteContentFiles: (
+    siteId: string,
+    pages?: string[],
+  ) => Promise<
+    | Map<string, Buffer | string>
+    | {
+        files: Map<string, Buffer | string>;
+        removals: string[];
+        /**
+         * When true, the publish-worker tells publishCommit to treat the
+         * file map as the authoritative tree (deletes anything in the
+         * prior commit not present in the map). Set by callers that
+         * overlay a theme so stale theme files from prior tags don't
+         * persist on the publish branch.
+         */
+        replaceTree?: boolean;
+      }
+  >;
   logger: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -112,9 +143,16 @@ export class PublishWorker {
         return;
       }
 
-      // Build file map
-      const files = await this.deps.buildSiteContentFiles(args.siteId, args.pages);
-      if (files.size === 0 && !args.force) {
+      // Build file map (+ optional explicit removals for cleanup of
+      // platform-emitted files that are no longer produced — e.g. when
+      // a site flips to theme.owns_routing=true, the prior `app/*` tree
+      // needs to be deleted from the publish branch so Next.js stops
+      // routing into stale platform stubs).
+      const built = await this.deps.buildSiteContentFiles(args.siteId, args.pages);
+      const files = built instanceof Map ? built : built.files;
+      const removals = built instanceof Map ? [] : built.removals;
+      const replaceTree = built instanceof Map ? false : built.replaceTree === true;
+      if (files.size === 0 && removals.length === 0 && !args.force) {
         await this.deps.supabase
           .from('site_republish_log')
           .update({
@@ -136,9 +174,22 @@ export class PublishWorker {
         repo,
         branch: 'publish',
         files,
+        removals,
+        replaceTree,
         message: `Publish: ${args.reason ?? 'content update'}`,
         tag: tagName,
         author: { name: 'gatewaze', email: 'noreply@gatewaze.local' },
+      });
+
+      // If the site has graduated, mirror the commit (and its tag) to the
+      // external remote. We do this BEFORE marking the row succeeded —
+      // otherwise the UI claims the publish landed in GitHub when only
+      // the internal bare repo actually saw the bytes.
+      await this.mirrorIfGraduated({
+        siteId: args.siteId,
+        repo,
+        localBranch: 'publish',
+        tag: result.tag,
       });
 
       // Update log row
@@ -163,6 +214,66 @@ export class PublishWorker {
       const message = err instanceof Error ? err.message : String(err);
       await this.markFailed(publishId, message);
     }
+  }
+
+  /**
+   * After a publishCommit succeeds, push the commit (and its tag) to the
+   * graduated external remote. Default remote branch is 'publish' — the
+   * legacy single-repo convention where main is the theme source and
+   * publish is the built output. Sites whose external is a dedicated
+   * publish-only repo (e.g. aaif-publish) should override this to 'main'
+   * via `sites.config.publish.external_branch` so the built artifacts
+   * land on the repo's default branch.
+   */
+  private async mirrorIfGraduated(args: {
+    siteId: string;
+    repo: InternalRepoRef;
+    localBranch: string;
+    tag?: string;
+  }): Promise<void> {
+    interface SiteRow {
+      git_provenance: 'internal' | 'external';
+      git_url: string | null;
+      config: { publish?: { external_branch?: string } } | null;
+    }
+    const siteRes = await this.deps.supabase
+      .from('sites')
+      .select('git_provenance, git_url, config')
+      .eq('id', args.siteId)
+      .single();
+    const site = (siteRes as { data: SiteRow | null }).data;
+    if (!site || site.git_provenance !== 'external' || !site.git_url) return;
+
+    interface SecretRow {
+      encrypted_value: string;
+    }
+    const secretRes = await this.deps.supabase
+      .from('sites_secrets')
+      .select('encrypted_value')
+      .eq('site_id', args.siteId)
+      .eq('key', 'deploy_key')
+      .single();
+    const secret = (secretRes as { data: SecretRow | null }).data;
+    if (!secret?.encrypted_value) {
+      throw new Error(
+        'mirror_failed: site is graduated but no deploy_key secret found — re-run graduate-to-external',
+      );
+    }
+
+    const remoteBranch = site.config?.publish?.external_branch ?? 'publish';
+    await this.deps.gitServer.mirrorBranchToExternal({
+      repo: args.repo,
+      localBranch: args.localBranch,
+      remoteBranch,
+      tag: args.tag,
+      externalUrl: site.git_url,
+      // sites_secrets.encrypted_value is a bytea column. graduate-to-external
+      // wrote the OpenSSH PEM in as a string; PostgREST returns it as the
+      // standard `\x<hex>` bytea encoding. Decode back to the original PEM
+      // text before writing to disk — otherwise ssh-keygen sees the literal
+      // hex string and bails with "error in libcrypto".
+      sshPrivateKey: decodeSupabaseBytea(secret.encrypted_value),
+    });
   }
 
   private async markFailed(publishId: string, errorMessage: string): Promise<void> {

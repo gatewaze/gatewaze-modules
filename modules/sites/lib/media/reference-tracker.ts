@@ -13,7 +13,11 @@
  */
 
 const MAX_DEPTH = 10;
-const MEDIA_KEY_RE = /^(image|image_url|src|href|background_image|.*_image)$/i;
+// Includes `url` and `_ref` so the rewriter picks up media references
+// nested under Sanity-shape image objects (`asset.url`, `asset._ref`).
+// `normalizeToStoragePath` filters out unknown hosts, so external URLs
+// under these keys are harmless no-ops at lookup time.
+const MEDIA_KEY_RE = /^(image|image_url|src|href|background_image|url|_ref|.*_image)$/i;
 
 export interface MediaReference {
   /** Storage path (relative; resolved via storage_bucket_url at render). */
@@ -79,8 +83,13 @@ export function normalizeToStoragePath(raw: string, storageBucketUrl?: string): 
     if (storageBucketUrl) {
       const baseUrl = new URL(storageBucketUrl);
       if (url.host === baseUrl.host) {
-        // Drop the storage prefix (e.g., /storage/v1/object/public/)
-        return url.pathname.replace(/^\/storage\/v1\/object\/(public|sign)\//, '').replace(/^\/+/, '');
+        // Drop the storage prefix AND the bucket segment. Storage paths
+        // in host_media are bucket-relative, so a full URL like
+        // `/storage/v1/object/public/media/sites/<id>/media/foo.webp`
+        // normalizes to `sites/<id>/media/foo.webp`.
+        return url.pathname
+          .replace(/^\/storage\/v1\/object\/(public|sign)\/[^/]+\//, '')
+          .replace(/^\/+/, '');
       }
     }
     // Unknown host — can't normalize; treat as opaque external URL (skip)

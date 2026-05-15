@@ -100,13 +100,64 @@ export async function buildSiteContentFiles(
     routesIndex.push({ slug: page.slug, full_path: page.full_path, composition_mode: page.composition_mode });
 
     if (page.composition_mode === 'schema') {
-      // Schema-mode: content lives in pages.content JSONB
-      files.set(`content/pages/${page.slug}.json`, JSON.stringify({
+      // Schema-mode: content lives in pages.content JSONB. Plus any
+      // editor-authored `page_variants` rows are embedded as a sibling
+      // `__variants` map so the runtime resolver (or the theme's local
+      // resolver) can pick the right overlay per request.
+      //
+      // Per spec-aaif-theme-deliverable §7.4: the static JSON is the
+      // source of truth. The runtime API reads the SAME file and
+      // applies resolution on the server when needed; local resolution
+      // in the theme reads the same data and applies the same
+      // algorithm. Both paths read variants from the `__variants` key
+      // we emit here.
+      const variantsResult = await deps.supabase
+        .from('page_variants')
+        .select('id, field_path, match_context, value, priority, updated_at')
+        .eq('page_id', page.id);
+      const variantRows = (variantsResult.data as Array<{
+        id: string;
+        field_path: string;
+        match_context: Record<string, unknown>;
+        value: unknown;
+        priority: number;
+        updated_at: string;
+      }> | null) ?? [];
+
+      // Group by field_path so the theme can `__variants["heroTitle"]`
+      // to find all candidates without scanning the whole list.
+      const variantsByField: Record<string, Array<{
+        id: string;
+        match_context: Record<string, unknown>;
+        value: unknown;
+        priority: number;
+        updated_at: string;
+      }>> = {};
+      for (const v of variantRows) {
+        const arr = variantsByField[v.field_path] ?? [];
+        arr.push({
+          id: v.id,
+          match_context: v.match_context,
+          value: v.value,
+          priority: v.priority,
+          updated_at: v.updated_at,
+        });
+        variantsByField[v.field_path] = arr;
+      }
+
+      const payload: Record<string, unknown> = {
         slug: page.slug,
         full_path: page.full_path,
         composition_mode: 'schema',
         content: page.content ?? {},
-      }, null, 2));
+      };
+      // Only include __variants when there are any — keeps the JSON
+      // clean for pages with no personalisation. Theme code can use
+      // `data.__variants ?? {}` as a safe fallback.
+      if (Object.keys(variantsByField).length > 0) {
+        payload['__variants'] = variantsByField;
+      }
+      files.set(`content/pages/${page.slug}.json`, JSON.stringify(payload, null, 2));
       continue;
     }
 
@@ -190,6 +241,11 @@ export async function buildSiteContentFiles(
       }
 
       assembledBlocks.push({
+        // The page_blocks row id — included so per-block variants (which
+        // store their field_path as `<block-id>.<prop>`) can target the
+        // right block at theme-resolution time. Per spec-aaif-theme-
+        // deliverable §5.2.
+        id: blockRow.id,
         block_def_name: def.name,
         block_kind: def.block_kind,
         audience: def.audience,
@@ -200,12 +256,52 @@ export async function buildSiteContentFiles(
       });
     }
 
-    files.set(`content/pages/${page.slug}.json`, JSON.stringify({
+    // Variants sidecar — same shape as schema-mode (`__variants[field_path]
+    // = candidates[]`). For blocks-mode the field_path is `<block-id>.<prop>`;
+    // themes apply via the walkBlockVariants helper at SSR or client time,
+    // or fall back to the runtime API for stateful (member-gated) personas.
+    const variantsResult = await deps.supabase
+      .from('page_variants')
+      .select('id, field_path, match_context, value, priority, updated_at')
+      .eq('page_id', page.id);
+    const variantRows = (variantsResult.data as Array<{
+      id: string;
+      field_path: string;
+      match_context: Record<string, unknown>;
+      value: unknown;
+      priority: number;
+      updated_at: string;
+    }> | null) ?? [];
+
+    const variantsByField: Record<string, Array<{
+      id: string;
+      match_context: Record<string, unknown>;
+      value: unknown;
+      priority: number;
+      updated_at: string;
+    }>> = {};
+    for (const v of variantRows) {
+      const arr = variantsByField[v.field_path] ?? [];
+      arr.push({
+        id: v.id,
+        match_context: v.match_context,
+        value: v.value,
+        priority: v.priority,
+        updated_at: v.updated_at,
+      });
+      variantsByField[v.field_path] = arr;
+    }
+
+    const blocksPayload: Record<string, unknown> = {
       slug: page.slug,
       full_path: page.full_path,
       composition_mode: 'blocks',
       blocks: assembledBlocks,
-    }, null, 2));
+    };
+    if (Object.keys(variantsByField).length > 0) {
+      blocksPayload['__variants'] = variantsByField;
+    }
+    files.set(`content/pages/${page.slug}.json`, JSON.stringify(blocksPayload, null, 2));
   }
 
   // 3. Routes index — full_path → page slug mapping for the publisher
