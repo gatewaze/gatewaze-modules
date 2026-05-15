@@ -169,9 +169,9 @@ export async function graduateToExternal(
 // Provider detection + ops
 // ---------------------------------------------------------------------------
 
-type GitProvider = 'github' | 'gitlab';
+export type GitProvider = 'github' | 'gitlab';
 
-function detectProvider(url: string): GitProvider | null {
+export function detectProvider(url: string): GitProvider | null {
   if (/^https?:\/\/github\.com\//.test(url)) return 'github';
   if (/^https?:\/\/gitlab\.com\//.test(url)) return 'gitlab';
   if (/^git@github\.com:/.test(url)) return 'github';
@@ -179,7 +179,7 @@ function detectProvider(url: string): GitProvider | null {
   return null;
 }
 
-function parseOwnerRepo(url: string, provider: GitProvider): string | null {
+export function parseOwnerRepo(url: string, provider: GitProvider): string | null {
   // Strip protocol + host + .git suffix
   const cleaned = url
     .replace(/^https?:\/\/[^/]+\//, '')
@@ -190,7 +190,7 @@ function parseOwnerRepo(url: string, provider: GitProvider): string | null {
   return null;
 }
 
-function toSshUrl(httpsUrl: string, provider: GitProvider): string {
+export function toSshUrl(httpsUrl: string, provider: GitProvider): string {
   const ownerRepo = parseOwnerRepo(httpsUrl, provider);
   if (!ownerRepo) return httpsUrl;
   if (provider === 'github') return `git@github.com:${ownerRepo}.git`;

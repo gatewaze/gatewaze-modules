@@ -83,6 +83,26 @@ describe('Puck adapter — integration', () => {
     expect(heroFields.bg.customFormat).toBe('image');
   });
 
+  it('injects universal _spacing_padding + _spacing_margin on every block and brick', () => {
+    // Regression guard for the "padding/margin on all blocks" feature.
+    // Every component the adapter emits (block OR brick) should carry
+    // the universal spacing fields + their '0px' defaults, regardless
+    // of what the underlying templates_*_defs.schema declared.
+    const result = buildPuckConfig({
+      libraryId: 'lib-a',
+      blockDefs, brickDefs, wrappers,
+      themeKind: 'website',
+      renderHost,
+    });
+    for (const [key, comp] of Object.entries(result.config.components)) {
+      const c = comp as { fields: Record<string, unknown>; defaultProps: Record<string, unknown> };
+      expect(c.fields, `${key} fields`).toHaveProperty('_spacing_padding');
+      expect(c.fields, `${key} fields`).toHaveProperty('_spacing_margin');
+      expect(c.defaultProps._spacing_padding, `${key} default padding`).toBe('0px');
+      expect(c.defaultProps._spacing_margin, `${key} default margin`).toBe('0px');
+    }
+  });
+
   it('round-trips a tree through load + diff with no user edits → 0 ops', () => {
     const tree: PageBlockTree = {
       page: { id: 'p1', wrapper_key: 'default', root_meta: {}, wysiwyg_locked: false },

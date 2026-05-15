@@ -23,6 +23,13 @@ export type CustomFormat = 'richtext' | 'image' | 'link' | 'color';
 
 export interface PuckFieldBase {
   label?: string;
+  /**
+   * True if the schema property carried `x-gatewaze-personalize: true`.
+   * The Config adapter wraps personalizable fields with the inline editor
+   * + a "Personalize" button that opens VariantEditor against the
+   * currently-selected block instance.
+   */
+  personalizable?: boolean;
 }
 
 export type PuckField =
@@ -54,6 +61,7 @@ interface JsonSchemaProperty {
   default?: unknown;
   properties?: Record<string, JsonSchemaProperty>;
   items?: JsonSchemaProperty;
+  'x-gatewaze-personalize'?: boolean;
 }
 
 interface JsonSchema {
@@ -87,28 +95,30 @@ function mapProperty(
   warnings: FieldMapWarning[],
 ): PuckField {
   const label = prop.title;
+  const personalizable: true | undefined = prop['x-gatewaze-personalize'] === true ? true : undefined;
+  const base: { label: string | undefined; personalizable?: true } = { label, personalizable };
 
   // enum → select (regardless of base type)
   if (prop.enum && prop.enum.length > 0) {
     return {
       type: 'select',
-      label,
+      ...base,
       options: prop.enum.map((v) => ({ label: String(v), value: v })),
     };
   }
 
   switch (prop.type) {
     case 'string':
-      return mapStringProperty(path, prop, warnings, label);
+      return mapStringProperty(path, prop, warnings, base);
 
     case 'number':
     case 'integer':
-      return { type: 'number', label };
+      return { type: 'number', ...base };
 
     case 'boolean':
       return {
         type: 'radio',
-        label,
+        ...base,
         options: [
           { label: 'Yes', value: true },
           { label: 'No', value: false },
@@ -122,7 +132,7 @@ function mapProperty(
         for (const [k, p] of Object.entries(items.properties)) {
           arrayFields[k] = mapProperty(`${path}[].${k}`, p, warnings);
         }
-        return { type: 'array', label, arrayFields };
+        return { type: 'array', ...base, arrayFields };
       }
       // Array of scalars (or untyped): fall back to text — Puck v0.20
       // arrays only support arrayFields (object items).
@@ -131,18 +141,18 @@ function mapProperty(
         reason: 'array of non-object items not supported',
         fallback: 'text',
       });
-      return { type: 'text', label };
+      return { type: 'text', ...base };
     }
 
     case 'object': {
       if (!prop.properties) {
-        return { type: 'text', label };
+        return { type: 'text', ...base };
       }
       const objectFields: Record<string, PuckField> = {};
       for (const [k, p] of Object.entries(prop.properties)) {
         objectFields[k] = mapProperty(`${path}.${k}`, p, warnings);
       }
-      return { type: 'object', label, objectFields };
+      return { type: 'object', ...base, objectFields };
     }
 
     default:
@@ -151,7 +161,7 @@ function mapProperty(
         reason: `unknown type: ${String(prop.type)}`,
         fallback: 'text',
       });
-      return { type: 'text', label };
+      return { type: 'text', ...base };
   }
 }
 
@@ -159,24 +169,24 @@ function mapStringProperty(
   path: string,
   prop: JsonSchemaProperty,
   warnings: FieldMapWarning[],
-  label: string | undefined,
+  base: { label: string | undefined; personalizable?: true },
 ): PuckField {
   const format = prop.format;
   if (!format || format === 'text') {
-    return { type: 'text', label };
+    return { type: 'text', ...base };
   }
   if (format === 'textarea') {
-    return { type: 'textarea', label };
+    return { type: 'textarea', ...base };
   }
   if (CUSTOM_FORMATS.has(format as CustomFormat)) {
-    return { type: 'custom', label, customFormat: format as CustomFormat };
+    return { type: 'custom', ...base, customFormat: format as CustomFormat };
   }
   warnings.push({
     fieldPath: path,
     reason: `unknown string format: ${format}`,
     fallback: 'text',
   });
-  return { type: 'text', label };
+  return { type: 'text', ...base };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

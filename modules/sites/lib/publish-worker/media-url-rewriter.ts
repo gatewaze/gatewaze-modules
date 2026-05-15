@@ -15,7 +15,7 @@
  * Used by buildSiteContentFiles when assembling the publish branch.
  */
 
-import { extractMediaReferences } from '../media/reference-tracker.js';
+import { extractMediaReferences, normalizeToStoragePath } from '../media/reference-tracker.js';
 
 export interface MediaUrlRewriterDeps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -28,10 +28,31 @@ export interface MediaUrlRewriterDeps {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
   };
+  /**
+   * Per `sites.config.publish.embed_media_in_git`. When true, items with
+   * `host_media.in_repo = true` get rewritten to a RELATIVE path
+   * (`/media/<safe-name>`) and an emission job is returned so the
+   * publish-worker can download + write the binary into the git tree.
+   * When false (default) we keep the current behaviour: everything
+   * rewrites to its CDN URL.
+   */
+  embedMediaInGit?: boolean;
+}
+
+export interface MediaEmitJob {
+  /** Storage path the publish-worker downloads from (via the media adapter). */
+  storagePath: string;
+  /** Path inside the git tree where the binary should be written. */
+  gitRelativePath: string;
+  /** Original mime_type / bytes — informational. */
+  mimeType: string;
+  bytes: number;
 }
 
 export interface RewriteResult {
-  /** Content with `/media/...` references rewritten to CDN URLs. */
+  /** Content with `/media/...` references rewritten to either CDN URLs or
+   *  in-repo relative paths (mix depending on each item's in_repo + the
+   *  site-level embedMediaInGit flag). */
   rewrittenContent: unknown;
   /** Manifest entries for media items kept CDN-only (>2MB threshold). */
   manifestEntries: Array<{
@@ -43,6 +64,10 @@ export interface RewriteResult {
   }>;
   /** Set of media paths actually referenced (for unused-media reporting). */
   referencedPaths: Set<string>;
+  /** Per-storage-path emission jobs — the publish-worker downloads each
+   *  binary and writes it to gitRelativePath. Empty when embedMediaInGit
+   *  is false. */
+  emitJobs: MediaEmitJob[];
 }
 
 /**
@@ -57,9 +82,18 @@ export async function rewriteMediaUrlsInContent(
   content: unknown,
   deps: MediaUrlRewriterDeps,
 ): Promise<RewriteResult> {
-  const refs = extractMediaReferences(content);
+  // Storage bucket URL lets the walker normalize absolute Supabase URLs
+  // (the shape platform-emitted asset.url / asset._ref hold) back to a
+  // storage_path so host_media lookups + the embed-media-in-git path
+  // catch them. Without this only `/media/<path>` placeholder strings
+  // are detected.
+  const sampleStorageUrl = deps.resolveMediaUrl('');
+  const storageBucketUrl = sampleStorageUrl
+    .replace(/\/storage\/v1\/object\/(public|sign)\/[^/]+\/?$/, '')
+    .replace(/\/+$/, '') || undefined;
+  const refs = extractMediaReferences(content, storageBucketUrl);
   if (refs.size === 0) {
-    return { rewrittenContent: content, manifestEntries: [], referencedPaths: new Set() };
+    return { rewrittenContent: content, manifestEntries: [], referencedPaths: new Set(), emitJobs: [] };
   }
 
   // Lookup all referenced media in one query
@@ -71,9 +105,11 @@ export async function rewriteMediaUrlsInContent(
   const items = ((result as { data: Array<{ storage_path: string; in_repo: boolean; mime_type: string; bytes: number }> | null }).data ?? []);
   const itemByPath = new Map(items.map((i) => [i.storage_path, i]));
 
-  // Build URL map: relative path → final URL
+  // Build URL map: relative path → final URL (or relative in-tree path)
   const urlMap = new Map<string, string>();
   const manifestEntries: RewriteResult['manifestEntries'] = [];
+  const emitJobs: MediaEmitJob[] = [];
+
   for (const ref of refs) {
     const item = itemByPath.get(ref);
     if (!item) {
@@ -85,10 +121,27 @@ export async function rewriteMediaUrlsInContent(
     }
     const supabaseUrl = deps.resolveMediaUrl(item.storage_path);
     const finalUrl = deps.bunnyRewriter ? deps.bunnyRewriter(supabaseUrl) : supabaseUrl;
-    urlMap.set(ref, finalUrl);
+
+    // When the site opts into media-in-git AND this item is small enough
+    // to be embedded (in_repo=true), use a relative path so the published
+    // site has no runtime dependency on the storage adapter.
+    if (deps.embedMediaInGit && item.in_repo) {
+      const gitRelativePath = `public/media/${safeFilename(item.storage_path)}`;
+      const urlForm = `/media/${safeFilename(item.storage_path)}`;
+      urlMap.set(ref, urlForm);
+      emitJobs.push({
+        storagePath: item.storage_path,
+        gitRelativePath,
+        mimeType: item.mime_type,
+        bytes: item.bytes,
+      });
+    } else {
+      urlMap.set(ref, finalUrl);
+    }
 
     if (!item.in_repo) {
-      // Large asset — emit a manifest entry
+      // Large asset — emit a manifest entry (regardless of the site flag,
+      // since by definition CDN-only items can't be inlined)
       manifestEntries.push({
         path: item.storage_path,
         sha256: null, // computed at upload time; not surfaced here for v1
@@ -99,29 +152,50 @@ export async function rewriteMediaUrlsInContent(
     }
   }
 
-  const rewritten = walkRewrite(content, 0, urlMap);
-  return { rewrittenContent: rewritten, manifestEntries, referencedPaths: refs };
+  const rewritten = walkRewrite(content, 0, urlMap, storageBucketUrl);
+  return { rewrittenContent: rewritten, manifestEntries, referencedPaths: refs, emitJobs };
+}
+
+/** Map a storage path to a filesystem-safe basename for the git tree. */
+function safeFilename(storagePath: string): string {
+  // Strip leading dirs (`sites/<id>/media/<file>` → `<file>`), keep the
+  // extension, replace anything funky with `-`.
+  const basename = storagePath.split('/').filter(Boolean).pop() ?? 'asset';
+  return basename.replace(/[^a-zA-Z0-9._-]/g, '-');
 }
 
 const MAX_DEPTH = 10;
-const MEDIA_KEY_RE = /^(image|image_url|src|href|background_image|.*_image)$/i;
+// Mirrors reference-tracker.ts — also walks `url` / `_ref` keys so the
+// rewriter rewrites URLs nested under Sanity-shape image objects
+// (`asset.url`, `asset._ref`). Strings that don't normalize to a known
+// storage path are left untouched.
+const MEDIA_KEY_RE = /^(image|image_url|src|href|background_image|url|_ref|.*_image)$/i;
 
-function walkRewrite(value: unknown, depth: number, urlMap: Map<string, string>): unknown {
+function walkRewrite(
+  value: unknown,
+  depth: number,
+  urlMap: Map<string, string>,
+  storageBucketUrl?: string,
+): unknown {
   if (depth > MAX_DEPTH) return value;
   if (value === null || value === undefined) return value;
   if (typeof value !== 'object') return value;
   if (Array.isArray(value)) {
-    return value.map((item) => walkRewrite(item, depth + 1, urlMap));
+    return value.map((item) => walkRewrite(item, depth + 1, urlMap, storageBucketUrl));
   }
   const obj = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(obj)) {
     if (typeof val === 'string' && MEDIA_KEY_RE.test(key)) {
-      const cleaned = val.split('?')[0]!.split('#')[0]!.replace(/^\/+/, '');
-      const rewritten = urlMap.get(cleaned);
+      // Normalize via the same logic extractMediaReferences uses so
+      // absolute Supabase URLs (asset.url/asset._ref shapes from the
+      // Sanity importer) get matched to a storage_path the urlMap
+      // is keyed by.
+      const normalized = normalizeToStoragePath(val, storageBucketUrl);
+      const rewritten = normalized ? urlMap.get(normalized) : undefined;
       out[key] = rewritten ?? val;
     } else {
-      out[key] = walkRewrite(val, depth + 1, urlMap);
+      out[key] = walkRewrite(val, depth + 1, urlMap, storageBucketUrl);
     }
   }
   return out;

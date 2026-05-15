@@ -193,3 +193,29 @@ function setRec(node: unknown, parts: string[], value: unknown): unknown {
 function unescapePointer(s: string): string {
   return s.replace(/~1/g, '/').replace(/~0/g, '~');
 }
+
+/**
+ * Resolve a schema subtree by JSON pointer. Numeric segments descend
+ * into `items` (the array case); string segments descend into
+ * `properties`. Returns `null` if the path can't be resolved.
+ *
+ * Used by the variant editor to find the schema for a personalized
+ * field so it can render the value editor with the same renderers as
+ * the main form.
+ */
+export function getSchemaAtPointer(root: SchemaNode, pointer: string): SchemaNode | null {
+  if (pointer === '') return root;
+  const parts = pointer.split('/').slice(1).map(unescapePointer);
+  let node: SchemaNode | undefined = root;
+  for (const p of parts) {
+    if (!node) return null;
+    if (/^\d+$/.test(p)) {
+      node = node.items;
+      continue;
+    }
+    const props = node.properties;
+    if (!props) return null;
+    node = props[p];
+  }
+  return node ?? null;
+}

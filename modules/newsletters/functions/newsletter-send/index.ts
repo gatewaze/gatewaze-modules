@@ -26,6 +26,141 @@ const BATCH_SIZE = 50
 const BATCH_DELAY_MS = 1000
 
 // ---------------------------------------------------------------------------
+// Weather substitution (open-meteo)
+// ---------------------------------------------------------------------------
+//
+// The Weather block (see admin/components/puck/email-blocks/blocks/Weather.tsx)
+// publishes HTML containing four Mustache placeholders:
+//   {{weather_emoji}}  {{weather_temp}}  {{weather_summary}}  {{weather_location}}
+// plus a `<!--gw-weather-units:celsius|fahrenheit-->` comment marker that
+// tells us which unit the block was configured for.
+//
+// The lookup uses `people.attributes->>'city'` and `attributes->>'country'`
+// for the recipient (matched by email). We cache by (city|country|units)
+// within a single send so duplicate locations only hit open-meteo once.
+
+interface WeatherResolved {
+  emoji: string;
+  temp: string;
+  summary: string;
+  location: string;
+}
+
+const WEATHER_UNAVAILABLE_SUMMARY = 'Weather unavailable for your location.';
+
+function weatherCodeToEmoji(code: number): { emoji: string; summary: string } {
+  if (code === 0) return { emoji: '☀️', summary: 'Clear sky' }
+  if (code === 1) return { emoji: '🌤️', summary: 'Mainly clear' }
+  if (code === 2) return { emoji: '⛅', summary: 'Partly cloudy' }
+  if (code === 3) return { emoji: '☁️', summary: 'Overcast' }
+  if (code === 45 || code === 48) return { emoji: '🌫️', summary: 'Fog' }
+  if (code >= 51 && code <= 57) return { emoji: '🌦️', summary: 'Drizzle' }
+  if (code >= 61 && code <= 67) return { emoji: '🌧️', summary: 'Rain' }
+  if (code >= 71 && code <= 77) return { emoji: '🌨️', summary: 'Snow' }
+  if (code >= 80 && code <= 82) return { emoji: '🌧️', summary: 'Rain showers' }
+  if (code === 85 || code === 86) return { emoji: '🌨️', summary: 'Snow showers' }
+  if (code >= 95 && code <= 99) return { emoji: '⛈️', summary: 'Thunderstorm' }
+  return { emoji: '🌡️', summary: 'Weather' }
+}
+
+function extractWeatherUnits(html: string): 'celsius' | 'fahrenheit' {
+  // First matching marker wins. Multiple weather blocks in one edition
+  // share the same unit setting in practice (and even if they don't,
+  // mixing units in a single email would be confusing).
+  const m = html.match(/<!--gw-weather-units:(celsius|fahrenheit)-->/)
+  return m && m[1] === 'fahrenheit' ? 'fahrenheit' : 'celsius'
+}
+
+interface GeocodeHit {
+  latitude: number
+  longitude: number
+  name: string
+  country?: string
+}
+
+async function geocode(city: string, country: string): Promise<GeocodeHit | null> {
+  const params = new URLSearchParams({
+    name: city.trim(),
+    count: '1',
+    language: 'en',
+    format: 'json',
+  })
+  if (country.trim()) params.set('country', country.trim())
+  const url = `https://geocoding-api.open-meteo.com/v1/search?${params}`
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const json = (await res.json()) as { results?: GeocodeHit[] }
+    return json.results?.[0] ?? null
+  } catch (err) {
+    console.warn('[weather] geocode failed', { city, country, err: String(err) })
+    return null
+  }
+}
+
+async function currentWeather(
+  hit: GeocodeHit,
+  units: 'celsius' | 'fahrenheit',
+): Promise<{ temperature: number; weatherCode: number } | null> {
+  const params = new URLSearchParams({
+    latitude: String(hit.latitude),
+    longitude: String(hit.longitude),
+    current: 'temperature_2m,weather_code',
+    temperature_unit: units,
+  })
+  const url = `https://api.open-meteo.com/v1/forecast?${params}`
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const json = (await res.json()) as {
+      current?: { temperature_2m?: number; weather_code?: number }
+    }
+    const t = json.current?.temperature_2m
+    const c = json.current?.weather_code
+    if (typeof t !== 'number' || typeof c !== 'number') return null
+    return { temperature: t, weatherCode: c }
+  } catch (err) {
+    console.warn('[weather] forecast failed', { hit, err: String(err) })
+    return null
+  }
+}
+
+async function resolveWeather(
+  city: string,
+  country: string,
+  units: 'celsius' | 'fahrenheit',
+): Promise<WeatherResolved | null> {
+  if (!city) return null
+  const hit = await geocode(city, country)
+  if (!hit) return null
+  const w = await currentWeather(hit, units)
+  if (!w) return null
+  const { emoji, summary } = weatherCodeToEmoji(w.weatherCode)
+  const tempUnit = units === 'fahrenheit' ? '°F' : '°C'
+  return {
+    emoji,
+    temp: `${Math.round(w.temperature)}${tempUnit}`,
+    summary,
+    location: `${hit.name}${hit.country ? `, ${hit.country}` : ''}`,
+  }
+}
+
+const UNAVAILABLE_WEATHER: WeatherResolved = {
+  emoji: '',
+  temp: '',
+  summary: WEATHER_UNAVAILABLE_SUMMARY,
+  location: '',
+}
+
+function substituteWeather(html: string, w: WeatherResolved): string {
+  return html
+    .replace(/\{\{weather_emoji\}\}/g, w.emoji)
+    .replace(/\{\{weather_temp\}\}/g, w.temp)
+    .replace(/\{\{weather_summary\}\}/g, w.summary)
+    .replace(/\{\{weather_location\}\}/g, w.location)
+}
+
+// ---------------------------------------------------------------------------
 // HMAC unsubscribe token generation
 // ---------------------------------------------------------------------------
 
@@ -226,11 +361,62 @@ async function processSend(
     let delivered = 0
     let failed = 0
 
+    // Detect the Weather block before paying for the per-recipient
+    // city/country lookup — most editions won't use it.
+    const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html)
+    const weatherUnits = usesWeather ? extractWeatherUnits(html) : 'celsius'
+
+    // Bulk-load recipient location attributes. people.email is unique
+    // and indexed (00003_people.sql); city/country live under
+    // attributes->>'city' / attributes->>'country' (jsonb).
+    const locationByEmail = new Map<string, { city: string; country: string }>()
+    if (usesWeather) {
+      // Supabase JS caps a single .in() payload at a few thousand rows;
+      // chunk to be safe across very large lists.
+      const CHUNK = 500
+      for (let i = 0; i < recipientEmails.length; i += CHUNK) {
+        const chunk = recipientEmails.slice(i, i + CHUNK)
+        const { data: peopleRows, error: pErr } = await supabase
+          .from('people')
+          .select('email, attributes')
+          .in('email', chunk)
+        if (pErr) {
+          console.warn('[weather] people lookup failed; falling back to unavailable', pErr.message)
+          break
+        }
+        for (const row of peopleRows ?? []) {
+          const attrs = (row as { attributes?: Record<string, unknown> }).attributes ?? {}
+          const city = typeof attrs.city === 'string' ? attrs.city : ''
+          const country = typeof attrs.country === 'string' ? attrs.country : ''
+          if (city) {
+            locationByEmail.set((row as { email: string }).email, { city, country })
+          }
+        }
+      }
+    }
+
     for (let i = 0; i < recipientEmails.length; i += BATCH_SIZE) {
       const batch = recipientEmails.slice(i, i + BATCH_SIZE)
 
       const fromEmail = send.from_address || Deno.env.get('EMAIL_FROM') || 'noreply@localhost'
       const fromName = send.from_name || Deno.env.get('EMAIL_FROM_NAME') || 'Gatewaze'
+
+      // Per-batch open-meteo cache — duplicate locations within a batch
+      // share a single resolution. Cached `null` means we already tried
+      // and failed (don't retry within the batch).
+      const weatherCache = new Map<string, WeatherResolved | null>()
+      async function getWeatherForEmail(email: string): Promise<WeatherResolved> {
+        if (!usesWeather) return UNAVAILABLE_WEATHER
+        const loc = locationByEmail.get(email)
+        if (!loc) return UNAVAILABLE_WEATHER
+        const key = `${loc.city.toLowerCase()}|${loc.country.toLowerCase()}|${weatherUnits}`
+        if (weatherCache.has(key)) {
+          return weatherCache.get(key) ?? UNAVAILABLE_WEATHER
+        }
+        const w = await resolveWeather(loc.city, loc.country, weatherUnits)
+        weatherCache.set(key, w)
+        return w ?? UNAVAILABLE_WEATHER
+      }
 
       const results = await Promise.allSettled(
         batch.map(async (email: string) => {
@@ -254,6 +440,11 @@ async function processSend(
             )
           } else if (unsubscribeUrl) {
             personalizedHtml = html.replace(/\{\{unsubscribe_url\}\}/g, unsubscribeUrl)
+          }
+
+          if (usesWeather) {
+            const weather = await getWeatherForEmail(email)
+            personalizedHtml = substituteWeather(personalizedHtml, weather)
           }
 
           // Create email_send_log entry
