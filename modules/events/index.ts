@@ -242,8 +242,6 @@ const eventsModule: GatewazeModule = {
 
   mcpContributions: () => getEventsMcpContributions(),
 
-  dependencies: [],
-
   configSchema: {},
 
   onInstall: async () => {
