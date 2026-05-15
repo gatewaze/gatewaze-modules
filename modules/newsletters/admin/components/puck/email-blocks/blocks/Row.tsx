@@ -1,16 +1,17 @@
 /**
- * Row primitive — react-email's `Row` (table-row wrapper that holds
- * `Column` children). One `Row` lays its children out side-by-side at
- * desktop widths; mobile clients (Outlook, Gmail iOS) collapse columns
- * via the `mobile:` Tailwind variant the Barebone templates ship.
+ * Row primitive — wraps react-email's `Row` (table-row) at publish time,
+ * but renders a `<div>` flex container in edit mode so Puck's DropZone
+ * (`<div>`) can legally nest inside it. See `../editor-safe-primitives.tsx`
+ * for the rationale.
  */
 
-import { Row } from '@react-email/components';
+import { EmailRow } from '../editor-safe-primitives.js';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { renderSlot } from '../render-slot.js';
 
 interface RowProps extends Record<string, unknown> {
   children?: unknown;
+  editMode?: boolean;
 }
 
 export const RowBlock: EmailBlockEntry<RowProps> = {
@@ -23,5 +24,7 @@ export const RowBlock: EmailBlockEntry<RowProps> = {
   defaultProps: {
     children: [],
   },
-  Component: ({ children }) => <Row>{renderSlot(children)}</Row>,
+  Component: ({ children, editMode }) => (
+    <EmailRow editMode={editMode}>{renderSlot(children)}</EmailRow>
+  ),
 };

@@ -2397,6 +2397,36 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
                 </div>
               )}
 
+              {/* External action links — populated by scrapers that capture
+                  per-card / per-page button URLs (e.g. Linux Foundation
+                  events: register / sponsor / schedule / videos / speak).
+                  Stored in source_details.action_links: a flat
+                  {label: url} object keyed by lower-cased button text. */}
+              {(() => {
+                const links = event.sourceDetails?.action_links as Record<string, string> | undefined;
+                if (!links || typeof links !== 'object' || Object.keys(links).length === 0) return null;
+                return (
+                  <div>
+                    <span className="text-xs font-semibold uppercase tracking-wider text-[var(--gray-a11)]">External Links</span>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {Object.entries(links).map(([label, href]) => (
+                        <a
+                          key={label}
+                          href={href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-[var(--gray-a6)] hover:border-[var(--accent-8)] hover:text-[var(--accent-11)] capitalize text-[var(--gray-12)] transition-colors"
+                          title={href}
+                        >
+                          {label}
+                          <span aria-hidden className="text-[var(--gray-a9)]">↗</span>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="pt-3 border-t border-[var(--gray-a6)] grid grid-cols-2 gap-4">
                 <div>
                   <span className="text-xs font-semibold uppercase tracking-wider text-[var(--gray-a11)]">Created</span>

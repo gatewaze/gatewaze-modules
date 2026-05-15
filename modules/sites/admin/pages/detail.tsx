@@ -18,6 +18,7 @@ import {
   RocketLaunchIcon,
   Cog6ToothIcon,
   BeakerIcon,
+  UserGroupIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Badge, Tabs } from '@/components/ui';
@@ -32,9 +33,10 @@ import { SiteMediaTab } from '../components/SiteMediaTab';
 import { SiteMenusTab } from '../components/SiteMenusTab';
 import { SitePublishingTab } from '../components/SitePublishingTab';
 import { SiteAbTestsTab } from '../components/SiteAbTestsTab';
+import { SitePersonasTab } from '../components/SitePersonasTab';
 import { SiteSettingsTab } from '../components/SiteSettingsTab';
 
-const VALID_TABS = ['pages', 'source', 'media', 'menus', 'publishing', 'experiments', 'settings'] as const;
+const VALID_TABS = ['pages', 'source', 'media', 'menus', 'personas', 'publishing', 'experiments', 'settings'] as const;
 type TabKey = (typeof VALID_TABS)[number];
 
 export default function SiteDetailPage() {
@@ -102,6 +104,9 @@ export default function SiteDetailPage() {
           { id: 'media', label: 'Media', icon: <PhotoIcon className={ic} /> },
           { id: 'menus', label: 'Menus', icon: <Bars3Icon className={ic} /> },
         ]),
+    // Personas drive per-segment page variants via the runtime API.
+    // Portal sites hide this — portal renders hardcoded views.
+    ...(isPortalSite ? [] : [{ id: 'personas', label: 'Personas', icon: <UserGroupIcon className={ic} /> }]),
     { id: 'publishing', label: 'Publishing', icon: <RocketLaunchIcon className={ic} /> },
     ...(isPortalSite ? [] : [{ id: 'experiments', label: 'Experiments', icon: <BeakerIcon className={ic} /> }]),
     { id: 'settings', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
@@ -153,6 +158,7 @@ export default function SiteDetailPage() {
         {activeTab === 'source' && <SiteSourceTab site={site} onSiteUpdated={(s) => setSite(s)} />}
         {activeTab === 'media' && !isPortalSite && <SiteMediaTab site={site} />}
         {activeTab === 'menus' && !isPortalSite && <SiteMenusTab site={site} />}
+        {activeTab === 'personas' && !isPortalSite && <SitePersonasTab site={site} />}
         {activeTab === 'publishing' && <SitePublishingTab site={site} onSiteUpdated={(s) => setSite(s)} />}
         {activeTab === 'experiments' && !isPortalSite && <SiteAbTestsTab site={site} />}
         {activeTab === 'settings' && <SiteSettingsTab site={site} onSiteUpdated={(s) => setSite(s)} />}

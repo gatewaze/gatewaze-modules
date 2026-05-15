@@ -26,10 +26,12 @@
  */
 
 import { Body, Container, Head, Html, Preview } from '@react-email/components';
+import { cloneElement, isValidElement } from 'react';
 import type { ComponentType, ReactElement, ReactNode } from 'react';
 import type { NewsletterEdition, EditionBlock } from '../../../utils/types.js';
 import { getEmailBlock, type FormatId } from './index.js';
 import { renderTemplate } from '../../../../../sites/lib/canvas-render/mustache-subset.js';
+import { extractSpacing, wrapWithSpacing } from './spacing-wrapper.js';
 
 export interface EditionEmailProps {
   edition: NewsletterEdition;
@@ -107,6 +109,13 @@ function BlockSlot({ block, format, meta }: BlockSlotProps): ReactElement | null
     }
     const Comp = pickFormatComponent(entry.Component, entry.formats, format);
     const props = { ...(block.content as Record<string, unknown>) };
+    // Pluck the universal spacing props off — they belong on the
+    // wrapper, not on the block's render. Strip from props BEFORE the
+    // slot/children handling so they don't leak through to the
+    // component's own attribute set.
+    const { padding, margin } = extractSpacing(props);
+    delete props._spacing_padding;
+    delete props._spacing_margin;
     // Slot containers: the `children` field is a serialised tree under
     // content.children. Recursively render it into JSX before passing
     // through to the component, so the component sees a ReactNode and
@@ -118,7 +127,7 @@ function BlockSlot({ block, format, meta }: BlockSlotProps): ReactElement | null
       // component's own intrinsic `children` (if any) wins.
       delete props.children;
     }
-    return <Comp {...(props as never)} />;
+    return <>{wrapWithSpacing(<Comp {...(props as never)} />, padding, margin)}</>;
   }
 
   // Mustache path
@@ -155,12 +164,21 @@ export function renderTree(
     const props = { ...propsRaw };
     const id = typeof props.id === 'string' ? props.id : `tree-${idx}`;
     delete props.id;
+    const { padding, margin } = extractSpacing(props);
+    delete props._spacing_padding;
+    delete props._spacing_margin;
     if (entryHasSlot(entry) && Array.isArray(props.children)) {
       props.children = renderTree(props.children as ReadonlyArray<unknown>, format);
     } else if ('children' in props && !entryHasSlot(entry)) {
       delete props.children;
     }
-    return <Comp key={id} {...(props as never)} />;
+    const node = <Comp key={id} {...(props as never)} />;
+    const wrapped = wrapWithSpacing(node, padding, margin);
+    // When the wrapper introduces a real <div>, React needs a key on
+    // the outer element (not the inner Comp). Clone the wrapper to
+    // attach the key without disturbing its styling.
+    if (wrapped === node) return node;
+    return isValidElement(wrapped) ? cloneElement(wrapped, { key: id }) : wrapped;
   });
 }
 

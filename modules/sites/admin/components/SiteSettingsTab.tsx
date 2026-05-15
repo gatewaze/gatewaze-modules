@@ -21,6 +21,7 @@ interface SettingsForm {
   robots: 'index' | 'noindex';
   analyticsProvider: 'plausible' | 'fathom' | 'umami' | 'ga4' | 'none';
   analyticsSiteId: string;
+  embedMediaInGit: boolean;
 }
 
 export function SiteSettingsTab({ site, onSiteUpdated }: { site: SiteRow; onSiteUpdated: (s: SiteRow) => void }) {
@@ -36,6 +37,7 @@ export function SiteSettingsTab({ site, onSiteUpdated }: { site: SiteRow; onSite
       robots: site.config?.seo?.robots ?? 'index',
       analyticsProvider: site.config?.analytics?.provider ?? 'none',
       analyticsSiteId: site.config?.analytics?.siteId ?? '',
+      embedMediaInGit: (site.config as { publish?: { embed_media_in_git?: boolean } })?.publish?.embed_media_in_git === true,
     },
   });
 
@@ -56,6 +58,10 @@ export function SiteSettingsTab({ site, onSiteUpdated }: { site: SiteRow; onSite
           data.analyticsProvider === 'none'
             ? { provider: 'none' }
             : { provider: data.analyticsProvider, siteId: data.analyticsSiteId || undefined },
+        publish: {
+          ...((site.config as { publish?: Record<string, unknown> })?.publish ?? {}),
+          embed_media_in_git: data.embedMediaInGit,
+        },
       },
     });
     setSubmitting(false);
@@ -123,6 +129,27 @@ export function SiteSettingsTab({ site, onSiteUpdated }: { site: SiteRow; onSite
             ]}
           />
           <Input label="Site ID / measurement ID" {...register('analyticsSiteId')} placeholder="(per-provider format)" />
+        </section>
+
+        <section className="space-y-3">
+          <h3 className="text-sm font-semibold text-[var(--gray-12)]">Publishing</h3>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              {...register('embedMediaInGit')}
+              className="mt-1"
+            />
+            <div>
+              <div className="text-sm font-medium text-[var(--gray-12)]">Embed media in published git tree</div>
+              <p className="text-xs text-[var(--gray-9)]">
+                When enabled, the publish writes referenced media files (images marked
+                <code className="mx-1">in_repo=true</code>) into <code>public/media/</code> in
+                the git tree and references them via relative paths. The published site has
+                no runtime dependency on the storage adapter (S3 / Supabase / Bunny). Large
+                files (above the per-site repo cap) still reference the CDN URL.
+              </p>
+            </div>
+          </label>
         </section>
 
         <div className="flex justify-end">

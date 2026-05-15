@@ -319,10 +319,14 @@ export function createMediaRoutes(deps: MediaRoutesDeps) {
       uploaded_by: string | null; width: number | null; height: number | null; created_at: string;
     }
     const rows = ((result as { data: Row[] | null }).data ?? []);
-    const items = rows.map((r) => {
-      const { data } = deps.supabase.storage.from('gatewaze-media').getPublicUrl(r.storage_path);
-      return { ...r, cdn_url: (data as { publicUrl: string }).publicUrl };
-    });
+    // Build browser-facing URLs from SUPABASE_PUBLIC_URL + the canonical
+    // `media` bucket — see spec-relative-storage-paths.md §4.
+    const bucket = process.env.STORAGE_BUCKET ?? 'media';
+    const publicBase = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+    const items = rows.map((r) => ({
+      ...r,
+      cdn_url: `${publicBase}/storage/v1/object/public/${bucket}/${r.storage_path}`,
+    }));
 
     res.status(200).json({ items });
   }

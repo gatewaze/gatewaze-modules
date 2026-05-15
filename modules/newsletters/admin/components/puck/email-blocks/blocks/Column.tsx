@@ -1,12 +1,11 @@
 /**
- * Column primitive — react-email's `Column` (table-cell). Lives inside
- * `Row` and provides per-column width / vertical alignment.
- *
- * Email-safe alternative to flex/grid: clients render the underlying
- * `<td>` table cells reliably across Outlook / Gmail / Apple Mail.
+ * Column primitive — wraps react-email's `Column` (table-cell) at publish
+ * time, but renders a sized `<div>` flex item in edit mode so Puck's
+ * outer DraggableComponent (`<div>`) can legally contain it. See
+ * `../editor-safe-primitives.tsx` for the rationale.
  */
 
-import { Column } from '@react-email/components';
+import { EmailColumn } from '../editor-safe-primitives.js';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { renderSlot } from '../render-slot.js';
 
@@ -15,6 +14,7 @@ interface ColumnProps extends Record<string, unknown> {
   verticalAlign: 'top' | 'middle' | 'bottom';
   padding: string;
   children?: unknown;
+  editMode?: boolean;
 }
 
 const VALIGN_OPTIONS = [
@@ -39,9 +39,14 @@ export const ColumnBlock: EmailBlockEntry<ColumnProps> = {
     padding: '0',
     children: [],
   },
-  Component: ({ width, verticalAlign, padding, children }) => (
-    <Column style={{ width, verticalAlign, padding }}>
+  Component: ({ width, verticalAlign, padding, children, editMode }) => (
+    <EmailColumn
+      editMode={editMode}
+      width={width}
+      verticalAlign={verticalAlign}
+      padding={padding}
+    >
       {renderSlot(children)}
-    </Column>
+    </EmailColumn>
   ),
 };

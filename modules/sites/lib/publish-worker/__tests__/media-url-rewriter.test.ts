@@ -109,6 +109,59 @@ describe('rewriteMediaUrlsInContent', () => {
   });
 });
 
+describe('rewriteMediaUrlsInContent — embedMediaInGit', () => {
+  it('rewrites in_repo items to relative paths when site opts in', async () => {
+    const deps = {
+      ...makeStubDeps([{ storage_path: 'media/hero.jpg', in_repo: true, mime_type: 'image/jpeg', bytes: 1024 }]),
+      embedMediaInGit: true,
+    };
+    const content = { image: '/media/hero.jpg' };
+    const result = await rewriteMediaUrlsInContent('site', 'site-1', content, deps);
+    expect((result.rewrittenContent as { image: string }).image).toBe('/media/hero.jpg');
+    expect(result.emitJobs).toEqual([{
+      storagePath: 'media/hero.jpg',
+      gitRelativePath: 'public/media/hero.jpg',
+      mimeType: 'image/jpeg',
+      bytes: 1024,
+    }]);
+  });
+
+  it('still uses CDN URL for in_repo=false items even when flag is set', async () => {
+    const deps = {
+      ...makeStubDeps([
+        { storage_path: 'media/small.jpg', in_repo: true, mime_type: 'image/jpeg', bytes: 1024 },
+        { storage_path: 'media/big.mp4', in_repo: false, mime_type: 'video/mp4', bytes: 10_485_760 },
+      ]),
+      embedMediaInGit: true,
+    };
+    // Use keys that match MEDIA_KEY_RE: `image`, `src`, `*_image`.
+    const content = { image: '/media/small.jpg', background_image: '/media/big.mp4' };
+    const result = await rewriteMediaUrlsInContent('site', 'site-1', content, deps);
+    expect((result.rewrittenContent as { image: string }).image).toBe('/media/small.jpg');
+    expect((result.rewrittenContent as { background_image: string }).background_image).toContain('supabase.example.com');
+    expect(result.emitJobs).toHaveLength(1);
+    expect(result.manifestEntries).toHaveLength(1);
+  });
+
+  it('omits emit jobs when site flag is false (default)', async () => {
+    const deps = makeStubDeps([{ storage_path: 'media/hero.jpg', in_repo: true, mime_type: 'image/jpeg', bytes: 1024 }]);
+    const content = { image: '/media/hero.jpg' };
+    const result = await rewriteMediaUrlsInContent('site', 'site-1', content, deps);
+    expect((result.rewrittenContent as { image: string }).image).toContain('supabase.example.com');
+    expect(result.emitJobs).toEqual([]);
+  });
+
+  it('makes filesystem-safe filenames from storage paths', async () => {
+    const deps = {
+      ...makeStubDeps([{ storage_path: 'media/Some File (1).jpg', in_repo: true, mime_type: 'image/jpeg', bytes: 1024 }]),
+      embedMediaInGit: true,
+    };
+    const content = { image: '/media/Some File (1).jpg' };
+    const result = await rewriteMediaUrlsInContent('site', 'site-1', content, deps);
+    expect(result.emitJobs[0]?.gitRelativePath).toBe('public/media/Some-File--1-.jpg');
+  });
+});
+
 describe('buildMediaManifest', () => {
   it('produces a valid JSON document with sorted entries', () => {
     const entries = [

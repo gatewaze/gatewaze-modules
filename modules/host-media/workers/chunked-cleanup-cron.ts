@@ -21,7 +21,8 @@ interface Deps {
   logger: PlatformLogger;
 }
 
-const STORAGE_BUCKET = process.env.HOST_MEDIA_BUCKET ?? 'host-media';
+// Canonical single bucket per spec-relative-storage-paths.md.
+const STORAGE_BUCKET = process.env.HOST_MEDIA_BUCKET ?? 'media';
 
 export async function cleanupExpiredChunkedUploads(deps: Deps): Promise<void> {
   const { data: expired, error } = await deps.supabase

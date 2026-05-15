@@ -69,7 +69,7 @@ export const Field: React.FC<FieldProps> = ({ pointer, schema, value, onChange, 
 
   const editor: React.ReactNode = overridden
     ? overridden({ value, schema, onChange, ctx } as Parameters<FieldRenderer>[0])
-    : renderBuiltin(kind, value, schema, onChange, renderers);
+    : renderBuiltin(kind, value, schema, onChange, pointer, onPersonalize, renderers);
 
   return (
     <div className="gw-field" data-pointer={pointer}>
@@ -92,6 +92,8 @@ function renderBuiltin(
   value: unknown,
   schema: SchemaNode,
   onChange: (next: unknown) => void,
+  pointer: string,
+  onPersonalize: ((pointer: string) => void) | undefined,
   renderers: FieldRendererMap | undefined,
 ): React.ReactNode {
   switch (kind) {
@@ -103,8 +105,8 @@ function renderBuiltin(
     case 'integer': return <NumberEditor value={asNumber(value)} onChange={(n) => onChange(Math.trunc(n))} step="1" />;
     case 'boolean': return <BooleanEditor value={asBool(value)} onChange={onChange} />;
     case 'select': return <SelectEditor value={asString(value)} options={(schema.enum ?? []) as ReadonlyArray<unknown>} onChange={onChange} />;
-    case 'object': return <ObjectEditor value={value as Record<string, unknown> | null} schema={schema} onChange={onChange} renderers={renderers} />;
-    case 'array': return <ArrayEditor value={(value as unknown[] | null) ?? []} schema={schema} onChange={onChange} renderers={renderers} />;
+    case 'object': return <ObjectEditor pointer={pointer} value={value as Record<string, unknown> | null} schema={schema} onChange={onChange} onPersonalize={onPersonalize} renderers={renderers} />;
+    case 'array': return <ArrayEditor pointer={pointer} value={(value as unknown[] | null) ?? []} schema={schema} onChange={onChange} onPersonalize={onPersonalize} renderers={renderers} />;
     default: return <em className="gw-field__unknown">unsupported field kind</em>;
   }
 }
@@ -191,11 +193,13 @@ const SelectEditor: React.FC<{ value: string; options: ReadonlyArray<unknown>; o
 );
 
 const ObjectEditor: React.FC<{
+  pointer: string;
   value: Record<string, unknown> | null;
   schema: SchemaNode;
   onChange: (v: Record<string, unknown>) => void;
+  onPersonalize: ((pointer: string) => void) | undefined;
   renderers: FieldRendererMap | undefined;
-}> = ({ value, schema, onChange, renderers }) => {
+}> = ({ pointer, value, schema, onChange, onPersonalize, renderers }) => {
   const v = value ?? {};
   const props = schema.properties ?? {};
   return (
@@ -203,10 +207,11 @@ const ObjectEditor: React.FC<{
       {Object.entries(props).map(([key, child]) => (
         <Field
           key={key}
-          pointer={`/${escapePointer(key)}`}
+          pointer={`${pointer}/${escapePointer(key)}`}
           schema={child}
           value={v[key]}
           onChange={(next) => onChange({ ...v, [key]: next })}
+          onPersonalize={onPersonalize}
           renderers={renderers}
         />
       ))}
@@ -215,18 +220,20 @@ const ObjectEditor: React.FC<{
 };
 
 const ArrayEditor: React.FC<{
+  pointer: string;
   value: unknown[];
   schema: SchemaNode;
   onChange: (v: unknown[]) => void;
+  onPersonalize: ((pointer: string) => void) | undefined;
   renderers: FieldRendererMap | undefined;
-}> = ({ value, schema, onChange, renderers }) => {
+}> = ({ pointer, value, schema, onChange, onPersonalize, renderers }) => {
   const itemsSchema = schema.items ?? { type: 'string' };
   return (
     <div className="gw-field__array">
       {value.map((item, i) => (
         <div className="gw-field__array-item" key={i}>
           <Field
-            pointer={`/${i}`}
+            pointer={`${pointer}/${i}`}
             schema={itemsSchema}
             value={item}
             onChange={(next) => {
@@ -234,6 +241,7 @@ const ArrayEditor: React.FC<{
               copy[i] = next;
               onChange(copy);
             }}
+            onPersonalize={onPersonalize}
             renderers={renderers}
           />
           <button
