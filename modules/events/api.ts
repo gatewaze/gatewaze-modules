@@ -511,15 +511,24 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
     }
   });
 
-  // Get single event
+  // Get single event by UUID OR by short event_id (e.g. "k593lq").
+  // The portal uses the short event_id in URLs, the admin uses UUID.
+  // Previously the route only tried `id = $param` which threw
+  // PG 22P02 "invalid input syntax for type uuid" on every short-id
+  // request — surfacing as a 500 + portal page 404.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   app.get('/api/events/:id', async (req: Request, res: Response) => {
     try {
       const supabase = initSupabase(projectRoot);
+      const ident = req.params.id;
+      // Pick the column based on shape — never send a non-UUID into
+      // the `id` filter, PG rejects it before RLS even runs.
+      const column = UUID_RE.test(ident) ? 'id' : 'event_id';
       const { data, error } = await supabase
         .from('events')
         .select('*')
-        .eq('id', req.params.id)
-        .single();
+        .eq(column, ident)
+        .maybeSingle();
 
       if (error) throw error;
       if (!data) return res.status(404).json({ error: 'Event not found' });
