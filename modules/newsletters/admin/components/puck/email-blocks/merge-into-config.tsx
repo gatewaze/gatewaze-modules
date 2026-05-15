@@ -19,8 +19,95 @@
  * dev mode so authors can notice.
  */
 
-import type { Config } from '@puckeditor/core';
+import type { Config, Field } from '@puckeditor/core';
 import type { EmailBlockEntry, EmailBlockRegistry } from './registry-types.js';
+import { NewsletterPaddingSliderField } from './number-slider-field-adapter.js';
+import { wrapWithSpacing } from './spacing-wrapper.js';
+
+/**
+ * Uniform spacing fields auto-injected into every registry block. The
+ * underscore prefix sets these apart from content fields (Container has
+ * its own `padding` for inner spacing — that survives unchanged; the
+ * `_spacing_*` pair adds outer spacing on a wrapper element).
+ *
+ * Both default to `'0px'` so existing blocks render identically until
+ * an operator opts in. The same slider field that powers Container's
+ * inner padding is reused — it handles single-axis and CSS-shorthand
+ * values (e.g. `"16px 24px"`).
+ */
+const SPACING_FIELDS: Record<string, Field> = {
+  _spacing_padding: {
+    type: 'custom',
+    label: 'Padding (outer)',
+    render: NewsletterPaddingSliderField as never,
+  },
+  _spacing_margin: {
+    type: 'custom',
+    label: 'Margin',
+    render: NewsletterPaddingSliderField as never,
+  },
+};
+
+const SPACING_DEFAULTS = {
+  _spacing_padding: '0px',
+  _spacing_margin: '0px',
+};
+
+/**
+ * Default `contentEditable: true` on every text / textarea field that
+ * doesn't explicitly opt out. This is what makes the canvas an inline
+ * editor: Puck wraps the field's rendered text node in an editable
+ * span. If a field's value isn't rendered as visible text (URLs on
+ * `href`, colors as `style` values, sizes in `px`), `contentEditable`
+ * is a no-op for it, so defaulting universally is safe — it only
+ * kicks in where the prop shows as visible text.
+ *
+ * Blocks can still opt out per-field by setting
+ * `contentEditable: false` explicitly. Custom / select / number /
+ * boolean fields are left untouched (they have their own UI).
+ */
+function enableInlineEditing(fields: Record<string, Field>): Record<string, Field> {
+  const out: Record<string, Field> = {};
+  for (const [key, field] of Object.entries(fields)) {
+    const type = (field as { type?: string }).type;
+    const hasExplicit = (field as { contentEditable?: boolean }).contentEditable !== undefined;
+    if ((type === 'text' || type === 'textarea') && !hasExplicit) {
+      out[key] = { ...field, contentEditable: true } as Field;
+    } else {
+      out[key] = field;
+    }
+  }
+  return out;
+}
+
+/**
+ * Detect custom fields that are missing a `render` function. Puck v0.21's
+ * AutoField throws "Field type for custom did not exist." the moment a
+ * drawer tries to render such a field — a confusing error message that
+ * surfaces only at runtime, only after a block is selected, and that
+ * crashes the editor's drawer. This pre-flight check catches the
+ * problem at merge time with a clear message instead.
+ *
+ * The trap is real: sites' PuckConfigAdapter has a resolver that maps
+ * `{ type: 'custom', customFormat: 'richtext' }` to an actual render
+ * function. The email-blocks merge layer doesn't run that resolver, so
+ * a block authored with `customFormat` (no `render`) ships broken.
+ * Pin the diagnostic here rather than relying on the per-block author
+ * remembering the difference.
+ */
+function assertCustomFieldsHaveRender(componentId: string, fields: Record<string, Field>): void {
+  for (const [key, field] of Object.entries(fields)) {
+    const f = field as { type?: string; render?: unknown; customFormat?: string };
+    if (f.type !== 'custom') continue;
+    if (typeof f.render === 'function') continue;
+    const hint = f.customFormat
+      ? ` (declared customFormat='${f.customFormat}' but the email-blocks merge layer does not resolve customFormat → render; provide an explicit \`render\` function instead)`
+      : '';
+    throw new Error(
+      `[email-blocks] Block '${componentId}' field '${key}' has type='custom' without a render function${hint}.`,
+    );
+  }
+}
 
 export interface MergeArgs {
   /** The Config already built from schema-driven block_defs. */
@@ -119,26 +206,69 @@ function puckEntryFromRegistry(entry: EmailBlockEntry): Config['components'][str
     entry.fields &&
     typeof (entry.fields as Record<string, { type?: string }>).children === 'object' &&
     (entry.fields as Record<string, { type?: string }>).children?.type === 'slot';
-  return {
+  // Merge the universal spacing fields. Registry-declared fields win on
+  // key collision so a block that already exposes `_spacing_*` keeps its
+  // own version (defensive — no block does today). After merging, walk
+  // the field map and default `contentEditable: true` on every text /
+  // textarea field — that's what gives every block in-canvas inline
+  // editing without needing per-block `contentEditable: true` flags.
+  const mergedFields = enableInlineEditing({
+    ...SPACING_FIELDS,
+    ...(entry.fields as Record<string, Field>),
+  });
+  assertCustomFieldsHaveRender(entry.componentId, mergedFields);
+  const mergedDefaults = {
+    ...SPACING_DEFAULTS,
+    ...entry.defaultProps,
+  };
+  const config: Record<string, unknown> = {
     label: entry.label,
-    fields: entry.fields,
-    defaultProps: entry.defaultProps,
+    fields: mergedFields,
+    defaultProps: mergedDefaults,
     // Puck calls render(props) — the registry's Component already accepts
     // the same shape. We strip Puck-only structural props (`id`,
-    // `variant_key`, `puck`, `editMode`) before delegating; the `children`
-    // slot prop survives only for components that declared a slot field.
+    // `variant_key`, `puck`) and the universal `_spacing_*` props
+    // (consumed by the wrapper, not the block) before delegating.
+    // `editMode` is forwarded so blocks can render preview content in
+    // the editor vs. Mustache placeholders at publish time. The
+    // `children` slot prop survives only for components that declared
+    // a slot field.
     render: (rawProps: Record<string, unknown>) => {
-      const { id, children, variant_key, puck, editMode, ...rest } = rawProps as {
+      const {
+        id,
+        children,
+        variant_key,
+        puck,
+        editMode,
+        _spacing_padding,
+        _spacing_margin,
+        ...rest
+      } = rawProps as {
         id?: string;
         children?: unknown;
         variant_key?: string;
         puck?: unknown;
         editMode?: unknown;
+        _spacing_padding?: string;
+        _spacing_margin?: string;
         [k: string]: unknown;
       };
-      void id; void variant_key; void puck; void editMode;
-      const props = hasSlotChildren ? { ...rest, children } : rest;
-      return <Component {...(props as never)} />;
+      void id; void variant_key; void puck;
+      const props = hasSlotChildren
+        ? { ...rest, children, editMode }
+        : { ...rest, editMode };
+      // Shared wrapper helper — same logic the publish path uses, so
+      // canvas and final email render identically.
+      const padding = typeof _spacing_padding === 'string' ? _spacing_padding : '0px';
+      const margin = typeof _spacing_margin === 'string' ? _spacing_margin : '0px';
+      return wrapWithSpacing(<Component {...(props as never)} />, padding, margin);
     },
   };
+  if (entry.resolveData) {
+    // Puck's typing for resolveData is generic over the full ComponentData
+    // shape; the registry contract narrows that to just `{ props }`. Cast
+    // at the boundary so callers aren't forced to thread Puck generics.
+    config.resolveData = entry.resolveData as unknown;
+  }
+  return config as Config['components'][string];
 }

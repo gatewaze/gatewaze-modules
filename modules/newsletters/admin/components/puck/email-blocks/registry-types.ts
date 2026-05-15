@@ -18,6 +18,25 @@ import type { Field } from '@puckeditor/core';
 
 export type FormatId = 'substack' | 'beehiiv';
 
+/**
+ * Subset of Puck's `resolveData` signature surfaced through the registry.
+ * Puck calls this in the editor whenever the block's props change; the
+ * resolver returns updated props (and optional `readOnly` flags marking
+ * derived fields). We narrow the shape so blocks don't pull Puck's full
+ * generic type machinery into the registry contract.
+ */
+export interface EmailBlockResolveDataParams<P> {
+  changed: Partial<Record<keyof P, boolean> & { id: string }>;
+  lastData: { props: P } | null;
+  trigger: 'insert' | 'replace' | 'load' | 'force' | 'move';
+}
+
+export type EmailBlockResolveData<P> = (
+  data: { props: P },
+  params: EmailBlockResolveDataParams<P>,
+) => Promise<{ props?: Partial<P>; readOnly?: Partial<Record<keyof P, boolean>> }>
+  | { props?: Partial<P>; readOnly?: Partial<Record<keyof P, boolean>> };
+
 export interface EmailBlockEntry<P extends Record<string, unknown> = Record<string, unknown>> {
   /** Stable id used as templates_block_defs.component_id. Lowercase + dash. */
   componentId: string;
@@ -30,7 +49,15 @@ export interface EmailBlockEntry<P extends Record<string, unknown> = Record<stri
   /** Default props when the block is first inserted. */
   defaultProps: P;
   /** TSX component — receives Puck props at render time, returns email-safe JSX. */
-  Component: ComponentType<P>;
+  Component: ComponentType<P & { editMode?: boolean }>;
+  /**
+   * Optional Puck `resolveData` hook. Called in the editor when props
+   * change; useful for fetching preview data (weather, currency rates,
+   * etc.) so the canvas shows realistic content. Does NOT run at send
+   * time — per-recipient personalisation still goes through the
+   * Mustache substitution pass in newsletter-send.
+   */
+  resolveData?: EmailBlockResolveData<P>;
   /**
    * Optional per-format component variants for non-email outputs.
    * When EditionEmail is composed for `format='substack'` (or 'beehiiv')

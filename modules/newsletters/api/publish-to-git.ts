@@ -23,6 +23,30 @@
 
 import type { Router, Response, NextFunction } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+const execFileP = promisify(execFile);
+
+/**
+ * PostgREST returns bytea columns as `\\x<hex>` strings. Tokens written
+ * into templates_sources.token_secret_ref as ASCII (PAT or deploy-key PEM)
+ * round-trip through that encoding when the column is bytea; for text
+ * columns they come back unchanged. Tolerate both shapes so the same
+ * publish-to-git code paths work in either schema.
+ */
+function decodeMaybeBytea(value: string): string {
+  if (typeof value !== 'string') return value;
+  if (!value.startsWith('\\x')) return value;
+  try {
+    return Buffer.from(value.slice(2), 'hex').toString('utf8');
+  } catch {
+    return value;
+  }
+}
 
 // NOTE: This endpoint used to import EditionEmail + @react-email/render and
 // render the HTML server-side. That pulled the admin's email-blocks barrel
@@ -65,6 +89,14 @@ interface MinimalGitServer {
      * (the impl expects a Map per sites/lib/git/internal-git-server.ts).
      */
     files: Map<string, Buffer | string>;
+    /**
+     * When true (used by the theme-overlay path) the impl treats the
+     * files map as the authoritative tree, deleting anything in the
+     * prior commit not present in the map. Without this, stale theme
+     * files would accumulate across publishes once a theme deletes a
+     * file. Mirrors sites' PublishCommitArgs.replaceTree.
+     */
+    replaceTree?: boolean;
     message: string;
     author: { name: string; email: string };
   }): Promise<{ sha: string; diffBytes: number; filesChanged: number }>;
@@ -146,7 +178,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
       }
       const collRes = await deps.supabase
         .from('newsletters_template_collections')
-        .select('id, slug, name, git_provenance, git_url, git_branch')
+        .select('id, slug, name, git_provenance, git_url, git_url_theme, git_branch, config')
         .eq('id', ed.collection_id)
         .maybeSingle();
       if (collRes.error || !collRes.data) {
@@ -163,8 +195,22 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         name: string;
         git_provenance: 'internal' | 'external';
         git_url: string | null;
+        git_url_theme: string | null;
         git_branch: string | null;
+        config: {
+          theme?: {
+            url?: string;
+            ref?: string;
+            subdir?: string;
+            owns_routing?: boolean;
+          };
+          publish?: {
+            external_branch?: string;
+            embed_media_in_git?: boolean;
+          };
+        } | null;
       };
+      const newsletterConfig = collection.config ?? {};
       const newsletterId = collection.id;
       const newsletterSlug = collection.slug;
 
@@ -247,16 +293,59 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         block_template: { id: string; html: string | null; render_kind: 'mustache' | 'react-email'; component_id: string | null } | null;
       }>;
 
-      // 6. Commit to the configured publish branch (collection.git_branch
-      //    defaults to 'publish' per migration 027). The output files
-      //    live at the repo root under `editions/`, NOT under a
-      //    `published/` subfolder.
-      const publishBranch = collection.git_branch || 'publish';
-      // publishCommit expects a Map<path, contents>, not an array of
-      // {path, content} objects — see the MinimalGitServer interface
-      // above and the iteration in
-      // modules/sites/lib/git/internal-git-server-impl.ts.
-      const files = new Map<string, string>();
+      // 6. Build the publish file map.
+      //
+      //    - The newsletter's edition artifacts ALWAYS go to the
+      //      conventional `editions/<id>.{html,json}` paths.
+      //    - When `config.theme.url + ref` is set, we overlay the theme
+      //      repo's files BEFORE the platform-emitted artifacts, so a
+      //      theme component shipping its own `editions/<id>.html` is
+      //      overridden by the freshly-rendered HTML. The resulting tree
+      //      is self-contained — a static site generator pointed at the
+      //      publish branch can build the archive page without any
+      //      additional inputs.
+      //
+      //    publishCommit expects a Map<path, contents>; the iteration in
+      //    modules/sites/lib/git/internal-git-server-impl.ts requires
+      //    that exact shape.
+      const files = new Map<string, Buffer | string>();
+
+      // Theme overlay (optional). Failures are logged but non-fatal —
+      // the edition still publishes with platform-only deltas. The
+      // operator's deploy target needs to supply the theme separately
+      // in that case.
+      let themeOverlayApplied: { url: string; ref: string; clonedSha: string } | null = null;
+      const themeConfig = newsletterConfig.theme;
+      if (themeConfig?.url && themeConfig.ref) {
+        try {
+          const { applyThemeOverlay } = await import('../lib/publish-worker/theme-overlay.js');
+          const overlayLog = await applyThemeOverlay(
+            { url: themeConfig.url, ref: themeConfig.ref, subdir: themeConfig.subdir },
+            files,
+            {
+              logger: {
+                info: (msg, meta) => { console.info('[newsletters publish-to-git]', msg, meta ?? {}); },
+                warn: (msg, meta) => { console.warn('[newsletters publish-to-git]', msg, meta ?? {}); },
+              },
+            },
+          );
+          themeOverlayApplied = {
+            url: themeConfig.url,
+            ref: themeConfig.ref,
+            clonedSha: overlayLog.clonedSha,
+          };
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[newsletters publish-to-git] theme overlay failed (continuing)', {
+            editionId,
+            themeUrl: themeConfig.url,
+            themeRef: themeConfig.ref,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      // Platform-emitted artifacts written LAST so they win any collision.
       files.set(`editions/${ed.id}.html`, html);
       files.set(`editions/${ed.id}.json`, JSON.stringify({
         id: ed.id,
@@ -273,21 +362,112 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
           component_id: b.block_template?.component_id ?? b.block_type,
         })),
       }, null, 2));
+
+      // Commit to the configured local publish branch (always 'publish'
+      // on the internal bare repo — that's the workspace branch the
+      // edition-writer + snapshot-job already target). Migration 027
+      // stored a `git_branch` column for legacy reasons; for the
+      // INTERNAL commit we keep it as 'publish' because the publish-
+      // worker abstraction is the one that knows about the remote-side
+      // branch name (see step 7 below).
+      const localPublishBranch = 'publish';
       const result = await deps.gitServer.publishCommit({
         repo: { id: repo.id, barePath: repo.barePath },
-        branch: publishBranch,
+        branch: localPublishBranch,
         files,
+        // When the theme overlay ran the file map now represents the
+        // full intended publish tree; tell the impl to prune anything
+        // not in the map so old theme files don't accumulate.
+        // Without an overlay we keep the legacy delta-publish behaviour
+        // so newsletters that never enable themes still accumulate
+        // commits the same way they always have.
+        replaceTree: themeOverlayApplied !== null,
         message: `Publish edition ${ed.title ?? ed.edition_date}`,
         author: { name: 'gatewaze-publisher', email: 'noreply@gatewaze' },
       });
+
+      // 7. Mirror the local `publish` branch out to the external repo.
+      //    The REMOTE branch name comes from `config.publish.external_
+      //    branch` — defaults to 'publish' for the legacy single-repo
+      //    convention; set to 'main' for separate-repo graduations (the
+      //    publish repo's default branch is `main`).
+      //
+      //    Auth precedence:
+      //      1. templates_sources.token_secret_ref looked up by the
+      //         publish URL. The graduate flow stores the deploy
+      //         PRIVATE KEY here (PEM). When present, we push via SSH
+      //         with that key. PAT-bearing strings (no '-----BEGIN ...
+      //         PRIVATE KEY-----' marker) fall through to HTTPS-with-
+      //         token for back-compat with earlier graduations.
+      //      2. No source row / no token → push fails with no_token_
+      //         persisted. The publish-worker model intentionally
+      //         drops the user's PAT after graduate; we never persist
+      //         it anywhere else.
+      const remoteBranch =
+        newsletterConfig.publish?.external_branch ||
+        // Fall back to the legacy `git_branch` column when set (operators
+        // upgrading from migration 027 might have it).
+        collection.git_branch ||
+        'publish';
+
+      let externalPush: null | { pushed: true; branch: string } | { pushed: false; error: string } = null;
+      const sourceRes = await deps.supabase
+        .from('templates_sources')
+        .select('token_secret_ref')
+        .eq('library_id', collection.id)
+        .eq('kind', 'git')
+        .eq('url', collection.git_url)
+        .maybeSingle();
+      const tokenRaw = (sourceRes.data as { token_secret_ref: string | null } | null)?.token_secret_ref;
+      const token = tokenRaw ? decodeMaybeBytea(tokenRaw) : null;
+
+      if (!token || token === '<redacted>') {
+        externalPush = { pushed: false, error: 'no_token_persisted' };
+      } else if (isOpenSshPrivateKey(token)) {
+        // SSH push using deploy key
+        externalPush = await pushWithDeployKey({
+          repoBarePath: repo.barePath,
+          externalUrl: collection.git_url!,
+          remoteBranch,
+          localBranch: localPublishBranch,
+          deployKeyPem: token,
+          editionId,
+        });
+      } else {
+        // PAT-with-HTTPS fallback (legacy graduations)
+        const urlWithAuth = collection.git_url!.replace(
+          /^https?:\/\//,
+          (m) => `${m}x-access-token:${encodeURIComponent(token)}@`,
+        );
+        try {
+          await execFileP(
+            'git',
+            ['push', urlWithAuth, `${localPublishBranch}:${remoteBranch}`],
+            { cwd: repo.barePath, timeout: 30_000 },
+          );
+          externalPush = { pushed: true, branch: remoteBranch };
+        } catch (err) {
+          const raw = err instanceof Error ? err.message : String(err);
+          // Strip the PAT-bearing URL before logging or returning.
+          const safe = raw.replace(urlWithAuth, collection.git_url!).slice(0, 500);
+          // eslint-disable-next-line no-console
+          console.warn('[newsletters publish-to-git] external mirror push failed', { editionId, error: safe });
+          externalPush = { pushed: false, error: safe };
+        }
+      }
 
       res.status(200).json({
         kind: 'published',
         editionId: ed.id,
         repoId: repo.id,
         commitSha: result.sha,
-        branch: publishBranch,
+        branch: localPublishBranch,
         files: [`editions/${ed.id}.html`, `editions/${ed.id}.json`],
+        externalPush,
+        externalUrl: collection.git_url,
+        externalThemeUrl: collection.git_url_theme,
+        remoteBranch,
+        themeOverlay: themeOverlayApplied,
       });
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -307,4 +487,80 @@ export function mountPublishToGitRoute(
   handler: ReturnType<typeof createPublishToGitRoute>,
 ): void {
   router.post('/newsletters/editions/:editionId/publish-to-git', handler as never);
+}
+
+// ---------------------------------------------------------------------------
+// Deploy-key SSH push helpers (exported for tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect whether a token string is an OpenSSH private key (PEM-encoded
+ * Ed25519 from `ssh-keygen`) vs a classic PAT. The graduate flow writes
+ * private keys to templates_sources.token_secret_ref; older single-repo
+ * graduations may have written the user's PAT instead. We branch on
+ * shape rather than on a sentinel column so both states keep working
+ * during the rollout.
+ */
+export function isOpenSshPrivateKey(value: string): boolean {
+  return /-----BEGIN (OPENSSH|RSA|EC|DSA) PRIVATE KEY-----/.test(value);
+}
+
+/**
+ * Convert an HTTPS or SSH-style URL into the canonical SSH-pushable form
+ * (`git@github.com:owner/repo.git`). Leaves SSH URLs unchanged. Returns
+ * null for shapes we don't know how to push to (we surface a clear
+ * "unsupported_url" error rather than guessing).
+ */
+export function toSshPushUrl(url: string): string | null {
+  if (/^git@[^:]+:/.test(url)) return url; // already SSH
+  const ghMatch = url.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  if (ghMatch) return `git@github.com:${ghMatch[1]}/${ghMatch[2]}.git`;
+  const glMatch = url.match(/^https?:\/\/gitlab\.com\/(.+?)(?:\.git)?\/?$/);
+  if (glMatch) return `git@gitlab.com:${glMatch[1]}.git`;
+  return null;
+}
+
+/**
+ * Push a local branch to the external repo using an Ed25519 deploy key.
+ * Writes the key to a tmp file (0600 perms), passes it to git via
+ * GIT_SSH_COMMAND, and cleans up regardless of push outcome.
+ */
+export async function pushWithDeployKey(args: {
+  repoBarePath: string;
+  externalUrl: string;
+  remoteBranch: string;
+  localBranch: string;
+  deployKeyPem: string;
+  editionId: string;
+}): Promise<{ pushed: true; branch: string } | { pushed: false; error: string }> {
+  const sshUrl = toSshPushUrl(args.externalUrl);
+  if (!sshUrl) {
+    return { pushed: false, error: `unsupported_url: cannot derive ssh form from ${args.externalUrl}` };
+  }
+  const tmpDir = await mkdtemp(join(tmpdir(), 'gatewaze-newsletter-push-'));
+  const keyPath = join(tmpDir, 'deploy_key');
+  try {
+    await writeFile(keyPath, args.deployKeyPem, { mode: 0o600 });
+    const sshCmd = `ssh -i ${keyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes`;
+    await execFileP(
+      'git',
+      ['push', sshUrl, `${args.localBranch}:${args.remoteBranch}`],
+      {
+        cwd: args.repoBarePath,
+        timeout: 30_000,
+        env: { ...process.env, GIT_SSH_COMMAND: sshCmd, GIT_TERMINAL_PROMPT: '0' },
+      },
+    );
+    return { pushed: true, branch: args.remoteBranch };
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.warn('[newsletters publish-to-git] deploy-key push failed', {
+      editionId: args.editionId,
+      error: raw.slice(0, 500),
+    });
+    return { pushed: false, error: raw.slice(0, 500) };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 }

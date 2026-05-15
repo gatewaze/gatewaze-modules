@@ -43,6 +43,49 @@ import type {
   PuckRenderHost,
 } from './types.js';
 import { resolveCustomField } from './fields/index.js';
+import { PersonalizableFieldWrapper } from './fields/PersonalizableFieldWrapper.js';
+
+/**
+ * Universal outer-spacing fields injected on every block + brick. The
+ * underscore prefix sets them apart from schema-declared content fields
+ * — content fields come from `templates_block_defs.schema` and never
+ * use the `_spacing_` namespace, so collisions can't happen by accident.
+ *
+ * Both default to `'0px'`. The render path wraps the iframe-bridged
+ * block render in a `<div>` carrying `padding`/`margin` inline styles
+ * when either value is non-default; identical-to-pre-spacing output
+ * otherwise.
+ *
+ * Plain `text` fields here (not the slider used by the email registry)
+ * because the slider component lives in the newsletters module and
+ * we're avoiding a cross-module dependency. Operators type CSS values
+ * directly: `"16px"`, `"16px 24px"`, etc.
+ */
+const SPACING_FIELDS: Record<string, Field> = {
+  _spacing_padding: { type: 'text', label: 'Padding (outer)' },
+  _spacing_margin: { type: 'text', label: 'Margin' },
+};
+const SPACING_DEFAULTS = { _spacing_padding: '0px', _spacing_margin: '0px' };
+
+/** Extract spacing props from a raw Puck prop bag, stripping them from `rest`. */
+function pickSpacing(props: Record<string, unknown>): {
+  padding: string;
+  margin: string;
+  rest: Record<string, unknown>;
+} {
+  const padding = typeof props._spacing_padding === 'string' ? props._spacing_padding : '0px';
+  const margin = typeof props._spacing_margin === 'string' ? props._spacing_margin : '0px';
+  const rest = { ...props };
+  delete rest._spacing_padding;
+  delete rest._spacing_margin;
+  return { padding, margin, rest };
+}
+
+/** Wrap an iframe-rendered block in a spacing div when non-default. */
+function withSpacing(node: React.ReactNode, padding: string, margin: string): React.ReactNode {
+  if (padding === '0px' && margin === '0px') return node;
+  return <div style={{ padding, margin }}>{node}</div>;
+}
 
 export interface BuildConfigArgs {
   libraryId: string;
@@ -102,14 +145,20 @@ export function buildPuckConfig(args: BuildConfigArgs): BuildConfigResult {
 
     components[def.key] = {
       label: def.name,
-      fields: fields as Record<string, Field>,
-      defaultProps: defaultsFromSchema(def.schema),
-      render: (props) =>
-        args.renderHost.renderBlock({
-          blockDefKey: def.key,
-          variantKey: typeof props.variant_key === 'string' ? props.variant_key : 'default',
-          content: stripStructural(props as Record<string, unknown>),
-        }),
+      fields: { ...SPACING_FIELDS, ...(fields as Record<string, Field>) },
+      defaultProps: { ...SPACING_DEFAULTS, ...defaultsFromSchema(def.schema) },
+      render: (props) => {
+        const { padding, margin, rest } = pickSpacing(props as Record<string, unknown>);
+        return withSpacing(
+          args.renderHost.renderBlock({
+            blockDefKey: def.key,
+            variantKey: typeof rest.variant_key === 'string' ? rest.variant_key : 'default',
+            content: stripStructural(rest),
+          }),
+          padding,
+          margin,
+        );
+      },
     };
   }
 
@@ -127,14 +176,20 @@ export function buildPuckConfig(args: BuildConfigArgs): BuildConfigResult {
     const fields = wrapFieldsWithComponents(rawFields, args);
     components[brick.key] = {
       label: brick.name,
-      fields: fields as Record<string, Field>,
-      defaultProps: defaultsFromSchema(brick.schema),
-      render: (props) =>
-        args.renderHost.renderBlock({
-          blockDefKey: brick.key,
-          variantKey: typeof props.variant_key === 'string' ? props.variant_key : 'default',
-          content: stripStructural(props as Record<string, unknown>),
-        }),
+      fields: { ...SPACING_FIELDS, ...(fields as Record<string, Field>) },
+      defaultProps: { ...SPACING_DEFAULTS, ...defaultsFromSchema(brick.schema) },
+      render: (props) => {
+        const { padding, margin, rest } = pickSpacing(props as Record<string, unknown>);
+        return withSpacing(
+          args.renderHost.renderBlock({
+            blockDefKey: brick.key,
+            variantKey: typeof rest.variant_key === 'string' ? rest.variant_key : 'default',
+            content: stripStructural(rest),
+          }),
+          padding,
+          margin,
+        );
+      },
     };
   }
 
@@ -166,14 +221,35 @@ function wrapFieldsWithComponents(
 ): Record<string, PuckField> {
   const out: Record<string, PuckField> = {};
   for (const [k, f] of Object.entries(raw)) {
-    out[k] = wrapField(f, args);
+    out[k] = wrapField(f, k, args);
   }
   return out;
 }
 
-function wrapField(f: PuckField, args: BuildConfigArgs): PuckField {
+function wrapField(f: PuckField, propName: string, args: BuildConfigArgs): PuckField {
+  // Personalizable fields get a custom wrapper that exposes the same
+  // inline editor + a "Personalize" button. We compose this AFTER any
+  // custom-format resolution so a personalizable image field still uses
+  // the host's media picker inline.
+  if (f.personalizable) {
+    const inner = innerCustomFieldRender(f, args);
+    return {
+      type: 'custom',
+      label: f.label,
+      customFormat: 'richtext', // sentinel; render takes over
+      render: ({ value, onChange }) => (
+        <PersonalizableFieldWrapper
+          field={f}
+          propName={propName}
+          value={value}
+          onChange={onChange}
+          {...(inner ? { resolveCustom: () => inner } : {})}
+        />
+      ),
+    };
+  }
+
   if (f.type === 'custom') {
-    // Resolve the component for this format.
     return {
       ...f,
       render: resolveCustomField(f.customFormat as CustomFormat, args),
@@ -192,6 +268,20 @@ function wrapField(f: PuckField, args: BuildConfigArgs): PuckField {
     };
   }
   return f;
+}
+
+/**
+ * When wrapping a personalizable `type: 'custom'` field, the wrapper
+ * still needs the underlying custom-format render (richtext editor,
+ * media picker, etc.) so it can mount it inline. Returns null when the
+ * source field isn't a custom-format field.
+ */
+function innerCustomFieldRender(
+  f: PuckField,
+  args: BuildConfigArgs,
+): ((p: { value: unknown; onChange: (v: unknown) => void }) => React.ReactNode) | null {
+  if (f.type !== 'custom') return null;
+  return resolveCustomField(f.customFormat as CustomFormat, args);
 }
 
 function brickKeysForBlock(parentKey: string, brickDefs: ReadonlyArray<BrickDefRow>): string[] {

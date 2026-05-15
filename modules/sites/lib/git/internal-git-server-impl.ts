@@ -29,9 +29,11 @@ import type {
   InternalGitServer,
   InternalRepoRef,
   MergeResult,
+  MirrorBranchToExternalArgs,
   PublishCommitArgs,
   SignedUrlArgs,
 } from './internal-git-server.js';
+import { detectProvider, toSshUrl } from './graduate-to-external.js';
 
 // ---------------------------------------------------------------------------
 // Worker pool: bounded concurrency for git subprocess invocations.
@@ -317,6 +319,22 @@ export class InternalGitServerImpl implements InternalGitServer {
             }
           }
 
+          // When the caller owns the full publish tree (theme overlay +
+          // platform deltas), prune any tracked file in the prior commit
+          // that the new map doesn't include. Without this, files deleted
+          // from the theme repo (or block route stubs we used to emit)
+          // stay forever on the publish branch.
+          if (args.replaceTree) {
+            const ls = await execGit(['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: workTree });
+            const existing = ls.stdout.split('\n').map((p) => p.trim()).filter(Boolean);
+            const newKeys = new Set<string>(args.files.keys());
+            for (const path of existing) {
+              if (!newKeys.has(path)) {
+                await execGit(['rm', '-f', '--ignore-unmatch', path], { cwd: workTree });
+              }
+            }
+          }
+
           // Apply file changes
           for (const path of args.removals ?? []) {
             await execGit(['rm', '-f', '--ignore-unmatch', path], { cwd: workTree });
@@ -347,9 +365,16 @@ export class InternalGitServerImpl implements InternalGitServer {
             throw new Error(`git commit failed: ${commit.stderr}`);
           }
 
-          // Tag if requested
+          // Tag if requested. Annotated tags (`-a -m ...`) so `git push
+          // --follow-tags` actually propagates them to the bare repo —
+          // lightweight tags are silently dropped by --follow-tags, which
+          // breaks the downstream mirror-to-external step (the tag wouldn't
+          // exist in bare when we try to push it).
           if (args.tag) {
-            const tag = await execGit(['tag', args.tag], { cwd: workTree });
+            const tag = await execGit(
+              ['tag', '-a', args.tag, '-m', args.message],
+              { cwd: workTree, env },
+            );
             if (tag.exitCode !== 0) throw new Error(`git tag failed: ${tag.stderr}`);
           }
 
@@ -454,6 +479,79 @@ export class InternalGitServerImpl implements InternalGitServer {
     const result = await execGit(['--git-dir', repo.barePath, 'rev-parse', branch]);
     if (result.exitCode !== 0) return null;
     return result.stdout.trim();
+  }
+
+  async mirrorBranchToExternal(args: MirrorBranchToExternalArgs): Promise<void> {
+    // Provider detection only converts URLs we know how to push to over
+    // SSH. An unknown provider almost certainly means the deploy key won't
+    // authenticate, so fail loudly rather than letting `git push` time out.
+    const provider = detectProvider(args.externalUrl);
+    if (!provider) {
+      throw new Error(`mirror_failed: unsupported git provider for ${args.externalUrl}`);
+    }
+    const sshUrl = toSshUrl(args.externalUrl, provider);
+
+    return this.pool.run(async () => {
+      const keyDir = await mkdtemp(join(tmpdir(), 'gatewaze-mirror-key-'));
+      const sshKeyPath = join(keyDir, 'deploy_key');
+      try {
+        await writeFile(sshKeyPath, args.sshPrivateKey, { mode: 0o600 });
+        const sshCommand = `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`;
+
+        // Push branch ref straight from the bare repo so we don't need a
+        // working tree. `--force` because the internal bare is canonical
+        // after graduate — anything on the external publish branch should
+        // be overwritten by what we just committed. The refspec maps
+        // localBranch (typically 'publish') to whatever remoteBranch the
+        // site config selected ('main' for separate publish repos,
+        // 'publish' for the single-repo newsletter convention).
+        const refspec = `${args.localBranch}:${args.remoteBranch}`;
+        const branchPush = await execGit(
+          ['--git-dir', args.repo.barePath, 'push', '--force', sshUrl, refspec],
+          { env: { GIT_SSH_COMMAND: sshCommand } },
+        );
+        if (branchPush.exitCode !== 0) {
+          throw new Error(`mirror_failed: branch push to external rejected: ${branchPush.stderr.trim()}`);
+        }
+
+        if (args.tag) {
+          const tagPush = await execGit(
+            ['--git-dir', args.repo.barePath, 'push', sshUrl, `refs/tags/${args.tag}`],
+            { env: { GIT_SSH_COMMAND: sshCommand } },
+          );
+          // Tolerated tag-push outcomes (logged but don't fail the publish):
+          //   - "already exists" — remote already has this tag (re-publish race)
+          //   - "src refspec ... does not match any" — tag missing from bare,
+          //     usually a lightweight tag that --follow-tags dropped. The
+          //     branch commit is already mirrored, so the publish is fine;
+          //     the operator just loses the named release pointer for this run.
+          if (
+            tagPush.exitCode !== 0
+            && !/already exists/i.test(tagPush.stderr)
+            && !/src refspec .* does not match any/i.test(tagPush.stderr)
+          ) {
+            throw new Error(`mirror_failed: tag push to external rejected: ${tagPush.stderr.trim()}`);
+          }
+          if (tagPush.exitCode !== 0) {
+            this.deps.logger.warn('internal-git: tag push to external skipped', {
+              slug: args.repo.slug,
+              tag: args.tag,
+              reason: tagPush.stderr.trim(),
+            });
+          }
+        }
+
+        this.deps.logger.info('internal-git: mirrored branch to external', {
+          slug: args.repo.slug,
+          localBranch: args.localBranch,
+          remoteBranch: args.remoteBranch,
+          tag: args.tag,
+          externalUrl: args.externalUrl,
+        });
+      } finally {
+        await rm(keyDir, { recursive: true, force: true });
+      }
+    });
   }
 
   async getRepoSize(repo: InternalRepoRef): Promise<number> {

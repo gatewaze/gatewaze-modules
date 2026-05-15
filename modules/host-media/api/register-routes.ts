@@ -22,7 +22,11 @@ import { createAlbumsRoutes, mountAlbumsRoutes } from './albums-routes.js';
 import { createChunkedRoutes, mountChunkedRoutes } from './chunked-routes.js';
 import { requireJwt } from '../lib/require-jwt.js';
 
-const STORAGE_BUCKET = process.env.HOST_MEDIA_BUCKET ?? 'host-media';
+// Canonical bucket per spec-relative-storage-paths.md: a single `media`
+// bucket per Gatewaze instance. HOST_MEDIA_BUCKET remains an override for
+// installs that historically split media across multiple buckets, but
+// new deployments should leave it unset.
+const STORAGE_BUCKET = process.env.HOST_MEDIA_BUCKET ?? 'media';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -70,6 +74,21 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  // Public-facing URL used in cdn_url responses + image src attributes.
+  // SUPABASE_URL is typically the internal docker hostname
+  // (http://supabase-kong:8000) for server-to-server calls. The browser
+  // can't resolve that hostname, so cdn_url responses must use the
+  // EXTERNAL hostname — set by `SUPABASE_PUBLIC_URL`. Falls back to
+  // SUPABASE_URL when not set (cloud envs where they're the same).
+  const publicSupabaseUrl = (process.env.SUPABASE_PUBLIC_URL || supabaseUrl).replace(/\/+$/, '');
+
+  /** Build a public URL for an object in our storage bucket. Mirrors
+   *  the Supabase JS client's getPublicUrl shape but using the external
+   *  hostname so browsers can resolve it. */
+  function buildPublicUrl(storagePath: string): string {
+    return `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
+  }
+
   // Default media adapter (Supabase Storage).
   const mediaAdapter: MediaAdapter = {
     async upload(args) {
@@ -79,16 +98,14 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
         upsert: false,
       });
       if (error) throw new Error(`storage upload failed: ${error.message}`);
-      const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
-      return { storagePath: path, cdnUrl: data.publicUrl };
+      return { storagePath: path, cdnUrl: buildPublicUrl(path) };
     },
     async delete(storagePath) {
       const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
       if (error) throw new Error(`storage delete failed: ${error.message}`);
     },
     getPublicUrl(storagePath) {
-      const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
-      return data.publicUrl;
+      return buildPublicUrl(storagePath);
     },
     async createSignedUrl(storagePath, ttlSeconds) {
       const { data, error } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(storagePath, ttlSeconds);

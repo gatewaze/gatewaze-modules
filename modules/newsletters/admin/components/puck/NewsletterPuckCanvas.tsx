@@ -20,21 +20,14 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import {
-  Puck,
   type Config,
   ActionBar,
-  blocksPlugin,
-  outlinePlugin,
-  fieldsPlugin,
   createUsePuck,
 } from '@puckeditor/core';
 import {
   PencilSquareIcon,
   CodeBracketIcon,
-  SunIcon,
-  MoonIcon,
   ArrowDownTrayIcon,
   ClipboardDocumentIcon,
   GlobeAltIcon,
@@ -57,8 +50,7 @@ import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js'
 import { emailBlockRegistry } from './email-blocks/index.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
-import { getCanvasPuckPlugins } from '../../../../sites/admin/components/canvas/puck/canvas-puck-plugin-registry.js';
-import { CanvasPluginHostContext } from '../../../../sites/admin/components/canvas/puck/canvas-plugin-host-context.js';
+import { CanvasShell } from '../../../../sites/admin/components/canvas/puck/CanvasShell.js';
 import { buildAiBlockDefs } from './email-blocks/build-ai-block-defs.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import { useHasModule } from '@/hooks/useModuleFeature';
@@ -234,7 +226,10 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   }, [edition.id, blockDefs, brickDefs, renderHost, enabledRegistryComponentIds]);
 
   const [data, setData] = useState(() => editionToPuckData(edition, emailBlockRegistry));
-  const [previewMode, setPreviewMode] = useState<'light' | 'dark'>('light');
+  // previewMode (light/dark) state lives inside CanvasShell now — it
+  // owns the Sun/Moon portal AND threads previewMode into Puck's
+  // metadata so the canvas root sees `puck.metadata.previewMode` and
+  // re-renders the email backdrop on toggle. No state here.
   const [exportBusy, setExportBusy] = useState<null | 'email' | 'substack' | 'beehiiv'>(null);
   // Toggles between the WYSIWYG Puck canvas and a read-only HTML view
   // (the same email-safe markup the recipient would see). Useful for
@@ -308,6 +303,8 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             reason?: string;
             message?: string;
             error?: { message?: string };
+            externalPush?: { pushed: true } | { pushed: false; error: string };
+            externalUrl?: string | null;
           }
         | null;
       if (!res.ok) {
@@ -315,6 +312,16 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       }
       if (body?.kind === 'skipped') {
         toast.warning(body.message ?? 'Edition saved to the database, but no external git repo is connected — nothing published to git.');
+      } else if (body?.externalPush && body.externalPush.pushed === false) {
+        // Internal commit landed but the mirror push to the external
+        // repo failed — surface that so the operator knows to fix
+        // credentials or remote state. Keep the message terse; full
+        // git stderr is in the API logs.
+        toast.warning(
+          `Edition published to internal repo, but mirror push to ${body.externalUrl ?? 'external repo'} failed: ${body.externalPush.error}`,
+        );
+      } else if (body?.externalPush?.pushed === true) {
+        toast.success(`Edition published to ${body.externalUrl ?? 'external repo'}.`);
       } else {
         toast.success('Edition published.');
       }
@@ -454,26 +461,6 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   );
 
   return (
-    <CanvasPluginHostContext.Provider
-      value={{
-        hostKind: 'newsletter',
-        // hostId = newsletter (collection) id when known, otherwise
-        // fall back to the edition id so the AI endpoint still has a
-        // stable identifier to hang per-newsletter quota / context off.
-        hostId: collectionId ?? edition.id,
-        targetId: edition.id,
-        // Disable AI on unsaved editions — the generate endpoint
-        // looks up the edition row in newsletters_editions to build
-        // its prompt context (library, blocks, preheader), and would
-        // 404 with `newsletter_edition_not_found` otherwise. Save
-        // the draft first, then come back to the AI tab.
-        enabled: hasEditorAi && edition.id !== 'new',
-        disabledReason: edition.id === 'new'
-          ? 'Save the edition first, then come back to use AI to generate content.'
-          : undefined,
-        blockDefs: aiBlockDefs,
-      }}
-    >
     <NewsletterEditingProvider
       value={{
         collectionMetadata: collectionMetadata ?? {},
@@ -482,13 +469,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       }}
     >
     <div
-      className={`newsletter-puck-canvas puck-canvas-email puck-preview-${previewMode}`}
+      className="newsletter-puck-canvas puck-canvas-email"
       style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}
     >
-      {/* Map Puck's internal CSS variables onto the admin's Radix
-          theme tokens — see PUCK_RADIX_THEME_CSS for details. */}
-      <style dangerouslySetInnerHTML={{ __html: PUCK_RADIX_THEME_CSS }} />
-
       {/* Page-level actions row. Sits ABOVE the curved-corner panel.
           The Editor / HTML view toggle is left-aligned (it switches
           which body the panel renders — feels like a navigation
@@ -647,201 +630,146 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         }}
       />
 
-      {/* Curved-corner panel that contains the editor itself. Mirrors
-          the look of the admin's table panels (border + radius + a
-          subtle shadow). The internal toolbar (view-toggle + light/
-          dark) sits above the editor inside the panel since it
-          affects what the panel displays — not the page as a
-          whole. */}
-      <div
-        className="newsletter-puck-panel"
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'var(--color-surface, #fff)',
-          border: '1px solid var(--gray-a5, #e5e7eb)',
-          borderRadius: 12,
-          overflow: 'hidden',
-          boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-        }}
-      >
-        {/* Light / Dark preview-iframe backdrop toggle is rendered
-            inside Puck's ViewportControls row (next to the
-            Desktop / Mobile switcher) via a portal. The portal sits
-            here so it mounts after Puck has rendered its chrome. */}
-        <ViewportLightDarkPortal previewMode={previewMode} setPreviewMode={setPreviewMode} />
-
-        {/* HTML source view — appears when the operator clicks the
-            <> button on the toolbar. Puck stays mounted underneath
-            (display:none) so undo history + selection state survive
-            the toggle. */}
-        {view === 'html' && (
-          <div
-            className="newsletter-puck-html-view"
+      {/* When the operator clicks the <> button, swap the wysiwyg
+          shell for a read-only HTML source panel. The shell unmounts
+          and Puck loses undo history while in HTML view — acceptable
+          tradeoff since HTML view is a quick "view source / copy"
+          flow rather than a long edit session. */}
+      {view === 'html' ? (
+        <div
+          className="newsletter-puck-html-view"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            background: '#0e0f12',
+            color: '#e5e7eb',
+            border: '1px solid var(--gray-a5, #e5e7eb)',
+            borderRadius: 12,
+            overflow: 'hidden',
+            boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #23262d' }}>
+            <span style={{ fontSize: 12, color: '#9ca3af' }}>Rendered email HTML — read-only.</span>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(htmlSource);
+                  toast.success('HTML copied to clipboard.');
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : 'Copy failed');
+                }
+              }}
+              style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #2a2d34', background: '#1f2227', color: '#e5e7eb', cursor: 'pointer', fontSize: 12 }}
+            >
+              Copy
+            </button>
+          </div>
+          <pre
             style={{
-              background: '#0e0f12',
-              color: '#e5e7eb',
-              padding: 0,
+              margin: 0,
+              padding: '12px 16px',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              fontSize: 12,
+              lineHeight: 1.5,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              overflow: 'auto',
               flex: 1,
-              minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid #23262d' }}>
-              <span style={{ fontSize: 12, color: '#9ca3af' }}>Rendered email HTML — read-only.</span>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(htmlSource);
-                    toast.success('HTML copied to clipboard.');
-                  } catch (e) {
-                    toast.error(e instanceof Error ? e.message : 'Copy failed');
-                  }
-                }}
-                style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #2a2d34', background: '#1f2227', color: '#e5e7eb', cursor: 'pointer', fontSize: 12 }}
-              >
-                Copy
-              </button>
-            </div>
-            <pre
-              style={{
-                margin: 0,
-                padding: '12px 16px',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                fontSize: 12,
-                lineHeight: 1.5,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                overflow: 'auto',
-                flex: 1,
-              }}
-            >
-              {htmlSource}
-            </pre>
-          </div>
-        )}
-
-        <div style={{ display: view === 'wysiwyg' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
-        <Puck
-        config={configWithUserBlocks.config as never}
-        data={data as never}
-        // Inherit height from our flex-sized wrapper instead of
-        // Puck's default `100dvh` (which forced the editor to be
-        // the full viewport, ignoring our wrapper sizing). Combined
-        // with the `_PuckLayout { height: 100% !important }` rule
-        // in PUCK_RADIX_THEME_CSS, this lets the inner grid actually
-        // resolve to a concrete pixel height; without the height
-        // prop on the outer .Puck div, the inner 100% had nothing
-        // to inherit from and Puck collapsed to its content
-        // (cropping at the icon bar).
-        height="100%"
-        // `metadata` propagates to the canvas root.render and to every
-        // component as `puck.metadata`. We only need previewMode there
-        // — the canvas root reads it to switch light/dark backdrop +
-        // card chrome dynamically.
-        metadata={{ previewMode }}
-        viewports={[
-          // Puck v0.21 ships built-in Monitor / Smartphone / Tablet
-          // glyphs and renders them in the viewport-switcher row above
-          // the canvas. Without `icon`, Puck falls back to its generic
-          // device shape (which read identically for desktop vs mobile
-          // — the visual difference between the two icons was
-          // imperceptible in the live editor).
-          { width: 600, height: 'auto' as const, label: 'Desktop', icon: 'Monitor' },
-          { width: 375, height: 'auto' as const, label: 'Mobile', icon: 'Smartphone' },
-        ]}
-        iframe={{ enabled: true }}
-        plugins={[
-          // Plugin order = sidebar tab order. Puck always prepends
-          // blocksPlugin() + outlinePlugin() internally; when a user
-          // plugin shares a name with one of those defaults, Puck's
-          // tab registration walks `delete details[name]; details[name]
-          // = …` — i.e. the second occurrence pushes the entry to the
-          // END of the insertion order. We exploit that here to put
-          // contributed plugins (e.g. AI) FIRST: spread them before
-          // the explicit blocks/outline/fields entries, then re-pass
-          // the defaults so they get bumped past the contributed tabs.
-          ...getCanvasPuckPlugins(),
-          blocksPlugin(),
-          outlinePlugin(),
-          fieldsPlugin({ desktopSideBar: 'left' }),
-        ]}
-        overrides={{
-          // Inject "Save block" alongside Puck's default
-          // delete/duplicate buttons in the contextual action bar that
-          // appears around the selected component. The previous draft
-          // returned a bare fragment which dropped the <ActionBar>
-          // chrome (the dark pill container, padding, white text);
-          // the icons rendered naked on the canvas. Rebuild the
-          // default DefaultActionBar shape — <ActionBar> wrapper +
-          // two <ActionBar.Group> sections (parentAction+label,
-          // children+SaveAsBlockAction) — so the result matches the
-          // puckeditor.com reference.
-          actionBar: ({ children, parentAction, label }) => (
-            <ActionBar>
-              <ActionBar.Group>
-                {parentAction}
-                {label ? <ActionBar.Label label={label} /> : null}
-              </ActionBar.Group>
-              <ActionBar.Group>
-                {children}
-                <SaveAsBlockAction />
-              </ActionBar.Group>
-            </ActionBar>
-          ),
-          // Hide Puck's native Publish button — we render our own
-          // outside the curved panel as a page-level action,
-          // alongside the export buttons. Returning null here makes
-          // the actions slot in Puck's header empty.
-          headerActions: () => null,
-        }}
-        onChange={(nextData) => {
-          // Convert + emit upstream. Cast through unknown because Puck's
-          // `Data` type widens props to its own shape; ours is a subset.
-          let nextPuck = nextData as unknown as ReturnType<typeof editionToPuckData>;
-
-          // Drawer-inserted "My blocks" components arrive with
-          // type='user::<id>' and an empty props object. Walk the tree
-          // and replace each one with the saved tree (real registry
-          // type + recursively-stamped fresh ids). This is the moment
-          // the synthetic ceases to exist — every downstream consumer
-          // (puckDataToEdition, the publish renderer, the EditionEmail
-          // composer) sees only the expanded type.
-          const expanded = expandUserBlockSynthetics(nextPuck, userBlocks.blocks);
-          if (expanded !== nextPuck) {
-            nextPuck = expanded;
-          }
-
-          setData(nextPuck);
-          try {
-            const nextEdition = puckDataToEdition({
-              base: edition,
-              data: nextPuck,
-              blockTemplates,
-              brickTemplates,
-              registry: emailBlockRegistry,
-            });
-            onChange(nextEdition);
-          } catch (e) {
-            // Catalogue mismatch — keep the editor state but don't
-            // propagate. The parent will surface a refresh prompt.
-            // eslint-disable-next-line no-console
-            console.warn('[newsletter-puck] adapter rejected change:', e);
-          }
-        }}
-        onPublish={async () => {
-          if (onSave) await onSave();
-        }}
-      />
+            {htmlSource}
+          </pre>
         </div>
-      </div>
+      ) : (
+        <CanvasShell
+          hostKind="newsletter"
+          hostId={collectionId ?? edition.id}
+          targetId={edition.id}
+          // Disable AI on unsaved editions — the generate endpoint
+          // looks up the edition row in newsletters_editions to build
+          // its prompt context (library, blocks, preheader), and would
+          // 404 with `newsletter_edition_not_found` otherwise. Save
+          // the draft first, then come back to the AI tab.
+          aiEnabled={hasEditorAi && edition.id !== 'new'}
+          {...(edition.id === 'new'
+            ? { aiDisabledReason: 'Save the edition first, then come back to use AI to generate content.' }
+            : {})}
+          blockDefs={aiBlockDefs}
+          config={configWithUserBlocks.config as never}
+          data={data as never}
+          // Newsletters lock to the email column widths — 600px desktop
+          // (industry-standard email width), 375px mobile. Sites uses
+          // CanvasShell's default 1280/375.
+          viewports={[
+            { width: 600, height: 'auto', label: 'Desktop', icon: 'Monitor' },
+            { width: 375, height: 'auto', label: 'Mobile', icon: 'Smartphone' },
+          ]}
+          overrides={{
+            // Inject "Save block" alongside Puck's default
+            // delete/duplicate buttons in the contextual action bar
+            // that appears around the selected component. Mirrors the
+            // puckeditor.com DefaultActionBar shape — <ActionBar>
+            // wrapper + two <ActionBar.Group> sections.
+            actionBar: ({ children, parentAction, label }) => (
+              <ActionBar>
+                <ActionBar.Group>
+                  {parentAction}
+                  {label ? <ActionBar.Label label={label} /> : null}
+                </ActionBar.Group>
+                <ActionBar.Group>
+                  {children}
+                  <SaveAsBlockAction />
+                </ActionBar.Group>
+              </ActionBar>
+            ),
+          }}
+          onChange={(nextData) => {
+            // Convert + emit upstream. Cast through unknown because
+            // Puck's `Data` type widens props to its own shape; ours
+            // is a subset.
+            let nextPuck = nextData as unknown as ReturnType<typeof editionToPuckData>;
+
+            // Drawer-inserted "My blocks" components arrive with
+            // type='user::<id>' and an empty props object. Walk the
+            // tree and replace each one with the saved tree (real
+            // registry type + recursively-stamped fresh ids). This is
+            // the moment the synthetic ceases to exist — every
+            // downstream consumer (puckDataToEdition, the publish
+            // renderer, the EditionEmail composer) sees only the
+            // expanded type.
+            const expanded = expandUserBlockSynthetics(nextPuck, userBlocks.blocks);
+            if (expanded !== nextPuck) {
+              nextPuck = expanded;
+            }
+
+            setData(nextPuck);
+            try {
+              const nextEdition = puckDataToEdition({
+                base: edition,
+                data: nextPuck,
+                blockTemplates,
+                brickTemplates,
+                registry: emailBlockRegistry,
+              });
+              onChange(nextEdition);
+            } catch (e) {
+              // Catalogue mismatch — keep the editor state but don't
+              // propagate. The parent will surface a refresh prompt.
+              // eslint-disable-next-line no-console
+              console.warn('[newsletter-puck] adapter rejected change:', e);
+            }
+          }}
+          onPublish={async () => {
+            if (onSave) await onSave();
+          }}
+        />
+      )}
     </div>
     </NewsletterEditingProvider>
-    </CanvasPluginHostContext.Provider>
   );
 };
 
@@ -966,6 +894,48 @@ function FieldsAutoSwitcher(): null {
   return null;
 }
 
+/**
+ * Watches Puck's internal store for `user::<id>` synthetics dropped
+ * from the "My blocks" drawer category and dispatches `setData` to
+ * replace each one with the saved tree (real registry componentId +
+ * recursively-stamped fresh ids).
+ *
+ * Why this exists alongside the outer-onChange expansion: Puck v0.21
+ * treats the `data` prop as an INITIAL seed only — the inner store
+ * lives in `useState(() => populateFromInitialData(data))`, which
+ * runs once at mount and never re-syncs from subsequent `data` prop
+ * changes. Our outer onChange handler `setData(expanded)`-s React's
+ * data state and threads the expanded tree through `puckDataToEdition`
+ * (so the email actually sends correctly), but Puck's CANVAS keeps
+ * showing the unexpanded `user::X` because its internal store is
+ * untouched. `user::X`'s render returns null → empty card on canvas.
+ *
+ * Mounting an effect inside Puck's context (via NewsletterCanvasRoot)
+ * lets us reach `dispatch` and replace the data in Puck's store
+ * directly, which propagates back through the canvas.
+ *
+ * Cost: `usePuckSelected((s) => s.appState.data)` re-renders this
+ * component on every Puck-internal edit. The component returns null
+ * (no DOM cost), and the effect early-exits when no synthetics are
+ * present, so the cost is a tree walk per edit — negligible compared
+ * to Puck's own re-render work.
+ */
+function UserBlockSyntheticExpander(): null {
+  const data = usePuckSelected((s) => s.appState.data);
+  const dispatch = usePuckSelected((s) => s.dispatch);
+  const { blocks: userBlocks } = useUserBlocks();
+  useEffect(() => {
+    if (userBlocks.length === 0) return;
+    const expanded = expandUserBlockSynthetics(
+      data as unknown as ReturnType<typeof editionToPuckData>,
+      userBlocks,
+    );
+    if (expanded === (data as unknown)) return;
+    dispatch({ type: 'setData', data: expanded as never });
+  }, [data, userBlocks, dispatch]);
+  return null;
+}
+
 function NewsletterCanvasRoot(props: RootProps) {
   const mode = props.puck?.metadata?.previewMode ?? 'light';
   const css = mode === 'dark' ? CANVAS_DARK_CSS : CANVAS_LIGHT_CSS;
@@ -998,6 +968,7 @@ function NewsletterCanvasRoot(props: RootProps) {
     <>
       <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
       <FieldsAutoSwitcher />
+      <UserBlockSyntheticExpander />
       <div ref={wrapperRef} className="gw-email-card">{props.children}</div>
     </>
   );
@@ -1141,141 +1112,10 @@ const CANVAS_DARK_CSS = `
 `;
 
 // ---------------------------------------------------------------------------
-// Toolbar helpers — small inline-style factories so the dark/light theme
-// toggle threads consistently through every button without adding a
-// stylesheet. Style polishing can later move these to a CSS file.
+// Toolbar helpers — small inline-style factories used by the page-level
+// toolbar above the canvas. Puck theming + the Light/Dark portal now
+// live in the shared CanvasShell.
 // ---------------------------------------------------------------------------
-
-// Puck's azure (accent) + grey scales remapped to Radix tokens. Puck
-// uses 01 (darkest) → 12 (lightest); Radix uses 1 (lightest) → 12
-// (darkest), hence the inverted mapping. The scoped `.newsletter-
-// puck-canvas` class keeps this isolated to the newsletter editor.
-const PUCK_RADIX_THEME_CSS = `
-.newsletter-puck-canvas {
-  --puck-color-azure-01: var(--accent-12);
-  --puck-color-azure-02: var(--accent-11);
-  --puck-color-azure-03: var(--accent-10);
-  --puck-color-azure-04: var(--accent-9);
-  --puck-color-azure-05: var(--accent-8);
-  --puck-color-azure-06: var(--accent-7);
-  --puck-color-azure-07: var(--accent-6);
-  --puck-color-azure-08: var(--accent-5);
-  --puck-color-azure-09: var(--accent-4);
-  --puck-color-azure-10: var(--accent-3);
-  --puck-color-azure-11: var(--accent-2);
-  --puck-color-azure-12: var(--accent-1);
-
-  --puck-color-grey-01: var(--gray-12);
-  --puck-color-grey-02: var(--gray-11);
-  --puck-color-grey-03: var(--gray-10);
-  --puck-color-grey-04: var(--gray-9);
-  --puck-color-grey-05: var(--gray-8);
-  --puck-color-grey-06: var(--gray-7);
-  --puck-color-grey-07: var(--gray-6);
-  --puck-color-grey-08: var(--gray-5);
-  --puck-color-grey-09: var(--gray-4);
-  --puck-color-grey-10: var(--gray-3);
-  --puck-color-grey-11: var(--gray-2);
-  --puck-color-grey-12: var(--gray-1);
-
-  --puck-color-red-04: var(--red-9, #ac1f35);
-  --puck-color-red-05: var(--red-8, #bf5366);
-  --puck-color-red-09: var(--red-4, #f3c8d2);
-
-  --puck-color-green-04: var(--green-9, #0c680c);
-  --puck-color-green-09: var(--green-4, #b8e8bf);
-}
-
-/* Hide Puck's entire native header row — the bar that contains the
-   sidebar visibility toggles, undo/redo, and (formerly) the page
-   title + Publish button. Per operator request: looks closer to the
-   puckeditor.com aesthetic without that secondary chrome. The
-   actions we still need (Publish, exports, view toggle) live in our
-   own page-level toolbar above the curved panel; undo/redo can come
-   back in a follow-up via the same portal pattern as Light/Dark if
-   needed. */
-.newsletter-puck-canvas [class*="PuckLayout-header"] {
-  display: none !important;
-}
-
-/* Puck's left tab strip ships with padding-top: 32px on .Nav-list
-   to push the first plugin button below the (now-hidden) header row.
-   With our header hidden the 32px gap read as a stray empty zone,
-   but zero padding made the first tab's blue active-state indicator
-   sit flush against the panel's top edge. 8px is just enough to
-   tuck the indicator inside the curved corner of the panel. */
-.newsletter-puck-canvas [class*="Nav-list"] {
-  padding-top: 8px !important;
-}
-
-/* Puck's ViewportControls-actionsInner has overflow: hidden. Our
-   ViewportLightDarkPortal portals Sun + Moon buttons into that row
-   so they sit next to Desktop / Mobile / Zoom; without this rule
-   the buttons get visually clipped when the row's flex layout runs
-   out of width. */
-.newsletter-puck-canvas [class*="ViewportControls-actionsInner"] {
-  overflow: visible !important;
-}
-
-/* Puck's outer PuckLayout wrapper ships with height: 100dvh, which
-   forces the editor to be the FULL viewport height regardless of how
-   tall its actual container (our editorHeight-constrained wrapper)
-   is. The wrapper's overflow: hidden clips Puck visually, but
-   internally Puck's grid still allocates a 100dvh row to the
-   Sidebar — so when the operator scrolls the Fields drawer, scroll
-   events bubble through a Sidebar that thinks it has more vertical
-   space than it does, and the whole layout (icon menu included)
-   appears to scroll together.
-
-   Force PuckLayout to inherit the wrapper's height, and tell its
-   internal scrollable areas to contain their scroll instead of
-   chaining up to ancestors. The "_PuckLayout_" attribute selector
-   (with the trailing underscore) matches only the outer class, not
-   the _PuckLayout-inner_ / _PuckLayout--mounted_ variants. */
-.newsletter-puck-canvas [class*="_PuckLayout_"] {
-  height: 100% !important;
-}
-.newsletter-puck-canvas [class*="_Sidebar_"],
-.newsletter-puck-canvas [class*="_Nav_"],
-.newsletter-puck-canvas [class*="_PuckPluginTab_"] {
-  overscroll-behavior: contain;
-}
-
-/* The previous draft used padding on PuckLayout-nav and Sidebar--
-   right to push their contents inward to align with the hero text.
-   Now that the editor lives inside a curved-corner panel, the panel
-   itself defines the inset — padding inside Puck would create a
-   visible gutter against the panel's rounded border, which looks
-   worse than flush chrome. Removed. */
-
-/* Puck draws a 2px selection / hover outline on the DraggableComponent
-   overlay with outline-offset: -2px, so the outline sits INSIDE the
-   block's edge and overlaps text being inline-edited. Shift the
-   outline OUTSIDE the block (positive offset) so the contentEditable
-   span has visual breathing room from the selection chrome. */
-.newsletter-puck-canvas [class*="DraggableComponent-overlay"] {
-  outline-offset: 4px !important;
-}
-
-/* Puck's InlineTextField span gets the browser's default focus ring
-   (a thick blue outline) when contentEditable is active. The Puck
-   selection chrome is already visually communicating "this is
-   editable", so the browser ring is redundant — drop it. */
-.newsletter-puck-canvas [class*="InlineTextField"]:focus,
-.newsletter-puck-canvas [class*="InlineTextField"]:focus-visible {
-  outline: none !important;
-}
-
-/* While the operator is actively typing in an InlineTextField, hide
-   Puck's block selection outline entirely. Two competing borders
-   (block selection + the InlineTextField active-state ring) made
-   the canvas look noisy during edit. The :has() selector targets
-   the DraggableComponent ancestor when an InlineTextField inside
-   it has focus. */
-.newsletter-puck-canvas [class*="DraggableComponent"]:has([class*="InlineTextField"]:focus) [class*="DraggableComponent-overlay"] {
-  outline: none !important;
-}
-`;
 
 function toolbarSegment(): React.CSSProperties {
   return {
@@ -1284,106 +1124,6 @@ function toolbarSegment(): React.CSSProperties {
     borderRadius: 4,
     overflow: 'hidden',
     background: 'var(--color-surface, #fff)',
-  };
-}
-
-// ---------------------------------------------------------------------------
-// ViewportLightDarkPortal — the Light / Dark backdrop toggle is a
-// canvas-rendering setting (it changes the iframe's body background
-// to simulate a light vs dark mail-client). Visually it belongs next
-// to the Desktop / Mobile viewport switcher Puck draws inside its
-// `_ViewportControls-actionsInner_*` row. Puck doesn't expose an
-// override for that row, so we render via a React portal: poll for
-// the element on mount (it appears after Puck initialises its
-// chrome) and inject our buttons there once we find it.
-// ---------------------------------------------------------------------------
-
-function ViewportLightDarkPortal({
-  previewMode,
-  setPreviewMode,
-}: {
-  previewMode: 'light' | 'dark';
-  setPreviewMode: (mode: 'light' | 'dark') => void;
-}): ReactElement | null {
-  const [target, setTarget] = useState<Element | null>(null);
-
-  useEffect(() => {
-    function find(): HTMLElement | null {
-      // Target the actionsInner flex row that holds Desktop / Mobile
-      // / Zoom controls so our Sun + Moon buttons sit alongside them.
-      // The inner has `overflow: hidden` in Puck's default CSS — the
-      // PUCK_RADIX_THEME_CSS block below relaxes that to `visible`
-      // so our portal children aren't clipped.
-      const candidates = document.querySelectorAll<HTMLElement>(
-        '.newsletter-puck-canvas [class*="ViewportControls-actionsInner"]',
-      );
-      return candidates[candidates.length - 1] ?? null;
-    }
-
-    // Initial probe; the row may not exist yet on first render.
-    setTarget(find());
-
-    // MutationObserver catches both the initial mount of Puck's
-    // ViewportControls and any future replacement (e.g., when Puck
-    // re-renders the row). The previous rAF-polling version stopped
-    // as soon as it found ONE node — if that node was later detached
-    // (Puck re-rendered the controls), the portal silently broke and
-    // the Light/Dark buttons disappeared.
-    const obs = new MutationObserver(() => {
-      const next = find();
-      setTarget((prev) => {
-        if (next === prev) return prev;
-        // If the previous target was detached, swap to the new one.
-        if (prev && !prev.isConnected) return next;
-        // Otherwise stick with prev unless a different node appeared.
-        return next ?? prev;
-      });
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-    return () => obs.disconnect();
-  }, []);
-
-  if (!target) return null;
-
-  return createPortal(
-    <div role="group" aria-label="Preview background" style={{ display: 'inline-flex', alignItems: 'center', marginLeft: 8 }}>
-      <button
-        type="button"
-        onClick={() => setPreviewMode('light')}
-        style={portalIconBtn(previewMode === 'light')}
-        aria-pressed={previewMode === 'light'}
-        aria-label="Light background preview"
-        title="Preview against a light mail-client background"
-      >
-        <SunIcon className="w-4 h-4" />
-      </button>
-      <button
-        type="button"
-        onClick={() => setPreviewMode('dark')}
-        style={portalIconBtn(previewMode === 'dark')}
-        aria-pressed={previewMode === 'dark'}
-        aria-label="Dark background preview"
-        title="Preview against a dark mail-client background"
-      >
-        <MoonIcon className="w-4 h-4" />
-      </button>
-    </div>,
-    target,
-  );
-}
-
-function portalIconBtn(active: boolean): React.CSSProperties {
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 28,
-    height: 28,
-    border: 'none',
-    background: active ? 'var(--accent-a3, #eef2f7)' : 'transparent',
-    color: active ? 'var(--accent-11, #14171E)' : 'var(--gray-12, inherit)',
-    cursor: 'pointer',
-    borderRadius: 4,
   };
 }
 

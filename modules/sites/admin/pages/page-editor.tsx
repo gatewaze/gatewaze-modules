@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { ArrowLeftIcon, DocumentIcon, ChartBarIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, DocumentIcon, ChartBarIcon, PencilSquareIcon, UserGroupIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Button, Card, Tabs } from '@/components/ui';
 import type { Tab } from '@/components/ui/Tabs';
@@ -16,11 +16,17 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
 import { PageEditor, type PageEditorContentSchema } from '../page-editor';
 import { PageAnalytics } from './PageAnalytics';
+import { VariantEditor } from '../components/VariantEditor';
+import { PagePersonalizationMatrix } from '../components/PagePersonalizationMatrix';
 import { SitesService, PagesService } from '../services/sitesService';
+import { PageVariantsService, type PageVariant } from '../services/pageVariantsService';
+import { PersonasService, type Persona } from '../services/personasService';
+import { jsonPointerToFieldPath } from '../lib/field-path';
+import { getSchemaAtPointer } from '../schema-editor/walk-schema';
 import type { PageRow, SiteRow } from '../../types';
 import { supabase } from '@/lib/supabase';
 
-const VALID_TABS = ['editor', 'analytics'] as const;
+const VALID_TABS = ['editor', 'personalization', 'analytics'] as const;
 type TabKey = (typeof VALID_TABS)[number];
 
 export default function PageEditorPage() {
@@ -32,6 +38,20 @@ export default function PageEditorPage() {
   const [contentSchema, setContentSchema] = useState<PageEditorContentSchema | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('editor');
+  const [variantPointer, setVariantPointer] = useState<string | null>(null);
+  const [variants, setVariants] = useState<PageVariant[]>([]);
+  const [personas, setPersonas] = useState<Persona[]>([]);
+
+  async function loadVariantsAndPersonas(siteId: string, pageIdToLoad: string) {
+    const [vRes, pRes] = await Promise.all([
+      PageVariantsService.list(pageIdToLoad),
+      PersonasService.list(siteId),
+    ]);
+    if (vRes.error) toast.error(`Variants: ${vRes.error}`);
+    if (pRes.error) toast.error(`Personas: ${pRes.error}`);
+    setVariants(vRes.variants);
+    setPersonas(pRes.personas);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +95,7 @@ export default function PageEditorPage() {
         setPage(pageRes.page);
         setContentSchema(schema);
         setLoading(false);
+        void loadVariantsAndPersonas(siteRes.site.id, pageRes.page.id);
       }
     };
     load();
@@ -114,6 +135,7 @@ export default function PageEditorPage() {
           onChange={(t: string) => setActiveTab(t as TabKey)}
           tabs={[
             { id: 'editor', label: 'Editor', icon: <PencilSquareIcon className="size-4" /> },
+            { id: 'personalization', label: 'Personalization', icon: <UserGroupIcon className="size-4" /> },
             { id: 'analytics', label: 'Analytics', icon: <ChartBarIcon className="size-4" /> },
           ] as Tab[]}
         />
@@ -132,13 +154,50 @@ export default function PageEditorPage() {
                 }}
                 contentSchema={contentSchema}
                 baseCommitSha={null}
+                onPersonalize={(pointer) => setVariantPointer(pointer)}
               />
+            </div>
+          </Card>
+        )}
+
+        {activeTab === 'personalization' && contentSchema && (
+          <Card>
+            <div className="p-4">
+              <PagePersonalizationMatrix
+                schema={contentSchema.schema_json}
+                defaultContent={(page.content ?? {}) as Record<string, unknown>}
+                personas={personas}
+                variants={variants}
+                onEditField={(pointer) => setVariantPointer(pointer)}
+              />
+            </div>
+          </Card>
+        )}
+
+        {activeTab === 'personalization' && !contentSchema && (
+          <Card>
+            <div className="p-6 text-center text-sm text-(--gray-9)">
+              Personalization is available for schema-mode pages once a content schema is loaded.
             </div>
           </Card>
         )}
 
         {activeTab === 'analytics' && (
           <PageAnalytics siteId={site.id} pagePath={page.full_path} />
+        )}
+
+        {variantPointer !== null && contentSchema && (
+          <VariantEditor
+            pageId={page.id}
+            siteId={site.id}
+            fieldPath={jsonPointerToFieldPath(variantPointer)}
+            fieldLabel={variantPointer}
+            fieldSchema={getSchemaAtPointer(contentSchema.schema_json, variantPointer)}
+            onClose={() => {
+              setVariantPointer(null);
+              void loadVariantsAndPersonas(site.id, page.id);
+            }}
+          />
         )}
       </div>
     </Page>

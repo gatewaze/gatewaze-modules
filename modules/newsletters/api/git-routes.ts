@@ -141,6 +141,34 @@ export function createInitRepoRoute(deps: GitRoutesDeps) {
 // ---------------------------------------------------------------------------
 // Phase 2.1 — graduate-to-external
 // ---------------------------------------------------------------------------
+//
+// Two layouts are supported:
+//
+//   1. LEGACY single-repo: body provides `externalGitUrl` + `pat`.
+//      Internal bare repo is mirror-pushed to that one remote; `main`
+//      (theme/source) and `publish` (built output) both live there.
+//
+//   2. SEPARATE theme + publish repos: body provides
+//      `externalThemeGitUrl` + `externalPublishGitUrl` + `pat`. The
+//      platform provisions a deploy key on EACH, pushes `main` to the
+//      theme repo, pushes `publish` to the publish repo's `main`
+//      (default branch), and sets `config.theme.url` so future
+//      publishes overlay the theme automatically.
+//
+// Either-or — callers MUST NOT mix both shapes. We sniff which shape
+// arrived and dispatch to graduateNewsletterToExternal accordingly.
+
+interface NewsletterGraduateBody {
+  externalGitUrl?: string;
+  externalThemeGitUrl?: string;
+  externalPublishGitUrl?: string;
+  pat?: string;
+}
+
+function pickString(body: Record<string, unknown>, key: keyof NewsletterGraduateBody): string {
+  const value = body[key];
+  return typeof value === 'string' ? value : '';
+}
 
 export function createGraduateToExternalRoute(deps: GitRoutesDeps) {
   return async function graduateToExternal(req: RequestWithUser, res: Response, _next: NextFunction): Promise<void> {
@@ -149,16 +177,58 @@ export function createGraduateToExternalRoute(deps: GitRoutesDeps) {
       return;
     }
     const collectionId = req.params.collectionId;
-    const externalGitUrl = typeof req.body.externalGitUrl === 'string' ? req.body.externalGitUrl : '';
-    const pat = typeof req.body.pat === 'string' ? req.body.pat : '';
-
-    if (!collectionId || !externalGitUrl || !pat) {
-      res.status(400).json({ error: { code: 'missing_fields', message: 'collectionId, externalGitUrl, pat all required' } });
+    if (!collectionId) {
+      res.status(400).json({ error: { code: 'missing_collection_id' } });
       return;
     }
-    if (!/^https?:\/\/(github|gitlab)\.com\//.test(externalGitUrl)) {
-      res.status(400).json({ error: { code: 'unsupported_provider', message: 'only github.com / gitlab.com are supported' } });
+
+    const externalGitUrl = pickString(req.body, 'externalGitUrl');
+    const externalThemeGitUrl = pickString(req.body, 'externalThemeGitUrl');
+    const externalPublishGitUrl = pickString(req.body, 'externalPublishGitUrl');
+    const pat = pickString(req.body, 'pat');
+
+    const isSingle = !!externalGitUrl;
+    const isSeparate = !!externalThemeGitUrl && !!externalPublishGitUrl;
+
+    if (!pat) {
+      res.status(400).json({ error: { code: 'missing_fields', message: 'pat is required' } });
       return;
+    }
+    if (isSingle && (externalThemeGitUrl || externalPublishGitUrl)) {
+      res.status(400).json({
+        error: {
+          code: 'mixed_layout',
+          message:
+            'cannot mix externalGitUrl (single-repo) with externalThemeGitUrl / externalPublishGitUrl (separate-repos)',
+        },
+      });
+      return;
+    }
+    if (!isSingle && !isSeparate) {
+      res.status(400).json({
+        error: {
+          code: 'missing_fields',
+          message:
+            'either externalGitUrl OR both externalThemeGitUrl + externalPublishGitUrl are required',
+        },
+      });
+      return;
+    }
+
+    // Provider whitelist (mirrors the legacy check; applies to every URL).
+    const urls = isSingle
+      ? [externalGitUrl]
+      : [externalThemeGitUrl, externalPublishGitUrl];
+    for (const url of urls) {
+      if (!/^https?:\/\/(github|gitlab)\.com\//.test(url)) {
+        res.status(400).json({
+          error: {
+            code: 'unsupported_provider',
+            message: 'only github.com / gitlab.com URLs are supported',
+          },
+        });
+        return;
+      }
     }
 
     if (!deps.gitServer) {
@@ -179,65 +249,85 @@ export function createGraduateToExternalRoute(deps: GitRoutesDeps) {
         return;
       }
 
-      // 2. Mirror-push the internal bare repo to the external remote.
-      //    We use a temp clone to avoid mutating the bare repo's refs.
-      //    The PAT travels via HTTPS for this initial push and is then
-      //    discarded — the platform never persists it.
-      const urlWithAuth = externalGitUrl.replace(
-        /^https?:\/\//,
-        (m) => `${m}x-access-token:${encodeURIComponent(pat)}@`,
-      );
-      const result = await execGit(
-        ['push', '--mirror', urlWithAuth],
-        { cwd: repo.barePath },
-      );
-      if (result.exitCode !== 0) {
-        res.status(502).json({
-          error: {
-            code: 'mirror_push_failed',
-            // Don't leak the PAT-bearing URL.
-            message: result.stderr.replace(urlWithAuth, externalGitUrl).slice(0, 500),
-          },
-        });
-        return;
-      }
-
-      // 3. Persist the graduate state on the collection.
-      const updateRes = await deps.supabase
+      // 2. Fetch the collection row for name/slug (used in deploy-key titles).
+      const collRes = await deps.supabase
         .from('newsletters_template_collections')
-        .update({
-          git_provenance: 'external',
-          git_url: externalGitUrl,
-        })
-        .eq('id', collectionId);
-      if (updateRes.error) {
-        res.status(500).json({ error: { code: 'collection_update_failed', message: updateRes.error.message } });
+        .select('id, name, slug')
+        .eq('id', collectionId)
+        .maybeSingle();
+      if (collRes.error || !collRes.data) {
+        res.status(404).json({ error: { code: 'collection_not_found', message: collRes.error?.message ?? '' } });
         return;
       }
+      const coll = collRes.data as { id: string; name: string; slug: string };
 
-      // 4. Schedule internal repo soft-delete (7-day grace per sites'
-      //    spec §6.5). We don't hard-delete — operators may want to
-      //    revert. Actual purge is a follow-up sweeper.
-      if (deps.gitServer.softDeleteRepo) {
-        try {
-          await deps.gitServer.softDeleteRepo(repo);
-        } catch {
-          // Soft-delete failures are non-fatal — the repo can be
-          // graduated again if needed; the bare repo just stays on disk.
-        }
-      }
+      // 3. Lazy-import the graduate impl so this route module doesn't
+      //    drag ssh-keygen / spawn at parse time.
+      const { graduateNewsletterToExternal } = await import('../lib/git/graduate-to-external.js');
+
+      const softDeleteFn = deps.gitServer.softDeleteRepo
+        ? async (r: { id: string; barePath: string }) => {
+            // The GitServer's softDeleteRepo expects a richer ref; we
+            // build it locally from the lookup result above so the
+            // graduate helper can stay narrow on its dependency.
+            await deps.gitServer!.softDeleteRepo!({
+              id: r.id,
+              barePath: r.barePath,
+            } as never);
+          }
+        : undefined;
+
+      const result = await graduateNewsletterToExternal(
+        {
+          collectionId,
+          collection: { name: coll.name, slug: coll.slug },
+          internalRepo: { id: repo.id, barePath: repo.barePath },
+          externalGitUrl: isSingle ? externalGitUrl : undefined,
+          externalThemeGitUrl: isSeparate ? externalThemeGitUrl : undefined,
+          externalPublishGitUrl: isSeparate ? externalPublishGitUrl : undefined,
+          pat,
+        },
+        {
+          supabase: deps.supabase,
+          ...(softDeleteFn ? { softDeleteInternalRepo: softDeleteFn } : {}),
+          logger: {
+            info: (msg, meta) => { console.info('[newsletters graduate]', msg, meta ?? {}); },
+            warn: (msg, meta) => { console.warn('[newsletters graduate]', msg, meta ?? {}); },
+            error: (msg, meta) => { console.error('[newsletters graduate]', msg, meta ?? {}); },
+          },
+        },
+      );
 
       res.status(200).json({
         kind: 'graduated',
         collectionId,
-        externalGitUrl,
-        internalRepoSoftDeleted: !!deps.gitServer.softDeleteRepo,
+        layout: result.layout,
+        externalGitUrl: result.externalGitUrl,
+        externalThemeGitUrl: result.externalThemeGitUrl,
+        publishRemoteBranch: result.publishRemoteBranch,
+        deployKeyId: result.deployKeyId,
+        themeDeployKeyId: result.themeDeployKeyId,
+        branchProtectionApplied: result.branchProtectionApplied,
+        internalPurgeScheduledFor: result.internalPurgeScheduledFor,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console
       console.error('[newsletters graduate-to-external] error', err);
+      if (message.startsWith('pat_under_scoped:')) {
+        res.status(400).json({
+          error: { code: 'pat_under_scoped', message: message.replace(/^pat_under_scoped:\s*/, '') },
+        });
+        return;
+      }
+      if (message.startsWith('graduate_layout_invalid:')) {
+        res.status(400).json({
+          error: { code: 'invalid_layout', message: message.replace(/^graduate_layout_invalid:\s*/, '') },
+        });
+        return;
+      }
       res.status(500).json({
-        error: { code: 'graduate_failed', message: err instanceof Error ? err.message : String(err) },
+        error: { code: 'graduate_failed', message },
       });
     }
   };

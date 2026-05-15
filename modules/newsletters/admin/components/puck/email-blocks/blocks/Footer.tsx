@@ -40,7 +40,9 @@ export const FooterBlock: EmailBlockEntry<FooterProps> = {
   fields: {
     footer_text: { type: 'textarea', label: 'Footer text' },
     unsubscribe_text: { type: 'text', label: 'Unsubscribe link text (optional)' },
-    unsubscribe_link: { type: 'text', label: 'Unsubscribe URL (optional)' },
+    // contentEditable disabled — safeHref() does `value.trim()` which
+    // needs a raw string. URL fields aren't useful inline-editable anyway.
+    unsubscribe_link: { type: 'text', label: 'Unsubscribe URL (optional)', contentEditable: false },
   },
   defaultProps: {
     footer_text: 'You are receiving this email because you subscribed.',

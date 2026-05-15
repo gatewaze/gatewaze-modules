@@ -54,36 +54,165 @@ import { CTACardBlock } from './blocks/CTACard.js';
 import { BulletListBlock } from './blocks/BulletList.js';
 import { SocialIconsRowBlock } from './blocks/SocialIconsRow.js';
 import { LogoHeaderBlock } from './blocks/LogoHeader.js';
+import { WeatherBlock } from './blocks/Weather.js';
+// Phase A — react.email/components parity, variant fills:
+import { HeaderWithNavBlock } from './blocks/HeaderWithNav.js';
+import { MultiColumnFooterBlock } from './blocks/MultiColumnFooter.js';
+import { SectionWithBackgroundBlock } from './blocks/SectionWithBackground.js';
+import { TwoColumnGridBlock } from './blocks/TwoColumnGrid.js';
+import { ThreeColumnGridBlock } from './blocks/ThreeColumnGrid.js';
+import { LabeledDividerBlock } from './blocks/LabeledDivider.js';
+import { HeadingWithEyebrowBlock } from './blocks/HeadingWithEyebrow.js';
+import { PullQuoteBlock } from './blocks/PullQuote.js';
+import { LinkWithArrowBlock } from './blocks/LinkWithArrow.js';
+import { ButtonGroupBlock } from './blocks/ButtonGroup.js';
+import { ImageWithCaptionBlock } from './blocks/ImageWithCaption.js';
+import { FullWidthImageBlock } from './blocks/FullWidthImage.js';
+import { IconListBlock } from './blocks/IconList.js';
+// Phase B — Articles, Features, Testimonials, Stats:
+import { ArticleCardBlock } from './blocks/ArticleCard.js';
+import { ArticleListBlock } from './blocks/ArticleList.js';
+import { ArticleWithAuthorBlock } from './blocks/ArticleWithAuthor.js';
+import { ArticleWithImageBlock } from './blocks/ArticleWithImage.js';
+import { FeaturedArticleBlock } from './blocks/FeaturedArticle.js';
+import { CompactArticleBlock } from './blocks/CompactArticle.js';
+import { ThreeColumnFeaturesBlock } from './blocks/ThreeColumnFeatures.js';
+import { FeatureRowWithIconBlock } from './blocks/FeatureRowWithIcon.js';
+import { AlternatingFeaturesBlock } from './blocks/AlternatingFeatures.js';
+import { FeatureGridBlock } from './blocks/FeatureGrid.js';
+import { TestimonialCardBlock } from './blocks/TestimonialCard.js';
+import { TestimonialStackBlock } from './blocks/TestimonialStack.js';
+import { StatsThreeUpBlock } from './blocks/StatsThreeUp.js';
+import { StatsWithDescriptionBlock } from './blocks/StatsWithDescription.js';
+// Phase C — Avatars, Gallery, Pricing, Feedback:
+import { AvatarBlock } from './blocks/Avatar.js';
+import { AvatarWithNameBlock } from './blocks/AvatarWithName.js';
+import { AvatarRowBlock } from './blocks/AvatarRow.js';
+import { AvatarWithStatusBlock } from './blocks/AvatarWithStatus.js';
+import { GalleryTwoColBlock } from './blocks/GalleryTwoCol.js';
+import { GalleryThreeColBlock } from './blocks/GalleryThreeCol.js';
+import { GalleryFourColBlock } from './blocks/GalleryFourCol.js';
+import { GalleryMosaicBlock } from './blocks/GalleryMosaic.js';
+import { PricingCardBlock } from './blocks/PricingCard.js';
+import { PricingComparisonBlock } from './blocks/PricingComparison.js';
+import { StarRatingBlock } from './blocks/StarRating.js';
+import { ThumbsRatingBlock } from './blocks/ThumbsRating.js';
+import { ScaleRatingBlock } from './blocks/ScaleRating.js';
+// Phase D — Code, Markdown, Ecommerce:
+import { CodeInlineBlock } from './blocks/CodeInline.js';
+import { CodeInlineWithLabelBlock } from './blocks/CodeInlineWithLabel.js';
+import { CodeBlockBlock } from './blocks/CodeBlock.js';
+import { CodeBlockWithFilenameBlock } from './blocks/CodeBlockWithFilename.js';
+import { CodeBlockWithLineNumbersBlock } from './blocks/CodeBlockWithLineNumbers.js';
+import { CodeBlockWithCopyLinkBlock } from './blocks/CodeBlockWithCopyLink.js';
+import { MarkdownContentBlock } from './blocks/MarkdownContent.js';
+import { MarkdownBlockquoteBlock } from './blocks/MarkdownBlockquote.js';
+import { MarkdownChangelogBlock } from './blocks/MarkdownChangelog.js';
+import { ProductCardBlock } from './blocks/ProductCard.js';
+import { ProductGridBlock } from './blocks/ProductGrid.js';
+import { CartSummaryBlock } from './blocks/CartSummary.js';
+import { OrderReceiptBlock } from './blocks/OrderReceipt.js';
+import { ShippingTrackerBlock } from './blocks/ShippingTracker.js';
 
 const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   // Navigation — composites
   LogoHeaderBlock as unknown as EmailBlockEntry,
   HeaderBlock as unknown as EmailBlockEntry,
+  HeaderWithNavBlock as unknown as EmailBlockEntry,
   FooterBlock as unknown as EmailBlockEntry,
+  MultiColumnFooterBlock as unknown as EmailBlockEntry,
   // Introduction — composites
   HeroBlock as unknown as EmailBlockEntry,
   // Content — composites (Barebone-derived)
   TwoColumnFeaturesBlock as unknown as EmailBlockEntry,
   BulletListBlock as unknown as EmailBlockEntry,
+  IconListBlock as unknown as EmailBlockEntry,
   // Content — composites (basic / wizard)
   ContentSectionBlock as unknown as EmailBlockEntry,
   HelixAiContentBlock as unknown as EmailBlockEntry,
+  // Content — composites (data-driven via Puck resolveData)
+  WeatherBlock as unknown as EmailBlockEntry,
+  // Articles
+  FeaturedArticleBlock as unknown as EmailBlockEntry,
+  ArticleCardBlock as unknown as EmailBlockEntry,
+  ArticleWithImageBlock as unknown as EmailBlockEntry,
+  ArticleWithAuthorBlock as unknown as EmailBlockEntry,
+  ArticleListBlock as unknown as EmailBlockEntry,
+  CompactArticleBlock as unknown as EmailBlockEntry,
+  // Features
+  ThreeColumnFeaturesBlock as unknown as EmailBlockEntry,
+  FeatureRowWithIconBlock as unknown as EmailBlockEntry,
+  AlternatingFeaturesBlock as unknown as EmailBlockEntry,
+  FeatureGridBlock as unknown as EmailBlockEntry,
+  // Testimonials
+  TestimonialCardBlock as unknown as EmailBlockEntry,
+  TestimonialStackBlock as unknown as EmailBlockEntry,
+  // Stats
+  StatsThreeUpBlock as unknown as EmailBlockEntry,
+  StatsWithDescriptionBlock as unknown as EmailBlockEntry,
+  // Avatars
+  AvatarBlock as unknown as EmailBlockEntry,
+  AvatarWithNameBlock as unknown as EmailBlockEntry,
+  AvatarRowBlock as unknown as EmailBlockEntry,
+  AvatarWithStatusBlock as unknown as EmailBlockEntry,
+  // Gallery
+  GalleryTwoColBlock as unknown as EmailBlockEntry,
+  GalleryThreeColBlock as unknown as EmailBlockEntry,
+  GalleryFourColBlock as unknown as EmailBlockEntry,
+  GalleryMosaicBlock as unknown as EmailBlockEntry,
+  // Pricing
+  PricingCardBlock as unknown as EmailBlockEntry,
+  PricingComparisonBlock as unknown as EmailBlockEntry,
+  // Feedback
+  StarRatingBlock as unknown as EmailBlockEntry,
+  ThumbsRatingBlock as unknown as EmailBlockEntry,
+  ScaleRatingBlock as unknown as EmailBlockEntry,
+  // Code
+  CodeInlineBlock as unknown as EmailBlockEntry,
+  CodeInlineWithLabelBlock as unknown as EmailBlockEntry,
+  CodeBlockBlock as unknown as EmailBlockEntry,
+  CodeBlockWithFilenameBlock as unknown as EmailBlockEntry,
+  CodeBlockWithLineNumbersBlock as unknown as EmailBlockEntry,
+  CodeBlockWithCopyLinkBlock as unknown as EmailBlockEntry,
+  // Markdown
+  MarkdownContentBlock as unknown as EmailBlockEntry,
+  MarkdownBlockquoteBlock as unknown as EmailBlockEntry,
+  MarkdownChangelogBlock as unknown as EmailBlockEntry,
+  // Ecommerce
+  ProductCardBlock as unknown as EmailBlockEntry,
+  ProductGridBlock as unknown as EmailBlockEntry,
+  CartSummaryBlock as unknown as EmailBlockEntry,
+  OrderReceiptBlock as unknown as EmailBlockEntry,
+  ShippingTrackerBlock as unknown as EmailBlockEntry,
+  // Content — composites (heading / quote / captioned)
+  HeadingWithEyebrowBlock as unknown as EmailBlockEntry,
+  PullQuoteBlock as unknown as EmailBlockEntry,
+  ImageWithCaptionBlock as unknown as EmailBlockEntry,
+  FullWidthImageBlock as unknown as EmailBlockEntry,
   // Content — primitives (leaf)
   HeadingBlock as unknown as EmailBlockEntry,
   TextBlock as unknown as EmailBlockEntry,
   ImgBlock as unknown as EmailBlockEntry,
   LinkBlock as unknown as EmailBlockEntry,
+  LinkWithArrowBlock as unknown as EmailBlockEntry,
   // Action — composites + primitives
   CTACardBlock as unknown as EmailBlockEntry,
   ButtonBlock as unknown as EmailBlockEntry,
+  ButtonGroupBlock as unknown as EmailBlockEntry,
   // Social — composites
   SocialIconsRowBlock as unknown as EmailBlockEntry,
   // Layout — primitives (slot containers)
   ContainerBlock as unknown as EmailBlockEntry,
   SectionBlock as unknown as EmailBlockEntry,
+  SectionWithBackgroundBlock as unknown as EmailBlockEntry,
   RowBlock as unknown as EmailBlockEntry,
   ColumnBlock as unknown as EmailBlockEntry,
+  // Layout — grid presets (static fields, not composable slots)
+  TwoColumnGridBlock as unknown as EmailBlockEntry,
+  ThreeColumnGridBlock as unknown as EmailBlockEntry,
+  // Layout — dividers
   HrBlock as unknown as EmailBlockEntry,
+  LabeledDividerBlock as unknown as EmailBlockEntry,
 ];
 
 const map = new Map<string, EmailBlockEntry>();

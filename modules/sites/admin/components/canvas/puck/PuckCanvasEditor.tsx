@@ -13,7 +13,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Puck, type Data as PuckCoreData } from '@puckeditor/core';
+import { type Data as PuckCoreData } from '@puckeditor/core';
+import { CanvasShell } from './CanvasShell.js';
 import { toast } from 'sonner';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { useCanvasLock } from '../useCanvasLock.js';
@@ -31,6 +32,9 @@ import { pageBlocksToPuckData, diffToOps } from './puck-data-adapter.js';
 import { renderBlockClient, type BlockTemplateLookup } from './render-block-client.js';
 import { extractThemeCss } from './extract-theme-css.js';
 import { HostMediaPickerModal } from './HostMediaPickerModal.js';
+import { PersonalizationHostProvider, type PersonalizationHost } from './fields/personalization-host-context.js';
+import { VariantEditor } from '../../VariantEditor.js';
+import { useHasModule } from '@/hooks/useModuleFeature';
 import {
   RefetchRequired,
   type PageBlockTree,
@@ -59,10 +63,14 @@ interface LoadedState {
   baselineVersion: number;
   config: BuildConfigResult;
   initialData: PuckData;
+  /** Kept so the personalization side panel can resolve a block's schema by id. */
+  blockDefs: ReadonlyArray<BlockDefRow>;
+  brickDefs: ReadonlyArray<BrickDefRow>;
 }
 
 export function PuckCanvasEditor({ pageId, siteSlug, themeKind = 'website' }: PuckCanvasEditorProps) {
   const lock = useCanvasLock(pageId);
+  const hasEditorAi = useHasModule('editor-ai-copilot');
 
   const [libraryId, setLibraryId] = useState<string | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
@@ -70,6 +78,18 @@ export function PuckCanvasEditor({ pageId, siteSlug, themeKind = 'website' }: Pu
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [mediaPicker, setMediaPicker] = useState<{ open: boolean; cb: ((url: string) => void) | null }>({ open: false, cb: null });
+  const [variantTarget, setVariantTarget] = useState<{ blockInstanceId: string; propName: string } | null>(null);
+
+  // Personalization host — bridges the Personalize button (inside Puck)
+  // to the VariantEditor mount (outside Puck).
+  const personalizationHost: PersonalizationHost = useMemo(
+    () => ({
+      openVariantEditor: ({ blockInstanceId, propName }) => {
+        setVariantTarget({ blockInstanceId, propName });
+      },
+    }),
+    [],
+  );
 
   // Mutable ref to the current baseline tree — diff always runs against this,
   // not against an older closure capture.
@@ -172,6 +192,8 @@ export function PuckCanvasEditor({ pageId, siteSlug, themeKind = 'website' }: Pu
         baselineVersion: pageRes.tree.page.version,
         config,
         initialData: pageBlocksToPuckData(tree),
+        blockDefs,
+        brickDefs,
       });
 
       if (config.warnings.length > 0) {
@@ -267,14 +289,6 @@ export function PuckCanvasEditor({ pageId, siteSlug, themeKind = 'website' }: Pu
     );
   }
 
-  // Per spec-builder-evaluation §3.6 — email mode locks the viewport to
-  // 600px (industry-standard email width) and hides the desktop/tablet/
-  // mobile viewport selector. The same Config + Data shape is used; the
-  // block templates themselves carry the email-vs-website differences.
-  const viewports = themeKind === 'email'
-    ? [{ width: 600, height: 'auto' as const, label: 'Email' }]
-    : undefined; // undefined → Puck's default 360/768/1280/full
-
   // Empty-state guard: if the library has zero blocks for the requested
   // channel, the user can't insert anything — surface this clearly
   // rather than dropping them into a blank canvas. Per spec §4.1
@@ -293,27 +307,100 @@ export function PuckCanvasEditor({ pageId, siteSlug, themeKind = 'website' }: Pu
     );
   }
 
-  return (
-    <div className={`puck-canvas-root puck-canvas-${themeKind}`}>
-      {saving && <div className="puck-saving-overlay" aria-busy="true">Saving…</div>}
-      <Puck
-        config={loaded.config.config as never}
-        data={loaded.initialData as never}
-        onPublish={handlePublish}
-        iframe={{ enabled: true }}
-        viewports={viewports}
-      />
-      {siteId && (
-        <HostMediaPickerModal
-          open={mediaPicker.open}
-          hostKind="site"
-          hostId={siteId}
-          onSelect={(url) => mediaPicker.cb?.(url)}
-          onClose={() => setMediaPicker({ open: false, cb: null })}
-        />
-      )}
+  // Toolbar above the canvas — placeholder for site-specific actions.
+  // The newsletter editor renders Save Draft / Substack / Beehiiv /
+  // Publish here; sites will surface its own actions (publish-to-git,
+  // version-snapshot, etc.) in a follow-up. The empty toolbar still
+  // takes up vertical space so the panel below sits consistently with
+  // the newsletter editor's layout.
+  const toolbar = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 32 }}>
+      {saving && <span style={{ fontSize: 12, color: 'var(--gray-9)' }}>Saving…</span>}
     </div>
   );
+
+  return (
+    <PersonalizationHostProvider host={personalizationHost}>
+      <div className={`puck-canvas-root puck-canvas-${themeKind}`} style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <CanvasShell
+          hostKind="site"
+          // hostId = site id (resolved by resolveSiteIds). Fall back to
+          // an empty string while it's still loading — but the loaded
+          // guard above means we only render this branch once siteId is
+          // populated, so the fallback is effectively unreachable.
+          hostId={siteId ?? ''}
+          targetId={pageId}
+          aiEnabled={hasEditorAi}
+          config={loaded.config.config as never}
+          data={loaded.initialData as never}
+          onPublish={handlePublish as never}
+          toolbar={toolbar}
+          // Sites uses Puck's default viewports for `website` theme (360 /
+          // 768 / 1280 / full); only override to 600 when the library is
+          // email-flavoured (rare, but supported when a site links an
+          // email theme repo for transactional sends).
+          {...(themeKind === 'email'
+            ? { viewports: [{ width: 600, height: 'auto' as const, label: 'Email' }] }
+            : {})}
+        />
+        {siteId && (
+          <HostMediaPickerModal
+            open={mediaPicker.open}
+            hostKind="site"
+            hostId={siteId}
+            onSelect={(url) => mediaPicker.cb?.(url)}
+            onClose={() => setMediaPicker({ open: false, cb: null })}
+          />
+        )}
+        {variantTarget && siteId && (
+          <VariantEditor
+            pageId={pageId}
+            siteId={siteId}
+            fieldPath={`${variantTarget.blockInstanceId}.${variantTarget.propName}`}
+            fieldLabel={`${describeBlock(variantTarget.blockInstanceId, loaded)} → ${variantTarget.propName}`}
+            fieldSchema={resolveBlockPropSchema(variantTarget.blockInstanceId, variantTarget.propName, loaded)}
+            onClose={() => setVariantTarget(null)}
+          />
+        )}
+      </div>
+    </PersonalizationHostProvider>
+  );
+}
+
+/**
+ * Resolve a block instance's prop JSON-Schema from the loaded library.
+ * Returns null when the block can't be found (race) or the prop name
+ * isn't in the schema (stale variant for a since-renamed field).
+ */
+function resolveBlockPropSchema(
+  blockInstanceId: string,
+  propName: string,
+  loaded: LoadedState,
+): import('../../../schema-editor/walk-schema.js').SchemaNode | null {
+  const block =
+    loaded.tree.topLevel.find((b) => b.id === blockInstanceId) ??
+    null;
+  const brick =
+    block ?? loaded.tree.bricks.find((b) => b.id === blockInstanceId) ?? null;
+  if (!block && !brick) return null;
+  const defKey = block?.block_def_key ?? (brick as { brick_def_key?: string } | null)?.brick_def_key;
+  if (!defKey) return null;
+  const def =
+    loaded.blockDefs.find((d) => d.key === defKey) ??
+    loaded.brickDefs.find((d) => d.key === defKey) ??
+    null;
+  const schema = def?.schema as
+    | { properties?: Record<string, import('../../../schema-editor/walk-schema.js').SchemaNode> }
+    | undefined;
+  return schema?.properties?.[propName] ?? null;
+}
+
+function describeBlock(blockInstanceId: string, loaded: LoadedState): string {
+  const block = loaded.tree.topLevel.find((b) => b.id === blockInstanceId);
+  if (block) return block.block_def_key;
+  const brick = loaded.tree.bricks.find((b) => b.id === blockInstanceId);
+  if (brick) return (brick as { brick_def_key?: string }).brick_def_key ?? 'brick';
+  return 'block';
 }
 
 // ---------------------------------------------------------------------------

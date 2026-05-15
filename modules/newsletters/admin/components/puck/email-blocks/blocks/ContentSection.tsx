@@ -4,10 +4,16 @@
  * Mirrors the legacy "Content Section" block created by the Newsletter
  * Setup Wizard's Basic Template option.
  *
- * `body` is a rich-text field (`format: 'html'`) — the editor renders
- * the TipTap-based RichTextField for it, the renderer emits the
- * resulting HTML inside `<Text>` via `dangerouslySetInnerHTML`. Per
- * spec-builder-evaluation §3.4.
+ * The `body` prop is a string that the renderer drops into the email
+ * via `dangerouslySetInnerHTML`, so it accepts either plain text or
+ * HTML markup. The field type is `textarea` — operators paste HTML
+ * directly or type plain text. (The earlier `type: 'custom' +
+ * customFormat: 'richtext'` declaration relied on a customFormat→render
+ * resolver that the email-blocks merge layer doesn't run — sites'
+ * PuckConfigAdapter does it but newsletters' mergeRegistryIntoConfig
+ * never wired up the same step, so Puck saw a custom field with no
+ * `render` and threw "Field type for custom did not exist." Pending
+ * the rich-text editor work that's parked, textarea is the safe shape.)
  */
 
 import { Heading, Section } from '@react-email/components';
@@ -24,7 +30,10 @@ export const ContentSectionBlock: EmailBlockEntry<ContentSectionProps> = {
   category: 'Content',
   fields: {
     title: { type: 'text', label: 'Section title (optional)' },
-    body: { type: 'custom', label: 'Body', customFormat: 'richtext' },
+    // contentEditable disabled — body is rendered via dangerouslySetInnerHTML
+    // which requires a raw string for __html. The inline-edit wrapper would
+    // make `typeof body === 'string'` false and the body would render empty.
+    body: { type: 'textarea', label: 'Body (HTML accepted)', contentEditable: false },
   },
   defaultProps: {
     title: '',

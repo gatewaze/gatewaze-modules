@@ -147,3 +147,50 @@ describe('defaultsFromSchema', () => {
     expect(defaultsFromSchema({})).toEqual({});
   });
 });
+
+describe('jsonSchemaToPuckFields — x-gatewaze-personalize', () => {
+  it('flags personalizable text fields', () => {
+    const { fields } = jsonSchemaToPuckFields({
+      type: 'object',
+      properties: {
+        heroTitle: { type: 'string', 'x-gatewaze-personalize': true },
+        plain: { type: 'string' },
+      },
+    });
+    expect(fields.heroTitle).toMatchObject({ type: 'text', personalizable: true });
+    expect(fields.plain).toMatchObject({ type: 'text' });
+    expect((fields.plain as { personalizable?: unknown }).personalizable).toBeUndefined();
+  });
+
+  it('flags personalizable select fields', () => {
+    const { fields } = jsonSchemaToPuckFields({
+      type: 'object',
+      properties: {
+        size: { type: 'string', enum: ['small', 'large'], 'x-gatewaze-personalize': true },
+      },
+    });
+    expect(fields.size).toMatchObject({ type: 'select', personalizable: true });
+  });
+
+  it('flags personalizable custom-format fields (richtext)', () => {
+    const { fields } = jsonSchemaToPuckFields({
+      type: 'object',
+      properties: {
+        body: { type: 'string', format: 'richtext', 'x-gatewaze-personalize': true },
+      },
+    });
+    expect(fields.body).toMatchObject({ type: 'custom', customFormat: 'richtext', personalizable: true });
+  });
+
+  it('does not flag fields without the marker', () => {
+    const { fields } = jsonSchemaToPuckFields({
+      type: 'object',
+      properties: {
+        a: { type: 'string', 'x-gatewaze-personalize': false },
+        b: { type: 'string' },
+      },
+    });
+    expect((fields.a as { personalizable?: unknown }).personalizable).toBeUndefined();
+    expect((fields.b as { personalizable?: unknown }).personalizable).toBeUndefined();
+  });
+});
