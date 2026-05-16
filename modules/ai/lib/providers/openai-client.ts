@@ -232,13 +232,14 @@ export class OpenAIProviderClient implements ProviderClient {
   async generateImage(opts: GenerateImageOpts): Promise<GenerateImageResult> {
     const size = aspectRatioToSize(opts.aspectRatio);
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const response = await this.client.images.generate({
         model: opts.model,
         prompt: opts.prompt,
         n: 1,
         size,
         response_format: 'b64_json',
-      });
+      } as any);
       const b64 = response.data?.[0]?.b64_json;
       if (!b64) {
         throw new InvalidProviderOutputError(

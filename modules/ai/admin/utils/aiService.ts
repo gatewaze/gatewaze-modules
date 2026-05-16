@@ -1,0 +1,327 @@
+/**
+ * Admin-side client for the @gatewaze-modules/ai REST surface.
+ *
+ * Mirrors the endpoint catalogue in api/admin-routes.ts. All calls go
+ * through the JWT-gated /api/modules/ai/admin/* prefix; bearer token is
+ * pulled from the supabase session.
+ */
+
+import { supabase } from '@/lib/supabase';
+
+// ─── Types ────────────────────────────────────────────────────────────────
+
+export type AiProvider = 'openai' | 'anthropic' | 'gemini';
+export type AiAutoOrProvider = 'auto' | AiProvider;
+export type AiThreadStatus = 'idle' | 'running' | 'ready' | 'failed' | 'cancelled';
+export type AiMessageStatus = 'pending' | 'running' | 'complete' | 'failed' | 'cancelled';
+
+export interface AiThread {
+  id: string;
+  use_case: string;
+  host_kind: string;
+  host_id: string;
+  thread_key: string;
+  status: AiThreadStatus;
+  last_error: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost_micro_usd: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface AiMessage {
+  id: string;
+  thread_id: string;
+  role: 'system' | 'user' | 'assistant' | 'tool_summary';
+  status: AiMessageStatus;
+  content: string;
+  structured: Record<string, unknown> | null;
+  provider: AiProvider | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost_micro_usd: number;
+  latency_ms: number;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface AiUseCase {
+  id: string;
+  label: string;
+  description: string;
+  default_provider: AiAutoOrProvider;
+  default_model: string;
+  allowed_models: string[];
+  allowed_web_tools: ('web_search' | 'fetch_url')[];
+  max_output_tokens: number;
+  daily_cost_cap_micro_usd: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AiUserCredentialMeta {
+  id: string;
+  user_id: string;
+  provider: AiProvider;
+  status: 'active' | 'disabled' | 'rotating';
+  last_4: string;
+  failure_count: number;
+  last_used_at: string | null;
+  created_at: string;
+  rotated_at: string | null;
+}
+
+export interface AiUseCaseCredentialMeta {
+  id: string;
+  use_case: string;
+  provider: AiProvider;
+  status: 'active' | 'disabled' | 'rotating';
+  last_4: string;
+  failure_count: number;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface AiModelInfo {
+  provider: AiProvider;
+  model: string;
+  label: string;
+  supports_chat?: boolean;
+  supports_tools?: boolean;
+  supports_web_search?: boolean;
+  supports_image_gen?: boolean;
+  supports_embeddings?: boolean;
+  input_per_million_usd?: number;
+  output_per_million_usd?: number;
+}
+
+export interface AiUsageSummary {
+  from: string;
+  to: string;
+  total_cost_micro_usd: number;
+  by_provider: Array<{ key: string; cost_micro_usd: number; input_tokens: number; output_tokens: number; event_count: number }>;
+  by_user: Array<{ key: string; cost_micro_usd: number; input_tokens: number; output_tokens: number; event_count: number }>;
+  by_use_case: Array<{ key: string; cost_micro_usd: number; input_tokens: number; output_tokens: number; event_count: number }>;
+}
+
+export interface AiUsageEvent {
+  id: string;
+  occurred_at: string;
+  user_id: string | null;
+  use_case: string;
+  thread_id: string | null;
+  message_id: string | null;
+  kind: 'llm' | 'tool' | 'embedding' | 'image';
+  provider: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  image_outputs: number;
+  cost_micro_usd: number;
+  latency_ms: number;
+  status: string;
+  error: string | null;
+}
+
+// ─── Plumbing ─────────────────────────────────────────────────────────────
+
+function apiUrl(): string {
+  return (import.meta as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
+}
+
+async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const { data: session } = await supabase.auth.getSession();
+  const token = session.session?.access_token;
+  return fetch(`${apiUrl()}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init.headers ?? {}),
+    },
+  });
+}
+
+async function jsonOrThrow<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string; message?: string };
+      if (body.message) detail = body.message;
+      else if (body.error) detail = body.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
+
+// ─── Threads ──────────────────────────────────────────────────────────────
+
+export async function lookupThread(opts: {
+  useCase: string;
+  hostKind: string;
+  hostId: string;
+  threadKey?: string;
+}): Promise<AiThread | null> {
+  const qs = new URLSearchParams({
+    use_case: opts.useCase,
+    host_kind: opts.hostKind,
+    host_id: opts.hostId,
+    thread_key: opts.threadKey ?? '',
+  });
+  const res = await authedFetch(`/api/modules/ai/admin/threads?${qs.toString()}`);
+  const body = await jsonOrThrow<{ thread: AiThread | null }>(res);
+  return body.thread;
+}
+
+export async function createThread(opts: {
+  useCase: string;
+  hostKind: string;
+  hostId: string;
+  threadKey?: string;
+}): Promise<AiThread> {
+  const res = await authedFetch('/api/modules/ai/admin/threads', {
+    method: 'POST',
+    body: JSON.stringify({
+      use_case: opts.useCase,
+      host_kind: opts.hostKind,
+      host_id: opts.hostId,
+      thread_key: opts.threadKey ?? '',
+    }),
+  });
+  const body = await jsonOrThrow<{ thread: AiThread }>(res);
+  return body.thread;
+}
+
+export async function getThread(threadId: string): Promise<{ thread: AiThread; messages: AiMessage[] }> {
+  const res = await authedFetch(`/api/modules/ai/admin/threads/${threadId}`);
+  return jsonOrThrow(res);
+}
+
+export async function deleteThread(threadId: string): Promise<void> {
+  const res = await authedFetch(`/api/modules/ai/admin/threads/${threadId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function postMessage(opts: {
+  threadId: string;
+  message: string;
+  provider?: AiAutoOrProvider;
+  model?: string;
+}): Promise<{ user_message: AiMessage; assistant_message: AiMessage }> {
+  const res = await authedFetch(`/api/modules/ai/admin/threads/${opts.threadId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ message: opts.message, provider: opts.provider, model: opts.model }),
+  });
+  return jsonOrThrow(res);
+}
+
+export async function cancelMessage(threadId: string, messageId: string): Promise<void> {
+  const res = await authedFetch(
+    `/api/modules/ai/admin/threads/${threadId}/messages/${messageId}/cancel`,
+    { method: 'POST' },
+  );
+  if (!res.ok && res.status !== 202) throw new Error(`HTTP ${res.status}`);
+}
+
+// ─── Use-cases ────────────────────────────────────────────────────────────
+
+export async function listUseCases(): Promise<AiUseCase[]> {
+  const res = await authedFetch('/api/modules/ai/admin/use-cases');
+  const body = await jsonOrThrow<{ use_cases: AiUseCase[] }>(res);
+  return body.use_cases;
+}
+
+export async function patchUseCase(id: string, patch: Partial<AiUseCase>): Promise<AiUseCase> {
+  const res = await authedFetch(`/api/modules/ai/admin/use-cases/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  const body = await jsonOrThrow<{ use_case: AiUseCase }>(res);
+  return body.use_case;
+}
+
+export async function listUseCaseModels(useCaseId: string): Promise<AiModelInfo[]> {
+  const res = await authedFetch(`/api/modules/ai/admin/use-cases/${useCaseId}/models`);
+  const body = await jsonOrThrow<{ models: AiModelInfo[] }>(res);
+  return body.models;
+}
+
+// ─── Credentials ──────────────────────────────────────────────────────────
+
+export async function listCredentials(): Promise<{
+  user_credentials: AiUserCredentialMeta[];
+  use_case_credentials: AiUseCaseCredentialMeta[];
+}> {
+  const res = await authedFetch('/api/modules/ai/admin/credentials');
+  return jsonOrThrow(res);
+}
+
+export async function createUserCredential(opts: {
+  userId: string;
+  provider: AiProvider;
+  apiKey: string;
+}): Promise<AiUserCredentialMeta> {
+  const res = await authedFetch('/api/modules/ai/admin/credentials/user', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: opts.userId,
+      provider: opts.provider,
+      api_key: opts.apiKey,
+    }),
+  });
+  const body = await jsonOrThrow<{ credential: AiUserCredentialMeta }>(res);
+  return body.credential;
+}
+
+export async function deleteUserCredential(id: string): Promise<void> {
+  const res = await authedFetch(`/api/modules/ai/admin/credentials/user/${id}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+}
+
+// ─── Usage / cost ─────────────────────────────────────────────────────────
+
+export async function getUsageSummary(opts?: { from?: string; to?: string }): Promise<AiUsageSummary> {
+  const qs = new URLSearchParams();
+  if (opts?.from) qs.set('from', opts.from);
+  if (opts?.to) qs.set('to', opts.to);
+  const res = await authedFetch(`/api/modules/ai/admin/usage/summary${qs.toString() ? '?' + qs : ''}`);
+  return jsonOrThrow(res);
+}
+
+export async function listUsageEvents(opts?: {
+  from?: string;
+  to?: string;
+  userId?: string;
+  useCase?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ events: AiUsageEvent[]; limit: number; offset: number }> {
+  const qs = new URLSearchParams();
+  if (opts?.from) qs.set('from', opts.from);
+  if (opts?.to) qs.set('to', opts.to);
+  if (opts?.userId) qs.set('user_id', opts.userId);
+  if (opts?.useCase) qs.set('use_case', opts.useCase);
+  if (opts?.limit) qs.set('limit', String(opts.limit));
+  if (opts?.offset) qs.set('offset', String(opts.offset));
+  const res = await authedFetch(`/api/modules/ai/admin/usage/events${qs.toString() ? '?' + qs : ''}`);
+  return jsonOrThrow(res);
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+export function microUsdToDollars(microUsd: number | null | undefined): string {
+  if (!microUsd) return '$0.00';
+  const dollars = Number(microUsd) / 1_000_000;
+  if (dollars >= 1000) return `$${dollars.toFixed(0)}`;
+  if (dollars >= 1) return `$${dollars.toFixed(2)}`;
+  if (dollars >= 0.01) return `$${dollars.toFixed(3)}`;
+  return `$${dollars.toFixed(4)}`;
+}

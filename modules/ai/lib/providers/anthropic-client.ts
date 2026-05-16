@@ -100,7 +100,7 @@ export class AnthropicProviderClient implements ProviderClient {
           webSearchCount = serverToolUse.web_search_requests;
         }
 
-        const contentBlocks = response.content as Array<
+        const contentBlocks = response.content as unknown as Array<
           Record<string, unknown>
         >;
 

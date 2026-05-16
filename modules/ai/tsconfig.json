@@ -18,8 +18,7 @@
   },
   "include": [
     "lib/**/*.ts",
-    "api/**/*.ts",
-    "index.ts"
+    "api/**/*.ts"
   ],
   "exclude": [
     "dist",
