@@ -1,0 +1,40 @@
+{
+  "name": "@gatewaze-modules/ai",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Unified AI infrastructure module — provider router, per-user credentials, cost ledger, reusable chat widget. Replaces editor-ai-copilot's chat surface, daily-briefing's research panel, portal's chat + ai-search, attendee-matching's Anthropic call, and content-pipeline's embeddings. Spec: gatewaze-environments/specs/spec-ai-module.md.",
+  "exports": {
+    ".": "./index.ts",
+    "./admin": "./admin/index.ts",
+    "./lib/runner": "./lib/runner.ts",
+    "./lib/providers/router": "./lib/providers/router.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "express": "*",
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "openai": "^4.50.0"
+  },
+  "devDependencies": {
+    "@assistant-ui/react": "^0.10.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.19.19",
+    "@types/supertest": "^6.0.2",
+    "express": "^4.21.2",
+    "supertest": "^7.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}
