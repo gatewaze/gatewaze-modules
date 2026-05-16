@@ -154,6 +154,31 @@ export async function runChat(
   let attemptError: ProviderError | null = null;
   for (let attempt = 0; attempt < RETRY_DELAYS_MS.length + 1; attempt++) {
     try {
+      // Wrap the fetch-url resolver so each call is attributed to this
+      // user/thread/message in ai_usage_events.
+      const wrappedFetchResolver = ctx.resolveFetchUrl
+        ? async (url: string, reason: string) => {
+            const fetchStarted = Date.now();
+            const fetchResult = await ctx.resolveFetchUrl!(url, reason);
+            await recordUsage(ctx.supabase, {
+              userId: opts.userId,
+              useCase: opts.useCase,
+              threadId: opts.threadId,
+              messageId: opts.messageId,
+              kind: 'tool',
+              provider: 'scrapling',
+              // We don't know the mode here — the resolver picks it.
+              // Default to fast tier; the operator can refine later.
+              model: 'fetch_url:fast',
+              bytesIn: fetchResult.bytesIn,
+              latencyMs: Date.now() - fetchStarted,
+              status: fetchResult.ok ? 'ok' : 'error',
+              error: fetchResult.error ?? null,
+            });
+            return fetchResult;
+          }
+        : undefined;
+
       const result = await picked.client.runConversation({
         systemPrompt: opts.systemPrompt,
         messages: opts.messages,
@@ -165,7 +190,7 @@ export async function runChat(
         webSearchMaxPerTurn: 6,
         fetchUrlMaxPerTurn: 8,
         resolveFetchUrl: useCase.allowed_web_tools.includes('fetch_url')
-          ? ctx.resolveFetchUrl
+          ? wrappedFetchResolver
           : undefined,
       });
 
