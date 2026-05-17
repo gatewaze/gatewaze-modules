@@ -35,6 +35,13 @@ export interface UsageEventInput {
   status: 'ok' | 'error' | 'rate_limited' | 'timeout' | 'budget_blocked' | 'cancelled';
   error?: string | null;
   requestId?: string | null;
+  /**
+   * Skip the price-book lookup and write this exact value. Used by
+   * callers that have their own cost estimate (e.g. editor-ai-copilot's
+   * per-tool fixed cost from env config, or gatewaze-fetch's per-mode
+   * tiered cost). Leave undefined for the default token-based compute.
+   */
+  costMicroUsdOverride?: number;
 }
 
 export interface UsageEventRow extends UsageEventInput {
@@ -81,21 +88,26 @@ export async function recordUsage(
 ): Promise<UsageEventRow> {
   const occurredAt = event.occurredAt ?? new Date();
 
-  // Price lookup via the SQL helper. Returns the row in effect at
-  // `occurredAt`; null for unknown (provider, model) — we still write
-  // the usage row but cost_micro_usd defaults to 0 so operators can
-  // detect missing price-book entries.
-  const priceLookup = await supabase
-    .from('ai_model_prices')
-    .select('input_per_million_usd, output_per_million_usd, cached_per_million_usd, image_per_image_usd')
-    .eq('provider', event.provider)
-    .eq('model', event.model)
-    .lte('effective_from', occurredAt.toISOString().slice(0, 10))
-    .order('effective_from', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const price: PriceRow | null = (priceLookup.data as PriceRow | null) ?? null;
-  const costMicroUsd = price ? computeCostMicroUsd(price, event) : 0;
+  let costMicroUsd: number;
+  if (typeof event.costMicroUsdOverride === 'number') {
+    // Caller-supplied cost (e.g. editor-ai-copilot's per-tool fixed
+    // cost from env, or gatewaze-fetch's per-mode tiered cost). Skip
+    // the price-book lookup entirely.
+    costMicroUsd = event.costMicroUsdOverride;
+  } else {
+    // Default path: compute from the price book.
+    const priceLookup = await supabase
+      .from('ai_model_prices')
+      .select('input_per_million_usd, output_per_million_usd, cached_per_million_usd, image_per_image_usd')
+      .eq('provider', event.provider)
+      .eq('model', event.model)
+      .lte('effective_from', occurredAt.toISOString().slice(0, 10))
+      .order('effective_from', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const price: PriceRow | null = (priceLookup.data as PriceRow | null) ?? null;
+    costMicroUsd = price ? computeCostMicroUsd(price, event) : 0;
+  }
 
   const insertRes = await supabase
     .from('ai_usage_events')
@@ -154,6 +166,43 @@ export async function estimateMaxCost(
     Math.round(args.inputTokens * price.input_per_million_usd) +
     Math.round(args.maxOutputTokens * price.output_per_million_usd)
   );
+}
+
+/**
+ * Today's call_count + cost_micro_usd for a (use_case, provider, model)
+ * triple. Used by editor-ai-copilot's per-tool budget gate to decide
+ * whether to strip a web tool from the next request.
+ *
+ * Returns zero counters when no rows exist yet — opens the gate by
+ * default rather than blocking on first use.
+ */
+export async function sumTodayToolUsage(
+  supabase: SupabaseClient,
+  args: { useCase: string; provider: string; model: string },
+): Promise<{ callCount: number; costMicroUsd: number }> {
+  const startIso = startOfTodayIso();
+  const result = await supabase
+    .from('ai_usage_events')
+    .select('cost_micro_usd')
+    .eq('use_case', args.useCase)
+    .eq('provider', args.provider)
+    .eq('model', args.model)
+    .eq('status', 'ok')
+    .gte('occurred_at', startIso);
+  const rows = (result.data ?? []) as Array<{ cost_micro_usd: number | string }>;
+  let cost = 0;
+  for (const r of rows) {
+    cost += typeof r.cost_micro_usd === 'number'
+      ? r.cost_micro_usd
+      : parseInt(String(r.cost_micro_usd), 10) || 0;
+  }
+  return { callCount: rows.length, costMicroUsd: cost };
+}
+
+function startOfTodayIso(): string {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d.toISOString();
 }
 
 /**
