@@ -33,6 +33,7 @@ import { mountSkillsRoutes } from './skills.js';
 import { mountSkillWebhookRoute } from './skill-webhook.js';
 import { mountRecipeSourceRoutes } from './recipe-sources.js';
 import { mountRecipeWebhookRoute } from './recipe-webhook.js';
+import { mountJobsRoutes } from './jobs-routes.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -126,9 +127,21 @@ export function registerRoutes(app: Express, ctx?: any): void {
     });
   }
 
+  const projectRoot = ctx?.projectRoot as string | undefined;
+
   const router = Router();
-  const routes = createAdminAiRoutes({ supabase, logger, resolveFetchUrl, resolveGatewazeSearch });
+  const routes = createAdminAiRoutes({
+    supabase,
+    logger,
+    resolveFetchUrl,
+    resolveGatewazeSearch,
+    enqueueJob,
+    ...(projectRoot && { projectRoot }),
+  });
   mountAdminAiRoutes(router, routes);
+
+  // spec-ai-job-runner — Jobs tab + SSE endpoints.
+  mountJobsRoutes(router, { supabase, enqueueJob, ...(projectRoot && { projectRoot }) });
 
   // ── Skills subsystem (moved from editor-ai-copilot, Phase 2) ──────────
   //
