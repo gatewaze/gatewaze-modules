@@ -41,6 +41,8 @@ import { decryptSecret } from '../lib/skills/secret-shim.js';
 import { recipesConfig } from '../lib/recipes/recipes-config.js';
 import { parseRecipe, type ParsedRecipe } from '../lib/recipes/parse-recipe.js';
 import { runRecipe, type RecipeParamValue } from '../lib/recipes/run-recipe.js';
+import { enqueueRecipeRunJob } from '../lib/jobs/enqueue.js';
+import { pingRedis } from '../lib/jobs/redis-client.js';
 
 interface SupabaseLike {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -418,26 +420,66 @@ export function mountRecipeSourceRoutes(router: Router, deps: Deps): void {
       }
     }
 
+    // spec-ai-job-runner §5.1 — INSERT the run row + enqueue. No more
+    // inline execution. The worker picks up the job and runs against
+    // the row, streaming events to Redis.
+    if (!deps.enqueueJob) {
+      return sendError(res, 503, 'enqueue_unavailable', 'enqueueJob not wired by host');
+    }
+    if (!(await pingRedis())) {
+      return sendError(res, 503, 'redis_unavailable', 'Redis is required for job dispatch');
+    }
+
+    const subRecipesSnapshot: Record<string, ParsedRecipe> = {};
+    for (const [k, v] of subRecipes.entries()) subRecipesSnapshot[k] = v;
+
+    const insertRes = await deps.supabase
+      .from('ai_recipe_runs')
+      .insert({
+        recipe_id: id,
+        recipe_file_path: row.file_path,
+        recipe_content_hash: recipe.content_hash,
+        user_id: req.userId ?? null,
+        use_case: useCase,
+        host_kind: hostKind ?? null,
+        host_id: hostId ?? null,
+        params: params as unknown as Record<string, unknown>,
+        status: 'queued',
+        steps: [],
+        recipe_snapshot: recipe as unknown as Record<string, unknown>,
+        sub_recipes_snapshot: subRecipesSnapshot as unknown as Record<string, unknown>,
+      })
+      .select('id')
+      .maybeSingle();
+    if (insertRes.error || !insertRes.data) {
+      return sendError(res, 500, 'internal_error', insertRes.error?.message ?? 'no row returned');
+    }
+    const runId = insertRes.data.id as string;
+
     try {
-      const result = await runRecipe(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        deps.supabase as any,
-        { supabase: deps.supabase, resolveFetchUrl: deps.resolveFetchUrl } as never,
-        {
-          recipe,
-          subRecipes,
-          params,
-          userId: req.userId ?? null,
-          useCase,
-          ...(hostKind && { hostKind }),
-          ...(hostId && { hostId }),
-          recipeId: id,
-          recipeFilePath: row.file_path,
-        },
-      );
-      res.status(202).json(result);
+      const enq = await enqueueRecipeRunJob(deps.enqueueJob, {
+        runId,
+        useCase,
+        recipeId: id,
+        userId: req.userId ?? null,
+      });
+      await deps.supabase
+        .from('ai_recipe_runs')
+        .update({ bull_job_id: enq.jobId ?? null })
+        .eq('id', runId);
+      res.status(202).json({
+        run_id: runId,
+        job_id: enq.jobId,
+        delayed: enq.delayed,
+        stream_url: `/api/modules/ai/admin/recipe-runs/${runId}/stream`,
+      });
     } catch (err) {
-      sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
+      sendError(res, 500, 'enqueue_failed', err instanceof Error ? err.message : String(err));
     }
   });
 }
+
+// runRecipe is no longer called from the API; suppress unused-import
+// noise without removing the import (still used by inline-fallback unit
+// tests via direct import).
+void runRecipe;

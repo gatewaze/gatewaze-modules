@@ -89,6 +89,13 @@ export interface RunChatOpts {
    * OpenAI/Gemini ignore them in this commit (provider parity gap).
    */
   extraTools?: import('./providers/types.js').ExtraTool[];
+
+  /**
+   * Token-level streaming callback. When supplied, provider clients
+   * use the streaming SDK variant and emit each text delta here.
+   * Spec: spec-ai-job-runner §4.2.
+   */
+  onToken?: (delta: string) => void | Promise<void>;
 }
 
 export interface RunChatResult {
@@ -245,6 +252,7 @@ export async function runChat(
           ? wrappedGatewazeSearchResolver
           : undefined,
         extraTools: opts.extraTools,
+        onToken: opts.onToken,
       });
 
       const usage = await recordUsage(ctx.supabase, {

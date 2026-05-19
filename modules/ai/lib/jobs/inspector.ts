@@ -1,0 +1,210 @@
+/**
+ * BullMQ Queue → admin-facing AdminJobDto serialisation + per-row
+ * lookups for the Jobs tab.
+ *
+ * Uses BullMQ's runtime API directly (rather than calling through the
+ * platform's worker context) because the API process has the Queue
+ * handle already wired up at startup. We require()-resolve `bullmq`
+ * the same way the scrapers module does.
+ *
+ * Spec: spec-ai-job-runner §5.2, §5.4.
+ */
+
+import { createRequire } from 'node:module';
+import { getRedisClient } from './redis-client.js';
+import { recipeRunStreamKey, threadStreamKey } from './stream-keys.js';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BullJob = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BullQueue = any;
+
+export type AdminJobStatus = 'active' | 'waiting' | 'delayed' | 'failed' | 'completed';
+
+export interface AdminJobDto {
+  id: string;
+  name: string;
+  status: AdminJobStatus;
+  attempts_made: number;
+  attempts_remaining: number;
+  created_at: string;
+  processed_on: string | null;
+  finished_on: string | null;
+  data: Record<string, unknown>;
+  failed_reason: string | null;
+  stacktrace: string[] | null;
+  owner_module: string;
+  linked_row:
+    | {
+        table: string;
+        id: string;
+      }
+    | null;
+  stream_key: string | null;
+  stream_offset_latest: string | null;
+}
+
+/**
+ * Resolve a BullMQ Queue handle for the shared `jobs` queue. The
+ * caller's project root is needed because the platform host runtime
+ * (gatewaze/packages/api) holds the bullmq dep — we resolve through
+ * that module graph to share the connection.
+ *
+ * `queueName` defaults to the brand-suffixed `jobs-${BRAND}` shape
+ * scrapers use; pass an explicit name for tests.
+ */
+export async function getJobsQueue(opts: {
+  projectRoot: string;
+  queueName?: string;
+}): Promise<BullQueue> {
+  const queueName = opts.queueName ?? `jobs-${process.env.BRAND || 'default'}`;
+  // Resolve bullmq through the API package's module graph so we
+  // share the version + connection options the platform uses.
+  const apiPkg = `${opts.projectRoot}/packages/api/package.json`;
+  const req = createRequire(apiPkg);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const bullmq = req('bullmq') as { Queue: new (name: string, opts: unknown) => BullQueue };
+  const client = await getRedisClient();
+  return new bullmq.Queue(queueName, { connection: client });
+}
+
+/**
+ * Convert a BullMQ Job to the admin DTO. The state must be passed in
+ * separately because BullMQ's Job.getState() is async — caller resolves
+ * it once per batch for efficiency.
+ */
+export async function jobToDto(job: BullJob, state: string): Promise<AdminJobDto> {
+  const name = String(job.name ?? 'unknown');
+  const data = (job.data as Record<string, unknown>) ?? {};
+  const ownerModule = deriveOwnerModule(name);
+  const linkedRow = deriveLinkedRow(name, data);
+  const streamKey = deriveStreamKey(name, data);
+  let streamOffsetLatest: string | null = null;
+  if (streamKey) {
+    streamOffsetLatest = await readLastStreamId(streamKey);
+  }
+  return {
+    id: String(job.id ?? ''),
+    name,
+    status: state as AdminJobStatus,
+    attempts_made: Number(job.attemptsMade ?? 0),
+    attempts_remaining: Math.max(0, Number(job.opts?.attempts ?? 1) - Number(job.attemptsMade ?? 0)),
+    created_at: new Date(Number(job.timestamp ?? Date.now())).toISOString(),
+    processed_on: job.processedOn ? new Date(Number(job.processedOn)).toISOString() : null,
+    finished_on: job.finishedOn ? new Date(Number(job.finishedOn)).toISOString() : null,
+    data,
+    failed_reason: job.failedReason ? String(job.failedReason) : null,
+    stacktrace: Array.isArray(job.stacktrace) ? job.stacktrace.slice(0, 3).map(String) : null,
+    owner_module: ownerModule,
+    linked_row: linkedRow,
+    stream_key: streamKey,
+    stream_offset_latest: streamOffsetLatest,
+  };
+}
+
+function deriveOwnerModule(name: string): string {
+  if (name.startsWith('ai:')) return 'ai';
+  if (name.startsWith('ai.')) return 'ai';
+  if (name.startsWith('scraper:')) return 'scrapers';
+  // Convention from premium-gatewaze-modules: '<module>:<action>' or
+  // '<module>.<action>'. Take the prefix up to the first separator.
+  const m = /^([a-z0-9_-]+)[:.]/.exec(name);
+  if (m) return m[1]!;
+  return 'unknown';
+}
+
+function deriveLinkedRow(
+  name: string,
+  data: Record<string, unknown>,
+): { table: string; id: string } | null {
+  if (name === 'ai:run-recipe' && typeof data.runId === 'string') {
+    return { table: 'ai_recipe_runs', id: data.runId };
+  }
+  if (name === 'ai:run-chat' && typeof data.assistantMessageId === 'string') {
+    return { table: 'ai_messages', id: data.assistantMessageId };
+  }
+  if (name === 'scraper:run' && typeof data.scraperJobId !== 'undefined') {
+    return { table: 'scrapers_jobs', id: String(data.scraperJobId) };
+  }
+  return null;
+}
+
+function deriveStreamKey(name: string, data: Record<string, unknown>): string | null {
+  if (name === 'ai:run-recipe' && typeof data.runId === 'string') {
+    return recipeRunStreamKey(data.runId);
+  }
+  if (name === 'ai:run-chat' && typeof data.threadId === 'string') {
+    return threadStreamKey(data.threadId);
+  }
+  return null;
+}
+
+async function readLastStreamId(streamKey: string): Promise<string | null> {
+  try {
+    const client = await getRedisClient();
+    // XINFO STREAM <key> returns a flat array of [field, value, …].
+    // 'last-generated-id' is the relevant field.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const info = (await client.xinfo('STREAM', streamKey)) as unknown as Array<string>;
+    for (let i = 0; i + 1 < info.length; i += 2) {
+      if (info[i] === 'last-generated-id') {
+        const v = info[i + 1] as string | undefined;
+        if (!v || v === '0-0') return null;
+        return v;
+      }
+    }
+    return null;
+  } catch {
+    // Stream may not exist (job done > TTL). Treat as null.
+    return null;
+  }
+}
+
+export type ListJobsFilter = {
+  states?: AdminJobStatus[];
+  name?: string;  // exact match
+  prefix?: string; // e.g. 'ai:' — name.startsWith(prefix)
+  limit?: number;
+  offset?: number;
+};
+
+/**
+ * List jobs from the queue matching the filter. Returns DTOs in
+ * (created_at DESC) order.
+ */
+export async function listJobs(
+  queue: BullQueue,
+  filter: ListJobsFilter,
+): Promise<{ jobs: AdminJobDto[]; total: number }> {
+  const states = filter.states ?? ['active', 'waiting', 'delayed', 'failed'];
+  const limit = Math.min(filter.limit ?? 100, 200);
+  const offset = filter.offset ?? 0;
+  // BullMQ's getJobs accepts a state list directly.
+  const jobs = (await queue.getJobs(states, 0, offset + limit * 4, false)) as BullJob[];
+  // Filter by name client-side because BullMQ doesn't have an indexed
+  // "by name" lookup on the union of states.
+  const filtered = jobs.filter((j) => {
+    const n = String(j.name ?? '');
+    if (filter.name && n !== filter.name) return false;
+    if (filter.prefix && !n.startsWith(filter.prefix)) return false;
+    return true;
+  });
+  const paged = filtered.slice(offset, offset + limit);
+  const dtos = await Promise.all(
+    paged.map(async (j) => {
+      const state = (await j.getState()) as string;
+      return jobToDto(j, state);
+    }),
+  );
+  return { jobs: dtos, total: filtered.length };
+}
+
+/**
+ * Single-job inspect. Returns null when the job ID is unknown.
+ */
+export async function getJob(queue: BullQueue, jobId: string): Promise<AdminJobDto | null> {
+  const job = (await queue.getJob(jobId)) as BullJob | null;
+  if (!job) return null;
+  const state = (await job.getState()) as string;
+  return jobToDto(job, state);
+}
