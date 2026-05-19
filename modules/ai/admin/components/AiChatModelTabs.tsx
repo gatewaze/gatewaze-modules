@@ -163,6 +163,19 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
       .catch((err) => console.warn('[ai-chat-tabs] failed to load use case', err));
   }, [useCase]);
 
+  // Once the use case row loads, seed a default tab IF the operator
+  // hasn't already supplied one (no initialModels, no defaultModel prop,
+  // and no existing thread was hydrated from the server). This lets the
+  // host stop hardcoding `defaultModel` and instead defer to whatever
+  // the operator picked in AI > Use Cases.
+  useEffect(() => {
+    if (!useCaseRow?.default_model) return;
+    setOpenTabs((prev) => {
+      if (prev.length > 0) return prev;
+      return [{ modelId: useCaseRow.default_model as string }];
+    });
+  }, [useCaseRow?.default_model]);
+
   // If activeTabId got removed (e.g. tab closed), drop to whatever's left.
   useEffect(() => {
     if (activeTabId && openTabs.some((t) => t.modelId === activeTabId)) return;

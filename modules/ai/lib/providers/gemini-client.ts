@@ -12,6 +12,12 @@
  * Uses the v1beta REST API directly (no SDK dep) — the editor team
  * found the @google/genai SDK churns too aggressively for our taste,
  * and the v1beta REST shape is stable.
+ *
+ * Recipe-injected `extraTools` (MCP servers, builtin: memory) are
+ * honoured: each is declared as a functionDeclaration (parameters
+ * run through `sanitizeSchemaForGemini` so MCP servers emitting
+ * draft-2020-12 JSON Schema fields don't trip Gemini's OpenAPI-3.0-
+ * subset parser) and routed through the supplied resolver.
  */
 
 import {
@@ -93,6 +99,8 @@ export class GeminiProviderClient implements ProviderClient {
     let lastModel = opts.model;
     const fetchedUrls: FetchedUrlAudit[] = [];
     let fetchCallsThisTurn = 0;
+    let gatewazeSearchCallsThisTurn = 0;
+    let gatewazeSearchCount = 0;
 
     try {
       for (let iter = 0; iter < MAX_LOOP_ITERATIONS; iter++) {
@@ -131,10 +139,12 @@ export class GeminiProviderClient implements ProviderClient {
               inputTokens: totalInputTokens,
               outputTokens: totalOutputTokens,
               cachedTokens: totalCachedTokens,
+              cacheCreationTokens: 0,
               durationMs: Date.now() - started,
               model: lastModel,
               fetchedUrls,
               webSearchCount: 0,
+              gatewazeSearchCount,
             };
           }
         } else if (cand.finishReason === 'STOP') {
@@ -144,18 +154,28 @@ export class GeminiProviderClient implements ProviderClient {
             inputTokens: totalInputTokens,
             outputTokens: totalOutputTokens,
             cachedTokens: totalCachedTokens,
+            cacheCreationTokens: 0,
             durationMs: Date.now() - started,
             model: lastModel,
             fetchedUrls,
             webSearchCount: 0,
+            gatewazeSearchCount,
           };
         }
 
-        // ── fetch_url calls?
-        const fetchCalls = cand.content.parts.filter(
-          (p) => p.functionCall?.name === 'fetch_url',
+        // ── Loop tool calls (fetch_url, gatewaze_search, extraTools).
+        //    Gemini's native googleSearch is server-side and shows up
+        //    in the candidate text directly, so we don't dispatch it
+        //    from here. Recipe-injected extraTools (MCP servers,
+        //    builtin: memory) are recognised by name.
+        const extraToolNames = new Set((opts.extraTools ?? []).map((t) => t.name));
+        const toolCalls = cand.content.parts.filter(
+          (p) =>
+            p.functionCall?.name === 'fetch_url' ||
+            p.functionCall?.name === 'gatewaze_search' ||
+            extraToolNames.has(p.functionCall?.name ?? ''),
         );
-        if (fetchCalls.length === 0) {
+        if (toolCalls.length === 0) {
           throw new InvalidProviderOutputError(
             `model stopped (finishReason=${cand.finishReason}) without emitting the structured tool`,
             'gemini',
@@ -163,45 +183,122 @@ export class GeminiProviderClient implements ProviderClient {
         }
 
         const toolParts: GeminiPart[] = [];
-        for (const call of fetchCalls) {
+        for (const call of toolCalls) {
+          const name = call.functionCall?.name ?? '';
           const args = call.functionCall?.args ?? {};
-          const url = typeof args['url'] === 'string' ? (args['url'] as string) : '';
-          const reason = typeof args['reason'] === 'string' ? (args['reason'] as string) : '';
 
-          if (!opts.resolveFetchUrl) {
+          if (name === 'fetch_url') {
+            const url = typeof args['url'] === 'string' ? (args['url'] as string) : '';
+            const reason = typeof args['reason'] === 'string' ? (args['reason'] as string) : '';
+
+            if (!opts.resolveFetchUrl) {
+              toolParts.push({
+                functionResponse: {
+                  name: 'fetch_url',
+                  response: { error: 'fetch_url_disabled' },
+                },
+              });
+              continue;
+            }
+            fetchCallsThisTurn++;
+            if (fetchCallsThisTurn > (opts.fetchUrlMaxPerTurn ?? 8)) {
+              toolParts.push({
+                functionResponse: {
+                  name: 'fetch_url',
+                  response: { error: 'fetch_quota_exceeded' },
+                },
+              });
+              continue;
+            }
+
+            const result = await opts.resolveFetchUrl(url, reason);
+            fetchedUrls.push({
+              url,
+              status: result.ok ? 200 : 0,
+              bytes_in: result.bytesIn,
+              reason,
+              fetched_at: new Date().toISOString(),
+            });
             toolParts.push({
               functionResponse: {
                 name: 'fetch_url',
-                response: { error: 'fetch_url_disabled' },
+                response: result.ok
+                  ? { content: result.content, final_url: result.finalUrl }
+                  : { error: result.error ?? 'unknown' },
               },
             });
             continue;
           }
-          fetchCallsThisTurn++;
-          if (fetchCallsThisTurn > (opts.fetchUrlMaxPerTurn ?? 8)) {
+
+          if (name === 'gatewaze_search') {
+            const query = typeof args['query'] === 'string' ? (args['query'] as string) : '';
+            const requestedMax =
+              typeof args['max_results'] === 'number' && (args['max_results'] as number) > 0
+                ? (args['max_results'] as number)
+                : 6;
+            if (!opts.resolveGatewazeSearch) {
+              toolParts.push({
+                functionResponse: {
+                  name: 'gatewaze_search',
+                  response: { error: 'gatewaze_search_disabled' },
+                },
+              });
+              continue;
+            }
+            gatewazeSearchCallsThisTurn++;
+            if (gatewazeSearchCallsThisTurn > (opts.gatewazeSearchMaxPerTurn ?? 6)) {
+              toolParts.push({
+                functionResponse: {
+                  name: 'gatewaze_search',
+                  response: { error: 'gatewaze_search_quota_exceeded' },
+                },
+              });
+              continue;
+            }
+            const searchResult = await opts.resolveGatewazeSearch(query, requestedMax);
+            if (searchResult.ok) gatewazeSearchCount++;
             toolParts.push({
               functionResponse: {
-                name: 'fetch_url',
-                response: { error: 'fetch_quota_exceeded' },
+                name: 'gatewaze_search',
+                response: searchResult.ok
+                  ? { backend: searchResult.backend, results: searchResult.results }
+                  : { error: searchResult.error ?? 'unknown' },
               },
             });
             continue;
           }
 
-          const result = await opts.resolveFetchUrl(url, reason);
-          fetchedUrls.push({
-            url,
-            status: result.ok ? 200 : 0,
-            bytes_in: result.bytesIn,
-            reason,
-            fetched_at: new Date().toISOString(),
-          });
+          // ── extraTools (recipe-injected: MCP servers, memory) ─────
+          // Gemini's functionResponse takes a plain object, so we
+          // wrap non-object resolver results in `{ result: ... }` to
+          // keep the contract uniform regardless of MCP server shape.
+          const extra = (opts.extraTools ?? []).find((t) => t.name === name);
+          if (extra) {
+            try {
+              const result = await extra.resolve(args as Record<string, unknown>);
+              const responseObj =
+                result && typeof result === 'object' && !Array.isArray(result)
+                  ? (result as Record<string, unknown>)
+                  : { result };
+              toolParts.push({
+                functionResponse: { name, response: responseObj },
+              });
+            } catch (err) {
+              toolParts.push({
+                functionResponse: {
+                  name,
+                  response: { error: err instanceof Error ? err.message : String(err) },
+                },
+              });
+            }
+            continue;
+          }
+
+          // Unknown tool — should be unreachable given the filter above.
           toolParts.push({
             functionResponse: {
-              name: 'fetch_url',
-              response: result.ok
-                ? { content: result.content, final_url: result.finalUrl }
-                : { error: result.error ?? 'unknown' },
+              name,
+              response: { error: `unknown_tool: no handler registered for '${name}'` },
             },
           });
         }
@@ -318,7 +415,7 @@ function buildTools(opts: RunConversationOpts): unknown[] {
     functionDeclarations.push({
       name: opts.structuredTool.name,
       description: opts.structuredTool.description,
-      parameters: opts.structuredTool.inputSchema,
+      parameters: sanitizeSchemaForGemini(opts.structuredTool.inputSchema),
     });
   }
   if (opts.webTools?.includes('fetch_url')) {
@@ -335,6 +432,34 @@ function buildTools(opts: RunConversationOpts): unknown[] {
       },
     });
   }
+  if (opts.webTools?.includes('gatewaze_search')) {
+    functionDeclarations.push({
+      name: 'gatewaze_search',
+      description:
+        'Gatewaze-hosted web search (Serper.dev or DuckDuckGo HTML scrape). Use for discovery; pair with fetch_url to read sources.',
+      parameters: sanitizeSchemaForGemini({
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query.' },
+          max_results: {
+            type: 'integer',
+            description: 'How many results to return (default 6, max 20).',
+          },
+        },
+        required: ['query'],
+      }),
+    });
+  }
+  // Recipe-injected extra tools (MCP servers, builtin: memory).
+  // Schemas are run through the Gemini sanitiser since MCP servers
+  // can emit draft-2020-12 JSON Schema that Gemini's parser rejects.
+  for (const t of opts.extraTools ?? []) {
+    functionDeclarations.push({
+      name: t.name,
+      description: t.description,
+      parameters: sanitizeSchemaForGemini(t.inputSchema),
+    });
+  }
   const tools: unknown[] = [];
   if (functionDeclarations.length > 0) {
     tools.push({ functionDeclarations });
@@ -346,6 +471,48 @@ function buildTools(opts: RunConversationOpts): unknown[] {
     tools.push({ googleSearch: {} });
   }
   return tools;
+}
+
+/**
+ * Strip JSON-Schema fields Gemini's tool-parameter parser doesn't
+ * recognize. The Gemini Function Calling API consumes an OpenAPI-3.0
+ * subset; anything draft-2020-12 (additionalProperties, $schema,
+ * definitions, etc.) raises a 400 INVALID_ARGUMENT. Recursively walks
+ * the schema, dropping the unsupported keys but otherwise preserving
+ * shape (type/properties/required/items/enum/format/description/nullable).
+ */
+function sanitizeSchemaForGemini(input: unknown): unknown {
+  if (Array.isArray(input)) return input.map(sanitizeSchemaForGemini);
+  if (!input || typeof input !== 'object') return input;
+  const unsupported = new Set([
+    'additionalProperties',
+    '$schema',
+    '$id',
+    '$ref',
+    'definitions',
+    '$defs',
+    'oneOf',
+    'anyOf',
+    'allOf',
+    'not',
+    'patternProperties',
+    'const',
+    'examples',
+    'default',
+    'minimum',
+    'maximum',
+    'minLength',
+    'maxLength',
+    'minItems',
+    'maxItems',
+    'uniqueItems',
+  ]);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (unsupported.has(k)) continue;
+    out[k] = sanitizeSchemaForGemini(v);
+  }
+  return out;
 }
 
 function toGeminiContents(messages: ConversationMessage[]): GeminiContent[] {

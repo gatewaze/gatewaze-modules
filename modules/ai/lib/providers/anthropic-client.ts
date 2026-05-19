@@ -66,6 +66,8 @@ export class AnthropicProviderClient implements ProviderClient {
     const fetchedUrls: FetchedUrlAudit[] = [];
     let webSearchCount = 0;
     let fetchCallsThisTurn = 0;
+    let gatewazeSearchCallsThisTurn = 0;
+    let gatewazeSearchCount = 0;
 
     try {
       for (let iter = 0; iter < MAX_LOOP_ITERATIONS; iter++) {
@@ -131,6 +133,7 @@ export class AnthropicProviderClient implements ProviderClient {
               model: lastModel,
               fetchedUrls,
               webSearchCount,
+              gatewazeSearchCount,
             };
           }
         } else if (response.stop_reason === 'end_turn') {
@@ -146,12 +149,22 @@ export class AnthropicProviderClient implements ProviderClient {
             model: lastModel,
             fetchedUrls,
             webSearchCount,
+            gatewazeSearchCount,
           };
         }
 
-        // ── No structured hit yet; must be a fetch_url tool call.
+        // ── No structured hit yet; loop the user/internal tool calls
+        //    (fetch_url, gatewaze_search, plus any extraTools declared
+        //    by the recipe runner — MCP server tools and the
+        //    builtin: memory surface). Native web_search is server-
+        //    side so it doesn't appear in tool_use blocks.
+        const extraToolNames = new Set((opts.extraTools ?? []).map((t) => t.name));
         const toolUseBlocks = contentBlocks.filter(
-          (b) => b['type'] === 'tool_use' && b['name'] === 'fetch_url',
+          (b) =>
+            b['type'] === 'tool_use' &&
+            (b['name'] === 'fetch_url' ||
+              b['name'] === 'gatewaze_search' ||
+              extraToolNames.has(String(b['name'] ?? ''))),
         );
         if (response.stop_reason !== 'tool_use' || toolUseBlocks.length === 0) {
           throw new InvalidProviderOutputError(
@@ -163,45 +176,125 @@ export class AnthropicProviderClient implements ProviderClient {
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         for (const block of toolUseBlocks) {
           const toolUseId = String(block['id'] ?? '');
-          const input = block['input'] as { url?: string; reason?: string } | undefined;
-          const url = typeof input?.url === 'string' ? input.url : '';
-          const reason = typeof input?.reason === 'string' ? input.reason : '';
+          const toolName = String(block['name'] ?? '');
 
-          if (!opts.resolveFetchUrl) {
+          if (toolName === 'fetch_url') {
+            const input = block['input'] as { url?: string; reason?: string } | undefined;
+            const url = typeof input?.url === 'string' ? input.url : '';
+            const reason = typeof input?.reason === 'string' ? input.reason : '';
+
+            if (!opts.resolveFetchUrl) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUseId,
+                content: '[fetch_url_disabled] fetch_url is not enabled for this use-case.',
+                is_error: true,
+              });
+              continue;
+            }
+            fetchCallsThisTurn++;
+            if (fetchCallsThisTurn > (opts.fetchUrlMaxPerTurn ?? 8)) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUseId,
+                content: '[fetch_quota_exceeded] per-turn fetch limit reached.',
+                is_error: true,
+              });
+              continue;
+            }
+
+            const fetchResult = await opts.resolveFetchUrl(url, reason);
+            fetchedUrls.push({
+              url,
+              status: fetchResult.ok ? 200 : 0,
+              bytes_in: fetchResult.bytesIn,
+              reason,
+              fetched_at: new Date().toISOString(),
+            });
             toolResults.push({
               type: 'tool_result',
               tool_use_id: toolUseId,
-              content: '[fetch_url_disabled] fetch_url is not enabled for this use-case.',
-              is_error: true,
-            });
-            continue;
-          }
-          fetchCallsThisTurn++;
-          if (fetchCallsThisTurn > (opts.fetchUrlMaxPerTurn ?? 8)) {
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: toolUseId,
-              content: '[fetch_quota_exceeded] per-turn fetch limit reached.',
-              is_error: true,
+              content: fetchResult.ok
+                ? fetchResult.content
+                : `[fetch_error] ${fetchResult.error ?? 'unknown'}`,
+              is_error: !fetchResult.ok,
             });
             continue;
           }
 
-          const fetchResult = await opts.resolveFetchUrl(url, reason);
-          fetchedUrls.push({
-            url,
-            status: fetchResult.ok ? 200 : 0,
-            bytes_in: fetchResult.bytesIn,
-            reason,
-            fetched_at: new Date().toISOString(),
-          });
+          if (toolName === 'gatewaze_search') {
+            const input = block['input'] as { query?: string; max_results?: number } | undefined;
+            const query = typeof input?.query === 'string' ? input.query : '';
+            const requestedMax =
+              typeof input?.max_results === 'number' && input.max_results > 0
+                ? input.max_results
+                : 6;
+            if (!opts.resolveGatewazeSearch) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUseId,
+                content: '[gatewaze_search_disabled] gatewaze_search is not enabled for this use-case.',
+                is_error: true,
+              });
+              continue;
+            }
+            gatewazeSearchCallsThisTurn++;
+            if (gatewazeSearchCallsThisTurn > (opts.gatewazeSearchMaxPerTurn ?? 6)) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUseId,
+                content: '[gatewaze_search_quota_exceeded] per-turn search limit reached.',
+                is_error: true,
+              });
+              continue;
+            }
+            const searchResult = await opts.resolveGatewazeSearch(query, requestedMax);
+            if (searchResult.ok) gatewazeSearchCount++;
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUseId,
+              content: searchResult.ok
+                ? JSON.stringify({ backend: searchResult.backend, results: searchResult.results })
+                : `[gatewaze_search_error] ${searchResult.error ?? 'unknown'}`,
+              is_error: !searchResult.ok,
+            });
+            continue;
+          }
+
+          // ── extraTools (recipe-runner-injected: MCP servers, memory) ──
+          // The runner builds these per step; we look up by tool name.
+          // Resolver errors are caught and surfaced as tool_result
+          // errors so the model can recover (e.g., retry with different
+          // args, or fall through to a no-tool path).
+          const extra = (opts.extraTools ?? []).find((t) => t.name === toolName);
+          if (extra) {
+            const args = (block['input'] ?? {}) as Record<string, unknown>;
+            try {
+              const result = await extra.resolve(args);
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUseId,
+                content: typeof result === 'string' ? result : JSON.stringify(result),
+                is_error: false,
+              });
+            } catch (err) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUseId,
+                content: `[tool_error] ${err instanceof Error ? err.message : String(err)}`,
+                is_error: true,
+              });
+            }
+            continue;
+          }
+
+          // Unknown tool — surface as an error so the model can
+          // recover. Should be unreachable given the filter above.
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUseId,
-            content: fetchResult.ok
-              ? fetchResult.content
-              : `[fetch_error] ${fetchResult.error ?? 'unknown'}`,
-            is_error: !fetchResult.ok,
+            content: `[unknown_tool] no handler registered for '${toolName}'`,
+            is_error: true,
           });
         }
 
@@ -263,6 +356,34 @@ function buildTools(opts: RunConversationOpts): unknown[] {
         },
         required: ['url', 'reason'],
       },
+    });
+  }
+  if (opts.webTools?.includes('gatewaze_search')) {
+    out.push({
+      name: 'gatewaze_search',
+      description:
+        'Gatewaze-hosted web search. Provider-agnostic, runs through Serper.dev or a DuckDuckGo HTML scrape. Use alongside web_search for redundancy, or as the sole discovery tool when the provider has no native search.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query.' },
+          max_results: {
+            type: 'integer',
+            description: 'How many results to return (default 6, max 20).',
+          },
+        },
+        required: ['query'],
+      },
+    });
+  }
+  // Recipe-injected extra tools (MCP server tools, builtin: memory).
+  // Forwarded verbatim — the recipe runner already validated their
+  // shape against the agentskills.io / MCP contract.
+  for (const t of opts.extraTools ?? []) {
+    out.push({
+      name: t.name,
+      description: t.description,
+      input_schema: t.inputSchema,
     });
   }
   return out;
