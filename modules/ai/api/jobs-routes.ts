@@ -94,6 +94,48 @@ export function mountJobsRoutes(router: Router, deps: JobsRoutesDeps): void {
     }
   });
 
+  // ── GET /admin/jobs/_diag ──────────────────────────────────────────
+  //
+  // Diagnostic endpoint — bypasses listJobs() filtering and returns the
+  // raw BullMQ counts + first 20 waiting/active/failed jobs verbatim.
+  // Use when the Jobs tab appears empty but the API returned a job_id
+  // on enqueue — answers "is the job actually in the queue?".
+  router.get('/admin/jobs/_diag', async (_req: Request, res: Response) => {
+    if (!deps.projectRoot) return sendError(res, 503, 'projectRoot_missing', 'projectRoot required');
+    if (!(await pingRedis())) {
+      return sendError(res, 503, 'redis_unavailable', `Redis ping failed: ${getLastConnectError() ?? 'unknown'}`);
+    }
+    try {
+      const queue = await getJobsQueue({ projectRoot: deps.projectRoot });
+      const counts = await queue.getJobCounts();
+      const waiting = await queue.getJobs(['waiting'], 0, 20);
+      const active = await queue.getJobs(['active'], 0, 20);
+      const failed = await queue.getJobs(['failed'], 0, 20);
+      const completed = await queue.getJobs(['completed'], 0, 20);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const summarise = (jobs: any[]) =>
+        jobs.map((j) => ({
+          id: String(j.id ?? ''),
+          name: String(j.name ?? ''),
+          attemptsMade: j.attemptsMade,
+          processedOn: j.processedOn ?? null,
+          finishedOn: j.finishedOn ?? null,
+          failedReason: j.failedReason ?? null,
+          data_keys: Object.keys(j.data ?? {}),
+        }));
+      res.status(200).json({
+        queue_name: queue.name,
+        counts,
+        waiting: summarise(waiting),
+        active: summarise(active),
+        failed: summarise(failed),
+        completed_sample: summarise(completed),
+      });
+    } catch (err) {
+      sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
+    }
+  });
+
   // ── GET /admin/jobs/:id ─────────────────────────────────────────────
   router.get('/admin/jobs/:id', async (req: Request, res: Response) => {
     const idP = JobIdParamSchema.safeParse(req.params);
