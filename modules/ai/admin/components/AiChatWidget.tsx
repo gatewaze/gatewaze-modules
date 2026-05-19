@@ -17,8 +17,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AssistantRuntimeProvider,
-  ThreadPrimitive,
-  MessagePrimitive,
   ComposerPrimitive,
   useExternalStoreRuntime,
   type ThreadMessageLike,
@@ -69,6 +67,13 @@ export interface AiChatWidgetProps {
   modelPicker?: boolean;
   /** Optional hook called after each assistant turn lands. */
   onAssistantMessage?: (message: AiMessage) => void;
+  /**
+   * Set when the widget is mounted inside a wrapper that already provides
+   * the outer border + rounding (e.g. AiChatModelTabs). Drops the
+   * widget's own border, rounded corners, and tinted background so
+   * nested borders don't appear as doubled corners.
+   */
+  embedded?: boolean;
 }
 
 export default function AiChatWidget(props: AiChatWidgetProps) {
@@ -82,6 +87,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
     defaultModel,
     modelPicker = true,
     onAssistantMessage,
+    embedded = false,
   } = props;
 
   const [thread, setThread] = useState<AiThread | null>(null);
@@ -127,22 +133,42 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
       .catch((err) => console.warn('[ai-chat] model list load failed', err));
   }, [useCase, modelPicker]);
 
-  // ── Poll while an assistant message is running ─────────────────────
+  // ── Poll the thread on a continuous cadence ─────────────────────────
+  // Two reasons for unconditional polling rather than gating on "a
+  // local message is running":
+  //   1. Externally-triggered runs (daily-briefing's "Run autopilot"
+  //      fan-out, the cron, a webhook-fired sync) insert a `running`
+  //      assistant placeholder server-side AFTER the widget has
+  //      hydrated. The old guard returned early because the widget's
+  //      local messages list had no running entry — so the operator
+  //      never saw the progress turn up.
+  //   2. The active tab is the only one visible at any time, but
+  //      every other tab stays mounted with display:none and keeps
+  //      polling, which is exactly what we want for fan-out: each tab
+  //      discovers its model's progress independently.
+  //
+  // Cadence: 4s while a message is running, 8s otherwise. Bounded
+  // backoff for long-running runs avoids hammering the API once a
+  // research turn settles into its multi-minute web_search loop.
   const runningStartedAt = useRef<number | null>(null);
   useEffect(() => {
+    if (!thread) return;
     const hasRunning = messages.some((m) => m.status === 'running');
-    if (!hasRunning) {
+    if (hasRunning) {
+      if (runningStartedAt.current == null) runningStartedAt.current = Date.now();
+    } else {
       runningStartedAt.current = null;
-      return;
     }
-    if (runningStartedAt.current == null) runningStartedAt.current = Date.now();
-    const elapsed = Date.now() - runningStartedAt.current;
-    const interval =
-      elapsed > POLL_LONG_BACKOFF_AT_MS
-        ? POLL_INTERVAL_MS * 4
-        : elapsed > POLL_BACKOFF_AT_MS
-          ? POLL_INTERVAL_MS * 2
-          : POLL_INTERVAL_MS;
+    const elapsed = runningStartedAt.current == null
+      ? 0
+      : Date.now() - runningStartedAt.current;
+    const interval = hasRunning
+      ? (elapsed > POLL_LONG_BACKOFF_AT_MS
+          ? POLL_INTERVAL_MS * 4
+          : elapsed > POLL_BACKOFF_AT_MS
+            ? POLL_INTERVAL_MS * 2
+            : POLL_INTERVAL_MS)
+      : POLL_INTERVAL_MS * 2; // 8s background poll when idle
 
     let cancelled = false;
     const tick = async () => {
@@ -186,7 +212,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
   const runtime = useExternalStoreRuntime<AiMessage>({
     messages,
     isRunning: isRunning || sending,
-    convertMessage: convertMessage(renderAssistantTurn),
+    convertMessage,
     onNew: async (message) => {
       if (!thread) return;
       const text = extractText(message);
@@ -243,74 +269,104 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
     );
   }
 
+  // When embedded, drop the widget's own border/rounded chrome AND the
+  // redundant "AI" header — the wrapper (e.g. AiChatModelTabs) already
+  // identifies the chat via its tab strip + Run buttons, so the bar is
+  // dead space. The wrapper also decides height: embedded widgets use
+  // `flex-1 min-h-0` so they fill whatever vertical room the host gives
+  // them, while standalone widgets keep the legacy max-h-[480px] cap.
+  const rootClass = embedded
+    ? 'flex flex-col bg-white flex-1 min-h-0'
+    : 'rounded-md border bg-neutral-50/60 flex flex-col';
+  const headerClass = 'flex items-center justify-between px-3 py-2 border-b bg-white rounded-t-md';
+  const composerClass = embedded
+    ? 'px-3 py-2 border-t bg-white flex items-center gap-2'
+    : 'px-3 py-2 border-t bg-white rounded-b-md flex items-center gap-2';
+  const messagesClass = embedded
+    ? 'px-3 py-3 space-y-3 flex-1 min-h-0 overflow-y-auto'
+    : 'px-3 py-3 space-y-3 max-h-[480px] overflow-y-auto';
+
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="rounded-md border bg-neutral-50/60 flex flex-col">
-        <header className="flex items-center justify-between px-3 py-2 border-b bg-white rounded-t-md">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <SparklesIcon className="size-4 text-amber-600" />
-            <span>AI</span>
-            {modelPicker && (
-              <ModelPicker
-                provider={provider}
-                model={model ?? defaultModel}
-                models={models}
-                onChange={(p, m) => {
-                  setProvider(p);
-                  setModel(m);
-                }}
-              />
-            )}
-            {thread && thread.cost_micro_usd > 0 && (
-              <span className="text-xs text-neutral-500 ml-2">
-                {microUsdToDollars(thread.cost_micro_usd)}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1">
-            {isRunning && (
-              <button
-                type="button"
-                onClick={() => void runtime.thread.cancelRun?.()}
-                className="text-xs text-neutral-600 hover:text-neutral-900 px-2"
-                title="Cancel"
-              >
-                <XMarkIcon className="size-4" />
-              </button>
-            )}
-            {messages.length > 0 && (
-              <button
-                type="button"
-                onClick={handleReset}
-                className="text-xs text-red-600 hover:text-red-900 px-2"
-                title="Reset thread"
-              >
-                <TrashIcon className="size-4" />
-              </button>
-            )}
-          </div>
-        </header>
+      <div className={rootClass}>
+        {!embedded && (
+          <header className={headerClass}>
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <SparklesIcon className="size-4 text-amber-600" />
+              <span>AI</span>
+              {modelPicker && (
+                <ModelPicker
+                  provider={provider}
+                  model={model ?? defaultModel}
+                  models={models}
+                  onChange={(p, m) => {
+                    setProvider(p);
+                    setModel(m);
+                  }}
+                />
+              )}
+              {thread && thread.cost_micro_usd > 0 && (
+                <span className="text-xs text-neutral-500 ml-2">
+                  {microUsdToDollars(thread.cost_micro_usd)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              {isRunning && (
+                <button
+                  type="button"
+                  onClick={() => void runtime.thread.cancelRun?.()}
+                  className="text-xs text-neutral-600 hover:text-neutral-900 px-2"
+                  title="Cancel"
+                >
+                  <XMarkIcon className="size-4" />
+                </button>
+              )}
+              {messages.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="text-xs text-red-600 hover:text-red-900 px-2"
+                  title="Reset thread"
+                >
+                  <TrashIcon className="size-4" />
+                </button>
+              )}
+            </div>
+          </header>
+        )}
 
-        <ThreadPrimitive.Root className="flex flex-col">
-          <ThreadPrimitive.Viewport className="px-3 py-3 space-y-3 max-h-[480px] overflow-y-auto">
-            <ThreadPrimitive.Messages
-              components={{
-                UserMessage: () => (
-                  <MessagePrimitive.Root className="flex justify-end">
+        <div className="flex flex-col flex-1 min-h-0">
+          <div className={messagesClass}>
+            {messages.map((m) => {
+              if (m.role === 'user') {
+                return (
+                  <div key={m.id} className="flex justify-end">
                     <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-blue-600 text-white px-3 py-2 text-sm whitespace-pre-wrap">
-                      <MessagePrimitive.Content />
+                      {m.content}
                     </div>
-                  </MessagePrimitive.Root>
-                ),
-                AssistantMessage: () => (
-                  <MessagePrimitive.Root className="flex justify-start">
-                    <div className="max-w-[90%] rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
-                      <MessagePrimitive.Content />
-                    </div>
-                  </MessagePrimitive.Root>
-                ),
-              }}
-            />
+                  </div>
+                );
+              }
+              const structuredJsx =
+                m.role === 'assistant' && m.structured && renderAssistantTurn
+                  ? renderAssistantTurn(m)
+                  : null;
+              if (structuredJsx) {
+                return (
+                  <div key={m.id} className="flex justify-start">
+                    <div className="max-w-[90%] w-full">{structuredJsx}</div>
+                  </div>
+                );
+              }
+              return (
+                <div key={m.id} className="flex justify-start">
+                  <div className="max-w-[90%] rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
+                    {m.content}
+                  </div>
+                </div>
+              );
+            })}
             {isRunning && (
               <div className="flex justify-start">
                 <div className="rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-600 inline-flex items-center gap-2">
@@ -319,9 +375,9 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                 </div>
               </div>
             )}
-          </ThreadPrimitive.Viewport>
+          </div>
 
-          <ComposerPrimitive.Root className="px-3 py-2 border-t bg-white rounded-b-md flex items-center gap-2">
+          <ComposerPrimitive.Root className={composerClass}>
             <ComposerPrimitive.Input
               placeholder={isRunning ? 'Working…' : 'Type a message…'}
               className="form-input flex-1 text-sm"
@@ -335,7 +391,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
               Send
             </ComposerPrimitive.Send>
           </ComposerPrimitive.Root>
-        </ThreadPrimitive.Root>
+        </div>
       </div>
     </AssistantRuntimeProvider>
   );
@@ -343,47 +399,24 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
 
 /**
  * Translate one of our AiMessage rows into the ThreadMessageLike shape
- * assistant-ui consumes. Structured-output turns get rendered via the
- * host-supplied `renderAssistantTurn` callback (returns JSX → wrapped
- * in a custom content part); plain narrative turns get a single text
- * content part.
+ * assistant-ui's external-store runtime consumes for state tracking.
+ *
+ * Note: we don't use assistant-ui's `ThreadPrimitive.Messages` renderer —
+ * the message list is rendered directly in the component above. Tried
+ * smuggling structured-output JSX through a custom `type: 'ui'` content
+ * part; assistant-ui validates against a fixed part schema and throws
+ * "Unsupported assistant message part type: ui". So this converter only
+ * needs to emit a valid text part to keep the runtime's state happy
+ * (running detection, send/cancel wiring) — host-rendered structured
+ * cards happen outside this path.
  */
-function convertMessage(
-  renderAssistantTurn: AiChatWidgetProps['renderAssistantTurn'],
-) {
-  return (m: AiMessage): ThreadMessageLike => {
-    // The library expects role ∈ 'user' | 'assistant' | 'system'.
-    // tool_summary maps to 'assistant' for v1 (rare, used by some
-    // future use-cases that summarise tool output as a separate turn).
-    const role = m.role === 'tool_summary' ? 'assistant' : (m.role as 'user' | 'assistant' | 'system');
-
-    // Structured-output rendering: let the host module substitute the
-    // entire content. We use a custom "ui" part — assistant-ui passes
-    // it through unchanged so the consumer can render arbitrary JSX.
-    if (role === 'assistant' && m.structured && renderAssistantTurn) {
-      const ui = renderAssistantTurn(m);
-      if (ui) {
-        return {
-          role,
-          id: m.id,
-          createdAt: new Date(m.created_at),
-          content: [
-            // Falls back to the narrative text if assistant-ui renders
-            // this in a context that doesn't honour the ui part.
-            { type: 'text', text: m.content || '' },
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            ({ type: 'ui', display: ui } as any),
-          ],
-        };
-      }
-    }
-
-    return {
-      role,
-      id: m.id,
-      createdAt: new Date(m.created_at),
-      content: [{ type: 'text', text: m.content || '' }],
-    };
+function convertMessage(m: AiMessage): ThreadMessageLike {
+  const role = m.role === 'tool_summary' ? 'assistant' : (m.role as 'user' | 'assistant' | 'system');
+  return {
+    role,
+    id: m.id,
+    createdAt: new Date(m.created_at),
+    content: [{ type: 'text', text: m.content || '' }],
   };
 }
 

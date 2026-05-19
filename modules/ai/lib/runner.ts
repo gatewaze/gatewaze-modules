@@ -209,6 +209,44 @@ export async function runChat(
         status: 'ok',
       });
 
+      // Web-search billed-tool cost. Anthropic charges $10 per 1000
+      // web_search calls (the only provider currently exposing a billed
+      // count via usage.server_tool_use.web_search_requests). OpenAI
+      // doesn't have a server-side web_search; Gemini's google_search
+      // doesn't return a billable count in the response. We record a
+      // separate ai_usage_events row so the unified cost ledger covers
+      // it — closes a ~$0.40/day under-count we observed in MTD
+      // reconciliation against Anthropic's billing dashboard.
+      if (picked.provider === 'anthropic' && result.webSearchCount > 0) {
+        try {
+          await recordUsage(ctx.supabase, {
+            userId: opts.userId,
+            useCase: opts.useCase,
+            threadId: opts.threadId,
+            messageId: opts.messageId,
+            kind: 'tool',
+            provider: 'anthropic',
+            model: 'web_search',
+            // $10 / 1000 requests = $0.01 / req = 10_000 micro-USD per
+            // request. Source: Anthropic web_search tool pricing as of
+            // 2026-05. Override the price-book lookup so this stays
+            // accurate even if the catalog row is absent.
+            costMicroUsdOverride: result.webSearchCount * 10_000,
+            // Reuse output_tokens as the request count for downstream
+            // visibility — keeps the row's token columns non-zero so
+            // it doesn't look like a phantom $0 entry.
+            outputTokens: result.webSearchCount,
+            status: 'ok',
+          });
+        } catch (err) {
+          ctx.logger?.warn?.('ai.web_search.record_failed', {
+            use_case: opts.useCase,
+            web_search_count: result.webSearchCount,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       ctx.logger?.info('ai.chat.complete', {
         use_case: opts.useCase,
         provider: picked.provider,
@@ -216,6 +254,7 @@ export async function runChat(
         attempt,
         input_tokens: result.inputTokens,
         output_tokens: result.outputTokens,
+        web_search_count: result.webSearchCount,
         cost_micro_usd: usage.costMicroUsd,
         credential_source: picked.credentialSource,
       });
@@ -348,6 +387,16 @@ export interface AiGenerateImageOpts {
     bucket: string;
     path: string;
   };
+  /**
+   * Reference images passed to the provider as visual conditioning.
+   * Each entry is the raw image base64-encoded plus its mime type.
+   * Use cases bound to a skill that declares `reference_images:` in
+   * its frontmatter automatically get these from the sync cache via
+   * resolveUseCasePrompt — pass that result's `referenceImages`
+   * straight through. Empty/omitted = text-only generation (today's
+   * default behaviour).
+   */
+  referenceImages?: Array<{ mimeType: string; base64: string }>;
   systemRun?: boolean;
 }
 
@@ -384,6 +433,7 @@ export async function aiGenerateImage(
     prompt: opts.prompt,
     model: picked.model,
     aspectRatio: opts.aspectRatio,
+    referenceImages: opts.referenceImages,
   });
 
   // Upload to caller-supplied destination via supabase storage.

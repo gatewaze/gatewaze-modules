@@ -158,6 +158,7 @@ const analyticsModule: GatewazeModule = {
       label: 'Analytics',
       icon: 'BarChart3',
       requiredFeature: 'analytics',
+      parentGroup: 'admin',
       order: 25,
     },
   ],

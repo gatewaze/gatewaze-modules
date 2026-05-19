@@ -255,7 +255,7 @@ export default function TemplatesPage() {
                     setNewName('');
                     setNewDescription('');
                   }}
-                  variant="ghost"
+                  variant="outline"
                 >
                   Cancel
                 </Button>

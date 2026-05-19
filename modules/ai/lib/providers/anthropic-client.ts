@@ -61,6 +61,7 @@ export class AnthropicProviderClient implements ProviderClient {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let totalCachedTokens = 0;
+    let totalCacheCreationTokens = 0;
     let lastModel = opts.model;
     const fetchedUrls: FetchedUrlAudit[] = [];
     let webSearchCount = 0;
@@ -93,6 +94,8 @@ export class AnthropicProviderClient implements ProviderClient {
         const usageRaw = (response.usage ?? {}) as unknown as Record<string, unknown>;
         const cached = usageRaw['cache_read_input_tokens'];
         if (typeof cached === 'number') totalCachedTokens += cached;
+        const cacheCreation = usageRaw['cache_creation_input_tokens'];
+        if (typeof cacheCreation === 'number') totalCacheCreationTokens += cacheCreation;
         const serverToolUse = usageRaw['server_tool_use'] as
           | { web_search_requests?: number }
           | undefined;
@@ -123,6 +126,7 @@ export class AnthropicProviderClient implements ProviderClient {
               inputTokens: totalInputTokens,
               outputTokens: totalOutputTokens,
               cachedTokens: totalCachedTokens,
+              cacheCreationTokens: totalCacheCreationTokens,
               durationMs: Date.now() - started,
               model: lastModel,
               fetchedUrls,
@@ -137,6 +141,7 @@ export class AnthropicProviderClient implements ProviderClient {
             inputTokens: totalInputTokens,
             outputTokens: totalOutputTokens,
             cachedTokens: totalCachedTokens,
+            cacheCreationTokens: totalCacheCreationTokens,
             durationMs: Date.now() - started,
             model: lastModel,
             fetchedUrls,
