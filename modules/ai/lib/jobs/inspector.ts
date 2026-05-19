@@ -57,7 +57,12 @@ export async function getJobsQueue(opts: {
   projectRoot: string;
   queueName?: string;
 }): Promise<BullQueue> {
-  const queueName = opts.queueName ?? `jobs-${process.env.BRAND || 'default'}`;
+  // Platform's shared module queue is named 'jobs' (see
+  // packages/api/src/lib/queue/index.ts:86 — `registerQueue({ name: 'jobs', … })`).
+  // The brand suffix is the scrapers module's own standalone-queue
+  // convention, NOT the platform's; AI jobs go through ctx.enqueueJob
+  // which targets 'jobs'.
+  const queueName = opts.queueName ?? 'jobs';
   // Resolve bullmq through the API package's module graph so we
   // share the version + connection options the platform uses.
   const apiPkg = `${opts.projectRoot}/packages/api/package.json`;
