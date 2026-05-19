@@ -23,6 +23,7 @@ import type { Request, Response, Router } from 'express';
 import { runChat } from '../lib/runner.js';
 import type { KnownProvider } from '../lib/providers/types.js';
 import { sumSpentMicroUsd } from '../lib/cost.js';
+import { resolveUseCasePrompt } from '../lib/use-case-prompt.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const USE_CASE_ID_RE = /^[a-z][a-z0-9-]{1,127}$/;
@@ -38,6 +39,11 @@ const USE_CASE_WRITE_FIELDS = new Set([
   'allowed_web_tools',
   'max_output_tokens',
   'daily_cost_cap_micro_usd',
+  // Phase-1 skill resolution (008_ai_use_cases_skill_ref).
+  'system_prompt',
+  'kickoff_message',
+  'skill_source_id',
+  'skill_path',
 ]);
 
 export function pickUseCaseFields(body: unknown): Record<string, unknown> {
@@ -100,6 +106,34 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     res.status(200).json({ thread: result.data ?? null });
   }
 
+  /**
+   * List every thread for a (use_case, host_kind, host_id) tuple — used
+   * by AiChatModelTabs to restore the operator's open-tab set on page
+   * refresh. Without this, only the default tab survives a reload and
+   * any other model's in-flight autopilot run looks lost.
+   */
+  async function listThreadsByHost(req: Request, res: Response): Promise<void> {
+    const useCase = paramAs(req.query['use_case']);
+    const hostKind = paramAs(req.query['host_kind']);
+    const hostId = paramAs(req.query['host_id']);
+    if (!useCase || !hostKind || !hostId) {
+      sendError(res, 400, 'bad_request', 'use_case, host_kind, host_id required');
+      return;
+    }
+    const result = await supabase
+      .from('ai_threads')
+      .select('*')
+      .eq('use_case', useCase)
+      .eq('host_kind', hostKind)
+      .eq('host_id', hostId)
+      .order('created_at', { ascending: true });
+    if (result.error) {
+      sendError(res, 500, 'internal', result.error.message);
+      return;
+    }
+    res.status(200).json({ threads: result.data ?? [] });
+  }
+
   async function createThread(req: Request, res: Response): Promise<void> {
     const body = (req.body as Record<string, unknown> | undefined) ?? {};
     const useCase = typeof body.use_case === 'string' ? body.use_case : '';
@@ -129,6 +163,26 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       .insert({ use_case: useCase, host_kind: hostKind, host_id: hostId, thread_key: threadKey, status: 'idle' })
       .select('*')
       .maybeSingle();
+    // Race: a concurrent caller (autopilot, second tab) may have inserted
+    // the same addressable row between our SELECT and INSERT. The unique
+    // constraint catches it — re-SELECT and return the winner instead of
+    // 500'ing the caller.
+    if (created.error && /ai_threads_addressable_unique/.test(created.error.message)) {
+      const refetch = await supabase
+        .from('ai_threads')
+        .select('*')
+        .eq('use_case', useCase)
+        .eq('host_kind', hostKind)
+        .eq('host_id', hostId)
+        .eq('thread_key', threadKey)
+        .maybeSingle();
+      if (refetch.data) {
+        res.status(200).json({ thread: refetch.data });
+        return;
+      }
+      sendError(res, 500, 'internal', refetch.error?.message ?? 'lost addressable race and row not found');
+      return;
+    }
     if (created.error) {
       sendError(res, 500, 'internal', created.error.message);
       return;
@@ -282,11 +336,17 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
           content: m.content,
         }));
 
-      // System prompt: caller supplied it during thread create OR uses
-      // an empty default. v1 stores the prompt on the thread row's
-      // host module — for now we accept that host modules pass it via
-      // their own routes. The base AI module assumes empty.
-      const systemPrompt = '';
+      // System prompt: resolve from the use case (skill body if a skill
+      // is bound, else the inline system_prompt column). Phase-1 added
+      // skill_ref support to ai_use_cases (migration 008); the chat
+      // path now uses it so the operator's configured skill drives
+      // every turn — not just the host-module-specific dedicated
+      // endpoints. Empty string is still valid (means "no system
+      // prompt"); the provider clients pass it through unchanged.
+      const resolved = await resolveUseCasePrompt(
+        supabase as never,
+        args.threadRow.use_case,
+      );
 
       const result = await runChat(
         { supabase, logger, resolveFetchUrl: deps.resolveFetchUrl },
@@ -295,7 +355,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
           userId: args.threadRow.created_by,
           threadId: args.threadId,
           messageId: args.assistantMessageId,
-          systemPrompt,
+          systemPrompt: resolved.systemPrompt,
           messages,
           provider: args.provider,
           model: args.model,
@@ -440,6 +500,163 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     });
   }
 
+  // ── Model catalog ──────────────────────────────────────────────────────
+  //
+  // CRUD over ai_model_prices, exposed as a flat catalog ("which models
+  // exist in this Gatewaze install?"). Because ai_model_prices is keyed
+  // by (provider, model, effective_from), the catalog view collapses to
+  // the most-recent effective_from row per (provider, model). Edits
+  // update that row in place — historical accuracy of past cost-ledger
+  // calculations is preserved by the per-event snapshot in
+  // ai_usage_events.cost_micro_usd, not by the price book.
+
+  async function listModels(_req: Request, res: Response): Promise<void> {
+    const result = await supabase
+      .from('ai_model_prices')
+      .select('*')
+      .order('provider', { ascending: true })
+      .order('effective_from', { ascending: false });
+    if (result.error) {
+      sendError(res, 500, 'internal', result.error.message);
+      return;
+    }
+    // Collapse to the latest effective_from per (provider, model).
+    const seen = new Set<string>();
+    type PriceRow = { provider: string; model: string } & Record<string, unknown>;
+    const latest: PriceRow[] = [];
+    for (const row of (result.data ?? []) as PriceRow[]) {
+      const key = `${row.provider}:${row.model}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      latest.push(row);
+    }
+    latest.sort((a, b) => {
+      if (a.provider !== b.provider) return a.provider.localeCompare(b.provider);
+      return a.model.localeCompare(b.model);
+    });
+    res.status(200).json({ models: latest });
+  }
+
+  const MODEL_WRITE_FIELDS = new Set([
+    'label',
+    'input_per_million_usd',
+    'output_per_million_usd',
+    'cached_per_million_usd',
+    'image_per_image_usd',
+    'supports_chat',
+    'supports_tools',
+    'supports_web_search',
+    'supports_image_gen',
+    'supports_embeddings',
+  ]);
+
+  function pickModelFields(body: unknown): Record<string, unknown> {
+    if (!body || typeof body !== 'object') return {};
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
+      if (MODEL_WRITE_FIELDS.has(k)) out[k] = v;
+    }
+    return out;
+  }
+
+  async function createModel(req: Request, res: Response): Promise<void> {
+    const body = (req.body as Record<string, unknown> | undefined) ?? {};
+    const provider = typeof body.provider === 'string' ? body.provider : '';
+    const model = typeof body.model === 'string' ? body.model.trim() : '';
+    if (!['openai', 'anthropic', 'gemini', 'scrapling'].includes(provider)) {
+      sendError(res, 400, 'bad_request', 'provider must be one of openai/anthropic/gemini/scrapling');
+      return;
+    }
+    if (!model || model.length > 128) {
+      sendError(res, 400, 'bad_request', 'model id required (≤128 chars)');
+      return;
+    }
+    const fields = pickModelFields(body);
+    // Today's date as the new row's effective_from. If a row already
+    // exists for (provider, model, today) the unique PK collides — re-
+    // surface a 409 rather than a generic 500 so the UI can react.
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await supabase
+      .from('ai_model_prices')
+      .insert({ provider, model, effective_from: today, ...fields })
+      .select('*')
+      .maybeSingle();
+    if (result.error) {
+      if (/duplicate key|unique/i.test(result.error.message)) {
+        sendError(res, 409, 'conflict', `model ${provider}/${model} already has a price row dated ${today}`);
+        return;
+      }
+      sendError(res, 500, 'internal', result.error.message);
+      return;
+    }
+    res.status(201).json({ model: result.data });
+  }
+
+  async function updateModel(req: Request, res: Response): Promise<void> {
+    const provider = paramAs(req.params.provider);
+    const model = paramAs(req.params.model);
+    if (!provider || !model) {
+      sendError(res, 400, 'bad_request', 'provider + model required');
+      return;
+    }
+    const fields = pickModelFields(req.body);
+    if (Object.keys(fields).length === 0) {
+      sendError(res, 400, 'bad_request', 'no editable fields supplied');
+      return;
+    }
+    // Find the latest effective_from row and update in place.
+    const latest = await supabase
+      .from('ai_model_prices')
+      .select('effective_from')
+      .eq('provider', provider)
+      .eq('model', model)
+      .order('effective_from', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latest.error || !latest.data) {
+      sendError(res, 404, 'not_found', 'model not found');
+      return;
+    }
+    const result = await supabase
+      .from('ai_model_prices')
+      .update(fields)
+      .eq('provider', provider)
+      .eq('model', model)
+      .eq('effective_from', latest.data.effective_from)
+      .select('*')
+      .maybeSingle();
+    if (result.error) {
+      sendError(res, 500, 'internal', result.error.message);
+      return;
+    }
+    res.status(200).json({ model: result.data });
+  }
+
+  async function deleteModel(req: Request, res: Response): Promise<void> {
+    const provider = paramAs(req.params.provider);
+    const model = paramAs(req.params.model);
+    if (!provider || !model) {
+      sendError(res, 400, 'bad_request', 'provider + model required');
+      return;
+    }
+    // Drops ALL effective-from rows for this (provider, model). Past
+    // ai_usage_events rows already snapshot their cost_micro_usd, so
+    // historical reporting is unaffected. Any use_case rows that name
+    // this model in allowed_models keep the string — they will surface
+    // as "uncatalogued" in the picker until an operator re-creates the
+    // catalog entry.
+    const result = await supabase
+      .from('ai_model_prices')
+      .delete()
+      .eq('provider', provider)
+      .eq('model', model);
+    if (result.error) {
+      sendError(res, 500, 'internal', result.error.message);
+      return;
+    }
+    res.status(204).end();
+  }
+
   // ── Credentials ────────────────────────────────────────────────────────
 
   async function listCredentials(_req: Request, res: Response): Promise<void> {
@@ -493,6 +710,50 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       return;
     }
     await supabase.from('ai_user_credentials').delete().eq('id', id);
+    res.status(204).end();
+  }
+
+  async function createUseCaseCredential(req: Request, res: Response): Promise<void> {
+    const body = (req.body as Record<string, unknown> | undefined) ?? {};
+    const useCase = typeof body.use_case === 'string' ? body.use_case : '';
+    const provider = typeof body.provider === 'string' ? (body.provider as KnownProvider) : '' as KnownProvider;
+    const apiKey = typeof body.api_key === 'string' ? body.api_key : '';
+    if (!USE_CASE_ID_RE.test(useCase) || !PROVIDERS.includes(provider) || !apiKey) {
+      sendError(res, 400, 'bad_request', 'use_case (slug), provider, api_key required');
+      return;
+    }
+    const encrypted = await encryptKey(supabase, apiKey);
+    const last4 = apiKey.slice(-4);
+    const result = await supabase
+      .from('ai_use_case_credentials')
+      .insert({
+        use_case: useCase,
+        provider,
+        api_key_ciphertext: encrypted.ciphertext,
+        api_key_nonce: encrypted.nonce,
+        last_4: last4,
+        status: 'active',
+      })
+      .select('id, use_case, provider, status, last_4')
+      .maybeSingle();
+    if (result.error) {
+      if (/duplicate key|unique/i.test(result.error.message)) {
+        sendError(res, 409, 'conflict', `${useCase} already has an active ${provider} credential — delete it first to replace`);
+        return;
+      }
+      sendError(res, 500, 'internal', result.error.message);
+      return;
+    }
+    res.status(201).json({ credential: result.data });
+  }
+
+  async function deleteUseCaseCredential(req: Request, res: Response): Promise<void> {
+    const id = paramAs(req.params.id);
+    if (!id || !UUID_RE.test(id)) {
+      sendError(res, 400, 'bad_request', 'id (uuid) required');
+      return;
+    }
+    await supabase.from('ai_use_case_credentials').delete().eq('id', id);
     res.status(204).end();
   }
 
@@ -562,6 +823,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
 
   return {
     lookupThread,
+    listThreadsByHost,
     createThread,
     getThread,
     deleteThread,
@@ -570,9 +832,15 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     listUseCases,
     patchUseCase,
     listUseCaseModels,
+    listModels,
+    createModel,
+    updateModel,
+    deleteModel,
     listCredentials,
     createUserCredential,
     deleteUserCredential,
+    createUseCaseCredential,
+    deleteUseCaseCredential,
     usageSummary,
     usageEvents,
   };
@@ -583,6 +851,9 @@ export function mountAdminAiRoutes(
   routes: ReturnType<typeof createAdminAiRoutes>,
 ): void {
   router.get('/admin/threads', routes.lookupThread);
+  // Must precede `/admin/threads/:id` — Express matches in order and
+  // `by-host` would otherwise be interpreted as a thread id.
+  router.get('/admin/threads/by-host', routes.listThreadsByHost);
   router.post('/admin/threads', routes.createThread);
   router.get('/admin/threads/:id', routes.getThread);
   router.delete('/admin/threads/:id', routes.deleteThread);
@@ -593,9 +864,16 @@ export function mountAdminAiRoutes(
   router.patch('/admin/use-cases/:id', routes.patchUseCase);
   router.get('/admin/use-cases/:id/models', routes.listUseCaseModels);
 
+  router.get('/admin/models', routes.listModels);
+  router.post('/admin/models', routes.createModel);
+  router.patch('/admin/models/:provider/:model', routes.updateModel);
+  router.delete('/admin/models/:provider/:model', routes.deleteModel);
+
   router.get('/admin/credentials', routes.listCredentials);
   router.post('/admin/credentials/user', routes.createUserCredential);
   router.delete('/admin/credentials/user/:id', routes.deleteUserCredential);
+  router.post('/admin/credentials/use-case', routes.createUseCaseCredential);
+  router.delete('/admin/credentials/use-case/:id', routes.deleteUseCaseCredential);
 
   router.get('/admin/usage/summary', routes.usageSummary);
   router.get('/admin/usage/events', routes.usageEvents);

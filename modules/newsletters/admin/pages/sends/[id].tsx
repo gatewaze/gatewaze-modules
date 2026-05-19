@@ -168,7 +168,7 @@ export default function SendDetailPage() {
           </div>
           <div className="flex items-center gap-2">
             {send.status === 'scheduled' && (
-              <Button variant="ghost" onClick={handleCancel}>
+              <Button variant="outline" onClick={handleCancel}>
                 <XMarkIcon className="w-4 h-4 mr-1" />
                 Cancel
               </Button>

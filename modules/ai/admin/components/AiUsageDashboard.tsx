@@ -109,15 +109,17 @@ export default function AiUsageDashboard() {
   }, [events]);
 
   return (
-    <div className="p-6 space-y-6">
-      <header className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">AI usage</h1>
-          <p className="text-sm text-neutral-500 mt-1">
-            Token + image + tool spend across all Gatewaze AI surfaces.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-sm text-neutral-500">
+          Token + image + tool spend across all Gatewaze AI surfaces. For the
+          cross-API universal cost ledger (proxies, budgets, all paid externals)
+          see{' '}
+          <a href="/admin/cost" className="text-blue-600 hover:underline">
+            the full cost dashboard →
+          </a>
+        </p>
+        <div className="flex items-center gap-2 shrink-0">
           <select
             value={`${filter.fromIso}|${filter.toIso}`}
             onChange={(e) => {
@@ -151,7 +153,7 @@ export default function AiUsageDashboard() {
             </a>
           )}
         </div>
-      </header>
+      </div>
 
       {/* ── Top-line total ───────────────────────────────────────────── */}
       <section className="rounded-md border bg-white p-4">

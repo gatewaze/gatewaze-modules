@@ -46,7 +46,8 @@ const webhooksModule: GatewazeModule = {
       // entry from other plumbing tabs and reads as "fires on change".
       icon: 'Bolt',
       requiredFeature: 'webhooks',
-      order: 90, // bottom of the nav — operator plumbing, not content
+      parentGroup: 'admin',
+      order: 90, // bottom of the admin group — operator plumbing, not content
     },
   ],
 

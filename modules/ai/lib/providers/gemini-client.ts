@@ -223,10 +223,20 @@ export class GeminiProviderClient implements ProviderClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000);
     try {
+      // Reference images go FIRST, then the text instruction. This is
+      // the "see this, then do this" pattern Gemini's image-conditioned
+      // generation expects — putting the prompt before the references
+      // weakens the visual anchoring substantially.
+      const parts: Array<Record<string, unknown>> = [];
+      for (const ref of opts.referenceImages ?? []) {
+        parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.base64 } });
+      }
+      parts.push({ text: opts.prompt });
+
       const response = await this.callGemini(
         opts.model,
         {
-          contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
+          contents: [{ role: 'user', parts }],
           generationConfig: {
             responseModalities: ['IMAGE'],
             ...(opts.aspectRatio

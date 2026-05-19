@@ -59,8 +59,36 @@ export interface AiUseCase {
   allowed_web_tools: ('web_search' | 'fetch_url')[];
   max_output_tokens: number;
   daily_cost_cap_micro_usd: number | null;
+  /**
+   * Inline system prompt. Used at runtime when no skill is bound (see
+   * skill_source_id/skill_path). Operator-editable via the admin.
+   */
+  system_prompt: string;
+  /**
+   * Initial user turn fired by autopilot triggers (e.g. daily-briefing
+   * "Run research"). Empty = no kickoff; system_prompt alone drives
+   * the model.
+   */
+  kickoff_message: string;
+  /**
+   * Soft ref to ai_skill_sources.id. When paired with skill_path, the
+   * matching ai_skills.body becomes the system prompt at runtime,
+   * overriding the inline system_prompt above.
+   */
+  skill_source_id: string | null;
+  /** Path within the skill source repo, matching ai_skills.path. */
+  skill_path: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Lightweight reference to a skill row for the use-case picker. */
+export interface AiSkillRef {
+  id: string;
+  source_id: string;
+  source_label: string;
+  path: string;
+  name: string;
 }
 
 export interface AiUserCredentialMeta {
@@ -97,6 +125,36 @@ export interface AiModelInfo {
   supports_embeddings?: boolean;
   input_per_million_usd?: number;
   output_per_million_usd?: number;
+}
+
+/** Catalog entry exposed by /admin/models (latest effective_from per model). */
+export interface AiCatalogModel {
+  provider: AiProvider | 'scrapling';
+  model: string;
+  label: string;
+  effective_from: string;
+  input_per_million_usd: number;
+  output_per_million_usd: number;
+  cached_per_million_usd: number | null;
+  image_per_image_usd: number | null;
+  supports_chat: boolean;
+  supports_tools: boolean;
+  supports_web_search: boolean;
+  supports_image_gen: boolean;
+  supports_embeddings: boolean;
+}
+
+export interface AiCatalogModelInput {
+  label?: string;
+  input_per_million_usd?: number;
+  output_per_million_usd?: number;
+  cached_per_million_usd?: number | null;
+  image_per_image_usd?: number | null;
+  supports_chat?: boolean;
+  supports_tools?: boolean;
+  supports_web_search?: boolean;
+  supports_image_gen?: boolean;
+  supports_embeddings?: boolean;
 }
 
 export interface AiUsageSummary {
@@ -181,6 +239,27 @@ export async function lookupThread(opts: {
   return body.thread;
 }
 
+/**
+ * List every thread (across all thread_keys) for a host. Used by
+ * AiChatModelTabs to restore the operator's open-tab set on page
+ * refresh — without this, only the default tab survives a reload and
+ * any other model's in-flight run looks lost.
+ */
+export async function listThreadsByHost(opts: {
+  useCase: string;
+  hostKind: string;
+  hostId: string;
+}): Promise<AiThread[]> {
+  const qs = new URLSearchParams({
+    use_case: opts.useCase,
+    host_kind: opts.hostKind,
+    host_id: opts.hostId,
+  });
+  const res = await authedFetch(`/api/modules/ai/admin/threads/by-host?${qs.toString()}`);
+  const body = await jsonOrThrow<{ threads: AiThread[] }>(res);
+  return body.threads;
+}
+
 export async function createThread(opts: {
   useCase: string;
   hostKind: string;
@@ -254,6 +333,75 @@ export async function listUseCaseModels(useCaseId: string): Promise<AiModelInfo[
   return body.models;
 }
 
+/**
+ * Lists skill files available to bind to a use case. Queries the
+ * ai_skills + ai_skill_sources tables directly (RLS allows authenticated
+ * SELECT). Returns empty if the skills module isn't installed.
+ */
+export async function listAiSkills(): Promise<AiSkillRef[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from('ai_skills')
+    .select('id, source_id, path, name, ai_skill_sources!inner(label)')
+    .order('name', { ascending: true });
+  if (error) {
+    // Table missing (editor-ai-copilot not installed) — treat as empty.
+    return [];
+  }
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    id: r.id as string,
+    source_id: r.source_id as string,
+    source_label:
+      (r.ai_skill_sources as { label?: string } | null)?.label ?? '—',
+    path: r.path as string,
+    name: r.name as string,
+  }));
+}
+
+// ─── Model catalog ────────────────────────────────────────────────────────
+
+export async function listCatalogModels(): Promise<AiCatalogModel[]> {
+  const res = await authedFetch('/api/modules/ai/admin/models');
+  const body = await jsonOrThrow<{ models: AiCatalogModel[] }>(res);
+  return body.models;
+}
+
+export async function createCatalogModel(opts: {
+  provider: AiCatalogModel['provider'];
+  model: string;
+} & AiCatalogModelInput): Promise<AiCatalogModel> {
+  const res = await authedFetch('/api/modules/ai/admin/models', {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+  const body = await jsonOrThrow<{ model: AiCatalogModel }>(res);
+  return body.model;
+}
+
+export async function updateCatalogModel(
+  provider: AiCatalogModel['provider'],
+  model: string,
+  patch: AiCatalogModelInput,
+): Promise<AiCatalogModel> {
+  const res = await authedFetch(
+    `/api/modules/ai/admin/models/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`,
+    { method: 'PATCH', body: JSON.stringify(patch) },
+  );
+  const body = await jsonOrThrow<{ model: AiCatalogModel }>(res);
+  return body.model;
+}
+
+export async function deleteCatalogModel(
+  provider: AiCatalogModel['provider'],
+  model: string,
+): Promise<void> {
+  const res = await authedFetch(
+    `/api/modules/ai/admin/models/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+}
+
 // ─── Credentials ──────────────────────────────────────────────────────────
 
 export async function listCredentials(): Promise<{
@@ -283,6 +431,28 @@ export async function createUserCredential(opts: {
 
 export async function deleteUserCredential(id: string): Promise<void> {
   const res = await authedFetch(`/api/modules/ai/admin/credentials/user/${id}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function createUseCaseCredential(opts: {
+  useCase: string;
+  provider: AiProvider;
+  apiKey: string;
+}): Promise<AiUseCaseCredentialMeta> {
+  const res = await authedFetch('/api/modules/ai/admin/credentials/use-case', {
+    method: 'POST',
+    body: JSON.stringify({
+      use_case: opts.useCase,
+      provider: opts.provider,
+      api_key: opts.apiKey,
+    }),
+  });
+  const body = await jsonOrThrow<{ credential: AiUseCaseCredentialMeta }>(res);
+  return body.credential;
+}
+
+export async function deleteUseCaseCredential(id: string): Promise<void> {
+  const res = await authedFetch(`/api/modules/ai/admin/credentials/use-case/${id}`, { method: 'DELETE' });
   if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
 }
 

@@ -27,6 +27,15 @@ export interface UsageEventInput {
   inputTokens?: number;
   outputTokens?: number;
   cachedTokens?: number;
+  /**
+   * Anthropic cache-creation tokens — billed at ~1.25× the regular
+   * input rate (a one-time premium for writing the cache, recouped on
+   * subsequent reads at 0.1×). Separate from cachedTokens (cache reads).
+   * Capture from `usage.cache_creation_input_tokens` on Anthropic
+   * responses. OpenAI / Gemini don't currently expose an equivalent
+   * counter, so leave undefined for those providers.
+   */
+  cacheCreationTokens?: number;
   imageOutputs?: number;
   bytesIn?: number;
   bytesOut?: number;
@@ -53,6 +62,7 @@ interface PriceRow {
   input_per_million_usd: number;
   output_per_million_usd: number;
   cached_per_million_usd: number | null;
+  cache_creation_per_million_usd: number | null;
   image_per_image_usd: number | null;
 }
 
@@ -62,11 +72,12 @@ interface PriceRow {
  */
 export function computeCostMicroUsd(
   price: PriceRow,
-  e: Pick<UsageEventInput, 'inputTokens' | 'outputTokens' | 'cachedTokens' | 'imageOutputs' | 'kind'>,
+  e: Pick<UsageEventInput, 'inputTokens' | 'outputTokens' | 'cachedTokens' | 'cacheCreationTokens' | 'imageOutputs' | 'kind'>,
 ): number {
   const inputTok = e.inputTokens ?? 0;
   const outputTok = e.outputTokens ?? 0;
   const cachedTok = e.cachedTokens ?? 0;
+  const cacheCreationTok = e.cacheCreationTokens ?? 0;
   const images = e.imageOutputs ?? 0;
 
   // Tokens × $/M → micro-USD requires *1_000_000/1_000_000 = identity;
@@ -76,10 +87,16 @@ export function computeCostMicroUsd(
   const cachedMicros = price.cached_per_million_usd
     ? Math.round(cachedTok * price.cached_per_million_usd)
     : 0;
+  // Cache-creation pricing: fall back to the regular input rate when
+  // the price book doesn't have a dedicated entry (per migration 011's
+  // contract — `NULL means no premium`).
+  const cacheCreationRate =
+    price.cache_creation_per_million_usd ?? price.input_per_million_usd;
+  const cacheCreationMicros = Math.round(cacheCreationTok * cacheCreationRate);
   const imageMicros = price.image_per_image_usd
     ? Math.round(images * price.image_per_image_usd * 1_000_000)
     : 0;
-  return inputMicros + outputMicros + cachedMicros + imageMicros;
+  return inputMicros + outputMicros + cachedMicros + cacheCreationMicros + imageMicros;
 }
 
 export async function recordUsage(
@@ -98,7 +115,7 @@ export async function recordUsage(
     // Default path: compute from the price book.
     const priceLookup = await supabase
       .from('ai_model_prices')
-      .select('input_per_million_usd, output_per_million_usd, cached_per_million_usd, image_per_image_usd')
+      .select('input_per_million_usd, output_per_million_usd, cached_per_million_usd, cache_creation_per_million_usd, image_per_image_usd')
       .eq('provider', event.provider)
       .eq('model', event.model)
       .lte('effective_from', occurredAt.toISOString().slice(0, 10))
@@ -123,6 +140,7 @@ export async function recordUsage(
       input_tokens: event.inputTokens ?? 0,
       output_tokens: event.outputTokens ?? 0,
       cached_tokens: event.cachedTokens ?? 0,
+      cache_creation_tokens: event.cacheCreationTokens ?? 0,
       image_outputs: event.imageOutputs ?? 0,
       bytes_in: event.bytesIn ?? 0,
       bytes_out: event.bytesOut ?? 0,

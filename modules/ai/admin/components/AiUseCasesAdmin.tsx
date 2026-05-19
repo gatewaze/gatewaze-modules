@@ -14,14 +14,20 @@ import { Modal, Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 import {
+  listAiSkills,
+  listCatalogModels,
   listUseCases,
   microUsdToDollars,
   patchUseCase,
+  type AiCatalogModel,
+  type AiSkillRef,
   type AiUseCase,
 } from '../utils/aiService';
 
 export default function AiUseCasesAdmin() {
   const [useCases, setUseCases] = useState<AiUseCase[]>([]);
+  const [catalog, setCatalog] = useState<AiCatalogModel[]>([]);
+  const [skills, setSkills] = useState<AiSkillRef[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<AiUseCase | null>(null);
   const [saving, setSaving] = useState(false);
@@ -33,14 +39,36 @@ export default function AiUseCasesAdmin() {
   async function load() {
     setLoading(true);
     try {
-      const rows = await listUseCases();
+      const [rows, models, skillRows] = await Promise.all([
+        listUseCases(),
+        listCatalogModels(),
+        listAiSkills(),
+      ]);
       setUseCases(rows);
+      setCatalog(models);
+      setSkills(skillRows);
     } catch (err) {
       console.error('[ai-use-cases] load failed', err);
       toast.error('Failed to load use-cases');
     } finally {
       setLoading(false);
     }
+  }
+
+  // Catalog grouped by provider, in catalog order (alphabetical).
+  const catalogByProvider = new Map<string, AiCatalogModel[]>();
+  for (const m of catalog) {
+    const arr = catalogByProvider.get(m.provider) ?? [];
+    arr.push(m);
+    catalogByProvider.set(m.provider, arr);
+  }
+  // Reverse-lookup by `model` for the default-model picker (we treat
+  // model ids as globally unique; the catalog already enforces (provider,
+  // model) but the use-case's default_model column doesn't store
+  // provider, so collisions across providers would be ambiguous).
+  const catalogByModel = new Map<string, AiCatalogModel>();
+  for (const m of catalog) {
+    if (!catalogByModel.has(m.model)) catalogByModel.set(m.model, m);
   }
 
   async function handleSave() {
@@ -56,6 +84,10 @@ export default function AiUseCasesAdmin() {
         allowed_web_tools: editing.allowed_web_tools,
         max_output_tokens: editing.max_output_tokens,
         daily_cost_cap_micro_usd: editing.daily_cost_cap_micro_usd,
+        system_prompt: editing.system_prompt,
+        kickoff_message: editing.kickoff_message,
+        skill_source_id: editing.skill_source_id,
+        skill_path: editing.skill_path,
       });
       toast.success('Use-case updated');
       setEditing(null);
@@ -73,15 +105,12 @@ export default function AiUseCasesAdmin() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">AI use-cases</h1>
-        <p className="text-sm text-neutral-500 mt-1">
-          Each Gatewaze AI surface registers as a use-case here. Edit defaults to
-          control provider, model, and per-use-case spend caps. Adding new use-cases
-          happens via module manifest declarations during install.
-        </p>
-      </header>
+    <div className="space-y-4">
+      <p className="text-sm text-neutral-500">
+        Each Gatewaze AI surface registers as a use-case here. Edit defaults to
+        control provider, model, and per-use-case spend caps. Adding new use-cases
+        happens via module manifest declarations during install.
+      </p>
 
       <div className="rounded-md border overflow-hidden">
         <table className="w-full text-sm">
@@ -135,7 +164,7 @@ export default function AiUseCasesAdmin() {
           size="lg"
           footer={
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setEditing(null)} disabled={saving}>
+              <Button variant="outline" onClick={() => setEditing(null)} disabled={saving}>
                 Cancel
               </Button>
               <Button onClick={handleSave} disabled={saving}>
@@ -160,43 +189,144 @@ export default function AiUseCasesAdmin() {
                 onChange={(e) => setEditing({ ...editing, description: e.target.value })}
               />
             </Field>
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Default provider">
-                <select
-                  className="form-input w-full"
-                  value={editing.default_provider}
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      default_provider: e.target.value as AiUseCase['default_provider'],
-                    })
+            <Field label="Default model">
+              <select
+                className="form-input w-full"
+                value={
+                  editing.default_provider === 'auto'
+                    ? 'auto'
+                    : `${editing.default_provider}:${editing.default_model}`
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === 'auto') {
+                    // Keep the existing default_model string so the
+                    // DB-level NOT NULL constraint stays satisfied —
+                    // when default_provider='auto' the router walks
+                    // allowed_models anyway and default_model is just a
+                    // fallback if allowed_models is empty.
+                    setEditing({ ...editing, default_provider: 'auto' });
+                    return;
                   }
-                >
-                  <option value="auto">auto (walk allowed_models)</option>
-                  <option value="openai">openai</option>
-                  <option value="anthropic">anthropic</option>
-                  <option value="gemini">gemini</option>
-                </select>
-              </Field>
-              <Field label="Default model">
-                <input
-                  className="form-input w-full font-mono text-xs"
-                  value={editing.default_model}
-                  onChange={(e) => setEditing({ ...editing, default_model: e.target.value })}
-                />
-              </Field>
-            </div>
-            <Field label="Allowed models (comma-separated, ordered)">
-              <input
-                className="form-input w-full font-mono text-xs"
-                value={editing.allowed_models.join(', ')}
-                onChange={(e) =>
+                  const [provider, ...rest] = v.split(':');
+                  const model = rest.join(':');
                   setEditing({
                     ...editing,
-                    allowed_models: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-                  })
-                }
-              />
+                    default_provider: provider as AiUseCase['default_provider'],
+                    default_model: model,
+                  });
+                }}
+              >
+                <option value="auto">Auto (walk allowed_models)</option>
+                {Array.from(catalogByProvider.entries()).map(([provider, models]) => (
+                  <optgroup key={provider} label={provider}>
+                    {models.map((m) => (
+                      <option key={`${provider}:${m.model}`} value={`${provider}:${m.model}`}>
+                        {m.label ? `${m.label} (${m.model})` : m.model}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+                {/* If the use-case's stored default_model isn't in the
+                    catalog (uncatalogued or deleted), surface it as a
+                    disabled option so we never silently strip the
+                    existing value on first edit. */}
+                {editing.default_provider !== 'auto' &&
+                  editing.default_model &&
+                  !catalog.some(
+                    (m) => m.provider === editing.default_provider && m.model === editing.default_model,
+                  ) && (
+                    <option
+                      value={`${editing.default_provider}:${editing.default_model}`}
+                    >
+                      {editing.default_provider}:{editing.default_model} (uncatalogued)
+                    </option>
+                  )}
+              </select>
+              {editing.default_provider !== 'auto' &&
+                editing.default_model &&
+                !catalogByModel.has(editing.default_model) && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    This model is not in the catalog. Add it via the AI models page so
+                    pricing + capabilities resolve correctly.
+                  </p>
+                )}
+            </Field>
+            <Field label="Allowed models">
+              <div className="space-y-3 border rounded-md p-3 bg-neutral-50/40 max-h-64 overflow-y-auto">
+                {catalog.length === 0 ? (
+                  <p className="text-xs text-neutral-500">
+                    No models in the catalog yet — add some via the AI models page.
+                  </p>
+                ) : (
+                  Array.from(catalogByProvider.entries()).map(([provider, models]) => (
+                    <div key={provider}>
+                      <div className="text-xs font-medium text-neutral-600 capitalize mb-1">
+                        {provider}
+                      </div>
+                      <div className="grid grid-cols-1 gap-1">
+                        {models.map((m) => {
+                          const checked = editing.allowed_models.includes(m.model);
+                          return (
+                            <label key={m.model} className="inline-flex items-start gap-2 text-xs">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={checked}
+                                onChange={(e) => {
+                                  const next = e.target.checked
+                                    ? [...editing.allowed_models, m.model]
+                                    : editing.allowed_models.filter((x) => x !== m.model);
+                                  setEditing({ ...editing, allowed_models: next });
+                                }}
+                              />
+                              <span>
+                                <span className="font-mono">{m.model}</span>
+                                {m.label && <span className="text-neutral-500"> — {m.label}</span>}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))
+                )}
+                {/* Surface allowed models that aren't in the catalog
+                    (uncatalogued / removed) so they can be toggled off
+                    without re-typing. */}
+                {editing.allowed_models.filter((m) => !catalogByModel.has(m)).length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-amber-700 mb-1">
+                      Uncatalogued
+                    </div>
+                    <div className="grid grid-cols-1 gap-1">
+                      {editing.allowed_models
+                        .filter((m) => !catalogByModel.has(m))
+                        .map((m) => (
+                          <label key={m} className="inline-flex items-start gap-2 text-xs">
+                            <input
+                              type="checkbox"
+                              className="mt-0.5"
+                              checked
+                              onChange={() =>
+                                setEditing({
+                                  ...editing,
+                                  allowed_models: editing.allowed_models.filter((x) => x !== m),
+                                })
+                              }
+                            />
+                            <span className="font-mono">{m}</span>
+                          </label>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-neutral-500 mt-1">
+                Order reflects selection sequence — the router walks this list when
+                default_provider is Auto, or as fallback if the default model is
+                unavailable.
+              </p>
             </Field>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Max output tokens">
@@ -219,6 +349,61 @@ export default function AiUseCasesAdmin() {
                 />
               </Field>
             </div>
+            <Field label="Skill (overrides system prompt below when set)">
+              <select
+                className="form-input w-full"
+                value={
+                  editing.skill_source_id && editing.skill_path
+                    ? `${editing.skill_source_id}:${editing.skill_path}`
+                    : ''
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) {
+                    setEditing({ ...editing, skill_source_id: null, skill_path: null });
+                    return;
+                  }
+                  const sep = v.indexOf(':');
+                  setEditing({
+                    ...editing,
+                    skill_source_id: v.slice(0, sep),
+                    skill_path: v.slice(sep + 1),
+                  });
+                }}
+              >
+                <option value="">— None (use inline system prompt) —</option>
+                {skills.map((s) => (
+                  <option key={s.id} value={`${s.source_id}:${s.path}`}>
+                    {s.source_label} / {s.name} ({s.path})
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-neutral-500 mt-1">
+                Skills are managed in the <strong>Skill sources</strong> tab on
+                this page (git repos of markdown files). Bind one here to use
+                its body as the system prompt at runtime; the inline prompt
+                below is the fallback when no skill is bound or the skill row
+                is missing.
+              </p>
+            </Field>
+            <Field label="System prompt (inline fallback)">
+              <textarea
+                className="form-input w-full font-mono text-xs"
+                rows={6}
+                value={editing.system_prompt}
+                onChange={(e) => setEditing({ ...editing, system_prompt: e.target.value })}
+                placeholder="The instructions the model receives on every turn. Editorial guidelines, output format requirements, persona, etc."
+              />
+            </Field>
+            <Field label="Kickoff message (initial user turn for Run Research / Run on all tabs)">
+              <textarea
+                className="form-input w-full text-xs"
+                rows={3}
+                value={editing.kickoff_message}
+                onChange={(e) => setEditing({ ...editing, kickoff_message: e.target.value })}
+                placeholder="Leave blank to start with no user message — the system prompt alone drives the model. Otherwise this is the first user turn sent when the operator clicks Run Research."
+              />
+            </Field>
             <Field label="Allowed web tools">
               <div className="flex gap-3 text-sm">
                 {(['web_search', 'fetch_url'] as const).map((tool) => (

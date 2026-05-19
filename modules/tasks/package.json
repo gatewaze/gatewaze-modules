@@ -1,0 +1,35 @@
+{
+  "name": "@gatewaze-modules/tasks",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Asana-style task management with tree/kanban/calendar views and cross-module linking",
+  "exports": {
+    ".": "./index.ts",
+    "./admin/*": "./admin/*",
+    "./migrations/*": "./migrations/*",
+    "./lib/*": "./lib/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "express": "^4.21.0",
+    "isomorphic-dompurify": "^3.0.0-rc.2",
+    "marked": "^14.1.0",
+    "react": "^18.3.0",
+    "vitest": "^4.0.0",
+    "zod": "^3.23.0"
+  }
+}
