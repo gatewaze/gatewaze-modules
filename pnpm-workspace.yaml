@@ -1,2 +1,6 @@
 packages:
   - 'modules/*'
+  # Sibling-repo packages that this workspace's modules depend on
+  # (workspace:* references to @gatewaze/shared etc.). Same pattern
+  # already in use in premium-gatewaze-modules/pnpm-workspace.yaml.
+  - '../gatewaze/packages/*'

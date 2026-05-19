@@ -416,7 +416,7 @@ function PersonaEditorModal({
       </div>
 
       <div className="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-(--gray-5)">
-        <Button variant="ghost" onClick={onClose} disabled={saving}>
+        <Button variant="outline" onClick={onClose} disabled={saving}>
           Cancel
         </Button>
         <Button color="primary" onClick={handleSave} disabled={saving || !!nameError || !!labelError}>

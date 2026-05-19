@@ -83,6 +83,11 @@ export interface RunConversationResult {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  /**
+   * Anthropic cache-creation tokens (the 1.25× premium tier). Only
+   * populated by the anthropic provider; openai/gemini return 0.
+   */
+  cacheCreationTokens: number;
 
   durationMs: number;
   model: string;        // echo of the resolved model id
@@ -110,6 +115,13 @@ export interface GenerateImageOpts {
   prompt: string;
   model: string;
   aspectRatio?: '16:9' | '1:1' | '4:3' | '9:16';
+  /**
+   * Reference images sent to the provider as visual conditioning.
+   * Providers that support image inputs (currently Gemini 2.5 Flash
+   * Image / "Nano Banana") prepend these as `inlineData` parts before
+   * the text prompt. Providers that don't ignore the field.
+   */
+  referenceImages?: Array<{ mimeType: string; base64: string }>;
 }
 
 export interface GenerateImageResult {
