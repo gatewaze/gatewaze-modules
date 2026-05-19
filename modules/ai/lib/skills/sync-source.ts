@@ -32,7 +32,7 @@ import {
   gitFetchHard,
   gitRevParseHead,
 } from './git-client.js';
-import { parseSkillFile, type ParsedSkill } from './frontmatter.js';
+import { parseSkill, type ParsedSkill, type UnsupportedFeature } from './parse-skill.js';
 import { skillsConfig } from './skills-config.js';
 import { decryptSecret } from './secret-shim.js';
 
@@ -179,10 +179,12 @@ export async function syncSource(args: SyncSourceArgs): Promise<SyncSourceResult
       };
     }
 
-    // 8. Walk for .md files. Symlink-resolved paths are re-checked
-    //    against the cache dir to defeat symlink-out-of-tree attacks.
+    // 8. Walk for SKILL.md directories. Per spec-ai-workflows-and-
+    //    skill-interop.md §3.2: a skill is a *directory* containing
+    //    SKILL.md, not a loose .md file. Sibling files in the
+    //    directory become inert resource-path metadata.
     const cap = skillsConfig.maxSkillsPerSource;
-    const walked = walkMarkdown({
+    const walked = walkSkillDirectories({
       walkRoot,
       cacheDir,
       cap,
@@ -190,64 +192,61 @@ export async function syncSource(args: SyncSourceArgs): Promise<SyncSourceResult
     });
 
     if (walked.hitCap) {
-      warnings.push(`file_count_cap_hit: ${cap} files indexed; remaining skipped`);
+      warnings.push(`skill_count_cap_hit: ${cap} skills indexed; remaining skipped`);
     }
 
     // 9. Read + parse + upsert each.
-    const seenPaths = new Set<string>();
+    const seenDirPaths = new Set<string>();
     let filesIndexed = 0;
     let filesSkipped = 0;
 
-    for (const absPath of walked.files) {
-      const relPath = relative(cacheDir, absPath); // path relative to repo root
-      seenPaths.add(relPath);
+    for (const skill of walked.skills) {
+      const dirPath = relative(cacheDir, skill.dirAbsPath); // path relative to repo root
+      seenDirPaths.add(dirPath);
 
-      const sizeBytes = statSync(absPath).size;
+      const skillMdAbs = join(skill.dirAbsPath, 'SKILL.md');
+      const sizeBytes = statSync(skillMdAbs).size;
       if (sizeBytes > skillsConfig.skillBodyMaxBytes) {
-        warnings.push(`file_too_large: ${relPath} (${sizeBytes} > ${skillsConfig.skillBodyMaxBytes})`);
+        warnings.push(`file_too_large: ${dirPath}/SKILL.md (${sizeBytes} > ${skillsConfig.skillBodyMaxBytes})`);
         filesSkipped += 1;
         continue;
       }
 
       let raw: string;
       try {
-        raw = readFileSync(absPath, 'utf-8');
+        raw = readFileSync(skillMdAbs, 'utf-8');
       } catch (err) {
-        warnings.push(`read_failed: ${relPath}: ${err instanceof Error ? err.message : String(err)}`);
+        warnings.push(`read_failed: ${dirPath}/SKILL.md: ${err instanceof Error ? err.message : String(err)}`);
         filesSkipped += 1;
         continue;
       }
 
-      const parsed = parseSkillFile(relPath, raw);
-      if (!parsed.ok) {
-        warnings.push(`parse_failed: ${relPath}: ${parsed.reason}`);
-        filesSkipped += 1;
-        continue;
-      }
+      const parsed = parseSkill(skill.dirAbsPath, raw, skill.siblingFiles);
 
-      // Resolve + validate the optional reference image. Failures are
-      // logged as warnings but never abort the skill row — the skill
-      // is still usable for text, just without image conditioning.
-      const refImage = parsed.skill.reference_image_path
-        ? readReferenceImage({
-            cacheDir,
-            mdAbsPath: absPath,
-            relativePath: parsed.skill.reference_image_path,
-            onWarn: (msg) => warnings.push(`${relPath}: ${msg}`),
-          })
-        : null;
-
-      const ups = await upsertSkill(args.supabase, source.id, relPath, headSha, parsed.skill, refImage);
+      // The new schema persists refused / parse_error skills too — the
+      // operator UI surfaces them with a status badge so authors can
+      // see what failed. The body is stored regardless so the admin
+      // can inspect the offending content.
+      const ups = await upsertSkill(args.supabase, source.id, dirPath, headSha, parsed, raw, skill.siblingFiles);
       if (!ups.ok) {
-        warnings.push(`upsert_failed: ${relPath}: ${ups.reason}`);
+        warnings.push(`upsert_failed: ${dirPath}: ${ups.reason}`);
         filesSkipped += 1;
         continue;
       }
-      filesIndexed += 1;
+      if (parsed.ok) {
+        filesIndexed += 1;
+        for (const w of parsed.warnings) warnings.push(`${dirPath}: ${w}`);
+      } else if (parsed.reason === 'refused') {
+        warnings.push(`${dirPath}: refused (${parsed.refusal.map((r) => r.feature).join(', ')})`);
+        filesSkipped += 1;
+      } else {
+        warnings.push(`${dirPath}: parse_error: ${parsed.message}`);
+        filesSkipped += 1;
+      }
     }
 
-    // 10. Delete stale rows (files removed from the repo since last sync).
-    await deleteStaleRows(args.supabase, source.id, Array.from(seenPaths));
+    // 10. Delete stale rows (skill dirs removed from the repo since last sync).
+    await deleteStaleRows(args.supabase, source.id, Array.from(seenDirPaths));
 
     // 11. Release lock with success.
     await releaseLock(args.supabase, source.id, headSha, null);
@@ -299,18 +298,39 @@ function isPathPrefixSafe(p: string): boolean {
   return PATH_PREFIX_SAFE_RE.test(p);
 }
 
+interface SkillDirEntry {
+  /** Absolute filesystem path of the directory containing SKILL.md. */
+  dirAbsPath: string;
+  /**
+   * Relative filenames inside the skill directory, excluding SKILL.md.
+   * Persisted as inert `resources` metadata on the skill row.
+   */
+  siblingFiles: string[];
+}
+
 interface WalkResult {
-  files: string[];
+  skills: SkillDirEntry[];
   hitCap: boolean;
 }
 
-function walkMarkdown(args: {
+/**
+ * Walk for directories that contain `SKILL.md`. Per spec §3.2:
+ *   - When a directory contains SKILL.md, the directory is one skill.
+ *     The walk does NOT descend further (a skill cannot contain a
+ *     nested skill).
+ *   - Sibling files are recorded as resource paths on the row.
+ *   - Directories that don't contain SKILL.md are walked recursively.
+ *   - Loose `.md` files (no SKILL.md sibling) are ignored.
+ *   - Symlink escapes from the cache dir are refused (mirrors the
+ *     prior implementation's defence-in-depth).
+ */
+function walkSkillDirectories(args: {
   walkRoot: string;
   cacheDir: string;
   cap: number;
   onSymlinkEscape: (path: string) => void;
 }): WalkResult {
-  const out: string[] = [];
+  const out: SkillDirEntry[] = [];
   const stack: string[] = [args.walkRoot];
   let hitCap = false;
 
@@ -322,36 +342,87 @@ function walkMarkdown(args: {
     } catch {
       continue;
     }
-    // Stable order: lex sort by name so the cap behaviour is
-    // deterministic across runs.
     entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      // Skip hidden dirs (.git/, .gitignore, etc.).
-      if (entry.name.startsWith('.')) continue;
-      const abs = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(abs);
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        // realpath re-resolution to defeat symlink-out-of-tree.
-        let real: string;
-        try {
-          real = realpathSync(abs);
-        } catch {
-          continue;
-        }
-        if (!real.startsWith(args.cacheDir + sep) && real !== args.cacheDir) {
-          args.onSymlinkEscape(abs);
-          continue;
-        }
-        out.push(abs);
-        if (out.length >= args.cap) {
-          hitCap = true;
-          return { files: out, hitCap };
-        }
+
+    // First pass: does THIS directory contain SKILL.md?
+    const hasSkillMd = entries.some(
+      (e) => e.isFile() && e.name === 'SKILL.md',
+    );
+
+    if (hasSkillMd) {
+      // Symlink check on the directory itself.
+      let real: string;
+      try {
+        real = realpathSync(dir);
+      } catch {
+        continue;
       }
+      if (!real.startsWith(args.cacheDir + sep) && real !== args.cacheDir) {
+        args.onSymlinkEscape(dir);
+        continue;
+      }
+
+      // Collect siblings recursively under the skill dir. Paths are
+      // recorded relative to the skill dir so the admin UI can
+      // display them as a tree. We DO descend through child dirs
+      // under the skill (e.g., references/, scripts/, assets/) to
+      // record their files — they're inert metadata in v1.
+      const siblingFiles: string[] = [];
+      collectSiblingFiles(dir, dir, siblingFiles, args.cacheDir, args.onSymlinkEscape);
+      out.push({ dirAbsPath: dir, siblingFiles });
+      if (out.length >= args.cap) {
+        hitCap = true;
+        return { skills: out, hitCap };
+      }
+      // Do not descend further — spec invariant: no nested skills.
+      continue;
+    }
+
+    // Recurse into subdirs.
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      if (!entry.isDirectory()) continue;
+      stack.push(join(dir, entry.name));
     }
   }
-  return { files: out, hitCap };
+  return { skills: out, hitCap };
+}
+
+function collectSiblingFiles(
+  base: string,
+  current: string,
+  out: string[],
+  cacheDir: string,
+  onSymlinkEscape: (path: string) => void,
+): void {
+  let entries;
+  try {
+    entries = readdirSync(current, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const abs = join(current, entry.name);
+    if (entry.isDirectory()) {
+      collectSiblingFiles(base, abs, out, cacheDir, onSymlinkEscape);
+    } else if (entry.isFile()) {
+      let real: string;
+      try {
+        real = realpathSync(abs);
+      } catch {
+        continue;
+      }
+      if (!real.startsWith(cacheDir + sep) && real !== cacheDir) {
+        onSymlinkEscape(abs);
+        continue;
+      }
+      const rel = relative(base, abs);
+      if (rel === 'SKILL.md') continue;
+      out.push(rel);
+    }
+  }
 }
 
 interface ResolvedReferenceImage {
@@ -465,39 +536,99 @@ function sniffImageMime(bytes: Buffer, path: string): string | null {
   return null;
 }
 
+/**
+ * Upsert a parsed skill (or the row representing a refused / parse-
+ * errored skill) into the new ai_skills schema. We always persist a
+ * row so the operator UI can show what failed and why — the body is
+ * available for inspection regardless of parse status.
+ *
+ * For refused / parse_error rows we still need values for the NOT NULL
+ * columns (name, description, body, content_hash). We derive sane
+ * fallbacks from the directory basename + raw body so the DB invariants
+ * hold without losing the diagnostic value. The CHECK constraint
+ * `ai_skills_name_grammar` and `ai_skills_name_matches_dir` are enforced
+ * even on parse_error rows, so the fallback name MUST match. We use
+ * `basename(dirPath)` as the fallback.
+ */
 async function upsertSkill(
   supabase: SupabaseLike,
   sourceId: string,
-  path: string,
+  dirPath: string,
   commitSha: string,
-  skill: ParsedSkill,
-  refImage: ResolvedReferenceImage | null,
+  parsed: import('./parse-skill.js').ParseSkillResult,
+  rawBody: string,
+  siblingFiles: string[],
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
+    const dirBase = dirPath.split('/').pop() ?? dirPath;
+    // The DB CHECK constraint enforces the name grammar. If the
+    // directory basename doesn't match the regex we can't write a row
+    // — skip rather than crash the entire sync.
+    const NAME_REGEX = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+    if (!NAME_REGEX.test(dirBase)) {
+      return {
+        ok: false,
+        reason: `dir_basename_invalid: '${dirBase}' must match ^[a-z][a-z0-9]*(-[a-z0-9]+)*$`,
+      };
+    }
+
+    let row: Record<string, unknown>;
+    if (parsed.ok) {
+      row = {
+        source_id: sourceId,
+        name: parsed.skill.name,
+        dir_path: dirPath,
+        description: parsed.skill.description,
+        metadata: parsed.skill.metadata,
+        resources: parsed.skill.resources,
+        body: parsed.skill.body,
+        body_chars: parsed.skill.body_chars,
+        content_hash: parsed.skill.content_hash,
+        parse_status: 'ok',
+        unsupported_features: [],
+        parse_warnings: parsed.warnings,
+        last_commit_sha: commitSha,
+        updated_at: new Date().toISOString(),
+      };
+    } else if (parsed.reason === 'refused') {
+      row = {
+        source_id: sourceId,
+        name: dirBase,
+        dir_path: dirPath,
+        description: '(refused)',
+        metadata: {},
+        resources: siblingFiles,
+        body: rawBody,
+        body_chars: rawBody.length,
+        content_hash: '',
+        parse_status: 'refused',
+        unsupported_features: parsed.refusal,
+        parse_warnings: [],
+        last_commit_sha: commitSha,
+        updated_at: new Date().toISOString(),
+      };
+    } else {
+      row = {
+        source_id: sourceId,
+        name: dirBase,
+        dir_path: dirPath,
+        description: '(parse error)',
+        metadata: {},
+        resources: siblingFiles,
+        body: rawBody,
+        body_chars: rawBody.length,
+        content_hash: '',
+        parse_status: 'parse_error',
+        unsupported_features: [],
+        parse_warnings: [parsed.message],
+        last_commit_sha: commitSha,
+        updated_at: new Date().toISOString(),
+      };
+    }
+
     const res = await supabase
       .from('ai_skills')
-      .upsert(
-        {
-          source_id: sourceId,
-          path,
-          name: skill.name,
-          description: skill.description,
-          tags: skill.tags,
-          applies_to: skill.applies_to,
-          body: skill.body,
-          body_chars: skill.body_chars,
-          content_hash: skill.content_hash,
-          last_commit_sha: commitSha,
-          updated_at: new Date().toISOString(),
-          // Postgrest serialises bytea via `\x<hex>` literals. We pass
-          // a hex string the driver will route to the bytea column.
-          // Both fields are set together or both cleared, matching the
-          // ai_skills_reference_image_both_or_neither check constraint.
-          reference_image_bytes: refImage ? '\\x' + refImage.bytes.toString('hex') : null,
-          reference_image_mime: refImage ? refImage.mime : null,
-        },
-        { onConflict: 'source_id,path' },
-      )
+      .upsert(row, { onConflict: 'source_id,dir_path' })
       .select('id')
       .maybeSingle();
     if (res?.error) return { ok: false, reason: String(res.error.message ?? res.error) };
@@ -507,21 +638,20 @@ async function upsertSkill(
   }
 }
 
-async function deleteStaleRows(supabase: SupabaseLike, sourceId: string, livePaths: string[]): Promise<void> {
+async function deleteStaleRows(supabase: SupabaseLike, sourceId: string, liveDirPaths: string[]): Promise<void> {
   // Postgrest doesn't have a clean "NOT IN with empty list" — handle
-  // both cases. When the repo has zero md files, delete every row for
+  // both cases. When the repo has zero skill dirs, delete every row for
   // this source. When it has some, NOT-IN them.
-  if (livePaths.length === 0) {
+  if (liveDirPaths.length === 0) {
     await supabase.from('ai_skills').delete().eq('source_id', sourceId);
     return;
   }
-  // Postgrest serialises strings via comma-joined CSV with quoting.
-  const csv = livePaths.map((p) => `"${p.replace(/"/g, '\\"')}"`).join(',');
+  const csv = liveDirPaths.map((p) => `"${p.replace(/"/g, '\\"')}"`).join(',');
   await supabase
     .from('ai_skills')
     .delete()
     .eq('source_id', sourceId)
-    .not('path', 'in', `(${csv})`);
+    .not('dir_path', 'in', `(${csv})`);
 }
 
 async function deleteAllForSource(supabase: SupabaseLike, sourceId: string): Promise<void> {

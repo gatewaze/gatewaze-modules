@@ -42,6 +42,10 @@ const aiModule: GatewazeModule = {
     'migrations/009_ai_skills.sql',
     'migrations/010_ai_seed_web_search.sql',
     'migrations/011_ai_cache_creation_tracking.sql',
+    'migrations/012_ai_gatewaze_search.sql',
+    'migrations/013_ai_skills_agentskills_io.sql',
+    'migrations/014_ai_recipes.sql',
+    'migrations/015_ai_recipes_version_prompt.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due skill sources every 5
@@ -53,6 +57,13 @@ const aiModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '*/5 * * * *' },
       data: { kind: 'ai.sync-skill-sources' },
+    },
+    // Recipe sync mirrors the skill cadence (spec-ai-workflows §4.12).
+    {
+      name: 'ai:sync-recipe-sources',
+      queue: 'jobs',
+      schedule: { pattern: '*/5 * * * *' },
+      data: { kind: 'ai.sync-recipe-sources' },
     },
   ],
 
@@ -68,6 +79,14 @@ const aiModule: GatewazeModule = {
     {
       name: 'ai.sync-one-skill-source',
       handler: 'workers/sync-one-skill-source.js',
+    },
+    {
+      name: 'ai.sync-recipe-sources',
+      handler: 'workers/sync-recipe-sources.js',
+    },
+    {
+      name: 'ai.sync-one-recipe-source',
+      handler: 'workers/sync-one-recipe-source.js',
     },
   ],
 
@@ -121,6 +140,12 @@ const aiModule: GatewazeModule = {
     },
     {
       path: 'ai/skill-sources',
+      component: () => import('./admin/components/AiDashboard'),
+      requiredFeature: 'ai.usage.read',
+      guard: 'admin',
+    },
+    {
+      path: 'ai/recipes',
       component: () => import('./admin/components/AiDashboard'),
       requiredFeature: 'ai.usage.read',
       guard: 'admin',

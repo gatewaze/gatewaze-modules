@@ -39,6 +39,7 @@ type Draft = {
   input_per_million_usd: string;
   output_per_million_usd: string;
   cached_per_million_usd: string;
+  cache_creation_per_million_usd: string;
   image_per_image_usd: string;
   supports_chat: boolean;
   supports_tools: boolean;
@@ -56,6 +57,7 @@ function blankDraft(provider: AiCatalogModel['provider'] = 'anthropic'): Draft {
     input_per_million_usd: '0',
     output_per_million_usd: '0',
     cached_per_million_usd: '',
+    cache_creation_per_million_usd: '',
     image_per_image_usd: '',
     supports_chat: true,
     supports_tools: false,
@@ -74,6 +76,10 @@ function fromRow(row: AiCatalogModel): Draft {
     input_per_million_usd: String(row.input_per_million_usd ?? 0),
     output_per_million_usd: String(row.output_per_million_usd ?? 0),
     cached_per_million_usd: row.cached_per_million_usd == null ? '' : String(row.cached_per_million_usd),
+    cache_creation_per_million_usd:
+      row.cache_creation_per_million_usd == null
+        ? ''
+        : String(row.cache_creation_per_million_usd),
     image_per_image_usd: row.image_per_image_usd == null ? '' : String(row.image_per_image_usd),
     supports_chat: row.supports_chat,
     supports_tools: row.supports_tools,
@@ -124,6 +130,7 @@ export default function AiModelsAdmin() {
       input_per_million_usd: Number(draft.input_per_million_usd) || 0,
       output_per_million_usd: Number(draft.output_per_million_usd) || 0,
       cached_per_million_usd: parseOptionalNumber(draft.cached_per_million_usd),
+      cache_creation_per_million_usd: parseOptionalNumber(draft.cache_creation_per_million_usd),
       image_per_image_usd: parseOptionalNumber(draft.image_per_image_usd),
       supports_chat: draft.supports_chat,
       supports_tools: draft.supports_tools,
@@ -329,7 +336,7 @@ export default function AiModelsAdmin() {
               </Field>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Cached $ per 1M (optional)">
+              <Field label="Cache-read $ per 1M (optional)">
                 <input
                   type="number"
                   step="0.0001"
@@ -339,17 +346,27 @@ export default function AiModelsAdmin() {
                   placeholder="blank if no cache discount"
                 />
               </Field>
-              <Field label="Image $ per image (optional)">
+              <Field label="Cache-creation $ per 1M (optional)">
                 <input
                   type="number"
-                  step="0.000001"
+                  step="0.0001"
                   className="form-input w-full font-mono text-xs"
-                  value={draft.image_per_image_usd}
-                  onChange={(e) => setDraft({ ...draft, image_per_image_usd: e.target.value })}
-                  placeholder="for image-gen models"
+                  value={draft.cache_creation_per_million_usd}
+                  onChange={(e) => setDraft({ ...draft, cache_creation_per_million_usd: e.target.value })}
+                  placeholder="Anthropic ≈ 1.25× input rate"
                 />
               </Field>
             </div>
+            <Field label="Image $ per image (optional)">
+              <input
+                type="number"
+                step="0.000001"
+                className="form-input w-full font-mono text-xs"
+                value={draft.image_per_image_usd}
+                onChange={(e) => setDraft({ ...draft, image_per_image_usd: e.target.value })}
+                placeholder="for image-gen models"
+              />
+            </Field>
             <Field label="Capabilities">
               <div className="flex flex-wrap gap-3 text-sm">
                 {(

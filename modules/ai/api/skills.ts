@@ -74,10 +74,15 @@ export function mountSkillsRoutes(router: Router, deps: Deps): void {
     if (typeof req.query.source_id === 'string' && req.query.source_id.length > 0) {
       filter.source_id = req.query.source_id;
     }
-    const appliesTo = parseCsvList(req.query.applies_to);
-    if (appliesTo && appliesTo.length > 0) filter.applies_to = appliesTo;
-    const tags = parseCsvList(req.query.tag);
-    if (tags && tags.length > 0) filter.tag = tags;
+    // ?parse_status=all surfaces refused / parse_error rows for the
+    // admin UI's diagnostics tab. Default is 'ok' (picker semantics).
+    if (
+      req.query.parse_status === 'all' ||
+      req.query.parse_status === 'refused' ||
+      req.query.parse_status === 'parse_error'
+    ) {
+      filter.parse_status = req.query.parse_status;
+    }
 
     try {
       const skills = await listSkills(deps.supabase, filter);

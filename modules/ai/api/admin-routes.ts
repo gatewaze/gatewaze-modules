@@ -23,6 +23,8 @@ import type { Request, Response, Router } from 'express';
 import { runChat } from '../lib/runner.js';
 import type { KnownProvider } from '../lib/providers/types.js';
 import { sumSpentMicroUsd } from '../lib/cost.js';
+import { parseRecipe, type ParsedRecipe } from '../lib/recipes/parse-recipe.js';
+import { runRecipe } from '../lib/recipes/run-recipe.js';
 import { resolveUseCasePrompt } from '../lib/use-case-prompt.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -65,6 +67,8 @@ export interface AdminAiRoutesDeps {
   };
   /** Resolves fetch_url for use-cases that enable it. */
   resolveFetchUrl?: Parameters<typeof runChat>[0]['resolveFetchUrl'];
+  /** Resolves gatewaze_search for use-cases that enable it. */
+  resolveGatewazeSearch?: Parameters<typeof runChat>[0]['resolveGatewazeSearch'];
 }
 
 function paramAs(v: unknown): string | undefined {
@@ -349,7 +353,12 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       );
 
       const result = await runChat(
-        { supabase, logger, resolveFetchUrl: deps.resolveFetchUrl },
+        {
+          supabase,
+          logger,
+          resolveFetchUrl: deps.resolveFetchUrl,
+          resolveGatewazeSearch: deps.resolveGatewazeSearch,
+        },
         {
           useCase: args.threadRow.use_case,
           userId: args.threadRow.created_by,
@@ -542,6 +551,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     'input_per_million_usd',
     'output_per_million_usd',
     'cached_per_million_usd',
+    'cache_creation_per_million_usd',
     'image_per_image_usd',
     'supports_chat',
     'supports_tools',
@@ -821,6 +831,180 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     res.status(200).json({ events: result.data ?? [], limit, offset });
   }
 
+  // ── Recipes ───────────────────────────────────────────────────────────
+  //
+  // Per spec-ai-workflows-and-skill-interop.md §5. v1 ships the
+  // execution surface (POST /recipes/run-inline + GET /recipe-runs/:id
+  // + DELETE /recipe-runs/:id). The CRUD-over-ai_recipes endpoints
+  // and the recipe-sync worker are next-pass work — at that point a
+  // `POST /recipes/:id/run` endpoint replaces `run-inline`.
+  //
+  // The inline path accepts a YAML body so authors can paste a Goose
+  // recipe straight from their editor without wiring up a git source
+  // first. It's the same code path runRecipe() will take when called
+  // from the sync-driven endpoint, so smoke tests cover both.
+
+  async function runRecipeInline(req: Request, res: Response): Promise<void> {
+    const body = (req.body as Record<string, unknown> | undefined) ?? {};
+    const yaml = typeof body.yaml === 'string' ? body.yaml : '';
+    const useCase = typeof body.use_case === 'string' ? body.use_case : '';
+    const params = (body.params && typeof body.params === 'object'
+      ? (body.params as Record<string, unknown>)
+      : {}) as Record<string, never>;
+    const pathPrefix = typeof body.path_prefix === 'string' ? body.path_prefix : '';
+    const userId = typeof body.user_id === 'string' && UUID_RE.test(body.user_id)
+      ? body.user_id
+      : null;
+    if (!yaml) {
+      sendError(res, 400, 'bad_request', 'body.yaml required');
+      return;
+    }
+    if (!USE_CASE_ID_RE.test(useCase)) {
+      sendError(res, 400, 'bad_request', 'body.use_case (slug) required');
+      return;
+    }
+
+    const parsed = parseRecipe('inline.yaml', yaml, {
+      sourceId: 'inline',
+      pathPrefix,
+    });
+    if (!parsed.ok) {
+      sendError(res, 400, parsed.reason, JSON.stringify({
+        message: parsed.reason === 'parse_error' ? parsed.message : 'tier-3 refused',
+        refusal: parsed.reason === 'refused' ? parsed.refusal : undefined,
+        partial: parsed.partial,
+      }));
+      return;
+    }
+
+    // Sub-recipes can't resolve in inline mode (no source registry).
+    // If the recipe declares any, refuse — author needs the sync
+    // worker path.
+    if (parsed.recipe.sub_recipes.length > 0) {
+      sendError(
+        res,
+        400,
+        'unsupported',
+        'inline runs do not support sub_recipes — register the source via /recipe-sources first',
+      );
+      return;
+    }
+
+    try {
+      const result = await runRecipe(
+        supabase as never,
+        { supabase, logger, resolveFetchUrl: deps.resolveFetchUrl },
+        {
+          recipe: parsed.recipe,
+          subRecipes: new Map<string, ParsedRecipe>(),
+          params: params as never,
+          userId,
+          useCase,
+        },
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      sendError(res, 500, 'internal', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function getRecipeRun(req: Request, res: Response): Promise<void> {
+    const id = paramAs(req.params.id);
+    if (!id || !UUID_RE.test(id)) {
+      sendError(res, 400, 'bad_request', 'id (uuid) required');
+      return;
+    }
+    const result = await supabase
+      .from('ai_recipe_runs')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (result.error) {
+      sendError(res, 500, 'internal', result.error.message);
+      return;
+    }
+    if (!result.data) {
+      sendError(res, 404, 'not_found', 'recipe run not found');
+      return;
+    }
+    res.status(200).json({ run: result.data });
+  }
+
+  async function cancelRecipeRun(req: Request, res: Response): Promise<void> {
+    const id = paramAs(req.params.id);
+    if (!id || !UUID_RE.test(id)) {
+      sendError(res, 400, 'bad_request', 'id (uuid) required');
+      return;
+    }
+    // If running → set status='cancelled' (the executor checks this
+    // between steps). If terminal → delete the row.
+    const row = await supabase
+      .from('ai_recipe_runs')
+      .select('id, status')
+      .eq('id', id)
+      .maybeSingle();
+    if (row.error || !row.data) {
+      sendError(res, 404, 'not_found', 'recipe run not found');
+      return;
+    }
+    if (row.data.status === 'running') {
+      await supabase
+        .from('ai_recipe_runs')
+        .update({ status: 'cancelled' })
+        .eq('id', id);
+      res.status(202).json({ status: 'cancelling' });
+      return;
+    }
+    await supabase.from('ai_recipe_runs').delete().eq('id', id);
+    res.status(204).end();
+  }
+
+  /**
+   * Per-day cost breakdown for the daily-breakdown chart on the AI
+   * usage tab. Returns `[{ day, provider, cost_micro_usd, event_count }]`
+   * collapsed in JS — Supabase's PostgREST doesn't have a GROUP BY
+   * primitive so we pull rows and aggregate in-process. Volume is bounded
+   * by the dashboard's date filter (typically ≤ a month).
+   */
+  async function usageDaily(req: Request, res: Response): Promise<void> {
+    const fromIso = paramAs(req.query['from']) ?? startOfThisMonthIso();
+    const toIso = paramAs(req.query['to']) ?? new Date().toISOString();
+    const result = await supabase
+      .from('ai_usage_events')
+      .select('occurred_at, provider, cost_micro_usd')
+      .gte('occurred_at', fromIso)
+      .lte('occurred_at', toIso);
+    if (result.error) {
+      sendError(res, 500, 'internal', result.error.message);
+      return;
+    }
+    const rows = (result.data ?? []) as Array<{
+      occurred_at: string;
+      provider: string;
+      cost_micro_usd: number | string;
+    }>;
+    // Bucket by (day, provider). Day = UTC YYYY-MM-DD slice of the ISO
+    // timestamp — keeps the chart aligned with Anthropic's daily CSV.
+    const buckets = new Map<string, { cost: number; count: number }>();
+    for (const r of rows) {
+      const day = r.occurred_at.slice(0, 10);
+      const key = `${day}|${r.provider}`;
+      const cur = buckets.get(key) ?? { cost: 0, count: 0 };
+      cur.cost += typeof r.cost_micro_usd === 'number'
+        ? r.cost_micro_usd
+        : parseInt(String(r.cost_micro_usd), 10) || 0;
+      cur.count += 1;
+      buckets.set(key, cur);
+    }
+    const days: Array<{ day: string; provider: string; cost_micro_usd: number; event_count: number }> = [];
+    for (const [key, v] of buckets) {
+      const [day, provider] = key.split('|') as [string, string];
+      days.push({ day, provider, cost_micro_usd: v.cost, event_count: v.count });
+    }
+    days.sort((a, b) => (a.day === b.day ? a.provider.localeCompare(b.provider) : a.day.localeCompare(b.day)));
+    res.status(200).json({ from: fromIso, to: toIso, days });
+  }
+
   return {
     lookupThread,
     listThreadsByHost,
@@ -843,6 +1027,10 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     deleteUseCaseCredential,
     usageSummary,
     usageEvents,
+    usageDaily,
+    runRecipeInline,
+    getRecipeRun,
+    cancelRecipeRun,
   };
 }
 
@@ -877,6 +1065,13 @@ export function mountAdminAiRoutes(
 
   router.get('/admin/usage/summary', routes.usageSummary);
   router.get('/admin/usage/events', routes.usageEvents);
+  router.get('/admin/usage/daily', routes.usageDaily);
+
+  // Recipe execution (v1: inline only — no sync-driven /recipes/:id/run
+  // yet; that ships with the sync worker in the next pass).
+  router.post('/admin/recipes/run-inline', routes.runRecipeInline);
+  router.get('/admin/recipe-runs/:id', routes.getRecipeRun);
+  router.delete('/admin/recipe-runs/:id', routes.cancelRecipeRun);
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

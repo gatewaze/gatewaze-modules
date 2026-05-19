@@ -31,6 +31,8 @@ import {
 import { mountSkillSourceRoutes } from './skill-sources.js';
 import { mountSkillsRoutes } from './skills.js';
 import { mountSkillWebhookRoute } from './skill-webhook.js';
+import { mountRecipeSourceRoutes } from './recipe-sources.js';
+import { mountRecipeWebhookRoute } from './recipe-webhook.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -92,8 +94,40 @@ export function registerRoutes(app: Express, ctx?: any): void {
     );
   }
 
+  // Optional gatewaze_search resolver. Backed by Serper.dev when
+  // SERPER_API_KEY is configured, otherwise falls back to a DuckDuckGo
+  // HTML scrape via scrapling-fetcher. GATEWAZE_SEARCH_BACKEND can
+  // explicitly force 'serper' or 'ddg'.
+  const serperKey = process.env.SERPER_API_KEY ?? '';
+  const searchBackend = (process.env.GATEWAZE_SEARCH_BACKEND as
+    | 'auto'
+    | 'serper'
+    | 'ddg'
+    | undefined) ?? 'auto';
+  let resolveGatewazeSearch: ReturnType<typeof import('../lib/gatewaze-search.js').buildGatewazeSearchResolver> | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { buildGatewazeSearchResolver } = require('../lib/gatewaze-search.js');
+    resolveGatewazeSearch = buildGatewazeSearchResolver({
+      serperApiKey: serperKey || undefined,
+      backend: searchBackend,
+      scraplingFetcherUrl: scraplingUrl || undefined,
+      scraplingInternalToken: scraplingToken || undefined,
+      logger,
+    });
+    logger.info('gatewaze_search resolver ready', {
+      backend: searchBackend,
+      serper_configured: Boolean(serperKey),
+      ddg_available: Boolean(scraplingUrl && scraplingToken),
+    });
+  } catch (err) {
+    logger.warn('failed to build gatewaze_search resolver', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   const router = Router();
-  const routes = createAdminAiRoutes({ supabase, logger, resolveFetchUrl });
+  const routes = createAdminAiRoutes({ supabase, logger, resolveFetchUrl, resolveGatewazeSearch });
   mountAdminAiRoutes(router, routes);
 
   // ── Skills subsystem (moved from editor-ai-copilot, Phase 2) ──────────
@@ -134,10 +168,24 @@ export function registerRoutes(app: Express, ctx?: any): void {
     enqueueJob,
   });
   mountSkillsRoutes(skillsRouter, { supabase });
+  // Recipe sources + recipes mount under the same JWT-gated router so
+  // they share the decodeJwt middleware. The handler enforces
+  // admin_profiles membership; super-admin is only required for
+  // create/update/delete of source rows (mirrors the skills surface).
+  mountRecipeSourceRoutes(skillsRouter, {
+    supabase,
+    enqueueJob,
+    resolveFetchUrl,
+  });
 
   // Webhook receiver — separate router (no JWT decode), HMAC-authenticated.
   const webhookRouter: Router = express.Router();
   mountSkillWebhookRoute(webhookRouter, {
+    supabase,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    enqueueJob,
+  });
+  mountRecipeWebhookRoute(webhookRouter, {
     supabase,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     enqueueJob,

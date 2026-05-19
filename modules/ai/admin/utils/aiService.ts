@@ -136,6 +136,7 @@ export interface AiCatalogModel {
   input_per_million_usd: number;
   output_per_million_usd: number;
   cached_per_million_usd: number | null;
+  cache_creation_per_million_usd: number | null;
   image_per_image_usd: number | null;
   supports_chat: boolean;
   supports_tools: boolean;
@@ -149,6 +150,7 @@ export interface AiCatalogModelInput {
   input_per_million_usd?: number;
   output_per_million_usd?: number;
   cached_per_million_usd?: number | null;
+  cache_creation_per_million_usd?: number | null;
   image_per_image_usd?: number | null;
   supports_chat?: boolean;
   supports_tools?: boolean;
@@ -482,6 +484,25 @@ export async function listUsageEvents(opts?: {
   if (opts?.limit) qs.set('limit', String(opts.limit));
   if (opts?.offset) qs.set('offset', String(opts.offset));
   const res = await authedFetch(`/api/modules/ai/admin/usage/events${qs.toString() ? '?' + qs : ''}`);
+  return jsonOrThrow(res);
+}
+
+export interface AiUsageDailyRow {
+  day: string;          // 'YYYY-MM-DD' UTC
+  provider: string;     // 'anthropic' | 'openai' | 'gemini' | 'scrapling'
+  cost_micro_usd: number;
+  event_count: number;
+}
+
+export async function getUsageDaily(opts?: { from?: string; to?: string }): Promise<{
+  from: string;
+  to: string;
+  days: AiUsageDailyRow[];
+}> {
+  const qs = new URLSearchParams();
+  if (opts?.from) qs.set('from', opts.from);
+  if (opts?.to) qs.set('to', opts.to);
+  const res = await authedFetch(`/api/modules/ai/admin/usage/daily${qs.toString() ? '?' + qs : ''}`);
   return jsonOrThrow(res);
 }
 

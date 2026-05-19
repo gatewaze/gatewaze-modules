@@ -9,19 +9,26 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowPathIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import ReactApexChart from 'react-apexcharts';
+import type { ApexOptions } from 'apexcharts';
 import { toast } from 'sonner';
 
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 import {
+  getUsageDaily,
   getUsageSummary,
   listUsageEvents,
   microUsdToDollars,
+  type AiUsageDailyRow,
   type AiUsageEvent,
   type AiUsageSummary,
 } from '../utils/aiService';
 
+type DateRangePreset = 'this_month' | 'last_30' | 'last_7' | 'today';
+
 interface Filter {
+  preset: DateRangePreset;
   fromIso: string;
   toIso: string;
   userId?: string;
@@ -35,14 +42,39 @@ function startOfMonthIso(): string {
   return d.toISOString();
 }
 
+function startOfTodayIso(): string {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+function daysAgoIso(n: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - n);
+  d.setUTCHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
 
+function rangeForPreset(preset: DateRangePreset): { fromIso: string; toIso: string } {
+  const toIso = nowIso();
+  switch (preset) {
+    case 'today':       return { fromIso: startOfTodayIso(),    toIso };
+    case 'last_7':      return { fromIso: daysAgoIso(7),         toIso };
+    case 'last_30':     return { fromIso: daysAgoIso(30),        toIso };
+    case 'this_month':
+    default:            return { fromIso: startOfMonthIso(),     toIso };
+  }
+}
+
 export default function AiUsageDashboard() {
-  const [filter, setFilter] = useState<Filter>(() => ({ fromIso: startOfMonthIso(), toIso: nowIso() }));
+  const [filter, setFilter] = useState<Filter>(() => ({ preset: 'this_month', ...rangeForPreset('this_month') }));
   const [summary, setSummary] = useState<AiUsageSummary | null>(null);
   const [events, setEvents] = useState<AiUsageEvent[]>([]);
+  const [daily, setDaily] = useState<AiUsageDailyRow[]>([]);
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingEvents, setLoadingEvents] = useState(true);
 
@@ -55,7 +87,7 @@ export default function AiUsageDashboard() {
     setLoadingSummary(true);
     setLoadingEvents(true);
     try {
-      const [s, e] = await Promise.all([
+      const [s, e, d] = await Promise.all([
         getUsageSummary({ from: filter.fromIso, to: filter.toIso }),
         listUsageEvents({
           from: filter.fromIso,
@@ -64,9 +96,11 @@ export default function AiUsageDashboard() {
           useCase: filter.useCase,
           limit: 200,
         }),
+        getUsageDaily({ from: filter.fromIso, to: filter.toIso }),
       ]);
       setSummary(s);
       setEvents(e.events);
+      setDaily(d.days);
     } catch (err) {
       console.error('[ai-usage] hydrate failed', err);
       toast.error('Failed to load usage');
@@ -75,6 +109,63 @@ export default function AiUsageDashboard() {
       setLoadingEvents(false);
     }
   }
+
+  // Daily chart: stacked bar per provider, one bar per day in the
+  // current date window. Aggregated server-side via /admin/usage/daily.
+  const dailyChart = useMemo(() => {
+    if (daily.length === 0) return null;
+    const dayOrder: string[] = [];
+    const seen = new Set<string>();
+    for (const row of daily) {
+      if (!seen.has(row.day)) {
+        seen.add(row.day);
+        dayOrder.push(row.day);
+      }
+    }
+    dayOrder.sort();
+    const providers = Array.from(new Set(daily.map((r) => r.provider))).sort();
+    const seriesByProvider = new Map<string, number[]>();
+    for (const p of providers) seriesByProvider.set(p, dayOrder.map(() => 0));
+    for (const row of daily) {
+      const idx = dayOrder.indexOf(row.day);
+      if (idx < 0) continue;
+      const arr = seriesByProvider.get(row.provider);
+      if (!arr) continue;
+      // micro-USD → USD for the chart
+      arr[idx] = (arr[idx] ?? 0) + Number(row.cost_micro_usd) / 1_000_000;
+    }
+    const series = providers.map((p) => ({
+      name: p,
+      data: (seriesByProvider.get(p) ?? []).map((n) => Number(n.toFixed(4))),
+    }));
+    const options: ApexOptions = {
+      chart: {
+        type: 'bar',
+        stacked: true,
+        toolbar: { show: false },
+        zoom: { enabled: false },
+      },
+      plotOptions: { bar: { borderRadius: 2, columnWidth: '70%' } },
+      dataLabels: { enabled: false },
+      stroke: { width: 0 },
+      xaxis: {
+        categories: dayOrder.map((d) => d.slice(5)),  // 'MM-DD' for compact display
+        labels: { style: { fontSize: '11px' } },
+      },
+      yaxis: {
+        labels: {
+          formatter: (v: number) => (v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`),
+          style: { fontSize: '11px' },
+        },
+      },
+      tooltip: {
+        y: { formatter: (v: number) => `$${v.toFixed(4)}` },
+      },
+      legend: { position: 'top', horizontalAlign: 'right', fontSize: '12px' },
+      colors: ['#a855f7', '#10b981', '#3b82f6', '#f59e0b', '#ef4444'],
+    };
+    return { options, series };
+  }, [daily]);
 
   const csvHref = useMemo(() => {
     if (events.length === 0) return null;
@@ -121,17 +212,17 @@ export default function AiUsageDashboard() {
         </p>
         <div className="flex items-center gap-2 shrink-0">
           <select
-            value={`${filter.fromIso}|${filter.toIso}`}
+            value={filter.preset}
             onChange={(e) => {
-              const [f, t] = e.target.value.split('|');
-              setFilter((prev) => ({ ...prev, fromIso: f ?? prev.fromIso, toIso: t ?? prev.toIso }));
+              const preset = e.target.value as DateRangePreset;
+              setFilter((prev) => ({ ...prev, preset, ...rangeForPreset(preset) }));
             }}
             className="form-input text-sm"
           >
-            <option value={`${startOfMonthIso()}|${nowIso()}`}>This month</option>
-            <option value={`${last30Iso()}|${nowIso()}`}>Last 30 days</option>
-            <option value={`${last7Iso()}|${nowIso()}`}>Last 7 days</option>
-            <option value={`${todayIso()}|${nowIso()}`}>Today</option>
+            <option value="this_month">This month</option>
+            <option value="last_30">Last 30 days</option>
+            <option value="last_7">Last 7 days</option>
+            <option value="today">Today</option>
           </select>
           <button
             type="button"
@@ -173,6 +264,22 @@ export default function AiUsageDashboard() {
           <div>—</div>
         )}
       </section>
+
+      {/* ── Daily breakdown chart ────────────────────────────────────── */}
+      {dailyChart && (
+        <section className="rounded-md border bg-white p-4">
+          <div className="text-xs text-neutral-500 mb-2">
+            Daily spend, stacked by provider — line up against your Anthropic /
+            OpenAI / Gemini billing dashboards row-for-row.
+          </div>
+          <ReactApexChart
+            type="bar"
+            height={240}
+            options={dailyChart.options}
+            series={dailyChart.series}
+          />
+        </section>
+      )}
 
       {/* ── Breakdowns ───────────────────────────────────────────────── */}
       {summary && !loadingSummary && (
@@ -332,22 +439,3 @@ function statusClass(status: string): string {
   }
 }
 
-function last30Iso(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - 30);
-  d.setUTCHours(0, 0, 0, 0);
-  return d.toISOString();
-}
-
-function last7Iso(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - 7);
-  d.setUTCHours(0, 0, 0, 0);
-  return d.toISOString();
-}
-
-function todayIso(): string {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d.toISOString();
-}

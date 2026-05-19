@@ -51,6 +51,17 @@ export interface RunnerContext {
     finalUrl: string;
     error?: string;
   }>;
+  /**
+   * Optional gatewaze_search resolver. Required when a use case enables
+   * the `gatewaze_search` web tool. Backed by Serper.dev or a DDG HTML
+   * scrape — see lib/gatewaze-search.ts.
+   */
+  resolveGatewazeSearch?: (query: string, maxResults: number) => Promise<{
+    ok: boolean;
+    results: Array<{ title: string; url: string; snippet: string }>;
+    backend: 'serper' | 'ddg';
+    error?: string;
+  }>;
   logger?: {
     info(msg: string, meta?: Record<string, unknown>): void;
     warn(msg: string, meta?: Record<string, unknown>): void;
@@ -72,6 +83,12 @@ export interface RunChatOpts {
   /** Per-call overrides (defaults come from the use-case row). */
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /**
+   * Extra tools the model can invoke (MCP servers, builtin: memory).
+   * Threaded down to the provider client. Anthropic honours these;
+   * OpenAI/Gemini ignore them in this commit (provider parity gap).
+   */
+  extraTools?: import('./providers/types.js').ExtraTool[];
 }
 
 export interface RunChatResult {
@@ -82,6 +99,7 @@ export interface RunChatResult {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  cacheCreationTokens: number;
   costMicroUsd: number;
   latencyMs: number;
   fetchedUrls: FetchedUrlAudit[];
@@ -92,7 +110,7 @@ interface UseCaseRow {
   id: string;
   max_output_tokens: number;
   daily_cost_cap_micro_usd: number | null;
-  allowed_web_tools: ('web_search' | 'fetch_url')[];
+  allowed_web_tools: ('web_search' | 'fetch_url' | 'gatewaze_search')[];
 }
 
 // ─── runChat ──────────────────────────────────────────────────────────────
@@ -179,6 +197,36 @@ export async function runChat(
           }
         : undefined;
 
+      // Mirror the same attribution wrap for gatewaze_search. Each
+      // invocation records a `kind='tool'` ai_usage_events row tagged
+      // with the resolved backend (serper or ddg) so the cost ledger
+      // surfaces search spend alongside fetches.
+      const wrappedGatewazeSearchResolver = ctx.resolveGatewazeSearch
+        ? async (query: string, maxResults: number) => {
+            const started = Date.now();
+            const searchResult = await ctx.resolveGatewazeSearch!(query, maxResults);
+            await recordUsage(ctx.supabase, {
+              userId: opts.userId,
+              useCase: opts.useCase,
+              threadId: opts.threadId,
+              messageId: opts.messageId,
+              kind: 'tool',
+              // The backend chosen at runtime decides the cost line.
+              // Serper is paid (~$1/1k → 1_000 micro-USD/call), DDG is
+              // free (override with 0 so the row appears but doesn't
+              // inflate spend).
+              provider: searchResult.backend === 'serper' ? 'serper' : 'scrapling',
+              model: searchResult.backend === 'serper' ? 'gatewaze_search:serper' : 'gatewaze_search:ddg',
+              costMicroUsdOverride: searchResult.backend === 'serper' ? 1_000 : 0,
+              outputTokens: searchResult.results.length,
+              latencyMs: Date.now() - started,
+              status: searchResult.ok ? 'ok' : 'error',
+              error: searchResult.error ?? null,
+            });
+            return searchResult;
+          }
+        : undefined;
+
       const result = await picked.client.runConversation({
         systemPrompt: opts.systemPrompt,
         messages: opts.messages,
@@ -189,9 +237,14 @@ export async function runChat(
         model: picked.model,
         webSearchMaxPerTurn: 6,
         fetchUrlMaxPerTurn: 8,
+        gatewazeSearchMaxPerTurn: 6,
         resolveFetchUrl: useCase.allowed_web_tools.includes('fetch_url')
           ? wrappedFetchResolver
           : undefined,
+        resolveGatewazeSearch: useCase.allowed_web_tools.includes('gatewaze_search')
+          ? wrappedGatewazeSearchResolver
+          : undefined,
+        extraTools: opts.extraTools,
       });
 
       const usage = await recordUsage(ctx.supabase, {
@@ -205,6 +258,7 @@ export async function runChat(
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         cachedTokens: result.cachedTokens,
+        cacheCreationTokens: result.cacheCreationTokens,
         latencyMs: result.durationMs,
         status: 'ok',
       });
@@ -267,6 +321,7 @@ export async function runChat(
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         cachedTokens: result.cachedTokens,
+        cacheCreationTokens: result.cacheCreationTokens,
         costMicroUsd: usage.costMicroUsd,
         latencyMs: result.durationMs,
         fetchedUrls: result.fetchedUrls,
