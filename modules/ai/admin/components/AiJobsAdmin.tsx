@@ -61,7 +61,11 @@ interface FilterState {
 export default function AiJobsAdmin() {
   const [jobs, setJobs] = useState<AdminJobDto[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<FilterState>({ view: 'live', crossModule: false });
+  // Default to cross-module=true so jobs from other modules that use
+  // the AI runner (daily-briefing:run-research, etc.) appear without
+  // the operator needing to toggle. The ai:* prefix view is one click
+  // away if you want to scope down.
+  const [filter, setFilter] = useState<FilterState>({ view: 'live', crossModule: true });
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const statuses: JobStatus[] = useMemo(() => {
