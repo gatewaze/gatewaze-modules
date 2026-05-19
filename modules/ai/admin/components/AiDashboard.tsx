@@ -32,6 +32,7 @@ import { useModuleSlots, type ResolvedSlot } from '@/hooks/useModuleSlots';
 
 import AiCredentialsAdmin from './AiCredentialsAdmin';
 import AiModelsAdmin from './AiModelsAdmin';
+import AiRecipesAdmin from './AiRecipesAdmin';
 import AiSkillSourcesAdmin from './AiSkillSourcesAdmin';
 import AiUsageDashboard from './AiUsageDashboard';
 import AiUseCasesAdmin from './AiUseCasesAdmin';
@@ -50,6 +51,9 @@ const BUILTIN_TABS: BuiltinTab[] = [
   // editor-ai-copilot via the 'ai-dashboard:tab' slot. Now a first-
   // class ai-module concern — built-in tab here.
   { id: 'skill-sources', label: 'Skill sources', order: 50, render: () => <AiSkillSourcesAdmin /> },
+  // Recipes — Goose-compatible workflow runner. Sources/recipes/runs
+  // surface, mirroring the skill-sources tab.
+  { id: 'recipes', label: 'Recipes', order: 60, render: () => <AiRecipesAdmin /> },
 ];
 
 interface SlotMeta {

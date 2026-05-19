@@ -13,7 +13,23 @@
  */
 
 export type KnownProvider = 'openai' | 'anthropic' | 'gemini';
-export type WebTool = 'web_search' | 'fetch_url';
+/**
+ * `web_search`     — the provider's native web search (Anthropic web_search,
+ *                    Gemini googleSearch, etc.). Quality varies; some are
+ *                    billed (Anthropic = $10/1k calls).
+ * `fetch_url`      — retrieve a specific URL via gatewaze-fetch.
+ * `gatewaze_search` — provider-agnostic web search backed by Serper.dev or
+ *                    a DuckDuckGo HTML scrape (via scrapling-fetcher). Free
+ *                    when DDG, ~$1/1k when Serper. Exposed as a function-
+ *                    call tool so every model sees the same surface.
+ */
+export type WebTool = 'web_search' | 'fetch_url' | 'gatewaze_search';
+
+export interface GatewazeSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
 
 // ─── Conversation (multi-turn chat with optional tool use) ────────────────
 
@@ -29,6 +45,31 @@ export interface StructuredOutputTool {
   description: string;
   /** JSON-Schema object describing the input the tool accepts. */
   inputSchema: Record<string, unknown>;
+}
+
+/**
+ * A tool function the provider should expose to the model alongside
+ * the built-in web tools (web_search, fetch_url, gatewaze_search) and
+ * the optional structured-output tool. Used for MCP-server tools +
+ * the `builtin: memory` surface in recipe execution.
+ *
+ * Naming convention: dotted names (e.g. `memory.store`, `github.get_pr`)
+ * are recommended so the model can pattern-match category from name.
+ * The provider doesn't constrain the name shape beyond what each SDK
+ * requires.
+ */
+export interface ExtraTool {
+  name: string;
+  description: string;
+  /** JSON-Schema input descriptor — exactly what each provider's tool API expects. */
+  inputSchema: Record<string, unknown>;
+  /**
+   * Resolver invoked by the provider when the model calls this tool.
+   * Return value is JSON-stringified into the tool_result block.
+   * Resolver-thrown errors are caught by the provider and surfaced
+   * to the model as `{ error: "..." }`.
+   */
+  resolve: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
 export interface RunConversationOpts {
@@ -52,6 +93,8 @@ export interface RunConversationOpts {
   /** Per-turn caps for tool calls. */
   webSearchMaxPerTurn?: number;
   fetchUrlMaxPerTurn?: number;
+  /** Cap on internal gatewaze_search calls per turn. */
+  gatewazeSearchMaxPerTurn?: number;
 
   /**
    * Resolves a fetch_url invocation. The runner provides this so the
@@ -62,6 +105,38 @@ export interface RunConversationOpts {
     content: string;   // truncated, wrapped for the model
     bytesIn: number;
     finalUrl: string;
+    error?: string;
+  }>;
+
+  /**
+   * Extra tools the provider should expose to the model alongside the
+   * built-in web tools. Used by the recipe runner to inject MCP
+   * `streamable_http` tools and the `builtin: memory` surface.
+   *
+   * The resolver is a thunk the provider calls when the model invokes
+   * the tool; the returned value is JSON-stringified and fed back as
+   * the tool_result block (or function-response, depending on
+   * provider). Errors thrown by the resolver should be caught by the
+   * provider and surfaced to the model as a `{ error: "..." }` payload
+   * so the model can decide whether to recover or give up.
+   *
+   * Provider parity caveat: as of this commit, only anthropic-client
+   * wires extraTools through. openai-client and gemini-client accept
+   * the parameter but ignore it — recipes that rely on extraTools
+   * MUST set settings.goose_provider: anthropic until that lands.
+   */
+  extraTools?: ExtraTool[];
+
+  /**
+   * Resolves a gatewaze_search invocation. The runner provides this so
+   * the underlying backend (Serper, DDG, etc.) can be swapped without
+   * changing the provider implementations. Returns the top N results
+   * for the query.
+   */
+  resolveGatewazeSearch?: (query: string, maxResults: number) => Promise<{
+    ok: boolean;
+    results: GatewazeSearchResult[];
+    backend: 'serper' | 'ddg';
     error?: string;
   }>;
 }
@@ -94,6 +169,8 @@ export interface RunConversationResult {
 
   fetchedUrls: FetchedUrlAudit[];
   webSearchCount: number;
+  /** Count of gatewaze_search invocations during the turn. */
+  gatewazeSearchCount: number;
 }
 
 // ─── Embeddings ────────────────────────────────────────────────────────────
