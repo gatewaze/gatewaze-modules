@@ -74,8 +74,31 @@ export interface RunRecipeArgs {
   /** Recipe id from ai_recipes (nullable for ad-hoc YAML runs). */
   recipeId?: string;
   recipeFilePath?: string;
+  /**
+   * Pre-allocated ai_recipe_runs row id. When provided, the executor
+   * skips its own INSERT and treats the row as the canonical record.
+   * The worker-dispatch path always supplies this (the API INSERTs
+   * with status='queued' before enqueuing). Backwards-compat inline
+   * callers can omit it; the executor will INSERT as before.
+   */
+  runId?: string;
   /** Optional progress callback fired between steps. */
   onProgress?: (step: { index: number; status: string }) => void;
+  /**
+   * Optional event callbacks consumed by the worker handler (spec-ai-
+   * job-runner §4.1). When unset, executor behaviour is identical to
+   * pre-worker. Workers wire these to XADD on the run's Redis Stream.
+   *
+   * Note: token-level / tool-call streaming events are NOT emitted at
+   * step granularity in v1. They are surfaced once at step.complete.
+   * Follow-up work wires per-token + per-tool emission through the
+   * provider clients (anthropic/openai/gemini).
+   */
+  onStepStart?: (idx: number, step: { step_id: string; step_label?: string }) => Promise<void>;
+  onStepComplete?: (
+    idx: number,
+    out: { structured: Record<string, unknown> | null; cost_micro_usd: number; status: 'complete' | 'skipped' | 'failed' },
+  ) => Promise<void>;
 }
 
 export interface RunRecipeResult {
@@ -137,25 +160,94 @@ export async function runRecipe(
   }
 
   // 2. Open the run row. Failures mean nothing else can proceed.
-  const runRow = await openRunRow(supabase, args);
-  if (!runRow.ok) {
-    return {
-      run_id: '',
-      status: 'failed',
-      final_output: null,
-      steps: [],
-      total_cost_micro_usd: 0,
-      total_input_tokens: 0,
-      total_output_tokens: 0,
-      duration_ms: Date.now() - recipeStart,
-      failure_reason: 'open_run_row_failed: ' + runRow.reason,
-    };
+  //    Worker-dispatch path supplies args.runId — the row was already
+  //    INSERTed by the API with status='queued'; we just flip it.
+  let runId: string;
+  if (args.runId) {
+    runId = args.runId;
+    const upd = await supabase
+      .from('ai_recipe_runs')
+      .update({ status: 'running' })
+      .eq('id', runId)
+      .select('id')
+      .maybeSingle();
+    if (upd.error || !upd.data) {
+      return {
+        run_id: runId,
+        status: 'failed',
+        final_output: null,
+        steps: [],
+        total_cost_micro_usd: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        duration_ms: Date.now() - recipeStart,
+        failure_reason: 'open_run_row_failed: ' + (upd.error?.message ?? 'row not found'),
+      };
+    }
+  } else {
+    const runRow = await openRunRow(supabase, args);
+    if (!runRow.ok) {
+      return {
+        run_id: '',
+        status: 'failed',
+        final_output: null,
+        steps: [],
+        total_cost_micro_usd: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        duration_ms: Date.now() - recipeStart,
+        failure_reason: 'open_run_row_failed: ' + runRow.reason,
+      };
+    }
+    runId = runRow.id;
   }
-  const runId = runRow.id;
 
   // 3. Step DAG enumeration in DFS pre-order. Step 0 is the parent
   //    recipe's primary step; sub-recipes get sequential indices.
   const stepPlan = enumerateSteps(args.recipe, args.subRecipes);
+
+  // Outputs map is populated either by the executor or by checkpoint
+  // hydration on retry — declared early so both paths can write to it.
+  const outputs = new Map<string, { structured: Record<string, unknown> | null; narrative: string }>();
+
+  // 3.5. Retry checkpoint hydration (spec-ai-job-runner §4.4).
+  //
+  // When the worker retries a run, the ai_recipe_run_steps rows from
+  // the prior attempt carry status='complete' for steps we've already
+  // executed. We hydrate them into `outputs` + `stepRecords` so:
+  //   - downstream steps' outputs_from refs resolve against prior
+  //     structured output (idempotency token).
+  //   - the executor's main loop sees the step records and SKIPs
+  //     completed steps via `step.status='skipped'` in the run record
+  //     while NOT re-running the step.
+  //
+  // We only do this when args.runId is provided (worker-dispatch path)
+  // — the inline-fallback path never retries so there's nothing to hydrate.
+  const completedStepIndices = new Set<number>();
+  if (args.runId) {
+    const stepsRes = await supabase
+      .from('ai_recipe_run_steps')
+      .select('step_index, step_id, status, structured, narrative, cost_micro_usd, duration_ms')
+      .eq('recipe_run_id', runId)
+      .eq('status', 'complete');
+    const completedRows =
+      (stepsRes?.data as Array<{
+        step_index: number;
+        step_id: string;
+        status: string;
+        structured: Record<string, unknown> | null;
+        narrative: string | null;
+        cost_micro_usd: number;
+        duration_ms: number;
+      }> | null) ?? [];
+    for (const row of completedRows) {
+      completedStepIndices.add(row.step_index);
+      outputs.set(`step-${row.step_index}`, {
+        structured: row.structured,
+        narrative: row.narrative ?? '',
+      });
+    }
+  }
 
   // 4. Pre-flight budget gate (§7.8). Sum worst-case cost across the
   //    full plan against the use-case's daily cap. Fanout multiplies
@@ -173,7 +265,6 @@ export async function runRecipe(
   // 5. Execute steps sequentially in DFS pre-order. Cancellation is
   //    checked between steps; an in-flight step gets the grace
   //    window before its AbortController fires.
-  const outputs = new Map<string, { structured: Record<string, unknown> | null; narrative: string }>();
   const stepRecords: RunRecipeResult['steps'] = [];
   let totalCost = 0;
   let totalIn = 0;
@@ -195,6 +286,31 @@ export async function runRecipe(
     if (Date.now() - recipeStart > MAX_RECIPE_DURATION_MS) {
       failureReason = 'total_duration_exceeded';
       break;
+    }
+    // Retry skip — if a prior attempt completed this step, push a
+    // 'skipped' record into the local array (so downstream summary +
+    // event emission see all steps) and continue. The output is
+    // already in `outputs` from §3.5 hydration so dependent steps
+    // resolve correctly.
+    if (completedStepIndices.has(planned.step_index)) {
+      stepRecords.push({
+        step_id: planned.step_id,
+        step_index: planned.step_index,
+        usage_event_id: null,
+        provider: null,
+        model: null,
+        cost_micro_usd: 0,
+        duration_ms: 0,
+        status: 'skipped',
+      });
+      args.onProgress?.({ index: planned.step_index, status: 'skipped' });
+      await args.onStepComplete?.(planned.step_index, {
+        structured: outputs.get(`step-${planned.step_index}`)?.structured ?? null,
+        cost_micro_usd: 0,
+        status: 'skipped',
+      });
+      await persistStepRecord(supabase, runId, stepRecords);
+      continue;
     }
     // Cancellation check before each step starts.
     if (await isCancelled(supabase, runId)) {
@@ -218,10 +334,22 @@ export async function runRecipe(
           status: 'skipped',
         });
         args.onProgress?.({ index: planned.step_index, status: 'skipped' });
+        await args.onStepComplete?.(planned.step_index, {
+          structured: null,
+          cost_micro_usd: 0,
+          status: 'skipped',
+        });
         await persistStepRecord(supabase, runId, stepRecords);
         continue;
       }
     }
+
+    // Emit step.start AFTER the activation-key skip check so skipped
+    // steps don't generate a misleading start event.
+    await args.onStepStart?.(planned.step_index, {
+      step_id: planned.step_id,
+      step_label: planned.step_id,
+    });
 
     // ── Fanout detection (§4.4) ─────────────────────────────────
     // A `values:` entry whose resolved value is a JS array triggers
@@ -490,6 +618,11 @@ export async function runRecipe(
         narrative: chatResult.narrative,
       });
       args.onProgress?.({ index: planned.step_index, status: 'complete' });
+      await args.onStepComplete?.(planned.step_index, {
+        structured: chatResult.structured ?? null,
+        cost_micro_usd: chatResult.costMicroUsd,
+        status: 'complete',
+      });
       await persistStepRecord(supabase, runId, stepRecords);
       await backlinkUsageEvent(supabase, runId, planned.step_index, args.userId, args.useCase, stepStart);
     }
@@ -938,10 +1071,42 @@ async function persistStepRecord(
   runId: string,
   steps: RunRecipeResult['steps'],
 ): Promise<void> {
+  // Denormalised JSON array on the run row — keeps the admin UI's
+  // single-row read fast.
   await supabase
     .from('ai_recipe_runs')
     .update({ steps: steps as unknown as Record<string, unknown>[] })
     .eq('id', runId);
+  // Per-step checkpoint table — written incrementally so retries
+  // (spec-ai-job-runner §4.4) can skip already-complete steps without
+  // walking the full JSON. The last entry is the one we just wrote.
+  const last = steps[steps.length - 1];
+  if (!last) return;
+  const structured = (last as { structured?: Record<string, unknown> | null }).structured ?? null;
+  const narrative = (last as { narrative?: string }).narrative ?? null;
+  await supabase
+    .from('ai_recipe_run_steps')
+    .upsert(
+      {
+        recipe_run_id: runId,
+        step_index: last.step_index,
+        step_id: last.step_id,
+        status: last.status,
+        structured,
+        narrative,
+        cost_micro_usd: last.cost_micro_usd,
+        duration_ms: last.duration_ms,
+        // started_at is set on first transition to 'running'; for the
+        // current model we just stamp it on the last write — accurate
+        // enough for retry skipping, where the worker only cares about
+        // 'status=complete' rows.
+        completed_at:
+          last.status === 'complete' || last.status === 'failed' || last.status === 'cancelled'
+            ? new Date().toISOString()
+            : null,
+      },
+      { onConflict: 'recipe_run_id,step_index' },
+    );
 }
 
 async function backlinkUsageEvent(

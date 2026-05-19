@@ -31,6 +31,7 @@ import { Tabs, type Tab } from '@/components/ui';
 import { useModuleSlots, type ResolvedSlot } from '@/hooks/useModuleSlots';
 
 import AiCredentialsAdmin from './AiCredentialsAdmin';
+import AiJobsAdmin from './AiJobsAdmin';
 import AiModelsAdmin from './AiModelsAdmin';
 import AiRecipesAdmin from './AiRecipesAdmin';
 import AiSkillSourcesAdmin from './AiSkillSourcesAdmin';
@@ -54,6 +55,11 @@ const BUILTIN_TABS: BuiltinTab[] = [
   // Recipes — Goose-compatible workflow runner. Sources/recipes/runs
   // surface, mirroring the skill-sources tab.
   { id: 'recipes', label: 'Recipes', order: 60, render: () => <AiRecipesAdmin /> },
+  // Jobs — live queue inspection (active/waiting/delayed/failed) +
+  // per-job stop/retry/promote + live-tail of the SSE stream.
+  // Cross-module toggle surfaces the wider BullMQ queue.
+  // Spec: spec-ai-job-runner §4.5.
+  { id: 'jobs', label: 'Jobs', order: 70, render: () => <AiJobsAdmin /> },
 ];
 
 interface SlotMeta {

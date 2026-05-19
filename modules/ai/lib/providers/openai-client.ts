@@ -86,16 +86,45 @@ export class OpenAIProviderClient implements ProviderClient {
           const tokensParam = isReasoningModel(opts.model)
             ? { max_completion_tokens: opts.maxOutputTokens }
             : { max_tokens: opts.maxOutputTokens };
-          response = await this.client.chat.completions.create(
-            {
-              model: opts.model,
-              ...tokensParam,
-              messages,
-              tools: tools as OpenAI.Chat.ChatCompletionTool[],
-              tool_choice: opts.structuredTool ? 'auto' : 'auto',
-            },
-            { signal: controller.signal },
-          );
+          if (opts.onToken) {
+            // Streaming path — iterate chunks, emit text deltas via the
+            // supplied callback, then assemble a synthetic
+            // ChatCompletion for the downstream loop logic. Spec-ai-
+            // job-runner §4.2.
+            //
+            // `stream: true` switches the return type to an
+            // AsyncIterable<ChatCompletionChunk>. We aggregate tool_call
+            // fragments + text deltas into the same shape the non-
+            // streaming variant returns.
+            const stream = await this.client.chat.completions.create(
+              {
+                model: opts.model,
+                ...tokensParam,
+                messages,
+                tools: tools as OpenAI.Chat.ChatCompletionTool[],
+                tool_choice: opts.structuredTool ? 'auto' : 'auto',
+                stream: true,
+                stream_options: { include_usage: true },
+              },
+              { signal: controller.signal },
+            );
+            response = await assembleOpenAIChunks(
+              stream as unknown as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>,
+              opts.onToken,
+              opts.model,
+            );
+          } else {
+            response = await this.client.chat.completions.create(
+              {
+                model: opts.model,
+                ...tokensParam,
+                messages,
+                tools: tools as OpenAI.Chat.ChatCompletionTool[],
+                tool_choice: opts.structuredTool ? 'auto' : 'auto',
+              },
+              { signal: controller.signal },
+            );
+          }
         } catch (err) {
           if (controller.signal.aborted) throw new ProviderTimeoutError('openai');
           throw mapOpenAIError(err);
@@ -386,6 +415,116 @@ function isReasoningModel(model: string): boolean {
   // o-series reasoning models
   if (/^o[1-9](-|$)/i.test(model)) return true;
   return false;
+}
+
+/**
+ * Collapse an OpenAI streaming response into the same shape as a
+ * non-streaming ChatCompletion so the downstream tool-loop logic
+ * doesn't have to branch.
+ *
+ * Emits each text delta via `onToken` as it arrives. Tool-call
+ * fragments are accumulated into complete tool_calls in the assembled
+ * choice — they're NOT streamed to onToken (those become tool_call
+ * events at the worker level).
+ */
+async function assembleOpenAIChunks(
+  stream: AsyncIterable<OpenAI.Chat.ChatCompletionChunk>,
+  onToken: (delta: string) => void | Promise<void>,
+  fallbackModel: string,
+): Promise<OpenAI.Chat.ChatCompletion> {
+  let id = '';
+  let model = fallbackModel;
+  let role: 'assistant' = 'assistant';
+  let contentBuf = '';
+  let finishReason: OpenAI.Chat.ChatCompletion.Choice['finish_reason'] | null = null;
+  const toolCalls = new Map<
+    number,
+    { id: string; type: 'function'; function: { name: string; arguments: string } }
+  >();
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let totalTokens = 0;
+
+  for await (const chunk of stream) {
+    if (chunk.id) id = chunk.id;
+    if (chunk.model) model = chunk.model;
+    const choice = chunk.choices?.[0];
+    if (choice) {
+      const delta = choice.delta ?? {};
+      if (typeof delta.content === 'string' && delta.content.length > 0) {
+        contentBuf += delta.content;
+        try {
+          await onToken(delta.content);
+        } catch {
+          // Swallow callback errors so the stream keeps draining.
+        }
+      }
+      // delta.role is 'assistant' on the first chunk; subsequent
+      // chunks omit it. Same for tool_calls deltas.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tcDeltas = (delta as any).tool_calls as
+        | Array<{
+            index: number;
+            id?: string;
+            type?: 'function';
+            function?: { name?: string; arguments?: string };
+          }>
+        | undefined;
+      if (tcDeltas) {
+        for (const d of tcDeltas) {
+          const existing = toolCalls.get(d.index) ?? {
+            id: d.id ?? '',
+            type: 'function' as const,
+            function: { name: '', arguments: '' },
+          };
+          if (d.id) existing.id = d.id;
+          if (d.function?.name) existing.function.name = d.function.name;
+          if (d.function?.arguments) existing.function.arguments += d.function.arguments;
+          toolCalls.set(d.index, existing);
+        }
+      }
+      if (choice.finish_reason) finishReason = choice.finish_reason;
+    }
+    if (chunk.usage) {
+      promptTokens = chunk.usage.prompt_tokens ?? promptTokens;
+      completionTokens = chunk.usage.completion_tokens ?? completionTokens;
+      totalTokens = chunk.usage.total_tokens ?? totalTokens;
+    }
+    void role;
+  }
+
+  const orderedToolCalls = [...toolCalls.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, v]) => v);
+
+  const message: OpenAI.Chat.ChatCompletionMessage = {
+    role: 'assistant',
+    content: contentBuf.length > 0 ? contentBuf : null,
+    refusal: null,
+    ...(orderedToolCalls.length > 0 && {
+      tool_calls: orderedToolCalls as OpenAI.Chat.ChatCompletionMessageToolCall[],
+    }),
+  };
+
+  return {
+    id: id || `chatcmpl-streamed-${Date.now()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        message,
+        finish_reason: finishReason ?? 'stop',
+        logprobs: null,
+      },
+    ],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
+    },
+  } as OpenAI.Chat.ChatCompletion;
 }
 
 function buildTools(opts: RunConversationOpts): unknown[] {

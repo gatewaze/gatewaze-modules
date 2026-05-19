@@ -73,18 +73,46 @@ export class AnthropicProviderClient implements ProviderClient {
       for (let iter = 0; iter < MAX_LOOP_ITERATIONS; iter++) {
         let response: Anthropic.Message;
         try {
-          response = await this.client.messages.create(
-            {
-              model: opts.model,
-              max_tokens: opts.maxOutputTokens,
-              system: opts.systemPrompt,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              tools: tools as any,
-              tool_choice: { type: 'auto' },
-              messages,
-            },
-            { signal: controller.signal },
-          );
+          if (opts.onToken) {
+            // Streaming path — emit text deltas via the supplied callback,
+            // then collapse to the final Message via .finalMessage().
+            // Spec-ai-job-runner §4.2.
+            const stream = this.client.messages.stream(
+              {
+                model: opts.model,
+                max_tokens: opts.maxOutputTokens,
+                system: opts.systemPrompt,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                tools: tools as any,
+                tool_choice: { type: 'auto' },
+                messages,
+              },
+              { signal: controller.signal },
+            );
+            // The SDK's `text` event fires for each text-block delta.
+            // Non-text blocks (tool_use, server_tool_use) are surfaced
+            // only on the final Message — not via this callback.
+            stream.on('text', (delta: string) => {
+              void Promise.resolve(opts.onToken!(delta)).catch(() => {
+                // Ignore callback errors — they shouldn't interrupt the
+                // model's response stream.
+              });
+            });
+            response = await stream.finalMessage();
+          } else {
+            response = await this.client.messages.create(
+              {
+                model: opts.model,
+                max_tokens: opts.maxOutputTokens,
+                system: opts.systemPrompt,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                tools: tools as any,
+                tool_choice: { type: 'auto' },
+                messages,
+              },
+              { signal: controller.signal },
+            );
+          }
         } catch (err) {
           if (controller.signal.aborted) throw new ProviderTimeoutError('anthropic');
           throw mapAnthropicError(err);

@@ -139,6 +139,22 @@ export interface RunConversationOpts {
     backend: 'serper' | 'ddg';
     error?: string;
   }>;
+
+  /**
+   * Token streaming callback. When provided, provider clients use the
+   * streaming variant of their SDK and call this for each text delta
+   * the model emits. Non-text deltas (tool_use chunks, etc.) are NOT
+   * forwarded — those land in the final response and are emitted via
+   * the higher-level tool_call / tool_result events.
+   *
+   * Returning a rejected promise does NOT cancel the in-flight provider
+   * call (the SDKs don't surface a mid-stream abort hook reliably across
+   * all three providers). Callers that need to cancel should use the
+   * worker's pub/sub cancel channel.
+   *
+   * Spec: spec-ai-job-runner §4.2 (token events).
+   */
+  onToken?: (delta: string) => void | Promise<void>;
 }
 
 export interface FetchedUrlAudit {
