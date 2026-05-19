@@ -46,6 +46,13 @@ const aiModule: GatewazeModule = {
     'migrations/013_ai_skills_agentskills_io.sql',
     'migrations/014_ai_recipes.sql',
     'migrations/015_ai_recipes_version_prompt.sql',
+    // spec-ai-job-runner — worker dispatch + Redis Streams SSE + Jobs tab.
+    'migrations/016_ai_use_cases_allow_retry.sql',
+    'migrations/017_ai_recipe_runs_queued_status.sql',
+    'migrations/018_ai_messages_queued_status.sql',
+    'migrations/019_ai_recipe_run_steps.sql',
+    'migrations/020_ai_recipe_runs_snapshot.sql',
+    'migrations/021_ai_run_state_machine.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due skill sources every 5
@@ -64,6 +71,15 @@ const aiModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '*/5 * * * *' },
       data: { kind: 'ai.sync-recipe-sources' },
+    },
+    // spec-ai-job-runner §4.1 — orphan-stream sweep. Runs every hour;
+    // walks ai:run:* and ai:thread:* keys; sets EXPIRE on any that
+    // lack one. Defence-in-depth for SIGKILL'd workers.
+    {
+      name: 'ai:cleanup-orphan-streams',
+      queue: 'jobs',
+      schedule: { pattern: '0 * * * *' },
+      data: { kind: 'ai.cleanup-orphan-streams' },
     },
   ],
 
@@ -87,6 +103,32 @@ const aiModule: GatewazeModule = {
     {
       name: 'ai.sync-one-recipe-source',
       handler: 'workers/sync-one-recipe-source.js',
+    },
+    // spec-ai-job-runner — moves recipe + chat execution off the API
+    // process. The API enqueues onto the shared `jobs` queue under
+    // these names; this module registers the consumers.
+    //
+    // Concurrency tuned per spec §4.1: recipe DFS workloads block on
+    // provider latency, chat streams add more parallelism. Override
+    // at deploy time via env if needed.
+    {
+      name: 'ai:run-recipe',
+      handler: 'workers/run-recipe-handler.js',
+      concurrency: Number(process.env.AI_RECIPE_WORKER_CONCURRENCY ?? 4),
+    },
+    {
+      name: 'ai:run-chat',
+      handler: 'workers/run-chat-handler.js',
+      concurrency: Number(process.env.AI_CHAT_WORKER_CONCURRENCY ?? 8),
+    },
+    // Orphan-stream sweep — runs every hour via the platform's cron
+    // → worker bridge. Defence-in-depth on top of the worker's own
+    // EXPIRE-after-XADD: catches streams left unexpired by SIGKILL
+    // between first XADD and the immediate EXPIRE call.
+    {
+      name: 'ai:cleanup-orphan-streams',
+      handler: 'workers/cleanup-orphan-streams.js',
+      concurrency: 1,
     },
   ],
 
@@ -148,6 +190,12 @@ const aiModule: GatewazeModule = {
       path: 'ai/recipes',
       component: () => import('./admin/components/AiDashboard'),
       requiredFeature: 'ai.usage.read',
+      guard: 'admin',
+    },
+    {
+      path: 'ai/jobs',
+      component: () => import('./admin/components/AiDashboard'),
+      requiredFeature: 'ai.manage',
       guard: 'admin',
     },
   ],

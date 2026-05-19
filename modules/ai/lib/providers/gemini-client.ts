@@ -104,18 +104,17 @@ export class GeminiProviderClient implements ProviderClient {
 
     try {
       for (let iter = 0; iter < MAX_LOOP_ITERATIONS; iter++) {
-        const response = await this.callGemini(
-          opts.model,
-          {
-            systemInstruction: { parts: [{ text: opts.systemPrompt }] },
-            contents,
-            tools,
-            generationConfig: {
-              maxOutputTokens: opts.maxOutputTokens,
-            },
+        const body = {
+          systemInstruction: { parts: [{ text: opts.systemPrompt }] },
+          contents,
+          tools,
+          generationConfig: {
+            maxOutputTokens: opts.maxOutputTokens,
           },
-          controller.signal,
-        );
+        };
+        const response = opts.onToken
+          ? await this.streamGemini(opts.model, body, controller.signal, opts.onToken)
+          : await this.callGemini(opts.model, body, controller.signal);
 
         lastModel = response.modelVersion ?? opts.model;
         totalInputTokens += response.usageMetadata?.promptTokenCount ?? 0;
@@ -405,6 +404,181 @@ export class GeminiProviderClient implements ProviderClient {
     }
     return (await response.json()) as GeminiResponse;
   }
+
+  /**
+   * Streaming variant — hits :streamGenerateContent with SSE framing,
+   * emits text deltas through `onToken`, and assembles the chunks into
+   * a synthetic GeminiResponse the downstream loop logic can consume
+   * unchanged.
+   *
+   * Spec-ai-job-runner §4.2.
+   */
+  private async streamGemini(
+    model: string,
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+    onToken: (delta: string) => void | Promise<void>,
+  ): Promise<GeminiResponse> {
+    const url =
+      `${this.baseUrl}/models/${encodeURIComponent(model)}` +
+      `:streamGenerateContent?alt=sse&key=${encodeURIComponent(this.apiKey)}`;
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (err) {
+      if (signal.aborted) throw new ProviderTimeoutError('gemini');
+      throw new ProviderError(
+        err instanceof Error ? err.message : String(err),
+        'gemini',
+      );
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      const retryable = response.status >= 500 || response.status === 429;
+      if (response.status === 429) {
+        throw new ProviderRateLimitError('gemini', null);
+      }
+      throw new ProviderError(
+        `Gemini ${response.status}: ${text.slice(0, 400)}`,
+        'gemini',
+        response.status,
+        retryable,
+      );
+    }
+    if (!response.body) {
+      // No body but 200 — degrade to JSON parse.
+      return (await response.json()) as GeminiResponse;
+    }
+
+    // Parse server-sent events. Each event arrives as `data: <json>`
+    // followed by a blank line. Lines without `data:` (e.g. event id
+    // comments) are ignored.
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+    const partials: GeminiResponse[] = [];
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nlIdx: number;
+        while ((nlIdx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nlIdx).replace(/\r$/, '');
+          buf = buf.slice(nlIdx + 1);
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload.length === 0) continue;
+          let parsed: GeminiResponse;
+          try {
+            parsed = JSON.parse(payload) as GeminiResponse;
+          } catch {
+            continue;
+          }
+          partials.push(parsed);
+          // Emit text deltas from any candidate.parts[i].text on this
+          // chunk. We don't attempt to dedupe across candidates — each
+          // delta is the new content for that chunk.
+          for (const cand of parsed.candidates ?? []) {
+            for (const part of cand.content?.parts ?? []) {
+              if (typeof (part as { text?: string }).text === 'string') {
+                const t = (part as { text: string }).text;
+                if (t.length > 0) {
+                  try {
+                    await onToken(t);
+                  } catch {
+                    // ignore callback errors
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // best effort
+      }
+    }
+    return mergeGeminiPartials(partials);
+  }
+}
+
+/**
+ * Stitch the streamed chunks back into a single GeminiResponse for the
+ * downstream tool-loop logic. Each chunk's text is concatenated; tool
+ * calls (functionCall parts) and finishReason are taken from the LAST
+ * chunk that carries them.
+ */
+function mergeGeminiPartials(partials: GeminiResponse[]): GeminiResponse {
+  if (partials.length === 0) {
+    return { candidates: [], usageMetadata: { promptTokenCount: 0, candidatesTokenCount: 0 } };
+  }
+  // Aggregate text per (candidateIndex, partIndex) — Gemini sends new
+  // content as additional parts OR as deltas to existing parts. We
+  // treat each chunk's parts as additive; non-text parts are merged
+  // by reference from the LAST chunk that includes them.
+  type Candidate = NonNullable<GeminiResponse['candidates']>[number];
+  const textsByCandidate = new Map<number, string>();
+  const lastByCandidate = new Map<number, Candidate>();
+  let usagePrompt = 0;
+  let usageCompletion = 0;
+  let usageCached = 0;
+  for (const p of partials) {
+    if (p.usageMetadata) {
+      usagePrompt = p.usageMetadata.promptTokenCount ?? usagePrompt;
+      usageCompletion = p.usageMetadata.candidatesTokenCount ?? usageCompletion;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cachedField = (p.usageMetadata as any).cachedContentTokenCount;
+      if (typeof cachedField === 'number') usageCached = cachedField;
+    }
+    for (let i = 0; i < (p.candidates ?? []).length; i++) {
+      const cand = (p.candidates ?? [])[i]!;
+      lastByCandidate.set(i, cand);
+      for (const part of cand.content?.parts ?? []) {
+        if (typeof (part as { text?: string }).text === 'string') {
+          textsByCandidate.set(
+            i,
+            (textsByCandidate.get(i) ?? '') + (part as { text: string }).text,
+          );
+        }
+      }
+    }
+  }
+  const mergedCandidates: Candidate[] = [];
+  for (const [idx, last] of lastByCandidate.entries()) {
+    const text = textsByCandidate.get(idx) ?? '';
+    const nonTextParts =
+      last.content?.parts?.filter(
+        (p: unknown) => typeof (p as { text?: string }).text !== 'string',
+      ) ?? [];
+    const parts: Array<Record<string, unknown>> = [];
+    if (text.length > 0) parts.push({ text });
+    parts.push(...(nonTextParts as Array<Record<string, unknown>>));
+    mergedCandidates.push({
+      ...last,
+      content: {
+        ...(last.content ?? { role: 'model' }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        parts: parts as any,
+      },
+    });
+  }
+  return {
+    candidates: mergedCandidates,
+    usageMetadata: {
+      promptTokenCount: usagePrompt,
+      candidatesTokenCount: usageCompletion,
+      ...(usageCached && { cachedContentTokenCount: usageCached }),
+    },
+  };
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

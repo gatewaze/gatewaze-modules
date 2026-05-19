@@ -26,6 +26,16 @@ import { sumSpentMicroUsd } from '../lib/cost.js';
 import { parseRecipe, type ParsedRecipe } from '../lib/recipes/parse-recipe.js';
 import { runRecipe } from '../lib/recipes/run-recipe.js';
 import { resolveUseCasePrompt } from '../lib/use-case-prompt.js';
+import { enqueueChatRunJob, enqueueRecipeRunJob } from '../lib/jobs/enqueue.js';
+import { broadcastCancel } from '../lib/jobs/cancel.js';
+import {
+  messageCancelChannel,
+  recipeRunCancelChannel,
+  recipeRunStreamKey,
+  threadStreamKey,
+} from '../lib/jobs/stream-keys.js';
+import { pingRedis } from '../lib/jobs/redis-client.js';
+import { forwardStreamToSse, isValidOffset } from '../lib/jobs/stream-bridge.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const USE_CASE_ID_RE = /^[a-z][a-z0-9-]{1,127}$/;
@@ -69,6 +79,17 @@ export interface AdminAiRoutesDeps {
   resolveFetchUrl?: Parameters<typeof runChat>[0]['resolveFetchUrl'];
   /** Resolves gatewaze_search for use-cases that enable it. */
   resolveGatewazeSearch?: Parameters<typeof runChat>[0]['resolveGatewazeSearch'];
+  /**
+   * BullMQ enqueue, supplied by the platform's ModuleRuntimeContext.
+   * Required for chat + recipe runs in the worker-dispatch model.
+   */
+  enqueueJob?: (
+    queue: string,
+    name: string,
+    data: Record<string, unknown>,
+  ) => Promise<{ id: string | undefined }>;
+  /** Project root passed through from the platform — used to locate the BullMQ Queue handle. */
+  projectRoot?: string;
 }
 
 function paramAs(v: unknown): string | undefined {
@@ -273,7 +294,18 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       return;
     }
 
-    // Persist user turn + assistant placeholder.
+    // spec-ai-job-runner §3.2 — enqueue a chat job; the worker picks it
+    // up and emits to the thread's Redis Stream.
+    if (!deps.enqueueJob) {
+      sendError(res, 503, 'enqueue_unavailable', 'enqueueJob not wired by host');
+      return;
+    }
+    if (!(await pingRedis())) {
+      sendError(res, 503, 'redis_unavailable', 'Redis is required for job dispatch');
+      return;
+    }
+
+    // Persist user turn + assistant placeholder (status='queued').
     const userInsert = await supabase
       .from('ai_messages')
       .insert({ thread_id: threadId, role: 'user', status: 'complete', content: userMessage })
@@ -285,7 +317,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     }
     const placeholderInsert = await supabase
       .from('ai_messages')
-      .insert({ thread_id: threadId, role: 'assistant', status: 'running', content: '' })
+      .insert({ thread_id: threadId, role: 'assistant', status: 'queued', content: '' })
       .select('*')
       .maybeSingle();
     if (placeholderInsert.error) {
@@ -297,24 +329,49 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       .update({ status: 'running', last_error: null })
       .eq('id', threadId);
 
+    let jobId: string | undefined;
+    let delayed = false;
+    try {
+      const enq = await enqueueChatRunJob(deps.enqueueJob, {
+        threadId,
+        assistantMessageId: placeholderInsert.data.id,
+        useCase: threadRes.data.use_case,
+        userId: threadRes.data.created_by,
+      });
+      jobId = enq.jobId;
+      delayed = enq.delayed;
+      await supabase
+        .from('ai_messages')
+        .update({ bull_job_id: enq.jobId ?? null })
+        .eq('id', placeholderInsert.data.id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await supabase
+        .from('ai_messages')
+        .update({ status: 'failed', error_code: 'enqueue_failed', error_message: msg })
+        .eq('id', placeholderInsert.data.id);
+      sendError(res, 500, 'enqueue_failed', msg);
+      return;
+    }
+
     res.status(202).json({
       user_message: userInsert.data,
       assistant_message: placeholderInsert.data,
+      job_id: jobId,
+      delayed,
+      stream_url: `/api/modules/ai/admin/threads/${threadId}/stream`,
     });
-
-    // Run in the background. Errors are persisted on the assistant row
-    // — the HTTP response has already returned.
-    void runBackground({
-      threadId,
-      threadRow: threadRes.data,
-      assistantMessageId: placeholderInsert.data.id,
-      userMessage,
-      provider,
-      model,
-    });
+    // Silence unused warnings while the legacy fields remain in scope.
+    void provider;
+    void model;
   }
 
-  async function runBackground(args: {
+  // Removed in spec-ai-job-runner — chat execution now lives in
+  // workers/run-chat-handler.ts. Stub kept temporarily so any stale
+  // references compile. Delete once the next commit cycle confirms
+  // no internal callers.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async function runBackground_DEPRECATED(args: {
     threadId: string;
     threadRow: { use_case: string; created_by: string | null };
     assistantMessageId: string;
@@ -420,15 +477,20 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       sendError(res, 400, 'bad_request', 'message_id (uuid) required');
       return;
     }
-    // Best-effort: flip the placeholder to 'cancelled'. The in-flight
-    // background runner will detect this on next status check.
+    // spec-ai-job-runner §4.3 — three-channel cancel:
+    //   (1) DB row, (2) pub/sub broadcast, (3) the worker's step poll.
     const update = await supabase
       .from('ai_messages')
-      .update({ status: 'cancelled' })
+      .update({ status: 'cancelling', cancel_requested_at: new Date().toISOString() })
       .eq('id', messageId)
-      .eq('status', 'running')
+      .in('status', ['queued', 'running'])
       .select('*')
       .maybeSingle();
+    try {
+      await broadcastCancel(messageCancelChannel(messageId), 'user');
+    } catch {
+      // Best-effort; the DB row + worker poll will still pick it up.
+    }
     res.status(202).json({ cancelled: Boolean(update.data) });
   }
 
@@ -890,21 +952,59 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       return;
     }
 
+    // spec-ai-job-runner §5.1 — inline-recipe runs go through the
+    // same worker dispatch as source-registered ones. Snapshot the
+    // parsed recipe on the run row so the worker has everything it
+    // needs without source lookup.
+    if (!deps.enqueueJob) {
+      sendError(res, 503, 'enqueue_unavailable', 'enqueueJob not wired by host');
+      return;
+    }
+    if (!(await pingRedis())) {
+      sendError(res, 503, 'redis_unavailable', 'Redis is required for job dispatch');
+      return;
+    }
+    const insertRes = await supabase
+      .from('ai_recipe_runs')
+      .insert({
+        recipe_id: null,
+        recipe_file_path: null,
+        recipe_content_hash: parsed.recipe.content_hash,
+        user_id: userId,
+        use_case: useCase,
+        host_kind: null,
+        host_id: null,
+        params: params as unknown as Record<string, unknown>,
+        status: 'queued',
+        steps: [],
+        recipe_snapshot: parsed.recipe as unknown as Record<string, unknown>,
+        sub_recipes_snapshot: {} as Record<string, unknown>,
+      })
+      .select('id')
+      .maybeSingle();
+    if (insertRes.error || !insertRes.data) {
+      sendError(res, 500, 'internal', insertRes.error?.message ?? 'no row returned');
+      return;
+    }
+    const runId = insertRes.data.id as string;
     try {
-      const result = await runRecipe(
-        supabase as never,
-        { supabase, logger, resolveFetchUrl: deps.resolveFetchUrl },
-        {
-          recipe: parsed.recipe,
-          subRecipes: new Map<string, ParsedRecipe>(),
-          params: params as never,
-          userId,
-          useCase,
-        },
-      );
-      res.status(200).json(result);
+      const enq = await enqueueRecipeRunJob(deps.enqueueJob, {
+        runId,
+        useCase,
+        userId,
+      });
+      await supabase
+        .from('ai_recipe_runs')
+        .update({ bull_job_id: enq.jobId ?? null })
+        .eq('id', runId);
+      res.status(202).json({
+        run_id: runId,
+        job_id: enq.jobId,
+        delayed: enq.delayed,
+        stream_url: `/api/modules/ai/admin/recipe-runs/${runId}/stream`,
+      });
     } catch (err) {
-      sendError(res, 500, 'internal', err instanceof Error ? err.message : String(err));
+      sendError(res, 500, 'enqueue_failed', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -936,8 +1036,6 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       sendError(res, 400, 'bad_request', 'id (uuid) required');
       return;
     }
-    // If running → set status='cancelled' (the executor checks this
-    // between steps). If terminal → delete the row.
     const row = await supabase
       .from('ai_recipe_runs')
       .select('id, status')
@@ -947,11 +1045,18 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       sendError(res, 404, 'not_found', 'recipe run not found');
       return;
     }
-    if (row.data.status === 'running') {
+    // spec-ai-job-runner §4.3 — three-channel cancel for in-flight runs.
+    // Terminal runs (complete/failed/cancelled) get deleted as before.
+    if (['queued', 'running'].includes(row.data.status as string)) {
       await supabase
         .from('ai_recipe_runs')
-        .update({ status: 'cancelled' })
+        .update({ status: 'cancelling', cancel_requested_at: new Date().toISOString() })
         .eq('id', id);
+      try {
+        await broadcastCancel(recipeRunCancelChannel(id), 'user');
+      } catch {
+        // Best-effort.
+      }
       res.status(202).json({ status: 'cancelling' });
       return;
     }
