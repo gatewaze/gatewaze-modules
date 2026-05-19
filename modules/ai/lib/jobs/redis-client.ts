@@ -2,52 +2,113 @@
  * Lazy ioredis client factory shared by the API process (XREAD,
  * XINFO, PUBLISH) and worker process (XADD, SUBSCRIBE, INCR).
  *
- * We hand-roll this here rather than depending on the platform's API
- * package because @gatewaze-modules/ai is consumable as a standalone
- * module. The connection is resolved from REDIS_URL or
- * REDIS_HOST/REDIS_PORT/REDIS_PASSWORD env (mirrors the platform's
- * convention).
+ * `ioredis` is a peer of the host platform — at module-package dev
+ * time it may not be installed, and at runtime the AI module is
+ * consumed *through* the API package's node_modules. We resolve via
+ * `createRequire` against the API package the same way `inspector.ts`
+ * resolves `bullmq`, so the platform's existing ioredis install is
+ * picked up reliably.
  *
  * Spec: spec-ai-job-runner §7.1.
  */
 
-// `ioredis` is a peer of the platform — when the module runs inside
-// the API process the constructor is already loaded. We `import()`
-// lazily so unit tests can mock it.
+import { createRequire } from 'node:module';
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type RedisLike = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type RedisCtor = new (...args: any[]) => RedisLike;
 
 let sharedClient: RedisLike | null = null;
 let sharedSubscriber: RedisLike | null = null;
+let cachedCtor: RedisCtor | null = null;
+let lastConnectError: Error | null = null;
+let configuredProjectRoot: string | null = null;
 
-async function loadRedisCtor(): Promise<new (...args: unknown[]) => RedisLike> {
-  // Dynamic import keeps ioredis off the import graph for module
-  // consumers that don't actually exercise the job-runner code.
-  // ioredis is a peer dep — at module-package dev time it may not be
-  // installed; runtime resolution happens through the host project's
-  // node_modules. We use a dynamic specifier so TypeScript doesn't
-  // require the type declaration at this package's build time.
-  const specifier = 'ioredis';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod = (await import(/* @vite-ignore */ specifier)) as any;
-  return (mod.default ?? mod) as new (...args: unknown[]) => RedisLike;
+/**
+ * Prime the module-level project root so loadRedisCtor() can resolve
+ * `ioredis` through the API package's module graph even before any
+ * request hits a route handler. The platform's apiRoutes(ctx) callback
+ * calls this from register-routes.ts at startup.
+ */
+export function setProjectRoot(root: string): void {
+  configuredProjectRoot = root;
 }
 
-function buildConnectionOptions(): Record<string, unknown> {
-  const url = process.env.REDIS_URL;
-  if (url && url.length > 0) {
-    // ioredis accepts a URL string directly as first arg, but we keep
-    // an options-object path for the host/port fallback too.
-    return { url };
+/**
+ * Resolve the ioredis ctor through the host project's module graph.
+ * Tries setProjectRoot()'s value first, then env, then cwd.
+ */
+function loadRedisCtor(): RedisCtor {
+  if (cachedCtor) return cachedCtor;
+  const candidates: string[] = [];
+  if (configuredProjectRoot) {
+    candidates.push(`${configuredProjectRoot}/packages/api/package.json`);
   }
+  const envRoot = process.env.GATEWAZE_PROJECT_ROOT;
+  if (envRoot) candidates.push(`${envRoot}/packages/api/package.json`);
+  candidates.push(`${process.cwd()}/packages/api/package.json`);
+  // Final fallback — plain dynamic require (works in monorepo dev where
+  // ioredis hoists to the workspace root, OR when the cwd IS the api package).
+  candidates.push(`${process.cwd()}/package.json`);
+
+  let lastError: unknown;
+  for (const c of candidates) {
+    try {
+      const req = createRequire(c);
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = req('ioredis') as { default?: RedisCtor } & RedisCtor;
+      cachedCtor = (mod.default ?? mod) as RedisCtor;
+      return cachedCtor!;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw new Error(
+    `ioredis not resolvable from any of: ${candidates.join(', ')}; last error: ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`,
+  );
+}
+
+function buildConnectionUrl(): string | null {
+  // Matches gatewaze/packages/api/src/lib/queue/connection.ts so the
+  // module + the platform connect to the SAME Redis.
+  if (process.env.REDIS_URL && process.env.REDIS_URL.length > 0) {
+    return process.env.REDIS_URL;
+  }
+  if (process.env.REDIS_HOST) {
+    const port = process.env.REDIS_PORT ?? '6379';
+    const pass = process.env.REDIS_PASSWORD
+      ? `:${encodeURIComponent(process.env.REDIS_PASSWORD)}@`
+      : '';
+    return `redis://${pass}${process.env.REDIS_HOST}:${port}`;
+  }
+  return null;
+}
+
+function baseConnectionOptions(): Record<string, unknown> {
   return {
-    host: process.env.REDIS_HOST ?? '127.0.0.1',
-    port: Number(process.env.REDIS_PORT ?? 6379),
-    password: process.env.REDIS_PASSWORD,
-    // BullMQ requires this so blocking commands work.
+    // Match the platform's queue/connection.ts so blocking commands
+    // (XREAD BLOCK, BRPOP) work.
     maxRetriesPerRequest: null,
-    enableReadyCheck: false,
+    enableReadyCheck: true,
+    lazyConnect: false,
   };
+}
+
+function buildClient(): RedisLike {
+  const Ctor = loadRedisCtor();
+  const url = buildConnectionUrl();
+  if (!url) {
+    throw new Error(
+      'Redis is not configured — set REDIS_URL or REDIS_HOST so the AI job runner can dispatch jobs.',
+    );
+  }
+  // ioredis: `new Redis(url, options)` mirrors the platform's own
+  // queue/connection.ts. baseConnectionOptions() also disables
+  // maxRetriesPerRequest so blocking commands work.
+  return new Ctor(url, baseConnectionOptions());
 }
 
 /**
@@ -56,13 +117,7 @@ function buildConnectionOptions(): Record<string, unknown> {
  */
 export async function getRedisClient(): Promise<RedisLike> {
   if (sharedClient) return sharedClient;
-  const Ctor = await loadRedisCtor();
-  const opts = buildConnectionOptions();
-  if ('url' in opts && typeof opts.url === 'string') {
-    sharedClient = new Ctor(opts.url);
-  } else {
-    sharedClient = new Ctor(opts);
-  }
+  sharedClient = buildClient();
   return sharedClient!;
 }
 
@@ -74,13 +129,7 @@ export async function getRedisClient(): Promise<RedisLike> {
  */
 export async function getRedisSubscriber(): Promise<RedisLike> {
   if (sharedSubscriber) return sharedSubscriber;
-  const Ctor = await loadRedisCtor();
-  const opts = buildConnectionOptions();
-  if ('url' in opts && typeof opts.url === 'string') {
-    sharedSubscriber = new Ctor(opts.url);
-  } else {
-    sharedSubscriber = new Ctor(opts);
-  }
+  sharedSubscriber = buildClient();
   return sharedSubscriber!;
 }
 
@@ -90,12 +139,7 @@ export async function getRedisSubscriber(): Promise<RedisLike> {
  * we don't want to share with the rest of the API).
  */
 export async function createDedicatedRedisClient(): Promise<RedisLike> {
-  const Ctor = await loadRedisCtor();
-  const opts = buildConnectionOptions();
-  if ('url' in opts && typeof opts.url === 'string') {
-    return new Ctor(opts.url);
-  }
-  return new Ctor(opts);
+  return buildClient();
 }
 
 /** Quick liveness check — used by the API to 503 when Redis is down. */
@@ -103,10 +147,17 @@ export async function pingRedis(): Promise<boolean> {
   try {
     const c = await getRedisClient();
     const r = (await c.ping()) as string;
+    lastConnectError = null;
     return r === 'PONG';
-  } catch {
+  } catch (err) {
+    lastConnectError = err instanceof Error ? err : new Error(String(err));
     return false;
   }
+}
+
+/** Last error captured by pingRedis(); surface in 503 responses. */
+export function getLastConnectError(): string | null {
+  return lastConnectError?.message ?? null;
 }
 
 /** Test-only: reset cached clients so each test gets a fresh setup. */
