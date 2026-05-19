@@ -22,7 +22,7 @@ import {
   getJobsQueue,
   listJobs,
 } from '../lib/jobs/inspector.js';
-import { pingRedis } from '../lib/jobs/redis-client.js';
+import { getLastConnectError, pingRedis } from '../lib/jobs/redis-client.js';
 import { forwardStreamToSse } from '../lib/jobs/stream-bridge.js';
 import {
   messageCancelChannel,
@@ -67,7 +67,14 @@ export function mountJobsRoutes(router: Router, deps: JobsRoutesDeps): void {
     const q = parseQuery(ListJobsQuerySchema, req.query);
     if (!q.ok) return sendError(res, 400, q.code, q.message);
     if (!deps.projectRoot) return sendError(res, 503, 'projectRoot_missing', 'jobs inspector needs projectRoot');
-    if (!(await pingRedis())) return sendError(res, 503, 'redis_unavailable', 'Redis is required');
+    if (!(await pingRedis())) {
+      return sendError(
+        res,
+        503,
+        'redis_unavailable',
+        `Redis ping failed: ${getLastConnectError() ?? 'unknown'}`,
+      );
+    }
     const states = parseStatusList(q.value.status);
     const limit = q.value.limit ?? 100;
     const offset = q.value.offset ?? 0;

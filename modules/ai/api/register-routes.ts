@@ -34,6 +34,7 @@ import { mountSkillWebhookRoute } from './skill-webhook.js';
 import { mountRecipeSourceRoutes } from './recipe-sources.js';
 import { mountRecipeWebhookRoute } from './recipe-webhook.js';
 import { mountJobsRoutes } from './jobs-routes.js';
+import { setProjectRoot } from '../lib/jobs/redis-client.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -128,6 +129,10 @@ export function registerRoutes(app: Express, ctx?: any): void {
   }
 
   const projectRoot = ctx?.projectRoot as string | undefined;
+  // Prime the job-runner's ioredis resolution so it picks the platform's
+  // installed copy (lives in <projectRoot>/packages/api/node_modules)
+  // rather than walking heuristic paths from cwd.
+  if (projectRoot) setProjectRoot(projectRoot);
 
   const router = Router();
   const routes = createAdminAiRoutes({

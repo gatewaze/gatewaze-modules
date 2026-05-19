@@ -34,7 +34,7 @@ import {
   recipeRunStreamKey,
   threadStreamKey,
 } from '../lib/jobs/stream-keys.js';
-import { pingRedis } from '../lib/jobs/redis-client.js';
+import { getLastConnectError, pingRedis } from '../lib/jobs/redis-client.js';
 import { forwardStreamToSse, isValidOffset } from '../lib/jobs/stream-bridge.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -301,7 +301,12 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       return;
     }
     if (!(await pingRedis())) {
-      sendError(res, 503, 'redis_unavailable', 'Redis is required for job dispatch');
+      sendError(
+        res,
+        503,
+        'redis_unavailable',
+        `Redis ping failed: ${getLastConnectError() ?? 'unknown'}`,
+      );
       return;
     }
 
@@ -961,7 +966,12 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       return;
     }
     if (!(await pingRedis())) {
-      sendError(res, 503, 'redis_unavailable', 'Redis is required for job dispatch');
+      sendError(
+        res,
+        503,
+        'redis_unavailable',
+        `Redis ping failed: ${getLastConnectError() ?? 'unknown'}`,
+      );
       return;
     }
     const insertRes = await supabase

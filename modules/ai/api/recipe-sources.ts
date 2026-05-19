@@ -42,7 +42,7 @@ import { recipesConfig } from '../lib/recipes/recipes-config.js';
 import { parseRecipe, type ParsedRecipe } from '../lib/recipes/parse-recipe.js';
 import { runRecipe, type RecipeParamValue } from '../lib/recipes/run-recipe.js';
 import { enqueueRecipeRunJob } from '../lib/jobs/enqueue.js';
-import { pingRedis } from '../lib/jobs/redis-client.js';
+import { getLastConnectError, pingRedis } from '../lib/jobs/redis-client.js';
 
 interface SupabaseLike {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -427,7 +427,12 @@ export function mountRecipeSourceRoutes(router: Router, deps: Deps): void {
       return sendError(res, 503, 'enqueue_unavailable', 'enqueueJob not wired by host');
     }
     if (!(await pingRedis())) {
-      return sendError(res, 503, 'redis_unavailable', 'Redis is required for job dispatch');
+      return sendError(
+        res,
+        503,
+        'redis_unavailable',
+        `Redis ping failed: ${getLastConnectError() ?? 'unknown'}`,
+      );
     }
 
     const subRecipesSnapshot: Record<string, ParsedRecipe> = {};
