@@ -60,14 +60,27 @@ export interface SkillSourceResponse {
 export interface SkillRow {
   id: string;
   source_id: string;
-  path: string;
+  /**
+   * Full path of the skill directory within the repo (e.g.
+   * `.claude/skills/brand-voice`). Replaces the v1 `path` column,
+   * which pointed at a loose `.md` file before the agentskills.io
+   * migration (013).
+   */
+  dir_path: string;
+  /** Skill identifier; equals `basename(dir_path)` per spec invariant. */
   name: string;
-  description: string | null;
-  tags: string[];
-  applies_to: string[];
+  /** Required, ≤1024. */
+  description: string;
+  /** Flat string→string metadata; arbitrary Tier-2 fields land here. */
+  metadata: Record<string, string>;
+  /** Sibling-file relative paths inside the skill dir. Inert in v1. */
+  resources: string[];
   body: string;
   body_chars: number;
   content_hash: string;
+  parse_status: 'ok' | 'refused' | 'parse_error';
+  unsupported_features: Array<{ feature: string; location: { line: number; col: number; snippet: string } }>;
+  parse_warnings: string[];
   last_commit_sha: string;
   updated_at: string;
 }
@@ -268,20 +281,27 @@ export interface SkillListItem {
   id: string;
   source_id: string;
   source_label: string;
-  path: string;
+  dir_path: string;
   name: string;
-  description: string | null;
-  tags: string[];
-  applies_to: string[];
+  description: string;
+  metadata: Record<string, string>;
   body_chars: number;
+  parse_status: 'ok' | 'refused' | 'parse_error';
   updated_at: string;
 }
 
 export interface ListSkillsFilter {
   source_id?: string;
-  applies_to?: string[];
-  tag?: string[];
+  /**
+   * Filter by parse_status. Default behaviour returns only `'ok'`
+   * rows — refused / parse_error rows are hidden from the picker
+   * surface but visible to the admin UI when explicitly requested.
+   */
+  parse_status?: 'ok' | 'refused' | 'parse_error' | 'all';
 }
+
+const SKILL_LIST_COLS =
+  'id, source_id, dir_path, name, description, metadata, body_chars, parse_status, updated_at, source:ai_skill_sources!source_id(label)';
 
 export async function listSkills(
   supabase: SupabaseLike,
@@ -289,28 +309,23 @@ export async function listSkills(
 ): Promise<SkillListItem[]> {
   let q = supabase
     .from('ai_skills')
-    .select('id, source_id, path, name, description, tags, applies_to, body_chars, updated_at, source:ai_skill_sources!source_id(label)')
+    .select(SKILL_LIST_COLS)
     .order('name', { ascending: true });
   if (filter.source_id) q = q.eq('source_id', filter.source_id);
-  // applies_to filter — array overlap.
-  if (filter.applies_to && filter.applies_to.length > 0) {
-    q = q.overlaps('applies_to', filter.applies_to);
-  }
-  if (filter.tag && filter.tag.length > 0) {
-    q = q.overlaps('tags', filter.tag);
-  }
+  const statusFilter = filter.parse_status ?? 'ok';
+  if (statusFilter !== 'all') q = q.eq('parse_status', statusFilter);
   const res = await q;
   const rows = (res?.data as Array<SkillRow & { source: { label: string } | null }> | null) ?? [];
   return rows.map((r) => ({
     id: r.id,
     source_id: r.source_id,
     source_label: r.source?.label ?? '(unknown source)',
-    path: r.path,
+    dir_path: r.dir_path,
     name: r.name,
     description: r.description,
-    tags: r.tags,
-    applies_to: r.applies_to,
+    metadata: r.metadata,
     body_chars: r.body_chars,
+    parse_status: r.parse_status,
     updated_at: r.updated_at,
   }));
 }
@@ -322,14 +337,17 @@ export async function readSkillFull(supabase: SupabaseLike, id: string): Promise
 
 /**
  * Bulk read by ids, preserving input order. Missing ids are silently
- * dropped (caller handles "deleted from git" warnings).
+ * dropped (caller handles "deleted from git" warnings). Refused /
+ * parse_error rows are filtered out — the runner only loads bodies
+ * for ok-parsed skills.
  */
 export async function readSkillsByIds(supabase: SupabaseLike, ids: string[]): Promise<SkillRow[]> {
   if (ids.length === 0) return [];
   const res = await supabase
     .from('ai_skills')
-    .select('id, source_id, path, name, description, tags, applies_to, body, body_chars, content_hash, last_commit_sha, updated_at')
-    .in('id', ids);
+    .select('*')
+    .in('id', ids)
+    .eq('parse_status', 'ok');
   const rows = (res?.data as SkillRow[] | null) ?? [];
   const byId = new Map(rows.map((r) => [r.id, r]));
   return ids.map((id) => byId.get(id)).filter((r): r is SkillRow => r != null);

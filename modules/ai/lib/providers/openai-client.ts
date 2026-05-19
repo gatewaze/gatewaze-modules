@@ -8,6 +8,12 @@
  *     the same way Anthropic does.
  *   - generateEmbedding: text-embedding-3-small / large via embeddings API.
  *   - generateImage: gpt-image-1 via images API.
+ *
+ * Recipe-injected `extraTools` (MCP servers, builtin: memory) are
+ * honoured: each is declared as a chat.completions function and its
+ * tool_calls are dispatched through the provided resolver. Strict-
+ * mode is off for these because MCP schemas don't always fit OpenAI's
+ * strict-mode subset.
  */
 
 import OpenAI from 'openai';
@@ -67,15 +73,23 @@ export class OpenAIProviderClient implements ProviderClient {
     let lastModel = opts.model;
     const fetchedUrls: FetchedUrlAudit[] = [];
     let fetchCallsThisTurn = 0;
+    let gatewazeSearchCallsThisTurn = 0;
+    let gatewazeSearchCount = 0;
 
     try {
       for (let iter = 0; iter < MAX_LOOP_ITERATIONS; iter++) {
         let response: OpenAI.Chat.ChatCompletion;
         try {
+          // Reasoning models (o1/o3/o4/gpt-5) reject `max_tokens` and
+          // require `max_completion_tokens` instead. The OpenAI SDK
+          // types accept both, so we pick the param at request time.
+          const tokensParam = isReasoningModel(opts.model)
+            ? { max_completion_tokens: opts.maxOutputTokens }
+            : { max_tokens: opts.maxOutputTokens };
           response = await this.client.chat.completions.create(
             {
               model: opts.model,
-              max_tokens: opts.maxOutputTokens,
+              ...tokensParam,
               messages,
               tools: tools as OpenAI.Chat.ChatCompletionTool[],
               tool_choice: opts.structuredTool ? 'auto' : 'auto',
@@ -128,6 +142,7 @@ export class OpenAIProviderClient implements ProviderClient {
               model: lastModel,
               fetchedUrls,
               webSearchCount: 0,
+              gatewazeSearchCount,
             };
           }
         } else if (choice.finish_reason === 'stop') {
@@ -142,12 +157,23 @@ export class OpenAIProviderClient implements ProviderClient {
             model: lastModel,
             fetchedUrls,
             webSearchCount: 0,
+            gatewazeSearchCount,
           };
         }
 
-        // ── fetch_url tool calls?
-        const fetchCalls = toolCalls.filter((c) => c.function?.name === 'fetch_url');
-        if (fetchCalls.length === 0) {
+        // ── Loop tool calls (fetch_url, gatewaze_search, extraTools).
+        //    OpenAI has no native server-side web search via chat.
+        //    completions, so web_search-style discovery happens via
+        //    gatewaze_search. Recipe-injected extraTools (MCP servers,
+        //    builtin: memory) land here too — recognised by name.
+        const extraToolNames = new Set((opts.extraTools ?? []).map((t) => t.name));
+        const handledCalls = toolCalls.filter(
+          (c) =>
+            c.function?.name === 'fetch_url' ||
+            c.function?.name === 'gatewaze_search' ||
+            extraToolNames.has(c.function?.name ?? ''),
+        );
+        if (handledCalls.length === 0) {
           throw new InvalidProviderOutputError(
             `model stopped (finish_reason=${choice.finish_reason}) without emitting the structured tool`,
             'openai',
@@ -155,46 +181,130 @@ export class OpenAIProviderClient implements ProviderClient {
         }
 
         const toolMessages: OpenAI.Chat.ChatCompletionToolMessageParam[] = [];
-        for (const call of fetchCalls) {
-          let parsed: { url?: string; reason?: string };
-          try {
-            parsed = JSON.parse(call.function.arguments) as { url?: string; reason?: string };
-          } catch {
-            parsed = {};
-          }
-          const url = typeof parsed.url === 'string' ? parsed.url : '';
-          const reason = typeof parsed.reason === 'string' ? parsed.reason : '';
+        for (const call of handledCalls) {
+          if (call.function?.name === 'fetch_url') {
+            let parsed: { url?: string; reason?: string };
+            try {
+              parsed = JSON.parse(call.function.arguments) as { url?: string; reason?: string };
+            } catch {
+              parsed = {};
+            }
+            const url = typeof parsed.url === 'string' ? parsed.url : '';
+            const reason = typeof parsed.reason === 'string' ? parsed.reason : '';
 
-          if (!opts.resolveFetchUrl) {
+            if (!opts.resolveFetchUrl) {
+              toolMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: '[fetch_url_disabled] fetch_url is not enabled for this use-case.',
+              });
+              continue;
+            }
+            fetchCallsThisTurn++;
+            if (fetchCallsThisTurn > (opts.fetchUrlMaxPerTurn ?? 8)) {
+              toolMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: '[fetch_quota_exceeded] per-turn fetch limit reached.',
+              });
+              continue;
+            }
+
+            const result = await opts.resolveFetchUrl(url, reason);
+            fetchedUrls.push({
+              url,
+              status: result.ok ? 200 : 0,
+              bytes_in: result.bytesIn,
+              reason,
+              fetched_at: new Date().toISOString(),
+            });
             toolMessages.push({
               role: 'tool',
               tool_call_id: call.id,
-              content: '[fetch_url_disabled] fetch_url is not enabled for this use-case.',
-            });
-            continue;
-          }
-          fetchCallsThisTurn++;
-          if (fetchCallsThisTurn > (opts.fetchUrlMaxPerTurn ?? 8)) {
-            toolMessages.push({
-              role: 'tool',
-              tool_call_id: call.id,
-              content: '[fetch_quota_exceeded] per-turn fetch limit reached.',
+              content: result.ok ? result.content : `[fetch_error] ${result.error ?? 'unknown'}`,
             });
             continue;
           }
 
-          const result = await opts.resolveFetchUrl(url, reason);
-          fetchedUrls.push({
-            url,
-            status: result.ok ? 200 : 0,
-            bytes_in: result.bytesIn,
-            reason,
-            fetched_at: new Date().toISOString(),
-          });
+          if (call.function?.name === 'gatewaze_search') {
+            let searchParsed: { query?: string; max_results?: number };
+            try {
+              searchParsed = JSON.parse(call.function.arguments) as {
+                query?: string;
+                max_results?: number;
+              };
+            } catch {
+              searchParsed = {};
+            }
+            const query = typeof searchParsed.query === 'string' ? searchParsed.query : '';
+            const requestedMax =
+              typeof searchParsed.max_results === 'number' && searchParsed.max_results > 0
+                ? searchParsed.max_results
+                : 6;
+            if (!opts.resolveGatewazeSearch) {
+              toolMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: '[gatewaze_search_disabled] gatewaze_search is not enabled for this use-case.',
+              });
+              continue;
+            }
+            gatewazeSearchCallsThisTurn++;
+            if (gatewazeSearchCallsThisTurn > (opts.gatewazeSearchMaxPerTurn ?? 6)) {
+              toolMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: '[gatewaze_search_quota_exceeded] per-turn search limit reached.',
+              });
+              continue;
+            }
+            const searchResult = await opts.resolveGatewazeSearch(query, requestedMax);
+            if (searchResult.ok) gatewazeSearchCount++;
+            toolMessages.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              content: searchResult.ok
+                ? JSON.stringify({ backend: searchResult.backend, results: searchResult.results })
+                : `[gatewaze_search_error] ${searchResult.error ?? 'unknown'}`,
+            });
+            continue;
+          }
+
+          // ── extraTools (recipe-injected: MCP servers, memory) ─────
+          // Resolver-thrown errors are caught and surfaced to the
+          // model as tool messages so it can decide whether to retry
+          // with different args or give up the turn.
+          const toolName = call.function?.name ?? '';
+          const extra = (opts.extraTools ?? []).find((t) => t.name === toolName);
+          if (extra) {
+            let args: Record<string, unknown>;
+            try {
+              args = JSON.parse(call.function?.arguments ?? '{}') as Record<string, unknown>;
+            } catch {
+              args = {};
+            }
+            try {
+              const result = await extra.resolve(args);
+              toolMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: typeof result === 'string' ? result : JSON.stringify(result),
+              });
+            } catch (err) {
+              toolMessages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: `[tool_error] ${err instanceof Error ? err.message : String(err)}`,
+              });
+            }
+            continue;
+          }
+
+          // Unknown tool — shouldn't be reachable given the filter above.
           toolMessages.push({
             role: 'tool',
             tool_call_id: call.id,
-            content: result.ok ? result.content : `[fetch_error] ${result.error ?? 'unknown'}`,
+            content: `[unknown_tool] no handler registered for '${toolName}'`,
           });
         }
 
@@ -263,6 +373,21 @@ export class OpenAIProviderClient implements ProviderClient {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
+/**
+ * OpenAI's reasoning models (o1, o3, o4, gpt-5) reject the legacy
+ * `max_tokens` parameter and require `max_completion_tokens`. This
+ * matcher is intentionally lenient — any future *-mini / *-pro / *-thinking
+ * variants still match, so we don't have to update this list every
+ * time OpenAI ships a new SKU.
+ */
+function isReasoningModel(model: string): boolean {
+  // gpt-5 and successors
+  if (/^gpt-[5-9]\b/i.test(model)) return true;
+  // o-series reasoning models
+  if (/^o[1-9](-|$)/i.test(model)) return true;
+  return false;
+}
+
 function buildTools(opts: RunConversationOpts): unknown[] {
   const out: unknown[] = [];
   if (opts.structuredTool) {
@@ -294,7 +419,45 @@ function buildTools(opts: RunConversationOpts): unknown[] {
       },
     });
   }
-  // web_search is not supported by OpenAI (as of 2026-05). Skip silently.
+  if (opts.webTools?.includes('gatewaze_search')) {
+    out.push({
+      type: 'function',
+      function: {
+        name: 'gatewaze_search',
+        description:
+          'Gatewaze-hosted web search (Serper.dev or DuckDuckGo HTML scrape). Use this for discovery; pair with fetch_url to read primary sources.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query.' },
+            max_results: {
+              type: 'integer',
+              description: 'How many results to return (default 6, max 20).',
+            },
+          },
+          required: ['query'],
+        },
+        strict: false,
+      },
+    });
+  }
+  // Recipe-injected extra tools (MCP server tools, builtin: memory).
+  // Forwarded as OpenAI functions; strict: false because MCP schemas
+  // aren't guaranteed to fit OpenAI's strict-mode subset (no `oneOf`,
+  // no defaults, every property required, etc.).
+  for (const t of opts.extraTools ?? []) {
+    out.push({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.inputSchema,
+        strict: false,
+      },
+    });
+  }
+  // OpenAI's chat.completions API has no native server-side web_search
+  // (as of 2026-05). Use gatewaze_search above when discovery is needed.
   return out;
 }
 
