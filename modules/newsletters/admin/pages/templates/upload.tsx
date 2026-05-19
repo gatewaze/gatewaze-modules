@@ -221,7 +221,7 @@ export default function TemplateUploadPage() {
               >
                 Import {parseResult.blocks.length} Block(s)
               </Button>
-              <Button variant="ghost" onClick={handleReset}>
+              <Button variant="outline" onClick={handleReset}>
                 Cancel
               </Button>
             </div>

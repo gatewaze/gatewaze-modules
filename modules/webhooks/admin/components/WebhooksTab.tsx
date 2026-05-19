@@ -354,7 +354,7 @@ export default function WebhooksTab() {
           size="lg"
           footer={
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setModalDraft(null)} disabled={saving}>
+              <Button variant="outline" onClick={() => setModalDraft(null)} disabled={saving}>
                 Cancel
               </Button>
               <Button onClick={handleSave} disabled={saving}>

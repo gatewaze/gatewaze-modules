@@ -195,7 +195,7 @@ export function InboxDrawer({
                 >
                   Confirm reject
                 </Button>
-                <Button size="1" variant="ghost" onClick={() => setShowReject(false)}>Cancel</Button>
+                <Button size="1" variant="outline" onClick={() => setShowReject(false)}>Cancel</Button>
               </div>
             </Card>
           )}

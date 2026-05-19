@@ -22,12 +22,15 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
   };
 }
 
-import { Router, type Express } from 'express';
+import express, { Router, type Express } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import {
   createAdminAiRoutes,
   mountAdminAiRoutes,
 } from './admin-routes.js';
+import { mountSkillSourceRoutes } from './skill-sources.js';
+import { mountSkillsRoutes } from './skills.js';
+import { mountSkillWebhookRoute } from './skill-webhook.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -43,8 +46,27 @@ function defaultLogger(): PlatformLogger {
   };
 }
 
-export function registerRoutes(app: Express): void {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function registerRoutes(app: Express, ctx?: any): void {
   const logger = defaultLogger();
+
+  // Job enqueue, provided by the platform's ModuleRuntimeContext (added
+  // in shared/src/types/modules.ts + wired in api/src/server.ts).
+  // Skill-sources Sync + post-create auto-sync route through this.
+  // Fallback shim only fires if a deployment is somehow running
+  // pre-bridge platform code — in that case sync silently no-ops with
+  // a warning, but the rest of ai's surface stays up.
+  const enqueueJob: (
+    q: string,
+    j: string,
+    d: Record<string, unknown>,
+  ) => Promise<{ id: string | undefined }> =
+    ctx?.enqueueJob ?? (async (q: string, j: string) => {
+      logger.warn(
+        `enqueueJob shim hit — platform ctx didn't provide a queue bridge. queue='${q}' job='${j}'`,
+      );
+      return { id: undefined };
+    });
 
   const supabaseUrl = process.env.SUPABASE_URL ?? '';
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
@@ -73,9 +95,61 @@ export function registerRoutes(app: Express): void {
   const router = Router();
   const routes = createAdminAiRoutes({ supabase, logger, resolveFetchUrl });
   mountAdminAiRoutes(router, routes);
+
+  // ── Skills subsystem (moved from editor-ai-copilot, Phase 2) ──────────
+  //
+  // The skill-sources router needs to decode the operator's JWT so the
+  // handler knows who made the call (mirrors editor-ai-copilot's prior
+  // mount). Signature verification is upstream; this just extracts the
+  // sub claim to populate req.userId. We DON'T apply this to the
+  // webhook router below — webhook callers authenticate via HMAC.
+  function decodeJwt(req: { headers: Record<string, string | string[] | undefined>; userId?: string }, _res: unknown, next: () => void): void {
+    const auth = req.headers['authorization'];
+    const header = Array.isArray(auth) ? auth[0] : auth;
+    if (header && header.startsWith('Bearer ')) {
+      const parts = header.slice(7).split('.');
+      if (parts.length === 3) {
+        try {
+          const payload = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf-8'));
+          if (typeof payload.sub === 'string') req.userId = payload.sub;
+        } catch {
+          /* bad token — handler will return 401 */
+        }
+      }
+    }
+    next();
+  }
+
+  const skillsRouter: Router = express.Router();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  skillsRouter.use(decodeJwt as any);
+  mountSkillSourceRoutes(skillsRouter, {
+    supabase,
+    // enqueueJob is provided by the module-runtime context but the ai
+    // module's registerRoutes signature doesn't expose ctx today — wire
+    // up via globalThis hook the worker module already publishes. Falls
+    // back to a no-op shim if not present (manual sync still works
+    // through the cron-style sync-skill-sources worker tick).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    enqueueJob,
+  });
+  mountSkillsRoutes(skillsRouter, { supabase });
+
+  // Webhook receiver — separate router (no JWT decode), HMAC-authenticated.
+  const webhookRouter: Router = express.Router();
+  mountSkillWebhookRoute(webhookRouter, {
+    supabase,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    enqueueJob,
+  });
+  app.use('/api/modules/ai/admin', webhookRouter);
+
+  // Then mount the authed admin routes. Skills routes nested under
+  // /api/modules/ai/admin/skill-sources + /api/modules/ai/admin/skills.
+  app.use('/api/modules/ai/admin', skillsRouter);
   app.use('/api/modules/ai', router);
 
-  logger.info('ai routes registered');
+  logger.info('ai routes registered (including skills subsystem)');
 }
 
 /**
