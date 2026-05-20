@@ -33,6 +33,9 @@ import { mountAgentWebhookRoute } from './agent-webhook.js';
 import { mountSkillsRoutes } from './skills.js';
 import { mountRecipeSourceRoutes } from './recipe-sources.js';
 import { mountJobsRoutes } from './jobs-routes.js';
+import { mountMcpServerRoutes } from './mcp-servers.js';
+import { mountMcpAllowlistRoutes } from './mcp-allowlist.js';
+import { mountUseCaseTemplateRoutes } from './use-case-templates.js';
 import { setProjectRoot } from '../lib/jobs/redis-client.js';
 
 interface PlatformLogger {
@@ -146,6 +149,16 @@ export function registerRoutes(app: Express, ctx?: any): void {
 
   // spec-ai-job-runner — Jobs tab + SSE endpoints.
   mountJobsRoutes(router, { supabase, enqueueJob, ...(projectRoot && { projectRoot }) });
+
+  // spec-ai-mcp-extensions — MCP server registry CRUD + Test probe.
+  // Mounts under the main JWT-gated router so /admin/mcp-servers/* is
+  // available to authenticated operators with ai.manage.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mountMcpServerRoutes(router as any, { supabase, enqueueJob });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mountMcpAllowlistRoutes(router as any, { supabase });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mountUseCaseTemplateRoutes(router as any, { supabase });
 
   // ── Skills subsystem (moved from editor-ai-copilot, Phase 2) ──────────
   //

@@ -328,7 +328,210 @@ function SettingsTab({
           ))}
         </div>
       </Field>
+
+      <McpAllowlistField useCaseId={editing.id} />
+      <GooseRuntimeTuningField editing={editing} setEditing={setEditing} />
     </div>
+  );
+}
+
+/**
+ * Allowed MCP servers — per-use-case allowlist stored in
+ * ai_use_case_mcp_allowlist. Mirrors today's Allowed web tools UX but
+ * sourced from the operator-managed ai_mcp_servers registry.
+ * spec-ai-mcp-extensions.md §7.4.
+ */
+function McpAllowlistField({ useCaseId }: { useCaseId: string }): JSX.Element {
+  const [servers, setServers] = useState<Array<{ id: string; name: string; display_name: string; type: string; enabled: boolean }>>([]);
+  const [allowed, setAllowed] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      setLoading(true);
+      try {
+        const sRes = await fetch('/api/modules/ai/admin/mcp-servers', { credentials: 'include' });
+        const sJson = await sRes.json();
+        setServers(sJson.servers ?? []);
+        const aRes = await fetch(`/api/modules/ai/admin/use-cases/${useCaseId}/mcp-allowlist`, { credentials: 'include' });
+        const aJson = await aRes.json();
+        const names = ((aJson.allowed ?? []) as Array<{ name?: string }>)
+          .map((a) => a.name).filter((n): n is string => typeof n === 'string');
+        setAllowed(new Set(names));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [useCaseId]);
+
+  async function toggle(name: string): Promise<void> {
+    const next = new Set(allowed);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    setSaving(true);
+    setError(null);
+    try {
+      await fetch(`/api/modules/ai/admin/use-cases/${useCaseId}/mcp-allowlist`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowed_server_names: Array.from(next) }),
+      });
+      setAllowed(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Field label="Allowed MCP servers">
+      {loading ? (
+        <div className="text-xs text-neutral-500">Loading…</div>
+      ) : servers.length === 0 ? (
+        <div className="text-xs text-neutral-500">
+          No MCP servers registered. Go to <a href="/admin/ai/mcp-servers" className="underline">/admin/ai/mcp-servers</a> to add one.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5 text-sm">
+          {error && <div className="text-red-700 text-xs">{error}</div>}
+          {servers.map((s) => (
+            <label key={s.id} className="inline-flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={allowed.has(s.name)}
+                disabled={saving || !s.enabled}
+                onChange={() => void toggle(s.name)}
+              />
+              <span>
+                <code className="font-mono text-xs">{s.name}</code>
+                <span className="text-xs text-neutral-500"> — {s.display_name} ({s.type}){!s.enabled && ' · disabled'}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </Field>
+  );
+}
+
+/**
+ * Goose runtime tuning — per-use-case overrides for allowlisted Goose
+ * env knobs. spec-ai-mcp-extensions.md round 7.
+ */
+function GooseRuntimeTuningField({
+  editing,
+  setEditing,
+}: {
+  editing: AiUseCase;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setEditing: (uc: any) => void;
+}): JSX.Element {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const overrides: Record<string, unknown> = ((editing as any).goose_runtime_overrides ?? {}) as Record<string, unknown>;
+
+  function update(key: string, value: unknown): void {
+    const next = { ...overrides };
+    if (value === null || value === undefined || value === '') delete next[key];
+    else next[key] = value;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setEditing({ ...(editing as any), goose_runtime_overrides: next });
+  }
+
+  return (
+    <Field label="Runtime tuning (Goose overrides)">
+      <div className="text-xs text-neutral-500 mb-2">
+        Per-use-case overrides. Leave a field blank to use the worker default. Allowlist + ranges enforced server-side.
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <label className="space-y-1">
+          <div className="text-xs text-neutral-600">GOOSE_AUTO_COMPACT_THRESHOLD <span className="text-neutral-400">0.1–0.99</span></div>
+          <input
+            type="number"
+            step="0.01"
+            min={0.1}
+            max={0.99}
+            value={(overrides.GOOSE_AUTO_COMPACT_THRESHOLD as number) ?? ''}
+            onChange={(e) => update('GOOSE_AUTO_COMPACT_THRESHOLD', e.target.value === '' ? null : Number(e.target.value))}
+            className="w-full border rounded px-2 py-1 font-mono"
+          />
+        </label>
+        <label className="space-y-1">
+          <div className="text-xs text-neutral-600">GOOSE_TOOL_CALL_CUTOFF <span className="text-neutral-400">100–1,000,000</span></div>
+          <input
+            type="number"
+            min={100}
+            max={1000000}
+            value={(overrides.GOOSE_TOOL_CALL_CUTOFF as number) ?? ''}
+            onChange={(e) => update('GOOSE_TOOL_CALL_CUTOFF', e.target.value === '' ? null : Number(e.target.value))}
+            className="w-full border rounded px-2 py-1 font-mono"
+          />
+        </label>
+        <label className="space-y-1">
+          <div className="text-xs text-neutral-600">GOOSE_MODE</div>
+          <select
+            value={(overrides.GOOSE_MODE as string) ?? ''}
+            onChange={(e) => update('GOOSE_MODE', e.target.value || null)}
+            className="w-full border rounded px-2 py-1 font-mono"
+          >
+            <option value="">(worker default)</option>
+            <option value="auto">auto</option>
+            <option value="approval">approval</option>
+            <option value="chat">chat</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <div className="text-xs text-neutral-600">CLAUDE_THINKING_TYPE</div>
+          <select
+            value={(overrides.CLAUDE_THINKING_TYPE as string) ?? ''}
+            onChange={(e) => update('CLAUDE_THINKING_TYPE', e.target.value || null)}
+            className="w-full border rounded px-2 py-1 font-mono"
+          >
+            <option value="">(worker default)</option>
+            <option value="disabled">disabled</option>
+            <option value="enabled">enabled</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <div className="text-xs text-neutral-600">GATEWAZE_GOOSE_MAX_TURNS <span className="text-neutral-400">1–5,000</span></div>
+          <input
+            type="number"
+            min={1}
+            max={5000}
+            value={(overrides.GATEWAZE_GOOSE_MAX_TURNS as number) ?? ''}
+            onChange={(e) => update('GATEWAZE_GOOSE_MAX_TURNS', e.target.value === '' ? null : Number(e.target.value))}
+            className="w-full border rounded px-2 py-1 font-mono"
+          />
+        </label>
+        <label className="space-y-1">
+          <div className="text-xs text-neutral-600">GATEWAZE_GOOSE_MAX_TOOL_REPETITIONS <span className="text-neutral-400">1–10,000</span></div>
+          <input
+            type="number"
+            min={1}
+            max={10000}
+            value={(overrides.GATEWAZE_GOOSE_MAX_TOOL_REPETITIONS as number) ?? ''}
+            onChange={(e) => update('GATEWAZE_GOOSE_MAX_TOOL_REPETITIONS', e.target.value === '' ? null : Number(e.target.value))}
+            className="w-full border rounded px-2 py-1 font-mono"
+          />
+        </label>
+        <label className="space-y-1 col-span-2">
+          <div className="text-xs text-neutral-600">GATEWAZE_MEMORY_DEFAULT_TTL_SECONDS <span className="text-neutral-400">0 = no expiry · max 1 year</span></div>
+          <input
+            type="number"
+            min={0}
+            max={31536000}
+            value={(overrides.GATEWAZE_MEMORY_DEFAULT_TTL_SECONDS as number) ?? ''}
+            onChange={(e) => update('GATEWAZE_MEMORY_DEFAULT_TTL_SECONDS', e.target.value === '' ? null : Number(e.target.value))}
+            className="w-full border rounded px-2 py-1 font-mono"
+          />
+        </label>
+      </div>
+    </Field>
   );
 }
 
