@@ -249,11 +249,21 @@ export async function runRecipeViaGoose(
     async function handleEvent(event: GooseStreamEvent): Promise<void> {
       await args.onStreamEvent?.(event);
 
-      if (event.type === 'Message') {
-        // Drill into Message.content[] looking for a tool_request
-        // whose name is the structured-output tool. The platform's
-        // recipe v1 always names this 'submit_result' (the in-house
-        // executor + the Goose runtime both follow Goose conventions).
+      // Goose's stream-json discriminators are lowercase: 'message',
+      // 'complete', 'error', 'notification'. Each event's shape is
+      // documented here against goose v1.34.x — re-validate when
+      // bumping the GOOSE_VERSION pin (Renovate PR notes carry the
+      // upstream changelog).
+      if (event.type === 'message') {
+        // Message events carry the assistant/user turn. Tool calls
+        // live as content[].type === 'toolRequest' with a `toolCall`
+        // object whose `.value.name` is the tool name and
+        // `.value.arguments` is the structured payload.
+        //
+        // For recipes with a response.json_schema (every Gatewaze-
+        // authored recipe does), Goose auto-injects a synthetic
+        // `recipe__final_output` tool whose arguments match the
+        // schema. That tool's call IS the structured output.
         const msg = (event.message ?? event) as Record<string, unknown>;
         const content = Array.isArray((msg as { content?: unknown }).content)
           ? ((msg as { content: unknown[] }).content)
@@ -261,18 +271,22 @@ export async function runRecipeViaGoose(
         for (const item of content) {
           if (!item || typeof item !== 'object') continue;
           const it = item as Record<string, unknown>;
-          // Goose's MessageContent enum tags vary by version; try
-          // common shapes. We don't fail if neither matches — the
-          // recipe just won't have structured output.
-          const tr = (it.tool_request ?? it.toolRequest ?? it.ToolRequest) as Record<string, unknown> | undefined;
-          if (!tr) continue;
-          const toolName = (tr.name ?? (tr as { tool_name?: string }).tool_name) as string | undefined;
-          if (toolName !== 'submit_result' && toolName !== 'submit_candidates') continue;
-          // The arguments are the structured output.
-          const argsField = (tr.arguments ?? tr.input ?? (tr as { params?: unknown }).params) as
-            | Record<string, unknown>
-            | string
-            | undefined;
+          if (it.type !== 'toolRequest') continue;
+          const toolCall = it.toolCall as Record<string, unknown> | undefined;
+          if (!toolCall || typeof toolCall !== 'object') continue;
+          const value = toolCall.value as Record<string, unknown> | undefined;
+          if (!value || typeof value !== 'object') continue;
+          const toolName = value.name;
+          // Capture the recipe-final-output synthetic tool plus any
+          // legacy in-house names we may have used during the
+          // transition window. Anything else is a regular tool call
+          // (web_search, fetch_url, MCP-served tools) — pass it through.
+          if (
+            toolName !== 'recipe__final_output' &&
+            toolName !== 'submit_result' &&
+            toolName !== 'submit_candidates'
+          ) continue;
+          const argsField = value.arguments;
           if (typeof argsField === 'string') {
             try {
               finalOutput = JSON.parse(argsField) as Record<string, unknown>;
@@ -283,19 +297,22 @@ export async function runRecipeViaGoose(
             finalOutput = argsField as Record<string, unknown>;
           }
         }
-      } else if (event.type === 'Complete') {
+      } else if (event.type === 'complete') {
+        // v1.34 emits only `total_tokens` — no input/output split.
+        // We attribute the whole figure to output_tokens for ledger
+        // purposes so the cost compute through ai_model_prices reads
+        // the same way an in-house chat run would (output is the
+        // primary cost driver for completion-heavy recipes; the price
+        // book's input rate just multiplies zero). When Goose grows a
+        // split we can wire it through here without touching callers.
         const cmp = event as Record<string, unknown>;
+        const total = numericOr(cmp.total_tokens ?? cmp.totalTokens, 0);
         totalIn = numericOr(cmp.input_tokens ?? cmp.inputTokens, 0);
-        totalOut = numericOr(cmp.output_tokens ?? cmp.outputTokens, 0);
-        const totalTokens = numericOr(cmp.total_tokens ?? cmp.totalTokens, totalIn + totalOut);
+        totalOut = numericOr(cmp.output_tokens ?? cmp.outputTokens, total - totalIn);
+        if (totalOut < 0) totalOut = total;
         provider = typeof cmp.provider === 'string' ? cmp.provider : null;
         model = typeof cmp.model === 'string' ? cmp.model : null;
-        // Goose doesn't ship a cost figure; we'd compute it via our
-        // price book once provider+model are known. recordUsage()
-        // does that lookup, so totalCost stays at 0 here — the row
-        // it writes will carry the real micro_usd.
-        void totalTokens;
-      } else if (event.type === 'Error') {
+      } else if (event.type === 'error') {
         const errMsg = typeof event.error === 'string' ? event.error : JSON.stringify(event.error);
         failureReason = `goose_runtime_error: ${errMsg}`;
       }
