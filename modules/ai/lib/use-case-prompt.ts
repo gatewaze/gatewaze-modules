@@ -1,5 +1,7 @@
 /**
- * Resolve the system prompt + kickoff message for an ai_use_case.
+ * Resolve the system prompt + kickoff message for an ai_use_case AND
+ * snapshot the provenance so callers can persist it on the resulting
+ * ai_messages row.
  *
  * Per migration 008_ai_use_cases_skill_ref:
  *   - If `skill_source_id` + `skill_path` are set AND a matching ai_skills
@@ -11,9 +13,17 @@
  *     (daily-briefing "Run research", future "Run on all tabs"). It is
  *     never sourced from a skill — kickoffs are intentionally short.
  *
+ * `skill_path` is matched against `ai_skills.dir_path` (the agentskills.io
+ * directory-as-skill identifier). For tolerance with legacy use-case rows
+ * that still carry a `<name>.md` or bare `<name>` shape, we also fall
+ * back to matching by `ai_skills.name` (the agentskills.io basename
+ * invariant guarantees uniqueness of name within a source).
+ *
  * Callers should treat both fields as "may be empty string" — that's the
  * documented "no prompt configured" state, not an error.
  */
+
+import { createHash } from 'node:crypto';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Supabase = { from(table: string): any };
@@ -22,6 +32,34 @@ export interface ReferenceImage {
   mimeType: string;
   /** Base64-encoded image bytes. */
   base64: string;
+}
+
+/**
+ * Provenance of the resolved system prompt + kickoff. Persisted onto
+ * ai_messages.prompt_source so the chat widget's "Run details" panel +
+ * audit queries can show which version was used for any past turn.
+ *
+ * Shape mirrors migration 023's column comment.
+ */
+export interface PromptSource {
+  use_case: string;
+  system_prompt: {
+    kind: 'skill' | 'inline' | 'fallback' | 'empty';
+    content_hash: string;
+    char_count: number;
+    skill?: {
+      source_id: string;
+      source_label: string | null;
+      name: string;
+      dir_path: string;
+      content_hash: string;
+      last_commit_sha: string;
+    };
+  };
+  kickoff_message: {
+    kind: 'inline' | 'empty';
+    char_count: number;
+  };
 }
 
 export interface UseCasePrompt {
@@ -36,6 +74,16 @@ export interface UseCasePrompt {
   referenceImages: ReferenceImage[];
   /** Which path produced systemPrompt — useful for logging. */
   source: 'skill' | 'inline' | 'empty';
+  /**
+   * Structured provenance the worker persists onto ai_messages.prompt_source.
+   * Always set; even an empty resolution carries kind='empty' so the
+   * audit trail is complete.
+   */
+  promptSource: PromptSource;
+}
+
+function sha256(s: string): string {
+  return createHash('sha256').update(s, 'utf-8').digest('hex');
 }
 
 export async function resolveUseCasePrompt(
@@ -48,7 +96,13 @@ export async function resolveUseCasePrompt(
     .eq('id', useCaseId)
     .maybeSingle();
   if (uc.error || !uc.data) {
-    return { systemPrompt: '', kickoffMessage: '', referenceImages: [], source: 'empty' };
+    return {
+      systemPrompt: '',
+      kickoffMessage: '',
+      referenceImages: [],
+      source: 'empty',
+      promptSource: emptyProvenance(useCaseId),
+    };
   }
   const row = uc.data as {
     system_prompt: string | null;
@@ -59,25 +113,39 @@ export async function resolveUseCasePrompt(
   const kickoffMessage = row.kickoff_message ?? '';
 
   if (row.skill_source_id && row.skill_path) {
-    const skill = await supabase
-      .from('ai_skills')
-      .select('body, reference_image_bytes, reference_image_mime')
-      .eq('source_id', row.skill_source_id)
-      .eq('path', row.skill_path)
-      .maybeSingle();
-    if (!skill.error && skill.data) {
-      const data = skill.data as {
-        body?: unknown;
-        reference_image_bytes?: unknown;
-        reference_image_mime?: unknown;
-      };
+    const skill = await lookupSkill(supabase, row.skill_source_id, row.skill_path);
+    if (skill && typeof skill.body === 'string' && skill.body.trim().length > 0) {
+      const sourceLabel = await lookupSourceLabel(supabase, row.skill_source_id);
       const referenceImages = extractReferenceImages(
-        data.reference_image_bytes,
-        data.reference_image_mime,
+        skill.reference_image_bytes,
+        skill.reference_image_mime,
       );
-      if (typeof data.body === 'string' && data.body.trim().length > 0) {
-        return { systemPrompt: data.body, kickoffMessage, referenceImages, source: 'skill' };
-      }
+      const resolvedHash = sha256(skill.body);
+      return {
+        systemPrompt: skill.body,
+        kickoffMessage,
+        referenceImages,
+        source: 'skill',
+        promptSource: {
+          use_case: useCaseId,
+          system_prompt: {
+            kind: 'skill',
+            content_hash: resolvedHash,
+            char_count: skill.body.length,
+            skill: {
+              source_id: row.skill_source_id,
+              source_label: sourceLabel,
+              name: skill.name,
+              dir_path: skill.dir_path,
+              content_hash: skill.content_hash,
+              last_commit_sha: skill.last_commit_sha,
+            },
+          },
+          kickoff_message: kickoffMessage.length > 0
+            ? { kind: 'inline', char_count: kickoffMessage.length }
+            : { kind: 'empty', char_count: 0 },
+        },
+      };
     }
     // Skill bound but missing/empty/inaccessible — fall through to inline.
   }
@@ -88,6 +156,94 @@ export async function resolveUseCasePrompt(
     kickoffMessage,
     referenceImages: [],
     source: inline.length > 0 ? 'inline' : 'empty',
+    promptSource: {
+      use_case: useCaseId,
+      system_prompt: {
+        kind: inline.length > 0 ? 'inline' : 'empty',
+        content_hash: inline.length > 0 ? sha256(inline) : '',
+        char_count: inline.length,
+      },
+      kickoff_message: kickoffMessage.length > 0
+        ? { kind: 'inline', char_count: kickoffMessage.length }
+        : { kind: 'empty', char_count: 0 },
+    },
+  };
+}
+
+/**
+ * Look up the bound skill. Tries `dir_path` first (current agentskills.io
+ * column, post-013) then falls back to `name` so legacy use-case rows
+ * that still carry just the skill name (or a `<name>.md` shape) keep
+ * resolving correctly during the transition window.
+ */
+async function lookupSkill(
+  supabase: Supabase,
+  sourceId: string,
+  skillPath: string,
+): Promise<SkillRow | null> {
+  // Primary: exact dir_path match.
+  const byPath = await supabase
+    .from('ai_skills')
+    .select('name, dir_path, body, content_hash, last_commit_sha, reference_image_bytes, reference_image_mime')
+    .eq('source_id', sourceId)
+    .eq('dir_path', skillPath)
+    .maybeSingle();
+  if (byPath?.data) return byPath.data as SkillRow;
+
+  // Fallback: strip a trailing /index.md or .md suffix and try by basename
+  // matched against `name` (per agentskills.io invariant
+  // basename(dir_path) === name).
+  const basename = stripLegacySuffix(skillPath).split('/').pop() ?? '';
+  if (basename.length === 0) return null;
+  const byName = await supabase
+    .from('ai_skills')
+    .select('name, dir_path, body, content_hash, last_commit_sha, reference_image_bytes, reference_image_mime')
+    .eq('source_id', sourceId)
+    .eq('name', basename)
+    .maybeSingle();
+  return (byName?.data as SkillRow | null) ?? null;
+}
+
+interface SkillRow {
+  name: string;
+  dir_path: string;
+  body: string;
+  content_hash: string;
+  last_commit_sha: string;
+  reference_image_bytes?: unknown;
+  reference_image_mime?: unknown;
+}
+
+function stripLegacySuffix(p: string): string {
+  if (p.endsWith('/index.md')) return p.slice(0, -'/index.md'.length);
+  if (p.endsWith('.md')) return p.slice(0, -'.md'.length);
+  return p;
+}
+
+async function lookupSourceLabel(
+  supabase: Supabase,
+  sourceId: string,
+): Promise<string | null> {
+  try {
+    const r = await supabase
+      .from('ai_skill_sources')
+      .select('label')
+      .eq('id', sourceId)
+      .maybeSingle();
+    if (r?.data && typeof (r.data as { label?: unknown }).label === 'string') {
+      return (r.data as { label: string }).label;
+    }
+  } catch {
+    // best-effort
+  }
+  return null;
+}
+
+function emptyProvenance(useCaseId: string): PromptSource {
+  return {
+    use_case: useCaseId,
+    system_prompt: { kind: 'empty', content_hash: '', char_count: 0 },
+    kickoff_message: { kind: 'empty', char_count: 0 },
   };
 }
 
@@ -121,4 +277,29 @@ function extractReferenceImages(
 
   if (!base64 || base64.length === 0) return [];
   return [{ mimeType: rawMime, base64 }];
+}
+
+/**
+ * Build a fallback PromptSource for callers that bypass resolveUseCasePrompt
+ * (e.g. daily-briefing's research-runner.ts which uses a hardcoded
+ * RESEARCH_SYSTEM_PROMPT when the use-case lookup returns empty).
+ * The worker handler calls this so the chat widget can still surface
+ * "kind=fallback" rather than "no provenance recorded".
+ */
+export function fallbackPromptSource(
+  useCaseId: string,
+  fallbackPrompt: string,
+  kickoffMessage: string,
+): PromptSource {
+  return {
+    use_case: useCaseId,
+    system_prompt: {
+      kind: 'fallback',
+      content_hash: fallbackPrompt.length > 0 ? sha256(fallbackPrompt) : '',
+      char_count: fallbackPrompt.length,
+    },
+    kickoff_message: kickoffMessage.length > 0
+      ? { kind: 'inline', char_count: kickoffMessage.length }
+      : { kind: 'empty', char_count: 0 },
+  };
 }

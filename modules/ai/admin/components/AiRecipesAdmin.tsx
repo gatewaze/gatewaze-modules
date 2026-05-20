@@ -674,6 +674,7 @@ function RunResultPanel({ run }: { run: RecipeRun }) {
           {run.failure_reason}
         </div>
       )}
+      {run.recipe_source && <RecipeSourceBadge run={run} />}
       <div>
         <div className="text-sm font-medium mb-1">Steps</div>
         <div className="rounded-md border overflow-hidden">
@@ -743,5 +744,61 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="block text-sm font-medium text-neutral-700 mb-1">{label}</span>
       {children}
     </label>
+  );
+}
+
+/**
+ * Provenance badge — surfaces which recipe version + commit was used.
+ * Lets operators verify that a recipe update has actually rolled out.
+ * Migration 023.
+ */
+function RecipeSourceBadge({ run }: { run: RecipeRun }): JSX.Element | null {
+  const src = run.recipe_source;
+  if (!src) return null;
+  const shortHash = (s: string | null | undefined): string => {
+    if (!s) return '—';
+    const h = s.replace(/^sha256:/, '');
+    return h.length >= 8 ? h.slice(0, 8) : h;
+  };
+  const isInline = src.kind === 'inline';
+  return (
+    <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs space-y-1">
+      <div className="font-medium text-neutral-700">Recipe source</div>
+      <ProvenanceRow label="Kind" value={isInline ? 'inline (no source row)' : 'source-registered'} />
+      {!isInline && src.source && (
+        <>
+          <ProvenanceRow label="Source" value={`${src.source.label} (${src.source.branch})`} />
+          <ProvenanceRow
+            label="Source commit"
+            value={shortHash(src.source.last_synced_commit)}
+          />
+        </>
+      )}
+      {src.file_path && <ProvenanceRow label="File path" value={src.file_path} />}
+      <ProvenanceRow label="Recipe content hash" value={shortHash(src.content_hash)} />
+      {src.last_commit_sha && (
+        <ProvenanceRow label="Recipe commit" value={shortHash(src.last_commit_sha)} />
+      )}
+      {src.sub_recipes.length > 0 && (
+        <>
+          <div className="text-neutral-500 pt-1">Sub-recipes ({src.sub_recipes.length})</div>
+          {src.sub_recipes.map((sr) => (
+            <div key={sr.file_path} className="ml-3 flex gap-2 items-baseline">
+              <span className="font-mono text-neutral-700">{sr.file_path}</span>
+              <span className="text-neutral-500">@ {shortHash(sr.last_commit_sha)}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProvenanceRow({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="flex gap-2 items-baseline">
+      <div className="w-40 shrink-0 text-neutral-500">{label}</div>
+      <div className="font-mono text-neutral-800 break-all">{value}</div>
+    </div>
   );
 }

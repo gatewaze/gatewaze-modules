@@ -989,6 +989,15 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
         steps: [],
         recipe_snapshot: parsed.recipe as unknown as Record<string, unknown>,
         sub_recipes_snapshot: {} as Record<string, unknown>,
+        recipe_source: {
+          kind: 'inline',
+          recipe_id: null,
+          file_path: null,
+          content_hash: parsed.recipe.content_hash,
+          last_commit_sha: null,
+          source: null,
+          sub_recipes: [],
+        } as unknown as Record<string, unknown>,
       })
       .select('id')
       .maybeSingle();

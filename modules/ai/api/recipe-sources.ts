@@ -438,6 +438,63 @@ export function mountRecipeSourceRoutes(router: Router, deps: Deps): void {
     const subRecipesSnapshot: Record<string, ParsedRecipe> = {};
     for (const [k, v] of subRecipes.entries()) subRecipesSnapshot[k] = v;
 
+    // Provenance snapshot — migration 023. Captures the git source-ref
+    // (label / commit sha) so an audit can answer "which version of
+    // this recipe was used for that run" even after the source has
+    // been updated/deleted.
+    const sourceLookup = await deps.supabase
+      .from('ai_recipe_sources')
+      .select('id, label, git_url, branch, last_synced_commit')
+      .eq('id', row.source_id)
+      .maybeSingle();
+    const sourceRow = (sourceLookup?.data ?? null) as {
+      id: string;
+      label: string;
+      git_url: string;
+      branch: string;
+      last_synced_commit: string | null;
+    } | null;
+
+    // Pull sub-recipe rows again (lightweight projection) for per-sub
+    // commit shas. The full body is already in sub_recipes_snapshot.
+    const subRecipeProvenance: Array<{
+      file_path: string;
+      content_hash: string;
+      last_commit_sha: string;
+    }> = [];
+    if (recipe.sub_recipes.length > 0) {
+      const subProv = await deps.supabase
+        .from('ai_recipes')
+        .select('file_path, content_hash, last_commit_sha')
+        .eq('source_id', row.source_id)
+        .in('file_path', recipe.sub_recipes.map((s) => s.path));
+      for (const sr of (subProv?.data as Array<{
+        file_path: string;
+        content_hash: string;
+        last_commit_sha: string;
+      }> | null) ?? []) {
+        subRecipeProvenance.push(sr);
+      }
+    }
+
+    const recipeSource = {
+      kind: 'source-registered' as const,
+      recipe_id: id,
+      file_path: row.file_path,
+      content_hash: recipe.content_hash,
+      last_commit_sha: row.last_commit_sha,
+      source: sourceRow
+        ? {
+            id: sourceRow.id,
+            label: sourceRow.label,
+            git_url: sourceRow.git_url,
+            branch: sourceRow.branch,
+            last_synced_commit: sourceRow.last_synced_commit,
+          }
+        : null,
+      sub_recipes: subRecipeProvenance,
+    };
+
     const insertRes = await deps.supabase
       .from('ai_recipe_runs')
       .insert({
@@ -453,6 +510,7 @@ export function mountRecipeSourceRoutes(router: Router, deps: Deps): void {
         steps: [],
         recipe_snapshot: recipe as unknown as Record<string, unknown>,
         sub_recipes_snapshot: subRecipesSnapshot as unknown as Record<string, unknown>,
+        recipe_source: recipeSource as unknown as Record<string, unknown>,
       })
       .select('id')
       .maybeSingle();
