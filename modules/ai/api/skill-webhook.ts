@@ -241,7 +241,7 @@ export function mountSkillWebhookRoute(router: Router, deps: Deps): void {
       // Read the source's configured branch (separate small lookup —
       // could fold into getWebhookSecret if it becomes hot).
       const branchRes = await deps.supabase
-        .from('ai_skill_sources')
+        .from('ai_agent_sources')
         .select('branch')
         .eq('id', sourceId)
         .maybeSingle();

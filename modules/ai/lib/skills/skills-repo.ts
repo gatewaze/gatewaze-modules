@@ -1,8 +1,8 @@
 /**
  * Data-access for the AI Skills feature.
  *
- * Centralises all reads/writes for `ai_skill_sources`, `ai_skills`, and
- * `ai_skill_source_webhook_log` so routes stay declarative and the
+ * Centralises all reads/writes for `ai_agent_sources`, `ai_skills`, and
+ * `ai_agent_source_webhook_log` so routes stay declarative and the
  * tests can mock one Supabase shim.
  *
  * Per spec-ai-skills.md §10 — every public endpoint maps to one of
@@ -114,7 +114,7 @@ function project(row: SkillSourceRow): SkillSourceResponse {
 
 export async function listSources(supabase: SupabaseLike): Promise<SkillSourceResponse[]> {
   const res = await supabase
-    .from('ai_skill_sources')
+    .from('ai_agent_sources')
     .select('*')
     .order('created_at', { ascending: false });
   const rows = (res?.data as SkillSourceRow[] | null) ?? [];
@@ -122,7 +122,7 @@ export async function listSources(supabase: SupabaseLike): Promise<SkillSourceRe
 }
 
 export async function readSource(supabase: SupabaseLike, id: string): Promise<SkillSourceResponse | null> {
-  const res = await supabase.from('ai_skill_sources').select('*').eq('id', id).maybeSingle();
+  const res = await supabase.from('ai_agent_sources').select('*').eq('id', id).maybeSingle();
   const row = res?.data as SkillSourceRow | null;
   return row ? project(row) : null;
 }
@@ -174,7 +174,7 @@ export async function createSource(
     sync_status: 'pending',
     created_by: input.created_by ?? null,
   };
-  const res = await supabase.from('ai_skill_sources').insert(insert).select('*').single();
+  const res = await supabase.from('ai_agent_sources').insert(insert).select('*').single();
   if (res?.error) return { ok: false, reason: res.error.message ?? 'insert_failed' };
   const row = res.data as SkillSourceRow;
   return { ok: true, row: project(row), webhook_secret: row.webhook_secret };
@@ -223,7 +223,7 @@ export async function updateSource(
       };
     }
   }
-  const res = await supabase.from('ai_skill_sources').update(update).eq('id', id).select('*').single();
+  const res = await supabase.from('ai_agent_sources').update(update).eq('id', id).select('*').single();
   if (res?.error) return { ok: false, reason: res.error.message ?? 'update_failed' };
   return { ok: true, row: project(res.data as SkillSourceRow) };
 }
@@ -238,7 +238,7 @@ export async function deleteSource(
     .select('id', { count: 'exact', head: true })
     .eq('source_id', id);
   const cascaded = countRes?.count ?? 0;
-  const res = await supabase.from('ai_skill_sources').delete().eq('id', id);
+  const res = await supabase.from('ai_agent_sources').delete().eq('id', id);
   if (res?.error) return { deleted: false, reason: res.error.message ?? 'delete_failed' };
   return { deleted: true, cascadedSkillCount: cascaded };
 }
@@ -249,7 +249,7 @@ export async function rotateWebhookSecret(
 ): Promise<{ ok: true; webhook_secret: string } | { ok: false; reason: string }> {
   const newSecret = randomBytes(32).toString('hex');
   const res = await supabase
-    .from('ai_skill_sources')
+    .from('ai_agent_sources')
     .update({ webhook_secret: newSecret })
     .eq('id', id)
     .select('id')
@@ -264,7 +264,7 @@ export async function getWebhookSecret(
   id: string,
 ): Promise<{ secret: string; provider: 'github' | 'gitlab' | 'gitea' } | null> {
   const res = await supabase
-    .from('ai_skill_sources')
+    .from('ai_agent_sources')
     .select('webhook_secret, webhook_provider')
     .eq('id', id)
     .maybeSingle();
@@ -301,7 +301,7 @@ export interface ListSkillsFilter {
 }
 
 const SKILL_LIST_COLS =
-  'id, source_id, dir_path, name, description, metadata, body_chars, parse_status, updated_at, source:ai_skill_sources!source_id(label)';
+  'id, source_id, dir_path, name, description, metadata, body_chars, parse_status, updated_at, source:ai_agent_sources!source_id(label)';
 
 export async function listSkills(
   supabase: SupabaseLike,
@@ -376,7 +376,7 @@ export async function listWebhookLog(
   limit = 50,
 ): Promise<WebhookLogEntry[]> {
   const res = await supabase
-    .from('ai_skill_source_webhook_log')
+    .from('ai_agent_source_webhook_log')
     .select('*')
     .eq('source_id', sourceId)
     .order('received_at', { ascending: false })
@@ -388,7 +388,7 @@ export async function writeWebhookLog(
   supabase: SupabaseLike,
   entry: Omit<WebhookLogEntry, 'id' | 'received_at'> & { received_at?: string },
 ): Promise<void> {
-  await supabase.from('ai_skill_source_webhook_log').insert({
+  await supabase.from('ai_agent_source_webhook_log').insert({
     source_id: entry.source_id,
     received_at: entry.received_at ?? new Date().toISOString(),
     remote_addr: entry.remote_addr,

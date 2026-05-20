@@ -2,7 +2,7 @@
  * Data-access for the Recipes feature.
  *
  * Parallels `lib/skills/skills-repo.ts`. Centralises reads/writes for
- * `ai_recipe_sources` + `ai_recipes` so the route handlers stay
+ * `ai_agent_sources` + `ai_recipes` so the route handlers stay
  * declarative.
  */
 
@@ -76,7 +76,7 @@ function projectSource(row: RecipeSourceRow): RecipeSourceResponse {
 
 export async function listRecipeSources(supabase: SupabaseLike): Promise<RecipeSourceResponse[]> {
   const res = await supabase
-    .from('ai_recipe_sources')
+    .from('ai_agent_sources')
     .select('*')
     .order('created_at', { ascending: false });
   const rows = (res?.data as RecipeSourceRow[] | null) ?? [];
@@ -87,7 +87,7 @@ export async function readRecipeSource(
   supabase: SupabaseLike,
   id: string,
 ): Promise<RecipeSourceResponse | null> {
-  const res = await supabase.from('ai_recipe_sources').select('*').eq('id', id).maybeSingle();
+  const res = await supabase.from('ai_agent_sources').select('*').eq('id', id).maybeSingle();
   const row = res?.data as RecipeSourceRow | null;
   return row ? projectSource(row) : null;
 }
@@ -137,7 +137,7 @@ export async function createRecipeSource(
     sync_status: 'pending',
     created_by: input.created_by ?? null,
   };
-  const res = await supabase.from('ai_recipe_sources').insert(insert).select('*').single();
+  const res = await supabase.from('ai_agent_sources').insert(insert).select('*').single();
   if (res?.error) return { ok: false, reason: res.error.message ?? 'insert_failed' };
   const row = res.data as RecipeSourceRow;
   return { ok: true, row: projectSource(row), webhook_secret: row.webhook_secret };
@@ -182,7 +182,7 @@ export async function updateRecipeSource(
       };
     }
   }
-  const res = await supabase.from('ai_recipe_sources').update(update).eq('id', id).select('*').single();
+  const res = await supabase.from('ai_agent_sources').update(update).eq('id', id).select('*').single();
   if (res?.error) return { ok: false, reason: res.error.message ?? 'update_failed' };
   return { ok: true, row: projectSource(res.data as RecipeSourceRow) };
 }
@@ -196,7 +196,7 @@ export async function deleteRecipeSource(
     .select('id', { count: 'exact', head: true })
     .eq('source_id', id);
   const cascaded = countRes?.count ?? 0;
-  const res = await supabase.from('ai_recipe_sources').delete().eq('id', id);
+  const res = await supabase.from('ai_agent_sources').delete().eq('id', id);
   if (res?.error) return { deleted: false, reason: res.error.message ?? 'delete_failed' };
   return { deleted: true, cascadedRecipeCount: cascaded };
 }
@@ -207,7 +207,7 @@ export async function rotateRecipeWebhookSecret(
 ): Promise<{ ok: true; webhook_secret: string } | { ok: false; reason: string }> {
   const newSecret = randomBytes(32).toString('hex');
   const res = await supabase
-    .from('ai_recipe_sources')
+    .from('ai_agent_sources')
     .update({ webhook_secret: newSecret })
     .eq('id', id)
     .select('id')
@@ -232,7 +232,7 @@ export interface RecipeListItem {
 }
 
 const RECIPE_LIST_COLS =
-  'id, source_id, file_path, title, description, parse_status, sub_recipe_refs, updated_at, source:ai_recipe_sources!source_id(label)';
+  'id, source_id, file_path, title, description, parse_status, sub_recipe_refs, updated_at, source:ai_agent_sources!source_id(label)';
 
 export async function listRecipes(
   supabase: SupabaseLike,
@@ -313,7 +313,7 @@ export async function getRecipeWebhookSecret(
   id: string,
 ): Promise<{ secret: string; provider: 'github' | 'gitlab' | 'gitea' } | null> {
   const res = await supabase
-    .from('ai_recipe_sources')
+    .from('ai_agent_sources')
     .select('webhook_secret, webhook_provider')
     .eq('id', id)
     .maybeSingle();
@@ -341,7 +341,7 @@ export async function listRecipeWebhookLog(
   limit = 50,
 ): Promise<RecipeWebhookLogEntry[]> {
   const res = await supabase
-    .from('ai_recipe_source_webhook_log')
+    .from('ai_agent_source_webhook_log')
     .select('*')
     .eq('source_id', sourceId)
     .order('received_at', { ascending: false })
@@ -353,7 +353,7 @@ export async function writeRecipeWebhookLog(
   supabase: SupabaseLike,
   entry: Omit<RecipeWebhookLogEntry, 'id' | 'received_at'> & { received_at?: string },
 ): Promise<void> {
-  await supabase.from('ai_recipe_source_webhook_log').insert({
+  await supabase.from('ai_agent_source_webhook_log').insert({
     source_id: entry.source_id,
     received_at: entry.received_at ?? new Date().toISOString(),
     remote_addr: entry.remote_addr,

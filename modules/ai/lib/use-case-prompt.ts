@@ -226,7 +226,7 @@ async function lookupSourceLabel(
 ): Promise<string | null> {
   try {
     const r = await supabase
-      .from('ai_skill_sources')
+      .from('ai_agent_sources')
       .select('label')
       .eq('id', sourceId)
       .maybeSingle();

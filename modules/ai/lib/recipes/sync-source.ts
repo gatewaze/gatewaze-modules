@@ -77,7 +77,7 @@ export async function syncRecipeSource(args: SyncRecipeSourceArgs): Promise<Sync
   // 1. Claim the lock atomically.
   const lockToken = randomUUID();
   const claimRes = await args.supabase
-    .from('ai_recipe_sources')
+    .from('ai_agent_sources')
     .update({
       sync_status: 'syncing',
       sync_lock_token: lockToken,
@@ -286,7 +286,7 @@ export async function syncRecipeSource(args: SyncRecipeSourceArgs): Promise<Sync
 
     try {
       await args.supabase
-        .from('ai_recipe_sources')
+        .from('ai_agent_sources')
         .update({
           sync_status: 'error',
           sync_error: reason.slice(0, 1000),
@@ -484,7 +484,7 @@ async function releaseLock(
   errorMsg: string | null,
 ): Promise<void> {
   await supabase
-    .from('ai_recipe_sources')
+    .from('ai_agent_sources')
     .update({
       sync_status: errorMsg ? 'ok' : 'ok',
       sync_error: errorMsg,
