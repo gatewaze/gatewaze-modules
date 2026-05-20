@@ -13,6 +13,7 @@
 
 import type { Router, Request, Response } from 'express';
 import { encryptSecret } from '../lib/skills/secret-shim.js';
+import { checkSsrfSafe } from '../lib/secrets/ssrf-guard.js';
 
 interface SupabaseLike {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -248,6 +249,12 @@ export function mountMcpServerRoutes(router: Router, deps: MountDeps): void {
       if (e1) return sendError(res, 400, 'validation_error', e1);
       const e2 = validateHttpHeaders(headers);
       if (e2) return sendError(res, 400, 'validation_error', e2);
+      // SSRF defense: resolve hostname + reject any non-public address.
+      // Defence-in-depth — the connect-time check happens too.
+      const ssrf = await checkSsrfSafe(uri as string);
+      if (!ssrf.ok) {
+        return sendError(res, 400, 'ssrf_blocked', `URI rejected by SSRF guard: ${ssrf.reason}`, ssrf.details);
+      }
       if (bearer_token !== undefined && bearer_token !== null && typeof bearer_token !== 'string') {
         return sendError(res, 400, 'validation_error', 'bearer_token must be a string');
       }

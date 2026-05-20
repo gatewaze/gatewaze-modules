@@ -125,6 +125,20 @@ export interface AiUseCase {
   recipe_source_id: string | null;
   /** Path of the recipe.yaml within the agent source (e.g. recipes/foo/recipe.yaml). */
   recipe_file_path: string | null;
+  /**
+   * spec-ai-mcp-extensions.md round 7 — jsonb map of allowlisted env
+   * overrides (GOOSE_AUTO_COMPACT_THRESHOLD, GOOSE_TOOL_CALL_CUTOFF,
+   * GOOSE_MODE, CLAUDE_THINKING_TYPE, GATEWAZE_GOOSE_MAX_*,
+   * GATEWAZE_MEMORY_DEFAULT_TTL_SECONDS). DB trigger validates keys
+   * + ranges. Empty object = use worker env defaults.
+   */
+  goose_runtime_overrides: Record<string, unknown>;
+  /**
+   * spec-ai-mcp-extensions.md round 8 — adopted template id. Drift
+   * flag flips on any subsequent edit to a template-controlled field.
+   */
+  template_id: string | null;
+  template_drifted: boolean;
   created_at: string;
   updated_at: string;
 }
