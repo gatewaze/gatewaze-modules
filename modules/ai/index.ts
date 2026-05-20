@@ -54,6 +54,7 @@ const aiModule: GatewazeModule = {
     'migrations/020_ai_recipe_runs_snapshot.sql',
     'migrations/021_ai_run_state_machine.sql',
     'migrations/022_ai_run_state_machine_relax.sql',
+    'migrations/023_ai_run_provenance.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due skill sources every 5

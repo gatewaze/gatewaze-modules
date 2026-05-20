@@ -45,6 +45,7 @@ import {
   type AiProvider,
   type AiThread,
 } from '../utils/aiService';
+import RunDetails from './RunDetails';
 
 const POLL_INTERVAL_MS = 4_000;
 const POLL_BACKOFF_AT_MS = 60_000;
@@ -355,14 +356,20 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
               if (structuredJsx) {
                 return (
                   <div key={m.id} className="flex justify-start">
-                    <div className="max-w-[90%] w-full">{structuredJsx}</div>
+                    <div className="max-w-[90%] w-full">
+                      {structuredJsx}
+                      <RunDetails message={m} />
+                    </div>
                   </div>
                 );
               }
               return (
                 <div key={m.id} className="flex justify-start">
-                  <div className="max-w-[90%] rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
-                    {m.content}
+                  <div className="max-w-[90%]">
+                    <div className="rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
+                      {m.content}
+                    </div>
+                    {m.role === 'assistant' && <RunDetails message={m} />}
                   </div>
                 </div>
               );

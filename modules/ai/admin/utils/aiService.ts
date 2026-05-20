@@ -31,6 +31,28 @@ export interface AiThread {
   created_by: string | null;
 }
 
+export interface PromptSourceSnapshot {
+  use_case: string;
+  system_prompt: {
+    kind: 'skill' | 'inline' | 'fallback' | 'empty';
+    content_hash: string;
+    char_count: number;
+    skill?: {
+      source_id: string;
+      source_label: string | null;
+      name: string;
+      dir_path: string;
+      content_hash: string;
+      last_commit_sha: string;
+    };
+    note?: string;
+  };
+  kickoff_message: {
+    kind: 'inline' | 'empty';
+    char_count: number;
+  };
+}
+
 export interface AiMessage {
   id: string;
   thread_id: string;
@@ -47,6 +69,8 @@ export interface AiMessage {
   error_code: string | null;
   error_message: string | null;
   created_at: string;
+  /** Provenance snapshot captured at run time. Migration 023. */
+  prompt_source: PromptSourceSnapshot | null;
 }
 
 export interface AiUseCase {

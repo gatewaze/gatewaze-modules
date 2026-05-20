@@ -79,6 +79,26 @@ export interface RecipeFull {
   updated_at: string;
 }
 
+export interface RecipeSourceSnapshot {
+  kind: 'source-registered' | 'inline';
+  recipe_id: string | null;
+  file_path: string | null;
+  content_hash: string;
+  last_commit_sha: string | null;
+  source: {
+    id: string;
+    label: string;
+    git_url: string;
+    branch: string;
+    last_synced_commit: string | null;
+  } | null;
+  sub_recipes: Array<{
+    file_path: string;
+    content_hash: string;
+    last_commit_sha: string;
+  }>;
+}
+
 export interface RecipeRun {
   id: string;
   recipe_id: string | null;
@@ -110,6 +130,8 @@ export interface RecipeRun {
   started_at: string;
   completed_at: string | null;
   duration_ms: number | null;
+  /** Provenance snapshot captured at enqueue time. Migration 023. */
+  recipe_source: RecipeSourceSnapshot | null;
 }
 
 export interface ServiceError {
