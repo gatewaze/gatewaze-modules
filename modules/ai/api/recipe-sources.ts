@@ -1,45 +1,25 @@
 /**
- * Recipe sources + recipes — admin REST endpoints.
+ * Recipe browsing + run endpoints.
  *
- * Routes (per spec-ai-workflows-and-skill-interop.md §5.1):
- *   GET    /recipe-sources
- *   POST   /recipe-sources
- *   GET    /recipe-sources/:id
- *   PATCH  /recipe-sources/:id
- *   DELETE /recipe-sources/:id
- *   POST   /recipe-sources/:id/sync
- *   POST   /recipe-sources/:id/test-connection
- *   POST   /recipe-sources/:id/rotate-webhook-secret
+ * After migration 024 + the unified agent-sources surface, this file
+ * only owns recipe-level operations (listing, reading, running). Source
+ * CRUD moved to api/agent-sources.ts. The exported handler name stays
+ * `mountRecipeSourceRoutes` for now to avoid an unnecessary
+ * register-routes rename.
  *
- *   GET    /recipes
- *   GET    /recipes/:id
- *   POST   /recipes/:id/run                     (per-id run; v1 has
- *                                                 inline-only via the
- *                                                 admin-routes.ts handler)
- *
- * Auth model mirrors the skills routes (decodeJwt + admin_profiles
- * check). The per-id run handler is here (not in admin-routes.ts)
- * because it reads from ai_recipes; the inline runner stays where
- * recipe parsing is co-located.
+ * Routes:
+ *   GET    /recipes              — list recipes (browsing)
+ *   GET    /recipes/:id          — read one recipe
+ *   POST   /recipes/:id/run      — enqueue ai:run-recipe
  */
 
 import type { Response, Router } from 'express';
 
 import {
-  createRecipeSource,
-  deleteRecipeSource,
-  listRecipeSources,
   listRecipes,
   readRecipe,
-  readRecipeSource,
-  rotateRecipeWebhookSecret,
-  updateRecipeSource,
-  type UpdateRecipeSourceInput,
 } from '../lib/recipes/recipes-repo.js';
-import { gitLsRemote, GitError } from '../lib/skills/git-client.js';
-import { decryptSecret } from '../lib/skills/secret-shim.js';
-import { recipesConfig } from '../lib/recipes/recipes-config.js';
-import { parseRecipe, type ParsedRecipe } from '../lib/recipes/parse-recipe.js';
+import { type ParsedRecipe } from '../lib/recipes/parse-recipe.js';
 import { runRecipe, type RecipeParamValue } from '../lib/recipes/run-recipe.js';
 import { enqueueRecipeRunJob } from '../lib/jobs/enqueue.js';
 import { getLastConnectError, pingRedis } from '../lib/jobs/redis-client.js';
@@ -107,187 +87,9 @@ async function requireAdmin(
   }
 }
 
-function isPathPrefixSafe(p: string): boolean {
-  if (p === '') return true;
-  if (p.startsWith('/')) return false;
-  if (p.split('/').some((seg) => seg === '..')) return false;
-  return /^[A-Za-z0-9_./-]+$/.test(p);
-}
-
 // ─── Routes ──────────────────────────────────────────────────────────
 
 export function mountRecipeSourceRoutes(router: Router, deps: Deps): void {
-  // ─── SOURCES: LIST ────────────────────────────────────────────────
-  router.get('/recipe-sources', async (req: RequestWithUser, res: Response) => {
-    if (!(await requireAdmin(deps, req.userId, res))) return;
-    try {
-      const sources = await listRecipeSources(deps.supabase);
-      res.status(200).json({ sources });
-    } catch (err) {
-      sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
-    }
-  });
-
-  // ─── SOURCES: CREATE ──────────────────────────────────────────────
-  router.post('/recipe-sources', async (req: RequestWithUser, res: Response) => {
-    if (!(await requireAdmin(deps, req.userId, res, true))) return;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const label = typeof body.label === 'string' ? body.label.trim() : '';
-    const git_url = typeof body.git_url === 'string' ? body.git_url.trim() : '';
-    if (!label) return sendError(res, 400, 'invalid_input', 'label is required');
-    if (!git_url) return sendError(res, 400, 'invalid_input', 'git_url is required');
-    if (!git_url.startsWith('https://')) {
-      return sendError(res, 400, 'invalid_input', 'git_url must start with https://');
-    }
-    const branch = typeof body.branch === 'string' ? body.branch.trim() : 'main';
-    const path_prefix = typeof body.path_prefix === 'string' ? body.path_prefix.trim() : '';
-    if (!isPathPrefixSafe(path_prefix)) {
-      return sendError(res, 400, 'invalid_input', 'path_prefix contains forbidden characters or traversal');
-    }
-    const description = typeof body.description === 'string' ? body.description : undefined;
-    const auth_token =
-      typeof body.auth_token === 'string' && body.auth_token.length > 0 ? body.auth_token : undefined;
-    const webhook_provider =
-      body.webhook_provider === 'gitlab' || body.webhook_provider === 'gitea'
-        ? body.webhook_provider
-        : 'github';
-
-    const result = await createRecipeSource(deps.supabase, {
-      label,
-      description,
-      git_url,
-      branch,
-      path_prefix,
-      auth_token,
-      webhook_provider,
-      created_by: req.userId,
-    });
-    if (!result.ok) return sendError(res, 500, 'internal_error', result.reason);
-    res.status(201).json({ ...result.row, webhook_secret: result.webhook_secret });
-  });
-
-  // ─── SOURCES: READ ────────────────────────────────────────────────
-  router.get('/recipe-sources/:id', async (req: RequestWithUser, res: Response) => {
-    if (!(await requireAdmin(deps, req.userId, res))) return;
-    const id = req.params.id;
-    if (!id) return sendError(res, 400, 'invalid_input', 'id required');
-    const row = await readRecipeSource(deps.supabase, id);
-    if (!row) return sendError(res, 404, 'not_found', 'recipe source not found');
-    res.status(200).json(row);
-  });
-
-  // ─── SOURCES: PATCH ───────────────────────────────────────────────
-  router.patch('/recipe-sources/:id', async (req: RequestWithUser, res: Response) => {
-    if (!(await requireAdmin(deps, req.userId, res, true))) return;
-    const id = req.params.id;
-    if (!id) return sendError(res, 400, 'invalid_input', 'id required');
-    const body = (req.body ?? {}) as Record<string, unknown>;
-
-    const patch: UpdateRecipeSourceInput = {};
-    if (typeof body.label === 'string') patch.label = body.label.trim();
-    if ('description' in body)
-      patch.description = body.description == null ? null : String(body.description);
-    if (typeof body.git_url === 'string') {
-      if (!body.git_url.startsWith('https://')) {
-        return sendError(res, 400, 'invalid_input', 'git_url must start with https://');
-      }
-      patch.git_url = body.git_url.trim();
-    }
-    if (typeof body.branch === 'string') patch.branch = body.branch.trim();
-    if (typeof body.path_prefix === 'string') {
-      if (!isPathPrefixSafe(body.path_prefix)) {
-        return sendError(res, 400, 'invalid_input', 'path_prefix contains forbidden characters or traversal');
-      }
-      patch.path_prefix = body.path_prefix.trim();
-    }
-    if (typeof body.webhook_provider === 'string' && ['github', 'gitlab', 'gitea'].includes(body.webhook_provider)) {
-      patch.webhook_provider = body.webhook_provider as 'github' | 'gitlab' | 'gitea';
-    }
-    if ('auth_token' in body) {
-      if (body.auth_token === null) patch.auth_token = null;
-      else if (typeof body.auth_token === 'string') patch.auth_token = body.auth_token;
-    }
-
-    const result = await updateRecipeSource(deps.supabase, id, patch);
-    if (!result.ok) return sendError(res, 500, 'internal_error', result.reason);
-    res.status(200).json(result.row);
-  });
-
-  // ─── SOURCES: DELETE ──────────────────────────────────────────────
-  router.delete('/recipe-sources/:id', async (req: RequestWithUser, res: Response) => {
-    if (!(await requireAdmin(deps, req.userId, res, true))) return;
-    const id = req.params.id;
-    if (!id) return sendError(res, 400, 'invalid_input', 'id required');
-    const result = await deleteRecipeSource(deps.supabase, id);
-    if (!result.deleted) return sendError(res, 500, 'internal_error', result.reason);
-    res.status(200).json({ deleted: true, cascaded_recipe_count: result.cascadedRecipeCount });
-  });
-
-  // ─── SOURCES: SYNC NOW ────────────────────────────────────────────
-  router.post('/recipe-sources/:id/sync', async (req: RequestWithUser, res: Response) => {
-    if (!(await requireAdmin(deps, req.userId, res))) return;
-    const id = req.params.id;
-    if (!id) return sendError(res, 400, 'invalid_input', 'id required');
-    if (!deps.enqueueJob) {
-      return sendError(res, 503, 'internal_error', 'job enqueue helper unavailable in this runtime');
-    }
-    const row = await readRecipeSource(deps.supabase, id);
-    if (!row) return sendError(res, 404, 'not_found', 'recipe source not found');
-
-    try {
-      const job = await deps.enqueueJob('jobs', 'ai.sync-one-recipe-source', {
-        kind: 'ai.sync-one-recipe-source',
-        source_id: id,
-        trigger: 'manual',
-      });
-      res.status(202).json({ job_id: job.id, status: 'queued' });
-    } catch (err) {
-      sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
-    }
-  });
-
-  // ─── SOURCES: TEST CONNECTION ─────────────────────────────────────
-  router.post('/recipe-sources/:id/test-connection', async (req: RequestWithUser, res: Response) => {
-    if (!(await requireAdmin(deps, req.userId, res))) return;
-    const id = req.params.id;
-    if (!id) return sendError(res, 400, 'invalid_input', 'id required');
-    const fullRes = await deps.supabase
-      .from('ai_agent_sources')
-      .select('git_url, branch, auth_token_ciphertext')
-      .eq('id', id)
-      .maybeSingle();
-    const row = fullRes?.data as { git_url: string; branch: string; auth_token_ciphertext: string | null } | null;
-    if (!row) return sendError(res, 404, 'not_found', 'recipe source not found');
-
-    const authToken = row.auth_token_ciphertext ? decryptSecret(row.auth_token_ciphertext) : null;
-    try {
-      const headSha = await gitLsRemote({
-        url: row.git_url,
-        branch: row.branch,
-        authToken,
-        timeoutMs: Math.min(5000, recipesConfig.recipeSyncTimeoutMs),
-      });
-      res.status(200).json({ ok: true, head_sha: headSha });
-    } catch (err) {
-      const code = err instanceof GitError ? err.code : 'git_error';
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(200).json({ ok: false, error: `${code}: ${message}` });
-    }
-  });
-
-  // ─── SOURCES: ROTATE WEBHOOK SECRET ───────────────────────────────
-  router.post('/recipe-sources/:id/rotate-webhook-secret', async (req: RequestWithUser, res: Response) => {
-    if (!(await requireAdmin(deps, req.userId, res, true))) return;
-    const id = req.params.id;
-    if (!id) return sendError(res, 400, 'invalid_input', 'id required');
-    const result = await rotateRecipeWebhookSecret(deps.supabase, id);
-    if (!result.ok) {
-      const status = result.reason === 'not_found' ? 404 : 500;
-      return sendError(res, status, result.reason === 'not_found' ? 'not_found' : 'internal_error', result.reason);
-    }
-    res.status(200).json({ webhook_secret: result.webhook_secret });
-  });
-
   // ─── RECIPES: LIST ────────────────────────────────────────────────
   router.get('/recipes', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res))) return;

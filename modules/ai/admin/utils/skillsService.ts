@@ -5,7 +5,7 @@
  * envelopes, ok-or-error discriminated unions for ergonomic call
  * sites.
  *
- * Routes are mounted by api/skill-sources.ts + api/skills.ts; see
+ * Routes are mounted by api/agent-sources.ts + api/skills.ts; see
  * spec-ai-skills.md §10 for the contract.
  */
 
@@ -118,7 +118,7 @@ async function parseError(res: Response): Promise<ServiceError> {
 
 export const SkillsService = {
   async listSources(): Promise<Result<SkillSource[]>> {
-    const r = await authedFetch('/api/modules/ai/admin/skill-sources');
+    const r = await authedFetch('/api/modules/ai/admin/agent-sources');
     if (!r.ok) return { ok: false, error: await parseError(r) };
     const b = (await r.json()) as { sources: SkillSource[] };
     return { ok: true, value: b.sources };
@@ -133,7 +133,7 @@ export const SkillsService = {
     auth_token?: string;
     webhook_provider?: 'github' | 'gitlab' | 'gitea';
   }): Promise<Result<SkillSourceCreated>> {
-    const r = await authedFetch('/api/modules/ai/admin/skill-sources', {
+    const r = await authedFetch('/api/modules/ai/admin/agent-sources', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -143,7 +143,7 @@ export const SkillsService = {
   },
 
   async readSource(id: string): Promise<Result<SkillSource>> {
-    const r = await authedFetch(`/api/modules/ai/admin/skill-sources/${encodeURIComponent(id)}`);
+    const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}`);
     if (!r.ok) return { ok: false, error: await parseError(r) };
     return { ok: true, value: (await r.json()) as SkillSource };
   },
@@ -160,7 +160,7 @@ export const SkillsService = {
       webhook_provider?: 'github' | 'gitlab' | 'gitea';
     },
   ): Promise<Result<SkillSource>> {
-    const r = await authedFetch(`/api/modules/ai/admin/skill-sources/${encodeURIComponent(id)}`, {
+    const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/merge-patch+json' },
       body: JSON.stringify(patch),
@@ -170,7 +170,7 @@ export const SkillsService = {
   },
 
   async deleteSource(id: string): Promise<Result<{ deleted: true; cascaded_skill_count: number }>> {
-    const r = await authedFetch(`/api/modules/ai/admin/skill-sources/${encodeURIComponent(id)}`, {
+    const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
     if (!r.ok) return { ok: false, error: await parseError(r) };
@@ -178,7 +178,7 @@ export const SkillsService = {
   },
 
   async syncNow(id: string): Promise<Result<{ job_id: string; status: string }>> {
-    const r = await authedFetch(`/api/modules/ai/admin/skill-sources/${encodeURIComponent(id)}/sync`, {
+    const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}/sync`, {
       method: 'POST',
     });
     if (!r.ok) return { ok: false, error: await parseError(r) };
@@ -187,7 +187,7 @@ export const SkillsService = {
 
   async testConnection(id: string): Promise<Result<{ ok: true; head_sha: string } | { ok: false; error: string }>> {
     const r = await authedFetch(
-      `/api/modules/ai/admin/skill-sources/${encodeURIComponent(id)}/test-connection`,
+      `/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}/test-connection`,
       { method: 'POST' },
     );
     if (!r.ok) return { ok: false, error: await parseError(r) };
@@ -196,7 +196,7 @@ export const SkillsService = {
 
   async rotateWebhookSecret(id: string): Promise<Result<{ webhook_secret: string }>> {
     const r = await authedFetch(
-      `/api/modules/ai/admin/skill-sources/${encodeURIComponent(id)}/rotate-webhook-secret`,
+      `/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}/rotate-webhook-secret`,
       { method: 'POST' },
     );
     if (!r.ok) return { ok: false, error: await parseError(r) };
@@ -205,7 +205,7 @@ export const SkillsService = {
 
   async listWebhookLog(id: string, limit = 50): Promise<Result<WebhookLogEntry[]>> {
     const r = await authedFetch(
-      `/api/modules/ai/admin/skill-sources/${encodeURIComponent(id)}/webhook-log?limit=${limit}`,
+      `/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}/webhook-log?limit=${limit}`,
     );
     if (!r.ok) return { ok: false, error: await parseError(r) };
     const b = (await r.json()) as { events: WebhookLogEntry[] };

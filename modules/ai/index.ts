@@ -61,22 +61,17 @@ const aiModule: GatewazeModule = {
     'migrations/024_ai_agent_sources_unified.sql',
   ],
 
-  // Cron schedule — fan-out worker scans for due skill sources every 5
-  // minutes and enqueues one per-source sync per match (moved from
-  // editor-ai-copilot's crons in the Phase-2 refactor).
+  // Cron schedule — fan-out worker scans for due agent sources every
+  // 5 minutes and enqueues one per-source sync per match. The
+  // per-source job (ai.sync-one-agent-source) handles BOTH skills/
+  // and recipes/ in a single pass against ai_agent_sources
+  // (migration 024 unification).
   crons: [
     {
-      name: 'ai:sync-skill-sources',
+      name: 'ai:sync-agent-sources',
       queue: 'jobs',
       schedule: { pattern: '*/5 * * * *' },
-      data: { kind: 'ai.sync-skill-sources' },
-    },
-    // Recipe sync mirrors the skill cadence (spec-ai-workflows §4.12).
-    {
-      name: 'ai:sync-recipe-sources',
-      queue: 'jobs',
-      schedule: { pattern: '*/5 * * * *' },
-      data: { kind: 'ai.sync-recipe-sources' },
+      data: { kind: 'ai.sync-agent-sources' },
     },
     // spec-ai-job-runner §4.1 — orphan-stream sweep. Runs every hour;
     // walks ai:run:* and ai:thread:* keys; sets EXPIRE on any that
@@ -94,21 +89,17 @@ const aiModule: GatewazeModule = {
   // jobs enqueued by /admin/skill-sources/:id/sync would sit in the
   // queue forever because no consumer would be registered.
   workers: [
+    // Unified sync — replaces the four legacy sync-* workers
+    // (sync-skill-sources, sync-one-skill-source, sync-recipe-sources,
+    // sync-one-recipe-source) after migration 024 collapsed the two
+    // source tables into ai_agent_sources.
     {
-      name: 'ai.sync-skill-sources',
-      handler: 'workers/sync-skill-sources.js',
+      name: 'ai.sync-agent-sources',
+      handler: 'workers/sync-agent-sources.js',
     },
     {
-      name: 'ai.sync-one-skill-source',
-      handler: 'workers/sync-one-skill-source.js',
-    },
-    {
-      name: 'ai.sync-recipe-sources',
-      handler: 'workers/sync-recipe-sources.js',
-    },
-    {
-      name: 'ai.sync-one-recipe-source',
-      handler: 'workers/sync-one-recipe-source.js',
+      name: 'ai.sync-one-agent-source',
+      handler: 'workers/sync-one-agent-source.js',
     },
     // spec-ai-job-runner — moves recipe + chat execution off the API
     // process. The API enqueues onto the shared `jobs` queue under
@@ -187,7 +178,7 @@ const aiModule: GatewazeModule = {
       guard: 'admin',
     },
     {
-      path: 'ai/skill-sources',
+      path: 'ai/agent-sources',
       component: () => import('./admin/components/AiDashboard'),
       requiredFeature: 'ai.usage.read',
       guard: 'admin',

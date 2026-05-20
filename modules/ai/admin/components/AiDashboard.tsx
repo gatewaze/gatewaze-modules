@@ -30,11 +30,11 @@ import { Page } from '@/components/shared/Page';
 import { Tabs, type Tab } from '@/components/ui';
 import { useModuleSlots, type ResolvedSlot } from '@/hooks/useModuleSlots';
 
+import AiAgentSourcesAdmin from './AiAgentSourcesAdmin';
 import AiCredentialsAdmin from './AiCredentialsAdmin';
 import AiJobsAdmin from './AiJobsAdmin';
 import AiModelsAdmin from './AiModelsAdmin';
 import AiRecipesAdmin from './AiRecipesAdmin';
-import AiSkillSourcesAdmin from './AiSkillSourcesAdmin';
 import AiUsageDashboard from './AiUsageDashboard';
 import AiUseCasesAdmin from './AiUseCasesAdmin';
 
@@ -48,10 +48,10 @@ const BUILTIN_TABS: BuiltinTab[] = [
   { id: 'use-cases', label: 'Use cases', order: 20, render: () => <AiUseCasesAdmin /> },
   { id: 'models', label: 'Models', order: 30, render: () => <AiModelsAdmin /> },
   { id: 'credentials', label: 'Credentials', order: 40, render: () => <AiCredentialsAdmin /> },
-  // Phase-2 refactor: skill sources used to be contributed by
-  // editor-ai-copilot via the 'ai-dashboard:tab' slot. Now a first-
-  // class ai-module concern — built-in tab here.
-  { id: 'skill-sources', label: 'Skill sources', order: 50, render: () => <AiSkillSourcesAdmin /> },
+  // Agent sources — unified replacement for the previously-separate
+  // "Skill sources" and "Recipes (sources)" tabs. One git repo = one
+  // row; sync walks both skills/ and recipes/ in one pass.
+  { id: 'agent-sources', label: 'Agent sources', order: 50, render: () => <AiAgentSourcesAdmin /> },
   // Recipes — Goose-compatible workflow runner. Sources/recipes/runs
   // surface, mirroring the skill-sources tab.
   { id: 'recipes', label: 'Recipes', order: 60, render: () => <AiRecipesAdmin /> },

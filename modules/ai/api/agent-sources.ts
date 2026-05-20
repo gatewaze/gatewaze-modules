@@ -1,20 +1,20 @@
 /**
  * AI Skills — admin endpoints for managing skill sources.
  *
- * Per spec-ai-skills.md §10.1. Auth: the parent register-routes layer
+ * Per spec-ai-skills.md §10.1 + migration 024 unification. Auth: the parent register-routes layer
  * applies a JWT-decode middleware that populates req.userId; we
  * additionally check the caller is an admin via admin_profiles.
  *
  * Routes:
- *   GET    /skill-sources
- *   POST   /skill-sources
- *   GET    /skill-sources/:id
- *   PATCH  /skill-sources/:id                (RFC 7396 merge patch)
- *   DELETE /skill-sources/:id
- *   POST   /skill-sources/:id/sync           (manual sync)
- *   POST   /skill-sources/:id/test-connection
- *   POST   /skill-sources/:id/rotate-webhook-secret
- *   GET    /skill-sources/:id/webhook-log?limit=
+ *   GET    /agent-sources
+ *   POST   /agent-sources
+ *   GET    /agent-sources/:id
+ *   PATCH  /agent-sources/:id                (RFC 7396 merge patch)
+ *   DELETE /agent-sources/:id
+ *   POST   /agent-sources/:id/sync           (manual sync)
+ *   POST   /agent-sources/:id/test-connection
+ *   POST   /agent-sources/:id/rotate-webhook-secret
+ *   GET    /agent-sources/:id/webhook-log?limit=
  */
 
 import type { Response, Router } from 'express';
@@ -82,9 +82,9 @@ async function requireAdmin(deps: Deps, userId: string | undefined, res: Respons
   }
 }
 
-export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
+export function mountAgentSourceRoutes(router: Router, deps: Deps): void {
   // ─── LIST ───────────────────────────────────────────────────────────
-  router.get('/skill-sources', async (req: RequestWithUser, res: Response) => {
+  router.get('/agent-sources', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res))) return;
     try {
       const sources = await listSources(deps.supabase);
@@ -95,7 +95,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
   });
 
   // ─── CREATE ─────────────────────────────────────────────────────────
-  router.post('/skill-sources', async (req: RequestWithUser, res: Response) => {
+  router.post('/agent-sources', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res, true))) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const label = typeof body.label === 'string' ? body.label.trim() : '';
@@ -130,7 +130,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
   });
 
   // ─── READ ───────────────────────────────────────────────────────────
-  router.get('/skill-sources/:id', async (req: RequestWithUser, res: Response) => {
+  router.get('/agent-sources/:id', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res))) return;
     const id = req.params.id;
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');
@@ -140,7 +140,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
   });
 
   // ─── PATCH (RFC 7396 merge-patch) ──────────────────────────────────
-  router.patch('/skill-sources/:id', async (req: RequestWithUser, res: Response) => {
+  router.patch('/agent-sources/:id', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res, true))) return;
     const id = req.params.id;
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');
@@ -177,7 +177,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
   });
 
   // ─── DELETE ─────────────────────────────────────────────────────────
-  router.delete('/skill-sources/:id', async (req: RequestWithUser, res: Response) => {
+  router.delete('/agent-sources/:id', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res, true))) return;
     const id = req.params.id;
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');
@@ -187,7 +187,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
   });
 
   // ─── SYNC NOW ───────────────────────────────────────────────────────
-  router.post('/skill-sources/:id/sync', async (req: RequestWithUser, res: Response) => {
+  router.post('/agent-sources/:id/sync', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res))) return;
     const id = req.params.id;
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');
@@ -199,8 +199,8 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
     if (!row) return sendError(res, 404, 'not_found', 'skill source not found');
 
     try {
-      const job = await deps.enqueueJob('jobs', 'ai.sync-one-skill-source', {
-        kind: 'ai.sync-one-skill-source',
+      const job = await deps.enqueueJob('jobs', 'ai.sync-one-agent-source', {
+        kind: 'ai.sync-one-agent-source',
         source_id: id,
         trigger: 'manual',
       });
@@ -211,7 +211,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
   });
 
   // ─── TEST CONNECTION ────────────────────────────────────────────────
-  router.post('/skill-sources/:id/test-connection', async (req: RequestWithUser, res: Response) => {
+  router.post('/agent-sources/:id/test-connection', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res))) return;
     const id = req.params.id;
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');
@@ -241,7 +241,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
   });
 
   // ─── ROTATE WEBHOOK SECRET ──────────────────────────────────────────
-  router.post('/skill-sources/:id/rotate-webhook-secret', async (req: RequestWithUser, res: Response) => {
+  router.post('/agent-sources/:id/rotate-webhook-secret', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res, true))) return;
     const id = req.params.id;
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');
@@ -254,7 +254,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
   });
 
   // ─── WEBHOOK LOG ────────────────────────────────────────────────────
-  router.get('/skill-sources/:id/webhook-log', async (req: RequestWithUser, res: Response) => {
+  router.get('/agent-sources/:id/webhook-log', async (req: RequestWithUser, res: Response) => {
     if (!(await requireAdmin(deps, req.userId, res))) return;
     const id = req.params.id;
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');

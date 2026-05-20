@@ -4,7 +4,7 @@
  * Mirrors skillsService — Bearer JWT auth, JSON envelopes, ok-or-error
  * discriminated unions.
  *
- * Routes are mounted by api/recipe-sources.ts + api/recipe-webhook.ts +
+ * Routes are mounted by api/agent-sources.ts + api/recipe-webhook.ts +
  * the inline-run handler in api/admin-routes.ts. See
  * spec-ai-workflows-and-skill-interop.md §5.
  */
@@ -164,7 +164,7 @@ export const RecipesService = {
   // Sources
 
   async listSources(): Promise<Result<RecipeSource[]>> {
-    const r = await authedFetch('/api/modules/ai/admin/recipe-sources');
+    const r = await authedFetch('/api/modules/ai/admin/agent-sources');
     if (!r.ok) return { ok: false, error: await parseError(r) };
     const b = (await r.json()) as { sources: RecipeSource[] };
     return { ok: true, value: b.sources };
@@ -179,7 +179,7 @@ export const RecipesService = {
     auth_token?: string;
     webhook_provider?: 'github' | 'gitlab' | 'gitea';
   }): Promise<Result<RecipeSourceCreated>> {
-    const r = await authedFetch('/api/modules/ai/admin/recipe-sources', {
+    const r = await authedFetch('/api/modules/ai/admin/agent-sources', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -190,7 +190,7 @@ export const RecipesService = {
   },
 
   async readSource(id: string): Promise<Result<RecipeSource>> {
-    const r = await authedFetch(`/api/modules/ai/admin/recipe-sources/${encodeURIComponent(id)}`);
+    const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}`);
     if (!r.ok) return { ok: false, error: await parseError(r) };
     const b = (await r.json()) as RecipeSource;
     return { ok: true, value: b };
@@ -208,7 +208,7 @@ export const RecipesService = {
       webhook_provider?: 'github' | 'gitlab' | 'gitea';
     },
   ): Promise<Result<RecipeSource>> {
-    const r = await authedFetch(`/api/modules/ai/admin/recipe-sources/${encodeURIComponent(id)}`, {
+    const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -219,7 +219,7 @@ export const RecipesService = {
   },
 
   async deleteSource(id: string): Promise<Result<{ deleted: true; cascaded_recipe_count: number }>> {
-    const r = await authedFetch(`/api/modules/ai/admin/recipe-sources/${encodeURIComponent(id)}`, {
+    const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
     if (!r.ok) return { ok: false, error: await parseError(r) };
@@ -228,7 +228,7 @@ export const RecipesService = {
   },
 
   async syncSource(id: string): Promise<Result<{ job_id: string; status: 'queued' }>> {
-    const r = await authedFetch(`/api/modules/ai/admin/recipe-sources/${encodeURIComponent(id)}/sync`, {
+    const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}/sync`, {
       method: 'POST',
     });
     if (!r.ok) return { ok: false, error: await parseError(r) };
@@ -238,7 +238,7 @@ export const RecipesService = {
 
   async testConnection(id: string): Promise<Result<{ ok: true; head_sha: string } | { ok: false; error: string }>> {
     const r = await authedFetch(
-      `/api/modules/ai/admin/recipe-sources/${encodeURIComponent(id)}/test-connection`,
+      `/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}/test-connection`,
       { method: 'POST' },
     );
     if (!r.ok) return { ok: false, error: await parseError(r) };
