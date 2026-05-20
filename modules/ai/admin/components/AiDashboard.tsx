@@ -34,6 +34,7 @@ import AiAgentSourcesAdmin from './AiAgentSourcesAdmin';
 import AiCredentialsAdmin from './AiCredentialsAdmin';
 import AiJobsAdmin from './AiJobsAdmin';
 import AiMcpServersAdmin from './AiMcpServersAdmin';
+import AiMemoryAdmin from './AiMemoryAdmin';
 import AiModelsAdmin from './AiModelsAdmin';
 import AiRecipesAdmin from './AiRecipesAdmin';
 import AiUsageDashboard from './AiUsageDashboard';
@@ -60,6 +61,10 @@ const BUILTIN_TABS: BuiltinTab[] = [
   // (stdio / streamable_http / builtin) with per-use-case allowlist.
   // Spec: spec-ai-mcp-extensions.md.
   { id: 'mcp-servers', label: 'MCP servers', order: 65, render: () => <AiMcpServersAdmin /> },
+  // Memory — inspector for the gatewaze-memory MCP server's backing
+  // store. Shows what models have written via store_memory + scope,
+  // TTL, originating message.
+  { id: 'memory', label: 'Memory', order: 68, render: () => <AiMemoryAdmin /> },
   // Jobs — live queue inspection (active/waiting/delayed/failed) +
   // per-job stop/retry/promote + live-tail of the SSE stream.
   // Cross-module toggle surfaces the wider BullMQ queue.

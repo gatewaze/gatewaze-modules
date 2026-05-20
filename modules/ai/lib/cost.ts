@@ -21,7 +21,7 @@ export interface UsageEventInput {
   useCase: string;
   threadId: string | null;
   messageId: string | null;
-  kind: 'llm' | 'tool' | 'embedding' | 'image';
+  kind: 'llm' | 'tool' | 'embedding' | 'image' | 'mcp_tool';
   // 'scrapling' attributes fetch_url tool calls; 'serper' attributes
   // gatewaze_search invocations that hit the Serper.dev backend.
   provider: KnownProvider | 'scrapling' | 'serper';
