@@ -122,10 +122,35 @@ interface UseCaseRow {
 
 // ─── runChat ──────────────────────────────────────────────────────────────
 
+/**
+ * Goose-CLI chat executor. Activated by AI_CHAT_EXECUTOR=goose. Routes
+ * unstructured chat (no structuredTool, no extraTools — those still
+ * need provider-native tool schemas) through the Goose session wrapper
+ * so MCP allowlists, per-use-case runtime overrides, and the operator-
+ * facing memory backing store all apply automatically.
+ *
+ * Structured-output callers (editor-ai-copilot's emit_page / emit_block_
+ * props, recipe runs surfacing `recipe__final_output`) stay on the
+ * inline ProviderRouter path until the Goose `goose run --recipe`
+ * structured-output bridge is wired through runChat too. They still
+ * benefit from the unified entry — every module is now one runChat
+ * call away from full Goose routing once the recipe bridge ships.
+ */
+function shouldRouteThroughGoose(opts: RunChatOpts): boolean {
+  if (process.env.AI_CHAT_EXECUTOR !== 'goose') return false;
+  if (opts.structuredTool) return false;
+  if (opts.extraTools && opts.extraTools.length > 0) return false;
+  if (!opts.threadId) return false;
+  return true;
+}
+
 export async function runChat(
   ctx: RunnerContext,
   opts: RunChatOpts,
 ): Promise<RunChatResult> {
+  if (shouldRouteThroughGoose(opts)) {
+    return runChatViaGooseAdapter(ctx, opts);
+  }
   const useCase = await loadUseCase(ctx.supabase, opts.useCase);
   const router = new ProviderRouter(ctx.supabase);
 
@@ -373,6 +398,82 @@ export async function runChat(
   }
   // Exhausted retries.
   throw attemptError ?? new Error('runChat exhausted retries without an error');
+}
+
+/**
+ * Translates RunChatOpts → runChatViaGoose args. The opts.messages
+ * transcript is split: the last user turn becomes the userMessage,
+ * everything before it becomes history (preserving role labels with
+ * 'tool_result' mapped to 'tool_summary' which the Goose serialiser
+ * already accepts).
+ *
+ * The Goose path returns a different shape; we map it back into
+ * RunChatResult so callers see a consistent contract. `fetchedUrls`
+ * and `webSearchCount` come back empty for now — Goose's stream-json
+ * doesn't yet thread provider-native tool telemetry through. Cost
+ * accounting still lands via recordUsage inside runChatViaGoose.
+ */
+async function runChatViaGooseAdapter(
+  ctx: RunnerContext,
+  opts: RunChatOpts,
+): Promise<RunChatResult> {
+  const { runChatViaGoose } = await import('./chat/run-chat-goose.js');
+
+  // Split messages into history + the trailing user turn.
+  const msgs = opts.messages.slice();
+  let userMessage = '';
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]!.role === 'user') {
+      userMessage = msgs[i]!.content;
+      msgs.splice(i, 1);
+      break;
+    }
+  }
+  const history: Array<{ role: 'user' | 'assistant' | 'tool_summary'; content: string }> = msgs
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({
+      role: m.role === 'tool_result' ? 'tool_summary' : (m.role as 'user' | 'assistant'),
+      content: m.content,
+    }));
+
+  const result = await runChatViaGoose(
+    ctx.supabase as unknown as { from(table: string): unknown },
+    ctx,
+    {
+      threadId: opts.threadId!,
+      assistantMessageId: opts.messageId ?? opts.threadId!,
+      useCase: opts.useCase,
+      userId: opts.userId,
+      systemPrompt: opts.systemPrompt,
+      history,
+      userMessage,
+      ...(opts.provider && opts.provider !== 'auto' ? { provider: opts.provider } : {}),
+      ...(opts.model ? { model: opts.model } : {}),
+    },
+  );
+
+  if (!result.ok) {
+    throw new ProviderError(
+      result.failure_reason ?? 'goose_failed',
+      (result.provider ?? 'anthropic') as KnownProvider,
+      500,
+    );
+  }
+
+  return {
+    narrative: result.content,
+    structured: result.structured,
+    provider: (result.provider ?? 'anthropic') as KnownProvider,
+    model: result.model ?? '',
+    inputTokens: result.total_input_tokens,
+    outputTokens: result.total_output_tokens,
+    cachedTokens: 0,
+    cacheCreationTokens: 0,
+    costMicroUsd: result.total_cost_micro_usd,
+    latencyMs: result.duration_ms,
+    fetchedUrls: [],
+    webSearchCount: 0,
+  };
 }
 
 // ─── aiEmbed ──────────────────────────────────────────────────────────────
