@@ -11,6 +11,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { runChat } from '../lib/runner.js';
+import { runChatViaGoose } from '../lib/chat/run-chat-goose.js';
 import { resolveUseCasePrompt } from '../lib/use-case-prompt.js';
 import { subscribeCancel } from '../lib/jobs/cancel.js';
 import { releaseUseCaseSemaphore } from '../lib/jobs/enqueue.js';
@@ -159,30 +160,119 @@ export default async function runChatHandler(
   await redis.expire(streamKey, STREAM_TTL_SECONDS);
 
   try {
-    const result = await runChat(
-      {
+    // spec-ai-mcp-extensions.md §6 — when AI_CHAT_EXECUTOR=goose, route
+    // chat through `goose session` so MCP extensions + memory + runtime
+    // overrides all apply identically to recipe runs. Default stays on
+    // the legacy in-house runChat path during rollout; flip the env to
+    // 'goose' once parity is validated in staging.
+    const executor = process.env.AI_CHAT_EXECUTOR ?? 'runChat';
+    let result: {
+      narrative: string;
+      structured: Record<string, unknown> | null;
+      provider: string | null;
+      model: string | null;
+      inputTokens: number;
+      outputTokens: number;
+      costMicroUsd: number;
+      latencyMs: number;
+      loaded_mcp_server_names?: string[];
+      mcp_warnings?: Array<Record<string, unknown>>;
+      goose_runtime_overrides_snapshot?: Record<string, unknown>;
+    };
+    if (executor === 'goose') {
+      // The new turn is the LAST user message in the thread; everything
+      // earlier is replayed as history. We hydrated `messages` above
+      // from ai_messages; pop the trailing user turn for `userMessage`.
+      let userMessage = '';
+      const history: Array<{ role: 'user' | 'assistant' | 'tool_summary'; content: string }> = [];
+      for (let i = 0; i < messages.length; i++) {
+        if (i === messages.length - 1 && messages[i].role === 'user') {
+          userMessage = messages[i].content;
+        } else {
+          history.push({ role: messages[i].role as 'user' | 'assistant', content: messages[i].content });
+        }
+      }
+      const gooseResult = await runChatViaGoose(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        supabase: supabase as any,
-        logger: ctx?.logger,
-        resolveFetchUrl: ctx?.resolveFetchUrl,
-        resolveGatewazeSearch: ctx?.resolveGatewazeSearch,
-      } as never,
-      {
-        useCase: threadRow.use_case,
-        userId: threadRow.created_by,
-        threadId,
-        messageId: assistantMessageId,
-        systemPrompt: resolved.systemPrompt,
-        messages,
-        ...(job.data.provider && { provider: job.data.provider as 'auto' }),
-        ...(job.data.model && { model: job.data.model }),
-        // Token-streaming hook — every text delta from the provider
-        // becomes a `token` event on the thread stream. Spec §4.2.
-        onToken: (delta: string): void => {
-          void appendStreamEvent(redis, streamKey, { type: 'token', delta });
+        supabase as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          supabase: supabase as any,
+          logger: ctx?.logger,
+          resolveFetchUrl: ctx?.resolveFetchUrl,
+          resolveGatewazeSearch: ctx?.resolveGatewazeSearch,
+        } as never,
+        {
+          threadId,
+          assistantMessageId,
+          useCase: threadRow.use_case,
+          userId: threadRow.created_by,
+          systemPrompt: resolved.systemPrompt,
+          history,
+          userMessage,
+          ...(job.data.provider && { provider: job.data.provider }),
+          ...(job.data.model && { model: job.data.model }),
+          // Forward Goose stream events onto the existing thread stream
+          // so the chat widget sees deltas without any UI change.
+          onStreamEvent: async (event): Promise<void> => {
+            // Map Goose's message events to the existing 'token' event
+            // shape the widget already renders.
+            if (event.type === 'message') {
+              const msg = (event.message ?? event) as { content?: unknown[] };
+              if (Array.isArray(msg.content)) {
+                for (const item of msg.content) {
+                  if (item && typeof item === 'object') {
+                    const it = item as { type?: string; text?: string };
+                    if (it.type === 'text' && typeof it.text === 'string') {
+                      await appendStreamEvent(redis, streamKey, { type: 'token', delta: it.text });
+                    }
+                  }
+                }
+              }
+            }
+          },
         },
-      },
-    );
+      );
+      if (!gooseResult.ok) {
+        throw new Error(gooseResult.failure_reason ?? 'goose chat failed');
+      }
+      result = {
+        narrative: gooseResult.content,
+        structured: gooseResult.structured,
+        provider: gooseResult.provider,
+        model: gooseResult.model,
+        inputTokens: gooseResult.total_input_tokens,
+        outputTokens: gooseResult.total_output_tokens,
+        costMicroUsd: gooseResult.total_cost_micro_usd,
+        latencyMs: gooseResult.duration_ms,
+        loaded_mcp_server_names: gooseResult.loaded_mcp_server_names,
+        mcp_warnings: gooseResult.mcp_warnings,
+      };
+    } else {
+      result = await runChat(
+        {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          supabase: supabase as any,
+          logger: ctx?.logger,
+          resolveFetchUrl: ctx?.resolveFetchUrl,
+          resolveGatewazeSearch: ctx?.resolveGatewazeSearch,
+        } as never,
+        {
+          useCase: threadRow.use_case,
+          userId: threadRow.created_by,
+          threadId,
+          messageId: assistantMessageId,
+          systemPrompt: resolved.systemPrompt,
+          messages,
+          ...(job.data.provider && { provider: job.data.provider as 'auto' }),
+          ...(job.data.model && { model: job.data.model }),
+          onToken: (delta: string): void => {
+            void appendStreamEvent(redis, streamKey, { type: 'token', delta });
+          },
+        },
+      );
+    }
 
     // Cancel can fire AFTER runChat returns (we're past the provider
     // call but before the row update). Honour the latest signal.
@@ -211,6 +301,11 @@ export default async function runChatHandler(
         // can show which skill/prompt version was used for THIS turn
         // (not just what's configured now). Migration 023.
         prompt_source: resolved.promptSource as unknown as Record<string, unknown>,
+        // spec-ai-mcp-extensions.md §Data Models §3.5 — record which
+        // MCP servers the spawn actually loaded for this turn + any
+        // structured warnings about exclusions.
+        ...(result.loaded_mcp_server_names && { loaded_mcp_server_names: result.loaded_mcp_server_names }),
+        ...(result.mcp_warnings && { mcp_warnings: result.mcp_warnings }),
       })
       .eq('id', assistantMessageId);
     await supabase

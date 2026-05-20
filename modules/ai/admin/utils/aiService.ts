@@ -266,7 +266,7 @@ function apiUrl(): string {
   return (import.meta as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
 }
 
-async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const { data: session } = await supabase.auth.getSession();
   const token = session.session?.access_token;
   return fetch(`${apiUrl()}${path}`, {
