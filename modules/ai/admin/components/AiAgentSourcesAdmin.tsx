@@ -272,44 +272,137 @@ function WebhookSection({
     onRotated();
   }
 
+  async function copyUrl() {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success('URL copied');
+    } catch {
+      toast.error('Copy failed');
+    }
+  }
+  async function copySecret() {
+    if (!secret) return;
+    try {
+      await navigator.clipboard.writeText(secret);
+      toast.success('Secret copied');
+    } catch {
+      toast.error('Copy failed');
+    }
+  }
+
+  const providerLabel =
+    source.webhook_provider === 'github'
+      ? 'GitHub'
+      : source.webhook_provider === 'gitlab'
+        ? 'GitLab'
+        : 'Gitea';
+
   return (
-    <div>
-      <h3 className="font-medium text-sm mb-2 flex items-center gap-2">
-        <KeyIcon className="w-4 h-4" /> Webhook
-      </h3>
-      <p className="text-xs text-[var(--gray-9)] mb-2">
-        Configure this in your {source.webhook_provider} repo settings to trigger instant sync on push (instead of waiting up to 5 minutes for the cron).
+    <div className="rounded-md border border-[var(--gray-6)] bg-[var(--gray-2)] p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-sm flex items-center gap-1.5">
+          <KeyIcon className="w-4 h-4" /> Webhook
+        </h3>
+        <span className="text-[10px] uppercase tracking-wide text-[var(--gray-10)] px-1.5 py-0.5 rounded border border-[var(--gray-6)] bg-white">
+          {providerLabel}
+        </span>
+      </div>
+      <p className="text-xs text-[var(--gray-10)] mb-3">
+        Configure this in your {providerLabel} repo settings so push events
+        trigger an instant sync (otherwise the next cron tick picks it up
+        within 5 minutes).
       </p>
-      <div className="text-xs space-y-1">
-        <div><strong>URL:</strong> <code className="break-all">{url}</code></div>
-        <div>
-          <strong>Secret:</strong>{' '}
-          {secret ? (
-            <code className="break-all bg-[var(--gray-3)] px-2 py-1 rounded">{secret}</code>
-          ) : showSecret ? (
-            <em className="text-[var(--gray-9)]">stored encrypted — rotate to reveal a new one</em>
-          ) : (
-            <Button onClick={onToggleSecret}><EyeIcon className="w-3 h-3" /> Show…</Button>
-          )}
-        </div>
-        <div className="pt-1">
-          <Button onClick={() => void handleRotate()} disabled={rotating}>
-            {rotating ? 'Rotating…' : 'Rotate secret'}
+
+      {/* Payload URL */}
+      <div className="space-y-1 mb-3">
+        <label className="text-xs font-medium text-[var(--gray-11)]">Payload URL</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            readOnly
+            value={url}
+            className="flex-1 font-mono text-xs px-2 py-1.5 rounded border border-[var(--gray-6)] bg-white text-[var(--gray-12)]"
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <Button variant="outline" size="sm" onClick={() => void copyUrl()}>
+            Copy
           </Button>
         </div>
-        <div className="pt-2 text-[var(--gray-9)]">
-          <strong>Provider config:</strong>{' '}
+      </div>
+
+      {/* Secret */}
+      <div className="space-y-1 mb-3">
+        <label className="text-xs font-medium text-[var(--gray-11)]">Secret</label>
+        {secret ? (
+          <div className="flex gap-2">
+            <input
+              type="text"
+              readOnly
+              value={secret}
+              className="flex-1 font-mono text-xs px-2 py-1.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-900"
+              onFocus={(e) => e.currentTarget.select()}
+            />
+            <Button variant="outline" size="sm" onClick={() => void copySecret()}>
+              Copy
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              readOnly
+              value="•••••••••••••••••••••••• (encrypted; rotate to reveal)"
+              className="flex-1 font-mono text-xs px-2 py-1.5 rounded border border-[var(--gray-6)] bg-white text-[var(--gray-9)]"
+            />
+            <Button variant="outline" size="sm" onClick={onToggleSecret}>
+              <EyeIcon className="w-3.5 h-3.5 mr-1" /> Show
+            </Button>
+          </div>
+        )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void handleRotate()}
+          disabled={rotating}
+          className="mt-1"
+        >
+          {rotating ? 'Rotating…' : 'Rotate secret'}
+        </Button>
+      </div>
+
+      {/* Provider config hint */}
+      <details className="text-xs">
+        <summary className="cursor-pointer text-[var(--gray-10)] hover:text-[var(--gray-12)]">
+          Setup instructions ({providerLabel})
+        </summary>
+        <div className="mt-2 p-2 rounded bg-white border border-[var(--gray-6)] text-[var(--gray-11)] leading-relaxed">
           {source.webhook_provider === 'github' && (
-            <>GitHub: Settings → Webhooks → Add. Payload URL: <em>(above)</em>. Content type: <code>application/json</code>. Secret: <em>(above, after rotate)</em>. Events: just <code>push</code>.</>
+            <ol className="list-decimal pl-4 space-y-1">
+              <li>Go to <strong>Settings → Webhooks → Add webhook</strong>.</li>
+              <li>Paste the <strong>Payload URL</strong> above.</li>
+              <li>Content type: <code className="bg-[var(--gray-3)] px-1 rounded">application/json</code>.</li>
+              <li>Paste the <strong>Secret</strong> (rotate first if you haven't seen it).</li>
+              <li>Events: just <code className="bg-[var(--gray-3)] px-1 rounded">push</code>.</li>
+            </ol>
           )}
           {source.webhook_provider === 'gitlab' && (
-            <>GitLab: Settings → Webhooks → Add. URL: <em>(above)</em>. Secret token: <em>(above, after rotate)</em>. Triggers: <code>Push events</code> only.</>
+            <ol className="list-decimal pl-4 space-y-1">
+              <li>Go to <strong>Settings → Webhooks → Add webhook</strong>.</li>
+              <li>Paste the <strong>URL</strong> above.</li>
+              <li>Paste the <strong>Secret token</strong>.</li>
+              <li>Triggers: only <code className="bg-[var(--gray-3)] px-1 rounded">Push events</code>.</li>
+            </ol>
           )}
           {source.webhook_provider === 'gitea' && (
-            <>Gitea: Settings → Webhooks → Add Webhook. URL: <em>(above)</em>. Secret: <em>(above, after rotate)</em>. Trigger: <code>Push Events</code>.</>
+            <ol className="list-decimal pl-4 space-y-1">
+              <li>Go to <strong>Settings → Webhooks → Add Webhook</strong>.</li>
+              <li>Paste the <strong>URL</strong> above.</li>
+              <li>Paste the <strong>Secret</strong>.</li>
+              <li>Trigger: <code className="bg-[var(--gray-3)] px-1 rounded">Push Events</code>.</li>
+            </ol>
           )}
         </div>
-      </div>
+      </details>
     </div>
   );
 }

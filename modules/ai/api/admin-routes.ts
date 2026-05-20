@@ -56,6 +56,11 @@ const USE_CASE_WRITE_FIELDS = new Set([
   'kickoff_message',
   'skill_source_id',
   'skill_path',
+  // Recipe binding (025_ai_use_cases_recipe_binding). Mutually
+  // exclusive with skill_* (enforced by CHECK constraint at DB level —
+  // not re-checked here; an invalid combo bubbles up as a 400 from PG).
+  'recipe_source_id',
+  'recipe_file_path',
 ]);
 
 export function pickUseCaseFields(body: unknown): Record<string, unknown> {

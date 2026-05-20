@@ -59,6 +59,7 @@ const aiModule: GatewazeModule = {
     // table. One repo = one row. CASCADE drops ai_skills + ai_recipes
     // and rebuilds them with FKs to ai_agent_sources.
     'migrations/024_ai_agent_sources_unified.sql',
+    'migrations/025_ai_use_cases_recipe_binding.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every

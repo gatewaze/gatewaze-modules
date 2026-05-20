@@ -95,13 +95,23 @@ export interface AiUseCase {
    */
   kickoff_message: string;
   /**
-   * Soft ref to ai_skill_sources.id. When paired with skill_path, the
-   * matching ai_skills.body becomes the system prompt at runtime,
-   * overriding the inline system_prompt above.
+   * Skill binding — FK to ai_agent_sources.id. When paired with
+   * skill_path, the matching ai_skills.body becomes the system prompt
+   * at runtime, overriding the inline system_prompt above. Mutually
+   * exclusive with recipe_source_id.
    */
   skill_source_id: string | null;
-  /** Path within the skill source repo, matching ai_skills.path. */
+  /** dir_path within the agent source, matching ai_skills.dir_path. */
   skill_path: string | null;
+  /**
+   * Recipe binding — FK to ai_agent_sources.id. When paired with
+   * recipe_file_path, "Run" enqueues an ai:run-recipe job against the
+   * bound recipe instead of firing a free-form chat. Mutually exclusive
+   * with skill_source_id. Migration 025.
+   */
+  recipe_source_id: string | null;
+  /** Path of the recipe.yaml within the agent source (e.g. recipes/foo/recipe.yaml). */
+  recipe_file_path: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -111,8 +121,19 @@ export interface AiSkillRef {
   id: string;
   source_id: string;
   source_label: string;
+  /** Repo-relative directory path (agentskills.io dir_path). */
   path: string;
   name: string;
+}
+
+/** Lightweight reference to a recipe row for the use-case picker. */
+export interface AiRecipeRef {
+  id: string;
+  source_id: string;
+  source_label: string;
+  /** Repo-relative file path (e.g. recipes/<name>/recipe.yaml). */
+  file_path: string;
+  title: string;
 }
 
 export interface AiUserCredentialMeta {
@@ -382,27 +403,57 @@ export async function getUseCasePromptSource(
 }
 
 /**
- * Lists skill files available to bind to a use case. Queries the
- * ai_skills + ai_skill_sources tables directly (RLS allows authenticated
- * SELECT). Returns empty if the skills module isn't installed.
+ * Lists skill rows available to bind to a use case. Queries the
+ * ai_skills + ai_agent_sources tables directly (RLS allows authenticated
+ * SELECT). Returns empty if the agent-sources subsystem isn't installed.
+ *
+ * Post-migration 024: skills live under ai_agent_sources (renamed from
+ * ai_skill_sources), and the path column was renamed dir_path in 013.
+ * The query returns dir_path mapped to `path` on the DTO so the
+ * use-case modal's existing prop wiring works unchanged.
  */
 export async function listAiSkills(): Promise<AiSkillRef[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from('ai_skills')
-    .select('id, source_id, path, name, ai_skill_sources!inner(label)')
+    .select('id, source_id, dir_path, name, ai_agent_sources!inner(label)')
+    .eq('parse_status', 'ok')
     .order('name', { ascending: true });
   if (error) {
-    // Table missing (editor-ai-copilot not installed) — treat as empty.
+    // Table missing (subsystem not installed) — treat as empty.
     return [];
   }
   return (data ?? []).map((r: Record<string, unknown>) => ({
     id: r.id as string,
     source_id: r.source_id as string,
     source_label:
-      (r.ai_skill_sources as { label?: string } | null)?.label ?? '—',
-    path: r.path as string,
+      (r.ai_agent_sources as { label?: string } | null)?.label ?? '—',
+    path: r.dir_path as string,
     name: r.name as string,
+  }));
+}
+
+/**
+ * Lists recipe rows available to bind to a use case. Same pattern as
+ * listAiSkills but against ai_recipes. The use-case modal lets an
+ * operator bind EITHER a skill OR a recipe — they're mutually
+ * exclusive (a recipe IS the workflow body, no separate prompt).
+ */
+export async function listAiRecipes(): Promise<AiRecipeRef[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from('ai_recipes')
+    .select('id, source_id, file_path, title, ai_agent_sources!inner(label)')
+    .eq('parse_status', 'ok')
+    .order('title', { ascending: true });
+  if (error) return [];
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    id: r.id as string,
+    source_id: r.source_id as string,
+    source_label:
+      (r.ai_agent_sources as { label?: string } | null)?.label ?? '—',
+    file_path: r.file_path as string,
+    title: r.title as string,
   }));
 }
 

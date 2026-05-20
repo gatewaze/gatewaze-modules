@@ -14,12 +14,14 @@ import { Modal, Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 import {
+  listAiRecipes,
   listAiSkills,
   listCatalogModels,
   listUseCases,
   microUsdToDollars,
   patchUseCase,
   type AiCatalogModel,
+  type AiRecipeRef,
   type AiSkillRef,
   type AiUseCase,
 } from '../utils/aiService';
@@ -28,6 +30,7 @@ export default function AiUseCasesAdmin() {
   const [useCases, setUseCases] = useState<AiUseCase[]>([]);
   const [catalog, setCatalog] = useState<AiCatalogModel[]>([]);
   const [skills, setSkills] = useState<AiSkillRef[]>([]);
+  const [recipes, setRecipes] = useState<AiRecipeRef[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<AiUseCase | null>(null);
   const [saving, setSaving] = useState(false);
@@ -39,14 +42,16 @@ export default function AiUseCasesAdmin() {
   async function load() {
     setLoading(true);
     try {
-      const [rows, models, skillRows] = await Promise.all([
+      const [rows, models, skillRows, recipeRows] = await Promise.all([
         listUseCases(),
         listCatalogModels(),
         listAiSkills(),
+        listAiRecipes(),
       ]);
       setUseCases(rows);
       setCatalog(models);
       setSkills(skillRows);
+      setRecipes(recipeRows);
     } catch (err) {
       console.error('[ai-use-cases] load failed', err);
       toast.error('Failed to load use-cases');
@@ -88,6 +93,8 @@ export default function AiUseCasesAdmin() {
         kickoff_message: editing.kickoff_message,
         skill_source_id: editing.skill_source_id,
         skill_path: editing.skill_path,
+        recipe_source_id: editing.recipe_source_id,
+        recipe_file_path: editing.recipe_file_path,
       });
       toast.success('Use-case updated');
       setEditing(null);
@@ -349,43 +356,12 @@ export default function AiUseCasesAdmin() {
                 />
               </Field>
             </div>
-            <Field label="Skill (overrides system prompt below when set)">
-              <select
-                className="form-input w-full"
-                value={
-                  editing.skill_source_id && editing.skill_path
-                    ? `${editing.skill_source_id}:${editing.skill_path}`
-                    : ''
-                }
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) {
-                    setEditing({ ...editing, skill_source_id: null, skill_path: null });
-                    return;
-                  }
-                  const sep = v.indexOf(':');
-                  setEditing({
-                    ...editing,
-                    skill_source_id: v.slice(0, sep),
-                    skill_path: v.slice(sep + 1),
-                  });
-                }}
-              >
-                <option value="">— None (use inline system prompt) —</option>
-                {skills.map((s) => (
-                  <option key={s.id} value={`${s.source_id}:${s.path}`}>
-                    {s.source_label} / {s.name} ({s.path})
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-neutral-500 mt-1">
-                Skills are managed in the <strong>Skill sources</strong> tab on
-                this page (git repos of markdown files). Bind one here to use
-                its body as the system prompt at runtime; the inline prompt
-                below is the fallback when no skill is bound or the skill row
-                is missing.
-              </p>
-            </Field>
+            <BindingPicker
+              editing={editing}
+              setEditing={setEditing}
+              skills={skills}
+              recipes={recipes}
+            />
             <Field label="System prompt (inline fallback)">
               <textarea
                 className="form-input w-full font-mono text-xs"
@@ -436,5 +412,185 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="block text-sm font-medium text-neutral-700 mb-1">{label}</span>
       {children}
     </label>
+  );
+}
+
+/**
+ * Unified binding picker — Skill XOR Recipe XOR None.
+ *
+ * Replaces the standalone Skill dropdown after migration 025 added
+ * recipe binding columns. The two bindings are mutually exclusive at
+ * the DB level (CHECK constraint); the radio toggle here enforces it
+ * at the UI level so an operator can't even attempt to set both.
+ *
+ *   - None: use the inline system_prompt field below.
+ *   - Skill: bind to ai_skills row; skill body becomes the system
+ *     prompt at runtime.
+ *   - Recipe: bind to ai_recipes row; "Run" enqueues an ai:run-recipe
+ *     job (the recipe carries its own prompt + workflow).
+ */
+function BindingPicker({
+  editing,
+  setEditing,
+  skills,
+  recipes,
+}: {
+  editing: AiUseCase;
+  setEditing: (uc: AiUseCase) => void;
+  skills: AiSkillRef[];
+  recipes: AiRecipeRef[];
+}) {
+  type Kind = 'none' | 'skill' | 'recipe';
+  const currentKind: Kind = editing.recipe_source_id
+    ? 'recipe'
+    : editing.skill_source_id
+      ? 'skill'
+      : 'none';
+
+  function setKind(k: Kind) {
+    if (k === 'none') {
+      setEditing({
+        ...editing,
+        skill_source_id: null,
+        skill_path: null,
+        recipe_source_id: null,
+        recipe_file_path: null,
+      });
+    } else if (k === 'skill') {
+      setEditing({
+        ...editing,
+        recipe_source_id: null,
+        recipe_file_path: null,
+        // leave skill_* empty until user picks an option
+      });
+    } else {
+      setEditing({
+        ...editing,
+        skill_source_id: null,
+        skill_path: null,
+      });
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <span className="block text-sm font-medium text-neutral-700">
+        Binding (system prompt source)
+      </span>
+      <div role="radiogroup" className="flex items-center gap-4 text-sm">
+        {(['none', 'skill', 'recipe'] as const).map((k) => (
+          <label key={k} className="inline-flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="radio"
+              name="binding-kind"
+              checked={currentKind === k}
+              onChange={() => setKind(k)}
+            />
+            <span className="capitalize">
+              {k === 'none' ? 'None (inline prompt)' : k}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {currentKind === 'skill' && (
+        <div className="pt-1">
+          <select
+            className="form-input w-full"
+            value={
+              editing.skill_source_id && editing.skill_path
+                ? `${editing.skill_source_id}:${editing.skill_path}`
+                : ''
+            }
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) {
+                setEditing({ ...editing, skill_source_id: null, skill_path: null });
+                return;
+              }
+              const sep = v.indexOf(':');
+              setEditing({
+                ...editing,
+                skill_source_id: v.slice(0, sep),
+                skill_path: v.slice(sep + 1),
+              });
+            }}
+          >
+            <option value="">— Choose a skill —</option>
+            {skills.map((s) => (
+              <option key={s.id} value={`${s.source_id}:${s.path}`}>
+                {s.source_label} · {s.name} ({s.path})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-neutral-500 mt-1">
+            Skill body becomes the system prompt at runtime. The inline prompt
+            below is the fallback when the skill row is missing.
+            {skills.length === 0 && (
+              <>
+                {' '}
+                <strong>No skills indexed yet</strong> — add a source in the{' '}
+                <strong>Agent sources</strong> tab and wait for sync.
+              </>
+            )}
+          </p>
+        </div>
+      )}
+
+      {currentKind === 'recipe' && (
+        <div className="pt-1">
+          <select
+            className="form-input w-full"
+            value={
+              editing.recipe_source_id && editing.recipe_file_path
+                ? `${editing.recipe_source_id}:${editing.recipe_file_path}`
+                : ''
+            }
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) {
+                setEditing({
+                  ...editing,
+                  recipe_source_id: null,
+                  recipe_file_path: null,
+                });
+                return;
+              }
+              const sep = v.indexOf(':');
+              setEditing({
+                ...editing,
+                recipe_source_id: v.slice(0, sep),
+                recipe_file_path: v.slice(sep + 1),
+              });
+            }}
+          >
+            <option value="">— Choose a recipe —</option>
+            {recipes.map((r) => (
+              <option key={r.id} value={`${r.source_id}:${r.file_path}`}>
+                {r.source_label} · {r.title} ({r.file_path})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-neutral-500 mt-1">
+            "Run" on this use case enqueues an <code>ai:run-recipe</code> job
+            against the bound recipe. The inline prompt below is ignored.
+            {recipes.length === 0 && (
+              <>
+                {' '}
+                <strong>No recipes indexed yet</strong> — add a source in the{' '}
+                <strong>Agent sources</strong> tab and wait for sync.
+              </>
+            )}
+          </p>
+        </div>
+      )}
+
+      {currentKind === 'none' && (
+        <p className="text-xs text-neutral-500">
+          Use the inline <strong>System prompt</strong> field below. Skills + recipes are managed in the{' '}
+          <strong>Agent sources</strong> tab.
+        </p>
+      )}
+    </div>
   );
 }
