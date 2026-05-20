@@ -346,7 +346,7 @@ export async function runRecipeViaGoose(
         total_cost_micro_usd: totalCost,
         total_input_tokens: totalIn,
         total_output_tokens: totalOut,
-        finished_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
         failure_reason: failureReason ?? null,
       })
       .eq('id', runId);
@@ -459,7 +459,7 @@ async function markRunFailed(supabase: SupabaseClient, runId: string, reason: st
       .update({
         status: 'failed',
         failure_reason: reason,
-        finished_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
       })
       .eq('id', runId);
   } catch {
