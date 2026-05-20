@@ -80,7 +80,12 @@ export interface AiUseCase {
   default_provider: AiAutoOrProvider;
   default_model: string;
   allowed_models: string[];
-  allowed_web_tools: ('web_search' | 'fetch_url')[];
+  /**
+   * Narrow to the DB CHECK constraint (migration 012). gatewaze_search
+   * is the operator-friendly third tool — Serper.dev when configured,
+   * DuckDuckGo via scrapling-fetcher otherwise.
+   */
+  allowed_web_tools: ('web_search' | 'fetch_url' | 'gatewaze_search')[];
   max_output_tokens: number;
   daily_cost_cap_micro_usd: number | null;
   /**

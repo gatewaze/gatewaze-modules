@@ -22,7 +22,9 @@ export interface UsageEventInput {
   threadId: string | null;
   messageId: string | null;
   kind: 'llm' | 'tool' | 'embedding' | 'image';
-  provider: KnownProvider | 'scrapling';
+  // 'scrapling' attributes fetch_url tool calls; 'serper' attributes
+  // gatewaze_search invocations that hit the Serper.dev backend.
+  provider: KnownProvider | 'scrapling' | 'serper';
   model: string;
   inputTokens?: number;
   outputTokens?: number;
