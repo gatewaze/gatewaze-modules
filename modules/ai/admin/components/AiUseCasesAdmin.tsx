@@ -441,13 +441,22 @@ function BindingPicker({
   recipes: AiRecipeRef[];
 }) {
   type Kind = 'none' | 'skill' | 'recipe';
-  const currentKind: Kind = editing.recipe_source_id
+
+  // Derive the initial radio choice from the FK columns; after that,
+  // the radio is its OWN local state so the operator can flip to
+  // 'skill' / 'recipe' BEFORE picking a value from the dropdown. We
+  // can't derive kind from the FKs alone because empty FKs would
+  // snap the radio back to 'none' the moment the operator clicks
+  // 'skill' (the FKs only fill once they pick an option below).
+  const derivedKind: Kind = editing.recipe_source_id
     ? 'recipe'
     : editing.skill_source_id
       ? 'skill'
       : 'none';
+  const [kind, setKindState] = useState<Kind>(derivedKind);
 
   function setKind(k: Kind) {
+    setKindState(k);
     if (k === 'none') {
       setEditing({
         ...editing,
@@ -457,11 +466,13 @@ function BindingPicker({
         recipe_file_path: null,
       });
     } else if (k === 'skill') {
+      // Clear the OPPOSITE binding so we don't violate the
+      // mutual-exclusion CHECK constraint at save time. Skill FKs
+      // stay empty until the operator picks from the dropdown.
       setEditing({
         ...editing,
         recipe_source_id: null,
         recipe_file_path: null,
-        // leave skill_* empty until user picks an option
       });
     } else {
       setEditing({
@@ -483,7 +494,7 @@ function BindingPicker({
             <input
               type="radio"
               name="binding-kind"
-              checked={currentKind === k}
+              checked={kind === k}
               onChange={() => setKind(k)}
             />
             <span className="capitalize">
@@ -493,7 +504,7 @@ function BindingPicker({
         ))}
       </div>
 
-      {currentKind === 'skill' && (
+      {kind === 'skill' && (
         <div className="pt-1">
           <select
             className="form-input w-full"
@@ -537,7 +548,7 @@ function BindingPicker({
         </div>
       )}
 
-      {currentKind === 'recipe' && (
+      {kind === 'recipe' && (
         <div className="pt-1">
           <select
             className="form-input w-full"
@@ -585,7 +596,7 @@ function BindingPicker({
         </div>
       )}
 
-      {currentKind === 'none' && (
+      {kind === 'none' && (
         <p className="text-xs text-neutral-500">
           Use the inline <strong>System prompt</strong> field below. Skills + recipes are managed in the{' '}
           <strong>Agent sources</strong> tab.
