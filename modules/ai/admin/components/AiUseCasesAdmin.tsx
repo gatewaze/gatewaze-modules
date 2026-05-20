@@ -35,7 +35,7 @@ export default function AiUseCasesAdmin() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<AiUseCase | null>(null);
   const [saving, setSaving] = useState(false);
-  const [editTab, setEditTab] = useState<'settings' | 'prompt'>('settings');
+  const [editTab, setEditTab] = useState<'settings' | 'models' | 'prompt'>('settings');
 
   useEffect(() => {
     void load();
@@ -188,12 +188,15 @@ export default function AiUseCasesAdmin() {
           <div className="space-y-4">
             <Tabs
               value={editTab}
-              onChange={(v) => setEditTab(v as 'settings' | 'prompt')}
+              onChange={(v) => setEditTab(v as 'settings' | 'models' | 'prompt')}
               tabs={EDIT_TABS}
             />
 
             {editTab === 'settings' && (
-              <SettingsTab
+              <SettingsTab editing={editing} setEditing={setEditing} />
+            )}
+            {editTab === 'models' && (
+              <ModelsTab
                 editing={editing}
                 setEditing={setEditing}
                 catalog={catalog}
@@ -227,27 +230,22 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const EDIT_TABS: Tab[] = [
   { id: 'settings', label: 'Settings' },
+  { id: 'models', label: 'Models' },
   { id: 'prompt', label: 'Prompt' },
 ];
 
 /**
- * Settings tab — provider/model defaults, allowed-models matrix,
- * token + cost caps, web-tool allowlist. The label + description
- * fields stay on this tab too since they're metadata not part of
- * the prompt body.
+ * Settings tab — identity (label, description) and runtime gates
+ * (token cap, daily cost cap, web-tool allowlist). Model + prompt
+ * live on their own tabs so an operator scanning for "what does this
+ * use case cost" doesn't have to scroll past the allowed-models matrix.
  */
 function SettingsTab({
   editing,
   setEditing,
-  catalog,
-  catalogByProvider,
-  catalogByModel,
 }: {
   editing: AiUseCase;
   setEditing: (uc: AiUseCase) => void;
-  catalog: AiCatalogModel[];
-  catalogByProvider: Map<string, AiCatalogModel[]>;
-  catalogByModel: Map<string, AiCatalogModel>;
 }) {
   return (
     <div className="space-y-4">
@@ -264,6 +262,70 @@ function SettingsTab({
           onChange={(e) => setEditing({ ...editing, description: e.target.value })}
         />
       </Field>
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Max output tokens">
+          <TextField.Root
+            type="number"
+            value={String(editing.max_output_tokens)}
+            onChange={(e) =>
+              setEditing({ ...editing, max_output_tokens: parseInt(e.target.value, 10) || 0 })
+            }
+          />
+        </Field>
+        <Field label="Daily cap (micro-USD, blank = no cap)">
+          <TextField.Root
+            type="number"
+            value={editing.daily_cost_cap_micro_usd == null ? '' : String(editing.daily_cost_cap_micro_usd)}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              setEditing({ ...editing, daily_cost_cap_micro_usd: v ? parseInt(v, 10) : null });
+            }}
+          />
+        </Field>
+      </div>
+      <Field label="Allowed web tools">
+        <div className="flex gap-3 text-sm">
+          {(['web_search', 'fetch_url'] as const).map((tool) => (
+            <label key={tool} className="inline-flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={editing.allowed_web_tools.includes(tool)}
+                onChange={(e) => {
+                  const next = e.target.checked
+                    ? [...new Set([...editing.allowed_web_tools, tool])]
+                    : editing.allowed_web_tools.filter((t) => t !== tool);
+                  setEditing({ ...editing, allowed_web_tools: next });
+                }}
+              />
+              <code>{tool}</code>
+            </label>
+          ))}
+        </div>
+      </Field>
+    </div>
+  );
+}
+
+/**
+ * Models tab — default provider/model picker + allowed-models matrix.
+ * Walked by the router when default_provider='auto'; falls back if
+ * the default model is unavailable.
+ */
+function ModelsTab({
+  editing,
+  setEditing,
+  catalog,
+  catalogByProvider,
+  catalogByModel,
+}: {
+  editing: AiUseCase;
+  setEditing: (uc: AiUseCase) => void;
+  catalog: AiCatalogModel[];
+  catalogByProvider: Map<string, AiCatalogModel[]>;
+  catalogByModel: Map<string, AiCatalogModel>;
+}) {
+  return (
+    <div className="space-y-4">
       <Field label="Default model">
         <Select.Root
           value={
@@ -322,7 +384,7 @@ function SettingsTab({
           )}
       </Field>
       <Field label="Allowed models">
-        <div className="space-y-3 border rounded-md p-3 bg-neutral-50/40 max-h-64 overflow-y-auto">
+        <div className="space-y-3 border rounded-md p-3 bg-neutral-50/40 max-h-[28rem] overflow-y-auto">
           {catalog.length === 0 ? (
             <p className="text-xs text-neutral-500">
               No models in the catalog yet — add some via the AI models page.
@@ -390,46 +452,6 @@ function SettingsTab({
           Order reflects selection sequence — the router walks this list when
           default_provider is Auto, or as fallback if the default model is unavailable.
         </p>
-      </Field>
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Max output tokens">
-          <TextField.Root
-            type="number"
-            value={String(editing.max_output_tokens)}
-            onChange={(e) =>
-              setEditing({ ...editing, max_output_tokens: parseInt(e.target.value, 10) || 0 })
-            }
-          />
-        </Field>
-        <Field label="Daily cap (micro-USD, blank = no cap)">
-          <TextField.Root
-            type="number"
-            value={editing.daily_cost_cap_micro_usd == null ? '' : String(editing.daily_cost_cap_micro_usd)}
-            onChange={(e) => {
-              const v = e.target.value.trim();
-              setEditing({ ...editing, daily_cost_cap_micro_usd: v ? parseInt(v, 10) : null });
-            }}
-          />
-        </Field>
-      </div>
-      <Field label="Allowed web tools">
-        <div className="flex gap-3 text-sm">
-          {(['web_search', 'fetch_url'] as const).map((tool) => (
-            <label key={tool} className="inline-flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={editing.allowed_web_tools.includes(tool)}
-                onChange={(e) => {
-                  const next = e.target.checked
-                    ? [...new Set([...editing.allowed_web_tools, tool])]
-                    : editing.allowed_web_tools.filter((t) => t !== tool);
-                  setEditing({ ...editing, allowed_web_tools: next });
-                }}
-              />
-              <code>{tool}</code>
-            </label>
-          ))}
-        </div>
       </Field>
     </div>
   );
