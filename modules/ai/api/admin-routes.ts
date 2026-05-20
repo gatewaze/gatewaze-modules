@@ -541,6 +541,38 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
    * Lists models the requesting user can use for a given use-case.
    * `available: true` iff there's a resolvable key.
    */
+  /**
+   * Pre-run preview — resolve the use-case prompt source WITHOUT
+   * invoking the model. Returns the same PromptSource snapshot the
+   * worker would persist onto ai_messages.prompt_source after a run,
+   * so the chat widget can show operators which skill/commit will be
+   * used before they click "Run research" / Send.
+   *
+   * Spec: provenance addendum to spec-ai-job-runner — the
+   * configured-now snapshot is just the post-run snapshot resolved
+   * at fetch time.
+   */
+  async function getUseCasePromptSource(req: Request, res: Response): Promise<void> {
+    const id = paramAs(req.params.id);
+    if (!id || !USE_CASE_ID_RE.test(id)) {
+      sendError(res, 400, 'bad_request', 'id (slug) required');
+      return;
+    }
+    try {
+      const resolved = await resolveUseCasePrompt(supabase as never, id);
+      res.status(200).json({
+        prompt_source: resolved.promptSource,
+        // The resolved strings are useful for "expand to see the
+        // actual prompt that'll be sent" — but they can be tens of
+        // KB. Echo a length + sha hint instead.
+        system_prompt_preview: resolved.systemPrompt.slice(0, 280),
+        kickoff_message_preview: resolved.kickoffMessage.slice(0, 280),
+      });
+    } catch (err) {
+      sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function listUseCaseModels(req: Request, res: Response): Promise<void> {
     const id = paramAs(req.params.id);
     if (!id || !USE_CASE_ID_RE.test(id)) {
@@ -1140,6 +1172,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     listUseCases,
     patchUseCase,
     listUseCaseModels,
+    getUseCasePromptSource,
     listModels,
     createModel,
     updateModel,
@@ -1175,6 +1208,7 @@ export function mountAdminAiRoutes(
   router.get('/admin/use-cases', routes.listUseCases);
   router.patch('/admin/use-cases/:id', routes.patchUseCase);
   router.get('/admin/use-cases/:id/models', routes.listUseCaseModels);
+  router.get('/admin/use-cases/:id/prompt-source', routes.getUseCasePromptSource);
 
   router.get('/admin/models', routes.listModels);
   router.post('/admin/models', routes.createModel);
