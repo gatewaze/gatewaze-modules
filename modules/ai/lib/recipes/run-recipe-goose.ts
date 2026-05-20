@@ -157,9 +157,12 @@ export async function runRecipeViaGoose(
   // 2. Materialize recipe + sub-recipes into a tmpdir Goose can read.
   let workdir: string | null = null;
   let recipePath: string;
+  let subRecipePaths: string[] = [];
   try {
     workdir = await mkdtemp(join(osTmpdir(), `gatewaze-goose-${runId}-`));
-    recipePath = await materializeRecipe(workdir, args.recipe, args.subRecipes);
+    const materialized = await materializeRecipe(workdir, args.recipe, args.subRecipes);
+    recipePath = materialized.parentPath;
+    subRecipePaths = materialized.subPaths;
   } catch (err) {
     const reason = `materialize_failed: ${err instanceof Error ? err.message : String(err)}`;
     await markRunFailed(supabase, runId, reason);
@@ -195,9 +198,22 @@ export async function runRecipeViaGoose(
     Number(process.env.GATEWAZE_GOOSE_MAX_TOOL_REPETITIONS ?? '100'),
   );
 
+  // Sub-recipes need to be passed as --sub-recipe flags explicitly —
+  // Goose's `run --recipe parent.yaml` does NOT auto-traverse the
+  // `sub_recipes:` array inside the YAML. Confirmed by observation:
+  // a dual-model recipe ran with status=complete but the merger
+  // produced 'no_candidates' because Sonnet + GPT-5 sub-passes were
+  // never actually invoked. Pass each materialized sub-recipe path
+  // so Goose registers them as runnable from the parent step.
+  const subRecipeArgs: string[] = [];
+  for (const subPath of subRecipePaths) {
+    subRecipeArgs.push('--sub-recipe', subPath);
+  }
+
   const gooseArgs = [
     'run',
     '--recipe', recipePath,
+    ...subRecipeArgs,
     ...paramArgs,
     '--output-format', 'stream-json',
     '--quiet',
@@ -423,15 +439,18 @@ async function materializeRecipe(
   workdir: string,
   recipe: ParsedRecipe,
   subRecipes: Map<string, ParsedRecipe>,
-): Promise<string> {
+): Promise<{ parentPath: string; subPaths: string[] }> {
   // Parent gets a top-level recipe.yaml. Sub-recipes go under their
   // declared relative paths (after normalising `../` against the
-  // parent's implicit recipes/<name>/ location).
+  // parent's implicit recipes/<name>/ location). Returned subPaths
+  // are the absolute paths the caller passes to `--sub-recipe` flags
+  // so Goose registers them as callable from the parent step.
   const parentDir = join(workdir, 'recipes', 'parent');
   await mkdir(parentDir, { recursive: true });
   const parentPath = join(parentDir, 'recipe.yaml');
   await writeFile(parentPath, yamlDump(toGooseYaml(recipe)), 'utf-8');
 
+  const subPaths: string[] = [];
   for (const [relPath, sub] of subRecipes) {
     // sub_recipes[].path is `../daily-briefing-research-sonnet/recipe.yaml`
     // relative to the PARENT'S recipe.yaml. Resolve against parentPath
@@ -442,8 +461,9 @@ async function materializeRecipe(
     }
     await mkdir(dirname(absolute), { recursive: true });
     await writeFile(absolute, yamlDump(toGooseYaml(sub)), 'utf-8');
+    subPaths.push(absolute);
   }
-  return parentPath;
+  return { parentPath, subPaths };
 }
 
 /**
