@@ -26,7 +26,7 @@ async function authedFetch(path: string, init?: RequestInit): Promise<Response> 
 // Types
 // ---------------------------------------------------------------------------
 
-export interface SkillSource {
+export interface AgentSource {
   id: string;
   label: string;
   description: string | null;
@@ -43,7 +43,7 @@ export interface SkillSource {
   updated_at: string;
 }
 
-export interface SkillSourceCreated extends SkillSource {
+export interface AgentSourceCreated extends AgentSource {
   webhook_secret: string;
 }
 
@@ -116,11 +116,11 @@ async function parseError(res: Response): Promise<ServiceError> {
 // Sources
 // ---------------------------------------------------------------------------
 
-export const SkillsService = {
-  async listSources(): Promise<Result<SkillSource[]>> {
+export const AgentsService = {
+  async listSources(): Promise<Result<AgentSource[]>> {
     const r = await authedFetch('/api/modules/ai/admin/agent-sources');
     if (!r.ok) return { ok: false, error: await parseError(r) };
-    const b = (await r.json()) as { sources: SkillSource[] };
+    const b = (await r.json()) as { sources: AgentSource[] };
     return { ok: true, value: b.sources };
   },
 
@@ -132,20 +132,20 @@ export const SkillsService = {
     path_prefix?: string;
     auth_token?: string;
     webhook_provider?: 'github' | 'gitlab' | 'gitea';
-  }): Promise<Result<SkillSourceCreated>> {
+  }): Promise<Result<AgentSourceCreated>> {
     const r = await authedFetch('/api/modules/ai/admin/agent-sources', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     });
     if (!r.ok) return { ok: false, error: await parseError(r) };
-    return { ok: true, value: (await r.json()) as SkillSourceCreated };
+    return { ok: true, value: (await r.json()) as AgentSourceCreated };
   },
 
-  async readSource(id: string): Promise<Result<SkillSource>> {
+  async readSource(id: string): Promise<Result<AgentSource>> {
     const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}`);
     if (!r.ok) return { ok: false, error: await parseError(r) };
-    return { ok: true, value: (await r.json()) as SkillSource };
+    return { ok: true, value: (await r.json()) as AgentSource };
   },
 
   async updateSource(
@@ -159,14 +159,14 @@ export const SkillsService = {
       auth_token?: string | null;
       webhook_provider?: 'github' | 'gitlab' | 'gitea';
     },
-  ): Promise<Result<SkillSource>> {
+  ): Promise<Result<AgentSource>> {
     const r = await authedFetch(`/api/modules/ai/admin/agent-sources/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/merge-patch+json' },
       body: JSON.stringify(patch),
     });
     if (!r.ok) return { ok: false, error: await parseError(r) };
-    return { ok: true, value: (await r.json()) as SkillSource };
+    return { ok: true, value: (await r.json()) as AgentSource };
   },
 
   async deleteSource(id: string): Promise<Result<{ deleted: true; cascaded_skill_count: number }>> {
