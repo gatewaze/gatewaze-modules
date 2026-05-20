@@ -176,6 +176,25 @@ export async function runRecipeViaGoose(
   for (const [k, v] of Object.entries(args.params)) {
     paramArgs.push('--params', `${k}=${formatParam(v)}`);
   }
+  // Iteration ceilings — set EXPLICITLY rather than letting Goose's
+  // default (1000) cap kick in. The dual-model daily-briefing recipe
+  // observed 0 candidates at Goose's default because each sub-pass
+  // exhausted Goose's tool-repetition budget before surfacing items
+  // (research recipes legitimately call web_search / fetch_url many
+  // times). Bump both ceilings and let the cost-ledger be the real
+  // governance lever instead of a turn count.
+  //
+  // Tunables via env so an operator can dial them back without a
+  // module redeploy if a runaway recipe ever burns cap.
+  const maxTurns = Math.max(
+    1,
+    Number(process.env.GATEWAZE_GOOSE_MAX_TURNS ?? '500'),
+  );
+  const maxToolRepetitions = Math.max(
+    1,
+    Number(process.env.GATEWAZE_GOOSE_MAX_TOOL_REPETITIONS ?? '100'),
+  );
+
   const gooseArgs = [
     'run',
     '--recipe', recipePath,
@@ -183,6 +202,8 @@ export async function runRecipeViaGoose(
     '--output-format', 'stream-json',
     '--quiet',
     '--no-session',
+    '--max-turns', String(maxTurns),
+    '--max-tool-repetitions', String(maxToolRepetitions),
   ];
 
   let child: ChildProcessByStdio<null, Readable, Readable> | null = null;
