@@ -268,7 +268,12 @@ export async function runRecipeViaGoose(
   // surfaces as an ai_usage_events row tagged kind='mcp_tool' so the
   // cost ledger attributes per-server / per-tool spend the same way
   // it attributes kind='tool' web_search / fetch_url calls.
-  const mcpToolCalls: Array<{ server: string; tool: string; ts: number }> = [];
+  // MCP tool-call telemetry with latency. toolRequest events stamp
+  // started_at into pendingToolReqs keyed by tool-call id; toolResponse
+  // events pair and compute latency_ms. Unmatched requests at end of
+  // run get drained with latency = end-of-run timestamp.
+  const mcpToolCalls: Array<{ server: string; tool: string; latencyMs: number }> = [];
+  const pendingToolReqs = new Map<string, { server: string; tool: string; startedAt: number }>();
 
   try {
     child = spawn(GOOSE_BIN, gooseArgs, {
@@ -362,6 +367,22 @@ export async function runRecipeViaGoose(
         for (const item of content) {
           if (!item || typeof item !== 'object') continue;
           const it = item as Record<string, unknown>;
+          // Pair toolResponse → toolRequest for latency before the
+          // toolRequest-only branch (the existing flow skipped non-
+          // toolRequest items entirely).
+          if (it.type === 'toolResponse') {
+            const respId = (it as { id?: string }).id;
+            if (typeof respId === 'string' && pendingToolReqs.has(respId)) {
+              const req = pendingToolReqs.get(respId)!;
+              pendingToolReqs.delete(respId);
+              mcpToolCalls.push({
+                server: req.server,
+                tool: req.tool,
+                latencyMs: Date.now() - req.startedAt,
+              });
+            }
+            continue;
+          }
           if (it.type !== 'toolRequest') continue;
           const toolCall = it.toolCall as Record<string, unknown> | undefined;
           if (!toolCall || typeof toolCall !== 'object') continue;
@@ -394,13 +415,15 @@ export async function runRecipeViaGoose(
           // <extension>__<tool>. If the prefix matches one of our
           // loaded server names, this is an MCP tool call worth
           // recording. recipe__ and other goose-internal tools fall
-          // through to no-op here.
-          if (typeof toolName === 'string' && toolName.includes('__')) {
+          // through to no-op here. latency is computed later when
+          // the matching toolResponse arrives.
+          const toolCallId = (item as { id?: string }).id;
+          if (typeof toolName === 'string' && toolName.includes('__') && typeof toolCallId === 'string') {
             const sep = toolName.indexOf('__');
             const ext = toolName.slice(0, sep);
             const tool = toolName.slice(sep + 2);
             if (loadedServerNames.includes(ext)) {
-              mcpToolCalls.push({ server: ext, tool, ts: Date.now() });
+              pendingToolReqs.set(toolCallId, { server: ext, tool, startedAt: Date.now() });
             }
           }
         }
@@ -459,6 +482,17 @@ export async function runRecipeViaGoose(
         // best-effort; cost ledger isn't critical for run completion
       }
     }
+    // Drain any toolRequests that never paired with a toolResponse
+    // (run terminated mid-tool). Latency = elapsed-since-request.
+    for (const [, pending] of pendingToolReqs) {
+      mcpToolCalls.push({
+        server: pending.server,
+        tool: pending.tool,
+        latencyMs: Date.now() - pending.startedAt,
+      });
+    }
+    pendingToolReqs.clear();
+
     // MCP tool-call cost-ledger rows (one per call). Cost computed from
     // ai_model_prices when (provider=<server>, model=<tool>) is
     // registered; defaults to 0 otherwise.
@@ -475,7 +509,7 @@ export async function runRecipeViaGoose(
           model: call.tool,
           inputTokens: 0,
           outputTokens: 0,
-          latencyMs: 0,
+          latencyMs: call.latencyMs,
           status: 'ok',
           error: null,
         });
@@ -706,6 +740,23 @@ async function resolveMcpExtensions(
       warnings.push({ code: 'mcp_disabled', server: name, details: 'Server is registered + allowlisted but disabled.' });
       continue;
     }
+    // spec-ai-mcp-extensions.md open question #4 — per-(use_case,
+    // mcp_server) tool-call rate limit. Counts the trailing hour of
+    // ai_usage_events(kind='mcp_tool'). If the cap is exceeded, exclude
+    // the server from this run with a structured warning — the run
+    // continues without that server's tools.
+    {
+      const { checkMcpRateLimit } = await import('../mcp/rate-limit.js');
+      const decision = await checkMcpRateLimit(supabase, args.useCaseId, name);
+      if (!decision.allowed) {
+        warnings.push({
+          code: 'mcp_rate_limited',
+          server: name,
+          details: `Trailing hour count ${decision.count} >= cap ${decision.cap}. Bump GATEWAZE_MCP_MAX_TOOL_CALLS_PER_HOUR or the per-use-case MCP_MAX_TOOL_CALLS_PER_HOUR override.`,
+        });
+        continue;
+      }
+    }
     // Resolve to CLI flags + env.
     const type = server.type as string;
     if (type === 'stdio') {
@@ -744,6 +795,20 @@ async function resolveMcpExtensions(
       flags.push('--with-extension', `node ${launcherPath} ${descriptorEnvName}`);
     } else if (type === 'streamable_http') {
       const uri = server.uri as string;
+      // spec-ai-mcp-extensions.md §Security §SSRF. Re-validate at
+      // spawn time even though POST /admin/mcp-servers already
+      // checked — DNS could have rebound between API write and the
+      // current run.
+      const { checkSsrfSafe } = await import('../secrets/ssrf-guard.js');
+      const ssrf = await checkSsrfSafe(uri);
+      if (!ssrf.ok) {
+        warnings.push({
+          code: 'mcp_ssrf_blocked',
+          server: name,
+          details: `URI ${uri} blocked at connect-time SSRF check: ${ssrf.reason}`,
+        });
+        continue;
+      }
       flags.push('--with-streamable-http-extension', uri);
       if (typeof server.bearer_token_ciphertext === 'string' && server.bearer_token_ciphertext.length > 0) {
         const { decryptSecret } = await import('../skills/secret-shim.js');

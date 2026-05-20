@@ -76,6 +76,8 @@ const aiModule: GatewazeModule = {
     'migrations/033_ai_messages_mcp_columns.sql',
     'migrations/034_ai_usage_events_mcp_kind.sql',
     'migrations/035_ai_memory.sql',
+    // Open question #4 — per-MCP rate limiting allowlist extension.
+    'migrations/036_ai_use_cases_mcp_rate_limit_keys.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every

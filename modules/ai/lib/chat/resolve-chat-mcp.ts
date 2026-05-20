@@ -41,6 +41,21 @@ export async function resolveChatMcpExtensions(
       warnings.push({ code: 'mcp_disabled', server: name });
       continue;
     }
+    // Per-(use_case, mcp_server) hourly rate limit. Same machinery as
+    // the recipe resolver. Rate-limited servers are excluded from
+    // this turn with a structured warning; chat continues.
+    {
+      const { checkMcpRateLimit } = await import('../mcp/rate-limit.js');
+      const decision = await checkMcpRateLimit(supabase, useCaseId, name);
+      if (!decision.allowed) {
+        warnings.push({
+          code: 'mcp_rate_limited',
+          server: name,
+          details: `Trailing hour count ${decision.count} >= cap ${decision.cap}.`,
+        });
+        continue;
+      }
+    }
     const type = server.type as string;
     if (type === 'stdio') {
       // Reuse the same descriptor-via-env shim pattern as recipe runs.
@@ -80,7 +95,16 @@ export async function resolveChatMcpExtensions(
       env[descriptorEnvName] = JSON.stringify({ cmd, args: argList, env: perServerEnv });
       flags.push('--with-extension', `node ${launcherPath} ${descriptorEnvName}`);
     } else if (type === 'streamable_http') {
-      flags.push('--with-streamable-http-extension', server.uri as string);
+      // Connect-time SSRF re-check. DNS could rebind between the
+      // POST /admin/mcp-servers validation and now.
+      const uri = server.uri as string;
+      const { checkSsrfSafe } = await import('../secrets/ssrf-guard.js');
+      const ssrf = await checkSsrfSafe(uri);
+      if (!ssrf.ok) {
+        warnings.push({ code: 'mcp_ssrf_blocked', server: name, details: `URI ${uri} blocked at connect-time: ${ssrf.reason}` });
+        continue;
+      }
+      flags.push('--with-streamable-http-extension', uri);
       if (typeof server.bearer_token_ciphertext === 'string' && server.bearer_token_ciphertext.length > 0) {
         const { decryptSecret } = await import('../skills/secret-shim.js');
         const plaintext = decryptSecret(server.bearer_token_ciphertext);
