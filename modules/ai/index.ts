@@ -64,6 +64,18 @@ const aiModule: GatewazeModule = {
     // share a fast-path key (the shared column caused recipe sync to
     // short-circuit after the skill pass updated it).
     'migrations/026_ai_agent_sources_per_kind_sync.sql',
+    // spec-ai-mcp-extensions.md — operator-managed MCP server registry,
+    // per-use-case allowlist, Goose runtime overrides, use-case
+    // templates, Gatewaze-owned memory backing store.
+    'migrations/027_ai_mcp_servers.sql',
+    'migrations/028_ai_use_case_mcp_allowlist.sql',
+    'migrations/029_ai_use_cases_goose_runtime_overrides.sql',
+    'migrations/030_ai_use_case_templates.sql',
+    'migrations/031_ai_use_case_templates_seed.sql',
+    'migrations/032_ai_recipe_runs_mcp_columns.sql',
+    'migrations/033_ai_messages_mcp_columns.sql',
+    'migrations/034_ai_usage_events_mcp_kind.sql',
+    'migrations/035_ai_memory.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every
@@ -86,6 +98,14 @@ const aiModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '0 * * * *' },
       data: { kind: 'ai.cleanup-orphan-streams' },
+    },
+    // spec-ai-mcp-extensions.md §Memory backing store §Retention.
+    // Hourly sweep of ai_memory rows where expires_at < now().
+    {
+      name: 'ai:cleanup-expired-memory',
+      queue: 'jobs',
+      schedule: { pattern: '0 * * * *' },
+      data: { kind: 'ai.cleanup-expired-memory' },
     },
   ],
 
@@ -130,6 +150,13 @@ const aiModule: GatewazeModule = {
     {
       name: 'ai:cleanup-orphan-streams',
       handler: 'workers/cleanup-orphan-streams.js',
+      concurrency: 1,
+    },
+    // spec-ai-mcp-extensions.md §Memory backing store §Retention.
+    // Hourly sweep of ai_memory rows where expires_at < now().
+    {
+      name: 'ai:cleanup-expired-memory',
+      handler: 'workers/cleanup-expired-memory.js',
       concurrency: 1,
     },
   ],
@@ -196,6 +223,12 @@ const aiModule: GatewazeModule = {
     },
     {
       path: 'ai/jobs',
+      component: () => import('./admin/components/AiDashboard'),
+      requiredFeature: 'ai.manage',
+      guard: 'admin',
+    },
+    {
+      path: 'ai/mcp-servers',
       component: () => import('./admin/components/AiDashboard'),
       requiredFeature: 'ai.manage',
       guard: 'admin',

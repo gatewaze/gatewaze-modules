@@ -210,11 +210,43 @@ export async function runRecipeViaGoose(
     subRecipeArgs.push('--sub-recipe', subPath);
   }
 
+  // spec-ai-mcp-extensions.md — resolve MCP extensions for this run.
+  // Intersection of (recipe.extensions ∩ use_case.allowed_mcp_servers ∩ enabled).
+  // Returns CLI flags + structured warnings + env merges for the spawn.
+  let extensionFlags: string[] = [];
+  let extensionEnv: Record<string, string> = {};
+  let extensionWarnings: Array<Record<string, unknown>> = [];
+  let loadedServerNames: string[] = [];
+  try {
+    const resolved = await resolveMcpExtensions(supabase, {
+      useCaseId: args.useCase,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      recipeExtensions: (args.recipe.extensions ?? []) as any[],
+    });
+    extensionFlags = resolved.flags;
+    extensionEnv = resolved.env;
+    extensionWarnings = resolved.warnings;
+    loadedServerNames = resolved.loadedNames;
+  } catch (err) {
+    // MCP resolution failure (decrypt error, DB error) → fail the run
+    // before spawn rather than silently dropping extensions.
+    const reason = `mcp_load_failed: ${err instanceof Error ? err.message : String(err)}`;
+    await markRunFailed(supabase, runId, reason, {
+      code: 'mcp_load_failed',
+      reason: 'mcp_resolve_failed',
+      server_name: null,
+      stderr_excerpt: reason.slice(0, 8000),
+    });
+    if (workdir) await rm(workdir, { recursive: true, force: true }).catch(() => undefined);
+    return { run_id: runId, status: 'failed', final_output: null, total_cost_micro_usd: 0, total_input_tokens: 0, total_output_tokens: 0, duration_ms: Date.now() - start, failure_reason: reason };
+  }
+
   const gooseArgs = [
     'run',
     '--recipe', recipePath,
     ...subRecipeArgs,
     ...paramArgs,
+    ...extensionFlags,
     '--output-format', 'stream-json',
     '--quiet',
     '--no-session',
@@ -243,6 +275,10 @@ export async function runRecipeViaGoose(
         // per-use-case default routes through ANTHROPIC_API_KEY etc.
         // already in env; only the model selector is recipe-driven.
         GOOSE_PROVIDER: process.env.GOOSE_PROVIDER ?? '',
+        // spec-ai-mcp-extensions.md §Env injection — MCP server env
+        // vars and bearer tokens (decrypted just-in-time, never logged).
+        // Override anything in process.env so per-server creds win.
+        ...extensionEnv,
       },
     }) as ChildProcessByStdio<null, Readable, Readable>;
   } catch (err) {
@@ -402,6 +438,9 @@ export async function runRecipeViaGoose(
         total_output_tokens: totalOut,
         completed_at: new Date().toISOString(),
         failure_reason: failureReason ?? null,
+        // spec-ai-mcp-extensions.md §Data Models §Run warnings.
+        loaded_mcp_server_names: loadedServerNames,
+        mcp_warnings: extensionWarnings,
       })
       .eq('id', runId);
 
@@ -510,19 +549,159 @@ function formatParam(v: unknown): string {
   return JSON.stringify(v);
 }
 
-async function markRunFailed(supabase: SupabaseClient, runId: string, reason: string): Promise<void> {
+async function markRunFailed(
+  supabase: SupabaseClient,
+  runId: string,
+  reason: string,
+  failure_details?: Record<string, unknown>,
+): Promise<void> {
   try {
+    const update: Record<string, unknown> = {
+      status: 'failed',
+      failure_reason: reason,
+      completed_at: new Date().toISOString(),
+    };
+    if (failure_details) update.failure_details = failure_details;
     await supabase
       .from('ai_recipe_runs')
-      .update({
-        status: 'failed',
-        failure_reason: reason,
-        completed_at: new Date().toISOString(),
-      })
+      .update(update)
       .eq('id', runId);
   } catch {
     // best-effort
   }
+}
+
+// ─── MCP extension resolution ───────────────────────────────────────
+//
+// spec-ai-mcp-extensions.md §Runner / Goose CLI Integration §Extension
+// resolution algorithm.
+//
+// Intersection of (recipe-declared ∩ use_case.allowed_mcp_servers ∩
+// enabled servers). Returns CLI flags + decrypted env vars + structured
+// warnings. Anything excluded surfaces as a warning, never silently
+// dropped.
+
+interface McpResolveResult {
+  flags: string[];
+  env: Record<string, string>;
+  warnings: Array<Record<string, unknown>>;
+  loadedNames: string[];
+}
+
+async function resolveMcpExtensions(
+  supabase: SupabaseClient,
+  args: {
+    useCaseId: string;
+    recipeExtensions: Array<{ name?: string; type?: string; raw?: Record<string, unknown> } & Record<string, unknown>>;
+  },
+): Promise<McpResolveResult> {
+  // 1. Recipe-declared extension names. Recipes that declare nothing
+  //    get an empty load — chat-path callers (§6 round 6) populate
+  //    recipeExtensions from the use-case allowlist directly instead.
+  const declaredNames = Array.from(new Set(
+    args.recipeExtensions
+      .map((e) => (typeof e.name === 'string' ? e.name : ((e.raw as { name?: string })?.name)))
+      .filter((n): n is string => typeof n === 'string' && n.length > 0),
+  ));
+
+  if (declaredNames.length === 0) {
+    return { flags: [], env: {}, warnings: [], loadedNames: [] };
+  }
+
+  // 2. Use-case allowlist.
+  const allowRes = await supabase
+    .from('ai_use_case_mcp_allowlist')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select('mcp_server_id, ai_mcp_servers(name, type, enabled, cmd, args, env_keys, envs_ciphertext, uri, bearer_token_ciphertext, headers, builtin_name)') as { data: Array<Record<string, unknown>> | null; error: { message: string } | null };
+  // The join above filters by use_case_id but supabase-js requires the
+  // .eq() call separately; doing it inline causes the typed select to
+  // squash. Issue the eq:
+  const allowed = await supabase
+    .from('ai_use_case_mcp_allowlist')
+    .select('mcp_server_id, ai_mcp_servers(name, type, enabled, cmd, args, env_keys, envs_ciphertext, uri, bearer_token_ciphertext, headers, builtin_name)')
+    .eq('use_case_id', args.useCaseId);
+  void allowRes;
+
+  if (allowed.error) {
+    throw new Error(`mcp_allowlist_load_failed: ${allowed.error.message}`);
+  }
+  const allowedRows = (allowed.data ?? []) as Array<{ mcp_server_id: string; ai_mcp_servers: Record<string, unknown> }>;
+  const allowedByName = new Map<string, Record<string, unknown>>();
+  for (const row of allowedRows) {
+    const srv = row.ai_mcp_servers as { name?: string };
+    if (typeof srv?.name === 'string') {
+      allowedByName.set(srv.name, row.ai_mcp_servers);
+    }
+  }
+
+  // 3. Intersect + classify each declared extension.
+  const flags: string[] = [];
+  const env: Record<string, string> = {};
+  const warnings: Array<Record<string, unknown>> = [];
+  const loadedNames: string[] = [];
+
+  for (const name of declaredNames) {
+    const server = allowedByName.get(name);
+    if (!server) {
+      warnings.push({ code: 'mcp_not_allowed', server: name, details: 'Server not in use_case.allowed_mcp_servers; add it via /admin/ai/mcp-allowlist.' });
+      continue;
+    }
+    if (server.enabled === false) {
+      warnings.push({ code: 'mcp_disabled', server: name, details: 'Server is registered + allowlisted but disabled.' });
+      continue;
+    }
+    // Resolve to CLI flags + env.
+    const type = server.type as string;
+    if (type === 'stdio') {
+      const cmd = server.cmd as string;
+      const argList = (server.args as string[] | null) ?? [];
+      // Single quoted command string for --with-extension (Goose v1.34 syntax).
+      // NOTE: per spec, future Gatewaze-goose-launcher shim will replace
+      // this with execve-safe descriptor passing — v1 trusts Goose's parser.
+      flags.push('--with-extension', [cmd, ...argList].join(' '));
+      if (typeof server.envs_ciphertext === 'string' && server.envs_ciphertext.length > 0) {
+        // Lazy-import the secret-shim so this lib doesn't take a hard
+        // dep on it when MCP isn't in use.
+        const { decryptSecret } = await import('../skills/secret-shim.js');
+        const plaintext = decryptSecret(server.envs_ciphertext);
+        if (plaintext != null) {
+          try {
+            const map = JSON.parse(plaintext) as Record<string, string>;
+            for (const [k, v] of Object.entries(map)) {
+              if (typeof v === 'string') env[k] = v;
+            }
+          } catch {
+            warnings.push({ code: 'mcp_envs_decrypt_parse_failed', server: name });
+          }
+        } else {
+          warnings.push({ code: 'mcp_envs_decrypt_failed', server: name });
+        }
+      }
+    } else if (type === 'streamable_http') {
+      const uri = server.uri as string;
+      flags.push('--with-streamable-http-extension', uri);
+      if (typeof server.bearer_token_ciphertext === 'string' && server.bearer_token_ciphertext.length > 0) {
+        const { decryptSecret } = await import('../skills/secret-shim.js');
+        const plaintext = decryptSecret(server.bearer_token_ciphertext);
+        if (plaintext != null) {
+          try {
+            const token = JSON.parse(plaintext) as string;
+            const tokenEnvKey = `GOOSE_HTTP_EXTENSION_${name.toUpperCase().replace(/-/g, '_')}_TOKEN`;
+            env[tokenEnvKey] = token;
+          } catch {
+            warnings.push({ code: 'mcp_bearer_decrypt_parse_failed', server: name });
+          }
+        } else {
+          warnings.push({ code: 'mcp_bearer_decrypt_failed', server: name });
+        }
+      }
+    } else if (type === 'builtin') {
+      flags.push('--with-builtin', String(server.builtin_name ?? name));
+    }
+    loadedNames.push(name);
+  }
+
+  return { flags, env, warnings, loadedNames };
 }
 
 function earlyFail(

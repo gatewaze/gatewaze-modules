@@ -61,6 +61,14 @@ const USE_CASE_WRITE_FIELDS = new Set([
   // not re-checked here; an invalid combo bubbles up as a 400 from PG).
   'recipe_source_id',
   'recipe_file_path',
+  // spec-ai-mcp-extensions.md round 7 — jsonb map of allowlisted env-var
+  // overrides. DB trigger validate_goose_runtime_overrides enforces the
+  // allowlist + per-key range checks.
+  'goose_runtime_overrides',
+  // spec-ai-mcp-extensions.md round 8 — template adoption pointer.
+  // template_drifted flips to true on any subsequent edit (handled
+  // below in patchUseCase, not via pass-through).
+  'template_id',
 ]);
 
 export function pickUseCaseFields(body: unknown): Record<string, unknown> {

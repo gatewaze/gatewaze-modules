@@ -33,6 +33,7 @@ import { useModuleSlots, type ResolvedSlot } from '@/hooks/useModuleSlots';
 import AiAgentSourcesAdmin from './AiAgentSourcesAdmin';
 import AiCredentialsAdmin from './AiCredentialsAdmin';
 import AiJobsAdmin from './AiJobsAdmin';
+import AiMcpServersAdmin from './AiMcpServersAdmin';
 import AiModelsAdmin from './AiModelsAdmin';
 import AiRecipesAdmin from './AiRecipesAdmin';
 import AiUsageDashboard from './AiUsageDashboard';
@@ -55,6 +56,10 @@ const BUILTIN_TABS: BuiltinTab[] = [
   // Recipes — Goose-compatible workflow runner. Sources/recipes/runs
   // surface, mirroring the skill-sources tab.
   { id: 'recipes', label: 'Recipes', order: 60, render: () => <AiRecipesAdmin /> },
+  // MCP servers — operator-managed registry of MCP server definitions
+  // (stdio / streamable_http / builtin) with per-use-case allowlist.
+  // Spec: spec-ai-mcp-extensions.md.
+  { id: 'mcp-servers', label: 'MCP servers', order: 65, render: () => <AiMcpServersAdmin /> },
   // Jobs — live queue inspection (active/waiting/delayed/failed) +
   // per-job stop/retry/promote + live-tail of the SSE stream.
   // Cross-module toggle surfaces the wider BullMQ queue.
