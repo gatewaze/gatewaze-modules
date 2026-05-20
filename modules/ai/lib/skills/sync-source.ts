@@ -64,7 +64,10 @@ interface SourceRow {
   branch: string;
   path_prefix: string;
   auth_token_ciphertext: string | null;
-  last_synced_commit: string | null;
+  // Per-kind fast-path key (migration 026). See the matching comment
+  // in lib/recipes/sync-source.ts — sharing a single column between
+  // the two passes caused recipes to silently never index.
+  last_synced_skills_commit: string | null;
   sync_status: string;
   sync_lock_expires_at: string | null;
 }
@@ -85,7 +88,7 @@ export async function syncSource(args: SyncSourceArgs): Promise<SyncSourceResult
     })
     .eq('id', args.sourceId)
     .or(`sync_status.neq.syncing,sync_lock_expires_at.lt.${new Date().toISOString()}`)
-    .select('id, git_url, branch, path_prefix, auth_token_ciphertext, last_synced_commit, sync_status, sync_lock_expires_at')
+    .select('id, git_url, branch, path_prefix, auth_token_ciphertext, last_synced_skills_commit, sync_status, sync_lock_expires_at')
     .maybeSingle();
 
   const source = claimRes?.data as SourceRow | null;
@@ -142,9 +145,11 @@ export async function syncSource(args: SyncSourceArgs): Promise<SyncSourceResult
       });
     }
 
-    // 6. HEAD SHA — fast-path if unchanged.
+    // 6. HEAD SHA — fast-path if unchanged. Compares against the
+    // skill-specific sync key (migration 026); see the per-kind
+    // comment on SourceRow above.
     const headSha = await gitRevParseHead({ cwd: cacheDir, timeoutMs: perStepTimeout });
-    if (source.last_synced_commit === headSha) {
+    if (source.last_synced_skills_commit === headSha) {
       await releaseLock(args.supabase, source.id, headSha, null);
       return {
         ok: true,
@@ -665,6 +670,10 @@ async function releaseLock(supabase: SupabaseLike, sourceId: string, headSha: st
       sync_status: errorMsg ? 'ok' : 'ok',
       sync_error: errorMsg,
       last_synced_at: new Date().toISOString(),
+      // Per-kind key drives the fast-path; the legacy column is kept
+      // in step so the admin UI's "last commit" display stays
+      // accurate regardless of which pass ran last.
+      last_synced_skills_commit: headSha,
       last_synced_commit: headSha,
       sync_lock_token: null,
       sync_lock_expires_at: null,
