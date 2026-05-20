@@ -24,6 +24,7 @@ interface Props {
 
 const KIND_LABELS: Record<PromptSourceSnapshot['system_prompt']['kind'], string> = {
   skill: 'Skill',
+  recipe: 'Recipe',
   inline: 'Inline prompt',
   fallback: 'Hardcoded fallback',
   empty: 'No prompt configured',
@@ -31,6 +32,7 @@ const KIND_LABELS: Record<PromptSourceSnapshot['system_prompt']['kind'], string>
 
 const KIND_COLORS: Record<PromptSourceSnapshot['system_prompt']['kind'], string> = {
   skill: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  recipe: 'text-violet-700 bg-violet-50 border-violet-200',
   inline: 'text-blue-700 bg-blue-50 border-blue-200',
   fallback: 'text-amber-700 bg-amber-50 border-amber-200',
   empty: 'text-neutral-600 bg-neutral-50 border-neutral-200',
@@ -94,12 +96,18 @@ export default function ConfiguredPromptBar({ useCase }: Props): JSX.Element | n
       ? `${skill.source_label}`
       : skill.source_id.slice(0, 8);
     summary = `${skill.name} · ${sourceTag} @ ${shortHash(skill.last_commit_sha)}`;
+  } else if (ps?.system_prompt.kind === 'recipe' && ps.system_prompt.recipe) {
+    const recipe = ps.system_prompt.recipe;
+    const sourceTag = recipe.source_label
+      ? `${recipe.source_label}`
+      : recipe.source_id.slice(0, 8);
+    summary = `${recipe.title} (${recipe.file_path}) · ${sourceTag} @ ${shortHash(recipe.last_commit_sha)}`;
   } else if (ps?.system_prompt.kind === 'inline') {
     summary = `inline (${ps.system_prompt.char_count} chars, hash ${shortHash(ps.system_prompt.content_hash)})`;
   } else if (ps?.system_prompt.kind === 'fallback') {
-    summary = 'using hardcoded fallback prompt — skill_path may be stale';
+    summary = ps.system_prompt.note ?? 'hardcoded fallback prompt — binding may be stale';
   } else {
-    summary = 'no prompt configured (use case has no skill + no inline prompt)';
+    summary = 'no prompt configured (use case has no recipe, no skill, and no inline prompt)';
   }
 
   return (
@@ -134,6 +142,17 @@ export default function ConfiguredPromptBar({ useCase }: Props): JSX.Element | n
                   <Row label="Skill dir_path" value={ps.system_prompt.skill.dir_path} />
                   <Row label="Skill content hash" value={shortHash(ps.system_prompt.skill.content_hash)} />
                   <Row label="Skill commit" value={shortHash(ps.system_prompt.skill.last_commit_sha)} />
+                </>
+              )}
+              {ps.system_prompt.kind === 'recipe' && ps.system_prompt.recipe && (
+                <>
+                  <Row
+                    label="Recipe"
+                    value={`${ps.system_prompt.recipe.title} (${ps.system_prompt.recipe.source_label ?? ps.system_prompt.recipe.source_id})`}
+                  />
+                  <Row label="Recipe file_path" value={ps.system_prompt.recipe.file_path} />
+                  <Row label="Recipe content hash" value={shortHash(ps.system_prompt.recipe.content_hash)} />
+                  <Row label="Recipe commit" value={shortHash(ps.system_prompt.recipe.last_commit_sha)} />
                 </>
               )}
               {ps.system_prompt.kind === 'fallback' && ps.system_prompt.note && (
