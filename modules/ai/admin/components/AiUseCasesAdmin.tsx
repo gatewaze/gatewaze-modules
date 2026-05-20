@@ -62,9 +62,16 @@ export default function AiUseCasesAdmin() {
     }
   }
 
+  // The catalog carries every billable unit — chat models, embeddings,
+  // image generation, AND web-tool variants (scrapling fetch_url
+  // browser/fast/stealth). The use-case's allowed-models matrix should
+  // only show CHAT-capable rows; embeddings/images/web-tools have
+  // their own configuration surfaces. Filter on supports_chat.
+  const chatCatalog = catalog.filter((m) => m.supports_chat);
+
   // Catalog grouped by provider, in catalog order (alphabetical).
   const catalogByProvider = new Map<string, AiCatalogModel[]>();
-  for (const m of catalog) {
+  for (const m of chatCatalog) {
     const arr = catalogByProvider.get(m.provider) ?? [];
     arr.push(m);
     catalogByProvider.set(m.provider, arr);
@@ -74,7 +81,7 @@ export default function AiUseCasesAdmin() {
   // model) but the use-case's default_model column doesn't store
   // provider, so collisions across providers would be ambiguous).
   const catalogByModel = new Map<string, AiCatalogModel>();
-  for (const m of catalog) {
+  for (const m of chatCatalog) {
     if (!catalogByModel.has(m.model)) catalogByModel.set(m.model, m);
   }
 
@@ -284,20 +291,39 @@ function SettingsTab({
         </Field>
       </div>
       <Field label="Allowed web tools">
-        <div className="flex gap-3 text-sm">
-          {(['web_search', 'fetch_url'] as const).map((tool) => (
-            <label key={tool} className="inline-flex items-center gap-1">
+        <div className="flex flex-col gap-1.5 text-sm">
+          {(
+            [
+              {
+                id: 'web_search' as const,
+                label: 'Anthropic-native web_search (provider-billed, ~$10/1k requests)',
+              },
+              {
+                id: 'fetch_url' as const,
+                label: 'fetch_url via scrapling-fetcher (browser / fast / stealth modes)',
+              },
+              {
+                id: 'gatewaze_search' as const,
+                label: 'gatewaze_search — Serper.dev when SERPER_API_KEY is set, else DuckDuckGo via scrapling',
+              },
+            ]
+          ).map((tool) => (
+            <label key={tool.id} className="inline-flex items-start gap-2">
               <input
                 type="checkbox"
-                checked={editing.allowed_web_tools.includes(tool)}
+                className="mt-0.5"
+                checked={editing.allowed_web_tools.includes(tool.id)}
                 onChange={(e) => {
                   const next = e.target.checked
-                    ? [...new Set([...editing.allowed_web_tools, tool])]
-                    : editing.allowed_web_tools.filter((t) => t !== tool);
+                    ? Array.from(new Set([...editing.allowed_web_tools, tool.id]))
+                    : editing.allowed_web_tools.filter((t) => t !== tool.id);
                   setEditing({ ...editing, allowed_web_tools: next });
                 }}
               />
-              <code>{tool}</code>
+              <span>
+                <code className="font-mono text-xs">{tool.id}</code>
+                <span className="text-xs text-neutral-500"> — {tool.label}</span>
+              </span>
             </label>
           ))}
         </div>
