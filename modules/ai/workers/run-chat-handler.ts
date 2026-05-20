@@ -207,6 +207,10 @@ export default async function runChatHandler(
         output_tokens: result.outputTokens,
         cost_micro_usd: result.costMicroUsd,
         latency_ms: result.latencyMs,
+        // Snapshot provenance so the chat widget's Run details panel
+        // can show which skill/prompt version was used for THIS turn
+        // (not just what's configured now). Migration 023.
+        prompt_source: resolved.promptSource as unknown as Record<string, unknown>,
       })
       .eq('id', assistantMessageId);
     await supabase
