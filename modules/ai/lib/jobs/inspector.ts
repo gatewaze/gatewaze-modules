@@ -70,7 +70,14 @@ export async function getJobsQueue(opts: {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const bullmq = req('bullmq') as { Queue: new (name: string, opts: unknown) => BullQueue };
   const client = await getRedisClient();
-  return new bullmq.Queue(queueName, { connection: client });
+  // CRITICAL: prefix must match the platform's BullMQ config so we
+  // read from the same Redis keyspace. Platform's
+  // packages/api/src/lib/queue/registry.ts uses
+  //   `bull:${BRAND ?? 'default'}`
+  // so Redis keys land at bull:default:jobs:... (default-prefix
+  // would put us at bull:jobs:... — a different, empty keyspace).
+  const prefix = `bull:${process.env.BRAND ?? 'default'}`;
+  return new bullmq.Queue(queueName, { connection: client, prefix });
 }
 
 /**
