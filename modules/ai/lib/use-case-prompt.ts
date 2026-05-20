@@ -44,7 +44,7 @@ export interface ReferenceImage {
 export interface PromptSource {
   use_case: string;
   system_prompt: {
-    kind: 'skill' | 'inline' | 'fallback' | 'empty';
+    kind: 'skill' | 'recipe' | 'inline' | 'fallback' | 'empty';
     content_hash: string;
     char_count: number;
     skill?: {
@@ -55,6 +55,17 @@ export interface PromptSource {
       content_hash: string;
       last_commit_sha: string;
     };
+    recipe?: {
+      source_id: string;
+      source_label: string | null;
+      recipe_id: string;
+      title: string;
+      file_path: string;
+      content_hash: string;
+      last_commit_sha: string;
+    };
+    /** Set for kind='fallback' so the UI can label the deprecated path. */
+    note?: string;
   };
   kickoff_message: {
     kind: 'inline' | 'empty';
@@ -72,8 +83,13 @@ export interface UseCasePrompt {
    * missing. Consumers pass these to image generators as conditioning.
    */
   referenceImages: ReferenceImage[];
-  /** Which path produced systemPrompt — useful for logging. */
-  source: 'skill' | 'inline' | 'empty';
+  /**
+   * Which path produced systemPrompt — useful for logging and for the
+   * caller's branching ('recipe' means the caller should dispatch
+   * ai:run-recipe via dispatchUseCaseRecipeRun rather than using
+   * systemPrompt directly).
+   */
+  source: 'skill' | 'recipe' | 'inline' | 'empty';
   /**
    * Structured provenance the worker persists onto ai_messages.prompt_source.
    * Always set; even an empty resolution carries kind='empty' so the
@@ -92,7 +108,7 @@ export async function resolveUseCasePrompt(
 ): Promise<UseCasePrompt> {
   const uc = await supabase
     .from('ai_use_cases')
-    .select('system_prompt, kickoff_message, skill_source_id, skill_path')
+    .select('system_prompt, kickoff_message, skill_source_id, skill_path, recipe_source_id, recipe_file_path')
     .eq('id', useCaseId)
     .maybeSingle();
   if (uc.error || !uc.data) {
@@ -109,8 +125,53 @@ export async function resolveUseCasePrompt(
     kickoff_message: string | null;
     skill_source_id: string | null;
     skill_path: string | null;
+    recipe_source_id: string | null;
+    recipe_file_path: string | null;
   };
   const kickoffMessage = row.kickoff_message ?? '';
+
+  // Recipe binding wins when set. Migration 025 enforces skill XOR
+  // recipe via CHECK constraint, so we only need to check one. The
+  // caller is expected to branch on source==='recipe' and dispatch
+  // ai:run-recipe via dispatchUseCaseRecipeRun — systemPrompt is left
+  // empty because the recipe's instructions/prompt run inside the
+  // recipe executor, not on the caller's chat turn.
+  if (row.recipe_source_id && row.recipe_file_path) {
+    const recipe = await lookupRecipe(supabase, row.recipe_source_id, row.recipe_file_path);
+    if (recipe && recipe.parse_status === 'ok') {
+      const sourceLabel = await lookupSourceLabel(supabase, row.recipe_source_id);
+      return {
+        systemPrompt: '',
+        kickoffMessage,
+        referenceImages: [],
+        source: 'recipe',
+        promptSource: {
+          use_case: useCaseId,
+          system_prompt: {
+            kind: 'recipe',
+            content_hash: recipe.content_hash,
+            char_count: recipe.instructions.length,
+            recipe: {
+              source_id: row.recipe_source_id,
+              source_label: sourceLabel,
+              recipe_id: recipe.id,
+              title: recipe.title,
+              file_path: recipe.file_path,
+              content_hash: recipe.content_hash,
+              last_commit_sha: recipe.last_commit_sha,
+            },
+          },
+          kickoff_message: kickoffMessage.length > 0
+            ? { kind: 'inline', char_count: kickoffMessage.length }
+            : { kind: 'empty', char_count: 0 },
+        },
+      };
+    }
+    // Recipe bound but missing/refused/parse_error — fall through to
+    // inline/empty so the operator sees "no prompt configured" rather
+    // than the run silently using a different path. The caller still
+    // sees source==='inline'|'empty' and won't dispatch ai:run-recipe.
+  }
 
   if (row.skill_source_id && row.skill_path) {
     const skill = await lookupSkill(supabase, row.skill_source_id, row.skill_path);
@@ -212,6 +273,36 @@ interface SkillRow {
   last_commit_sha: string;
   reference_image_bytes?: unknown;
   reference_image_mime?: unknown;
+}
+
+interface RecipeRow {
+  id: string;
+  file_path: string;
+  title: string;
+  instructions: string;
+  parse_status: 'ok' | 'refused' | 'parse_error';
+  content_hash: string;
+  last_commit_sha: string;
+}
+
+/**
+ * Look up the bound recipe by (source_id, file_path). Returns the raw
+ * row so the caller can decide what to do with a non-'ok' parse_status
+ * (display the failure in the UI vs. silently fall back).
+ */
+async function lookupRecipe(
+  supabase: Supabase,
+  sourceId: string,
+  filePath: string,
+): Promise<RecipeRow | null> {
+  const res = await supabase
+    .from('ai_recipes')
+    .select('id, file_path, title, instructions, parse_status, content_hash, last_commit_sha')
+    .eq('source_id', sourceId)
+    .eq('file_path', filePath)
+    .maybeSingle();
+  if (!res || res.error || !res.data) return null;
+  return res.data as RecipeRow;
 }
 
 function stripLegacySuffix(p: string): string {
