@@ -1,25 +1,35 @@
 /**
- * Public webhook receiver for recipe-source instant-sync.
+ * Public webhook receiver for skill-source instant-sync.
  *
- * Mirrors `api/skill-webhook.ts` exactly per spec-ai-workflows-and-
- * skill-interop.md §3.1 ("same webhook plumbing"). Mounted under
+ * Per spec-ai-skills.md §5. Mounted under
+ *   POST /api/admin/modules/editor-ai-copilot/skill-sources/:id/webhook
  *
- *   POST /api/modules/ai/admin/recipe-sources/:id/webhook
+ * Despite living under the `/admin/` prefix, this route is PUBLIC (no
+ * JWT) because the caller is the git provider, not a Gatewaze user.
+ * Authentication is provider-specific:
+ *   - github  → HMAC-SHA256 of body, header X-Hub-Signature-256
+ *   - gitlab  → plain-text token compare, header X-Gitlab-Token
+ *   - gitea   → plain-text token compare, header X-Gitea-Token (or
+ *               X-Hub-Signature-256 fallback for compatibility)
  *
- * Even though the route lives under `/admin/`, it's PUBLIC (no JWT)
- * because the caller is the git provider. Authentication is
- * provider-specific (github HMAC / gitlab token / gitea token+HMAC).
+ * On success we 202-Accept and enqueue a per-source sync job; the
+ * actual git work happens async.
  *
- * The body must be the raw bytes git sent — we mount express.raw at
- * the route level so HMAC checks against the unparsed payload.
+ * Defensive details:
+ *   - 404 with a fixed body for unknown source ids (does NOT
+ *     distinguish "no such id" from "id exists but wrong tenant").
+ *   - constant-time HMAC compare via timingSafeEqual
+ *   - 5–15 ms jitter delay on auth-fail / 404 paths so an attacker
+ *     can't id-enumerate via timing
+ *   - per-source rate limit (skillsConfig.skillWebhookRateMax / min)
+ *   - audit row written for every call regardless of outcome
  */
 
 import type { Response, Router } from 'express';
 import express from 'express';
 import { createHmac, timingSafeEqual, randomInt } from 'node:crypto';
-
-import { recipesConfig } from '../lib/recipes/recipes-config.js';
-import { getRecipeWebhookSecret, writeRecipeWebhookLog } from '../lib/recipes/recipes-repo.js';
+import { skillsConfig } from '../lib/skills/skills-config.js';
+import { getWebhookSecret, writeWebhookLog } from '../lib/skills/skills-repo.js';
 
 interface SupabaseLike {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -29,6 +39,7 @@ interface SupabaseLike {
 interface RequestWithRaw {
   params: Record<string, string>;
   headers: Record<string, string | string[] | undefined>;
+  /** Raw body buffer (captured via express.raw — needed for HMAC). */
   body: Buffer | Record<string, unknown>;
   ip?: string;
   socket?: { remoteAddress?: string };
@@ -39,8 +50,8 @@ interface Deps {
   enqueueJob?: (queue: string, name: string, data: Record<string, unknown>) => Promise<{ id: string }>;
 }
 
-// Per-source token bucket. Process-local; resets on restart (cap is
-// to deter misconfigured CI loops, not adversaries).
+// In-memory per-source token bucket. Resets on process restart — that's
+// fine, the cap is to deter misconfigured CI loops, not adversaries.
 interface Bucket {
   count: number;
   resetAt: number;
@@ -108,7 +119,8 @@ function isPushEventOnBranch(
   else if (provider === 'gitlab') eventType = getHeader(headers, 'X-Gitlab-Event');
   else if (provider === 'gitea') eventType = getHeader(headers, 'X-Gitea-Event');
 
-  const pushEventName = provider === 'gitlab' ? 'Push Hook' : 'push';
+  const pushEventName =
+    provider === 'gitlab' ? 'Push Hook' : 'push';
   if (eventType !== pushEventName) {
     return { matches: false, eventType, reason: `event_type ${eventType || '(none)'} != ${pushEventName}` };
   }
@@ -121,26 +133,31 @@ function isPushEventOnBranch(
   return { matches: true, eventType };
 }
 
-export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
+export function mountAgentWebhookRoute(router: Router, deps: Deps): void {
+  // Use express.raw at the route level — HMAC needs the EXACT bytes
+  // git sent, not a JSON-re-stringified version. Express's default
+  // body-parser would JSON-parse and we'd lose property ordering.
   router.post(
-    '/recipe-sources/:id/webhook',
+    '/skill-sources/:id/webhook',
     express.raw({ type: '*/*', limit: '1mb' }),
     async (req: RequestWithRaw, res: Response) => {
       const sourceId = req.params.id;
-      if (!sourceId) {
-        res.status(400).json({ error: 'invalid_input' });
-        return;
-      }
       const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       const remoteAddr = req.ip ?? req.socket?.remoteAddress ?? null;
 
-      const secretInfo = await getRecipeWebhookSecret(deps.supabase, sourceId);
+      // Look up the source (need secret + provider + branch).
+      const secretInfo = await getWebhookSecret(deps.supabase, sourceId);
+
+      // 404: source doesn't exist. Don't reveal which.
       if (!secretInfo) {
         await jitter();
+        // Still write an audit row even though we don't have a real
+        // source_id — skip it to avoid FK violation, but emit a log.
         res.status(404).json({ error: 'not_found' });
         return;
       }
 
+      // Verify signature
       const provider = secretInfo.provider;
       let signatureValid = false;
       let authReason = '';
@@ -153,6 +170,8 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
         signatureValid = tok.length > 0 && constantTimeEq(tok, secretInfo.secret);
         if (!signatureValid) authReason = tok ? 'token_mismatch' : 'missing_token';
       } else if (provider === 'gitea') {
+        // Gitea supports both X-Gitea-Token (plain) and X-Hub-Signature-256
+        // (HMAC). Try HMAC first, fall back to token.
         const sig = getHeader(req.headers, 'X-Hub-Signature-256');
         const tok = getHeader(req.headers, 'X-Gitea-Token');
         if (sig.length > 0) {
@@ -168,7 +187,7 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
 
       if (!signatureValid) {
         await jitter();
-        await writeRecipeWebhookLog(deps.supabase, {
+        await writeWebhookLog(deps.supabase, {
           source_id: sourceId,
           remote_addr: remoteAddr,
           provider,
@@ -182,8 +201,9 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
         return;
       }
 
-      if (!checkRate(sourceId, recipesConfig.recipeWebhookRateMax, 60_000)) {
-        await writeRecipeWebhookLog(deps.supabase, {
+      // Rate limit (after auth — don't tell an attacker our cap).
+      if (!checkRate(sourceId, skillsConfig.skillWebhookRateMax, 60_000)) {
+        await writeWebhookLog(deps.supabase, {
           source_id: sourceId,
           remote_addr: remoteAddr,
           provider,
@@ -198,11 +218,13 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
         return;
       }
 
+      // Parse JSON body for event matching.
       let parsed: PushPayload = {};
       try {
         parsed = JSON.parse(rawBody.toString('utf-8')) as PushPayload;
       } catch {
-        await writeRecipeWebhookLog(deps.supabase, {
+        // Bad JSON — log and reject as ignored.
+        await writeWebhookLog(deps.supabase, {
           source_id: sourceId,
           remote_addr: remoteAddr,
           provider,
@@ -216,6 +238,8 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
         return;
       }
 
+      // Read the source's configured branch (separate small lookup —
+      // could fold into getWebhookSecret if it becomes hot).
       const branchRes = await deps.supabase
         .from('ai_agent_sources')
         .select('branch')
@@ -225,7 +249,7 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
 
       const matched = isPushEventOnBranch(provider, req.headers, parsed, expectedBranch);
       if (!matched.matches) {
-        await writeRecipeWebhookLog(deps.supabase, {
+        await writeWebhookLog(deps.supabase, {
           source_id: sourceId,
           remote_addr: remoteAddr,
           provider,
@@ -243,8 +267,9 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
         return;
       }
 
+      // Enqueue the per-source sync job.
       if (!deps.enqueueJob) {
-        await writeRecipeWebhookLog(deps.supabase, {
+        await writeWebhookLog(deps.supabase, {
           source_id: sourceId,
           remote_addr: remoteAddr,
           provider,
@@ -260,14 +285,14 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
 
       let jobId: string;
       try {
-        const job = await deps.enqueueJob('jobs', 'ai.sync-one-recipe-source', {
-          kind: 'ai.sync-one-recipe-source',
+        const job = await deps.enqueueJob('jobs', 'ai.sync-one-agent-source', {
+          kind: 'ai.sync-one-agent-source',
           source_id: sourceId,
           trigger: 'webhook',
         });
         jobId = job.id;
       } catch (err) {
-        await writeRecipeWebhookLog(deps.supabase, {
+        await writeWebhookLog(deps.supabase, {
           source_id: sourceId,
           remote_addr: remoteAddr,
           provider,
@@ -281,7 +306,7 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
         return;
       }
 
-      await writeRecipeWebhookLog(deps.supabase, {
+      await writeWebhookLog(deps.supabase, {
         source_id: sourceId,
         remote_addr: remoteAddr,
         provider,

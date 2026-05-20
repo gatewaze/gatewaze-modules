@@ -1,14 +1,16 @@
 /**
- * Worker handler — processes a single `ai.sync-one-recipe-source` job.
- * Delegates to `lib/recipes/sync-source.ts`. Parallels
- * `sync-one-skill-source.ts` exactly; the trigger string is carried
- * for telemetry only.
+ * Per-source sync handler — replaces ai.sync-one-skill-source +
+ * ai.sync-one-recipe-source after the unification.
+ *
+ * Delegates to lib/agents/sync-agent-source.ts (which orchestrates the
+ * skill + recipe passes sequentially). Same trigger string semantics
+ * as before: 'cron' | 'webhook' | 'manual' for telemetry.
  */
 
 import { createClient } from '@supabase/supabase-js';
 import WebSocketImpl from 'ws';
-import { syncRecipeSource } from '../lib/recipes/sync-source.js';
-import { recipesConfig } from '../lib/recipes/recipes-config.js';
+import { syncAgentSource } from '../lib/agents/sync-agent-source.js';
+import { skillsConfig } from '../lib/skills/skills-config.js';
 
 interface JobInput {
   data: {
@@ -27,12 +29,12 @@ interface RuntimeContext {
   };
 }
 
-export default async function syncOneRecipeSourceHandler(
+export default async function syncOneAgentSourceHandler(
   job: JobInput,
   ctx?: RuntimeContext,
 ): Promise<unknown> {
-  if (!recipesConfig.recipesEnabled) {
-    ctx?.logger?.info('recipes.killswitch', { jobId: job.id });
+  if (!skillsConfig.skillsEnabled) {
+    ctx?.logger?.info('agents.killswitch', { jobId: job.id });
     return { skipped: true, reason: 'killswitch' };
   }
 
@@ -55,7 +57,7 @@ export default async function syncOneRecipeSourceHandler(
     },
   );
 
-  const result = await syncRecipeSource({
+  const result = await syncAgentSource({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     supabase: supabase as any,
     sourceId,

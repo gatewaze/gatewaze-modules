@@ -28,11 +28,10 @@ import {
   createAdminAiRoutes,
   mountAdminAiRoutes,
 } from './admin-routes.js';
-import { mountSkillSourceRoutes } from './skill-sources.js';
+import { mountAgentSourceRoutes } from './agent-sources.js';
+import { mountAgentWebhookRoute } from './agent-webhook.js';
 import { mountSkillsRoutes } from './skills.js';
-import { mountSkillWebhookRoute } from './skill-webhook.js';
 import { mountRecipeSourceRoutes } from './recipe-sources.js';
-import { mountRecipeWebhookRoute } from './recipe-webhook.js';
 import { mountJobsRoutes } from './jobs-routes.js';
 import { setProjectRoot } from '../lib/jobs/redis-client.js';
 
@@ -172,50 +171,42 @@ export function registerRoutes(app: Express, ctx?: any): void {
     next();
   }
 
-  const skillsRouter: Router = express.Router();
+  // JWT-gated admin router — agent-sources CRUD + skill browsing +
+  // recipe browsing/run, all sharing the decodeJwt middleware.
+  const adminContentRouter: Router = express.Router();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  skillsRouter.use(decodeJwt as any);
-  mountSkillSourceRoutes(skillsRouter, {
+  adminContentRouter.use(decodeJwt as any);
+  // Unified source CRUD (replaces /skill-sources + /recipe-sources
+  // CRUD; both old surfaces deleted post-migration 024).
+  mountAgentSourceRoutes(adminContentRouter, {
     supabase,
-    // enqueueJob is provided by the module-runtime context but the ai
-    // module's registerRoutes signature doesn't expose ctx today — wire
-    // up via globalThis hook the worker module already publishes. Falls
-    // back to a no-op shim if not present (manual sync still works
-    // through the cron-style sync-skill-sources worker tick).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     enqueueJob,
   });
-  mountSkillsRoutes(skillsRouter, { supabase });
-  // Recipe sources + recipes mount under the same JWT-gated router so
-  // they share the decodeJwt middleware. The handler enforces
-  // admin_profiles membership; super-admin is only required for
-  // create/update/delete of source rows (mirrors the skills surface).
-  mountRecipeSourceRoutes(skillsRouter, {
+  // Skill content browsing — unchanged surface, still at /admin/skills.
+  mountSkillsRoutes(adminContentRouter, { supabase });
+  // Recipe browsing + /recipes/:id/run. The source-CRUD portion of
+  // this router was deleted; only the recipe-level endpoints remain.
+  mountRecipeSourceRoutes(adminContentRouter, {
     supabase,
     enqueueJob,
     resolveFetchUrl,
   });
 
-  // Webhook receiver — separate router (no JWT decode), HMAC-authenticated.
+  // Webhook receiver — separate router (no JWT decode), HMAC-auth'd.
+  // Single unified webhook endpoint replaces /skill-webhook + /recipe-webhook.
   const webhookRouter: Router = express.Router();
-  mountSkillWebhookRoute(webhookRouter, {
-    supabase,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    enqueueJob,
-  });
-  mountRecipeWebhookRoute(webhookRouter, {
+  mountAgentWebhookRoute(webhookRouter, {
     supabase,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     enqueueJob,
   });
   app.use('/api/modules/ai/admin', webhookRouter);
 
-  // Then mount the authed admin routes. Skills routes nested under
-  // /api/modules/ai/admin/skill-sources + /api/modules/ai/admin/skills.
-  app.use('/api/modules/ai/admin', skillsRouter);
+  app.use('/api/modules/ai/admin', adminContentRouter);
   app.use('/api/modules/ai', router);
 
-  logger.info('ai routes registered (including skills subsystem)');
+  logger.info('ai routes registered (agent-sources unified)');
 }
 
 /**

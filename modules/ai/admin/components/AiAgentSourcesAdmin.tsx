@@ -1,5 +1,5 @@
 /**
- * AI Skill Sources — admin page for managing git-driven skill repos.
+ * AI Agent Sources — admin page for managing git-driven skill repos.
  *
  * Per spec-ai-skills.md §8.1.
  *
@@ -22,16 +22,16 @@ import { Page } from '@/components/shared/Page';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Card, Button } from '@/components/ui';
 import { ArrowPathIcon, PlusIcon, TrashIcon, EyeIcon, KeyIcon } from '@heroicons/react/24/outline';
-import { SkillsService, type SkillSource, type WebhookLogEntry } from '../utils/skillsService';
+import { AgentsService, type AgentSource, type WebhookLogEntry } from '../utils/agentsService';
 
-const STATUS_COLORS: Record<SkillSource['sync_status'], string> = {
+const STATUS_COLORS: Record<AgentSource['sync_status'], string> = {
   pending: 'text-[var(--gray-9)]',
   syncing: 'text-blue-500',
   ok: 'text-green-600',
   error: 'text-red-600',
 };
 
-const STATUS_LABELS: Record<SkillSource['sync_status'], string> = {
+const STATUS_LABELS: Record<AgentSource['sync_status'], string> = {
   pending: 'Pending',
   syncing: 'Syncing…',
   ok: 'OK',
@@ -51,15 +51,15 @@ function timeAgo(iso: string | null): string {
   return `${d} d ago`;
 }
 
-export default function SkillSourcesPage() {
-  const [sources, setSources] = useState<SkillSource[]>([]);
+export default function AgentSourcesPage() {
+  const [sources, setSources] = useState<AgentSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const loadSources = useCallback(async () => {
     setLoading(true);
-    const r = await SkillsService.listSources();
+    const r = await AgentsService.listSources();
     setLoading(false);
     if (!r.ok) {
       toast.error(`Failed to load sources: ${r.error.message}`);
@@ -76,10 +76,10 @@ export default function SkillSourcesPage() {
   }, [loadSources]);
 
   return (
-    <Page title="AI Skill Sources">
+    <Page title="AI Agent Sources">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold">AI Skill Sources</h2>
+          <h2 className="text-xl font-semibold">AI Agent Sources</h2>
           <p className="text-sm text-[var(--gray-9)] mt-1">
             Git repositories containing markdown skill files that shape AI-generated newsletters and pages.
           </p>
@@ -98,7 +98,7 @@ export default function SkillSourcesPage() {
 
       {!loading && sources.length === 0 && (
         <Card className="p-8 text-center text-[var(--gray-9)]">
-          <p className="mb-3">No skill sources yet.</p>
+          <p className="mb-3">No agent sources yet.</p>
           <p className="text-sm">
             Add a git repository containing your AI brand-voice / structural guidelines as markdown files.
             They'll apply to every AI generation that selects them in its newsletter or site settings.
@@ -139,7 +139,7 @@ function SourceRow({
   onToggleExpanded,
   onChanged,
 }: {
-  source: SkillSource;
+  source: AgentSource;
   expanded: boolean;
   onToggleExpanded: () => void;
   onChanged: () => void;
@@ -149,12 +149,12 @@ function SourceRow({
 
   const webhookUrl = useMemo(() => {
     const apiUrl = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
-    return `${apiUrl}/api/modules/ai/admin/skill-sources/${source.id}/webhook`;
+    return `${apiUrl}/api/modules/ai/admin/agent-sources/${source.id}/webhook`;
   }, [source.id]);
 
   async function handleSync() {
     setSyncing(true);
-    const r = await SkillsService.syncNow(source.id);
+    const r = await AgentsService.syncNow(source.id);
     setSyncing(false);
     if (!r.ok) {
       toast.error(`Sync failed: ${r.error.message}`);
@@ -165,7 +165,7 @@ function SourceRow({
   }
 
   async function handleTest() {
-    const r = await SkillsService.testConnection(source.id);
+    const r = await AgentsService.testConnection(source.id);
     if (!r.ok) {
       toast.error(`Test failed: ${r.error.message}`);
       return;
@@ -180,7 +180,7 @@ function SourceRow({
       `Delete source "${source.label}"? Cascade-deletes all indexed skills from this repo. Newsletters/sites currently using these skills will silently skip them on next generation.`,
     );
     if (!confirmed) return;
-    const r = await SkillsService.deleteSource(source.id);
+    const r = await AgentsService.deleteSource(source.id);
     if (!r.ok) {
       toast.error(`Delete failed: ${r.error.message}`);
       return;
@@ -248,7 +248,7 @@ function WebhookSection({
   onToggleSecret,
   onRotated,
 }: {
-  source: SkillSource;
+  source: AgentSource;
   url: string;
   showSecret: boolean;
   onToggleSecret: () => void;
@@ -261,7 +261,7 @@ function WebhookSection({
     const confirmed = window.confirm('Rotate the webhook secret? The old secret stops working immediately.');
     if (!confirmed) return;
     setRotating(true);
-    const r = await SkillsService.rotateWebhookSecret(source.id);
+    const r = await AgentsService.rotateWebhookSecret(source.id);
     setRotating(false);
     if (!r.ok) {
       toast.error(`Rotate failed: ${r.error.message}`);
@@ -325,7 +325,7 @@ function WebhookLogSection({ sourceId }: { sourceId: string }) {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const r = await SkillsService.listWebhookLog(sourceId, 20);
+      const r = await AgentsService.listWebhookLog(sourceId, 20);
       if (cancelled) return;
       setLoading(false);
       if (r.ok) setEvents(r.value);
@@ -385,7 +385,7 @@ function AddSourceModal({ onClose, onCreated }: { onClose: () => void; onCreated
       return;
     }
     setSubmitting(true);
-    const r = await SkillsService.createSource({
+    const r = await AgentsService.createSource({
       label: label.trim(),
       git_url: gitUrl.trim(),
       branch: branch.trim() || 'main',
