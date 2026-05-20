@@ -15,6 +15,7 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Select, TextArea, TextField } from '@radix-ui/themes';
 
 import {
+  authedFetch,
   listAiRecipes,
   listAiSkills,
   listCatalogModels,
@@ -378,7 +379,7 @@ function TemplateAdoptionField({
   useEffect(() => {
     void (async () => {
       try {
-        const r = await fetch('/api/modules/ai/admin/use-case-templates', { credentials: 'include' });
+        const r = await authedFetch('/api/modules/ai/admin/use-case-templates');
         const j = await r.json();
         setTemplates(j.templates ?? []);
       } catch {
@@ -490,10 +491,10 @@ function McpAllowlistField({ useCaseId }: { useCaseId: string }): JSX.Element {
     void (async () => {
       setLoading(true);
       try {
-        const sRes = await fetch('/api/modules/ai/admin/mcp-servers', { credentials: 'include' });
+        const sRes = await authedFetch('/api/modules/ai/admin/mcp-servers');
         const sJson = await sRes.json();
         setServers(sJson.servers ?? []);
-        const aRes = await fetch(`/api/modules/ai/admin/use-cases/${useCaseId}/mcp-allowlist`, { credentials: 'include' });
+        const aRes = await authedFetch(`/api/modules/ai/admin/use-cases/${useCaseId}/mcp-allowlist`);
         const aJson = await aRes.json();
         const names = ((aJson.allowed ?? []) as Array<{ name?: string }>)
           .map((a) => a.name).filter((n): n is string => typeof n === 'string');
@@ -512,10 +513,8 @@ function McpAllowlistField({ useCaseId }: { useCaseId: string }): JSX.Element {
     setSaving(true);
     setError(null);
     try {
-      await fetch(`/api/modules/ai/admin/use-cases/${useCaseId}/mcp-allowlist`, {
+      await authedFetch(`/api/modules/ai/admin/use-cases/${useCaseId}/mcp-allowlist`, {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ allowed_server_names: Array.from(next) }),
       });
       setAllowed(next);

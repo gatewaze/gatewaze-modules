@@ -9,6 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Button, IconButton } from '@/components/ui';
+import { authedFetch } from '../utils/aiService';
 
 interface McpServerStdio { cmd: string | null; args: string[]; env_keys: string[]; envs_set: boolean }
 interface McpServerHttp  { uri: string | null; headers: Record<string, string>; bearer_token_set: boolean }
@@ -34,11 +35,7 @@ interface McpServer {
 type ServerType = McpServer['type'];
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    credentials: 'include',
-  });
+  const res = await authedFetch(path, init);
   if (!res.ok) {
     const err = await res.json().catch(() => null);
     throw new Error(err?.error?.message ?? `${res.status} ${res.statusText}`);
