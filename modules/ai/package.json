@@ -10,6 +10,9 @@
     "./admin": "./admin/index.ts",
     "./lib/runner": "./lib/runner.ts",
     "./lib/providers/router": "./lib/providers/router.ts",
+    "./lib/use-case-prompt": "./lib/use-case-prompt.ts",
+    "./lib/use-case-recipe-dispatch": "./lib/use-case-recipe-dispatch.ts",
+    "./lib/recipes/run-recipe": "./lib/recipes/run-recipe.ts",
     "./migrations/*": "./migrations/*"
   },
   "scripts": {
