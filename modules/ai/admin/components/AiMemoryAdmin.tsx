@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import { Button, IconButton } from '@/components/ui';
+import { authedFetch } from '../utils/aiService';
 
 interface MemoryEntry {
   id: string;
@@ -36,7 +37,7 @@ export default function AiMemoryAdmin(): JSX.Element {
   useEffect(() => {
     void (async () => {
       try {
-        const r = await fetch('/api/modules/ai/admin/use-cases', { credentials: 'include' });
+        const r = await authedFetch('/api/modules/ai/admin/use-cases');
         const j = await r.json();
         const cases = ((j.use_cases ?? j.useCases ?? []) as Array<{ id: string; label: string }>);
         setUseCases(cases);
@@ -59,7 +60,7 @@ export default function AiMemoryAdmin(): JSX.Element {
       const url = new URL('/api/modules/ai/admin/memory', window.location.origin);
       url.searchParams.set('use_case', selected);
       if (scope) url.searchParams.set('scope', scope);
-      const r = await fetch(url.pathname + url.search, { credentials: 'include' });
+      const r = await authedFetch(url.pathname + url.search);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error?.message ?? r.statusText);
       setEntries(j.entries ?? []);
@@ -73,7 +74,7 @@ export default function AiMemoryAdmin(): JSX.Element {
   async function onDelete(id: string, key: string): Promise<void> {
     if (!confirm(`Delete memory entry "${key}"? The model can rewrite it on the next turn.`)) return;
     try {
-      const r = await fetch(`/api/modules/ai/admin/memory/${id}`, { method: 'DELETE', credentials: 'include' });
+      const r = await authedFetch(`/api/modules/ai/admin/memory/${id}`, { method: 'DELETE' });
       if (!r.ok) throw new Error(await r.text());
       await refresh();
     } catch (e) {
