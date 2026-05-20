@@ -137,12 +137,50 @@ export interface RunRecipeResult {
  * Top-level entry point. Opens an ai_recipe_runs row, runs the DAG,
  * persists progress incrementally, and resolves the final row state
  * before returning.
+ *
+ * Executor selection:
+ *   - AI_RECIPE_EXECUTOR=goose (default in production worker images
+ *     that bake the Goose binary) → spawns `goose run` and forwards
+ *     stream events. Skill auto-loading, stdio MCP, sub-recipe output
+ *     forwarding all come from the upstream runtime.
+ *   - AI_RECIPE_EXECUTOR=builtin → the legacy in-house TS executor
+ *     below. Kept for test environments without the Goose binary and
+ *     for the few features the builtin still wins on (Postgres-backed
+ *     memory tool). Will be deprecated once Goose ships an equivalent.
  */
 export async function runRecipe(
   supabase: SupabaseClient,
   ctx: RunnerContext,
   args: RunRecipeArgs,
 ): Promise<RunRecipeResult> {
+  const executor = process.env.AI_RECIPE_EXECUTOR ?? 'goose';
+  if (executor === 'goose') {
+    const { runRecipeViaGoose } = await import('./run-recipe-goose.js');
+    const result = await runRecipeViaGoose(supabase, ctx, {
+      recipe: args.recipe,
+      subRecipes: args.subRecipes,
+      params: args.params as Record<string, unknown>,
+      userId: args.userId,
+      useCase: args.useCase,
+      ...(args.hostKind !== undefined && { hostKind: args.hostKind }),
+      ...(args.hostId !== undefined && { hostId: args.hostId }),
+      ...(args.recipeId !== undefined && { recipeId: args.recipeId }),
+      ...(args.recipeFilePath !== undefined && { recipeFilePath: args.recipeFilePath }),
+      ...(args.runId !== undefined && { runId: args.runId }),
+    });
+    return {
+      run_id: result.run_id,
+      status: result.status,
+      final_output: result.final_output,
+      steps: [],
+      total_cost_micro_usd: result.total_cost_micro_usd,
+      total_input_tokens: result.total_input_tokens,
+      total_output_tokens: result.total_output_tokens,
+      duration_ms: result.duration_ms,
+      ...(result.failure_reason && { failure_reason: result.failure_reason }),
+    };
+  }
+
   const recipeStart = Date.now();
 
   // 1. Parameter binding — substitute {{ key }} in instructions +
