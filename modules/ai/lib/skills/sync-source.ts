@@ -77,7 +77,7 @@ export async function syncSource(args: SyncSourceArgs): Promise<SyncSourceResult
   // 1. Claim the lock with an atomic update.
   const lockToken = randomUUID();
   const claimRes = await args.supabase
-    .from('ai_skill_sources')
+    .from('ai_agent_sources')
     .update({
       sync_status: 'syncing',
       sync_lock_token: lockToken,
@@ -272,7 +272,7 @@ export async function syncSource(args: SyncSourceArgs): Promise<SyncSourceResult
     // the 10-min lock-expiry catches us.
     try {
       await args.supabase
-        .from('ai_skill_sources')
+        .from('ai_agent_sources')
         .update({
           sync_status: 'error',
           sync_error: reason.slice(0, 1000),
@@ -660,7 +660,7 @@ async function deleteAllForSource(supabase: SupabaseLike, sourceId: string): Pro
 
 async function releaseLock(supabase: SupabaseLike, sourceId: string, headSha: string, errorMsg: string | null): Promise<void> {
   await supabase
-    .from('ai_skill_sources')
+    .from('ai_agent_sources')
     .update({
       sync_status: errorMsg ? 'ok' : 'ok',
       sync_error: errorMsg,
