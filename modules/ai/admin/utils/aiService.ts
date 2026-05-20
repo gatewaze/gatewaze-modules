@@ -34,7 +34,7 @@ export interface AiThread {
 export interface PromptSourceSnapshot {
   use_case: string;
   system_prompt: {
-    kind: 'skill' | 'recipe' | 'inline' | 'fallback' | 'empty';
+    kind: 'skill' | 'recipe' | 'inline' | 'empty';
     content_hash: string;
     char_count: number;
     skill?: {
@@ -54,7 +54,6 @@ export interface PromptSourceSnapshot {
       content_hash: string;
       last_commit_sha: string;
     };
-    note?: string;
   };
   kickoff_message: {
     kind: 'inline' | 'empty';
