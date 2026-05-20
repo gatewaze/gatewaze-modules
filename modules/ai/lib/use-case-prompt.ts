@@ -44,7 +44,7 @@ export interface ReferenceImage {
 export interface PromptSource {
   use_case: string;
   system_prompt: {
-    kind: 'skill' | 'recipe' | 'inline' | 'fallback' | 'empty';
+    kind: 'skill' | 'recipe' | 'inline' | 'empty';
     content_hash: string;
     char_count: number;
     skill?: {
@@ -64,8 +64,6 @@ export interface PromptSource {
       content_hash: string;
       last_commit_sha: string;
     };
-    /** Set for kind='fallback' so the UI can label the deprecated path. */
-    note?: string;
   };
   kickoff_message: {
     kind: 'inline' | 'empty';
@@ -368,29 +366,4 @@ function extractReferenceImages(
 
   if (!base64 || base64.length === 0) return [];
   return [{ mimeType: rawMime, base64 }];
-}
-
-/**
- * Build a fallback PromptSource for callers that bypass resolveUseCasePrompt
- * (e.g. daily-briefing's research-runner.ts which uses a hardcoded
- * RESEARCH_SYSTEM_PROMPT when the use-case lookup returns empty).
- * The worker handler calls this so the chat widget can still surface
- * "kind=fallback" rather than "no provenance recorded".
- */
-export function fallbackPromptSource(
-  useCaseId: string,
-  fallbackPrompt: string,
-  kickoffMessage: string,
-): PromptSource {
-  return {
-    use_case: useCaseId,
-    system_prompt: {
-      kind: 'fallback',
-      content_hash: fallbackPrompt.length > 0 ? sha256(fallbackPrompt) : '',
-      char_count: fallbackPrompt.length,
-    },
-    kickoff_message: kickoffMessage.length > 0
-      ? { kind: 'inline', char_count: kickoffMessage.length }
-      : { kind: 'empty', char_count: 0 },
-  };
 }
