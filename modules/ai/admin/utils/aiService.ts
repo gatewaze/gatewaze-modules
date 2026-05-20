@@ -359,6 +359,28 @@ export async function listUseCaseModels(useCaseId: string): Promise<AiModelInfo[
   return body.models;
 }
 
+export interface UseCasePromptSourceResponse {
+  prompt_source: PromptSourceSnapshot | null;
+  system_prompt_preview: string;
+  kickoff_message_preview: string;
+}
+
+/**
+ * Pre-run preview of which skill / prompt will be used for a use case.
+ * The chat widget calls this on mount + after any patchUseCase so
+ * operators can see "what will run when I click Send" without firing
+ * the model. Mirrors the post-run prompt_source persisted onto
+ * ai_messages — same shape, resolved at fetch time.
+ */
+export async function getUseCasePromptSource(
+  useCaseId: string,
+): Promise<UseCasePromptSourceResponse> {
+  const res = await authedFetch(
+    `/api/modules/ai/admin/use-cases/${useCaseId}/prompt-source`,
+  );
+  return jsonOrThrow<UseCasePromptSourceResponse>(res);
+}
+
 /**
  * Lists skill files available to bind to a use case. Queries the
  * ai_skills + ai_skill_sources tables directly (RLS allows authenticated
