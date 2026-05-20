@@ -21,7 +21,6 @@ const KIND_LABELS: Record<PromptSourceSnapshot['system_prompt']['kind'], string>
   skill: 'Skill',
   recipe: 'Recipe',
   inline: 'Inline use-case prompt',
-  fallback: 'Hardcoded fallback',
   empty: 'No prompt configured',
 };
 
@@ -29,7 +28,6 @@ const KIND_COLORS: Record<PromptSourceSnapshot['system_prompt']['kind'], string>
   skill: 'text-emerald-700 bg-emerald-50 border-emerald-200',
   recipe: 'text-violet-700 bg-violet-50 border-violet-200',
   inline: 'text-blue-700 bg-blue-50 border-blue-200',
-  fallback: 'text-amber-700 bg-amber-50 border-amber-200',
   empty: 'text-neutral-600 bg-neutral-50 border-neutral-200',
 };
 
@@ -103,9 +101,6 @@ export default function RunDetails({ message }: Props): JSX.Element | null {
                   <Row label="Recipe content hash" value={shortHash(ps.system_prompt.recipe.content_hash)} />
                   <Row label="Recipe commit" value={shortHash(ps.system_prompt.recipe.last_commit_sha)} />
                 </>
-              )}
-              {ps.system_prompt.kind === 'fallback' && ps.system_prompt.note && (
-                <Row label="Note" value={ps.system_prompt.note} />
               )}
               <Row
                 label="Kickoff message"
