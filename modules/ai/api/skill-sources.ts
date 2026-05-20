@@ -217,7 +217,7 @@ export function mountSkillSourceRoutes(router: Router, deps: Deps): void {
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');
     // Read the FULL row (need ciphertext + branch).
     const fullRes = await deps.supabase
-      .from('ai_skill_sources')
+      .from('ai_agent_sources')
       .select('git_url, branch, auth_token_ciphertext')
       .eq('id', id)
       .maybeSingle();

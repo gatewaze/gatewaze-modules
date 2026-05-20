@@ -252,7 +252,7 @@ export function mountRecipeSourceRoutes(router: Router, deps: Deps): void {
     const id = req.params.id;
     if (!id) return sendError(res, 400, 'invalid_input', 'id required');
     const fullRes = await deps.supabase
-      .from('ai_recipe_sources')
+      .from('ai_agent_sources')
       .select('git_url, branch, auth_token_ciphertext')
       .eq('id', id)
       .maybeSingle();
@@ -443,7 +443,7 @@ export function mountRecipeSourceRoutes(router: Router, deps: Deps): void {
     // this recipe was used for that run" even after the source has
     // been updated/deleted.
     const sourceLookup = await deps.supabase
-      .from('ai_recipe_sources')
+      .from('ai_agent_sources')
       .select('id, label, git_url, branch, last_synced_commit')
       .eq('id', row.source_id)
       .maybeSingle();

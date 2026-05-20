@@ -217,7 +217,7 @@ export function mountRecipeWebhookRoute(router: Router, deps: Deps): void {
       }
 
       const branchRes = await deps.supabase
-        .from('ai_recipe_sources')
+        .from('ai_agent_sources')
         .select('branch')
         .eq('id', sourceId)
         .maybeSingle();
