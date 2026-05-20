@@ -45,6 +45,7 @@ import {
   type AiProvider,
   type AiThread,
 } from '../utils/aiService';
+import ConfiguredPromptBar from './ConfiguredPromptBar';
 import RunDetails from './RunDetails';
 
 const POLL_INTERVAL_MS = 4_000;
@@ -338,6 +339,10 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
         )}
 
         <div className="flex flex-col flex-1 min-h-0">
+          {/* Pre-run provenance — same shape as the post-run RunDetails
+              panel under each assistant message. Surfaces which
+              skill/prompt will run before the operator clicks Send. */}
+          <ConfiguredPromptBar useCase={useCase} />
           <div className={messagesClass}>
             {messages.map((m) => {
               if (m.role === 'user') {
