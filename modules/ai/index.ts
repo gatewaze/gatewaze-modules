@@ -60,6 +60,10 @@ const aiModule: GatewazeModule = {
     // and rebuilds them with FKs to ai_agent_sources.
     'migrations/024_ai_agent_sources_unified.sql',
     'migrations/025_ai_use_cases_recipe_binding.sql',
+    // Per-kind sync-commit columns so skill + recipe passes don't
+    // share a fast-path key (the shared column caused recipe sync to
+    // short-circuit after the skill pass updated it).
+    'migrations/026_ai_agent_sources_per_kind_sync.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every
