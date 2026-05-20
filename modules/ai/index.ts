@@ -159,6 +159,13 @@ const aiModule: GatewazeModule = {
       handler: 'workers/cleanup-expired-memory.js',
       concurrency: 1,
     },
+    // spec-ai-mcp-extensions.md §5.3 Test Probe. One-shot Goose spawn
+    // that asks the server to advertise its tool inventory.
+    {
+      name: 'ai:test-mcp-server',
+      handler: 'workers/test-mcp-server.js',
+      concurrency: Number(process.env.AI_MCP_TEST_MAX_CONCURRENCY ?? 2),
+    },
   ],
 
   apiRoutes: async (app: unknown, ctx: unknown) => {
@@ -231,6 +238,12 @@ const aiModule: GatewazeModule = {
       path: 'ai/mcp-servers',
       component: () => import('./admin/components/AiDashboard'),
       requiredFeature: 'ai.manage',
+      guard: 'admin',
+    },
+    {
+      path: 'ai/memory',
+      component: () => import('./admin/components/AiDashboard'),
+      requiredFeature: 'ai.usage.read',
       guard: 'admin',
     },
   ],

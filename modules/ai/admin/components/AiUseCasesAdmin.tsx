@@ -256,6 +256,7 @@ function SettingsTab({
 }) {
   return (
     <div className="space-y-4">
+      <TemplateAdoptionField editing={editing} setEditing={setEditing} />
       <Field label="Label">
         <TextField.Root
           value={editing.label}
@@ -341,6 +342,143 @@ function SettingsTab({
  * sourced from the operator-managed ai_mcp_servers registry.
  * spec-ai-mcp-extensions.md §7.4.
  */
+/**
+ * spec-ai-mcp-extensions.md round 8 — use-case template picker +
+ * drift detection + Reset-to-template button.
+ *
+ * Built-in templates: research, interactive-chat-approval, image-gen,
+ * brief-qa, recipe-autopilot (immutable seeded rows). Operator-defined
+ * templates are listed alongside. Selecting a template populates every
+ * template-controlled field; subsequent edits flip template_drifted=true
+ * and reveal the "Reset" button.
+ */
+function TemplateAdoptionField({
+  editing,
+  setEditing,
+}: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  editing: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setEditing: (uc: any) => void;
+}): JSX.Element {
+  interface Template {
+    id: string;
+    name: string;
+    display_name: string;
+    is_builtin: boolean;
+    suggested_provider: string | null;
+    suggested_model: string | null;
+    suggested_allowed_web_tools: string[];
+    suggested_allowed_mcp_server_names: string[];
+    goose_runtime_overrides: Record<string, unknown>;
+  }
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await fetch('/api/modules/ai/admin/use-case-templates', { credentials: 'include' });
+        const j = await r.json();
+        setTemplates(j.templates ?? []);
+      } catch {
+        // ignore — template adoption is optional
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const currentTemplate = useMemo(
+    () => templates.find((t) => t.id === editing.template_id) ?? null,
+    [templates, editing.template_id],
+  );
+
+  function applyTemplate(t: Template): void {
+    setEditing({
+      ...editing,
+      template_id: t.id,
+      template_drifted: false,
+      ...(t.suggested_provider && { default_provider: t.suggested_provider }),
+      ...(t.suggested_model && { default_model: t.suggested_model }),
+      allowed_web_tools: t.suggested_allowed_web_tools.length > 0
+        ? t.suggested_allowed_web_tools
+        : editing.allowed_web_tools,
+      goose_runtime_overrides: t.goose_runtime_overrides,
+    });
+    // Note: suggested_allowed_mcp_server_names isn't applied here —
+    // MCP allowlist lives in its own join table; operator clicks
+    // checkboxes after save. v2 could auto-PUT the allowlist on apply.
+  }
+
+  function clearTemplate(): void {
+    setEditing({ ...editing, template_id: null, template_drifted: false });
+  }
+
+  return (
+    <Field label="Template">
+      <div className="space-y-2 text-sm">
+        {loading ? (
+          <div className="text-xs text-neutral-500">Loading templates…</div>
+        ) : templates.length === 0 ? (
+          <div className="text-xs text-neutral-500">No templates registered.</div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <select
+                value={editing.template_id ?? ''}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (!id) { clearTemplate(); return; }
+                  const t = templates.find((x) => x.id === id);
+                  if (t) applyTemplate(t);
+                }}
+                className="border rounded px-2 py-1 flex-1"
+              >
+                <option value="">(no template)</option>
+                {templates.filter((t) => t.is_builtin).length > 0 && (
+                  <optgroup label="Built-in">
+                    {templates.filter((t) => t.is_builtin).map((t) => (
+                      <option key={t.id} value={t.id}>{t.display_name} ({t.name})</option>
+                    ))}
+                  </optgroup>
+                )}
+                {templates.filter((t) => !t.is_builtin).length > 0 && (
+                  <optgroup label="Operator-defined">
+                    {templates.filter((t) => !t.is_builtin).map((t) => (
+                      <option key={t.id} value={t.id}>{t.display_name} ({t.name})</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              {currentTemplate && editing.template_drifted && (
+                <button
+                  type="button"
+                  className="px-2 py-1 text-xs rounded border bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100"
+                  onClick={() => applyTemplate(currentTemplate)}
+                  title="Re-apply the template's suggested values to this use case"
+                >
+                  Reset to template
+                </button>
+              )}
+            </div>
+            {currentTemplate && editing.template_drifted && (
+              <div className="text-xs text-amber-700">
+                Modified from <code>{currentTemplate.name}</code> template — settings have diverged from the suggested defaults.
+              </div>
+            )}
+            {currentTemplate && !editing.template_drifted && (
+              <div className="text-xs text-neutral-500">
+                Adopting <code>{currentTemplate.name}</code> template defaults.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Field>
+  );
+}
+
 function McpAllowlistField({ useCaseId }: { useCaseId: string }): JSX.Element {
   const [servers, setServers] = useState<Array<{ id: string; name: string; display_name: string; type: string; enabled: boolean }>>([]);
   const [allowed, setAllowed] = useState<Set<string>>(new Set());

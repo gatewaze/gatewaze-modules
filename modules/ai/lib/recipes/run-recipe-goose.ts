@@ -264,6 +264,11 @@ export async function runRecipeViaGoose(
   let provider: string | null = null;
   let model: string | null = null;
   let failureReason: string | undefined;
+  // spec-ai-mcp-extensions.md §Tool-call capture — each MCP tool call
+  // surfaces as an ai_usage_events row tagged kind='mcp_tool' so the
+  // cost ledger attributes per-server / per-tool spend the same way
+  // it attributes kind='tool' web_search / fetch_url calls.
+  const mcpToolCalls: Array<{ server: string; tool: string; ts: number }> = [];
 
   try {
     child = spawn(GOOSE_BIN, gooseArgs, {
@@ -275,10 +280,23 @@ export async function runRecipeViaGoose(
         // per-use-case default routes through ANTHROPIC_API_KEY etc.
         // already in env; only the model selector is recipe-driven.
         GOOSE_PROVIDER: process.env.GOOSE_PROVIDER ?? '',
+        // Scope env for gatewaze-memory-mcp (substituted for the
+        // `memory` builtin). The script reads these to decide which
+        // (use_case, scope, thread_id?, user_id?) tuple to store/
+        // retrieve under. Set unconditionally — the script only reads
+        // them if invoked.
+        GATEWAZE_USE_CASE: args.useCase,
+        ...(args.hostKind === 'daily-briefing' && args.hostId
+          ? {}                       // recipe runs hosted by daily-briefing don't have a thread id; falls through to use_case scope.
+          : {}),
+        ...(args.userId ? { GATEWAZE_USER_ID: args.userId } : {}),
         // spec-ai-mcp-extensions.md §Env injection — MCP server env
         // vars and bearer tokens (decrypted just-in-time, never logged).
         // Override anything in process.env so per-server creds win.
         ...extensionEnv,
+        // Per-use-case Goose runtime overrides (round 7). Applied LAST
+        // so use-case override > worker env > Goose default.
+        ...(await resolveGooseOverrides(supabase, args.useCase)),
       },
     }) as ChildProcessByStdio<null, Readable, Readable>;
   } catch (err) {
@@ -352,22 +370,38 @@ export async function runRecipeViaGoose(
           const toolName = value.name;
           // Capture the recipe-final-output synthetic tool plus any
           // legacy in-house names we may have used during the
-          // transition window. Anything else is a regular tool call
-          // (web_search, fetch_url, MCP-served tools) — pass it through.
+          // transition window. Anything else is either a generic tool
+          // call (web_search, fetch_url) or an MCP-served tool that
+          // we want in the cost-ledger as kind='mcp_tool'.
           if (
-            toolName !== 'recipe__final_output' &&
-            toolName !== 'submit_result' &&
-            toolName !== 'submit_candidates'
-          ) continue;
-          const argsField = value.arguments;
-          if (typeof argsField === 'string') {
-            try {
-              finalOutput = JSON.parse(argsField) as Record<string, unknown>;
-            } catch {
-              finalOutput = argsField;
+            toolName === 'recipe__final_output' ||
+            toolName === 'submit_result' ||
+            toolName === 'submit_candidates'
+          ) {
+            const argsField = value.arguments;
+            if (typeof argsField === 'string') {
+              try {
+                finalOutput = JSON.parse(argsField) as Record<string, unknown>;
+              } catch {
+                finalOutput = argsField;
+              }
+            } else if (argsField && typeof argsField === 'object') {
+              finalOutput = argsField as Record<string, unknown>;
             }
-          } else if (argsField && typeof argsField === 'object') {
-            finalOutput = argsField as Record<string, unknown>;
+            continue;
+          }
+          // MCP tool calls follow Goose's namespacing convention:
+          // <extension>__<tool>. If the prefix matches one of our
+          // loaded server names, this is an MCP tool call worth
+          // recording. recipe__ and other goose-internal tools fall
+          // through to no-op here.
+          if (typeof toolName === 'string' && toolName.includes('__')) {
+            const sep = toolName.indexOf('__');
+            const ext = toolName.slice(0, sep);
+            const tool = toolName.slice(sep + 2);
+            if (loadedServerNames.includes(ext)) {
+              mcpToolCalls.push({ server: ext, tool, ts: Date.now() });
+            }
           }
         }
       } else if (event.type === 'complete') {
@@ -422,11 +456,33 @@ export async function runRecipeViaGoose(
           error: failureReason ?? null,
         });
       } catch {
-        // Ledger failures don't break the run — operators can
-        // reconcile from the Goose session log if needed.
+        // best-effort; cost ledger isn't critical for run completion
       }
     }
-
+    // MCP tool-call cost-ledger rows (one per call). Cost computed from
+    // ai_model_prices when (provider=<server>, model=<tool>) is
+    // registered; defaults to 0 otherwise.
+    for (const call of mcpToolCalls) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await recordUsage(supabase as any, {
+          userId: args.userId,
+          useCase: args.useCase,
+          threadId: null,
+          messageId: null,
+          kind: 'mcp_tool',
+          provider: call.server as never,
+          model: call.tool,
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs: 0,
+          status: 'ok',
+          error: null,
+        });
+      } catch {
+        // best-effort
+      }
+    }
     const status: RunRecipeViaGooseResult['status'] = failureReason ? 'failed' : 'complete';
     await supabase
       .from('ai_recipe_runs')
@@ -655,20 +711,26 @@ async function resolveMcpExtensions(
     if (type === 'stdio') {
       const cmd = server.cmd as string;
       const argList = (server.args as string[] | null) ?? [];
-      // Single quoted command string for --with-extension (Goose v1.34 syntax).
-      // NOTE: per spec, future Gatewaze-goose-launcher shim will replace
-      // this with execve-safe descriptor passing — v1 trusts Goose's parser.
-      flags.push('--with-extension', [cmd, ...argList].join(' '));
+      // spec-ai-mcp-extensions.md §Stdio execution risk §Safe-spawn
+      // adapter. Instead of passing a raw command string to Goose's
+      // --with-extension (which may shell-parse it), we pass a single
+      // invocation of the gatewaze-goose-launcher shim. The shim
+      // reads the descriptor (cmd + args[] + env) from an env var
+      // and spawns the actual MCP server via execve(cmd, args[]) with
+      // shell:false. Goose's argv-parsing path never sees the operator-
+      // supplied args.
+      const launcherPath = await resolveGatewazeGooseLauncherPath();
+      const descriptorEnvName = `GATEWAZE_MCP_LAUNCH_DESCRIPTOR_${name.toUpperCase().replace(/-/g, '_')}`;
+      // Decrypt per-server env values first so we can bundle into descriptor.
+      const perServerEnv: Record<string, string> = {};
       if (typeof server.envs_ciphertext === 'string' && server.envs_ciphertext.length > 0) {
-        // Lazy-import the secret-shim so this lib doesn't take a hard
-        // dep on it when MCP isn't in use.
         const { decryptSecret } = await import('../skills/secret-shim.js');
         const plaintext = decryptSecret(server.envs_ciphertext);
         if (plaintext != null) {
           try {
             const map = JSON.parse(plaintext) as Record<string, string>;
             for (const [k, v] of Object.entries(map)) {
-              if (typeof v === 'string') env[k] = v;
+              if (typeof v === 'string') perServerEnv[k] = v;
             }
           } catch {
             warnings.push({ code: 'mcp_envs_decrypt_parse_failed', server: name });
@@ -677,6 +739,9 @@ async function resolveMcpExtensions(
           warnings.push({ code: 'mcp_envs_decrypt_failed', server: name });
         }
       }
+      const descriptor = { cmd, args: argList, env: perServerEnv };
+      env[descriptorEnvName] = JSON.stringify(descriptor);
+      flags.push('--with-extension', `node ${launcherPath} ${descriptorEnvName}`);
     } else if (type === 'streamable_http') {
       const uri = server.uri as string;
       flags.push('--with-streamable-http-extension', uri);
@@ -696,12 +761,107 @@ async function resolveMcpExtensions(
         }
       }
     } else if (type === 'builtin') {
-      flags.push('--with-builtin', String(server.builtin_name ?? name));
+      const builtinName = String(server.builtin_name ?? name);
+      // spec-ai-mcp-extensions.md §Memory backing store §Substitution.
+      // The `memory` builtin's local-FS storage is wrong for Gatewaze
+      // (ephemeral, no admin visibility, no retention). Substitute the
+      // gatewaze-memory-mcp stdio server which advertises the same
+      // store_memory / retrieve_memory / list_memory tool surface but
+      // persists to ai_memory. Goose namespaces stdio extensions by
+      // their declared name, so as long as we spawn under name='memory'
+      // the model sees the tools in the same namespace.
+      if (builtinName === 'memory') {
+        const scriptPath = await resolveGatewazeMemoryMcpPath();
+        flags.push('--with-extension', `node ${scriptPath}`);
+      } else {
+        flags.push('--with-builtin', builtinName);
+      }
     }
     loadedNames.push(name);
   }
 
   return { flags, env, warnings, loadedNames };
+}
+
+/**
+ * spec-ai-mcp-extensions.md round 7 — load per-use-case Goose runtime
+ * overrides. Returns an env map ready to merge onto the spawn. The DB
+ * trigger validates the allowlist at write time so we don't re-check
+ * here; the env map just stringifies whatever's stored.
+ */
+async function resolveGooseOverrides(
+  supabase: SupabaseClient,
+  useCaseId: string,
+): Promise<Record<string, string>> {
+  try {
+    const res = await supabase
+      .from('ai_use_cases')
+      .select('goose_runtime_overrides')
+      .eq('id', useCaseId)
+      .maybeSingle();
+    if (res.error || !res.data) return {};
+    const overrides = ((res.data as { goose_runtime_overrides?: Record<string, unknown> }).goose_runtime_overrides) ?? {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v == null) continue;
+      out[k] = typeof v === 'string' ? v : String(v);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Locate scripts/gatewaze-memory-mcp.mjs at runtime. Tries (in order):
+ *   1. GATEWAZE_MEMORY_MCP_PATH env var (operator override).
+ *   2. Resolution relative to this compiled JS file — works for the
+ *      production module-host path and the dev tsx-watch path.
+ *   3. A baked /usr/local/bin/gatewaze-memory-mcp symlink (future).
+ *
+ * Throws if none resolve — callers should never silently fall through
+ * to Goose's local-FS memory builtin (the whole point of the
+ * substitution is to avoid that).
+ */
+async function resolveGatewazeGooseLauncherPath(): Promise<string> {
+  const envPath = process.env.GATEWAZE_GOOSE_LAUNCHER_PATH;
+  if (envPath) return envPath;
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, resolve } = await import('node:path');
+  const { existsSync } = await import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath((globalThis as any).import?.meta?.url ?? `file://${process.cwd()}/`));
+  const candidates = [
+    resolve(here, '..', '..', 'scripts', 'gatewaze-goose-launcher.mjs'),
+    resolve(here, '..', '..', '..', 'scripts', 'gatewaze-goose-launcher.mjs'),
+    '/usr/local/bin/gatewaze-goose-launcher',
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  throw new Error(`gatewaze-goose-launcher script not found. Tried: ${candidates.join(', ')}. Set GATEWAZE_GOOSE_LAUNCHER_PATH to override.`);
+}
+
+async function resolveGatewazeMemoryMcpPath(): Promise<string> {
+  const envPath = process.env.GATEWAZE_MEMORY_MCP_PATH;
+  if (envPath) return envPath;
+  // Walk up from this file's directory to find scripts/gatewaze-memory-mcp.mjs.
+  // run-recipe-goose.ts compiles to .../modules/ai/lib/recipes/run-recipe-goose.js,
+  // so the script lives at ../../scripts/gatewaze-memory-mcp.mjs.
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, resolve } = await import('node:path');
+  const { existsSync } = await import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath((globalThis as any).import?.meta?.url ?? `file://${process.cwd()}/`));
+  const candidates = [
+    resolve(here, '..', '..', 'scripts', 'gatewaze-memory-mcp.mjs'),
+    resolve(here, '..', '..', '..', 'scripts', 'gatewaze-memory-mcp.mjs'),
+    '/usr/local/bin/gatewaze-memory-mcp',
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  throw new Error(`gatewaze-memory-mcp script not found. Tried: ${candidates.join(', ')}. Set GATEWAZE_MEMORY_MCP_PATH to override.`);
 }
 
 function earlyFail(

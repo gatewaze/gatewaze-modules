@@ -36,6 +36,7 @@ import { mountJobsRoutes } from './jobs-routes.js';
 import { mountMcpServerRoutes } from './mcp-servers.js';
 import { mountMcpAllowlistRoutes } from './mcp-allowlist.js';
 import { mountUseCaseTemplateRoutes } from './use-case-templates.js';
+import { mountMemoryRoutes } from './memory.js';
 import { setProjectRoot } from '../lib/jobs/redis-client.js';
 
 interface PlatformLogger {
@@ -159,6 +160,8 @@ export function registerRoutes(app: Express, ctx?: any): void {
   mountMcpAllowlistRoutes(router as any, { supabase });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mountUseCaseTemplateRoutes(router as any, { supabase });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mountMemoryRoutes(router as any, { supabase });
 
   // ── Skills subsystem (moved from editor-ai-copilot, Phase 2) ──────────
   //
