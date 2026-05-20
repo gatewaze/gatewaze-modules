@@ -117,13 +117,23 @@ export async function runChatViaGoose(
 
   const tmpd = await mkdtemp(join(osTmpdir(), `gatewaze-chat-${args.threadId}-`));
 
+  // Serialize prior history into the system prompt as a "Prior conversation"
+  // context block. Goose's session command's --text flag accepts only the
+  // single new user turn; replaying earlier turns through stdin would
+  // require pinning against a specific Goose session protocol version.
+  // The system-prompt context-block approach is forward-compatible across
+  // Goose versions and matches the in-house runChat's behavior bit-for-bit
+  // (the messages[] array we used to pass became Anthropic/OpenAI's
+  // alternating-role transcript; here it becomes a serialised block).
+  const effectiveSystemPrompt = serializeHistoryIntoPrompt(args.systemPrompt, args.history);
+
   const gooseArgs = [
     'session',
     '--no-tty',
     '--quiet',
     '--no-session',
     '--output-format', 'stream-json',
-    '--system', args.systemPrompt,
+    '--system', effectiveSystemPrompt,
     '--text', args.userMessage,
     '--max-turns', String(maxTurns),
     '--max-tool-repetitions', String(maxToolRepetitions),
@@ -142,7 +152,11 @@ export async function runChatViaGoose(
   let provider: string | null = null;
   let model: string | null = null;
   let failureReason: string | undefined;
-  const mcpToolCalls: Array<{ server: string; tool: string }> = [];
+  // MCP tool-call telemetry: { server, tool, latencyMs }. toolRequest
+  // events are stamped with started_at; toolResponse pairs by tool-
+  // call id when present, else by ordinal sequence within the run.
+  const mcpToolCalls: Array<{ server: string; tool: string; latencyMs: number }> = [];
+  const pendingToolReqs = new Map<string, { server: string; tool: string; startedAt: number }>();
 
   try {
     child = spawn(GOOSE_BIN, gooseArgs, {
@@ -204,12 +218,14 @@ export async function runChatViaGoose(
                 finalContent += it.text;
               } else if (it.type === 'toolRequest' && it.toolCall?.value) {
                 const toolName = it.toolCall.value.name;
+                const toolCallId = (it as { id?: string }).id;
                 if (typeof toolName === 'string' && toolName.includes('__')) {
                   const sep = toolName.indexOf('__');
                   const ext = toolName.slice(0, sep);
                   const tool = toolName.slice(sep + 2);
-                  if (loadedNames.includes(ext)) {
-                    mcpToolCalls.push({ server: ext, tool });
+                  if (loadedNames.includes(ext) && typeof toolCallId === 'string') {
+                    // Record the start time; latency computed on toolResponse.
+                    pendingToolReqs.set(toolCallId, { server: ext, tool, startedAt: Date.now() });
                   }
                 }
                 // Capture structured-output tool args (recipe__final_output style)
@@ -218,6 +234,20 @@ export async function runChatViaGoose(
                   if (argsField && typeof argsField === 'object') {
                     structured = argsField as Record<string, unknown>;
                   }
+                }
+              } else if (it.type === 'toolResponse') {
+                // Pair with the matching toolRequest by id (Goose's
+                // stream-json id+toolResponse.id symmetry). Latency =
+                // toolResponse arrival - toolRequest emission.
+                const respId = (it as { id?: string; toolResult?: unknown }).id;
+                if (typeof respId === 'string' && pendingToolReqs.has(respId)) {
+                  const req = pendingToolReqs.get(respId)!;
+                  pendingToolReqs.delete(respId);
+                  mcpToolCalls.push({
+                    server: req.server,
+                    tool: req.tool,
+                    latencyMs: Date.now() - req.startedAt,
+                  });
                 }
               }
             }
@@ -245,6 +275,19 @@ export async function runChatViaGoose(
     if (exitCode !== 0 && !failureReason) {
       failureReason = `goose_exit_${exitCode}: ${stderrBuf.slice(0, 1000)}`;
     }
+
+    // Drain any toolRequests that never paired with a toolResponse —
+    // can happen if the run terminates mid-tool. Best-effort latency
+    // = (end-of-run - start). The ledger row still gets written so
+    // operators can spot a hung tool by its outlier latency.
+    for (const [, pending] of pendingToolReqs) {
+      mcpToolCalls.push({
+        server: pending.server,
+        tool: pending.tool,
+        latencyMs: Date.now() - pending.startedAt,
+      });
+    }
+    pendingToolReqs.clear();
 
     // Cost ledger — llm row + per mcp_tool row.
     if ((totalIn > 0 || totalOut > 0) && provider && model) {
@@ -279,7 +322,7 @@ export async function runChatViaGoose(
           model: call.tool,
           inputTokens: 0,
           outputTokens: 0,
-          latencyMs: 0,
+          latencyMs: call.latencyMs,
           status: 'ok',
           error: null,
         });
@@ -310,6 +353,40 @@ export async function runChatViaGoose(
 function numericOr(v: unknown, fallback: number): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   return fallback;
+}
+
+/**
+ * Serialize prior conversation history into a system-prompt context
+ * block. Goose v1.34's `goose session --text` accepts only the single
+ * new turn; this block carries everything before it.
+ *
+ * Wrapped in fenced section markers so the model can clearly
+ * distinguish "context I should treat as already-said" from the
+ * operator-authored system prompt above. Empty history → no block
+ * appended (keeps single-turn prompts clean).
+ */
+export function serializeHistoryIntoPrompt(
+  systemPrompt: string,
+  history: ChatTurn[],
+): string {
+  if (history.length === 0) return systemPrompt;
+
+  const lines: string[] = [];
+  lines.push(systemPrompt);
+  lines.push('');
+  lines.push('---');
+  lines.push('## Prior conversation in this thread');
+  lines.push('');
+  lines.push('The conversation below has already occurred. The current user turn follows after this block. Continue naturally from here; do not repeat prior responses.');
+  lines.push('');
+  for (const turn of history) {
+    const role = turn.role === 'tool_summary' ? 'tool' : turn.role;
+    lines.push(`### ${role}`);
+    lines.push(turn.content);
+    lines.push('');
+  }
+  lines.push('---');
+  return lines.join('\n');
 }
 
 function failResult(start: number, reason: string): RunChatViaGooseResult {
