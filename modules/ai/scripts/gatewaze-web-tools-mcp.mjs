@@ -1,51 +1,48 @@
 #!/usr/bin/env node
 /**
- * Bridges Gatewaze's `allowed_web_tools` surface (web_search,
- * fetch_url, gatewaze_search) into Goose as a stdio MCP extension.
- * Goose calls the tools as gatewaze-web-tools__web_search /
- * __fetch_url / __gatewaze_search.
+ * Stdio MCP server exposing Gatewaze-unique web tools to Goose.
  *
- * ## What this MCP is (and isn't) for
+ * Currently provides one tool: `gatewaze_search` — Serper.dev with a
+ * DuckDuckGo fallback. The platform spawns this server whenever a
+ * use case has `gatewaze_search` in its allowed_web_tools list.
  *
- * `web_search` and `fetch_url` are often already available from
- * other sources — Anthropic's API exposes `web_search` as a native
- * server-side tool, and Goose's `developer` builtin can fetch URLs.
- * Recipes targeting those providers can use the native paths and
- * skip this MCP entirely.
+ * Why this server doesn't expose web_search / fetch_url:
+ *   - Anthropic ships `web_search` as a native server-side tool, so
+ *     Claude-backed recipes get it for free via the model.
+ *   - Goose's `developer` builtin handles basic URL fetches. Recipes
+ *     that need it can `--with-builtin developer` or declare a
+ *     dedicated fetch MCP server.
  *
- * The Gatewaze MCP's unique value:
- *   - `gatewaze_search` — Serper.dev with DDG fallback, no native
- *      equivalent on any provider
- *   - **Provider parity** — gives OpenAI/Gemini-backed recipes the
- *      same web_search/fetch_url surface Anthropic gets natively
- *   - **Cost ledger** (platform mode only) — every call lands as
- *      one ai_usage_events row, attributable per use case
+ * The Gatewaze MCP's role is the Serper.dev + DDG fallback chain —
+ * uniform across providers, operator-controllable, ledgered.
+ *
+ * Goose tool surface: gatewaze-web-tools__gatewaze_search.
  *
  * ## Two operating modes
  *
  * **Platform mode** — spawned by run-recipe-goose / run-chat-goose
  * inside the Gatewaze worker. The wrapper sets
- * GATEWAZE_ALLOWED_WEB_TOOLS to the use case's allowed_web_tools
- * subset; the tools/list response is filtered strictly to that set.
+ * GATEWAZE_ALLOWED_WEB_TOOLS to a comma-separated subset (only
+ * `gatewaze_search` is meaningful here since that's the only tool we
+ * advertise); tools/list is filtered accordingly.
  *
  * **Local Goose mode** — anyone running `goose run --recipe foo.yaml`
- * on their own machine. With GATEWAZE_ALLOWED_WEB_TOOLS unset, ALL
- * three tools are advertised so developers can experiment freely.
- * Set the env to a subset to mirror a specific use case's allowlist
- * during development.
+ * on their own machine. With GATEWAZE_ALLOWED_WEB_TOOLS unset, the
+ * full tool surface (currently just `gatewaze_search`) is exposed.
  *
- * Backend selection (fetch_url + DDG html scrape), highest priority
+ * Backend selection for the DuckDuckGo fallback, highest priority
  * first:
  *
  *   1. GATEWAZE_FETCH_BASE_URL + GATEWAZE_FETCH_API_KEY
  *        → public gatewaze-fetch service (paid, anti-bot + JS render)
  *   2. SCRAPLING_FETCHER_URL + SCRAPLING_INTERNAL_TOKEN
  *        → in-cluster scrapling-fetcher (Gatewaze internal)
- *   3. (no env set) → vanilla node fetch() (no JS, no anti-bot —
- *        works for most public pages)
+ *   3. (no env set) → vanilla node fetch() — works for most public
+ *      pages without any external service
  *
- * web_search picks Serper.dev when SERPER_API_KEY is set, else
- * falls back to DuckDuckGo HTML scrape via the active fetch backend.
+ * Serper.dev is preferred when SERPER_API_KEY is set; otherwise the
+ * server falls back to scraping DuckDuckGo's HTML endpoint via the
+ * active fetch backend.
  *
  * ## Recipe.yaml example (local Goose)
  *
@@ -56,14 +53,7 @@
  *       args:
  *         - /path/to/gatewaze-web-tools-mcp.mjs
  *       envs:
- *         # Omit to expose all three tools (default). Set to a
- *         # subset to mirror a specific use case's allowlist during
- *         # development.
- *         # GATEWAZE_ALLOWED_WEB_TOOLS: "gatewaze_search"
  *         SERPER_API_KEY: "${SERPER_API_KEY}"
- *         # Optional public fetch backend:
- *         # GATEWAZE_FETCH_BASE_URL: "https://fetch.example.com"
- *         # GATEWAZE_FETCH_API_KEY: "${GATEWAZE_FETCH_API_KEY}"
  *
  * ## Standalone debug
  *
@@ -74,14 +64,12 @@
 import { createInterface } from 'node:readline';
 import process from 'node:process';
 
-const ALL_TOOL_NAMES = ['web_search', 'fetch_url', 'gatewaze_search'];
+const ALL_TOOL_NAMES = ['gatewaze_search'];
 
 // Platform mode (env set to a non-empty list) → exactly that subset.
-// Local mode (env unset or empty) → expose ALL tools so a developer
-// building a recipe locally can use everything without first wiring
-// a use-case allowlist. The platform wrapper at run-recipe-goose.ts
-// always passes the env var so platform spawns never accidentally
-// expose disabled tools.
+// Local mode (env unset or empty) → expose ALL tools. The platform
+// wrapper at run-recipe-goose.ts always passes the env var so platform
+// spawns never accidentally expose tools the operator didn't allow.
 const rawAllowed = (process.env.GATEWAZE_ALLOWED_WEB_TOOLS ?? '')
   .split(',')
   .map((s) => s.trim())
@@ -100,12 +88,6 @@ const SERPER_ENDPOINT = 'https://google.serper.dev/search';
 const FETCH_TIMEOUT_MS = 15_000;
 const SERPER_TIMEOUT_MS = 12_000;
 
-// Backend selection for fetch_url + DDG html scraping. Highest
-// priority first:
-//   1. gatewaze-fetch (public paid service)
-//   2. scrapling-fetcher (in-cluster)
-//   3. vanilla node fetch (no anti-bot, no JS) — works for most
-//      public pages without any external service
 function fetchBackend() {
   if (GATEWAZE_FETCH_URL && GATEWAZE_FETCH_KEY) return 'gatewaze-fetch';
   if (SCRAPLING_URL && SCRAPLING_TOKEN) return 'scrapling';
@@ -113,22 +95,14 @@ function fetchBackend() {
 }
 
 // ─── unified fetch backend ───────────────────────────────────────
-// Returns { url, final_url, status, html, text, mode_used } regardless
-// of which backend serviced the call. text is best-effort: scrapling
-// + gatewaze-fetch return it directly; vanilla mode strips tags from
-// html with a minimal regex.
-async function htmlFetch(url, { mode = 'fast' } = {}) {
+async function htmlFetch(url) {
   const backend = fetchBackend();
-  if (backend === 'gatewaze-fetch') {
-    return gatewazeFetch(url, { mode });
-  }
-  if (backend === 'scrapling') {
-    return scraplingFetch(url, { mode });
-  }
+  if (backend === 'gatewaze-fetch') return gatewazeFetch(url);
+  if (backend === 'scrapling') return scraplingFetch(url);
   return vanillaFetch(url);
 }
 
-async function scraplingFetch(url, { mode = 'fast' } = {}) {
+async function scraplingFetch(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -140,8 +114,8 @@ async function scraplingFetch(url, { mode = 'fast' } = {}) {
       },
       body: JSON.stringify({
         url,
-        mode,
-        extract: ['html', 'text'],
+        mode: 'fast',
+        extract: ['html'],
         timeout_ms: FETCH_TIMEOUT_MS - 1000,
       }),
       signal: controller.signal,
@@ -151,20 +125,13 @@ async function scraplingFetch(url, { mode = 'fast' } = {}) {
       throw new Error(`scrapling ${response.status}: ${text.slice(0, 400)}`);
     }
     const body = await response.json();
-    return {
-      url,
-      final_url: typeof body.final_url === 'string' ? body.final_url : url,
-      status: typeof body.status === 'number' ? body.status : 200,
-      html: typeof body.html === 'string' ? body.html : '',
-      text: typeof body.text === 'string' ? body.text : '',
-      mode_used: mode,
-    };
+    return { html: typeof body.html === 'string' ? body.html : '' };
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function gatewazeFetch(url, { mode = 'fast' } = {}) {
+async function gatewazeFetch(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -176,8 +143,8 @@ async function gatewazeFetch(url, { mode = 'fast' } = {}) {
       },
       body: JSON.stringify({
         url,
-        mode,
-        extract: ['html', 'text'],
+        mode: 'fast',
+        extract: ['html'],
         timeout_ms: FETCH_TIMEOUT_MS - 1000,
       }),
       signal: controller.signal,
@@ -187,14 +154,7 @@ async function gatewazeFetch(url, { mode = 'fast' } = {}) {
       throw new Error(`gatewaze-fetch ${response.status}: ${text.slice(0, 400)}`);
     }
     const body = await response.json();
-    return {
-      url,
-      final_url: typeof body.final_url === 'string' ? body.final_url : url,
-      status: typeof body.status === 'number' ? body.status : 200,
-      html: typeof body.html === 'string' ? body.html : '',
-      text: typeof body.text === 'string' ? body.text : '',
-      mode_used: mode,
-    };
+    return { html: typeof body.html === 'string' ? body.html : '' };
   } finally {
     clearTimeout(timer);
   }
@@ -207,7 +167,6 @@ async function vanillaFetch(url) {
     const response = await fetch(url, {
       method: 'GET',
       headers: {
-        // Generic UA — many sites refuse fetches without one.
         'User-Agent': 'Mozilla/5.0 (gatewaze-web-tools-mcp; +https://example.com)',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
@@ -215,14 +174,7 @@ async function vanillaFetch(url) {
       redirect: 'follow',
     });
     const html = await response.text();
-    return {
-      url,
-      final_url: response.url,
-      status: response.status,
-      html,
-      text: stripTags(html),
-      mode_used: 'vanilla',
-    };
+    return { html };
   } finally {
     clearTimeout(timer);
   }
@@ -261,11 +213,8 @@ async function querySerper(query, maxResults) {
   }
 }
 
-// ─── DuckDuckGo HTML scrape (same parser as lib/gatewaze-search.ts) ──
+// ─── DuckDuckGo HTML scrape ──────────────────────────────────────
 function parseDdgHtml(html, maxResults) {
-  // Minimal HTML scrape: pick <a class="result__a" href="...">title</a>
-  // followed by <a class="result__snippet">snippet</a>. DDG's HTML
-  // endpoint is stable enough for this to survive without a parser.
   const out = [];
   const linkRe = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
   const snipRe = /<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
@@ -280,7 +229,6 @@ function parseDdgHtml(html, maxResults) {
   }
   for (let i = 0; i < Math.min(titles.length, maxResults); i++) {
     const t = titles[i];
-    // DDG wraps the real URL in a redirector: /l/?uddg=<encoded>
     let url = t.rawUrl;
     try {
       if (url.startsWith('//')) url = `https:${url}`;
@@ -297,14 +245,20 @@ function parseDdgHtml(html, maxResults) {
 }
 
 function stripTags(s) {
-  return s.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  return s
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
 
 async function queryDdg(query, maxResults) {
   const ddgUrl = `${DDG_HTML_ENDPOINT}?${new URLSearchParams({ q: query }).toString()}`;
-  const body = await htmlFetch(ddgUrl, { mode: 'fast' });
+  const body = await htmlFetch(ddgUrl);
   const html = body.html ?? '';
-  if (!html) throw new Error(`${body.mode_used} fetch returned empty html`);
+  if (!html) throw new Error('fetch backend returned empty html');
   return parseDdgHtml(html, maxResults);
 }
 
@@ -315,7 +269,7 @@ function pickSearchBackend() {
   return SERPER_KEY ? 'serper' : 'ddg';
 }
 
-async function webSearch({ query, max_results = 6 }) {
+async function gatewazeSearch({ query, max_results = 6 }) {
   if (typeof query !== 'string' || query.length === 0) {
     throw new Error('query (string) required');
   }
@@ -327,68 +281,17 @@ async function webSearch({ query, max_results = 6 }) {
   return { backend, query, results };
 }
 
-// Identical semantics to web_search — Anthropic's native web_search
-// and Gatewaze's `gatewaze_search` collapse onto the same backend
-// from Goose's POV. We expose both names so a recipe written against
-// either contract picks the right tool by suffix.
-const gatewazeSearch = webSearch;
-
-async function fetchUrl({ url, mode = 'fast' }) {
-  if (typeof url !== 'string' || url.length === 0) {
-    throw new Error('url (string) required');
-  }
-  let parsed;
-  try { parsed = new URL(url); } catch { throw new Error('malformed url'); }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new Error(`only http/https URLs allowed (got ${parsed.protocol})`);
-  }
-  const validMode = ['fast', 'stealth', 'browser'].includes(mode) ? mode : 'fast';
-  const body = await scraplingFetch(url, { mode: validMode, extract: ['html', 'text'] });
-  return {
-    url,
-    final_url: typeof body.final_url === 'string' ? body.final_url : url,
-    status: typeof body.status === 'number' ? body.status : 200,
-    mode_used: validMode,
-    text: typeof body.text === 'string' ? body.text : '',
-    html: typeof body.html === 'string' ? body.html.slice(0, 200_000) : '',
-  };
-}
-
 // ─── MCP JSON-RPC handler ────────────────────────────────────────
 const TOOL_DEFINITIONS = {
-  web_search: {
-    name: 'web_search',
-    description: 'Search the web via Serper.dev (when SERPER_API_KEY is configured) or DuckDuckGo as a fallback. Returns a ranked list of {title, url, snippet}.',
-    inputSchema: {
-      type: 'object',
-      required: ['query'],
-      properties: {
-        query: { type: 'string' },
-        max_results: { type: 'number', minimum: 1, maximum: 20, default: 6 },
-      },
-    },
-  },
   gatewaze_search: {
     name: 'gatewaze_search',
-    description: 'Same as web_search — provided under both names so recipes can reference whichever surface they were written against.',
+    description: 'Search the web. Uses Serper.dev when SERPER_API_KEY is configured (Google results, ~$1/1k queries); falls back to scraping DuckDuckGo HTML otherwise. Returns a ranked list of {title, url, snippet}.',
     inputSchema: {
       type: 'object',
       required: ['query'],
       properties: {
         query: { type: 'string' },
         max_results: { type: 'number', minimum: 1, maximum: 20, default: 6 },
-      },
-    },
-  },
-  fetch_url: {
-    name: 'fetch_url',
-    description: 'Fetch the contents of a URL via gatewaze scrapling-fetcher and return its extracted text + html. Supports modes: fast (HTTP, no JS), stealth (header-jiggled HTTP), browser (full Chromium). Default fast.',
-    inputSchema: {
-      type: 'object',
-      required: ['url'],
-      properties: {
-        url: { type: 'string' },
-        mode: { type: 'string', enum: ['fast', 'stealth', 'browser'], default: 'fast' },
       },
     },
   },
@@ -430,9 +333,7 @@ async function handleMessage(msg) {
       }
       let result;
       switch (name) {
-        case 'web_search':      result = await webSearch(args); break;
         case 'gatewaze_search': result = await gatewazeSearch(args); break;
-        case 'fetch_url':       result = await fetchUrl(args); break;
         default:
           sendResponse(id, null, { code: -32601, message: `Unknown tool: ${name}` });
           return;

@@ -157,12 +157,14 @@ export async function resolveChatMcpExtensions(
 
 /**
  * Bridge ai_use_cases.allowed_web_tools into the Goose chat spawn by
- * attaching gatewaze-web-tools-mcp filtered to exactly the tools the
- * operator allowed. Returns an empty load when the field is empty or
- * the row can't be read.
+ * attaching gatewaze-web-tools-mcp for the subset of tools the
+ * Gatewaze MCP owns. Currently that's just `gatewaze_search` —
+ * web_search and fetch_url come from the model or Goose's builtins.
  *
  * Mirrors resolveWebToolsExtension in lib/recipes/run-recipe-goose.ts.
  */
+const MCP_OWNED_TOOLS = new Set(['gatewaze_search']);
+
 async function resolveWebToolsForChat(
   supabase: SupabaseLike,
   useCaseId: string,
@@ -179,7 +181,8 @@ async function resolveWebToolsForChat(
   } catch {
     return { flags: [], env: {}, loadedNames: [], warnings: [] };
   }
-  if (allowed.length === 0) {
+  const mcpTools = allowed.filter((t) => MCP_OWNED_TOOLS.has(t));
+  if (mcpTools.length === 0) {
     return { flags: [], env: {}, loadedNames: [], warnings: [] };
   }
 
@@ -213,7 +216,7 @@ async function resolveWebToolsForChat(
 
   const descriptorEnvName = 'GATEWAZE_MCP_LAUNCH_DESCRIPTOR_GATEWAZE_WEB_TOOLS';
   const perServerEnv: Record<string, string> = {
-    GATEWAZE_ALLOWED_WEB_TOOLS: allowed.join(','),
+    GATEWAZE_ALLOWED_WEB_TOOLS: mcpTools.join(','),
   };
   for (const k of [
     'SCRAPLING_FETCHER_URL',
