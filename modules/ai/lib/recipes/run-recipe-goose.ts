@@ -101,6 +101,15 @@ export interface GooseLogEvent {
   message: string;
   toolName: string | null;
   toolArgs: Record<string, unknown> | null;
+  /**
+   * Tokens for a single Anthropic LLM call, parsed from the
+   *   "Anthropic ACTUAL token counts from direct object: input=N, output=M, total=K"
+   * debug line. Goose writes llm_request.*.jsonl files for some
+   * sessions but not for Anthropic subagents — the daily-briefing
+   * worker uses these events to attribute Sonnet usage that would
+   * otherwise be lost. Null on every other line.
+   */
+  anthropicTokens: { input: number; output: number } | null;
   raw: Record<string, unknown>;
 }
 
@@ -907,7 +916,22 @@ function parseGooseLogLine(obj: Record<string, unknown>): GooseLogEvent | null {
       } catch {/* not JSON */}
     }
   }
-  return { sessionId, message, toolName, toolArgs, raw: obj };
+  // "Anthropic ACTUAL token counts from direct object: input=29330, output=41, total=29371"
+  // is emitted once per Anthropic LLM call when RUST_LOG=goose=debug.
+  // We surface these so the worker handler can write usage rows for
+  // sessions Goose's per-call file logger silently skips.
+  let anthropicTokens: { input: number; output: number } | null = null;
+  if (message.startsWith('Anthropic ACTUAL token counts')) {
+    const m = message.match(/input=(\d+),\s*output=(\d+)/);
+    if (m && m[1] && m[2]) {
+      const input = Number(m[1]);
+      const output = Number(m[2]);
+      if (Number.isFinite(input) && Number.isFinite(output)) {
+        anthropicTokens = { input, output };
+      }
+    }
+  }
+  return { sessionId, message, toolName, toolArgs, anthropicTokens, raw: obj };
 }
 
 function sleep(ms: number): Promise<void> {
