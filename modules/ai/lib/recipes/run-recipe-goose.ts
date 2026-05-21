@@ -316,6 +316,17 @@ export async function runRecipeViaGoose(
   const mcpToolCalls: Array<{ server: string; tool: string; latencyMs: number }> = [];
   const pendingToolReqs = new Map<string, { server: string; tool: string; startedAt: number }>();
 
+  // Per-spawn XDG_STATE_HOME so we can read Goose's per-LLM-request
+  // logs after the run without interleaving with other concurrent
+  // spawns. Goose writes one file per LLM call to
+  // $XDG_STATE_HOME/goose/logs/llm_request.N.jsonl, each containing
+  // the request (with model_config.model_name) + a final usage line
+  // with input_tokens / output_tokens / cache token columns. We parse
+  // these after the spawn to attribute spend per model — the only
+  // path to per-call cost attribution in Goose v1.34, since the
+  // stream-json `complete` event only carries an aggregate total.
+  const xdgStateDir = await mkdtemp(join(osTmpdir(), `gatewaze-goose-xdg-${runId}-`));
+
   try {
     child = spawn(GOOSE_BIN, gooseArgs, {
       cwd: workdir,
@@ -326,6 +337,9 @@ export async function runRecipeViaGoose(
         // per-use-case default routes through ANTHROPIC_API_KEY etc.
         // already in env; only the model selector is recipe-driven.
         GOOSE_PROVIDER: process.env.GOOSE_PROVIDER ?? '',
+        // Isolate Goose's state dir for this spawn — comment above the
+        // xdgStateDir declaration explains why.
+        XDG_STATE_HOME: xdgStateDir,
         // Scope env for gatewaze-memory-mcp (substituted for the
         // `memory` builtin). The script reads these to decide which
         // (use_case, scope, thread_id?, user_id?) tuple to store/
@@ -349,6 +363,7 @@ export async function runRecipeViaGoose(
     const reason = `goose_spawn_failed: ${err instanceof Error ? err.message : String(err)}`;
     await markRunFailed(supabase, runId, reason);
     await rm(workdir!, { recursive: true, force: true }).catch(() => undefined);
+    await rm(xdgStateDir, { recursive: true, force: true }).catch(() => undefined);
     return { run_id: runId, status: 'failed', final_output: null, total_cost_micro_usd: 0, total_input_tokens: 0, total_output_tokens: 0, duration_ms: Date.now() - start, failure_reason: reason };
   }
 
@@ -502,11 +517,43 @@ export async function runRecipeViaGoose(
       failureReason = `goose_exit_${exitCode}: ${stderrBuf.slice(0, 1000)}`;
     }
 
-    // Write a cost-ledger row using the per-run totals. The price
-    // lookup happens inside recordUsage() against ai_model_prices, so
-    // even though Goose doesn't tell us micro-USD directly, the ledger
-    // ends up consistent with chat spend.
-    if ((totalIn > 0 || totalOut > 0) && provider && model) {
+    // Per-LLM-call cost attribution. Goose's stream-json `complete`
+    // event only carries an aggregate total_tokens for the whole spawn
+    // — useless when a recipe with sub-recipes mixes haiku (cheap) +
+    // sonnet + gpt-5 in one run. Instead, read each per-call log file
+    // from XDG_STATE_HOME/goose/logs/llm_request.N.jsonl and write
+    // one ai_usage_events row per call with the actual provider/model
+    // + accurate input/output/cache tokens. Aggregate cost on the
+    // dashboard is unchanged; per-model attribution finally lines up.
+    const perCallUsage = await extractPerCallUsage(xdgStateDir);
+    if (perCallUsage.length > 0) {
+      for (const u of perCallUsage) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await recordUsage(supabase as any, {
+            userId: args.userId,
+            useCase: args.useCase,
+            threadId: null,
+            messageId: null,
+            kind: 'llm',
+            provider: u.provider as never,
+            model: u.model,
+            inputTokens: u.input_tokens,
+            outputTokens: u.output_tokens,
+            cachedTokens: u.cache_read_input_tokens ?? 0,
+            cacheCreationTokens: u.cache_write_input_tokens ?? 0,
+            latencyMs: 0,
+            status: failureReason ? 'error' : 'ok',
+            error: failureReason ?? null,
+          });
+        } catch {
+          // best-effort; cost ledger isn't critical for run completion
+        }
+      }
+    } else if ((totalIn > 0 || totalOut > 0) && provider && model) {
+      // Fallback: per-call log dir was empty (Goose didn't write logs
+      // for some reason). Fall back to the legacy single-row attribution
+      // off the complete event so spend isn't dropped entirely.
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await recordUsage(supabase as any, {
@@ -597,7 +644,102 @@ export async function runRecipeViaGoose(
     clearTimeout(cancelTimer);
     if (child && !child.killed) child.kill('SIGTERM');
     if (workdir) await rm(workdir, { recursive: true, force: true }).catch(() => undefined);
+    await rm(xdgStateDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * Read Goose's per-LLM-request log files from XDG_STATE_HOME and
+ * extract one usage record per LLM call.
+ *
+ * Goose v1.34 writes one file per call to
+ * `<xdg_state_home>/goose/logs/llm_request.N.jsonl` (one numbered
+ * sequence per spawn process; UUID-named files appear for some
+ * orphaned or detached cases — we read them too). Each file is a
+ * newline-delimited JSON stream where:
+ *   - The first line carries the request with model_config.model_name
+ *   - The last line containing a non-null `usage` object carries
+ *     {input_tokens, output_tokens, cache_read_input_tokens?,
+ *      cache_write_input_tokens?, total_tokens}
+ *
+ * Returns one entry per file with model + provider (inferred from
+ * model id) + the four token columns. Empty array on any I/O failure.
+ */
+interface PerCallUsage {
+  model: string;
+  provider: 'anthropic' | 'openai' | 'gemini' | 'unknown';
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number | null;
+  cache_write_input_tokens: number | null;
+}
+async function extractPerCallUsage(xdgStateDir: string): Promise<PerCallUsage[]> {
+  const { readdir, readFile } = await import('node:fs/promises');
+  const logsDir = `${xdgStateDir}/goose/logs`;
+  let entries: string[] = [];
+  try {
+    entries = await readdir(logsDir);
+  } catch {
+    return [];
+  }
+  const out: PerCallUsage[] = [];
+  for (const name of entries) {
+    if (!name.startsWith('llm_request.') || !name.endsWith('.jsonl')) continue;
+    let body: string;
+    try {
+      body = await readFile(`${logsDir}/${name}`, 'utf-8');
+    } catch {
+      continue;
+    }
+    const lines = body.split('\n').filter((l) => l.trim().length > 0);
+    if (lines.length === 0) continue;
+    // Parse the first line for model.
+    let model = '';
+    try {
+      const first = JSON.parse(lines[0]!) as { model_config?: { model_name?: string }; input?: { model?: string } };
+      model = first.model_config?.model_name ?? first.input?.model ?? '';
+    } catch {/* skip */}
+    if (!model) continue;
+    // Walk backwards for the last usage line — Goose appends a final
+    // {"data":null,"usage":{...}} after the streaming response ends.
+    let usage: PerCallUsage | null = null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(lines[i]!) as { usage?: Record<string, unknown> | null };
+        const u = parsed.usage;
+        if (u && typeof u === 'object') {
+          const input = Number(u.input_tokens);
+          const output = Number(u.output_tokens);
+          if (Number.isFinite(input) && Number.isFinite(output)) {
+            const cacheRead = u.cache_read_input_tokens;
+            const cacheWrite = u.cache_write_input_tokens;
+            usage = {
+              model,
+              provider: inferProviderFromModel(model),
+              input_tokens: input,
+              output_tokens: output,
+              cache_read_input_tokens: typeof cacheRead === 'number' ? cacheRead : null,
+              cache_write_input_tokens: typeof cacheWrite === 'number' ? cacheWrite : null,
+            };
+            break;
+          }
+        }
+      } catch {/* skip non-JSON */}
+    }
+    if (usage) out.push(usage);
+  }
+  return out;
+}
+
+function inferProviderFromModel(modelId: string): PerCallUsage['provider'] {
+  if (modelId.startsWith('claude') || modelId.includes('haiku') || modelId.includes('sonnet') || modelId.includes('opus')) {
+    return 'anthropic';
+  }
+  if (modelId.startsWith('gpt') || modelId.startsWith('o1') || modelId.startsWith('o3') || modelId.startsWith('o4')) {
+    return 'openai';
+  }
+  if (modelId.startsWith('gemini')) return 'gemini';
+  return 'unknown';
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
