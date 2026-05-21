@@ -114,8 +114,8 @@ export default function ConfiguredPromptBar({ useCase }: Props): JSX.Element | n
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
-        <span className="text-neutral-500">{open ? '▾' : '▸'}</span>
-        <span className="text-neutral-500">Will run with</span>
+        <span className="text-neutral-500 text-base leading-none">{open ? '▾' : '▸'}</span>
+        <span className="text-neutral-500">Will run</span>
         <span className={`px-1.5 py-0.5 rounded border text-[10px] uppercase tracking-wide ${chipColor}`}>
           {chipLabel}
         </span>
