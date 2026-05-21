@@ -88,7 +88,13 @@ export async function forwardStreamToSse(
             continue;
           }
           res.write(`id: ${id}\n`);
-          res.write(`event: ${event.type}\n`);
+          // Intentionally emit no `event:` line. Browsers only fire
+          // EventSource.onmessage for events without a custom name —
+          // setting `event: tool.gatewaze_search` silently routes the
+          // payload to addEventListener('tool.gatewaze_search', ...)
+          // which we don't register. The event's type is carried
+          // inside the JSON `data` payload anyway; consumers branch
+          // on event.type there.
           res.write(`data: ${JSON.stringify(event)}\n\n`);
           cursor = id;
           lastWroteAt = Date.now();
