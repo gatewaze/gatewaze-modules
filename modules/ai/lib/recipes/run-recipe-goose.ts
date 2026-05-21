@@ -154,13 +154,27 @@ export async function runRecipeViaGoose(
     runId = (insert.data as { id: string }).id;
   }
 
+  // Substitute Goose's `computercontroller` builtin (browser automation,
+  // shell access — not available inside the worker sandbox) with the
+  // gatewaze-web-tools MCP. Recipes written for local-Goose use often
+  // declare computercontroller to get web search + URL fetching; this
+  // makes the same recipes run unchanged inside Gatewaze with the
+  // platform's Serper/DDG search backend standing in.
+  //
+  // Returns the recipe / sub-recipes with computercontroller stripped
+  // (so Goose doesn't try to load an extension that won't work) plus a
+  // flag the MCP resolver checks to know it should auto-attach
+  // gatewaze-web-tools even when allowed_web_tools is unset.
+  const { recipe: recipeStripped, subRecipes: subRecipesStripped, substituted: ccSubstituted } =
+    substituteComputercontroller(args.recipe, args.subRecipes);
+
   // 2. Materialize recipe + sub-recipes into a tmpdir Goose can read.
   let workdir: string | null = null;
   let recipePath: string;
   let subRecipePaths: string[] = [];
   try {
     workdir = await mkdtemp(join(osTmpdir(), `gatewaze-goose-${runId}-`));
-    const materialized = await materializeRecipe(workdir, args.recipe, args.subRecipes);
+    const materialized = await materializeRecipe(workdir, recipeStripped, subRecipesStripped);
     recipePath = materialized.parentPath;
     subRecipePaths = materialized.subPaths;
   } catch (err) {
@@ -221,7 +235,8 @@ export async function runRecipeViaGoose(
     const resolved = await resolveMcpExtensions(supabase, {
       useCaseId: args.useCase,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      recipeExtensions: (args.recipe.extensions ?? []) as any[],
+      recipeExtensions: (recipeStripped.extensions ?? []) as any[],
+      forceWebToolsBridge: ccSubstituted,
     });
     extensionFlags = resolved.flags;
     extensionEnv = resolved.env;
@@ -564,6 +579,40 @@ export async function runRecipeViaGoose(
  * because that's what every sub_recipe path in the indexed recipes
  * uses today.
  */
+/**
+ * Detect and substitute Goose's `computercontroller` builtin
+ * extension. Local Goose recipes often declare it to get a web-
+ * search + URL-fetch surface, but the builtin needs Goose's host
+ * environment (browser, shell) — not available inside the worker
+ * sandbox. We strip it from the materialized recipe and signal the
+ * MCP resolver to auto-attach gatewaze-web-tools (gatewaze_search)
+ * as the search replacement.
+ *
+ * Returns the recipe + sub-recipes with the entries removed plus a
+ * `substituted: true` flag whenever at least one occurrence was
+ * detected anywhere in the tree.
+ */
+function substituteComputercontroller(
+  recipe: ParsedRecipe,
+  subRecipes: Map<string, ParsedRecipe>,
+): { recipe: ParsedRecipe; subRecipes: Map<string, ParsedRecipe>; substituted: boolean } {
+  let substituted = false;
+  function stripFrom(r: ParsedRecipe): ParsedRecipe {
+    if (!Array.isArray(r.extensions) || r.extensions.length === 0) return r;
+    const kept = r.extensions.filter((e) => {
+      const isCc = e?.type === 'builtin' && e?.name === 'computercontroller';
+      if (isCc) substituted = true;
+      return !isCc;
+    });
+    if (kept.length === r.extensions.length) return r;
+    return { ...r, extensions: kept };
+  }
+  const newRecipe = stripFrom(recipe);
+  const newSubs = new Map<string, ParsedRecipe>();
+  for (const [k, v] of subRecipes) newSubs.set(k, stripFrom(v));
+  return { recipe: newRecipe, subRecipes: newSubs, substituted };
+}
+
 async function materializeRecipe(
   workdir: string,
   recipe: ParsedRecipe,
@@ -683,15 +732,24 @@ async function resolveMcpExtensions(
   args: {
     useCaseId: string;
     recipeExtensions: Array<{ name?: string; type?: string; raw?: Record<string, unknown> } & Record<string, unknown>>;
+    /**
+     * When true, attach gatewaze-web-tools (with gatewaze_search)
+     * even if the use case's allowed_web_tools is empty. Set by the
+     * caller when it stripped a `computercontroller` builtin from
+     * the recipe — the MCP stands in as the web-search replacement.
+     */
+    forceWebToolsBridge?: boolean;
   },
 ): Promise<McpResolveResult> {
   // Web-tools bridge: bring ai_use_cases.allowed_web_tools into the
-  // Goose spawn as a gatewaze-owned stdio MCP exposing web_search /
-  // fetch_url / gatewaze_search tools. Same backends (Serper/DDG +
-  // scrapling-fetcher) the inline runChat path uses — the UI's
-  // "Allowed web tools" checkboxes mean the same thing whether the
-  // executor is Goose or runChat.
-  const webToolsResolve = await resolveWebToolsExtension(supabase, args.useCaseId);
+  // Goose spawn as a gatewaze-owned stdio MCP exposing gatewaze_search.
+  // Same backend (Serper/DDG) the inline runChat path uses. When
+  // forceWebToolsBridge is set, attach regardless of allowed_web_tools.
+  const webToolsResolve = await resolveWebToolsExtension(
+    supabase,
+    args.useCaseId,
+    { forceAttach: args.forceWebToolsBridge ?? false },
+  );
 
   // 1. Recipe-declared extension names. Recipes that declare nothing
   //    still get the web-tools bridge if allowed_web_tools is non-empty;
@@ -880,6 +938,7 @@ const MCP_OWNED_TOOLS = new Set(['gatewaze_search']);
 async function resolveWebToolsExtension(
   supabase: SupabaseClient,
   useCaseId: string,
+  opts: { forceAttach?: boolean } = {},
 ): Promise<McpResolveResult> {
   let allowed: string[] = [];
   try {
@@ -891,12 +950,18 @@ async function resolveWebToolsExtension(
     const row = (res.data as { allowed_web_tools?: string[] } | null) ?? null;
     allowed = Array.isArray(row?.allowed_web_tools) ? row!.allowed_web_tools.filter((t) => typeof t === 'string') : [];
   } catch {
-    return { flags: [], env: {}, warnings: [], loadedNames: [] };
+    // forceAttach still wins even if the lookup failed.
+    if (!opts.forceAttach) return { flags: [], env: {}, warnings: [], loadedNames: [] };
   }
   // Filter down to only the tools the Gatewaze MCP provides; if none
-  // of the operator-enabled tools fall into that set, there's nothing
-  // for this MCP to expose.
-  const mcpTools = allowed.filter((t) => MCP_OWNED_TOOLS.has(t));
+  // of the operator-enabled tools fall into that set, the MCP normally
+  // wouldn't attach. forceAttach (set when the caller substituted
+  // computercontroller) injects gatewaze_search regardless so the
+  // recipe still gets a search surface.
+  let mcpTools = allowed.filter((t) => MCP_OWNED_TOOLS.has(t));
+  if (opts.forceAttach && !mcpTools.includes('gatewaze_search')) {
+    mcpTools = [...mcpTools, 'gatewaze_search'];
+  }
   if (mcpTools.length === 0) {
     return { flags: [], env: {}, warnings: [], loadedNames: [] };
   }
