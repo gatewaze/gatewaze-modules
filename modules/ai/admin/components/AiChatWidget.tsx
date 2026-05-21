@@ -274,29 +274,32 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
         } catch {
           return;
         }
-        switch (parsed.type) {
-          case 'token':
-            if (typeof parsed.delta === 'string') {
-              setLiveContent((prev) => prev + parsed.delta);
-            }
-            break;
-          case 'run.start':
-            setLiveStatus(parsed.recipeId ? `running ${parsed.recipeId}` : 'starting');
-            break;
-          case 'tool.web_search':
+        if (parsed.type === 'token') {
+          if (typeof parsed.delta === 'string') {
+            setLiveContent((prev) => prev + parsed.delta);
+          }
+        } else if (parsed.type === 'run.start') {
+          setLiveStatus(parsed.recipeId ? `running ${parsed.recipeId}` : 'starting');
+        } else if (parsed.type === 'assistant.complete'
+                || parsed.type === 'run.complete'
+                || parsed.type === 'run.failed'
+                || parsed.type === 'close') {
+          // Worker reached a terminal state; the next poll has the
+          // canonical row, so drop the SSE connection here.
+          source.close();
+        } else if (parsed.type?.startsWith('tool.')) {
+          // Any sub-recipe tool call. Common cases get a friendly
+          // verb ("searching" / "fetching"); everything else falls
+          // through to the bare tool name so operators still see
+          // *something* happening rather than a blank spinner.
+          const toolName = parsed.type.slice('tool.'.length);
+          if (toolName === 'web_search' || toolName === 'gatewaze_search') {
             setLiveStatus(parsed.query ? `searching: ${parsed.query}` : 'searching the web');
-            break;
-          case 'tool.fetch_url':
+          } else if (toolName === 'fetch_url' || toolName === 'gatewaze_fetch') {
             setLiveStatus(parsed.url ? `fetching: ${parsed.url}` : 'fetching a url');
-            break;
-          case 'assistant.complete':
-          case 'run.complete':
-          case 'run.failed':
-          case 'close':
-            // Worker reached a terminal state; the next poll has the
-            // canonical row, so drop the SSE connection here.
-            source.close();
-            break;
+          } else {
+            setLiveStatus(`running ${toolName}`);
+          }
         }
       };
       source.onerror = () => {
