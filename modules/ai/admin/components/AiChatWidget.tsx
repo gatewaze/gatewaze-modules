@@ -103,10 +103,24 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
   // message is running. Cleared when the message transitions to
   // `complete` (the poll picks up the canonical content row).
   const [liveContent, setLiveContent] = useState<string>('');
+  // Past actions for this run, oldest first. Each tool/run.start
+  // event appends one entry; the bottom-most bubble is what's
+  // happening right now and carries the spinner. Capped at 100 to
+  // keep the DOM tractable for long Sonnet runs (90+ tool calls
+  // observed in the daily-briefing-research recipe).
+  const [liveEvents, setLiveEvents] = useState<Array<{ id: string; text: string }>>([]);
+  const liveEventCounter = useRef(0);
+  const pushLiveEvent = (text: string): void => {
+    liveEventCounter.current += 1;
+    const id = `${Date.now()}-${liveEventCounter.current}`;
+    setLiveEvents((prev) => {
+      const next = [...prev, { id, text }];
+      return next.length > 100 ? next.slice(next.length - 100) : next;
+    });
+  };
   // Optional status text fed by run.start / tool.* events so the
   // operator sees what the agent is doing right now ("searching X",
   // "fetching url …") rather than a blank "Thinking…".
-  const [liveStatus, setLiveStatus] = useState<string>('');
 
   // ── Hydrate thread on mount ─────────────────────────────────────────
   useEffect(() => {
@@ -238,11 +252,11 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
   useEffect(() => {
     if (!thread || !hasRunningMessage) {
       setLiveContent('');
-      setLiveStatus('');
+      setLiveEvents([]);
       return;
     }
     setLiveContent('');
-    setLiveStatus('');
+    setLiveEvents([]);
     let es: EventSource | null = null;
     let cancelled = false;
     // EventSource can't carry custom headers, so we grab the
@@ -279,7 +293,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
             setLiveContent((prev) => prev + parsed.delta);
           }
         } else if (parsed.type === 'run.start') {
-          setLiveStatus(parsed.recipeId ? `running ${parsed.recipeId}` : 'starting');
+          pushLiveEvent(parsed.recipeId ? `running ${parsed.recipeId}` : 'starting');
         } else if (parsed.type === 'assistant.complete'
                 || parsed.type === 'run.complete'
                 || parsed.type === 'run.failed'
@@ -294,11 +308,11 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
           // *something* happening rather than a blank spinner.
           const toolName = parsed.type.slice('tool.'.length);
           if (toolName === 'web_search' || toolName === 'gatewaze_search') {
-            setLiveStatus(parsed.query ? `searching: ${parsed.query}` : 'searching the web');
+            pushLiveEvent(parsed.query ? `searching: ${parsed.query}` : 'searching the web');
           } else if (toolName === 'fetch_url' || toolName === 'gatewaze_fetch') {
-            setLiveStatus(parsed.url ? `fetching: ${parsed.url}` : 'fetching a url');
+            pushLiveEvent(parsed.url ? `fetching: ${parsed.url}` : 'fetching a url');
           } else {
-            setLiveStatus(`running ${toolName}`);
+            pushLiveEvent(`running ${toolName}`);
           }
         }
       };
@@ -455,7 +469,14 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
               if (m.role === 'user') {
                 return (
                   <div key={m.id} className="flex justify-end">
-                    <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-blue-600 text-white px-3 py-2 text-sm whitespace-pre-wrap">
+                    {/* Use Radix Themes' accent token so the user bubble
+                        tracks the workspace's primary color rather than
+                        a hardcoded blue. var(--accent-9) is the same
+                        primary the Send button uses elsewhere. */}
+                    <div
+                      className="max-w-[80%] rounded-2xl rounded-br-sm text-white px-3 py-2 text-sm whitespace-pre-wrap"
+                      style={{ backgroundColor: 'var(--accent-9)' }}
+                    >
                       {m.content}
                     </div>
                   </div>
@@ -489,7 +510,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
               return (
                 <div key={m.id} className="flex justify-start">
                   <div className="max-w-[90%]">
-                    <div className="rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
+                    <div className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
                       {m.content}
                     </div>
                     {m.role === 'assistant' && <RunDetails message={m} />}
@@ -499,15 +520,31 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
             })}
             {isRunning && (
               <div className="flex justify-start">
-                <div className="max-w-[90%] w-full">
+                <div className="max-w-[90%] w-full space-y-1">
                   {liveContent.length > 0 && (
-                    <div className="rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap mb-1">
+                    <div className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
                       {liveContent}
                     </div>
                   )}
-                  <div className="rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-600 inline-flex items-center gap-2">
+                  {/*
+                    Each completed action gets its own bubble — no spinner;
+                    these are historical "we did this" markers. The newest
+                    action gets the spinner bubble below to indicate
+                    "currently working on this".
+                  */}
+                  {liveEvents.slice(0, -1).map((ev) => (
+                    <div
+                      key={ev.id}
+                      className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500 inline-block"
+                    >
+                      {ev.text}
+                    </div>
+                  ))}
+                  <div className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-sm text-neutral-600 inline-flex items-center gap-2">
                     <ArrowPathIcon className="size-4 animate-spin" />
-                    {liveStatus || (liveContent.length > 0 ? 'streaming…' : 'Thinking…')}
+                    {liveEvents.length > 0
+                      ? liveEvents[liveEvents.length - 1]!.text
+                      : (liveContent.length > 0 ? 'streaming…' : 'Thinking…')}
                   </div>
                 </div>
               </div>
