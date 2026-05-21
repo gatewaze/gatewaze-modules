@@ -507,6 +507,31 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                   </div>
                 );
               }
+              // Historical tool-call bubbles from structured.live_events
+              // (persisted by the worker at run-completion time so a
+               // page reload still shows the full step history). Same
+              // muted styling the live spinner uses for in-progress
+              // events — operators can scroll back through the agent's
+              // searches/fetches even after the run is done. Render
+              // ONLY for messages NOT currently running, because the
+              // isRunning section below already renders these from the
+              // in-memory liveEvents state.
+              const persistedEvents =
+                m.role === 'assistant' && m.status === 'complete'
+                  ? extractPersistedLiveEvents(m.structured)
+                  : [];
+              const historyBubbles = persistedEvents.length > 0 ? (
+                <div className="space-y-1 mb-2">
+                  {persistedEvents.map((ev, i) => (
+                    <div
+                      key={`${m.id}-h-${i}`}
+                      className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500 block w-fit"
+                    >
+                      {ev.text}
+                    </div>
+                  ))}
+                </div>
+              ) : null;
               const structuredJsx =
                 m.role === 'assistant' && m.structured && renderAssistantTurn
                   ? renderAssistantTurn(m)
@@ -515,6 +540,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                 return (
                   <div key={m.id} className="flex justify-start">
                     <div className="max-w-[90%] w-full">
+                      {historyBubbles}
                       {structuredJsx}
                       <RunDetails message={m} />
                     </div>
@@ -535,6 +561,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
               return (
                 <div key={m.id} className="flex justify-start">
                   <div className="max-w-[90%]">
+                    {historyBubbles}
                     <div className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
                       {m.content}
                     </div>
@@ -609,6 +636,29 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
  * (running detection, send/cancel wiring) — host-rendered structured
  * cards happen outside this path.
  */
+/**
+ * Read the persisted tool-call history off a completed assistant
+ * message's `structured` payload. The worker writes one entry per
+ * "searching: ..." / "fetching: ..." / "running ..." event during
+ * the run so reload-after-completion still surfaces the full step
+ * trail. Defensive about shape because `structured` is JSONB and
+ * may be anything (or a legacy shape without live_events).
+ */
+function extractPersistedLiveEvents(
+  structured: Record<string, unknown> | null | undefined,
+): Array<{ text: string }> {
+  if (!structured || typeof structured !== 'object') return [];
+  const list = (structured as { live_events?: unknown }).live_events;
+  if (!Array.isArray(list)) return [];
+  const out: Array<{ text: string }> = [];
+  for (const ev of list) {
+    if (ev && typeof ev === 'object' && typeof (ev as { text?: unknown }).text === 'string') {
+      out.push({ text: (ev as { text: string }).text });
+    }
+  }
+  return out;
+}
+
 function convertMessage(m: AiMessage): ThreadMessageLike {
   const role = m.role === 'tool_summary' ? 'assistant' : (m.role as 'user' | 'assistant' | 'system');
   return {
