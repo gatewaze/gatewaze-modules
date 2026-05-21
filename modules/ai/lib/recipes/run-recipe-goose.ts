@@ -382,6 +382,16 @@ export async function runRecipeViaGoose(
         // Isolate Goose's state dir for this spawn — comment above the
         // xdgStateDir declaration explains why.
         XDG_STATE_HOME: xdgStateDir,
+        // When a caller wired onGooseLogEvent, they need Goose's CLI
+        // debug log file to exist — without RUST_LOG, Goose writes
+        // nothing for the tailer to read and sub-recipe streaming
+        // goes silent. Force goose=debug for the spawn (does not
+        // affect the worker's own log level). Operators can still
+        // override via process.env.RUST_LOG to widen the scope (e.g.
+        // RUST_LOG='goose=trace,goose_cli=trace').
+        ...(args.onGooseLogEvent && !process.env.RUST_LOG
+          ? { RUST_LOG: 'goose=debug' }
+          : {}),
         // Scope env for gatewaze-memory-mcp (substituted for the
         // `memory` builtin). The script reads these to decide which
         // (use_case, scope, thread_id?, user_id?) tuple to store/
