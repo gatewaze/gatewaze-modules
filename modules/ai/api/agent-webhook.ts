@@ -285,8 +285,8 @@ export function mountAgentWebhookRoute(router: Router, deps: Deps): void {
 
       let jobId: string;
       try {
-        const job = await deps.enqueueJob('jobs', 'ai.sync-one-agent-source', {
-          kind: 'ai.sync-one-agent-source',
+        const job = await deps.enqueueJob('jobs', 'ai:sync-one-agent-source', {
+          kind: 'ai:sync-one-agent-source',
           source_id: sourceId,
           trigger: 'webhook',
         });
