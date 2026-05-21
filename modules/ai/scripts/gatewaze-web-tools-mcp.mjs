@@ -3,36 +3,24 @@
  * Stdio MCP server exposing Gatewaze-unique web tools to Goose.
  *
  * Currently provides one tool: `gatewaze_search` — Serper.dev with a
- * DuckDuckGo fallback. The platform spawns this server whenever a
- * use case has `gatewaze_search` in its allowed_web_tools list.
- *
- * Why this server doesn't expose web_search / fetch_url:
- *   - Anthropic ships `web_search` as a native server-side tool, so
- *     Claude-backed recipes get it for free via the model.
- *   - Goose's `developer` builtin handles basic URL fetches. Recipes
- *     that need it can `--with-builtin developer` or declare a
- *     dedicated fetch MCP server.
- *
- * The Gatewaze MCP's role is the Serper.dev + DDG fallback chain —
- * uniform across providers, operator-controllable, ledgered.
+ * DuckDuckGo HTML-scrape fallback. Standard MCP pattern: the user
+ * (or platform spawn) supplies upstream credentials via env, the
+ * server uses whatever it has.
  *
  * Goose tool surface: gatewaze-web-tools__gatewaze_search.
  *
- * ## Two operating modes
+ * ## Env vars
  *
- * **Platform mode** — spawned by run-recipe-goose / run-chat-goose
- * inside the Gatewaze worker. The wrapper sets
- * GATEWAZE_ALLOWED_WEB_TOOLS to a comma-separated subset (only
- * `gatewaze_search` is meaningful here since that's the only tool we
- * advertise); tools/list is filtered accordingly.
+ * Search backend:
+ *   SERPER_API_KEY              optional — Serper.dev key, preferred
+ *                                when set; otherwise DDG scrape.
+ *   GATEWAZE_SEARCH_BACKEND     optional — 'auto'|'serper'|'ddg'.
+ *                                Forces a specific backend; 'auto' is
+ *                                the default and picks serper when a
+ *                                key is set.
  *
- * **Local Goose mode** — anyone running `goose run --recipe foo.yaml`
- * on their own machine. With GATEWAZE_ALLOWED_WEB_TOOLS unset, the
- * full tool surface (currently just `gatewaze_search`) is exposed.
- *
- * Backend selection for the DuckDuckGo fallback, highest priority
+ * Fetch backend (for the DDG fallback's HTML scrape), highest priority
  * first:
- *
  *   1. GATEWAZE_FETCH_BASE_URL + GATEWAZE_FETCH_API_KEY
  *        → public gatewaze-fetch service (paid, anti-bot + JS render)
  *   2. SCRAPLING_FETCHER_URL + SCRAPLING_INTERNAL_TOKEN
@@ -40,9 +28,9 @@
  *   3. (no env set) → vanilla node fetch() — works for most public
  *      pages without any external service
  *
- * Serper.dev is preferred when SERPER_API_KEY is set; otherwise the
- * server falls back to scraping DuckDuckGo's HTML endpoint via the
- * active fetch backend.
+ * Tool filtering:
+ *   GATEWAZE_ALLOWED_WEB_TOOLS  optional — comma list to filter
+ *      tools/list. Default = all advertised tools.
  *
  * ## Recipe.yaml example (local Goose)
  *
