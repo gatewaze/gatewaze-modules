@@ -64,6 +64,16 @@ export interface ParsedRecipe {
   settings: ParsedSettings;
   sub_recipes: ParsedSubRecipeRef[];
   extensions: ParsedExtension[];
+  /**
+   * Skill references to auto-load at run time. Each entry is a skill
+   * name (matched against ai_skills.name) or a `source/path` form for
+   * disambiguation when multiple agent sources expose skills with the
+   * same name. The Goose-routed wrapper looks each up in ai_skills,
+   * prepends the resolved body to the recipe's instructions, and
+   * substitutes the in-house executor's "auto-loaded skill" feature
+   * that recipes were originally written against.
+   */
+  skills: string[];
   content_hash: string;
 }
 
@@ -493,6 +503,30 @@ export function parseRecipe(
     prompt = d.prompt;
   }
 
+  // ── Step 11: skills (auto-loader references) ────────────────────
+  // Optional `skills: [<name>, ...]` block. Recipes that previously
+  // relied on the in-house TS executor's "auto-loaded skill" feature
+  // (e.g. "Follow the daily-briefing-research skill") can list those
+  // skills explicitly here so the Goose-routed wrapper resolves and
+  // inlines them. Backwards-compatible: missing => empty list.
+  let skills: string[] = [];
+  if (d.skills !== undefined) {
+    if (!Array.isArray(d.skills)) {
+      return { ok: false, reason: 'parse_error', message: 'recipe.skills must be an array of strings', partial };
+    }
+    for (const [i, raw] of d.skills.entries()) {
+      if (typeof raw !== 'string' || raw.trim().length === 0) {
+        return {
+          ok: false,
+          reason: 'parse_error',
+          message: `recipe.skills[${i}] must be a non-empty string`,
+          partial,
+        };
+      }
+    }
+    skills = (d.skills as string[]).map((s) => s.trim());
+  }
+
   return {
     ok: true,
     recipe: {
@@ -506,6 +540,7 @@ export function parseRecipe(
       settings,
       sub_recipes: subRecipes,
       extensions,
+      skills,
       content_hash: createHash('sha256').update(recipeYamlRaw, 'utf-8').digest('hex'),
     },
     warnings,

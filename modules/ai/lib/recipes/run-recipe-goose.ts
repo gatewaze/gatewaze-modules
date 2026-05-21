@@ -168,13 +168,30 @@ export async function runRecipeViaGoose(
   const { recipe: recipeStripped, subRecipes: subRecipesStripped, substituted: ccSubstituted } =
     substituteComputercontroller(args.recipe, args.subRecipes);
 
+  // Skill auto-loader: prepend the bodies of every declared / referenced
+  // skill to each recipe's instructions before Goose sees them. Recipes
+  // can declare skills two ways:
+  //   1. Explicit `skills: [name, ...]` block (the preferred form)
+  //   2. "Follow the X skill (auto-loaded by your runtime)" phrase
+  //      inside instructions — backwards-compat with recipes authored
+  //      against the in-house TS executor's skill auto-loader.
+  // Both forms are unioned and resolved against ai_skills.body.
+  const { recipe: recipeWithSkills, subRecipes: subRecipesWithSkills, skillsLoaded } =
+    await autoloadSkills(supabase, recipeStripped, subRecipesStripped);
+  if (skillsLoaded.length > 0) {
+    _ctx.logger?.info?.('ai.recipe-goose.skills_autoloaded', {
+      run_id: runId,
+      skills: skillsLoaded,
+    });
+  }
+
   // 2. Materialize recipe + sub-recipes into a tmpdir Goose can read.
   let workdir: string | null = null;
   let recipePath: string;
   let subRecipePaths: string[] = [];
   try {
     workdir = await mkdtemp(join(osTmpdir(), `gatewaze-goose-${runId}-`));
-    const materialized = await materializeRecipe(workdir, recipeStripped, subRecipesStripped);
+    const materialized = await materializeRecipe(workdir, recipeWithSkills, subRecipesWithSkills);
     recipePath = materialized.parentPath;
     subRecipePaths = materialized.subPaths;
   } catch (err) {
@@ -592,6 +609,118 @@ export async function runRecipeViaGoose(
  * because that's what every sub_recipe path in the indexed recipes
  * uses today.
  */
+/**
+ * Skill auto-loader. Resolves every skill a recipe (or sub-recipe)
+ * depends on against the ai_skills table and prepends the body to
+ * the recipe's `instructions` before materialization. The Goose
+ * spawn sees one merged instruction block — the model gets the same
+ * context the in-house executor's "auto-loaded skill" feature used
+ * to inject.
+ *
+ * Two declaration forms are unioned:
+ *   1. `skills: [name, ...]` block (preferred). ParsedRecipe.skills
+ *      carries this from parse-recipe.ts.
+ *   2. "Follow the X skill (auto-loaded by your runtime)" phrase
+ *      inside `instructions`. Captures X via regex so recipes
+ *      authored against the old executor work without modification.
+ *
+ * Missing skills are best-effort: the run continues without that
+ * skill's body, and the omission is returned for caller logging.
+ * (We don't fail the run because that would surprise anyone whose
+ * recipe references a skill that exists locally but not in the DB.)
+ *
+ * Frontmatter (--- ... ---) is stripped from each body before
+ * injection; only the prose body reaches the model.
+ */
+const AUTOLOAD_PHRASE_RE = /the\s+([\w-]+)\s+skill\s*\(auto-loaded\s+by\s+your\s+runtime\)/gi;
+
+async function autoloadSkills(
+  supabase: SupabaseClient,
+  recipe: ParsedRecipe,
+  subRecipes: Map<string, ParsedRecipe>,
+): Promise<{ recipe: ParsedRecipe; subRecipes: Map<string, ParsedRecipe>; skillsLoaded: string[] }> {
+  // Union the skill names referenced across the parent + every sub-
+  // recipe before issuing a single DB lookup. Most recipes share the
+  // same skill so this collapses to one or two rows.
+  const namesToResolve = new Set<string>();
+  function collectFromRecipe(r: ParsedRecipe): void {
+    if (Array.isArray(r.skills)) {
+      for (const n of r.skills) namesToResolve.add(n);
+    }
+    if (typeof r.instructions === 'string') {
+      for (const m of r.instructions.matchAll(AUTOLOAD_PHRASE_RE)) {
+        if (typeof m[1] === 'string') namesToResolve.add(m[1]);
+      }
+    }
+  }
+  collectFromRecipe(recipe);
+  for (const sub of subRecipes.values()) collectFromRecipe(sub);
+
+  if (namesToResolve.size === 0) {
+    return { recipe, subRecipes, skillsLoaded: [] };
+  }
+
+  // One read against ai_skills. We don't scope by source_id — multiple
+  // sources rarely expose skills with the same name, and when they do
+  // the first hit is the resolver's best guess. Authors can use the
+  // explicit `skills: [name]` form and rely on operator-side source
+  // ordering to disambiguate.
+  const skillBodies = new Map<string, string>();
+  const skillsLoaded: string[] = [];
+  try {
+    const res = await supabase
+      .from('ai_skills')
+      .select('name, body')
+      .in('name', Array.from(namesToResolve));
+    const rows = (res?.data as Array<{ name: string; body: string }> | null) ?? [];
+    for (const row of rows) {
+      if (typeof row.name !== 'string' || typeof row.body !== 'string') continue;
+      if (skillBodies.has(row.name)) continue;
+      skillBodies.set(row.name, stripFrontmatter(row.body));
+      skillsLoaded.push(row.name);
+    }
+  } catch {
+    // Best-effort: any DB error → no skills loaded, run continues.
+    return { recipe, subRecipes, skillsLoaded: [] };
+  }
+
+  function inject(r: ParsedRecipe): ParsedRecipe {
+    const declared = Array.isArray(r.skills) ? r.skills : [];
+    const phraseMentions: string[] = typeof r.instructions === 'string'
+      ? Array.from(r.instructions.matchAll(AUTOLOAD_PHRASE_RE), (m) => m[1] ?? '').filter((s) => s.length > 0)
+      : [];
+    const seen = new Set<string>();
+    const bodies: string[] = [];
+    for (const name of [...declared, ...phraseMentions]) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const body = skillBodies.get(name);
+      if (typeof body === 'string' && body.length > 0) {
+        bodies.push(`<!-- gatewaze-autoloaded-skill: ${name} -->\n${body.trim()}`);
+      }
+    }
+    if (bodies.length === 0) return r;
+    const block = bodies.join('\n\n---\n\n');
+    return {
+      ...r,
+      instructions: `${block}\n\n---\n\n${r.instructions}`,
+    };
+  }
+
+  const newRecipe = inject(recipe);
+  const newSubs = new Map<string, ParsedRecipe>();
+  for (const [k, v] of subRecipes) newSubs.set(k, inject(v));
+  return { recipe: newRecipe, subRecipes: newSubs, skillsLoaded };
+}
+
+/** Strip a leading YAML frontmatter block (--- ... ---) from a markdown body. */
+function stripFrontmatter(body: string): string {
+  if (!body.startsWith('---')) return body;
+  const end = body.indexOf('\n---', 3);
+  if (end < 0) return body;
+  return body.slice(end + 4).replace(/^\s*\n/, '');
+}
+
 /**
  * Detect and substitute Goose's `computercontroller` builtin
  * extension. Local Goose recipes often declare it to get a web-
