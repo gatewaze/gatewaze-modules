@@ -79,6 +79,15 @@ export interface RunRecipeViaGooseArgs {
    */
   onStreamEvent?: (event: GooseStreamEvent) => Promise<void> | void;
   /**
+   * External cancellation signal. When this aborts, the runner
+   * SIGTERMs the goose subprocess (best-effort SIGKILL after the
+   * cancellation grace window) and finishes with status='cancelled'.
+   * Workers wire this to a CancelToken from subscribeCancel(...) so
+   * the Jobs-tab Stop button propagates all the way down through
+   * the goose CLI.
+   */
+  abortSignal?: AbortSignal;
+  /**
    * Per-line callback for Goose's CLI debug log (only fires when
    * RUST_LOG=goose=* is set, which causes Goose to write structured
    * JSON-per-line events to $XDG_STATE_HOME/goose/logs/cli/...). Used
@@ -407,6 +416,26 @@ export async function runRecipeViaGoose(
     }, CANCELLATION_GRACE_MS);
   }, MAX_RUN_DURATION_MS);
 
+  // External cancel hook (Jobs-tab Stop → broadcastCancel pub/sub →
+  // worker handler abort controller → here). SIGTERM the goose
+  // subprocess and follow up with SIGKILL after the grace window if
+  // it hasn't exited. failureReason gets stamped so the run's row
+  // shows "cancelled by operator" instead of a bare non-zero exit.
+  let cancelled = false;
+  const onAbort = (): void => {
+    if (cancelled) return;
+    cancelled = true;
+    failureReason = `cancelled_by_${(args.abortSignal as AbortSignal & { reason?: unknown })?.reason ?? 'operator'}`;
+    if (child && !child.killed) child.kill('SIGTERM');
+    setTimeout(() => {
+      if (child && !child.killed) child.kill('SIGKILL');
+    }, CANCELLATION_GRACE_MS);
+  };
+  if (args.abortSignal) {
+    if (args.abortSignal.aborted) onAbort();
+    else args.abortSignal.addEventListener('abort', onAbort, { once: true });
+  }
+
   // CLI-log tailer. Goose writes one structured JSON-per-line debug
   // log per spawn at $XDG_STATE_HOME/goose/logs/cli/<date>/<ts>.log
   // when RUST_LOG=goose=* is set. The async-delegate path of
@@ -657,7 +686,9 @@ export async function runRecipeViaGoose(
         // best-effort
       }
     }
-    const status: RunRecipeViaGooseResult['status'] = failureReason ? 'failed' : 'complete';
+    const status: RunRecipeViaGooseResult['status'] = cancelled
+      ? 'cancelled'
+      : failureReason ? 'failed' : 'complete';
     await supabase
       .from('ai_recipe_runs')
       .update({
