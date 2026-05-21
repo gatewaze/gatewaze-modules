@@ -866,17 +866,17 @@ async function resolveMcpExtensions(
 
 /**
  * Bridge ai_use_cases.allowed_web_tools into the Goose spawn by
- * attaching the gatewaze-web-tools-mcp stdio script as an extension
- * filtered to exactly the tools the operator allowed.
+ * attaching the gatewaze-web-tools-mcp stdio script for the subset
+ * of tools the Gatewaze MCP owns. Currently that's just
+ * `gatewaze_search` — web_search and fetch_url come from the model
+ * (Anthropic-native web_search) or Goose's developer builtin, not
+ * from this MCP.
  *
- * Goose sees three tool names (web_search, fetch_url, gatewaze_search)
- * under the extension prefix `gatewaze-web-tools__` — same identifiers
- * the inline runChat path exposes, so recipes and chat prompts that
- * reference them by name work identically across executors.
- *
- * Returns an empty load when allowed_web_tools is empty or the use
- * case row can't be read.
+ * Returns an empty load when allowed_web_tools doesn't include any
+ * tool the MCP knows about, or when the use case row can't be read.
  */
+const MCP_OWNED_TOOLS = new Set(['gatewaze_search']);
+
 async function resolveWebToolsExtension(
   supabase: SupabaseClient,
   useCaseId: string,
@@ -893,7 +893,11 @@ async function resolveWebToolsExtension(
   } catch {
     return { flags: [], env: {}, warnings: [], loadedNames: [] };
   }
-  if (allowed.length === 0) {
+  // Filter down to only the tools the Gatewaze MCP provides; if none
+  // of the operator-enabled tools fall into that set, there's nothing
+  // for this MCP to expose.
+  const mcpTools = allowed.filter((t) => MCP_OWNED_TOOLS.has(t));
+  if (mcpTools.length === 0) {
     return { flags: [], env: {}, warnings: [], loadedNames: [] };
   }
 
@@ -911,7 +915,7 @@ async function resolveWebToolsExtension(
   // _API_KEY). The platform's worker already has these in the env —
   // we forward by reference so the MCP child inherits them.
   const perServerEnv: Record<string, string> = {
-    GATEWAZE_ALLOWED_WEB_TOOLS: allowed.join(','),
+    GATEWAZE_ALLOWED_WEB_TOOLS: mcpTools.join(','),
   };
   for (const k of [
     'SCRAPLING_FETCHER_URL',
