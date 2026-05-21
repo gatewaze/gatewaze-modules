@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Card, Tabs } from '@/components/ui';
+import { Badge, Button, Card, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { useModuleSlots } from '@/hooks/useModuleSlots';
 import { supabase } from '@/lib/supabase';
@@ -187,27 +187,13 @@ export default function InboxPage() {
   const ActiveTabComp = tabs.find((t) => t.id === activeTab)?.component ?? null;
 
   return (
-    <Page title="Content Inbox">
-      <div className="p-6">
-        <div className="mb-6">
-          <h1 className="text-2xl font-semibold mb-1">Content Inbox</h1>
-          <p className="text-sm text-[var(--gray-11)]">
-            All content awaiting review across types — events, blog, podcasts, AI-discovered, and more.
-          </p>
-        </div>
-
-        {/* Tab bar — same style as the Events dashboard (default Radix-Themes
-            tabs in a bordered card wrapper). */}
-        {tabs.length > 1 && (
-          <div className="mb-4">
-            <Tabs
-              value={activeTab}
-              onChange={setActiveTab}
-              tabs={tabs.map((t) => ({ id: t.id, label: t.label }))}
-            />
-          </div>
-        )}
-
+    <Page title="Inbox">
+      <WorkspaceLayout
+        title="Inbox"
+        tabs={tabs.map((t) => ({ id: t.id, label: t.label }))}
+        activeTabId={activeTab}
+        onTabChange={setActiveTab}
+      >
         {/* Non-triage tabs render the slot's component and stop here */}
         {ActiveTabComp && activeTab !== 'triage' ? (
           <Suspense fallback={<div className="p-8 text-center text-sm text-[var(--gray-11)]">Loading…</div>}>
@@ -386,7 +372,6 @@ export default function InboxPage() {
           )}
         </Card>
         </>)}
-      </div>
 
       {openRow && (() => {
         const idx = rows.findIndex((r) => r.triage_item_id === openRow.triage_item_id);
@@ -423,6 +408,7 @@ export default function InboxPage() {
           />
         );
       })()}
+      </WorkspaceLayout>
     </Page>
   );
 }
