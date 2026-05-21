@@ -30,6 +30,15 @@ export interface AdminJobDto {
   created_at: string;
   processed_on: string | null;
   finished_on: string | null;
+  /**
+   * For status='delayed' jobs only: ISO timestamp of when the job is
+   * scheduled to fire (timestamp + delay_ms). Null for active / waiting
+   * / failed / completed states. The admin UI uses this to render
+   * "Fires at HH:MM:SS" / "Fires in Xm" instead of the misleading
+   * "Delayed Xm ago" wording, which actually reflects descriptor age,
+   * not overdue-ness.
+   */
+  scheduled_for: string | null;
   data: Record<string, unknown>;
   failed_reason: string | null;
   stacktrace: string[] | null;
@@ -95,6 +104,23 @@ export async function jobToDto(job: BullJob, state: string): Promise<AdminJobDto
   if (streamKey) {
     streamOffsetLatest = await readLastStreamId(streamKey);
   }
+  // For delayed jobs, BullMQ stores the "fire at" timestamp on
+  // job.opts.timestamp (when the job was created) PLUS job.opts.delay
+  // (ms to wait). Repeatable-job descriptors also expose
+  // opts.repeat.prevMillis = the scheduled fire time. Prefer the
+  // explicit timestamp+delay sum for accuracy; fall back to the repeat
+  // descriptor's nrjid-derived timestamp when present.
+  let scheduledFor: string | null = null;
+  if (state === 'delayed') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts = job.opts as any;
+    const timestamp = Number(opts?.timestamp ?? job.timestamp ?? 0);
+    const delay = Number(opts?.delay ?? 0);
+    if (timestamp > 0 && delay >= 0) {
+      scheduledFor = new Date(timestamp + delay).toISOString();
+    }
+  }
+
   return {
     id: String(job.id ?? ''),
     name,
@@ -104,6 +130,7 @@ export async function jobToDto(job: BullJob, state: string): Promise<AdminJobDto
     created_at: new Date(Number(job.timestamp ?? Date.now())).toISOString(),
     processed_on: job.processedOn ? new Date(Number(job.processedOn)).toISOString() : null,
     finished_on: job.finishedOn ? new Date(Number(job.finishedOn)).toISOString() : null,
+    scheduled_for: scheduledFor,
     data,
     failed_reason: job.failedReason ? String(job.failedReason) : null,
     stacktrace: Array.isArray(job.stacktrace) ? job.stacktrace.slice(0, 3).map(String) : null,
