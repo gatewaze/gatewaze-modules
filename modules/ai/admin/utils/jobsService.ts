@@ -29,6 +29,13 @@ export interface AdminJobDto {
   created_at: string;
   processed_on: string | null;
   finished_on: string | null;
+  /**
+   * Wall-clock time at which a `delayed` job will be promoted to the
+   * wait queue. Null for non-delayed states. Used by the admin UI to
+   * render "Fires in 2m" rather than "Delayed 32m ago", which was
+   * showing the descriptor age (misleading — looked like overdue).
+   */
+  scheduled_for: string | null;
   data: Record<string, unknown>;
   failed_reason: string | null;
   stacktrace: string[] | null;
