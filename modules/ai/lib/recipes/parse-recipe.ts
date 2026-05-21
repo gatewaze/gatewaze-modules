@@ -89,6 +89,17 @@ export interface ParsedParameter {
 export interface ParsedSettings {
   goose_provider: 'anthropic' | 'openai' | 'gemini' | 'auto' | null;
   goose_model: string | null;
+  /**
+   * Per-recipe override of Goose's iteration / action ceilings. When
+   * a recipe is invoked via the parent's `delegate` tool, our top-
+   * level --max-turns / --max-tool-repetitions CLI flags don't
+   * propagate; the sub-recipe gets Goose's default (~50 turns) and
+   * trips the "max actions" message before completing research-heavy
+   * work. Setting these in the recipe yaml lets Goose pick them up
+   * when it loads the recipe for the sub-spawn.
+   */
+  max_turns: number | null;
+  max_tool_repetitions: number | null;
 }
 
 export interface ParsedSubRecipeRef {
@@ -324,7 +335,12 @@ export function parseRecipe(
   }
 
   // ── Step 7: settings ────────────────────────────────────────────
-  const settings: ParsedSettings = { goose_provider: null, goose_model: null };
+  const settings: ParsedSettings = {
+    goose_provider: null,
+    goose_model: null,
+    max_turns: null,
+    max_tool_repetitions: null,
+  };
   if (d.settings !== undefined) {
     if (!d.settings || typeof d.settings !== 'object' || Array.isArray(d.settings)) {
       return { ok: false, reason: 'parse_error', message: 'recipe.settings must be a mapping', partial };
@@ -358,6 +374,28 @@ export function parseRecipe(
         };
       }
       settings.goose_model = s.goose_model;
+    }
+    if (s.max_turns !== undefined) {
+      if (typeof s.max_turns !== 'number' || !Number.isFinite(s.max_turns) || s.max_turns < 1 || s.max_turns > 10_000) {
+        return {
+          ok: false,
+          reason: 'parse_error',
+          message: `recipe.settings.max_turns must be a positive integer ≤ 10000`,
+          partial,
+        };
+      }
+      settings.max_turns = Math.floor(s.max_turns);
+    }
+    if (s.max_tool_repetitions !== undefined) {
+      if (typeof s.max_tool_repetitions !== 'number' || !Number.isFinite(s.max_tool_repetitions) || s.max_tool_repetitions < 1 || s.max_tool_repetitions > 10_000) {
+        return {
+          ok: false,
+          reason: 'parse_error',
+          message: `recipe.settings.max_tool_repetitions must be a positive integer ≤ 10000`,
+          partial,
+        };
+      }
+      settings.max_tool_repetitions = Math.floor(s.max_tool_repetitions);
     }
   }
 
