@@ -104,6 +104,14 @@ export interface RunRecipeArgs {
    */
   onGooseLogEvent?: (event: Record<string, unknown>) => Promise<void> | void;
   /**
+   * External cancellation signal. When this aborts mid-run the
+   * underlying goose subprocess is SIGTERMed and the result lands
+   * as status='cancelled'. Workers thread this through from
+   * subscribeCancel(...) so the Jobs-tab Stop button reaches all
+   * the way into the goose CLI.
+   */
+  abortSignal?: AbortSignal;
+  /**
    * Optional event callbacks consumed by the worker handler (spec-ai-
    * job-runner §4.1). When unset, executor behaviour is identical to
    * pre-worker. Workers wire these to XADD on the run's Redis Stream.
@@ -190,6 +198,7 @@ export async function runRecipe(
       ...(args.onGooseLogEvent !== undefined && {
         onGooseLogEvent: args.onGooseLogEvent as Parameters<typeof runRecipeViaGoose>[2]['onGooseLogEvent'],
       }),
+      ...(args.abortSignal !== undefined && { abortSignal: args.abortSignal }),
     });
     return {
       run_id: result.run_id,
