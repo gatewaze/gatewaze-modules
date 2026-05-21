@@ -195,7 +195,12 @@ describe('parseRecipe — settings', () => {
     const r = parseRecipe('recipes/foo/recipe.yaml', yaml, DEFAULT_CTX);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.recipe.settings).toEqual({ goose_provider: 'anthropic', goose_model: 'claude-sonnet-4-5' });
+    expect(r.recipe.settings).toEqual({
+      goose_provider: 'anthropic',
+      goose_model: 'claude-sonnet-4-5',
+      max_turns: null,
+      max_tool_repetitions: null,
+    });
   });
 
   it('refuses unknown goose_provider', () => {

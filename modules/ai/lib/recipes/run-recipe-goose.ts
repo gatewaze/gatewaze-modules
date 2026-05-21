@@ -803,7 +803,17 @@ function toGooseYaml(recipe: ParsedRecipe): Record<string, unknown> {
   if (recipe.prompt) out.prompt = recipe.prompt;
   if (recipe.parameters && recipe.parameters.length > 0) out.parameters = recipe.parameters;
   if (recipe.response_schema) out.response = { json_schema: recipe.response_schema };
-  if (recipe.settings && Object.keys(recipe.settings).length > 0) out.settings = recipe.settings;
+  // Only emit settings keys with non-null values so we don't fill the
+  // materialized yaml with `goose_provider: null` etc when the recipe
+  // didn't actually declare them.
+  if (recipe.settings) {
+    const cleanedSettings: Record<string, unknown> = {};
+    if (recipe.settings.goose_provider) cleanedSettings.goose_provider = recipe.settings.goose_provider;
+    if (recipe.settings.goose_model) cleanedSettings.goose_model = recipe.settings.goose_model;
+    if (recipe.settings.max_turns) cleanedSettings.max_turns = recipe.settings.max_turns;
+    if (recipe.settings.max_tool_repetitions) cleanedSettings.max_tool_repetitions = recipe.settings.max_tool_repetitions;
+    if (Object.keys(cleanedSettings).length > 0) out.settings = cleanedSettings;
+  }
   if (recipe.sub_recipes && recipe.sub_recipes.length > 0) out.sub_recipes = recipe.sub_recipes;
   if (recipe.extensions && recipe.extensions.length > 0) {
     // Extensions need their `raw` shape for Goose to load them.
