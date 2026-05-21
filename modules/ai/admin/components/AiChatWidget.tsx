@@ -535,12 +535,12 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                   {liveEvents.slice(0, -1).map((ev) => (
                     <div
                       key={ev.id}
-                      className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500 inline-block"
+                      className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-1.5 text-xs text-neutral-500 block w-fit"
                     >
                       {ev.text}
                     </div>
                   ))}
-                  <div className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-sm text-neutral-600 inline-flex items-center gap-2">
+                  <div className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-sm text-neutral-600 flex w-fit items-center gap-2">
                     <ArrowPathIcon className="size-4 animate-spin" />
                     {liveEvents.length > 0
                       ? liveEvents[liveEvents.length - 1]!.text
