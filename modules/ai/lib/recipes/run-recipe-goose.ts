@@ -276,8 +276,17 @@ export async function runRecipeViaGoose(
   let totalIn = 0;
   let totalOut = 0;
   let totalCost = 0;
-  let provider: string | null = null;
-  let model: string | null = null;
+  // Pre-seed provider / model from the recipe's settings block. Goose
+  // v1.34's `complete` stream event only emits total_tokens — no
+  // provider or model split — so the wrapper would otherwise drop
+  // every cost-ledger row for lack of these fields. Falling back to
+  // what the recipe declared (settings.goose_provider /
+  // settings.goose_model) is correct: that's literally what Goose
+  // executed against, since it's how the spawn picked its provider.
+  // Sub-recipe nested calls will override these fields if Goose ever
+  // surfaces them in the stream.
+  let provider: string | null = args.recipe.settings?.goose_provider ?? null;
+  let model: string | null = args.recipe.settings?.goose_model ?? null;
   let failureReason: string | undefined;
   // spec-ai-mcp-extensions.md §Tool-call capture — each MCP tool call
   // surfaces as an ai_usage_events row tagged kind='mcp_tool' so the
@@ -455,8 +464,12 @@ export async function runRecipeViaGoose(
         totalIn = numericOr(cmp.input_tokens ?? cmp.inputTokens, 0);
         totalOut = numericOr(cmp.output_tokens ?? cmp.outputTokens, total - totalIn);
         if (totalOut < 0) totalOut = total;
-        provider = typeof cmp.provider === 'string' ? cmp.provider : null;
-        model = typeof cmp.model === 'string' ? cmp.model : null;
+        // Goose's complete event only includes provider/model on some
+        // versions / providers. When absent, KEEP the pre-seeded
+        // settings-derived values rather than nulling them out — the
+        // wrapper still needs them for the cost-ledger row.
+        if (typeof cmp.provider === 'string') provider = cmp.provider;
+        if (typeof cmp.model === 'string') model = cmp.model;
       } else if (event.type === 'error') {
         const errMsg = typeof event.error === 'string' ? event.error : JSON.stringify(event.error);
         failureReason = `goose_runtime_error: ${errMsg}`;
