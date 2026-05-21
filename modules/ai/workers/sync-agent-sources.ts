@@ -70,10 +70,16 @@ export default async function syncAgentSourcesHandler(
   const due = (res?.data as DueSource[] | null) ?? [];
   ctx?.logger?.info('agents.fanout.scan', { due: due.length });
 
-  if (!ctx?.enqueueJob) {
+  // The platform's worker dispatcher doesn't (currently) thread a ctx
+  // through to handlers — entry.handler(job) is invoked with just the
+  // job. Fall back to a direct BullMQ enqueue when ctx.enqueueJob
+  // isn't supplied so the cron fan-out actually runs. The lazy import
+  // mirrors the dispatcher's own queue-resolution path.
+  const enqueueJob = ctx?.enqueueJob ?? (await loadFallbackEnqueueJob(ctx));
+  if (!enqueueJob) {
     ctx?.logger?.warn('agents.fanout.no_enqueue_helper', {
       due: due.length,
-      hint: 'platform runtime did not supply enqueueJob — fan-out is a no-op',
+      hint: 'neither ctx.enqueueJob nor a fallback BullMQ queue handle could be resolved — fan-out is a no-op',
     });
     return { skipped: true, reason: 'no_enqueue_helper', enqueued: 0 };
   }
@@ -81,7 +87,7 @@ export default async function syncAgentSourcesHandler(
   let enqueued = 0;
   for (const source of due) {
     try {
-      await ctx.enqueueJob('jobs', 'ai:sync-one-agent-source', {
+      await enqueueJob('jobs', 'ai:sync-one-agent-source', {
         kind: 'ai:sync-one-agent-source',
         source_id: source.id,
         trigger: 'cron',
@@ -96,4 +102,38 @@ export default async function syncAgentSourcesHandler(
   }
 
   return { enqueued, scanned: due.length };
+}
+
+/**
+ * Resolve a BullMQ queue handle for `jobs` directly, bypassing the
+ * platform's ctx-supplied enqueueJob. Used as a fallback when the
+ * worker dispatcher doesn't thread a ctx through to handlers (the
+ * current shape — entry.handler(job) is called with no ctx). The
+ * import-walk mirrors how the daily-briefing handler resolves
+ * @gatewaze-modules/ai/lib/recipes/run-recipe.
+ */
+type EnqueueFn = (queue: string, name: string, data: Record<string, unknown>) => Promise<{ id: string | undefined }>;
+async function loadFallbackEnqueueJob(ctx?: { logger?: { warn: (msg: string, fields?: Record<string, unknown>) => void } }): Promise<EnqueueFn | null> {
+  try {
+    // Prefer the platform's own queue registry — same module the
+    // dispatcher uses, so we land on the same Queue instance with the
+    // right Redis connection + prefix.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mod = (await import('@gatewaze/api/lib/queue/index.js' as any).catch(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      () => import('@gatewaze/api/dist/lib/queue/index.js' as any),
+    )) as { getQueue?: (name: string) => { add: (n: string, d: Record<string, unknown>) => Promise<{ id?: string }> } | null };
+    if (typeof mod.getQueue !== 'function') return null;
+    return async (queueName, jobName, data) => {
+      const queue = mod.getQueue!(queueName);
+      if (!queue) return { id: undefined };
+      const job = await queue.add(jobName, data);
+      return { id: job.id };
+    };
+  } catch (err) {
+    ctx?.logger?.warn('agents.fanout.fallback_enqueue_load_failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
