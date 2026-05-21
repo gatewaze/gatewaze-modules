@@ -85,6 +85,15 @@ export interface RunRecipeArgs {
   /** Optional progress callback fired between steps. */
   onProgress?: (step: { index: number; status: string }) => void;
   /**
+   * Optional Goose stream-event forwarder. The Goose-routed executor
+   * surfaces every stream-json event it sees (message text deltas,
+   * tool requests/responses, complete events) to this callback. The
+   * daily-briefing worker hooks this to feed token deltas onto the
+   * chat thread's Redis stream so the AiChatWidget renders live
+   * output instead of "Thinking…".
+   */
+  onStreamEvent?: (event: Record<string, unknown>) => Promise<void> | void;
+  /**
    * Optional event callbacks consumed by the worker handler (spec-ai-
    * job-runner §4.1). When unset, executor behaviour is identical to
    * pre-worker. Workers wire these to XADD on the run's Redis Stream.
@@ -167,6 +176,7 @@ export async function runRecipe(
       ...(args.recipeId !== undefined && { recipeId: args.recipeId }),
       ...(args.recipeFilePath !== undefined && { recipeFilePath: args.recipeFilePath }),
       ...(args.runId !== undefined && { runId: args.runId }),
+      ...(args.onStreamEvent !== undefined && { onStreamEvent: args.onStreamEvent }),
     });
     return {
       run_id: result.run_id,

@@ -99,6 +99,14 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
   const [provider, setProvider] = useState<AiAutoOrProvider>(defaultProvider);
   const [model, setModel] = useState<string | undefined>(defaultModel);
   const [models, setModels] = useState<AiModelInfo[]>([]);
+  // Live token buffer fed by the SSE stream while an assistant
+  // message is running. Cleared when the message transitions to
+  // `complete` (the poll picks up the canonical content row).
+  const [liveContent, setLiveContent] = useState<string>('');
+  // Optional status text fed by run.start / tool.* events so the
+  // operator sees what the agent is doing right now ("searching X",
+  // "fetching url …") rather than a blank "Thinking…".
+  const [liveStatus, setLiveStatus] = useState<string>('');
 
   // ── Hydrate thread on mount ─────────────────────────────────────────
   useEffect(() => {
@@ -204,6 +212,102 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, thread?.id]);
+
+  // ── Live SSE stream ─────────────────────────────────────────────────
+  // The platform exposes /api/modules/ai/admin/threads/:id/stream as an
+  // SSE feed of Redis-stream events emitted by the chat / recipe worker
+  // (token deltas, run.start, run.complete, tool.* status events). We
+  // open the EventSource whenever an assistant message is running and
+  // tear it down when the run completes — saves an idle socket per tab
+  // and matches the polling effect's lifecycle.
+  //
+  // Events feed two pieces of UI state:
+  //   - liveContent  — accumulated text deltas, rendered as the
+  //                     running-message bubble so the operator sees
+  //                     output build up in real time
+  //   - liveStatus   — short status line ("searching ...", "tool ...")
+  //                     so the spinner has a label instead of just
+  //                     "Thinking…"
+  // The canonical content lands on ai_messages.content when the worker
+  // finishes; the polling effect overwrites both pieces of local state
+  // at that point.
+  const hasRunningMessage = useMemo(
+    () => messages.some((m) => m.status === 'running'),
+    [messages],
+  );
+  useEffect(() => {
+    if (!thread || !hasRunningMessage) {
+      setLiveContent('');
+      setLiveStatus('');
+      return;
+    }
+    setLiveContent('');
+    setLiveStatus('');
+    let es: EventSource | null = null;
+    let cancelled = false;
+    // EventSource can't carry custom headers, so we grab the
+    // current Supabase access token and pass it as ?access_token=
+    // — the platform's extractToken accepts that.
+    void (async () => {
+      try {
+        // Pull the access token from the same Supabase client the
+        // admin app uses — admins have it in localStorage via
+        // supabase-js's default storage. We then pass it as a query
+        // string because EventSource can't carry custom headers.
+        const { supabase: sb } = await import('@/lib/supabase');
+        const { data } = await sb.auth.getSession();
+        const token = data.session?.access_token;
+        if (cancelled || !thread) return;
+        const qs = token ? `?access_token=${encodeURIComponent(token)}` : '';
+        const url = `/api/modules/ai/admin/threads/${thread.id}/stream${qs}`;
+        es = new EventSource(url, { withCredentials: true });
+        attachStreamHandlers(es);
+      } catch (err) {
+        console.warn('[ai-chat] SSE open failed', err);
+      }
+    })();
+    function attachStreamHandlers(source: EventSource): void {
+      source.onmessage = (ev) => {
+        let parsed: { type?: string; delta?: string; recipeId?: string; tool?: string; query?: string; url?: string };
+        try {
+          parsed = JSON.parse(ev.data) as typeof parsed;
+        } catch {
+          return;
+        }
+        switch (parsed.type) {
+          case 'token':
+            if (typeof parsed.delta === 'string') {
+              setLiveContent((prev) => prev + parsed.delta);
+            }
+            break;
+          case 'run.start':
+            setLiveStatus(parsed.recipeId ? `running ${parsed.recipeId}` : 'starting');
+            break;
+          case 'tool.web_search':
+            setLiveStatus(parsed.query ? `searching: ${parsed.query}` : 'searching the web');
+            break;
+          case 'tool.fetch_url':
+            setLiveStatus(parsed.url ? `fetching: ${parsed.url}` : 'fetching a url');
+            break;
+          case 'assistant.complete':
+          case 'run.complete':
+          case 'run.failed':
+          case 'close':
+            // Worker reached a terminal state; the next poll has the
+            // canonical row, so drop the SSE connection here.
+            source.close();
+            break;
+        }
+      };
+      source.onerror = () => {
+        // SSE will auto-reconnect; nothing to do.
+      };
+    }
+    return () => {
+      cancelled = true;
+      es?.close();
+    };
+  }, [thread?.id, hasRunningMessage]);
 
   // ── Build the assistant-ui external store adapter ──────────────────
   const isRunning = useMemo(
@@ -381,9 +485,16 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
             })}
             {isRunning && (
               <div className="flex justify-start">
-                <div className="rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-600 inline-flex items-center gap-2">
-                  <ArrowPathIcon className="size-4 animate-spin" />
-                  Thinking…
+                <div className="max-w-[90%] w-full">
+                  {liveContent.length > 0 && (
+                    <div className="rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap mb-1">
+                      {liveContent}
+                    </div>
+                  )}
+                  <div className="rounded-2xl rounded-bl-sm bg-white border px-3 py-2 text-sm text-neutral-600 inline-flex items-center gap-2">
+                    <ArrowPathIcon className="size-4 animate-spin" />
+                    {liveStatus || (liveContent.length > 0 ? 'streaming…' : 'Thinking…')}
+                  </div>
                 </div>
               </div>
             )}
