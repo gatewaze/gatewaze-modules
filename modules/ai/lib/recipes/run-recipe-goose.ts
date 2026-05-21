@@ -78,6 +78,30 @@ export interface RunRecipeViaGooseArgs {
    * widget see progress in real time.
    */
   onStreamEvent?: (event: GooseStreamEvent) => Promise<void> | void;
+  /**
+   * Per-line callback for Goose's CLI debug log (only fires when
+   * RUST_LOG=goose=* is set, which causes Goose to write structured
+   * JSON-per-line events to $XDG_STATE_HOME/goose/logs/cli/...). Used
+   * by daily-briefing's worker to surface sub-recipe tool calls
+   * (web_search, fetch_url) to per-sub-recipe chat tabs in real time
+   * — async-delegated sub-recipe stdout never reaches the parent's
+   * stream-json output, so this is the only path that observes their
+   * intermediate work.
+   */
+  onGooseLogEvent?: (event: GooseLogEvent) => Promise<void> | void;
+}
+
+/**
+ * Parsed line from Goose's per-spawn CLI debug log. We extract just
+ * the fields the demux needs; the rest of the JSON is preserved in
+ * `raw` for callers that want to dig deeper.
+ */
+export interface GooseLogEvent {
+  sessionId: string | null;
+  message: string;
+  toolName: string | null;
+  toolArgs: Record<string, unknown> | null;
+  raw: Record<string, unknown>;
 }
 
 export interface RunRecipeViaGooseResult {
@@ -374,6 +398,20 @@ export async function runRecipeViaGoose(
     }, CANCELLATION_GRACE_MS);
   }, MAX_RUN_DURATION_MS);
 
+  // CLI-log tailer. Goose writes one structured JSON-per-line debug
+  // log per spawn at $XDG_STATE_HOME/goose/logs/cli/<date>/<ts>.log
+  // when RUST_LOG=goose=* is set. The async-delegate path of
+  // delegate(...) runs sub-recipes in internal sessions whose stdout
+  // never reaches the parent's stream-json pipe, so this CLI log is
+  // the only observation channel for intermediate sub-recipe tool
+  // calls. Cancellation is fire-and-forget — the watch loop polls
+  // an AbortSignal-style flag and exits cleanly when the goose
+  // process terminates.
+  const stopLogTail = { aborted: false };
+  if (args.onGooseLogEvent) {
+    void tailGooseCliLog(xdgStateDir, args.onGooseLogEvent, stopLogTail);
+  }
+
   try {
     child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
@@ -512,6 +550,7 @@ export async function runRecipeViaGoose(
       child!.on('exit', (code) => resolve(code ?? -1));
     });
     clearTimeout(cancelTimer);
+    stopLogTail.aborted = true;
 
     if (exitCode !== 0 && !failureReason) {
       failureReason = `goose_exit_${exitCode}: ${stderrBuf.slice(0, 1000)}`;
@@ -642,9 +681,18 @@ export async function runRecipeViaGoose(
     return { run_id: runId, status: 'failed', final_output: null, total_cost_micro_usd: 0, total_input_tokens: 0, total_output_tokens: 0, duration_ms: Date.now() - start, failure_reason: reason };
   } finally {
     clearTimeout(cancelTimer);
+    stopLogTail.aborted = true;
     if (child && !child.killed) child.kill('SIGTERM');
     if (workdir) await rm(workdir, { recursive: true, force: true }).catch(() => undefined);
-    await rm(xdgStateDir, { recursive: true, force: true }).catch(() => undefined);
+    // GATEWAZE_GOOSE_KEEP_STATE=1 preserves the per-spawn XDG_STATE_HOME
+    // dir so an operator can inspect Goose's per-LLM-request logs after
+    // a run (used for debugging missing-usage attribution). Off by
+    // default — the dir holds raw provider request/response payloads.
+    if (process.env.GATEWAZE_GOOSE_KEEP_STATE !== '1') {
+      await rm(xdgStateDir, { recursive: true, force: true }).catch(() => undefined);
+    } else {
+      _ctx.logger?.info?.('ai.recipe-goose.state_kept', { xdgStateDir, runId });
+    }
   }
 }
 
@@ -740,6 +788,130 @@ function inferProviderFromModel(modelId: string): PerCallUsage['provider'] {
   }
   if (modelId.startsWith('gemini')) return 'gemini';
   return 'unknown';
+}
+
+/**
+ * Tail Goose's per-spawn CLI debug log and emit one parsed event per
+ * line through onLogEvent. The file lives at
+ *   $XDG_STATE_HOME/goose/logs/cli/<yyyy-mm-dd>/<yyyymmdd_hhmmss>.log
+ * and Goose only creates it once it actually starts running, so we
+ * poll the date dir until the first file appears (typically <1s
+ * after spawn). After that we hold an fd open and read appended
+ * bytes on a 200ms tick — fs.watchFile is unreliable inside Docker
+ * bind mounts, so we use plain stat-based polling for predictability.
+ *
+ * The loop terminates when `stop.aborted` flips true (set by the
+ * parent's exit handler) or after MAX_RUN_DURATION_MS as a safety
+ * net.
+ *
+ * Errors are swallowed — log-tailing is best-effort UI sugar; it
+ * must never affect the run's success/failure status.
+ */
+async function tailGooseCliLog(
+  xdgStateDir: string,
+  onLogEvent: NonNullable<RunRecipeViaGooseArgs['onGooseLogEvent']>,
+  stop: { aborted: boolean },
+): Promise<void> {
+  const { readdir, stat, open } = await import('node:fs/promises');
+  const cliRoot = `${xdgStateDir}/goose/logs/cli`;
+  const deadline = Date.now() + MAX_RUN_DURATION_MS;
+
+  // Step 1: wait for the file to appear.
+  let logPath: string | null = null;
+  while (!stop.aborted && Date.now() < deadline && !logPath) {
+    try {
+      const dates = await readdir(cliRoot);
+      for (const d of dates) {
+        const files = await readdir(`${cliRoot}/${d}`);
+        const matched = files.find((f) => f.endsWith('.log'));
+        if (matched) {
+          logPath = `${cliRoot}/${d}/${matched}`;
+          break;
+        }
+      }
+    } catch {/* dir not created yet */}
+    if (!logPath) await sleep(200);
+  }
+  if (!logPath || stop.aborted) return;
+
+  // Step 2: open the file and follow it. We track bytes-read; on
+  // each tick we stat for size, read the delta, append to a buffer,
+  // split on '\n', and emit each complete JSON line.
+  let fd: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    fd = await open(logPath, 'r');
+  } catch {
+    return;
+  }
+  let cursor = 0;
+  let buf = '';
+  try {
+    while (!stop.aborted && Date.now() < deadline) {
+      try {
+        const s = await stat(logPath);
+        if (s.size > cursor) {
+          const chunkSize = s.size - cursor;
+          const chunk = Buffer.alloc(chunkSize);
+          await fd.read(chunk, 0, chunkSize, cursor);
+          cursor = s.size;
+          buf += chunk.toString('utf-8');
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+            if (line.trim().length === 0) continue;
+            try {
+              const obj = JSON.parse(line) as Record<string, unknown>;
+              const event = parseGooseLogLine(obj);
+              if (event) {
+                try {
+                  await onLogEvent(event);
+                } catch {/* user callback error; ignore */}
+              }
+            } catch {/* malformed JSON; skip */}
+          }
+        }
+      } catch {/* stat / read transient error; retry */}
+      await sleep(200);
+    }
+  } finally {
+    try { await fd?.close(); } catch {/* ignore */}
+  }
+}
+
+function parseGooseLogLine(obj: Record<string, unknown>): GooseLogEvent | null {
+  const fields = obj.fields as Record<string, unknown> | undefined;
+  const message = typeof fields?.message === 'string' ? fields.message : '';
+  if (!message) return null;
+  const span = obj.span as Record<string, unknown> | undefined;
+  const sessionId = typeof span?.['session.id'] === 'string' ? (span['session.id'] as string) : null;
+
+  // The events we care about all surface as
+  //   fields.message = "WAITING_TOOL_START: <tool_name>"
+  // plus span.input = '{"tool":"<tool_name>","arguments":{...}}'
+  // We strip the tool name + arguments for the UI; everything else
+  // (egress/permission/repetition inspector noise, ping events, etc.)
+  // we leave as a passthrough so the demux can filter however it likes.
+  let toolName: string | null = null;
+  let toolArgs: Record<string, unknown> | null = null;
+  if (message.startsWith('WAITING_TOOL_START:')) {
+    toolName = message.slice('WAITING_TOOL_START:'.length).trim() || null;
+    const rawInput = span?.input;
+    if (typeof rawInput === 'string') {
+      try {
+        const parsed = JSON.parse(rawInput) as { tool?: string; arguments?: Record<string, unknown> };
+        if (parsed.tool && !toolName) toolName = parsed.tool;
+        if (parsed.arguments && typeof parsed.arguments === 'object') {
+          toolArgs = parsed.arguments;
+        }
+      } catch {/* not JSON */}
+    }
+  }
+  return { sessionId, message, toolName, toolArgs, raw: obj };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────

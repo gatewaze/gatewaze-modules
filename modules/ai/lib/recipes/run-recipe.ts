@@ -94,6 +94,16 @@ export interface RunRecipeArgs {
    */
   onStreamEvent?: (event: Record<string, unknown>) => Promise<void> | void;
   /**
+   * Optional Goose CLI-log event forwarder. Only fires when
+   * RUST_LOG=goose=* is set in the worker env (otherwise Goose
+   * doesn't write the log file). Surfaces sub-recipe tool calls
+   * the parent's stream-json output never sees — daily-briefing
+   * uses this to push live "searching: <query>" / "fetching: <url>"
+   * status events into per-sub-recipe tabs while async-delegated
+   * subagents are running.
+   */
+  onGooseLogEvent?: (event: Record<string, unknown>) => Promise<void> | void;
+  /**
    * Optional event callbacks consumed by the worker handler (spec-ai-
    * job-runner §4.1). When unset, executor behaviour is identical to
    * pre-worker. Workers wire these to XADD on the run's Redis Stream.
@@ -177,6 +187,9 @@ export async function runRecipe(
       ...(args.recipeFilePath !== undefined && { recipeFilePath: args.recipeFilePath }),
       ...(args.runId !== undefined && { runId: args.runId }),
       ...(args.onStreamEvent !== undefined && { onStreamEvent: args.onStreamEvent }),
+      ...(args.onGooseLogEvent !== undefined && {
+        onGooseLogEvent: args.onGooseLogEvent as Parameters<typeof runRecipeViaGoose>[2]['onGooseLogEvent'],
+      }),
     });
     return {
       run_id: result.run_id,
