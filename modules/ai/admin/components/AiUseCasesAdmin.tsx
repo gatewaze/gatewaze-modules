@@ -6,7 +6,7 @@
  * tools, max_output_tokens, and daily cost cap.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { PencilIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 
