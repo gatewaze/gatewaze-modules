@@ -35,7 +35,12 @@ const STATUS_COLORS: Record<JobStatus, string> = {
 const STATUS_LABELS: Record<JobStatus, string> = {
   active: 'Active',
   waiting: 'Waiting',
-  delayed: 'Delayed',
+  // "Scheduled" replaces "Delayed" — "Delayed" misread as "overdue"
+  // because BullMQ uses the term for future-scheduled jobs that
+  // haven't reached their fire time yet (cron repeats, jobs with
+  // explicit delay opts). Pair with the column's "Fires in" wording
+  // so the row makes sense.
+  delayed: 'Scheduled',
   failed: 'Failed',
   completed: 'Completed',
 };
@@ -51,6 +56,33 @@ function timeAgo(iso: string | null): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
+}
+
+/**
+ * Render a wall-clock fire-time for a scheduled (delayed) job. Returns
+ * either "Fires in 2m" / "Fires in 1h" for soon-to-fire jobs or
+ * "Fires at HH:MM" for anything more than 60 minutes out. Overdue
+ * cases (which signal a real worker problem) get an explicit "Overdue
+ * Xm" so operators can spot them.
+ */
+function firesIn(iso: string | null): string {
+  if (!iso) return '—';
+  const diff = new Date(iso).getTime() - Date.now();
+  if (diff < 0) {
+    const overdueMin = Math.floor(-diff / 60000);
+    return overdueMin >= 1 ? `Overdue ${overdueMin}m` : 'Overdue';
+  }
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `Fires in ${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `Fires in ${m}m`;
+  // > 1 hour out: show wall-clock so the operator doesn't have to
+  // do math on "Fires in 18h" to figure out when they'll see action.
+  const d = new Date(iso);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const sameDay = new Date().toDateString() === d.toDateString();
+  return sameDay ? `Fires at ${hh}:${mm}` : `Fires ${d.toLocaleDateString()} ${hh}:${mm}`;
 }
 
 interface FilterState {
@@ -174,7 +206,7 @@ export default function AiJobsAdmin() {
                 <th className="px-3 py-2 w-8"></th>
                 <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Age</th>
+                <th className="px-3 py-2">When</th>
                 <th className="px-3 py-2">Attempts</th>
                 <th className="px-3 py-2">Linked Row</th>
                 <th className="px-3 py-2 text-right">Actions</th>
@@ -231,7 +263,13 @@ function JobRow({ job, expanded, onToggle, onStop, onRetry, onPromote }: JobRowP
           <div className="text-[var(--gray-10)] text-xs">{job.id}</div>
         </td>
         <td className={`px-3 py-2 align-top ${STATUS_COLORS[job.status]}`}>{STATUS_LABELS[job.status]}</td>
-        <td className="px-3 py-2 align-top text-[var(--gray-11)]">{timeAgo(job.created_at)}</td>
+        <td className="px-3 py-2 align-top text-[var(--gray-11)]">
+          {/* For scheduled (delayed) jobs render the wall-clock fire
+              time so operators don't misread the descriptor age as
+              "overdue". Everything else uses the conventional
+              "Xm ago" age relative to created_at. */}
+          {job.status === 'delayed' ? firesIn(job.scheduled_for) : timeAgo(job.created_at)}
+        </td>
         <td className="px-3 py-2 align-top text-[var(--gray-11)]">
           {job.attempts_made} / {job.attempts_made + job.attempts_remaining}
         </td>
