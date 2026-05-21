@@ -243,7 +243,12 @@ interface JobRowProps {
 
 function JobRow({ job, expanded, onToggle, onStop, onRetry, onPromote }: JobRowProps) {
   const isAiOwned = job.owner_module === 'ai';
-  const canStop = isAiOwned && ['active', 'waiting', 'delayed'].includes(job.status);
+  // Stop is allowed for any module's job — BullMQ remove + (when
+  // linked_row.table is ai_recipe_runs/ai_messages) cancel pub/sub.
+  // Active jobs from non-ai modules can only be removed from the
+  // queue, not interrupted mid-handler, until those handlers also
+  // subscribe to cancel.
+  const canStop = ['active', 'waiting', 'delayed'].includes(job.status);
   const canRetry = isAiOwned && job.status === 'failed';
   const canPromote = isAiOwned && job.status === 'delayed';
   const canTail = Boolean(job.stream_key) && ['active', 'waiting', 'completed'].includes(job.status);
