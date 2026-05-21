@@ -199,8 +199,8 @@ export function mountAgentSourceRoutes(router: Router, deps: Deps): void {
     if (!row) return sendError(res, 404, 'not_found', 'skill source not found');
 
     try {
-      const job = await deps.enqueueJob('jobs', 'ai.sync-one-agent-source', {
-        kind: 'ai.sync-one-agent-source',
+      const job = await deps.enqueueJob('jobs', 'ai:sync-one-agent-source', {
+        kind: 'ai:sync-one-agent-source',
         source_id: id,
         trigger: 'manual',
       });

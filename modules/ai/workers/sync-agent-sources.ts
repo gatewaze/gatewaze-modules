@@ -81,8 +81,8 @@ export default async function syncAgentSourcesHandler(
   let enqueued = 0;
   for (const source of due) {
     try {
-      await ctx.enqueueJob('jobs', 'ai.sync-one-agent-source', {
-        kind: 'ai.sync-one-agent-source',
+      await ctx.enqueueJob('jobs', 'ai:sync-one-agent-source', {
+        kind: 'ai:sync-one-agent-source',
         source_id: source.id,
         trigger: 'cron',
       });

@@ -90,7 +90,7 @@ const aiModule: GatewazeModule = {
       name: 'ai:sync-agent-sources',
       queue: 'jobs',
       schedule: { pattern: '*/5 * * * *' },
-      data: { kind: 'ai.sync-agent-sources' },
+      data: { kind: 'ai:sync-agent-sources' },
     },
     // spec-ai-job-runner §4.1 — orphan-stream sweep. Runs every hour;
     // walks ai:run:* and ai:thread:* keys; sets EXPIRE on any that
@@ -121,11 +121,11 @@ const aiModule: GatewazeModule = {
     // sync-one-recipe-source) after migration 024 collapsed the two
     // source tables into ai_agent_sources.
     {
-      name: 'ai.sync-agent-sources',
+      name: 'ai:sync-agent-sources',
       handler: 'workers/sync-agent-sources.js',
     },
     {
-      name: 'ai.sync-one-agent-source',
+      name: 'ai:sync-one-agent-source',
       handler: 'workers/sync-one-agent-source.js',
     },
     // spec-ai-job-runner — moves recipe + chat execution off the API
