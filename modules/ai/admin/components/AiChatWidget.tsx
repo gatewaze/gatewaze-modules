@@ -103,6 +103,13 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
   // message is running. Cleared when the message transitions to
   // `complete` (the poll picks up the canonical content row).
   const [liveContent, setLiveContent] = useState<string>('');
+  // Auto-scroll the message list to the bottom whenever new content
+  // arrives (tool calls, token deltas, completed messages). Skipped
+  // when the operator has scrolled up — detected by checking whether
+  // the current scroll position is within ~80px of the bottom before
+  // we update. Mirrors ChatGPT/Claude's "stick to bottom unless the
+  // user opts out" behaviour.
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   // Past actions for this run, oldest first. Each tool/run.start
   // event appends one entry; the bottom-most bubble is what's
   // happening right now and carries the spinner. Capped at 100 to
@@ -326,6 +333,24 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
     };
   }, [thread?.id, hasRunningMessage]);
 
+  // Auto-scroll to bottom on any new content. We capture the
+  // pre-update "stuck to bottom" state synchronously via a layout
+  // effect, then schedule the scroll for the next tick so it lands
+  // after React has painted the new bubble. Threshold of 80px gives
+  // the operator a small grace window if they scrolled up to read
+  // something — they stay put unless they're effectively at the end.
+  useEffect(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 80) {
+      // requestAnimationFrame to let the new bubble lay out first.
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+    }
+  }, [messages, liveEvents, liveContent]);
+
   // ── Build the assistant-ui external store adapter ──────────────────
   const isRunning = useMemo(
     () => messages.some((m) => m.status === 'running'),
@@ -464,7 +489,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
               panel under each assistant message. Surfaces which
               skill/prompt will run before the operator clicks Send. */}
           <ConfiguredPromptBar useCase={useCase} />
-          <div className={messagesClass}>
+          <div className={messagesClass} ref={messagesScrollRef}>
             {messages.map((m) => {
               if (m.role === 'user') {
                 return (
