@@ -25,6 +25,18 @@ export async function resolveChatMcpExtensions(
   const loadedNames: string[] = [];
   const warnings: Array<Record<string, unknown>> = [];
 
+  // Web-tools bridge: same machinery as run-recipe-goose so the UI's
+  // "Allowed web tools" checkboxes apply identically across chat +
+  // recipe executors. Lives at the top so an empty MCP allowlist
+  // still gets the web-tools surface.
+  {
+    const webBridge = await resolveWebToolsForChat(supabase, useCaseId);
+    flags.push(...webBridge.flags);
+    Object.assign(env, webBridge.env);
+    loadedNames.push(...webBridge.loadedNames);
+    warnings.push(...webBridge.warnings);
+  }
+
   // Load the full allowlist + joined server config in one query.
   const res = await supabase
     .from('ai_use_case_mcp_allowlist')
@@ -141,4 +153,89 @@ export async function resolveChatMcpExtensions(
     loadedNames.push(name);
   }
   return { flags, env, loadedNames, warnings };
+}
+
+/**
+ * Bridge ai_use_cases.allowed_web_tools into the Goose chat spawn by
+ * attaching gatewaze-web-tools-mcp filtered to exactly the tools the
+ * operator allowed. Returns an empty load when the field is empty or
+ * the row can't be read.
+ *
+ * Mirrors resolveWebToolsExtension in lib/recipes/run-recipe-goose.ts.
+ */
+async function resolveWebToolsForChat(
+  supabase: SupabaseLike,
+  useCaseId: string,
+): Promise<ChatMcpResolveResult> {
+  let allowed: string[] = [];
+  try {
+    const res = await supabase
+      .from('ai_use_cases')
+      .select('allowed_web_tools')
+      .eq('id', useCaseId)
+      .maybeSingle();
+    const row = (res.data as { allowed_web_tools?: string[] } | null) ?? null;
+    allowed = Array.isArray(row?.allowed_web_tools) ? row!.allowed_web_tools.filter((t) => typeof t === 'string') : [];
+  } catch {
+    return { flags: [], env: {}, loadedNames: [], warnings: [] };
+  }
+  if (allowed.length === 0) {
+    return { flags: [], env: {}, loadedNames: [], warnings: [] };
+  }
+
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, resolve } = await import('node:path');
+  const { existsSync } = await import('node:fs');
+
+  // Locate the launcher shim + the web-tools MCP script.
+  let launcherPath = process.env.GATEWAZE_GOOSE_LAUNCHER_PATH;
+  if (!launcherPath) {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+      resolve(here, '..', '..', 'scripts', 'gatewaze-goose-launcher.mjs'),
+      resolve(here, '..', '..', '..', 'scripts', 'gatewaze-goose-launcher.mjs'),
+      '/usr/local/bin/gatewaze-goose-launcher',
+    ];
+    launcherPath = candidates.find((c) => existsSync(c));
+    if (!launcherPath) throw new Error('gatewaze-goose-launcher not found');
+  }
+  let scriptPath = process.env.GATEWAZE_WEB_TOOLS_MCP_PATH;
+  if (!scriptPath) {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+      resolve(here, '..', '..', 'scripts', 'gatewaze-web-tools-mcp.mjs'),
+      resolve(here, '..', '..', '..', 'scripts', 'gatewaze-web-tools-mcp.mjs'),
+      '/usr/local/bin/gatewaze-web-tools-mcp',
+    ];
+    scriptPath = candidates.find((c) => existsSync(c));
+    if (!scriptPath) throw new Error('gatewaze-web-tools-mcp not found');
+  }
+
+  const descriptorEnvName = 'GATEWAZE_MCP_LAUNCH_DESCRIPTOR_GATEWAZE_WEB_TOOLS';
+  const perServerEnv: Record<string, string> = {
+    GATEWAZE_ALLOWED_WEB_TOOLS: allowed.join(','),
+  };
+  for (const k of [
+    'SCRAPLING_FETCHER_URL',
+    'SCRAPLING_INTERNAL_TOKEN',
+    'SERPER_API_KEY',
+    'GATEWAZE_SEARCH_BACKEND',
+    'GATEWAZE_FETCH_BASE_URL',
+    'GATEWAZE_FETCH_API_KEY',
+  ]) {
+    const v = process.env[k];
+    if (typeof v === 'string' && v.length > 0) perServerEnv[k] = v;
+  }
+  return {
+    flags: ['--with-extension', `node ${launcherPath} ${descriptorEnvName}`],
+    env: {
+      [descriptorEnvName]: JSON.stringify({
+        cmd: 'node',
+        args: [scriptPath],
+        env: perServerEnv,
+      }),
+    },
+    loadedNames: ['gatewaze-web-tools'],
+    warnings: [],
+  };
 }

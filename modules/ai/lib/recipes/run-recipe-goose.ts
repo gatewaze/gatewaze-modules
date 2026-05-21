@@ -685,9 +685,17 @@ async function resolveMcpExtensions(
     recipeExtensions: Array<{ name?: string; type?: string; raw?: Record<string, unknown> } & Record<string, unknown>>;
   },
 ): Promise<McpResolveResult> {
+  // Web-tools bridge: bring ai_use_cases.allowed_web_tools into the
+  // Goose spawn as a gatewaze-owned stdio MCP exposing web_search /
+  // fetch_url / gatewaze_search tools. Same backends (Serper/DDG +
+  // scrapling-fetcher) the inline runChat path uses — the UI's
+  // "Allowed web tools" checkboxes mean the same thing whether the
+  // executor is Goose or runChat.
+  const webToolsResolve = await resolveWebToolsExtension(supabase, args.useCaseId);
+
   // 1. Recipe-declared extension names. Recipes that declare nothing
-  //    get an empty load — chat-path callers (§6 round 6) populate
-  //    recipeExtensions from the use-case allowlist directly instead.
+  //    still get the web-tools bridge if allowed_web_tools is non-empty;
+  //    otherwise (no web tools either) the load is empty.
   const declaredNames = Array.from(new Set(
     args.recipeExtensions
       .map((e) => (typeof e.name === 'string' ? e.name : ((e.raw as { name?: string })?.name)))
@@ -695,7 +703,7 @@ async function resolveMcpExtensions(
   ));
 
   if (declaredNames.length === 0) {
-    return { flags: [], env: {}, warnings: [], loadedNames: [] };
+    return webToolsResolve;
   }
 
   // 2. Use-case allowlist.
@@ -845,7 +853,114 @@ async function resolveMcpExtensions(
     loadedNames.push(name);
   }
 
-  return { flags, env, warnings, loadedNames };
+  // Merge the web-tools bridge into the final load so a recipe that
+  // declares an MCP server AND the use case has allowed_web_tools both
+  // load. Order matters only for stable warning ordering.
+  return {
+    flags: [...webToolsResolve.flags, ...flags],
+    env: { ...webToolsResolve.env, ...env },
+    warnings: [...webToolsResolve.warnings, ...warnings],
+    loadedNames: [...webToolsResolve.loadedNames, ...loadedNames],
+  };
+}
+
+/**
+ * Bridge ai_use_cases.allowed_web_tools into the Goose spawn by
+ * attaching the gatewaze-web-tools-mcp stdio script as an extension
+ * filtered to exactly the tools the operator allowed.
+ *
+ * Goose sees three tool names (web_search, fetch_url, gatewaze_search)
+ * under the extension prefix `gatewaze-web-tools__` — same identifiers
+ * the inline runChat path exposes, so recipes and chat prompts that
+ * reference them by name work identically across executors.
+ *
+ * Returns an empty load when allowed_web_tools is empty or the use
+ * case row can't be read.
+ */
+async function resolveWebToolsExtension(
+  supabase: SupabaseClient,
+  useCaseId: string,
+): Promise<McpResolveResult> {
+  let allowed: string[] = [];
+  try {
+    const res = await supabase
+      .from('ai_use_cases')
+      .select('allowed_web_tools')
+      .eq('id', useCaseId)
+      .maybeSingle();
+    const row = (res.data as { allowed_web_tools?: string[] } | null) ?? null;
+    allowed = Array.isArray(row?.allowed_web_tools) ? row!.allowed_web_tools.filter((t) => typeof t === 'string') : [];
+  } catch {
+    return { flags: [], env: {}, warnings: [], loadedNames: [] };
+  }
+  if (allowed.length === 0) {
+    return { flags: [], env: {}, warnings: [], loadedNames: [] };
+  }
+
+  // Resolve the launcher shim + the web-tools MCP script.
+  const launcherPath = await resolveGatewazeGooseLauncherPath();
+  const scriptPath = await resolveGatewazeWebToolsMcpPath();
+
+  // Descriptor env (consumed by the launcher shim, same pattern as
+  // operator-registered stdio servers). The shim spawn() the script
+  // with shell:false so the args/env are not parsed by a shell.
+  const descriptorEnvName = 'GATEWAZE_MCP_LAUNCH_DESCRIPTOR_GATEWAZE_WEB_TOOLS';
+  // The script reads GATEWAZE_ALLOWED_WEB_TOOLS to filter its tools/
+  // list, plus passthrough creds (SCRAPLING_FETCHER_URL/_TOKEN,
+  // SERPER_API_KEY, GATEWAZE_SEARCH_BACKEND, GATEWAZE_FETCH_BASE_URL/
+  // _API_KEY). The platform's worker already has these in the env —
+  // we forward by reference so the MCP child inherits them.
+  const perServerEnv: Record<string, string> = {
+    GATEWAZE_ALLOWED_WEB_TOOLS: allowed.join(','),
+  };
+  for (const k of [
+    'SCRAPLING_FETCHER_URL',
+    'SCRAPLING_INTERNAL_TOKEN',
+    'SERPER_API_KEY',
+    'GATEWAZE_SEARCH_BACKEND',
+    'GATEWAZE_FETCH_BASE_URL',
+    'GATEWAZE_FETCH_API_KEY',
+  ]) {
+    const v = process.env[k];
+    if (typeof v === 'string' && v.length > 0) perServerEnv[k] = v;
+  }
+  const env: Record<string, string> = {
+    [descriptorEnvName]: JSON.stringify({
+      cmd: 'node',
+      args: [scriptPath],
+      env: perServerEnv,
+    }),
+  };
+  return {
+    flags: ['--with-extension', `node ${launcherPath} ${descriptorEnvName}`],
+    env,
+    warnings: [],
+    loadedNames: ['gatewaze-web-tools'],
+  };
+}
+
+/**
+ * Locate scripts/gatewaze-web-tools-mcp.mjs at runtime. Same fallback
+ * walk as the memory MCP — env override, walk up from this file,
+ * baked /usr/local/bin symlink.
+ */
+async function resolveGatewazeWebToolsMcpPath(): Promise<string> {
+  const envPath = process.env.GATEWAZE_WEB_TOOLS_MCP_PATH;
+  if (envPath) return envPath;
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, resolve } = await import('node:path');
+  const { existsSync } = await import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath((globalThis as any).import?.meta?.url ?? `file://${process.cwd()}/`));
+  const candidates = [
+    resolve(here, '..', '..', 'scripts', 'gatewaze-web-tools-mcp.mjs'),
+    resolve(here, '..', '..', '..', 'scripts', 'gatewaze-web-tools-mcp.mjs'),
+    '/usr/local/bin/gatewaze-web-tools-mcp',
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  throw new Error(`gatewaze-web-tools-mcp script not found. Tried: ${candidates.join(', ')}. Set GATEWAZE_WEB_TOOLS_MCP_PATH to override.`);
 }
 
 /**
