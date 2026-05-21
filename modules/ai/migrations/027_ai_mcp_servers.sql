@@ -65,30 +65,39 @@ CREATE TABLE IF NOT EXISTS public.ai_mcp_servers (
     END
   ),
 
-  -- args jsonb must be an array of strings when present.
-  CONSTRAINT ai_mcp_servers_args_string_array CHECK (
-    args IS NULL OR (
-      jsonb_typeof(args) = 'array'
-      AND NOT EXISTS (
-        SELECT 1 FROM jsonb_array_elements(args) e WHERE jsonb_typeof(e) <> 'string'
-      )
-    )
-  ),
-
-  -- env_keys must be array of uppercase identifier strings.
-  CONSTRAINT ai_mcp_servers_env_keys_string_array CHECK (
-    jsonb_typeof(env_keys) = 'array'
-    AND NOT EXISTS (
-      SELECT 1 FROM jsonb_array_elements_text(env_keys) e WHERE e !~ '^[A-Z][A-Z0-9_]*$'
-    )
-  ),
-
   -- headers must be a JSON object (not array, not scalar).
   CONSTRAINT ai_mcp_servers_headers_object CHECK (jsonb_typeof(headers) = 'object'),
 
   -- streamable_http URIs MUST be https.
   CONSTRAINT ai_mcp_servers_uri_https CHECK (uri IS NULL OR uri ~ '^https://')
 );
+
+-- Postgres rejects subqueries in CHECK constraints, so the per-element
+-- array shape checks (args = strings only, env_keys = UPPER_SNAKE_CASE
+-- strings only) live in IMMUTABLE helper functions which CHECK can call.
+CREATE OR REPLACE FUNCTION public.ai_mcp_args_all_strings(j jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT j IS NULL OR (
+    jsonb_typeof(j) = 'array'
+    AND NOT EXISTS (
+      SELECT 1 FROM jsonb_array_elements(j) e WHERE jsonb_typeof(e) <> 'string'
+    )
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.ai_mcp_env_keys_valid(j jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(j) = 'array'
+    AND NOT EXISTS (
+      SELECT 1 FROM jsonb_array_elements_text(j) e WHERE e !~ '^[A-Z][A-Z0-9_]*$'
+    );
+$$;
+
+ALTER TABLE public.ai_mcp_servers
+  ADD CONSTRAINT ai_mcp_servers_args_string_array
+    CHECK (public.ai_mcp_args_all_strings(args)),
+  ADD CONSTRAINT ai_mcp_servers_env_keys_string_array
+    CHECK (public.ai_mcp_env_keys_valid(env_keys));
 
 CREATE UNIQUE INDEX IF NOT EXISTS ai_mcp_servers_name_key
   ON public.ai_mcp_servers(name);
