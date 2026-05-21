@@ -162,13 +162,17 @@ export function mountJobsRoutes(router: Router, deps: JobsRoutesDeps): void {
       const queue = await getJobsQueue({ projectRoot: deps.projectRoot });
       const dto = await getJob(queue, id);
       if (!dto) return sendError(res, 404, 'job_not_found', `no job '${id}'`);
-      if (dto.owner_module !== 'ai') {
-        return sendError(res, 403, 'wrong_module', `job belongs to '${dto.owner_module}' — stop via that module's surface`);
-      }
       if (['completed', 'failed'].includes(dto.status)) {
         return sendError(res, 409, 'job_terminal', `job is ${dto.status}`);
       }
       // 1. PUBLISH cancel for the worker's pub/sub subscriber.
+      //    Pub/sub fires only for jobs linked to ai_recipe_runs /
+      //    ai_messages — that's what the ai run-recipe and run-chat
+      //    handlers subscribe to. Jobs from other modules (e.g.
+      //    daily-briefing:run-research) get only the BullMQ remove
+      //    below: instant kill for waiting/delayed, no-op for active
+      //    (the worker process holds the lock; needs a restart to
+      //    fully release until those handlers also subscribe).
       if (dto.linked_row?.table === 'ai_recipe_runs') {
         await broadcastCancel(recipeRunCancelChannel(dto.linked_row.id), 'admin');
         await deps.supabase
