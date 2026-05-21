@@ -472,6 +472,17 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                   </div>
                 );
               }
+              // Skip empty assistant placeholders while still running —
+              // the isRunning block below renders the live spinner /
+              // streamed content. Empty + complete still renders (lets
+              // empty-final-output be visually distinct).
+              if (
+                m.role === 'assistant' &&
+                m.status !== 'complete' &&
+                m.content.length === 0
+              ) {
+                return null;
+              }
               return (
                 <div key={m.id} className="flex justify-start">
                   <div className="max-w-[90%]">
