@@ -99,7 +99,7 @@ const aiModule: GatewazeModule = {
       name: 'ai:cleanup-orphan-streams',
       queue: 'jobs',
       schedule: { pattern: '0 * * * *' },
-      data: { kind: 'ai.cleanup-orphan-streams' },
+      data: { kind: 'ai:cleanup-orphan-streams' },
     },
     // spec-ai-mcp-extensions.md §Memory backing store §Retention.
     // Hourly sweep of ai_memory rows where expires_at < now().
@@ -107,7 +107,7 @@ const aiModule: GatewazeModule = {
       name: 'ai:cleanup-expired-memory',
       queue: 'jobs',
       schedule: { pattern: '0 * * * *' },
-      data: { kind: 'ai.cleanup-expired-memory' },
+      data: { kind: 'ai:cleanup-expired-memory' },
     },
   ],
 
