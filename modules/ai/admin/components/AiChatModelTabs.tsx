@@ -118,10 +118,18 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
   // set. This is what makes the operator's tabs survive a page refresh
   // (and a refresh mid-autopilot keeps the in-flight runs visible
   // because each model's thread is its own row).
+  //
+  // After mount, KEEP polling on a short cadence so threads created
+  // server-side after the widget loaded (e.g. a kickoff that pre-
+  // creates per-sub-recipe threads) auto-open as tabs. Cadence
+  // matches the inner widget's poll (4s) — short enough for the
+  // operator to feel immediate, light enough that idle dashboards
+  // don't hammer the API.
   useEffect(() => {
     let cancelled = false;
-    listThreadsByHost({ useCase, hostKind, hostId })
-      .then((threads) => {
+    async function discover(): Promise<void> {
+      try {
+        const threads = await listThreadsByHost({ useCase, hostKind, hostId });
         if (cancelled) return;
         const keysWithThreads = threads
           .map((t) => t.thread_key)
@@ -130,20 +138,25 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
         setOpenTabs((prev) => {
           const have = new Set(prev.map((t) => t.modelId));
           const merged = [...prev];
+          let changed = false;
           for (const k of keysWithThreads) {
             if (!have.has(k)) {
               merged.push({ modelId: k });
               have.add(k);
+              changed = true;
             }
           }
-          return merged;
+          return changed ? merged : prev;
         });
-      })
-      .catch((err) => {
-        console.warn('[ai-chat-tabs] failed to hydrate tabs from threads', err);
-      });
+      } catch (err) {
+        console.warn('[ai-chat-tabs] thread discovery failed', err);
+      }
+    }
+    void discover();
+    const id = setInterval(() => void discover(), 4_000);
     return () => {
       cancelled = true;
+      clearInterval(id);
     };
   }, [useCase, hostKind, hostId]);
 
