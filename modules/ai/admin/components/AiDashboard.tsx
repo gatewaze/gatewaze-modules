@@ -17,9 +17,9 @@
  * Module-contributed tabs register under slotName 'ai-dashboard:tab' with
  * `meta: { tabId, label, order? }`. See editor-ai-copilot/index.ts.
  *
- * The shell owns page chrome (Page title + outer p-6 + the h1 + tab
- * strip). Each tab's component should return inner content only — no
- * outer p-6, no top-level h1.
+ * The shell owns page chrome (Page title + WorkspaceLayout hero +
+ * primary tab strip). Each tab's component should return inner
+ * content only — no outer p-6, no top-level h1.
  */
 
 import { lazy, Suspense, useCallback, useMemo } from 'react';
@@ -27,7 +27,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { Tabs, type Tab } from '@/components/ui';
+import { WorkspaceLayout, type Tab } from '@/components/ui';
 import { useModuleSlots, type ResolvedSlot } from '@/hooks/useModuleSlots';
 
 import AiAgentSourcesAdmin from './AiAgentSourcesAdmin';
@@ -139,9 +139,12 @@ export default function AiDashboard() {
 
   return (
     <Page title="AI">
-      <div className="p-6 space-y-4">
-        <h1 className="text-2xl font-semibold text-[var(--gray-12)]">AI</h1>
-        <Tabs value={tabId} onChange={onChange} tabs={allTabs} />
+      <WorkspaceLayout
+        title="AI"
+        tabs={allTabs}
+        activeTabId={tabId}
+        onTabChange={onChange}
+      >
         <Suspense
           fallback={
             <div className="p-8 flex justify-center">
@@ -151,7 +154,7 @@ export default function AiDashboard() {
         >
           {ActiveBuiltin ? ActiveBuiltin.render() : ActiveExtra ? <ActiveExtra /> : null}
         </Suspense>
-      </div>
+      </WorkspaceLayout>
     </Page>
   );
 }
