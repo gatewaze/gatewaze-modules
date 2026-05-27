@@ -372,8 +372,13 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
                   chat message to the active tab. The chat handler
                   resolves the bound recipe's first sub-recipe template
                   and runs THAT job on the active tab's model — works
-                  for any model in the picker (Gemini, Haiku, etc.). */}
-              {activeTabId && (
+                  for any model in the picker (Gemini, Haiku, etc.).
+                  Hidden until the operator opens a second tab: with
+                  only the default Haiku tab visible on first load,
+                  "Run on Haiku" is redundant with "Run research"
+                  (the latter already kicks off the parent recipe
+                  whose first sub-recipe pass is haiku-equivalent). */}
+              {activeTabId && openTabs.length > 1 && (
                 <button
                   type="button"
                   onClick={() => void runResearchOnActiveTab()}
