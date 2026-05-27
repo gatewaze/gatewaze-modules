@@ -108,6 +108,28 @@ export default async function runChatHandler(
     created_by: string | null;
   };
 
+  // Resolve provider/model fallback. The widget passes both via job
+  // data, but if absent (older clients, programmatic enqueues) fall
+  // back to the use case's default_provider/default_model. Goose's
+  // `goose run` has no env-level default in the worker — without
+  // either of these, the subprocess exits 1 silently.
+  if (!job.data.provider || !job.data.model) {
+    const ucRes = await supabase
+      .from('ai_use_cases')
+      .select('default_provider, default_model')
+      .eq('id', threadRow.use_case)
+      .maybeSingle();
+    const uc = (ucRes.data as { default_provider?: string; default_model?: string } | null) ?? null;
+    if (uc) {
+      if (!job.data.provider && uc.default_provider && uc.default_provider !== 'auto') {
+        job.data.provider = uc.default_provider;
+      }
+      if (!job.data.model && uc.default_model) {
+        job.data.model = uc.default_model;
+      }
+    }
+  }
+
   await supabase
     .from('ai_messages')
     .update({ status: 'running' })
