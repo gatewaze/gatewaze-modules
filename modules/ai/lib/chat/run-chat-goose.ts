@@ -279,7 +279,23 @@ export async function runChatViaGoose(
     clearTimeout(cancelTimer);
 
     if (exitCode !== 0 && !failureReason) {
-      failureReason = `goose_exit_${exitCode}: ${stderrBuf.slice(0, 1000)}`;
+      // Include the tail of stdoutBuf alongside stderr so a silent
+      // exit (no stderr written) still leaves a clue. Also emit a
+      // worker-log line with the full args + buffers so operators
+      // can post-mortem from `docker logs example-worker` even when the
+      // ai_messages row only gets the truncated string.
+      const stderrTail = stderrBuf.slice(-1500);
+      const stdoutTail = stdoutBuf.slice(-1500);
+      try {
+        // eslint-disable-next-line no-console
+        console.error('[chat-goose] non-zero exit', {
+          exitCode,
+          gooseArgs,
+          stderrTail,
+          stdoutTail,
+        });
+      } catch { /* logging best-effort */ }
+      failureReason = `goose_exit_${exitCode}: stderr=${stderrTail || '(empty)'} | stdout_tail=${stdoutTail.slice(-400)}`;
     }
 
     // Drain any toolRequests that never paired with a toolResponse —
