@@ -287,6 +287,37 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
     }
   }
 
+  /**
+   * Send a "do the research" chat message to the active tab's model.
+   * Routes through the chat path (run-chat-handler), which now uses
+   * the bound recipe's first sub-recipe as its template (instructions
+   * + response schema). End result: the active tab's model runs the
+   * per-pass research job — same job sonnet / gpt-5 sub-recipes do
+   * during a full Run research, but executed by THIS tab's model.
+   *
+   * Operators use this to test the research task on a new model
+   * (e.g. Gemini 3 Pro) without authoring a dedicated sub-recipe.
+   */
+  const [runningTabResearch, setRunningTabResearch] = useState(false);
+  async function runResearchOnActiveTab() {
+    if (!activeTabId) return;
+    const activeTab = openTabs.find((t) => t.modelId === activeTabId);
+    const label = activeTab?.label ?? activeTabId;
+    setRunningTabResearch(true);
+    try {
+      await fireMessageOnTab(
+        activeTabId,
+        'Run the research task as described in your instructions. Use your available web tools, follow the response schema exactly, and emit your candidates.',
+      );
+      toast.success(`Research dispatched to ${label}`);
+    } catch (err) {
+      console.error('[ai-chat-tabs] run research on active tab failed', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to dispatch');
+    } finally {
+      setRunningTabResearch(false);
+    }
+  }
+
   return (
     <div className="bg-white flex flex-col flex-1 min-h-0">
       {/* Tab strip + actions */}
@@ -335,6 +366,29 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
         <div className="flex items-center gap-1 shrink-0">
           {(customKickoff || kickoffMessage) ? (
             <>
+              {/* Per-tab research kickoff. Bypasses customKickoff
+                  (which runs the parent recipe with its declared sub-
+                  recipe models) and instead sends a "do the research"
+                  chat message to the active tab. The chat handler
+                  resolves the bound recipe's first sub-recipe template
+                  and runs THAT job on the active tab's model — works
+                  for any model in the picker (Gemini, Haiku, etc.). */}
+              {activeTabId && (
+                <button
+                  type="button"
+                  onClick={() => void runResearchOnActiveTab()}
+                  disabled={runningTabResearch}
+                  className="inline-flex items-center px-2 py-1 rounded text-xs border border-amber-600 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                  title={`Run the research task on this tab's model only (${openTabs.find((t) => t.modelId === activeTabId)?.label ?? activeTabId})`}
+                >
+                  {runningTabResearch ? (
+                    <ArrowPathIcon className="size-3 mr-1 animate-spin" />
+                  ) : (
+                    <SparklesIcon className="size-3 mr-1" />
+                  )}
+                  Run on {openTabs.find((t) => t.modelId === activeTabId)?.label ?? activeTabId}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void runOnActive()}
