@@ -172,6 +172,38 @@ export default async function runChatHandler(
   // Resolve system prompt + emit run.start to the thread stream.
   const resolved = await resolveUseCasePrompt(supabase as never, threadRow.use_case);
 
+  // When the use case is bound to a recipe with a response.json_schema,
+  // chat follow-ups should produce the SAME structured output the
+  // recipe's first run did — operators expect candidate cards on every
+  // assistant turn, not a one-off. Look up the bound recipe and build
+  // an enriched system prompt that:
+  //   - Includes the recipe's instructions (so the model carries the
+  //     visual contract / role / constraints from the recipe).
+  //   - Appends the response schema with a hard "respond as JSON only"
+  //     directive. Goose's chat path has no native --response-schema
+  //     flag; we instruct the model via prompt and parse the JSON out
+  //     of stdout below.
+  let chatSystemPrompt = resolved.systemPrompt;
+  let chatResponseSchema: Record<string, unknown> | null = null;
+  if (resolved.source === 'recipe') {
+    const recipeMeta = resolved.promptSource?.system_prompt?.kind === 'recipe'
+      ? (resolved.promptSource.system_prompt as { recipe?: { recipe_id?: string } }).recipe
+      : undefined;
+    if (recipeMeta?.recipe_id) {
+      const rr = await supabase
+        .from('ai_recipes')
+        .select('instructions, response_schema')
+        .eq('id', recipeMeta.recipe_id)
+        .maybeSingle();
+      const row = (rr.data as { instructions?: string; response_schema?: Record<string, unknown> } | null) ?? null;
+      if (row?.instructions) chatSystemPrompt = row.instructions;
+      if (row?.response_schema && typeof row.response_schema === 'object') {
+        chatResponseSchema = row.response_schema;
+        chatSystemPrompt += `\n\n## Response format\n\nYour response MUST be a single JSON object conforming to this JSON Schema:\n\n\`\`\`json\n${JSON.stringify(chatResponseSchema, null, 2)}\n\`\`\`\n\nReturn ONLY the JSON object. Do not wrap it in markdown code fences. Do not include any prose before or after the JSON. The widget rendering your reply parses the JSON directly.`;
+      }
+    }
+  }
+
   await incConcurrency('ai:run-chat', 1);
   const runStart = Date.now();
 
@@ -230,7 +262,7 @@ export default async function runChatHandler(
           assistantMessageId,
           useCase: threadRow.use_case,
           userId: threadRow.created_by,
-          systemPrompt: resolved.systemPrompt,
+          systemPrompt: chatSystemPrompt,
           history,
           userMessage,
           ...(job.data.provider && { provider: job.data.provider }),
@@ -259,9 +291,24 @@ export default async function runChatHandler(
       if (!gooseResult.ok) {
         throw new Error(gooseResult.failure_reason ?? 'goose chat failed');
       }
+      // If the chat use case is recipe-bound (response schema injected
+      // above), try to parse the model's reply as JSON conforming to
+      // the recipe's response.json_schema. Successful parse → persist
+      // to ai_messages.structured so CandidateCards renders the reply
+      // the same way the recipe's first turn does. Failed parse →
+      // fall through to the plain-text path.
+      let parsedNarrative = gooseResult.content;
+      let parsedStructured = gooseResult.structured;
+      if (chatResponseSchema && parsedStructured === null) {
+        const candidate = tryExtractJsonObject(gooseResult.content);
+        if (candidate) {
+          parsedStructured = candidate;
+          parsedNarrative = typeof candidate.narrative === 'string' ? candidate.narrative : '';
+        }
+      }
       result = {
-        narrative: gooseResult.content,
-        structured: gooseResult.structured,
+        narrative: parsedNarrative,
+        structured: parsedStructured,
         provider: gooseResult.provider,
         model: gooseResult.model,
         inputTokens: gooseResult.total_input_tokens,
@@ -420,4 +467,56 @@ async function shouldRetry(
     .eq('id', useCase)
     .maybeSingle();
   return Boolean(r?.data?.allow_retry);
+}
+
+/**
+ * Best-effort extraction of a JSON object from a model's free-form
+ * reply. Handles:
+ *   - Raw `{...}` object output
+ *   - Output wrapped in ```json fences``` (the model didn't follow
+ *     the "no markdown fences" instruction)
+ *   - Output with leading/trailing prose (e.g. "Here you go:\n{...}")
+ *
+ * Returns null when nothing parseable is found.
+ */
+function tryExtractJsonObject(text: string): Record<string, unknown> | null {
+  if (typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+
+  // 1) Direct parse.
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {/* try next */}
+
+  // 2) Fenced ```json ... ``` block.
+  const fenceMatch = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
+  if (fenceMatch && fenceMatch[1]) {
+    try {
+      const parsed = JSON.parse(fenceMatch[1]);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {/* try next */}
+  }
+
+  // 3) First `{...}` substring. Scan for matched braces from the first
+  //    `{` to find the longest valid object. Simple but tolerates
+  //    leading/trailing prose.
+  const firstBrace = trimmed.indexOf('{');
+  if (firstBrace >= 0) {
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {/* give up */}
+    }
+  }
+  return null;
 }
