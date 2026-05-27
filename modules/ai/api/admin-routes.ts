@@ -355,6 +355,14 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
         assistantMessageId: placeholderInsert.data.id,
         useCase: threadRes.data.use_case,
         userId: threadRes.data.created_by,
+        // Forward the widget's model/provider so the worker's
+        // run-chat-handler can pass `--provider/--model` to `goose
+        // run`. Without these, Goose's `goose run` has no default
+        // provider configured in the worker env (no GOOSE_PROVIDER /
+        // GOOSE_MODEL) and exits 1 silently — every follow-up chat
+        // turn looked like it failed for no reason.
+        ...(provider !== 'auto' ? { provider } : {}),
+        ...(model ? { model } : {}),
       });
       jobId = enq.jobId;
       delayed = enq.delayed;
@@ -379,9 +387,6 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       delayed,
       stream_url: `/api/modules/ai/admin/threads/${threadId}/stream`,
     });
-    // Silence unused warnings while the legacy fields remain in scope.
-    void provider;
-    void model;
   }
 
   // Removed in spec-ai-job-runner — chat execution now lives in
