@@ -129,6 +129,18 @@ export default async function runChatHandler(
       }
     }
   }
+  // Cross-check provider against model — multi-model chat surfaces
+  // (AiChatModelTabs) used to send a fixed default provider for every
+  // tab, so the GPT-5 tab was hitting the Anthropic API with
+  // model=gpt-5 and getting "Resource not found (404)". Defence in
+  // depth: if model is set but provider clearly doesn't serve it,
+  // overwrite provider from the model id.
+  if (typeof job.data.model === 'string') {
+    const inferred = inferProviderFromModel(job.data.model);
+    if (inferred && inferred !== 'unknown' && job.data.provider !== inferred) {
+      job.data.provider = inferred;
+    }
+  }
 
   await supabase
     .from('ai_messages')
@@ -467,6 +479,21 @@ async function shouldRetry(
     .eq('id', useCase)
     .maybeSingle();
   return Boolean(r?.data?.allow_retry);
+}
+
+/**
+ * Map a model id back to the provider that serves it. Mirrors the
+ * runner-side helper in lib/recipes/run-recipe-goose.ts.
+ */
+function inferProviderFromModel(model: string): 'anthropic' | 'openai' | 'gemini' | 'unknown' {
+  if (model.startsWith('claude') || model.includes('haiku') || model.includes('sonnet') || model.includes('opus')) {
+    return 'anthropic';
+  }
+  if (model.startsWith('gpt') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')) {
+    return 'openai';
+  }
+  if (model.startsWith('gemini')) return 'gemini';
+  return 'unknown';
 }
 
 /**
