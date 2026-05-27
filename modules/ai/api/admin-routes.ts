@@ -284,6 +284,16 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     }
     const provider = typeof body.provider === 'string' ? (body.provider as 'auto' | KnownProvider) : 'auto';
     const model = typeof body.model === 'string' ? body.model : undefined;
+    // Optional per-tab recipe override. When the operator picks a
+    // specific sub-recipe in the chat widget's Will-run panel, this
+    // path is forwarded to the chat handler, which loads the named
+    // recipe's instructions + response schema INSTEAD of the chat-
+    // handler's default "first sub-recipe of the use case's bound
+    // parent" auto-pick. The worker re-validates against the parent's
+    // sub_recipe_refs so this can't be used to load arbitrary recipes.
+    const recipeOverridePath = typeof body.recipe_override_path === 'string' && body.recipe_override_path.length > 0
+      ? body.recipe_override_path
+      : undefined;
 
     const threadRes = await supabase
       .from('ai_threads')
@@ -363,6 +373,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
         // turn looked like it failed for no reason.
         ...(provider !== 'auto' ? { provider } : {}),
         ...(model ? { model } : {}),
+        ...(recipeOverridePath ? { recipeOverridePath } : {}),
       });
       jobId = enq.jobId;
       delayed = enq.delayed;
@@ -578,6 +589,54 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     }
     try {
       const resolved = await resolveUseCasePrompt(supabase as never, id);
+      // When the use case is bound to a recipe with declared
+      // sub_recipes, surface the available sub-recipe choices so the
+      // chat widget's Will-run panel can render a per-tab "Run as"
+      // override picker. Operators can then pick which sub-recipe a
+      // given tab runs (e.g. force the Gemini 3 Pro tab to run the
+      // sonnet research sub-recipe).
+      let availableSubRecipes: Array<{
+        name: string;
+        path: string;
+        title: string | null;
+      }> = [];
+      const ps = resolved.promptSource;
+      const recipeMeta = ps?.system_prompt?.kind === 'recipe'
+        ? (ps.system_prompt as { recipe?: { recipe_id?: string; source_id?: string } }).recipe
+        : null;
+      if (recipeMeta?.recipe_id && recipeMeta?.source_id) {
+        const parentRes = await supabase
+          .from('ai_recipes')
+          .select('sub_recipe_refs')
+          .eq('id', recipeMeta.recipe_id)
+          .maybeSingle();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const refs = (parentRes.data as any)?.sub_recipe_refs ?? [];
+        if (Array.isArray(refs) && refs.length > 0) {
+          const paths = refs
+            .map((r: { path?: string }) => r?.path)
+            .filter((p: unknown): p is string => typeof p === 'string' && p.length > 0);
+          if (paths.length > 0) {
+            const titlesRes = await supabase
+              .from('ai_recipes')
+              .select('file_path, title')
+              .eq('source_id', recipeMeta.source_id)
+              .in('file_path', paths);
+            const titleMap = new Map<string, string>();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            for (const row of (titlesRes.data ?? []) as any[]) {
+              if (row?.file_path && row?.title) titleMap.set(row.file_path, row.title);
+            }
+            availableSubRecipes = refs
+              .map((r: { name?: string; path?: string }) => ({
+                name: typeof r.name === 'string' ? r.name : '',
+                path: typeof r.path === 'string' ? r.path : '',
+                title: titleMap.get(r.path ?? '') ?? null,
+              }))
+              .filter((r: { path: string }) => r.path.length > 0);
+          }
+        }
+      }
       res.status(200).json({
         prompt_source: resolved.promptSource,
         // The resolved strings are useful for "expand to see the
@@ -585,6 +644,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
         // KB. Echo a length + sha hint instead.
         system_prompt_preview: resolved.systemPrompt.slice(0, 280),
         kickoff_message_preview: resolved.kickoffMessage.slice(0, 280),
+        available_sub_recipes: availableSubRecipes,
       });
     } catch (err) {
       sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
