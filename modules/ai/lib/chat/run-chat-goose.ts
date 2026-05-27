@@ -2,7 +2,7 @@
  * spec-ai-mcp-extensions.md §6 §High-level flow (chat turn).
  *
  * Replaces the in-house runChat TS path with a Goose-CLI-backed
- * chat wrapper. Spawns `goose session --no-tty --quiet --no-session
+ * chat wrapper. Spawns `goose run --quiet --no-session
  * --output-format stream-json` with the resolved system prompt
  * (skill body or inline) + the use case's MCP extension allowlist.
  * Multi-turn history is replayed via stdin --text invocations on each
@@ -127,9 +127,15 @@ export async function runChatViaGoose(
   // alternating-role transcript; here it becomes a serialised block).
   const effectiveSystemPrompt = serializeHistoryIntoPrompt(args.systemPrompt, args.history);
 
+  // Goose v1.34 split chat into `goose session` (interactive, requires
+  // a TTY) and `goose run` (one-shot, non-interactive). For background
+  // chat-turn execution we want the one-shot variant. The previous
+  // `goose session --no-tty` invocation worked on older Gooses but
+  // started failing with "unexpected argument '--no-tty'" once the
+  // CLI was upgraded — `--no-tty` was dropped because `goose run`
+  // never opens a TTY in the first place.
   const gooseArgs = [
-    'session',
-    '--no-tty',
+    'run',
     '--quiet',
     '--no-session',
     '--output-format', 'stream-json',

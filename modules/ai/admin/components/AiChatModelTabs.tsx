@@ -108,7 +108,6 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
   const [activeTabId, setActiveTabId] = useState<string | null>(
     openTabs[0]?.modelId ?? null,
   );
-  const [runningAll, setRunningAll] = useState(false);
   const [runningActive, setRunningActive] = useState(false);
 
   // ── Hydrate openTabs from existing threads ──────────────────────────
@@ -288,36 +287,6 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
     }
   }
 
-  async function runOnAll() {
-    if (openTabs.length === 0) return;
-    if (!customKickoff && !kickoffMessage) {
-      toast.error('This use case has no kickoff message configured');
-      return;
-    }
-    setRunningAll(true);
-    try {
-      if (customKickoff) {
-        await customKickoff(openTabs.map((t) => t.modelId));
-        toast.success(`Kickoff sent to ${openTabs.length} tab${openTabs.length === 1 ? '' : 's'}`);
-      } else {
-        const results = await Promise.allSettled(
-          openTabs.map((t) => fireMessageOnTab(t.modelId, kickoffMessage)),
-        );
-        const failed = results.filter((r) => r.status === 'rejected').length;
-        if (failed === 0) {
-          toast.success(`Kickoff sent to ${openTabs.length} tab${openTabs.length === 1 ? '' : 's'}`);
-        } else {
-          toast.error(`${failed} of ${openTabs.length} tabs failed to start`);
-        }
-      }
-    } catch (err) {
-      console.error('[ai-chat-tabs] run all failed', err);
-      toast.error(err instanceof Error ? err.message : 'Run failed');
-    } finally {
-      setRunningAll(false);
-    }
-  }
-
   return (
     <div className="bg-white flex flex-col flex-1 min-h-0">
       {/* Tab strip + actions */}
@@ -380,22 +349,6 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
                 )}
                 Run research
               </button>
-              {openTabs.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => void runOnAll()}
-                  disabled={runningAll}
-                  className="inline-flex items-center px-2 py-1 rounded text-xs bg-amber-700 text-white hover:bg-amber-800 disabled:opacity-50"
-                  title="Send the kickoff message to every open tab in parallel"
-                >
-                  {runningAll ? (
-                    <ArrowPathIcon className="size-3 mr-1 animate-spin" />
-                  ) : (
-                    <SparklesIcon className="size-3 mr-1" />
-                  )}
-                  Run on all tabs ({openTabs.length})
-                </button>
-              )}
             </>
           ) : (
             <span
