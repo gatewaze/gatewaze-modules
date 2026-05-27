@@ -230,12 +230,20 @@ export default async function runChatHandler(
         .maybeSingle();
       const row = (rr.data as { response_schema?: Record<string, unknown> } | null) ?? null;
       if (row?.response_schema && typeof row.response_schema === 'object') {
-        chatResponseSchema = row.response_schema;
+        // Strip recipe-runner-specific fields from the per-item schema
+        // before showing it to the chat model. `found_by` only makes
+        // sense in the dual-model recipe (which sub-recipe surfaced
+        // the candidate); in chat there are no sub-recipes, so forcing
+        // the model to set it makes it hallucinate a "merge" narrative
+        // ("sonnet surfaced 10, gpt-5 returned 0 ..."). Drop the field
+        // from required + properties so the model just emits the
+        // candidate fields it can actually populate.
+        chatResponseSchema = stripFieldFromSchema(row.response_schema, ['candidates', 'items'], 'found_by');
         const recipeTitle = recipeMeta.title ?? 'this recipe';
         chatSystemPrompt = [
           `You are continuing a conversation that started with the "${recipeTitle}" recipe.`,
           'The recipe has already run; the user is asking follow-up questions about its output or for related work.',
-          'Use your available web-search / fetch tools to answer if needed, but do not try to dispatch any sub-recipes — they are not available in this chat context.',
+          'Use your available web-search / fetch tools to answer. You are operating in chat mode — there is no "merger" or "sub-recipe" context here. Answer as YOURSELF in first person: "I searched...", "I found...". Do not narrate about sub-recipes, parallel passes, or merging — those concepts are not relevant in this chat.',
           '',
           '## Response format',
           '',
@@ -246,9 +254,8 @@ export default async function runChatHandler(
           '```',
           '',
           'Return ONLY the JSON object. Do not wrap it in markdown code fences. Do not include any prose before or after the JSON. The chat widget rendering your reply parses the JSON directly — text outside the JSON object will not display.',
-          'For `narrative`, write a short sentence summarising what you did or found.',
-          'For `candidates[]`, emit ONLY NEW items the user is asking for. The prior conversation already surfaced candidates with their `source_href`s — do NOT include any candidate whose `source_href` already appears in an earlier assistant turn in the history below. Find the NEXT items (the ones not yet shown).',
-          'For required fields you cannot determine confidently (e.g. `found_by` when the chat reply did not come from a labelled sub-recipe), pick the most reasonable value and explain in the narrative.',
+          'For `narrative`, write a short factual sentence describing what you did and found, in first person.',
+          'For `candidates[]`, emit ONLY NEW items. The prior conversation already surfaced candidates with their `source_href`s — do NOT include any candidate whose `source_href` already appears in the history below. Find the NEXT items (the ones not yet shown).',
         ].join('\n');
       }
     }
@@ -517,6 +524,52 @@ async function shouldRetry(
     .eq('id', useCase)
     .maybeSingle();
   return Boolean(r?.data?.allow_retry);
+}
+
+/**
+ * Walk down `path` in a JSON-schema-shaped object and remove `field`
+ * from the leaf's `required` list and `properties` map. Returns a
+ * deep-cloned schema; the input is left untouched. No-op if any step
+ * of the path is missing.
+ *
+ * Used to drop recipe-runner-specific fields (e.g. `found_by`) from
+ * the schema the chat model sees, since those fields only make sense
+ * in the recipe's multi-pass merge context.
+ */
+function stripFieldFromSchema(
+  schema: Record<string, unknown>,
+  path: string[],
+  field: string,
+): Record<string, unknown> {
+  const cloned = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let cursor: any = cloned;
+  for (const segment of path) {
+    if (segment === 'items') {
+      if (cursor && typeof cursor === 'object' && 'items' in cursor) {
+        cursor = cursor.items;
+      } else {
+        return cloned;
+      }
+    } else {
+      // Treat as a property name on a "properties" map.
+      const props = cursor?.properties;
+      if (props && typeof props === 'object' && segment in props) {
+        cursor = props[segment];
+      } else {
+        return cloned;
+      }
+    }
+  }
+  if (cursor && typeof cursor === 'object') {
+    if (Array.isArray(cursor.required)) {
+      cursor.required = cursor.required.filter((f: unknown) => f !== field);
+    }
+    if (cursor.properties && typeof cursor.properties === 'object') {
+      delete cursor.properties[field];
+    }
+  }
+  return cloned;
 }
 
 /**
