@@ -384,7 +384,12 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
                 hostKind={hostKind}
                 hostId={hostId}
                 threadKey={tab.modelId}
-                defaultProvider={defaultProvider}
+                // Infer provider per-tab from the model id. Each tab
+                // pins a specific model (Claude Haiku, Claude Sonnet,
+                // GPT-5, ...); the provider follows the model. Using a
+                // shared defaultProvider here sent the GPT-5 tab's
+                // chat turns to Anthropic, which 404'd on model=gpt-5.
+                defaultProvider={inferProviderFromModelId(tab.modelId) ?? defaultProvider}
                 defaultModel={tab.modelId}
                 modelPicker={false}
                 embedded
@@ -439,6 +444,23 @@ function AddTabDropdown({
       ))}
     </select>
   );
+}
+
+/**
+ * Map a model id back to the provider that serves it. Mirrors the
+ * runner-side inferProviderFromModel in lib/recipes/run-recipe-goose.ts.
+ * Returns null when the model id doesn't match a known prefix so the
+ * caller can fall through to whatever defaultProvider was supplied.
+ */
+function inferProviderFromModelId(model: string): 'anthropic' | 'openai' | 'gemini' | null {
+  if (model.startsWith('claude') || model.includes('haiku') || model.includes('sonnet') || model.includes('opus')) {
+    return 'anthropic';
+  }
+  if (model.startsWith('gpt') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')) {
+    return 'openai';
+  }
+  if (model.startsWith('gemini')) return 'gemini';
+  return null;
 }
 
 // Re-export the message type so consumers can declare onAssistantMessage typed.
