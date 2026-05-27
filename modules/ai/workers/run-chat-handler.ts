@@ -220,15 +220,43 @@ export default async function runChatHandler(
   let chatResponseSchema: Record<string, unknown> | null = null;
   if (resolved.source === 'recipe') {
     const recipeMeta = resolved.promptSource?.system_prompt?.kind === 'recipe'
-      ? (resolved.promptSource.system_prompt as { recipe?: { recipe_id?: string; title?: string } }).recipe
+      ? (resolved.promptSource.system_prompt as { recipe?: { recipe_id?: string; title?: string; source_id?: string } }).recipe
       : undefined;
     if (recipeMeta?.recipe_id) {
       const rr = await supabase
         .from('ai_recipes')
-        .select('response_schema')
+        .select('response_schema, sub_recipe_refs')
         .eq('id', recipeMeta.recipe_id)
         .maybeSingle();
-      const row = (rr.data as { response_schema?: Record<string, unknown> } | null) ?? null;
+      const row = (rr.data as { response_schema?: Record<string, unknown>; sub_recipe_refs?: unknown } | null) ?? null;
+      // If the parent recipe declares sub_recipes, prefer ONE of them
+      // as the chat template — they hold the actual research
+      // instructions ("fetch X, return Y") and a research schema
+      // without merger-specific fields like found_by. The parent's
+      // own schema is the MERGER's contract and is wrong for a
+      // single-model chat turn. This lets operators open a chat tab
+      // for ANY model (Gemini 3 Pro, Haiku 4.5, anything) and have
+      // it run the same per-pass research job with that model.
+      let chatInstructions: string | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const subRecipeRefs = (rr.data as any)?.sub_recipe_refs ?? [];
+      if (Array.isArray(subRecipeRefs) && subRecipeRefs.length > 0) {
+        const firstRef = subRecipeRefs[0] as { path?: string; name?: string };
+        if (firstRef?.path && recipeMeta.source_id) {
+          const subRes = await supabase
+            .from('ai_recipes')
+            .select('instructions, response_schema')
+            .eq('source_id', recipeMeta.source_id)
+            .eq('file_path', firstRef.path)
+            .maybeSingle();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const subRow = (subRes.data as any) ?? null;
+          if (subRow?.response_schema && typeof subRow.response_schema === 'object') {
+            row.response_schema = subRow.response_schema;
+            chatInstructions = typeof subRow.instructions === 'string' ? subRow.instructions : null;
+          }
+        }
+      }
       if (row?.response_schema && typeof row.response_schema === 'object') {
         // Strip recipe-runner-specific fields from the per-item schema
         // before showing it to the chat model. `found_by` only makes
@@ -241,9 +269,19 @@ export default async function runChatHandler(
         chatResponseSchema = stripFieldFromSchema(row.response_schema, ['candidates', 'items'], 'found_by');
         const recipeTitle = recipeMeta.title ?? 'this recipe';
         chatSystemPrompt = [
-          `You are continuing a conversation that started with the "${recipeTitle}" recipe.`,
-          'The recipe has already run; the user is asking follow-up questions about its output or for related work.',
-          'Use your available web-search / fetch tools to answer. You are operating in chat mode — there is no "merger" or "sub-recipe" context here. Answer as YOURSELF in first person: "I searched...", "I found...". Do not narrate about sub-recipes, parallel passes, or merging — those concepts are not relevant in this chat.',
+          ...(chatInstructions ? [
+            '## Research task',
+            '',
+            chatInstructions,
+            '',
+            '---',
+            '',
+          ] : []),
+          `You are running a research turn for the "${recipeTitle}" use case.`,
+          chatInstructions
+            ? 'The task instructions above describe what to do. Run them using YOUR model (whatever model is executing this chat turn) — not by dispatching sub-recipes; in chat mode there are no sub-recipes to dispatch.'
+            : 'Use your available web-search / fetch tools to answer the user. You are operating in chat mode — there is no "merger" or "sub-recipe" context here.',
+          'Answer as YOURSELF in first person: "I searched...", "I found...". Do not narrate about sub-recipes, parallel passes, or merging — those concepts are not relevant in this chat.',
           '',
           '## Response format',
           '',
