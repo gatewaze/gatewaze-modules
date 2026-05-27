@@ -20,6 +20,14 @@ import {
 
 interface Props {
   useCase: string;
+  /**
+   * Currently-selected sub-recipe override path for this tab.
+   * `null` means "use the default" (the chat handler picks the first
+   * declared sub-recipe). The bar renders a picker only when the
+   * use case is bound to a recipe with non-empty sub_recipes.
+   */
+  recipeOverride?: string | null;
+  onRecipeOverrideChange?: (path: string | null) => void;
 }
 
 const KIND_LABELS: Record<PromptSourceSnapshot['system_prompt']['kind'], string> = {
@@ -42,11 +50,16 @@ function shortHash(s: string | undefined | null): string {
   return h.length >= 8 ? h.slice(0, 8) : h;
 }
 
-export default function ConfiguredPromptBar({ useCase }: Props): JSX.Element | null {
+export default function ConfiguredPromptBar({
+  useCase,
+  recipeOverride,
+  onRecipeOverrideChange,
+}: Props): JSX.Element | null {
   const [data, setData] = useState<{
     ps: PromptSourceSnapshot | null;
     systemPreview: string;
     kickoffPreview: string;
+    subRecipes: Array<{ name: string; path: string; title: string | null }>;
   } | null>(null);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +74,7 @@ export default function ConfiguredPromptBar({ useCase }: Props): JSX.Element | n
             ps: r.prompt_source,
             systemPreview: r.system_prompt_preview,
             kickoffPreview: r.kickoff_message_preview,
+            subRecipes: r.available_sub_recipes ?? [],
           });
         }
       } catch (e) {
@@ -149,6 +163,32 @@ export default function ConfiguredPromptBar({ useCase }: Props): JSX.Element | n
                   <Row label="Recipe file_path" value={ps.system_prompt.recipe.file_path} />
                   <Row label="Recipe content hash" value={shortHash(ps.system_prompt.recipe.content_hash)} />
                   <Row label="Recipe commit" value={shortHash(ps.system_prompt.recipe.last_commit_sha)} />
+                  {data.subRecipes.length > 0 && onRecipeOverrideChange && (
+                    // Per-tab sub-recipe override. By default the chat
+                    // handler picks the first declared sub-recipe; this
+                    // dropdown lets the operator force a specific one
+                    // for this tab (e.g. run the Gemini 3 Pro tab's
+                    // research turns against the sonnet sub-recipe's
+                    // instructions + schema).
+                    <div className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-0.5 items-center">
+                      <div className="text-neutral-500">Run as (this tab)</div>
+                      <select
+                        className="form-input text-xs py-0.5 px-1.5 rounded border border-neutral-300 bg-white"
+                        value={recipeOverride ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          onRecipeOverrideChange(v === '' ? null : v);
+                        }}
+                      >
+                        <option value="">Default (first sub-recipe)</option>
+                        {data.subRecipes.map((r) => (
+                          <option key={r.path} value={r.path}>
+                            {r.title ?? r.name} ({r.path})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </>
               )}
               <Row

@@ -76,6 +76,16 @@ export interface AiChatWidgetProps {
    * nested borders don't appear as doubled corners.
    */
   embedded?: boolean;
+  /**
+   * Per-tab sub-recipe override path (controlled value). When set,
+   * each postMessage call forwards it to the chat handler, which
+   * uses the named recipe's instructions + schema. `null` means
+   * "use the chat handler's default (first sub-recipe of the bound
+   * parent recipe)". Lifted up so the parent (AiChatModelTabs) can
+   * read each tab's override for the per-tab "Run on <model>" button.
+   */
+  recipeOverride?: string | null;
+  onRecipeOverrideChange?: (path: string | null) => void;
 }
 
 export default function AiChatWidget(props: AiChatWidgetProps) {
@@ -90,6 +100,8 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
     modelPicker = true,
     onAssistantMessage,
     embedded = false,
+    recipeOverride = null,
+    onRecipeOverrideChange,
   } = props;
 
   const [thread, setThread] = useState<AiThread | null>(null);
@@ -367,7 +379,13 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
       if (!text.trim()) return;
       setSending(true);
       try {
-        await postMessage({ threadId: thread.id, message: text, provider, model });
+        await postMessage({
+          threadId: thread.id,
+          message: text,
+          provider,
+          model,
+          ...(recipeOverride ? { recipeOverridePath: recipeOverride } : {}),
+        });
         // Optimistic refresh; the polling effect will pull the
         // completed assistant turn.
         const result = await getThread(thread.id);
@@ -488,7 +506,11 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
           {/* Pre-run provenance — same shape as the post-run RunDetails
               panel under each assistant message. Surfaces which
               skill/prompt will run before the operator clicks Send. */}
-          <ConfiguredPromptBar useCase={useCase} />
+          <ConfiguredPromptBar
+            useCase={useCase}
+            recipeOverride={recipeOverride}
+            onRecipeOverrideChange={onRecipeOverrideChange}
+          />
           <div className={messagesClass} ref={messagesScrollRef}>
             {messages.map((m) => {
               if (m.role === 'user') {
