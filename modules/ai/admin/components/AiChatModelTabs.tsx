@@ -109,6 +109,10 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
     openTabs[0]?.modelId ?? null,
   );
   const [runningActive, setRunningActive] = useState(false);
+  // Per-tab sub-recipe override. Lives here (not in the child widget)
+  // so both fireMessageOnTab / runResearchOnActiveTab can read the
+  // active tab's selection, and the widget can render the picker.
+  const [recipeOverrideByTab, setRecipeOverrideByTab] = useState<Record<string, string | null>>({});
 
   // ── Hydrate openTabs from existing threads ──────────────────────────
   // Every prior conversation for this (useCase, hostKind, hostId) lives
@@ -260,10 +264,19 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
     const threadKey = modelId;
     const existing = await lookupThread({ useCase, hostKind, hostId, threadKey });
     const t = existing ?? (await createThread({ useCase, hostKind, hostId, threadKey }));
+    const override = recipeOverrideByTab[modelId] ?? null;
     // Provider is inferred by the runner from the model; pass model
     // explicitly so the router picks THIS one rather than the
-    // use-case's default_provider walk.
-    await postMessage({ threadId: t.id, message, model: modelId, provider: 'auto' });
+    // use-case's default_provider walk. Forward this tab's recipe
+    // override too so the worker runs the picked sub-recipe instead
+    // of the chat handler's auto first-sub-recipe default.
+    await postMessage({
+      threadId: t.id,
+      message,
+      model: modelId,
+      provider: 'auto',
+      ...(override ? { recipeOverridePath: override } : {}),
+    });
   }
 
   async function runOnActive() {
@@ -458,6 +471,10 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
                 embedded
                 renderAssistantTurn={renderAssistantTurn}
                 onAssistantMessage={onAssistantMessage}
+                recipeOverride={recipeOverrideByTab[tab.modelId] ?? null}
+                onRecipeOverrideChange={(path) =>
+                  setRecipeOverrideByTab((prev) => ({ ...prev, [tab.modelId]: path }))
+                }
               />
             </div>
           );

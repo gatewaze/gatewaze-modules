@@ -368,10 +368,24 @@ export async function postMessage(opts: {
   message: string;
   provider?: AiAutoOrProvider;
   model?: string;
+  /**
+   * Optional sub-recipe override. When set, the chat handler loads
+   * the recipe at this path (must be a sub-recipe of the use case's
+   * bound parent — server validates against sub_recipe_refs) and
+   * uses ITS instructions + response schema for this turn, instead
+   * of the chat-handler's default "first sub-recipe" pick. Wired
+   * from the chat widget's per-tab Will-run picker.
+   */
+  recipeOverridePath?: string;
 }): Promise<{ user_message: AiMessage; assistant_message: AiMessage }> {
   const res = await authedFetch(`/api/modules/ai/admin/threads/${opts.threadId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ message: opts.message, provider: opts.provider, model: opts.model }),
+    body: JSON.stringify({
+      message: opts.message,
+      provider: opts.provider,
+      model: opts.model,
+      ...(opts.recipeOverridePath ? { recipe_override_path: opts.recipeOverridePath } : {}),
+    }),
   });
   return jsonOrThrow(res);
 }
@@ -411,6 +425,15 @@ export interface UseCasePromptSourceResponse {
   prompt_source: PromptSourceSnapshot | null;
   system_prompt_preview: string;
   kickoff_message_preview: string;
+  /**
+   * Sub-recipes declared by the parent recipe the use case is bound
+   * to. Populated when the binding is a recipe with non-empty
+   * sub_recipes; empty array otherwise. Each entry is `{ name, path,
+   * title }` where `title` is the sub-recipe's display title from
+   * ai_recipes (null if not synced). Used by the chat widget's
+   * Will-run panel to render a per-tab "Run as" override picker.
+   */
+  available_sub_recipes: Array<{ name: string; path: string; title: string | null }>;
 }
 
 /**
