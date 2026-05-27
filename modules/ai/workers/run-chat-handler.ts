@@ -237,24 +237,42 @@ export default async function runChatHandler(
       // single-model chat turn. This lets operators open a chat tab
       // for ANY model (Gemini 3 Pro, Haiku 4.5, anything) and have
       // it run the same per-pass research job with that model.
+      //
+      // When job.data.recipeOverridePath is set (from the widget's
+      // per-tab Will-run picker), honour that explicit choice;
+      // otherwise auto-pick the first declared sub-recipe.
       let chatInstructions: string | null = null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const subRecipeRefs = (rr.data as any)?.sub_recipe_refs ?? [];
-      if (Array.isArray(subRecipeRefs) && subRecipeRefs.length > 0) {
+      const overridePath = typeof job.data.recipeOverridePath === 'string'
+        ? job.data.recipeOverridePath
+        : null;
+      let chosenSubRecipePath: string | null = null;
+      if (overridePath && Array.isArray(subRecipeRefs)) {
+        // Only honour overrides that resolve to one of the parent's
+        // declared sub-recipes — prevents cross-recipe access via
+        // arbitrary path injection.
+        const ok = subRecipeRefs.some(
+          (r: { path?: string }) => typeof r?.path === 'string' && r.path === overridePath,
+        );
+        if (ok) chosenSubRecipePath = overridePath;
+      }
+      if (!chosenSubRecipePath && Array.isArray(subRecipeRefs) && subRecipeRefs.length > 0) {
         const firstRef = subRecipeRefs[0] as { path?: string; name?: string };
-        if (firstRef?.path && recipeMeta.source_id) {
-          const subRes = await supabase
-            .from('ai_recipes')
-            .select('instructions, response_schema')
-            .eq('source_id', recipeMeta.source_id)
-            .eq('file_path', firstRef.path)
-            .maybeSingle();
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const subRow = (subRes.data as any) ?? null;
-          if (subRow?.response_schema && typeof subRow.response_schema === 'object') {
-            row.response_schema = subRow.response_schema;
-            chatInstructions = typeof subRow.instructions === 'string' ? subRow.instructions : null;
-          }
+        if (firstRef?.path) chosenSubRecipePath = firstRef.path;
+      }
+      if (chosenSubRecipePath && recipeMeta.source_id) {
+        const subRes = await supabase
+          .from('ai_recipes')
+          .select('instructions, response_schema')
+          .eq('source_id', recipeMeta.source_id)
+          .eq('file_path', chosenSubRecipePath)
+          .maybeSingle();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const subRow = (subRes.data as any) ?? null;
+        if (subRow?.response_schema && typeof subRow.response_schema === 'object') {
+          row.response_schema = subRow.response_schema;
+          chatInstructions = typeof subRow.instructions === 'string' ? subRow.instructions : null;
         }
       }
       if (row?.response_schema && typeof row.response_schema === 'object') {
