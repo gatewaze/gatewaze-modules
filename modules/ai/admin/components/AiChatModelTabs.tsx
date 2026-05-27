@@ -393,7 +393,11 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
                 type="button"
                 onClick={() => void runOnActive()}
                 disabled={runningActive || !activeTabId}
-                className="inline-flex items-center px-2 py-1 rounded text-xs bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                // border-transparent matches the outlined "Run on
+                // <model>" button's 1px border so both buttons sit at
+                // the same height; without it the solid Run-research
+                // button reads as 2px shorter.
+                className="inline-flex items-center px-2 py-1 rounded text-xs border border-transparent bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
                 title="Send the use case's kickoff message to the active tab"
               >
                 {runningActive ? (
