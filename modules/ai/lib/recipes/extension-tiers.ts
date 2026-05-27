@@ -68,6 +68,16 @@ const TIER2_RECOGNISED_BUILTINS = new Set([
   'chatrecall',
   'todo',
   'tom',
+  // computercontroller is desktop/UI-coupled on local-Goose (browser
+  // automation), but run-recipe-goose.ts's substituteComputercontroller
+  // strips it on Gatewaze spawns and force-attaches the gatewaze-web-
+  // tools MCP (gatewaze_search) in its place. Recognise it as Tier-2
+  // here so recipes that declare it (the canonical pattern for
+  // "this recipe needs web tools — handle however your runtime can")
+  // parse cleanly. Without this, definitive recipes can't be written
+  // to run on both local-Goose AND Gatewaze: local needs the
+  // declaration, the parser refused it.
+  'computercontroller',
 ]);
 
 /**
@@ -76,7 +86,6 @@ const TIER2_RECOGNISED_BUILTINS = new Set([
  */
 const TIER3_DESKTOP_BUILTINS = new Set([
   'autovisualiser',
-  'computercontroller',
   'peekaboo',
   'tutorial',
 ]);
