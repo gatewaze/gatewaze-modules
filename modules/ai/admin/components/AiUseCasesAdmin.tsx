@@ -959,16 +959,14 @@ function BindingPicker({
 
       {kind === 'skill' && (
         <div className="pt-1">
-          <select
-            className="form-input w-full"
+          <Select.Root
             value={
               editing.skill_source_id && editing.skill_path
                 ? `${editing.skill_source_id}:${editing.skill_path}`
-                : ''
+                : '__none__'
             }
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) {
+            onValueChange={(v) => {
+              if (!v || v === '__none__') {
                 setEditing({ ...editing, skill_source_id: null, skill_path: null });
                 return;
               }
@@ -980,13 +978,16 @@ function BindingPicker({
               });
             }}
           >
-            <option value="">— Choose a skill —</option>
-            {skills.map((s) => (
-              <option key={s.id} value={`${s.source_id}:${s.path}`}>
-                {s.source_label} · {s.name} ({s.path})
-              </option>
-            ))}
-          </select>
+            <Select.Trigger className="w-full" placeholder="— Choose a skill —" />
+            <Select.Content>
+              <Select.Item value="__none__">— Choose a skill —</Select.Item>
+              {skills.map((s) => (
+                <Select.Item key={s.id} value={`${s.source_id}:${s.path}`}>
+                  {s.source_label} · {s.name} ({s.path})
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
           <p className="text-xs text-neutral-500 mt-1">
             Skill body becomes the system prompt at runtime. The inline prompt
             below is the fallback when the skill row is missing.
@@ -1003,16 +1004,14 @@ function BindingPicker({
 
       {kind === 'recipe' && (
         <div className="pt-1">
-          <select
-            className="form-input w-full"
+          <Select.Root
             value={
               editing.recipe_source_id && editing.recipe_file_path
                 ? `${editing.recipe_source_id}:${editing.recipe_file_path}`
-                : ''
+                : '__none__'
             }
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) {
+            onValueChange={(v) => {
+              if (!v || v === '__none__') {
                 setEditing({
                   ...editing,
                   recipe_source_id: null,
@@ -1028,13 +1027,16 @@ function BindingPicker({
               });
             }}
           >
-            <option value="">— Choose a recipe —</option>
-            {recipes.map((r) => (
-              <option key={r.id} value={`${r.source_id}:${r.file_path}`}>
-                {r.source_label} · {r.title} ({r.file_path})
-              </option>
-            ))}
-          </select>
+            <Select.Trigger className="w-full" placeholder="— Choose a recipe —" />
+            <Select.Content>
+              <Select.Item value="__none__">— Choose a recipe —</Select.Item>
+              {recipes.map((r) => (
+                <Select.Item key={r.id} value={`${r.source_id}:${r.file_path}`}>
+                  {r.source_label} · {r.title} ({r.file_path})
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
           <p className="text-xs text-neutral-500 mt-1">
             "Run" on this use case enqueues an <code>ai:run-recipe</code> job
             against the bound recipe. The inline prompt below is ignored.
