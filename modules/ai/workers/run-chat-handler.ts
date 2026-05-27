@@ -164,10 +164,15 @@ export default async function runChatHandler(
     }
   }, 500);
 
-  // Build conversation history.
+  // Build conversation history. For assistant messages that carry a
+  // structured payload (recipe-shaped candidate list), surface the
+  // candidates' source_hrefs alongside the narrative so the model can
+  // see what's been shown and avoid emitting duplicates on follow-up.
+  // Without this, the assistant content was just the narrative — the
+  // model had no way to know which items already exist.
   const history = await supabase
     .from('ai_messages')
-    .select('role, content, status, created_at')
+    .select('role, content, status, structured, created_at')
     .eq('thread_id', threadId)
     .neq('id', assistantMessageId)
     .order('created_at', { ascending: true });
@@ -176,42 +181,75 @@ export default async function runChatHandler(
       (m: { status: string; role: string }) =>
         m.status === 'complete' && (m.role === 'user' || m.role === 'assistant'),
     )
-    .map((m: { role: string; content: string }) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
+    .map((m: { role: string; content: string; structured: Record<string, unknown> | null }) => {
+      let content = m.content ?? '';
+      if (m.role === 'assistant' && m.structured && typeof m.structured === 'object') {
+        const candidates = (m.structured as { candidates?: unknown }).candidates;
+        if (Array.isArray(candidates) && candidates.length > 0) {
+          const lines = candidates
+            .map((c) => {
+              if (!c || typeof c !== 'object') return null;
+              const o = c as Record<string, unknown>;
+              const t = typeof o.title === 'string' ? o.title : '';
+              const h = typeof o.source_href === 'string' ? o.source_href : '';
+              return t || h ? `- ${t} (${h})` : null;
+            })
+            .filter((x): x is string => x !== null);
+          if (lines.length > 0) {
+            content = `${content}\n\nCandidates already surfaced (do not re-emit on follow-up):\n${lines.join('\n')}`;
+          }
+        }
+      }
+      return { role: m.role as 'user' | 'assistant', content };
+    });
 
   // Resolve system prompt + emit run.start to the thread stream.
   const resolved = await resolveUseCasePrompt(supabase as never, threadRow.use_case);
 
   // When the use case is bound to a recipe with a response.json_schema,
   // chat follow-ups should produce the SAME structured output the
-  // recipe's first run did — operators expect candidate cards on every
-  // assistant turn, not a one-off. Look up the bound recipe and build
-  // an enriched system prompt that:
-  //   - Includes the recipe's instructions (so the model carries the
-  //     visual contract / role / constraints from the recipe).
-  //   - Appends the response schema with a hard "respond as JSON only"
-  //     directive. Goose's chat path has no native --response-schema
-  //     flag; we instruct the model via prompt and parse the JSON out
-  //     of stdout below.
+  // recipe's first run did so the widget can render candidate cards
+  // on every reply, not just the initial recipe run.
+  //
+  // We deliberately DO NOT inject the recipe's `instructions` block —
+  // those describe the orchestration the recipe runner already did
+  // (delegate sub-recipes, merge results, etc.) and confuse the chat
+  // model into trying to re-orchestrate something it has no tools for.
+  // Instead, give it a chat-appropriate role + the recipe's schema.
   let chatSystemPrompt = resolved.systemPrompt;
   let chatResponseSchema: Record<string, unknown> | null = null;
   if (resolved.source === 'recipe') {
     const recipeMeta = resolved.promptSource?.system_prompt?.kind === 'recipe'
-      ? (resolved.promptSource.system_prompt as { recipe?: { recipe_id?: string } }).recipe
+      ? (resolved.promptSource.system_prompt as { recipe?: { recipe_id?: string; title?: string } }).recipe
       : undefined;
     if (recipeMeta?.recipe_id) {
       const rr = await supabase
         .from('ai_recipes')
-        .select('instructions, response_schema')
+        .select('response_schema')
         .eq('id', recipeMeta.recipe_id)
         .maybeSingle();
-      const row = (rr.data as { instructions?: string; response_schema?: Record<string, unknown> } | null) ?? null;
-      if (row?.instructions) chatSystemPrompt = row.instructions;
+      const row = (rr.data as { response_schema?: Record<string, unknown> } | null) ?? null;
       if (row?.response_schema && typeof row.response_schema === 'object') {
         chatResponseSchema = row.response_schema;
-        chatSystemPrompt += `\n\n## Response format\n\nYour response MUST be a single JSON object conforming to this JSON Schema:\n\n\`\`\`json\n${JSON.stringify(chatResponseSchema, null, 2)}\n\`\`\`\n\nReturn ONLY the JSON object. Do not wrap it in markdown code fences. Do not include any prose before or after the JSON. The widget rendering your reply parses the JSON directly.`;
+        const recipeTitle = recipeMeta.title ?? 'this recipe';
+        chatSystemPrompt = [
+          `You are continuing a conversation that started with the "${recipeTitle}" recipe.`,
+          'The recipe has already run; the user is asking follow-up questions about its output or for related work.',
+          'Use your available web-search / fetch tools to answer if needed, but do not try to dispatch any sub-recipes — they are not available in this chat context.',
+          '',
+          '## Response format',
+          '',
+          'Your reply MUST be a single JSON object conforming to this JSON Schema:',
+          '',
+          '```json',
+          JSON.stringify(chatResponseSchema, null, 2),
+          '```',
+          '',
+          'Return ONLY the JSON object. Do not wrap it in markdown code fences. Do not include any prose before or after the JSON. The chat widget rendering your reply parses the JSON directly — text outside the JSON object will not display.',
+          'For `narrative`, write a short sentence summarising what you did or found.',
+          'For `candidates[]`, emit ONLY NEW items the user is asking for. The prior conversation already surfaced candidates with their `source_href`s — do NOT include any candidate whose `source_href` already appears in an earlier assistant turn in the history below. Find the NEXT items (the ones not yet shown).',
+          'For required fields you cannot determine confidently (e.g. `found_by` when the chat reply did not come from a labelled sub-recipe), pick the most reasonable value and explain in the narrative.',
+        ].join('\n');
       }
     }
   }
