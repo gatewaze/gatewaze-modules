@@ -13,7 +13,7 @@ VALUES
    true, 'daily'),
   ('Luma Search: LLM Ops', 'LumaSearchScraper', 'events', 'mixed', 'community',
    'https://lu.ma/search/llmops', true, 15, true,
-   '{"keywords": ["LLMOps meetup", "LLM operations", "Demo LLM"], "maxResultsPerKeyword": 30, "dateRestrict": "m3", "excludePastEvents": true}',
+   '{"keywords": ["LLMOps meetup", "LLM operations", "MLOps LLM"], "maxResultsPerKeyword": 30, "dateRestrict": "m3", "excludePastEvents": true}',
    true, 'daily')
 -- Partial unique index on base_url (WHERE base_url IS NOT NULL) needs a
 -- matching predicate to be inferred as the conflict target.
