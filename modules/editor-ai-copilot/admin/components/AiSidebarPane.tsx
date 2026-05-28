@@ -37,7 +37,7 @@ import { createUsePuck } from '@puckeditor/core';
 import { toast } from 'sonner';
 import { useAiGenerate } from './useAiGenerate.js';
 import { AiDocumentUploader, type AttachedDoc } from './AiDocumentUploader.js';
-import type { HostKind, GenerateMode, GenerateRequest } from '../services/canvasAiService.js';
+import { CanvasAiService, type HostKind, type GenerateMode, type GenerateRequest } from '../services/canvasAiService.js';
 import type { PuckData } from './puck-data-merger.js';
 
 export interface AiSidebarPaneProps {
@@ -669,6 +669,30 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length]);
+
+  // On mount (and when the target changes) rehydrate the transcript from
+  // the DB so the conversation survives a page reload. Only applied when
+  // the pane is still empty, so an in-flight turn is never clobbered.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const history = await CanvasAiService.loadThread({
+          host_kind: props.hostKind,
+          host_id: props.hostId,
+          target_id: props.targetId,
+        });
+        if (!cancelled && history.length > 0) {
+          setMessages((prev) => (prev.length === 0 ? history : prev));
+        }
+      } catch {
+        // Non-fatal — start with an empty transcript.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [props.hostKind, props.hostId, props.targetId]);
 
   const { status, error, warnings, lastUsage, generate, abort } = useAiGenerate();
 
