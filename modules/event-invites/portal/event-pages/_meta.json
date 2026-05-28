@@ -1,0 +1,14 @@
+{
+  "rsvp": {
+    "label": "RSVP",
+    "icon": "envelope",
+    "order": 90,
+    "requiresLocalStorage": "invite_short_code"
+  },
+  "open-rsvp": {
+    "label": "Open RSVP",
+    "icon": "envelope",
+    "order": 91,
+    "requiresLocalStorage": "open_rsvp_code"
+  }
+}

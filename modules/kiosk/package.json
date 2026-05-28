@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/kiosk",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Kiosk mode for on-site registrant info lookup and editing",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}

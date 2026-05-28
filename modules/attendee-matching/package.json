@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/attendee-matching",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "AI-powered 1:1 attendee matching for pre-event networking introductions",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}

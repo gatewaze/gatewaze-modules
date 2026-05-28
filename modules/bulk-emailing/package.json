@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/bulk-emailing",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Ad-hoc bulk email sending to segments and contact lists",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}

@@ -1,0 +1,158 @@
+###############################################################################
+# gatewaze-monitoring Helm subchart — default values
+#
+# Install:
+#   helm dependency update premium-gatewaze-modules/modules/monitoring/helm
+#   helm install gatewaze-monitoring \
+#     premium-gatewaze-modules/modules/monitoring/helm \
+#     --namespace monitoring --create-namespace
+#
+# See README.md.
+###############################################################################
+
+# -- Override the chart name in resource names (defaults to chart name)
+nameOverride: ""
+fullnameOverride: ""
+
+# =============================================================================
+# kube-prometheus-stack (Prometheus Operator + Prometheus + Alertmanager +
+# Grafana). Set `prometheusStack.enabled=false` to skip the dependency
+# entirely (use when the cluster already has a Prometheus Operator install).
+# =============================================================================
+prometheusStack:
+  enabled: true
+
+# Passthrough overrides for the kube-prometheus-stack sub-chart. Anything
+# under `kube-prometheus-stack.*` is forwarded as-is. Common settings shown
+# below — see https://github.com/prometheus-community/helm-charts/blob/main/charts/kube-prometheus-stack/values.yaml
+# for the full surface.
+kube-prometheus-stack:
+  # Make the operator scope to the monitoring namespace + the Gatewaze
+  # namespace so it picks up our PodMonitors and PrometheusRules without
+  # needing cluster-wide RBAC for *-Selector resources.
+  prometheusOperator:
+    admissionWebhooks:
+      patch:
+        enabled: true
+
+  # Have Prometheus look for PodMonitors / PrometheusRules in any namespace
+  # carrying the standard "release" label, not just its own. This lets the
+  # Gatewaze namespace's Gatewaze PodMonitors be discovered without the
+  # cluster operator having to relabel.
+  prometheus:
+    prometheusSpec:
+      podMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      serviceMonitorSelectorNilUsesHelmValues: false
+      retention: 15d
+      resources:
+        requests:
+          cpu: 200m
+          memory: 1Gi
+        limits:
+          cpu: 1000m
+          memory: 4Gi
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources:
+              requests:
+                storage: 50Gi
+
+  alertmanager:
+    alertmanagerSpec:
+      retention: 120h
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+
+  grafana:
+    enabled: true
+    # -- Set this in your install command or values override; do not commit a default.
+    adminPassword: ""
+    sidecar:
+      dashboards:
+        enabled: true
+        # Sidecar watches all namespaces for ConfigMaps with this label and
+        # auto-imports them as dashboards. Our `dashboards.yaml` template
+        # stamps this label, so the dashboards land in Grafana automatically.
+        label: grafana_dashboard
+        labelValue: "1"
+        folder: /tmp/dashboards
+        provider:
+          foldersFromFilesStructure: true
+    persistence:
+      enabled: true
+      size: 5Gi
+
+# =============================================================================
+# Gatewaze cluster placement
+# =============================================================================
+gatewaze:
+  # -- Namespace the core Gatewaze pods run in. PodMonitors select pods in
+  # this namespace.
+  namespace: gatewaze
+
+  # -- The instance name used by the core gatewaze chart. Selectors need to
+  # match the labels Helm stamps on the worker / scheduler / api pods.
+  instanceName: gatewaze
+
+  # -- Metric ports exposed by the core chart (must match the metricsPort
+  # values in the core chart).
+  metricsPorts:
+    api: 3002
+    worker: 9090
+    scheduler: 9091
+
+# =============================================================================
+# PodMonitors
+# =============================================================================
+podMonitor:
+  enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
+  # -- Extra labels stamped on every PodMonitor. When using an existing
+  # Prometheus Operator install (prometheusStack.enabled=false), set
+  # `release: <your-prom-release>` so its PodMonitor selector picks them up.
+  additionalLabels: {}
+
+# =============================================================================
+# PrometheusRule (alert thresholds — spec §11.4)
+# =============================================================================
+alerts:
+  enabled: true
+  # -- Stamped on every rule for routing.
+  additionalLabels:
+    app: gatewaze
+  severity:
+    warning: warning
+    critical: critical
+  thresholds:
+    # Queue backlog: warn when waiting jobs > N for 10m
+    queueBacklogWaiting: 500
+    queueBacklogFor: 10m
+    # Queue stuck: critical when waiting > 0 AND no progress for 10m
+    queueStuckFor: 10m
+    # Terminal failures: critical when rate > N/s for 10m
+    terminalFailuresPerSecond: 0.5
+    terminalFailuresFor: 10m
+    # Email failures: critical on ANY terminal failure for 5m
+    emailFailuresFor: 5m
+    # Duration p99: warn when > 2x target for 15m (target labels apply per queue)
+    durationP99For: 15m
+    # Redis health: critical when down for 2m
+    redisHealthFor: 2m
+
+# =============================================================================
+# Grafana dashboards
+# =============================================================================
+dashboards:
+  enabled: true
+  # -- Folder name in Grafana (drives the directory the sidecar drops the
+  # JSON into when foldersFromFilesStructure is on).
+  folder: gatewaze

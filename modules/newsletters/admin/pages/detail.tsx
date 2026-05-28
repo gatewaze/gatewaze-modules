@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
-  ArrowLeftIcon,
   Cog6ToothIcon,
   RectangleGroupIcon,
   DocumentTextIcon,
@@ -13,8 +12,7 @@ import {
 import { HostMediaTab } from '@gatewaze-modules/host-media/admin';
 import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
-import { Badge, Button } from '@/components/ui';
-import { Tabs } from '@/components/ui';
+import { Badge, Button, WorkspaceLayout } from '@/components/ui';
 import type { Tab } from '@/components/ui/Tabs';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { supabase } from '@/lib/supabase';
@@ -114,7 +112,6 @@ export default function NewsletterDetailPage() {
     return <Page title="Not Found"><div className="p-6 text-center text-[var(--gray-9)]">Newsletter not found</div></Page>;
   }
 
-  const accentColor = newsletter.accent_color || '#00a2c7';
   const ic = 'size-4';
 
   const tabs: Tab[] = [
@@ -131,29 +128,21 @@ export default function NewsletterDetailPage() {
 
   return (
     <Page title={newsletter.name}>
-      {/* Hero Header */}
-      <div
-        className="relative -mx-(--margin-x) -mt-(--margin-x) overflow-hidden"
-        style={{ background: `linear-gradient(135deg, #1a1a2e 0%, ${accentColor}30 50%, #1a1a2e 100%)` }}
-      >
-        <div className="absolute inset-0 bg-gradient-to-b from-black/40 to-black/60 pointer-events-none" />
-        <div className="relative" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem) 1.75rem' }}>
-          <button
-            onClick={() => navigate('/newsletters')}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md bg-white/90 backdrop-blur-md border border-white/40 text-gray-900 shadow-sm hover:bg-white transition-colors mb-3"
-          >
-            <ArrowLeftIcon className="w-4 h-4" /> Back
-          </button>
-          <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-white mb-2">{newsletter.name}</h1>
-          <div className="flex items-center gap-3 flex-wrap">
+      <WorkspaceLayout
+        title={`Newsletters: ${newsletter.name}`}
+        tabs={tabs}
+        activeTabId={activeTab}
+        onTabChange={handleTabChange}
+        actions={
+          <div className="flex items-center gap-2 flex-wrap">
             {newsletter.content_category && (
-              <span className="px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-sm text-white/90">{newsletter.content_category}</span>
+              <Badge variant="soft" color="blue" size="1">{newsletter.content_category}</Badge>
             )}
-            <span className="px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-sm text-white/90">
+            <span className="text-sm text-[var(--gray-11)]">
               {newsletter.edition_count || 0} edition{newsletter.edition_count !== 1 ? 's' : ''}
             </span>
             {newsletter.subscriber_count != null && (
-              <span className="px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-sm text-white/90">
+              <span className="text-sm text-[var(--gray-11)]">
                 {newsletter.subscriber_count} subscriber{newsletter.subscriber_count !== 1 ? 's' : ''}
               </span>
             )}
@@ -161,36 +150,30 @@ export default function NewsletterDetailPage() {
               <Badge variant="soft" color="orange" size="1">Setup incomplete</Badge>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Tab Bar */}
-      <div className="-mx-(--margin-x)">
-        <Tabs fullWidth value={activeTab} onChange={handleTabChange} tabs={tabs} />
-      </div>
-
+        }
+      >
       {/* Tab Content */}
       {activeTab === 'details' && (
-        <div className="-mx-(--margin-x) py-6 space-y-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="py-2 space-y-6">
           <NewsletterDetailsForm newsletter={newsletter} onSave={loadNewsletter} />
           <DeleteNewsletterCard newsletterId={newsletter.id} newsletterName={newsletter.name} />
         </div>
       )}
 
       {activeTab === 'template' && (
-        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="py-2">
           <TemplateTabContent newsletterId={newsletter.id} newsletterSlug={newsletter.slug} />
         </div>
       )}
 
       {activeTab === 'editions' && (
-        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="py-2">
           <EditorTab newsletterId={newsletter.id} newsletterSlug={newsletter.slug} setupComplete={newsletter.setup_complete} />
         </div>
       )}
 
       {activeTab === 'media' && (
-        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="py-2">
           <HostMediaTab
             hostId={newsletter.id}
             consumer={{
@@ -205,22 +188,23 @@ export default function NewsletterDetailPage() {
       )}
 
       {activeTab === 'import' && (
-        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="py-2">
           <GDocImportTab newsletterId={newsletter.id} newsletterSlug={newsletter.slug} />
         </div>
       )}
 
       {activeTab === 'replies' && hasBulkEmailing && (
-        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="py-2">
           <NewsletterRepliesTab newsletterId={newsletter.id} />
         </div>
       )}
 
       {activeTab === 'stats' && hasBulkEmailing && (
-        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="py-2">
           <NewsletterStatsTab newsletterId={newsletter.id} />
         </div>
       )}
+      </WorkspaceLayout>
     </Page>
   );
 }

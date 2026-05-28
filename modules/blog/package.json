@@ -1,0 +1,22 @@
+{
+  "name": "@gatewaze-modules/blog",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Blog posts, categories, and content management",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "next": "*",
+    "react": "*"
+  }
+}

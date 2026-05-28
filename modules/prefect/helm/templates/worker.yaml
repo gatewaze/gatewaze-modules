@@ -1,0 +1,73 @@
+###############################################################################
+# Prefect Worker — Python flow executor
+#
+# Rolling update (maxSurge=1, maxUnavailable=0). In-flight flow runs are
+# recovered by Prefect's heartbeat mechanism across restarts.
+###############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "prefect-worker.fullname" . }}-worker
+  labels:
+    {{- include "prefect-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "prefect-worker.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "prefect-worker.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "prefect-worker.serviceAccountName" . }}
+      containers:
+        - name: prefect-worker
+          image: "{{ .Values.worker.image.registry }}/{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          args:
+            - python
+            - -m
+            - src.main
+            - worker
+          envFrom:
+            - configMapRef:
+                name: {{ include "prefect-worker.fullname" . }}-config
+            - secretRef:
+                name: {{ include "prefect-worker.fullname" . }}-secret
+          livenessProbe:
+            exec:
+              command:
+                - pgrep
+                - -f
+                - "prefect.*worker"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,39 @@
+{
+  "name": "@gatewaze-modules/gatewaze-fetch",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "External-facing web fetch and content extraction (spec-gatewaze-fetch.md)",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*",
+    "./lib/*": "./lib/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@supabase/supabase-js": "*",
+    "express": "*",
+    "zod": "*"
+  },
+  "devDependencies": {
+    "@gatewaze/shared": "workspace:*",
+    "@mozilla/readability": "^0.5.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "@types/turndown": "^5.0.4",
+    "express": "^4.21.0",
+    "linkedom": "^0.18.0",
+    "react": "^18.3.0",
+    "turndown": "^7.2.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0",
+    "zod": "^3.23.0"
+  }
+}

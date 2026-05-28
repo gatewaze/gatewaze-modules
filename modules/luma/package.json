@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/luma",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Luma event platform integration for registrations, webhooks, and discount issuance",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}

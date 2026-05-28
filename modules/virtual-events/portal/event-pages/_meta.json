@@ -1,0 +1,7 @@
+{
+  "live": {
+    "label": "Live",
+    "icon": "play",
+    "order": 5
+  }
+}

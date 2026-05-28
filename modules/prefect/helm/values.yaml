@@ -1,0 +1,151 @@
+###############################################################################
+# prefect-worker Helm subchart — default values
+#
+# Install:
+#   helm install gatewaze-prefect-worker \
+#     premium-gatewaze-modules/modules/prefect-worker/helm \
+#     -f my-prefect-values.yaml
+#
+# Wire the resulting ConfigMap + Secret into the core Gatewaze chart by
+# setting its `extraEnvFrom` (see README.md).
+###############################################################################
+
+# -- Instance name used for resource naming (e.g. "example-prefect-worker")
+nameOverride: ""
+fullnameOverride: ""
+
+# =============================================================================
+# Supabase connection — metadata store for Prefect + data plane for agents
+# =============================================================================
+supabase:
+  # -- Supabase project URL reachable from the worker pod
+  # (cloud: https://<project>.supabase.co; local: http://host.docker.internal:54321)
+  url: ""
+
+  # -- Supabase service role key — used by the worker's orchestration code
+  # ONLY (writing to content_discovery_runs, reading config). NEVER passed
+  # to agent tools.
+  serviceRoleKey: ""
+
+  # -- Direct Postgres host for Prefect's Alembic migrations (port 5432)
+  # (cloud: db.<project>.supabase.co; local Supabase CLI: host.docker.internal)
+  databaseHost: ""
+
+  # -- Password for the `prefect_app` Postgres role created by the module's
+  # 001 migration. After install run:
+  #   ALTER ROLE prefect_app WITH PASSWORD '<same value>';
+  databasePassword: ""
+
+  # -- Scoped Supabase JWTs for the two agent roles (see spec A.8).
+  # Sign these with the project's JWT secret; role claim must match the
+  # Postgres role name exactly. See README for generation script.
+  agentReaderKey: ""
+  agentWriterKey: ""
+
+# =============================================================================
+# HMAC webhook secret — signs worker → Gatewaze status callbacks
+# =============================================================================
+webhook:
+  # -- Shared HMAC secret. Generate: openssl rand -hex 32
+  # This SAME value must be set as PREFECT_WEBHOOK_SECRET in the core
+  # Gatewaze config so the content-discovery module can verify signatures.
+  secret: ""
+
+  # -- Base URL the worker POSTs status callbacks to. Typically the
+  # in-cluster service DNS of the gatewaze-api pod.
+  gatewazeBaseUrl: ""
+
+# =============================================================================
+# LLM credentials
+# =============================================================================
+anthropicApiKey: ""
+openaiApiKey: ""
+
+# =============================================================================
+# Self-hosted Firecrawl
+# =============================================================================
+firecrawl:
+  # -- In-cluster URL of the Firecrawl API service
+  apiUrl: ""
+  # -- Optional bearer token if Firecrawl is deployed with auth
+  apiToken: ""
+
+# =============================================================================
+# Third-party data source credentials (optional per spec A.5.1)
+# =============================================================================
+githubToken: ""
+youtubeApiKey: ""
+
+# =============================================================================
+# Shared Redis URL (optional; falls back to in-process rate limiter)
+# =============================================================================
+redisUrl: ""
+
+# =============================================================================
+# Prefect Server
+# =============================================================================
+server:
+  image: prefecthq/prefect:3-latest
+  imagePullPolicy: IfNotPresent
+
+  # -- 30 days retention for flow-run metadata (spec C.1.4 #4)
+  retentionSeconds: 2592000
+
+  # -- Prefect deployment ID returned by `register`. Populate after the
+  # first deploy so admin triggers can target the correct deployment.
+  # Propagated into the ConfigMap for the content-discovery module.
+  discoveryDeploymentId: ""
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# =============================================================================
+# Prefect Worker
+# =============================================================================
+worker:
+  replicas: 1
+  image:
+    registry: ghcr.io/gatewaze
+    repository: prefect-worker
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  workPool: gatewaze-default
+
+  # -- Max Claude Agent SDK turns per session (spec A.8 #4)
+  agentMaxTurns: 25
+
+  # -- Per-stage CostGuard ceilings (USD). Match spec A.9 defaults.
+  costBudgets:
+    discoveryUsd: "0.50"
+    triageUsd: "0.20"
+    processingUsd: "0.30"
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# =============================================================================
+# Image pull secrets / node scheduling (passthrough)
+# =============================================================================
+imagePullSecrets: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# =============================================================================
+# ServiceAccount
+# =============================================================================
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""

@@ -1,0 +1,18 @@
+{
+  "name": "@gatewaze-modules/newsletters-output-beehiiv",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Beehiiv rich text output adapter for newsletters",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}
