@@ -371,6 +371,51 @@ function registerEventsAdminListing(app: Express, projectRoot: string) {
     }
   });
 
+  // Events eligible for outbound Luma sync. This is the server-side
+  // ownership gate for the luma-event-sync agent: only events on a calendar
+  // with luma_sync_enabled = true are returned, so the agent physically
+  // cannot see (or edit) events we merely scraped. Each row carries its
+  // target luma_calendar_id. A row is included only when it has a Luma
+  // counterpart and has changed since its last successful push.
+  app.get('/api/admin/events/luma-syncable', async (_req: Request, res: Response) => {
+    try {
+      const supabase = initSupabase(projectRoot);
+      const { data, error } = await supabase
+        .from('calendars')
+        .select(
+          'luma_calendar_id, calendars_events(events(id, event_id, event_title, event_description, event_start, event_end, event_timezone, event_location, venue_address, event_featured_image, luma_event_id, luma_sync_status, luma_synced_at, updated_at))',
+        )
+        .eq('luma_sync_enabled', true);
+      if (error) throw error;
+
+      type EvRow = {
+        luma_event_id: string | null;
+        luma_synced_at: string | null;
+        updated_at: string | null;
+      } & Record<string, unknown>;
+      const out: Record<string, unknown>[] = [];
+      const seen = new Set<string>();
+      for (const cal of (data ?? []) as Array<Record<string, unknown>>) {
+        const links = (cal.calendars_events ?? []) as Array<{ events: EvRow | null }>;
+        for (const link of links) {
+          const ev = link.events;
+          if (!ev || !ev.luma_event_id) continue;
+          const needsSync =
+            !ev.luma_synced_at ||
+            (ev.updated_at != null && new Date(ev.updated_at) > new Date(ev.luma_synced_at));
+          if (!needsSync) continue;
+          if (seen.has(ev.id as string)) continue;
+          seen.add(ev.id as string);
+          out.push({ ...ev, luma_calendar_id: cal.luma_calendar_id });
+        }
+      }
+      res.json({ events: out });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: { code: 'LUMA_SYNCABLE_INTERNAL_ERROR', message } });
+    }
+  });
+
   // Bulk-delete by ids (admin-only). Pass-through to EventService-style
   // delete; the EventsPage wires this to the selection state.
   app.post('/api/admin/events/bulk-delete', async (req: Request, res: Response) => {
