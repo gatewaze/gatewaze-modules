@@ -88,11 +88,12 @@ async function parseError(res: Response): Promise<AiServiceError> {
 }
 
 export const CanvasAiService = {
-  async generate(req: GenerateRequest): Promise<GenerateResult> {
+  async generate(req: GenerateRequest, signal?: AbortSignal): Promise<GenerateResult> {
     const res = await authedFetch('/api/admin/modules/editor-ai-copilot/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
+      ...(signal ? { signal } : {}),
     });
     if (!res.ok) return { ok: false, error: await parseError(res) };
     const response = (await res.json()) as GenerateResponse;
