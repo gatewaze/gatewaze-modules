@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { TrashIcon } from '@heroicons/react/24/outline';
 import { Button, IconButton } from '@/components/ui';
 import { authedFetch } from '../utils/aiService';
 
@@ -168,7 +169,9 @@ export default function AiMcpServersAdmin(): JSX.Element {
                 </td>
                 <td className="py-2 pr-3 flex gap-1">
                   <Button onClick={() => void onTest(s.id)}>Test</Button>
-                  <IconButton aria-label="Delete" onClick={() => void onDelete(s.id, s.name)}>🗑</IconButton>
+                  <IconButton aria-label="Delete" onClick={() => void onDelete(s.id, s.name)}>
+                    <TrashIcon className="size-4" />
+                  </IconButton>
                 </td>
               </tr>
             ))}
