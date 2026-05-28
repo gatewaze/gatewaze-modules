@@ -6,6 +6,7 @@
 
 import { supabase } from '@/lib/supabase';
 import type { PuckData } from '../components/puck-data-merger.js';
+import type { TranscriptMessage } from '../../lib/transcript.js';
 
 const API_URL = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
 
@@ -98,6 +99,23 @@ export const CanvasAiService = {
     if (!res.ok) return { ok: false, error: await parseError(res) };
     const response = (await res.json()) as GenerateResponse;
     return { ok: true, response };
+  },
+
+  // Load the persisted transcript for a canvas target so the sidebar
+  // rehydrates the conversation on reload. Non-fatal: returns [] on any
+  // failure (a fresh pane is better than a broken one).
+  async loadThread(args: { host_kind: HostKind; host_id: string; target_id: string }): Promise<TranscriptMessage[]> {
+    const qs = new URLSearchParams({
+      host_kind: args.host_kind,
+      host_id: args.host_id,
+      target_id: args.target_id,
+    });
+    const res = await authedFetch(`/api/admin/modules/editor-ai-copilot/thread?${qs.toString()}`, {
+      method: 'GET',
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as { messages?: TranscriptMessage[] };
+    return body.messages ?? [];
   },
 
   // Phase F — file upload.

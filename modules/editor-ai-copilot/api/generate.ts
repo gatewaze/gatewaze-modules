@@ -26,6 +26,7 @@ import {
   validateEditBlockOutput,
 } from '../lib/output-validator.js';
 import { dispatchToolCall } from '../lib/web-tools/dispatch.js';
+import { copilotStatusLabel, approxCostUsd } from '../lib/transcript.js';
 // Phase-2: full skills-repo moved to @gatewaze-modules/ai. Editor
 // keeps a minimal local shim with just the SkillRow type + the
 // readSkillsByIds helper — see lib/skills/skills-repo.ts for the
@@ -144,6 +145,10 @@ export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
       sendError(res, 400, 'invalid_input', `max ${canvasAiConfig.maxDocsPerRequest} doc_ids per request`);
       return;
     }
+
+    // Turn context for transcript persistence — host_kind/host_id/target_id
+    // are guaranteed non-null past the guards above.
+    const turnCtx: TurnContext = { hostKind, hostId, targetId, userId, prompt };
 
     // Authorization — host-kind-aware. Falls back to assertCanAdminHost
     // from the route dep (which is the legacy canvas-auth helper).
@@ -363,6 +368,7 @@ export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
           : `${validation.blocksDropped} of ${validation.blocksReturned} blocks failed validation. See drop_reasons for details.`;
       const errorCode =
         validation.blocksReturned === 0 ? 'ai_needs_info' : 'ai_invalid_output';
+      void persistCopilotTurn(deps, turnCtx, { ok: false, errorCode, message: friendly });
       sendError(res, 422, errorCode, friendly, {
         drop_reasons: validation.dropReasons,
         blocks_returned: validation.blocksReturned,
@@ -370,6 +376,17 @@ export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
       });
       return;
     }
+
+    void persistCopilotTurn(deps, turnCtx, {
+      ok: true,
+      statusLabel: copilotStatusLabel(mode, validation.data.content.length),
+      inputTokens: toolCall.inputTokens,
+      outputTokens: toolCall.outputTokens,
+      durationMs: toolCall.durationMs,
+      costApprox: approxCostUsd(toolCall.inputTokens, toolCall.outputTokens),
+      provider: editorProvider(toolCall.providerName),
+      model: toolCall.model,
+    });
 
     res.status(200).json({
       data: validation.data,
@@ -413,6 +430,13 @@ interface HandleEditBlockArgs {
 
 async function handleEditBlockMode(args: HandleEditBlockArgs): Promise<void> {
   const blockId = args.body.blockId!;
+  const ebCtx: TurnContext = {
+    hostKind: args.hostKind,
+    hostId: args.hostId,
+    targetId: args.targetId,
+    userId: args.userId,
+    prompt: args.prompt,
+  };
   // Find the block in the loaded tree (recursive walk for nested bricks).
   const block = findBlock(args.loaded.data.content, blockId);
   if (!block) {
@@ -489,6 +513,7 @@ async function handleEditBlockMode(args: HandleEditBlockArgs): Promise<void> {
       webSearches: toolCall.webSearches,
       fetchedUrls: toolCall.fetchedUrls,
     });
+    void persistCopilotTurn(args.deps, ebCtx, { ok: false, errorCode: 'ai_invalid_output', message: validation.reason });
     sendError(args.res, 422, 'ai_invalid_output', validation.reason, validation.details as Record<string, unknown> | undefined);
     return;
   }
@@ -506,6 +531,17 @@ async function handleEditBlockMode(args: HandleEditBlockArgs): Promise<void> {
     ...skillsAuditFields(args.skillSelection),
     webSearches: toolCall.webSearches,
     fetchedUrls: toolCall.fetchedUrls,
+  });
+
+  void persistCopilotTurn(args.deps, ebCtx, {
+    ok: true,
+    statusLabel: copilotStatusLabel('edit-block', 1),
+    inputTokens: toolCall.inputTokens,
+    outputTokens: toolCall.outputTokens,
+    durationMs: toolCall.durationMs,
+    costApprox: approxCostUsd(toolCall.inputTokens, toolCall.outputTokens),
+    provider: editorProvider(toolCall.providerName),
+    model: toolCall.model,
   });
 
   args.res.status(200).json({
@@ -698,6 +734,129 @@ async function recordEditorUsage(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Transcript persistence — DB-backed copilot chat history.
+//
+// Each completed turn writes a user + assistant row to the ai module's
+// ai_threads / ai_messages tables, keyed by the natural 4-tuple
+// (use_case='editor-ai-copilot', host_kind, host_id, thread_key=target_id).
+// The sidebar rehydrates from these on reload. Best-effort: a failure
+// here never blocks the generate response (mirrors writeAudit /
+// recordEditorUsage). The server is the source of truth and re-derives
+// the thread from the request on every call, so the client never has to
+// track a thread id.
+
+const COPILOT_USE_CASE = 'editor-ai-copilot';
+
+interface TurnContext {
+  hostKind: HostKind;
+  hostId: string;
+  targetId: string;
+  userId: string;
+  prompt: string;
+}
+
+type TurnOutcome =
+  | {
+      ok: true;
+      statusLabel: string;
+      inputTokens: number;
+      outputTokens: number;
+      durationMs: number;
+      costApprox: number;
+      provider: ProviderName;
+      model: string;
+    }
+  | { ok: false; errorCode: string; message: string };
+
+async function ensureCopilotThread(deps: CreateGenerateRouteDeps, ctx: TurnContext): Promise<string | null> {
+  const sb = deps.supabase;
+  const byKey = () =>
+    sb
+      .from('ai_threads')
+      .select('id')
+      .eq('use_case', COPILOT_USE_CASE)
+      .eq('host_kind', ctx.hostKind)
+      .eq('host_id', ctx.hostId)
+      .eq('thread_key', ctx.targetId)
+      .maybeSingle();
+
+  const sel = await byKey();
+  if (sel?.data?.id) return sel.data.id as string;
+
+  const ins = await sb
+    .from('ai_threads')
+    .insert({
+      use_case: COPILOT_USE_CASE,
+      host_kind: ctx.hostKind,
+      host_id: ctx.hostId,
+      thread_key: ctx.targetId,
+      status: 'idle',
+      created_by: ctx.userId,
+    })
+    .select('id')
+    .maybeSingle();
+  if (ins?.data?.id) return ins.data.id as string;
+
+  // Lost an insert race against a concurrent turn — re-select the winner.
+  const re = await byKey();
+  return (re?.data?.id as string) ?? null;
+}
+
+async function persistCopilotTurn(deps: CreateGenerateRouteDeps, ctx: TurnContext, outcome: TurnOutcome): Promise<void> {
+  try {
+    const threadId = await ensureCopilotThread(deps, ctx);
+    if (!threadId) return;
+
+    await deps.supabase.from('ai_messages').insert({
+      thread_id: threadId,
+      role: 'user',
+      status: 'complete',
+      content: ctx.prompt,
+      created_by: ctx.userId,
+    });
+
+    if (outcome.ok) {
+      await deps.supabase.from('ai_messages').insert({
+        thread_id: threadId,
+        role: 'assistant',
+        status: 'complete',
+        content: '',
+        structured: {
+          copilot: { status_label: outcome.statusLabel, status_state: 'success' },
+          usage: {
+            tokens: outcome.inputTokens + outcome.outputTokens,
+            cost_approx: outcome.costApprox,
+            duration_ms: outcome.durationMs,
+          },
+        },
+        provider: outcome.provider,
+        model: outcome.model,
+        input_tokens: outcome.inputTokens,
+        output_tokens: outcome.outputTokens,
+        cost_micro_usd: Math.round(outcome.costApprox * 1_000_000),
+        latency_ms: outcome.durationMs,
+        created_by: ctx.userId,
+      });
+    } else {
+      await deps.supabase.from('ai_messages').insert({
+        thread_id: threadId,
+        role: 'assistant',
+        status: 'failed',
+        content: outcome.message,
+        structured: { copilot: { status_label: `Error: ${outcome.errorCode}`, status_state: 'error' } },
+        error_code: outcome.errorCode,
+        error_message: outcome.message,
+        created_by: ctx.userId,
+      });
+    }
+  } catch (err) {
+    deps.logger.warn('copilot.transcript_persist_failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 interface ProviderErrCtx {
   hostKind: HostKind;
   hostId: string;
@@ -765,6 +924,12 @@ async function handleProviderError(
     docIds: ctx.docIds,
     warnings: [message],
   });
+
+  void persistCopilotTurn(
+    deps,
+    { hostKind: ctx.hostKind, hostId: ctx.hostId, targetId: ctx.targetId, userId: ctx.userId, prompt: ctx.prompt },
+    { ok: false, errorCode: code, message },
+  );
 
   if (retryAfter !== null) res.setHeader('Retry-After', String(retryAfter));
   sendError(res, httpStatus, code, message);

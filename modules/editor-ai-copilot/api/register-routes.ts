@@ -25,6 +25,7 @@ import WebSocketImpl from 'ws';
 import type { ModuleRuntimeContext } from '@gatewaze/shared';
 import { createGenerateRoute } from './generate.js';
 import { createDocumentsRoute } from './documents.js';
+import { createThreadLoadRoute } from './thread.js';
 // Skill source / webhook / skills routes moved to the ai module in
 // Phase 2 — they now mount under /api/modules/ai/admin/*.
 import { registerHostAdapter } from '../lib/host-adapter-registry.js';
@@ -90,6 +91,7 @@ export async function registerEditorAiCopilotRoutes(app: Express, ctx: ModuleRun
 
   const generateHandler = createGenerateRoute({ supabase: supabase as never, logger, assertCanAdminHost });
   const documentsHandler = createDocumentsRoute({ supabase: supabase as never, logger });
+  const threadLoadHandler = createThreadLoadRoute({ supabase: supabase as never, logger, assertCanAdminHost });
 
   // Minimal JWT decode middleware — the platform's `requireJwt` middleware
   // lives in @gatewaze/api which isn't exposed to modules, so we extract
@@ -124,11 +126,12 @@ export async function registerEditorAiCopilotRoutes(app: Express, ctx: ModuleRun
   router.use(decodeJwt as any);
   router.post('/generate', generateHandler);
   router.post('/documents', documentsHandler);
+  router.get('/thread', threadLoadHandler);
   app.use('/api/admin/modules/editor-ai-copilot', router);
 
   // Touch ctx to silence the unused-arg lint now that we no longer
   // pull enqueueJob off it (skill routes moved out).
   void ctx;
 
-  logger.info('[editor-ai-copilot] routes mounted at /api/admin/modules/editor-ai-copilot/{generate,documents}');
+  logger.info('[editor-ai-copilot] routes mounted at /api/admin/modules/editor-ai-copilot/{generate,documents,thread}');
 }
