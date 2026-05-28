@@ -108,6 +108,16 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  // Claude-Code-style send-while-running queue. Messages the operator
+  // submits while an assistant turn is in flight are parked here and
+  // drained one-at-a-time after the current run completes (the
+  // backend rejects concurrent runs on a thread with 409 thread_busy,
+  // so we serialise client-side rather than firing them in parallel).
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  // Re-entrancy lock for the drain effect: set synchronously the
+  // moment we start sending a queued message so a re-render in the
+  // async gap before `sending` flips can't pop a second item.
+  const drainLockRef = useRef(false);
   const [provider, setProvider] = useState<AiAutoOrProvider>(defaultProvider);
   const [model, setModel] = useState<string | undefined>(defaultModel);
   const [models, setModels] = useState<AiModelInfo[]>([]);
@@ -361,7 +371,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
         el.scrollTop = el.scrollHeight;
       });
     }
-  }, [messages, liveEvents, liveContent]);
+  }, [messages, liveEvents, liveContent, queuedMessages]);
 
   // ── Build the assistant-ui external store adapter ──────────────────
   const isRunning = useMemo(
@@ -369,48 +379,88 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
     [messages],
   );
 
+  // POST one message now. Used both for immediate sends (idle thread)
+  // and for draining the queue. Returns when the turn has been
+  // enqueued server-side + the optimistic refresh has landed.
+  const sendMessageNow = async (text: string): Promise<void> => {
+    if (!thread) return;
+    setSending(true);
+    try {
+      await postMessage({
+        threadId: thread.id,
+        message: text,
+        provider,
+        model,
+        ...(recipeOverride ? { recipeOverridePath: recipeOverride } : {}),
+      });
+      // Optimistic refresh; the polling effect will pull the
+      // completed assistant turn.
+      const result = await getThread(thread.id);
+      setThread(result.thread);
+      setMessages(result.messages);
+    } catch (err) {
+      console.error('[ai-chat] send failed', err);
+      toast.error(err instanceof Error ? err.message : 'Send failed');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const cancelActiveRun = async (): Promise<void> => {
+    if (!thread) return;
+    const last = [...messages].reverse().find((m) => m.status === 'running');
+    if (!last) return;
+    try {
+      await cancelMessage(thread.id, last.id);
+      const result = await getThread(thread.id);
+      setMessages(result.messages);
+    } catch (err) {
+      console.error('[ai-chat] cancel failed', err);
+    }
+  };
+
   const runtime = useExternalStoreRuntime<AiMessage>({
     messages,
-    isRunning: isRunning || sending,
+    // Report NOT-running to assistant-ui so its composer stays
+    // enabled while a turn is in flight — that's what lets the
+    // operator type + submit follow-ups Claude-Code-style. We render
+    // our own spinner / live-events / cancel UI from the derived
+    // `isRunning` below, so we don't need assistant-ui's running
+    // affordances.
+    isRunning: false,
     convertMessage,
     onNew: async (message) => {
       if (!thread) return;
       const text = extractText(message);
       if (!text.trim()) return;
-      setSending(true);
-      try {
-        await postMessage({
-          threadId: thread.id,
-          message: text,
-          provider,
-          model,
-          ...(recipeOverride ? { recipeOverridePath: recipeOverride } : {}),
-        });
-        // Optimistic refresh; the polling effect will pull the
-        // completed assistant turn.
-        const result = await getThread(thread.id);
-        setThread(result.thread);
-        setMessages(result.messages);
-      } catch (err) {
-        console.error('[ai-chat] send failed', err);
-        toast.error(err instanceof Error ? err.message : 'Send failed');
-      } finally {
-        setSending(false);
+      // If a run is in flight (or one is sending, or a queue already
+      // exists), park the message and let the drain effect send it
+      // when the thread frees up — preserves submit order.
+      if (isRunning || sending || queuedMessages.length > 0) {
+        setQueuedMessages((prev) => [...prev, text]);
+        return;
       }
+      await sendMessageNow(text);
     },
-    onCancel: async () => {
-      if (!thread) return;
-      const last = [...messages].reverse().find((m) => m.status === 'running');
-      if (!last) return;
-      try {
-        await cancelMessage(thread.id, last.id);
-        const result = await getThread(thread.id);
-        setMessages(result.messages);
-      } catch (err) {
-        console.error('[ai-chat] cancel failed', err);
-      }
-    },
+    onCancel: cancelActiveRun,
   });
+
+  // Drain the queue one message at a time once the thread is idle.
+  // The lock ref guards the async window between popping and
+  // `sending` flipping true; isRunning gates against the next turn
+  // already being in flight.
+  useEffect(() => {
+    if (drainLockRef.current) return;
+    if (isRunning || sending) return;
+    if (queuedMessages.length === 0) return;
+    drainLockRef.current = true;
+    const [next, ...rest] = queuedMessages;
+    setQueuedMessages(rest);
+    void sendMessageNow(next!).finally(() => {
+      drainLockRef.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunning, sending, queuedMessages]);
 
   async function handleReset() {
     if (!thread) return;
@@ -481,7 +531,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
               {isRunning && (
                 <button
                   type="button"
-                  onClick={() => void runtime.thread.cancelRun?.()}
+                  onClick={() => void cancelActiveRun()}
                   className="text-xs text-neutral-600 hover:text-neutral-900 px-2"
                   title="Cancel"
                 >
@@ -623,20 +673,33 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                 </div>
               </div>
             )}
+            {/* Queued follow-ups the operator submitted while a turn was
+                in flight. Rendered as dimmed right-aligned user bubbles
+                with a "queued" tag so they can see what's pending; they
+                send automatically in order once the thread frees up. */}
+            {queuedMessages.map((q, i) => (
+              <div key={`queued-${i}`} className="flex justify-end">
+                <div
+                  className="max-w-[80%] rounded-2xl rounded-br-sm text-white px-3 py-2 text-sm whitespace-pre-wrap opacity-50"
+                  style={{ backgroundColor: 'var(--accent-9)' }}
+                >
+                  {q}
+                  <span className="ml-2 text-[10px] uppercase tracking-wide opacity-80">queued</span>
+                </div>
+              </div>
+            ))}
           </div>
 
           <ComposerPrimitive.Root className={composerClass}>
             <ComposerPrimitive.Input
-              placeholder={isRunning ? 'Working…' : 'Type a message…'}
+              placeholder={isRunning ? 'Working… (your message will queue)' : 'Type a message…'}
               className="form-input flex-1 text-sm"
-              disabled={isRunning || sending}
             />
             <ComposerPrimitive.Send
               className="inline-flex items-center px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm disabled:opacity-50"
-              disabled={isRunning || sending}
             >
               <PaperAirplaneIcon className="size-4 mr-1" />
-              Send
+              {isRunning ? 'Queue' : 'Send'}
             </ComposerPrimitive.Send>
           </ComposerPrimitive.Root>
         </div>
