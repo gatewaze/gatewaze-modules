@@ -1,0 +1,25 @@
+{
+  "name": "@premium-gatewaze-modules/sites-publisher-cloudflare-pages",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Cloudflare Pages publisher for the sites module — implements IExternalPublisher.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./adapter": "./adapter.ts",
+    "./lib/api": "./lib/api/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@gatewaze-modules/sites": "*"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0"
+  }
+}

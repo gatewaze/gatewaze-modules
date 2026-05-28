@@ -1,0 +1,674 @@
+'use client'
+
+// @ts-nocheck — portal deps are resolved at build time via webpack alias
+
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
+import DOMPurify from 'isomorphic-dompurify'
+
+/** Normalize an option (string | { label, description }) for rendering. */
+interface NormalizedOption { label: string; description?: string }
+function normalizeOption(raw: unknown): NormalizedOption {
+  if (typeof raw === 'string') return { label: raw }
+  if (raw && typeof raw === 'object') {
+    const r = raw as Record<string, unknown>
+    return {
+      label: typeof r.label === 'string' ? r.label : '',
+      description: typeof r.description === 'string' && r.description.trim() ? r.description : undefined,
+    }
+  }
+  return { label: '' }
+}
+function normalizeOptions(options: unknown): NormalizedOption[] {
+  if (!Array.isArray(options)) return []
+  return options.map(normalizeOption).filter(o => o.label !== '')
+}
+
+/** Sanitize HTML for display in question text and option descriptions. */
+function safeHtml(html: string | null | undefined): string {
+  if (!html) return ''
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'b', 'i', 'u', 's', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'code', 'pre', 'span'],
+    ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
+  })
+}
+
+interface Question {
+  id: string
+  question_text: string
+  question_type: 'select' | 'multi_select' | 'text' | 'yes_no'
+  options: Array<string | { label: string; description?: string }> | null
+  is_required: boolean
+  applies_to: 'all' | 'accepted_only'
+  current_answer: unknown
+}
+
+interface MemberEvent {
+  member_event_id: string
+  event_id: string
+  event_title: string
+  event_start: string | null
+  event_end: string | null
+  event_location: string | null
+  rsvp_status: string
+  rsvp_deadline: string | null
+  linked_rsvp: boolean
+  questions: Question[]
+}
+
+interface Member {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  is_lead_booker: boolean
+  is_plus_one: boolean
+  events: MemberEvent[]
+}
+
+interface Party {
+  id: string
+  name: string
+  status: string
+  max_plus_ones: number
+  plus_ones_added: number
+  version: number
+}
+
+interface RsvpEntry {
+  rsvp_status: string
+  answers: Record<string, unknown>
+}
+
+interface Assignment {
+  event_id: string
+  sub_event_id: string | null
+}
+
+interface NewPlusOne {
+  first_name: string
+  last_name: string
+  // Each plus-one gets one member_event row per assignment — so they inherit
+  // the inviter's sub-event breakdown (not just the parent event). Earlier
+  // versions only sent event_ids, which left sub_event_id null on the
+  // created rows and produced "(no sub-event)" entries in the admin.
+  assignments: Assignment[]
+  rsvp_statuses: Record<string, string>
+  answers: { event_id: string; question_id: string; answer: unknown }[]
+}
+
+function assignmentKey(a: Assignment): string {
+  return `${a.event_id}|${a.sub_event_id ?? ''}`
+}
+
+interface Props {
+  eventIdentifier: string
+  primaryColor: string
+  brandName: string
+  darkMode?: boolean
+}
+
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return ''
+  // Render in the viewer's timezone (matches the event-page hero), with a
+  // short timezone label so 14:30 BST reads correctly for a UK guest
+  // looking at a UTC-stored 13:30 timestamp.
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+  const datePart = `${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`
+  const timePart = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  let tzLabel = ''
+  try {
+    const formatted = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
+    const m = formatted.match(/[A-Z]{2,5}$/)
+    if (m) tzLabel = ` ${m[0]}`
+  } catch {
+    // ignore; timezone label is best-effort
+  }
+  return `${datePart} at ${timePart}${tzLabel}`
+}
+
+function isDeadlinePassed(deadline: string | null): boolean {
+  if (!deadline) return false
+  return new Date(deadline) < new Date()
+}
+
+function getMemberName(m: { first_name: string | null; last_name: string | null }): string {
+  return [m.first_name, m.last_name].filter(Boolean).join(' ') || 'Guest'
+}
+
+export default function RsvpPageClient({ eventIdentifier, primaryColor }: Props) {
+  const [party, setParty] = useState<Party | null>(null)
+  const [members, setMembers] = useState<Member[]>([])
+  const [loading, setLoading] = useState(true)
+  const [noToken, setNoToken] = useState(false)
+  const [rsvpData, setRsvpData] = useState<Record<string, RsvpEntry>>({})
+  const [plusOnes, setPlusOnes] = useState<NewPlusOne[]>([])
+  const [submitting, setSubmitting] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+  const [submitResult, setSubmitResult] = useState<Record<string, number> | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const searchParams = useSearchParams()
+
+  // Scope the localStorage key to the current event so an RSVP code
+  // for Event A doesn't bleed into Event B when the user navigates.
+  const storageKey = `invite_short_code:${eventIdentifier}`
+
+  // Store invite token from URL query param (from short link redirect)
+  useEffect(() => {
+    const inviteParam = searchParams.get('invite')
+    if (inviteParam) {
+      localStorage.setItem(storageKey, inviteParam)
+      // Also keep the legacy global key for backwards compat with old links
+      localStorage.setItem('invite_short_code', inviteParam)
+    }
+  }, [searchParams, storageKey])
+
+  const loadParty = useCallback(async () => {
+    // Check query param first, then event-scoped storage, then legacy global
+    const token =
+      searchParams.get('invite') ||
+      localStorage.getItem(storageKey) ||
+      localStorage.getItem('invite_short_code')
+    if (token) {
+      localStorage.setItem(storageKey, token)
+    }
+    if (!token) {
+      setNoToken(true)
+      setLoading(false)
+      return
+    }
+
+    try {
+      const res = await fetch('/api/invite-rsvp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'load', token }),
+      })
+
+      if (!res.ok) {
+        setNoToken(true)
+        setLoading(false)
+        return
+      }
+
+      const data = await res.json()
+
+      // Verify the party actually belongs to this event. The API returns
+      // an event_identifier that we can match against the current page's
+      // event. If they don't match, the user is viewing a different
+      // event's RSVP page with a stale token — treat as "no token".
+      if (data.event_identifier && eventIdentifier &&
+          data.event_identifier !== eventIdentifier) {
+        setNoToken(true)
+        setLoading(false)
+        return
+      }
+
+      setParty(data.party)
+      setMembers(data.members || [])
+
+      // Initialize RSVP data
+      const initial: Record<string, RsvpEntry> = {}
+      for (const member of data.members || []) {
+        for (const event of member.events) {
+          const answers: Record<string, unknown> = {}
+          for (const q of event.questions) {
+            if (q.current_answer != null) answers[q.id] = q.current_answer
+          }
+          initial[event.member_event_id] = { rsvp_status: event.rsvp_status, answers }
+        }
+      }
+      setRsvpData(initial)
+    } catch {
+      setNoToken(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [storageKey, eventIdentifier])
+
+  useEffect(() => { loadParty() }, [loadParty])
+
+  const updateRsvp = (memberEventId: string, status: string, member?: Member) => {
+    setRsvpData(prev => {
+      const updated = { ...prev, [memberEventId]: { ...prev[memberEventId], rsvp_status: status } }
+
+      // If accepting and this is a linked sub-event, auto-accept all other linked sub-events for this member
+      if (status === 'accepted' && member) {
+        const thisEvent = member.events.find(e => e.member_event_id === memberEventId)
+        if (thisEvent?.linked_rsvp) {
+          for (const otherEvent of member.events) {
+            if (otherEvent.member_event_id !== memberEventId && otherEvent.linked_rsvp) {
+              updated[otherEvent.member_event_id] = { ...prev[otherEvent.member_event_id], rsvp_status: 'accepted' }
+            }
+          }
+        }
+      }
+
+      // If declining and this is a linked sub-event, auto-decline all other linked sub-events
+      if (status === 'declined' && member) {
+        const thisEvent = member.events.find(e => e.member_event_id === memberEventId)
+        if (thisEvent?.linked_rsvp) {
+          for (const otherEvent of member.events) {
+            if (otherEvent.member_event_id !== memberEventId && otherEvent.linked_rsvp) {
+              updated[otherEvent.member_event_id] = { ...prev[otherEvent.member_event_id], rsvp_status: 'declined' }
+            }
+          }
+        }
+      }
+
+      return updated
+    })
+  }
+
+  const updateAnswer = (memberEventId: string, questionId: string, answer: unknown) => {
+    setRsvpData(prev => ({
+      ...prev,
+      [memberEventId]: {
+        ...prev[memberEventId],
+        answers: { ...prev[memberEventId]?.answers, [questionId]: answer },
+      },
+    }))
+  }
+
+  // Dedupe by (event_id, sub_event_id) — not just event_id — so parties with
+  // multiple sub-events under one parent event (Day + Evening of the wedding)
+  // don't collapse into a single assignment.
+  const allEvents = members.flatMap(m => m.events).reduce((acc, e) => {
+    const key = `${e.event_id}|${e.sub_event_id ?? ''}`
+    if (!acc.find(x => `${x.event_id}|${x.sub_event_id ?? ''}` === key)) acc.push(e)
+    return acc
+  }, [] as MemberEvent[])
+
+  const remainingPlusOnes = (party?.max_plus_ones || 0) - (party?.plus_ones_added || 0) - plusOnes.length
+
+  const addPlusOne = () => {
+    const assignments: Assignment[] = allEvents.map(e => ({ event_id: e.event_id, sub_event_id: e.sub_event_id }))
+    setPlusOnes(prev => [...prev, {
+      first_name: '', last_name: '',
+      assignments,
+      rsvp_statuses: Object.fromEntries(assignments.map(a => [assignmentKey(a), 'accepted'])),
+      answers: [],
+    }])
+  }
+
+  const removePlusOne = (i: number) => setPlusOnes(prev => prev.filter((_, idx) => idx !== i))
+
+  const updatePlusOne = (i: number, field: string, value: unknown) => {
+    setPlusOnes(prev => prev.map((po, idx) => idx === i ? { ...po, [field]: value } : po))
+  }
+
+  const handleSubmit = async () => {
+    if (!party) return
+    setSubmitting(true)
+    setError(null)
+
+    try {
+      const token = localStorage.getItem('invite_short_code')
+      const responses = Object.entries(rsvpData).map(([member_event_id, data]) => ({
+        member_event_id,
+        rsvp_status: data.rsvp_status,
+        answers: Object.entries(data.answers)
+          .filter(([, v]) => v != null && v !== '')
+          .map(([question_id, answer]) => ({ question_id, answer })),
+      }))
+
+      const body: Record<string, unknown> = {
+        action: 'submit', token, version: party.version, responses,
+      }
+      if (plusOnes.length > 0) {
+        body.new_plus_ones = plusOnes.filter(po => po.first_name || po.last_name)
+      }
+
+      const res = await fetch('/api/invite-rsvp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      const result = await res.json()
+      if (!res.ok) {
+        const msgs: Record<string, string> = {
+          VERSION_CONFLICT: 'Someone else updated this RSVP. Please refresh.',
+          VALIDATION_ERROR: 'Please fill in all required fields.',
+          DEADLINE_PASSED: 'The RSVP deadline has passed for some events.',
+          PLUS_ONE_LIMIT: result.message || 'Plus-one limit exceeded.',
+        }
+        setError(msgs[result.error] || result.message || 'Something went wrong.')
+        return
+      }
+
+      setSubmitResult(result.summary)
+      setSubmitted(true)
+    } catch {
+      setError('Network error. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (loading) {
+    return <div className="py-12 text-center text-gray-500">Loading your invitation...</div>
+  }
+
+  if (noToken || !party) {
+    return (
+      <div className="py-12 text-center">
+        <p className="text-gray-500">No active invitation found. Please use your invite link to access this page.</p>
+      </div>
+    )
+  }
+
+  if (submitted && submitResult) {
+    return (
+      <div className="py-12 text-center">
+        <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6" style={{ backgroundColor: `${primaryColor}30`, animation: 'rsvp-pop 0.4s cubic-bezier(0.34,1.56,0.64,1) both' }}>
+          <svg className="w-10 h-10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 13l4 4L19 7" style={{ strokeDasharray: 24, strokeDashoffset: 24, animation: 'rsvp-draw 0.5s 0.3s ease forwards' }} />
+          </svg>
+        </div>
+        <style>{`
+          @keyframes rsvp-draw { to { stroke-dashoffset: 0; } }
+          @keyframes rsvp-pop { 0% { transform: scale(0); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        `}</style>
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-2">RSVP Confirmed!</h1>
+        <p className="text-gray-500 mb-6">Thank you for responding.</p>
+        <div className="flex justify-center gap-6 text-sm mb-6">
+          {submitResult.accepted > 0 && <div><p className="text-2xl font-bold text-green-400">{submitResult.accepted}</p><p className="text-gray-500">Attending</p></div>}
+          {submitResult.declined > 0 && <div><p className="text-2xl font-bold text-red-400">{submitResult.declined}</p><p className="text-gray-500">Not attending</p></div>}
+        </div>
+        <button onClick={() => { setSubmitted(false); loadParty() }} className="text-sm font-medium hover:underline cursor-pointer" style={{ color: primaryColor }}>
+          Edit your response
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-8">
+      <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">RSVP</h1>
+
+      {members.map(member => (
+        <div key={member.id} className="bg-white/5 backdrop-blur-[10px] rounded-2xl border border-white/10 overflow-hidden">
+          <div className="px-5 py-3 border-b border-white/10">
+            <h3 className="text-lg font-semibold text-gray-900">
+              {getMemberName(member)}
+              {member.is_plus_one && <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300">Guest</span>}
+            </h3>
+          </div>
+
+          <div className="p-5 space-y-5">
+            {member.events.map((event, eventIndex) => {
+              const entry = rsvpData[event.member_event_id]
+              const locked = isDeadlinePassed(event.rsvp_deadline)
+              const isAccepted = entry?.rsvp_status === 'accepted'
+
+              // For linked sub-events, only show the first one's panel at
+              // all — the rest are auto-accepted via updateRsvp's linked
+              // propagation. Their questions get merged into this panel
+              // when the first is accepted, so the guest makes a single
+              // attending/not-attending decision and answers every
+              // linked event's questions in one place.
+              const linkedEvents = member.events.filter(e => e.linked_rsvp)
+              const isLinked = event.linked_rsvp
+              const isFirstLinked = isLinked && linkedEvents[0]?.member_event_id === event.member_event_id
+              const isSecondaryLinked = isLinked && !isFirstLinked
+
+              if (isSecondaryLinked) return null
+
+              // Gather the questions shown on this panel. Each question
+              // carries its own member_event_id so updateAnswer writes
+              // to the correct rsvpData entry — answers for linked
+              // event B stay under B's key even though the question was
+              // rendered inside event A's accepted block.
+              type RenderableQuestion = {
+                q: typeof event.questions[number]
+                memberEventId: string
+              }
+              const ownQuestions: RenderableQuestion[] = event.questions
+                .filter(q => q.applies_to === 'all' || isAccepted)
+                .map(q => ({ q, memberEventId: event.member_event_id }))
+              const mergedLinkedQuestions: RenderableQuestion[] = isFirstLinked && isAccepted
+                ? linkedEvents
+                    .filter(e => e.member_event_id !== event.member_event_id)
+                    .flatMap(e => e.questions.map(q => ({ q, memberEventId: e.member_event_id })))
+                : []
+              const renderQuestions = [...ownQuestions, ...mergedLinkedQuestions]
+
+              return (
+                <div key={event.member_event_id} className="space-y-3">
+                  <div>
+                    <h4 className="font-medium text-gray-900">{event.event_title}</h4>
+                    {event.event_start && <p className="text-sm text-gray-500 mt-0.5">{formatDate(event.event_start)}</p>}
+                    {isFirstLinked && linkedEvents.length > 1 && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        Includes: {linkedEvents.slice(1).map(e => e.event_title).join(', ')}
+                      </p>
+                    )}
+                  </div>
+
+                  {locked ? (
+                    <div className="inline-block px-3 py-1.5 text-sm font-medium text-gray-400 bg-white/5 rounded-lg">RSVP Closed</div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <button onClick={() => updateRsvp(event.member_event_id, 'accepted', member)}
+                        className={`flex-1 py-2.5 px-4 text-sm font-semibold transition-all cursor-pointer ${isAccepted ? 'portal-primary-button text-white' : 'border-2 border-white/10 text-gray-800'}`}
+                        style={isAccepted
+                          ? { '--button-bg': primaryColor, borderRadius: 'var(--radius-control)' } as React.CSSProperties
+                          : { borderRadius: 'var(--radius-control)' }}>
+                        <span className="relative z-10">Attending</span>
+                      </button>
+                      <button onClick={() => updateRsvp(event.member_event_id, 'declined', member)}
+                        className={`flex-1 py-2.5 px-4 text-sm font-semibold transition-all cursor-pointer ${entry?.rsvp_status === 'declined' ? 'portal-primary-button text-white' : 'border-2 border-white/10 text-gray-800'}`}
+                        style={entry?.rsvp_status === 'declined'
+                          ? { '--button-bg': '#ef4444', borderRadius: 'var(--radius-control)' } as React.CSSProperties
+                          : { borderRadius: 'var(--radius-control)' }}>
+                        <span className="relative z-10">Not Attending</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {isAccepted && !locked && renderQuestions.length > 0 && (
+                    <div className="space-y-3 pl-4 border-l-2" style={{ borderColor: `${primaryColor}60` }}>
+                      {renderQuestions.map(({ q, memberEventId }) => {
+                        // rsvpData is keyed per member_event_id; for
+                        // merged-linked questions we read/write against
+                        // the question's OWN member_event_id, not ours.
+                        const qEntry = rsvpData[memberEventId]
+                        const answerValue = qEntry?.answers[q.id]
+                        return (
+                          <div key={`${memberEventId}:${q.id}`}>
+                            <div className="text-sm font-medium mb-2 text-gray-500 [&_p]:m-0 [&_p+p]:mt-1">
+                              <span dangerouslySetInnerHTML={{ __html: safeHtml(q.question_text) }} />
+                              {q.is_required && <span className="text-red-500 ml-0.5">*</span>}
+                            </div>
+                            {q.question_type === 'select' && q.options && (
+                              <div className="space-y-2">
+                                {normalizeOptions(q.options).map(opt => {
+                                  const sel = (answerValue as string) === opt.label
+                                  const inputId = `${memberEventId}:${q.id}:${opt.label}`
+                                  return (
+                                    <label
+                                      key={opt.label}
+                                      htmlFor={inputId}
+                                      className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
+                                        sel ? 'border-current bg-white/10' : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                                      }`}
+                                      style={sel ? { borderColor: primaryColor } : undefined}
+                                    >
+                                      <input
+                                        id={inputId}
+                                        type="radio"
+                                        name={`${memberEventId}:${q.id}`}
+                                        checked={sel}
+                                        onChange={() => updateAnswer(memberEventId, q.id, opt.label)}
+                                        className="mt-1 cursor-pointer"
+                                        style={sel ? { accentColor: primaryColor } : undefined}
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-semibold text-gray-700 dark:text-white">{opt.label}</div>
+                                        {opt.description && (
+                                          <div
+                                            className="text-xs text-gray-500 dark:text-white/70 mt-1 [&_p]:m-0 [&_p+p]:mt-1 [&_a]:underline"
+                                            dangerouslySetInnerHTML={{ __html: safeHtml(opt.description) }}
+                                          />
+                                        )}
+                                      </div>
+                                    </label>
+                                  )
+                                })}
+                              </div>
+                            )}
+                            {q.question_type === 'multi_select' && q.options && (
+                              <div className="space-y-2">
+                                {normalizeOptions(q.options).map(opt => {
+                                  const sel = Array.isArray(answerValue) ? (answerValue as string[]).includes(opt.label) : false
+                                  const inputId = `${memberEventId}:${q.id}:${opt.label}`
+                                  return (
+                                    <label
+                                      key={opt.label}
+                                      htmlFor={inputId}
+                                      className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
+                                        sel ? 'border-current bg-white/10' : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                                      }`}
+                                      style={sel ? { borderColor: primaryColor } : undefined}
+                                    >
+                                      <input
+                                        id={inputId}
+                                        type="checkbox"
+                                        checked={sel}
+                                        onChange={() => {
+                                          const cur = Array.isArray(answerValue) ? [...(answerValue as string[])] : []
+                                          updateAnswer(memberEventId, q.id, sel ? cur.filter(x => x !== opt.label) : [...cur, opt.label])
+                                        }}
+                                        className="mt-1 cursor-pointer"
+                                        style={sel ? { accentColor: primaryColor } : undefined}
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-semibold text-gray-700 dark:text-white">{opt.label}</div>
+                                        {opt.description && (
+                                          <div
+                                            className="text-xs text-gray-500 dark:text-white/70 mt-1 [&_p]:m-0 [&_p+p]:mt-1 [&_a]:underline"
+                                            dangerouslySetInnerHTML={{ __html: safeHtml(opt.description) }}
+                                          />
+                                        )}
+                                      </div>
+                                    </label>
+                                  )
+                                })}
+                              </div>
+                            )}
+                            {q.question_type === 'text' && (
+                              <textarea value={(answerValue as string) || ''} onChange={e => updateAnswer(memberEventId, q.id, e.target.value)}
+                                rows={2} className="w-full px-3 py-2 text-sm border border-white/10 rounded-lg bg-white/10 text-gray-900 focus:outline-none focus:ring-2 resize-y" />
+                            )}
+                            {q.question_type === 'yes_no' && (
+                              <div className="flex gap-2">
+                                {['Yes', 'No'].map(val => (
+                                  <button key={val} onClick={() => updateAnswer(memberEventId, q.id, val === 'Yes')}
+                                    className={`px-4 py-1.5 text-sm rounded-lg border-2 font-medium cursor-pointer transition-colors ${answerValue === (val === 'Yes') ? 'text-white' : 'border-white/10 text-gray-800'}`}
+                                    style={answerValue === (val === 'Yes') ? { backgroundColor: primaryColor, borderColor: primaryColor } : {}}>
+                                    {val}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+
+      {(remainingPlusOnes > 0 || plusOnes.length > 0) && (
+        <div className="bg-white/5 backdrop-blur-[10px] rounded-2xl border border-white/10 p-5">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Additional Guests</h3>
+          {plusOnes.map((po, i) => (
+            <div key={i} className="mb-4 p-4 bg-white/5 rounded-lg space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-500">Guest {i + 1}</span>
+                <button onClick={() => removePlusOne(i)} className="text-sm text-red-500 hover:text-red-700 cursor-pointer">Remove</button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input type="text" placeholder="First name" value={po.first_name} onChange={e => updatePlusOne(i, 'first_name', e.target.value)}
+                  className="px-3 py-2 text-sm border border-white/10 rounded-lg bg-white/10 text-gray-900 placeholder-gray-400" />
+                <input type="text" placeholder="Last name" value={po.last_name} onChange={e => updatePlusOne(i, 'last_name', e.target.value)}
+                  className="px-3 py-2 text-sm border border-white/10 rounded-lg bg-white/10 text-gray-900 placeholder-gray-400" />
+              </div>
+              {allEvents.length > 1 && (
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Attending:</label>
+                  {allEvents.map(ev => {
+                    const evAssignment: Assignment = { event_id: ev.event_id, sub_event_id: ev.sub_event_id }
+                    const key = assignmentKey(evAssignment)
+                    const checked = po.assignments.some(a => assignmentKey(a) === key)
+                    return (
+                      <label key={key} className="flex items-center gap-2 text-sm cursor-pointer text-gray-500">
+                        <input type="checkbox" checked={checked}
+                          onChange={() => updatePlusOne(i, 'assignments', checked
+                            ? po.assignments.filter(a => assignmentKey(a) !== key)
+                            : [...po.assignments, evAssignment])}
+                          className="rounded" />{ev.event_title}
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+          {remainingPlusOnes > 0 && (
+            <button onClick={addPlusOne} className="text-sm font-medium hover:underline cursor-pointer" style={{ color: primaryColor }}>
+              + Add a guest ({remainingPlusOnes} remaining)
+            </button>
+          )}
+        </div>
+      )}
+
+      {error && <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-300">{error}</div>}
+
+      {(() => {
+        // Every sub-event whose deadline hasn't passed needs a yes/no answer
+        // before we let the user confirm. Locked events are excluded — they
+        // can't be changed, so demanding a response would be a trap.
+        const requiredIds = members.flatMap(m =>
+          m.events
+            .filter(e => !isDeadlinePassed(e.rsvp_deadline))
+            .map(e => e.member_event_id),
+        )
+        const pendingCount = requiredIds.filter(id => {
+          const s = rsvpData[id]?.rsvp_status
+          return s !== 'accepted' && s !== 'declined'
+        }).length
+        const allResponded = requiredIds.length > 0 && pendingCount === 0
+        const disabled = submitting || !allResponded
+
+        return (
+          <>
+            {!allResponded && requiredIds.length > 0 && (
+              <p className="text-sm text-center text-gray-500">
+                {pendingCount === 1
+                  ? '1 response remaining before you can confirm'
+                  : `${pendingCount} responses remaining before you can confirm`}
+              </p>
+            )}
+            <button
+              onClick={handleSubmit}
+              disabled={disabled}
+              className={`w-full py-4 text-white font-semibold text-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer portal-primary-button ${allResponded ? 'glow-button' : ''}`}
+              style={{ '--button-bg': primaryColor, borderRadius: 'var(--radius-control)' } as React.CSSProperties}
+            >
+              <span className="relative z-10">{submitting ? 'Submitting...' : 'Confirm RSVP'}</span>
+            </button>
+          </>
+        )
+      })()}
+    </div>
+  )
+}

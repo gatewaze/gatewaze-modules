@@ -1,0 +1,5 @@
+# Vendored Helm chart dependencies. Operators run `helm dependency update`
+# (or `helm dependency build` against the committed Chart.lock) before
+# install. We commit Chart.lock for reproducible versions but don't bloat
+# the repo with the ~600KB upstream tarball.
+charts/*.tgz

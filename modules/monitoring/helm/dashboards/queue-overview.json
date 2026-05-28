@@ -1,0 +1,145 @@
+{
+  "title": "Gatewaze — Queue Overview",
+  "uid": "gatewaze-queue-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "tags": ["gatewaze"],
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "queue",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "$datasource" },
+        "query": "label_values(gatewaze_queue_depth, queue)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "module",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "$datasource" },
+        "query": "label_values(gatewaze_queue_depth, module)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Queue depth — waiting",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "targets": [
+        {
+          "expr": "sum by (queue, module) (gatewaze_queue_depth{queue=~\"$queue\", module=~\"$module\", state=\"waiting\"})",
+          "legendFormat": "{{queue}} ({{module}})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 2,
+      "title": "Queue depth — active",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "targets": [
+        {
+          "expr": "sum by (queue, module) (gatewaze_queue_depth{queue=~\"$queue\", module=~\"$module\", state=\"active\"})",
+          "legendFormat": "{{queue}} ({{module}})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 3,
+      "title": "Enqueue rate (jobs/sec)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "targets": [
+        {
+          "expr": "sum by (queue, name) (rate(gatewaze_job_enqueued_total{queue=~\"$queue\", module=~\"$module\"}[5m]))",
+          "legendFormat": "{{queue}} / {{name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 4,
+      "title": "Job duration p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (queue, name, le) (rate(gatewaze_job_duration_seconds_bucket{queue=~\"$queue\", module=~\"$module\", status=\"completed\"}[5m])))",
+          "legendFormat": "p50 {{queue}}/{{name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (queue, name, le) (rate(gatewaze_job_duration_seconds_bucket{queue=~\"$queue\", module=~\"$module\", status=\"completed\"}[5m])))",
+          "legendFormat": "p95 {{queue}}/{{name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (queue, name, le) (rate(gatewaze_job_duration_seconds_bucket{queue=~\"$queue\", module=~\"$module\", status=\"completed\"}[5m])))",
+          "legendFormat": "p99 {{queue}}/{{name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 5,
+      "title": "Redis health",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 16, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "targets": [
+        { "expr": "min(gatewaze_queue_health)", "legendFormat": "health" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } } }
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Job state distribution (current)",
+      "type": "bargauge",
+      "gridPos": { "x": 6, "y": 16, "w": 18, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "targets": [
+        {
+          "expr": "sum by (queue, state) (gatewaze_queue_depth{queue=~\"$queue\", module=~\"$module\"})",
+          "legendFormat": "{{queue}} / {{state}}"
+        }
+      ],
+      "options": { "displayMode": "gradient", "orientation": "horizontal" }
+    }
+  ]
+}

@@ -1,0 +1,771 @@
+/**
+ * POST /api/admin/modules/editor-ai-copilot/generate
+ *
+ * The core AI generation endpoint. Resolves the target via the
+ * polymorphic HostAdapter, builds the prompt + tool schema, calls
+ * the LLM, validates output, persists an audit row, returns
+ * PuckData.
+ *
+ * Per spec-canvas-ai-copilot.md §4.1.
+ */
+
+import type { Request, Response } from 'express';
+import { canvasAiConfig, isCanvasAiUsable } from '../lib/canvas-ai-config.js';
+import { checkGenerateRateLimit } from '../lib/rate-limiter.js';
+import { insertAuditRow } from '../lib/audit-log.js';
+import { getHostAdapter } from '../lib/host-adapter-registry.js';
+import {
+  buildGeneratePrompt,
+  buildEditBlockPrompt,
+  buildGenerateToolSchema,
+  buildEditBlockToolSchema,
+  type SourceDocSummary,
+} from '../lib/prompt-builder.js';
+import {
+  validateGenerateOutput,
+  validateEditBlockOutput,
+} from '../lib/output-validator.js';
+import { dispatchToolCall } from '../lib/web-tools/dispatch.js';
+// Phase-2: full skills-repo moved to @gatewaze-modules/ai. Editor
+// keeps a minimal local shim with just the SkillRow type + the
+// readSkillsByIds helper — see lib/skills/skills-repo.ts for the
+// rationale (single-purpose, no business logic).
+import { readSkillsByIds } from '../lib/skills/skills-repo.js';
+import { selectActiveSkillsForPrompt, type SkillSelectionResult } from '../lib/skills/select-for-prompt.js';
+import {
+  InvalidToolOutputError,
+  ProviderError,
+  ProviderRateLimitError,
+  ProviderTimeoutError,
+  type BlockDefView,
+  type GenerateMode,
+  type HostKind,
+  type AuditStatus,
+  type ProviderName,
+} from '../lib/types.js';
+
+interface RequestWithUser extends Request {
+  userId?: string;
+}
+
+// Structural Supabase surface this module needs. Must match the
+// SupabaseLike used by audit-log.ts / rate-limiter.ts so we can hand
+// the same client through without coercion.
+interface SupabaseLike {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  from(table: string): any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: any | null }>;
+}
+
+interface CreateGenerateRouteDeps {
+  supabase: SupabaseLike;
+  logger: {
+    warn: (msg: string, fields?: Record<string, unknown>) => void;
+    info: (msg: string, fields?: Record<string, unknown>) => void;
+    error: (msg: string, fields?: Record<string, unknown>) => void;
+  };
+  assertCanAdminHost: (
+    hostKind: HostKind,
+    hostId: string,
+    userId: string,
+  ) => Promise<{ ok: true } | { ok: false; httpStatus: number; code: string; message: string }>;
+}
+
+interface GenerateRequestBody {
+  host_kind?: HostKind;
+  host_id?: string;
+  target_id?: string;
+  prompt?: string;
+  mode?: GenerateMode;
+  anchorBlockId?: string;
+  blockId?: string;
+  doc_ids?: string[];
+  provider?: 'anthropic' | 'openai';
+  model?: string;
+  /**
+   * Optional client-supplied block defs (newsletters' react-email
+   * registry case). When present we bypass the DB query against
+   * `templates_block_defs`. We still ajv-compile each entry's schema —
+   * malformed defs are filtered out by the validator at output time,
+   * and an attacker can't smuggle past the host adapter (which still
+   * ran assertCanAdminHost above this point).
+   */
+  block_defs?: unknown[];
+}
+
+function sendError(res: Response, status: number, code: string, message: string, details?: Record<string, unknown>): void {
+  res.status(status).json({ error: { code, message, ...(details ? { details } : {}) } });
+}
+
+export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
+  return async function generateHandler(req: RequestWithUser, res: Response): Promise<void> {
+    if (!isCanvasAiUsable()) {
+      sendError(res, 503, 'ai_provider_unavailable', 'no provider key configured or feature disabled');
+      return;
+    }
+    const userId = req.userId;
+    if (!userId) {
+      sendError(res, 401, 'unauthenticated', 'session required');
+      return;
+    }
+    const body = req.body as GenerateRequestBody;
+    const hostKind = body.host_kind;
+    const hostId = body.host_id;
+    const targetId = body.target_id;
+    const mode = body.mode;
+    const prompt = (body.prompt ?? '').trim();
+
+    if (!hostKind || !hostId || !targetId) {
+      sendError(res, 400, 'invalid_input', 'host_kind, host_id, target_id required');
+      return;
+    }
+    if (!mode) {
+      sendError(res, 400, 'invalid_input', 'mode required');
+      return;
+    }
+    if (!prompt) {
+      sendError(res, 400, 'invalid_input', 'prompt required');
+      return;
+    }
+    if (prompt.length > canvasAiConfig.maxPromptChars) {
+      sendError(res, 400, 'invalid_input', `prompt exceeds ${canvasAiConfig.maxPromptChars} chars`);
+      return;
+    }
+    if (mode === 'insert-after' && !body.anchorBlockId) {
+      sendError(res, 400, 'invalid_input', 'mode=insert-after requires anchorBlockId');
+      return;
+    }
+    if (mode === 'edit-block' && !body.blockId) {
+      sendError(res, 400, 'invalid_input', 'mode=edit-block requires blockId');
+      return;
+    }
+    if (body.doc_ids && body.doc_ids.length > canvasAiConfig.maxDocsPerRequest) {
+      sendError(res, 400, 'invalid_input', `max ${canvasAiConfig.maxDocsPerRequest} doc_ids per request`);
+      return;
+    }
+
+    // Authorization — host-kind-aware. Falls back to assertCanAdminHost
+    // from the route dep (which is the legacy canvas-auth helper).
+    const auth = await deps.assertCanAdminHost(hostKind, hostId, userId);
+    if (!auth.ok) {
+      sendError(res, auth.httpStatus, auth.code, auth.message);
+      return;
+    }
+
+    // Rate limits.
+    const rate = await checkGenerateRateLimit(deps.supabase, userId, hostKind, hostId);
+    if (!rate.ok) {
+      res.setHeader('Retry-After', String(rate.retryAfterSec));
+      sendError(res, 429, 'rate_limited', `quota exceeded (${rate.scope})`, {
+        retry_after_seconds: rate.retryAfterSec,
+        scope: rate.scope,
+      });
+      return;
+    }
+
+    // Resolve host → PuckData + library_id.
+    const adapter = getHostAdapter(hostKind);
+    if (!adapter) {
+      sendError(res, 400, 'invalid_input', `no host adapter registered for ${hostKind}`);
+      return;
+    }
+    let loaded: Awaited<ReturnType<typeof adapter.loadTarget>>;
+    try {
+      loaded = await adapter.loadTarget({ hostKind, hostId, targetId });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'site_page_not_found' || msg === 'newsletter_edition_not_found' || msg === 'page_not_in_blocks_mode') {
+        sendError(res, 404, 'not_found', msg);
+        return;
+      }
+      sendError(res, 500, 'internal_error', msg);
+      return;
+    }
+
+    // Block defs come from EITHER the client (preferred when supplied —
+    // newsletters' react-email registry case, where no DB rows back the
+    // available components) OR a DB query against `templates_block_defs`
+    // (the sites case). Either way we end up with a `BlockDefView[]`
+    // that the prompt-builder, tool-schema-builder, and output-validator
+    // consume identically.
+    let blockDefs: BlockDefView[];
+    if (Array.isArray(body.block_defs) && body.block_defs.length > 0) {
+      blockDefs = sanitiseClientBlockDefs(body.block_defs, loaded.themeKind);
+    } else {
+      const blockDefsRes = await deps.supabase
+        .from('templates_block_defs')
+        .select('id, key, name, description, schema, has_bricks, theme_kind')
+        .eq('library_id', loaded.libraryId)
+        .eq('is_current', true)
+        .eq('theme_kind', loaded.themeKind);
+      blockDefs = ((blockDefsRes?.data as BlockDefView[] | null) ?? [])
+        .filter((d) => d.theme_kind === loaded.themeKind);
+    }
+
+    if (blockDefs.length === 0) {
+      await writeAudit(deps, {
+        hostKind, hostId, targetId,
+        userId, prompt, mode,
+        blockId: body.blockId ?? null,
+        provider: 'anthropic', model: '?',
+        inputTokens: 0, outputTokens: 0, durationMs: 0,
+        status: 'no_blocks',
+        blocksReturned: 0, blocksDropped: 0,
+        docIds: body.doc_ids ?? [],
+        warnings: [],
+      });
+      sendError(res, 422, 'ai_no_blocks', `no ${loaded.themeKind} blocks in this library — connect a theme repo`);
+      return;
+    }
+
+    // Phase F — load source docs if any.
+    let sourceDocs: SourceDocSummary[] = [];
+    if (body.doc_ids && body.doc_ids.length > 0) {
+      const nowIso = new Date().toISOString();
+      const docsRes = await deps.supabase
+        .from('canvas_ai_documents')
+        .select('id, filename, source, extracted_text')
+        .in('id', body.doc_ids)
+        .eq('user_id', userId)
+        .eq('host_kind', hostKind)
+        .eq('host_id', hostId)
+        .eq('target_id', targetId)
+        .gt('expires_at', nowIso);
+      type DocRow = { id: string; filename: string; source: 'upload' | 'url'; extracted_text: string };
+      const docs = (docsRes?.data as DocRow[] | null) ?? [];
+      if (docs.length !== body.doc_ids.length) {
+        // At least one doc missing / expired / not owned.
+        sendError(res, 404, 'not_found', 'one or more doc_ids are missing, expired, or belong to a different target');
+        return;
+      }
+      sourceDocs = docs.map((d) => ({ doc_id: d.id, filename: d.filename, source: d.source, extracted_text: d.extracted_text }));
+    }
+
+    // AI Skills (git-driven brand guidelines). Killswitch gates the
+    // whole subsystem; when disabled, generation proceeds without
+    // brand-specific guidance. Otherwise we read the host's
+    // `active_skill_ids`, look up the bodies in `ai_skills`, and run
+    // them through the budget enforcer.
+    const skillSelection = await loadActiveSkills(deps.supabase, hostKind, hostId);
+
+    // Provider + model are now resolved inside @gatewaze-modules/ai's
+    // runChat via ProviderRouter (per-user credentials + use_case
+    // defaults from ai_use_cases). The editor only forwards optional
+    // overrides — runChat validates the model against the use_case's
+    // allowed_models allow-list. Audit logging gets the resolved
+    // provider/model back via dispatchToolCall's return shape.
+
+    // Build prompt + tool schema based on mode.
+    if (mode === 'edit-block') {
+      await handleEditBlockMode({
+        deps, res, body, loaded, blockDefs, sourceDocs, userId, prompt, hostKind, hostId, targetId,
+        skillSelection,
+      });
+      return;
+    }
+
+    // generate / append / insert-after / edit
+    //
+    // The current page state is ALWAYS passed to the prompt builder.
+    // For edit mode it's the source-of-truth for the revision; for
+    // other modes the prompt builder formats it as a read-only outline
+    // so the AI can spot duplicates, reference specific blocks the
+    // user mentioned, and avoid emitting conflicting content.
+    const promptResult = buildGeneratePrompt({
+      mode,
+      hostKind,
+      themeKind: loaded.themeKind,
+      blockDefs,
+      userPrompt: prompt,
+      currentData: loaded.data,
+      sourceDocs,
+      activeSkills: skillSelection.included,
+      ...(loaded.pageTitle ? { pageTitle: loaded.pageTitle } : {}),
+      ...(loaded.pagePath ? { pagePath: loaded.pagePath } : {}),
+    });
+    const toolSchemaResult = buildGenerateToolSchema(blockDefs, { allowIdField: mode === 'edit' });
+    const allWarnings: string[] = [...promptResult.warnings];
+    if (toolSchemaResult.truncatedBlockKeys.length > 0) {
+      allWarnings.push(`large_library_truncated: ${toolSchemaResult.truncatedBlockKeys.length} blocks dropped to fit tool-schema cap`);
+    }
+
+    let toolCall;
+    try {
+      toolCall = await dispatchToolCall({
+        supabase: deps.supabase,
+        systemPrompt: promptResult.systemPrompt,
+        userPrompt: prompt,
+        toolName: 'emit_page',
+        toolDescription: 'Emit the page content in the structured format described.',
+        toolInputSchema: toolSchemaResult.schema,
+        maxOutputTokens: canvasAiConfig.maxOutputTokens,
+        timeoutMs: canvasAiConfig.providerTimeoutMs,
+        userId,
+        ...(body.provider ? { providerOverride: body.provider } : {}),
+        ...(body.model ? { modelOverride: body.model } : {}),
+      });
+    } catch (err) {
+      await handleProviderError(deps, res, err, {
+        hostKind, hostId, targetId, blockId: null,
+        userId, prompt, mode,
+        provider: (body.provider ?? 'anthropic') as ProviderName,
+        docIds: body.doc_ids ?? [],
+      });
+      return;
+    }
+
+    const validation = validateGenerateOutput({
+      output: toolCall.input,
+      blockDefs,
+      mode,
+      ...(mode === 'edit' ? { currentData: loaded.data } : {}),
+    });
+    allWarnings.push(...validation.warnings);
+
+    let status: AuditStatus;
+    if (validation.blocksReturned === 0) {
+      status = 'invalid_output';
+    } else if (validation.data.content.length === 0) {
+      status = 'validation_dropped_all';
+    } else {
+      status = 'ok';
+    }
+
+    const auditId = await writeAudit(deps, {
+      hostKind, hostId, targetId,
+      userId, prompt, mode,
+      blockId: body.blockId ?? null,
+      provider: editorProvider(toolCall.providerName), model: toolCall.model,
+      inputTokens: toolCall.inputTokens, outputTokens: toolCall.outputTokens, durationMs: toolCall.durationMs,
+      status,
+      blocksReturned: validation.blocksReturned, blocksDropped: validation.blocksDropped,
+      docIds: body.doc_ids ?? [],
+      warnings: allWarnings,
+      ...skillsAuditFields(skillSelection),
+      webSearches: toolCall.webSearches,
+      fetchedUrls: toolCall.fetchedUrls,
+    });
+
+    if (status !== 'ok') {
+      // Three failure shapes:
+      //   - blocksReturned === 0 → the LLM produced an empty content
+      //     array. Per the system prompt this is the formal "refusal"
+      //     signal: the AI couldn't fulfil the request without
+      //     fabricating facts (e.g. asked to research an event it
+      //     doesn't have grounded info for). Tell the user explicitly
+      //     — the canvas isn't a surface for AI apologies.
+      //   - blocksReturned > 0 but everything was dropped → schema
+      //     violations etc. The drop_reasons explain why.
+      const friendly =
+        validation.blocksReturned === 0
+          ? "The AI couldn't fulfil this request without making up facts. Try giving it the details (dates, names, venue, links), attaching a source document via the + button, or asking it to write a placeholder draft you'll fill in."
+          : `${validation.blocksDropped} of ${validation.blocksReturned} blocks failed validation. See drop_reasons for details.`;
+      const errorCode =
+        validation.blocksReturned === 0 ? 'ai_needs_info' : 'ai_invalid_output';
+      sendError(res, 422, errorCode, friendly, {
+        drop_reasons: validation.dropReasons,
+        blocks_returned: validation.blocksReturned,
+        blocks_dropped: validation.blocksDropped,
+      });
+      return;
+    }
+
+    res.status(200).json({
+      data: validation.data,
+      warnings: allWarnings,
+      usage: {
+        input_tokens: toolCall.inputTokens,
+        output_tokens: toolCall.outputTokens,
+        provider: editorProvider(toolCall.providerName),
+        model: toolCall.model,
+        duration_ms: toolCall.durationMs,
+      },
+      // Per spec-ai-chatbot-web-search.md §5.2 — operators see what
+      // tools the model used. Both arrays are empty unless web tools
+      // were enabled for this request.
+      tool_calls: {
+        web_searches: toolCall.webSearches,
+        fetched_urls: toolCall.fetchedUrls,
+      },
+      audit_id: auditId,
+    });
+  };
+}
+
+// ---------------------------------------------------------------------------
+
+interface HandleEditBlockArgs {
+  deps: CreateGenerateRouteDeps;
+  res: Response;
+  body: GenerateRequestBody;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  loaded: any;
+  blockDefs: BlockDefView[];
+  sourceDocs: SourceDocSummary[];
+  userId: string;
+  prompt: string;
+  hostKind: HostKind;
+  hostId: string;
+  targetId: string;
+  skillSelection: SkillSelectionResult;
+}
+
+async function handleEditBlockMode(args: HandleEditBlockArgs): Promise<void> {
+  const blockId = args.body.blockId!;
+  // Find the block in the loaded tree (recursive walk for nested bricks).
+  const block = findBlock(args.loaded.data.content, blockId);
+  if (!block) {
+    await writeAudit(args.deps, {
+      hostKind: args.hostKind, hostId: args.hostId, targetId: args.targetId,
+      userId: args.userId, prompt: args.prompt, mode: 'edit-block',
+      blockId,
+      provider: (args.body.provider ?? 'anthropic') as ProviderName, model: '?',
+      inputTokens: 0, outputTokens: 0, durationMs: 0,
+      status: 'block_not_found',
+      blocksReturned: 0, blocksDropped: 0,
+      docIds: args.body.doc_ids ?? [],
+      warnings: [],
+      ...skillsAuditFields(args.skillSelection),
+    });
+    sendError(args.res, 404, 'block_not_found', 'blockId not on this page');
+    return;
+  }
+  const def = args.blockDefs.find((d) => d.key === block.type);
+  if (!def) {
+    sendError(args.res, 422, 'ai_invalid_output', `block type ${block.type} has no current def (theme drift)`);
+    return;
+  }
+
+  const promptResult = buildEditBlockPrompt({
+    blockDef: def,
+    currentProps: block.props,
+    currentData: args.loaded.data,
+    blockId,
+    userPrompt: args.prompt,
+    sourceDocs: args.sourceDocs,
+    activeSkills: args.skillSelection.included,
+  });
+  const toolSchema = buildEditBlockToolSchema(def);
+
+  let toolCall;
+  try {
+    toolCall = await dispatchToolCall({
+      supabase: args.deps.supabase,
+      systemPrompt: promptResult.systemPrompt,
+      userPrompt: args.prompt,
+      toolName: 'emit_block_props',
+      toolDescription: 'Emit the updated block props in the structured format described.',
+      toolInputSchema: toolSchema,
+      maxOutputTokens: canvasAiConfig.maxOutputTokens,
+      timeoutMs: canvasAiConfig.providerTimeoutMs,
+      userId: args.userId,
+      ...(args.body.provider ? { providerOverride: args.body.provider } : {}),
+      ...(args.body.model ? { modelOverride: args.body.model } : {}),
+    });
+  } catch (err) {
+    await handleProviderError(args.deps, args.res, err, {
+      hostKind: args.hostKind, hostId: args.hostId, targetId: args.targetId, blockId,
+      userId: args.userId, prompt: args.prompt, mode: 'edit-block',
+      provider: (args.body.provider ?? 'anthropic') as ProviderName,
+      docIds: args.body.doc_ids ?? [],
+    });
+    return;
+  }
+
+  const validation = validateEditBlockOutput(toolCall.input, def);
+  if (!validation.ok) {
+    await writeAudit(args.deps, {
+      hostKind: args.hostKind, hostId: args.hostId, targetId: args.targetId,
+      userId: args.userId, prompt: args.prompt, mode: 'edit-block',
+      blockId,
+      provider: editorProvider(toolCall.providerName), model: toolCall.model,
+      inputTokens: toolCall.inputTokens, outputTokens: toolCall.outputTokens, durationMs: toolCall.durationMs,
+      status: 'invalid_output',
+      blocksReturned: 1, blocksDropped: 1,
+      docIds: args.body.doc_ids ?? [],
+      warnings: [],
+      ...skillsAuditFields(args.skillSelection),
+      webSearches: toolCall.webSearches,
+      fetchedUrls: toolCall.fetchedUrls,
+    });
+    sendError(args.res, 422, 'ai_invalid_output', validation.reason, validation.details as Record<string, unknown> | undefined);
+    return;
+  }
+
+  const auditId = await writeAudit(args.deps, {
+    hostKind: args.hostKind, hostId: args.hostId, targetId: args.targetId,
+    userId: args.userId, prompt: args.prompt, mode: 'edit-block',
+    blockId,
+    provider: editorProvider(toolCall.providerName), model: toolCall.model,
+    inputTokens: toolCall.inputTokens, outputTokens: toolCall.outputTokens, durationMs: toolCall.durationMs,
+    status: 'ok',
+    blocksReturned: 1, blocksDropped: 0,
+    docIds: args.body.doc_ids ?? [],
+    warnings: validation.warnings,
+    ...skillsAuditFields(args.skillSelection),
+    webSearches: toolCall.webSearches,
+    fetchedUrls: toolCall.fetchedUrls,
+  });
+
+  args.res.status(200).json({
+    data: {
+      content: [{ type: block.type, props: { id: blockId, ...validation.props } }],
+      root: { props: {} },
+    },
+    warnings: validation.warnings,
+    usage: {
+      input_tokens: toolCall.inputTokens,
+      output_tokens: toolCall.outputTokens,
+      provider: editorProvider(toolCall.providerName),
+      model: toolCall.model,
+      duration_ms: toolCall.durationMs,
+    },
+    tool_calls: {
+      web_searches: toolCall.webSearches,
+      fetched_urls: toolCall.fetchedUrls,
+    },
+    audit_id: auditId,
+  });
+}
+
+/**
+ * Validate client-supplied block defs and coerce to BlockDefView[].
+ * Drops entries that lack a key, name, or compileable JSON schema —
+ * those would crash ajv downstream anyway. Caller has already passed
+ * the host-admin check, so this is shape validation, not authorisation.
+ */
+function sanitiseClientBlockDefs(raw: unknown[], themeKind: 'website' | 'email'): BlockDefView[] {
+  const out: BlockDefView[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const obj = item as Record<string, unknown>;
+    if (typeof obj.key !== 'string' || obj.key.length === 0) continue;
+    if (typeof obj.name !== 'string' || obj.name.length === 0) continue;
+    if (!obj.schema || typeof obj.schema !== 'object' || Array.isArray(obj.schema)) continue;
+    out.push({
+      id: typeof obj.id === 'string' ? obj.id : `client:${i}`,
+      key: obj.key,
+      name: obj.name,
+      description: typeof obj.description === 'string' ? obj.description : null,
+      schema: obj.schema as Record<string, unknown>,
+      has_bricks: typeof obj.has_bricks === 'boolean' ? obj.has_bricks : false,
+      // Force the theme to match what the host adapter declared — we
+      // don't trust the client to flip this and bypass cross-theme
+      // generation (e.g. asking for website blocks on an email host).
+      theme_kind: themeKind,
+    });
+  }
+  return out;
+}
+
+interface BlockEntry {
+  type: string;
+  props: { id: string; children?: BlockEntry[]; [k: string]: unknown };
+}
+
+/**
+ * The editor's audit log only tracks 'anthropic' | 'openai' (the
+ * provider columns predate Gemini support). When runChat resolves
+ * a Gemini model we collapse it onto 'openai' for audit-log purposes
+ * — the per-call cost row in ai_usage_events still carries the
+ * accurate provider for billing.
+ */
+function editorProvider(p: 'anthropic' | 'openai' | 'gemini'): ProviderName {
+  return p === 'anthropic' ? 'anthropic' : 'openai';
+}
+
+function findBlock(content: ReadonlyArray<BlockEntry>, blockId: string): BlockEntry | null {
+  for (const b of content) {
+    if (b.props.id === blockId) return b;
+    if (Array.isArray(b.props.children)) {
+      const inner = findBlock(b.props.children as BlockEntry[], blockId);
+      if (inner) return inner;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the host's `active_skill_ids`, fetch the matching skill bodies,
+ * and run them through the budget enforcer. When `skillsEnabled` is
+ * false (killswitch) we return an empty selection — same effect as
+ * "no skills configured." Errors are swallowed and reported via the
+ * empty selection: generation proceeds without brand voice rather
+ * than failing.
+ */
+async function loadActiveSkills(
+  supabase: SupabaseLike,
+  hostKind: HostKind,
+  hostId: string,
+): Promise<SkillSelectionResult> {
+  const empty: SkillSelectionResult = { included: [], dropped: [], totalIncludedChars: 0, audit: [] };
+  if (!canvasAiConfig.skillsEnabled) return empty;
+
+  try {
+    const hostTable = hostKind === 'newsletter' ? 'newsletters_template_collections' : 'sites';
+    const hostRes = await supabase
+      .from(hostTable)
+      .select('active_skill_ids')
+      .eq('id', hostId)
+      .maybeSingle();
+    const activeIds = ((hostRes?.data as { active_skill_ids?: string[] } | null)?.active_skill_ids ?? []);
+    if (activeIds.length === 0) return empty;
+
+    const skills = await readSkillsByIds(supabase, activeIds);
+    return selectActiveSkillsForPrompt(skills, canvasAiConfig.maxSkillsBytes);
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * Build the audit-row skill payload (ids / hashes / truncations) from
+ * a SkillSelectionResult. Returns a partial-AuditRow that callers can
+ * spread into their full audit-row.
+ */
+function skillsAuditFields(selection: SkillSelectionResult): {
+  activeSkillIds: string[];
+  activeSkillHashes: string[];
+  activeSkillTruncations: SkillSelectionResult['audit'];
+} {
+  return {
+    activeSkillIds: selection.included.map((s) => s.id),
+    activeSkillHashes: selection.included.map((s) => s.content_hash),
+    activeSkillTruncations: selection.audit,
+  };
+}
+
+async function writeAudit(deps: CreateGenerateRouteDeps, row: Parameters<typeof insertAuditRow>[1]): Promise<string | null> {
+  const r = await insertAuditRow(deps.supabase, row);
+  if (!r.ok) {
+    deps.logger.warn('canvas_ai_audit_insert_failed', { error: r.error });
+    return null;
+  }
+  // Phase C of spec-ai-module §16. The canvas_ai_audit_log row still
+  // carries the block-level audit (which blocks were dropped, which
+  // skills were active, etc.) — but every editor-ai-copilot call now
+  // ALSO writes one ai_usage_events row so spend lands on the unified
+  // cost dashboard. Errors here are non-fatal; the editor flow
+  // continues even if the ai module isn't installed yet.
+  void recordEditorUsage(deps, row, r.id).catch((err) => {
+    deps.logger.warn('ai.usage_record_failed', {
+      audit_id: r.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+  return r.id;
+}
+
+/**
+ * Lazy-resolve @gatewaze-modules/ai's recordUsage + write the cost row.
+ * The mapping from canvas_ai_audit_log columns to ai_usage_events is
+ * straightforward: tokens + provider + model are direct; status maps
+ * 'ok'→'ok' and everything else to 'error'; the cross-reference to
+ * canvas_ai_audit_log lives in usage_event_id (FK already added by
+ * migration 005 of the ai module — that table doesn't enforce the FK
+ * yet for cross-module compatibility, but the join works for queries).
+ */
+async function recordEditorUsage(
+  deps: CreateGenerateRouteDeps,
+  row: Parameters<typeof insertAuditRow>[1],
+  auditId: string | null,
+): Promise<void> {
+  if (!auditId) return;
+  // Skip non-completed rows — we record them on the final attempt only.
+  if (row.status !== 'ok' && row.status !== 'block_validation_failed') return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mod = await import('@gatewaze-modules/ai/lib/runner.js' as any).catch(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    () => import('../../../../gatewaze-modules/modules/ai/lib/runner.ts' as any),
+  );
+  if (typeof mod.recordUsage !== 'function') return;
+  await mod.recordUsage(deps.supabase, {
+    userId: row.user_id ?? null,
+    useCase: 'editor-ai-copilot',
+    threadId: null,
+    messageId: null,
+    kind: 'llm',
+    provider: row.provider,
+    model: row.model,
+    inputTokens: row.input_tokens ?? 0,
+    outputTokens: row.output_tokens ?? 0,
+    latencyMs: row.duration_ms ?? 0,
+    status: row.status === 'ok' ? 'ok' : 'error',
+  });
+}
+
+interface ProviderErrCtx {
+  hostKind: HostKind;
+  hostId: string;
+  targetId: string;
+  blockId: string | null;
+  userId: string;
+  prompt: string;
+  mode: GenerateMode;
+  provider: 'anthropic' | 'openai';
+  docIds: ReadonlyArray<string>;
+}
+
+async function handleProviderError(
+  deps: CreateGenerateRouteDeps,
+  res: Response,
+  err: unknown,
+  ctx: ProviderErrCtx,
+): Promise<void> {
+  let status: AuditStatus = 'provider_error';
+  let httpStatus = 502;
+  let code = 'ai_provider_error';
+  let message = err instanceof Error ? err.message : String(err);
+  let retryAfter: number | null = null;
+
+  if (err instanceof ProviderTimeoutError) {
+    status = 'timeout';
+    httpStatus = 504;
+    code = 'ai_timeout';
+    message = 'provider exceeded wall-clock';
+  } else if (err instanceof ProviderRateLimitError) {
+    status = 'rate_limited';
+    httpStatus = 429;
+    code = 'rate_limited';
+    message = 'upstream provider rate limited';
+    retryAfter = err.retryAfterSeconds;
+  } else if (err instanceof ProviderError) {
+    httpStatus = 502;
+    code = 'ai_provider_error';
+    // Surface the upstream detail (Anthropic / OpenAI error body). The
+    // SDK's err.message contains the full response body for 4xx errors;
+    // earlier this only logged `<provider> <status>`, which made
+    // debugging tool/schema rejections impossible.
+    message = `${err.provider} ${err.upstreamStatus}: ${err.message}`;
+    // eslint-disable-next-line no-console
+    console.error('[editor-ai-copilot] provider error', {
+      provider: err.provider,
+      status: err.upstreamStatus,
+      detail: err.message,
+    });
+  } else if (err instanceof InvalidToolOutputError) {
+    status = 'invalid_output';
+    httpStatus = 422;
+    code = 'ai_invalid_output';
+    message = err.message;
+  }
+
+  await writeAudit(deps, {
+    hostKind: ctx.hostKind, hostId: ctx.hostId, targetId: ctx.targetId,
+    userId: ctx.userId, prompt: ctx.prompt, mode: ctx.mode,
+    blockId: ctx.blockId,
+    provider: ctx.provider, model: '?',
+    inputTokens: 0, outputTokens: 0, durationMs: 0,
+    status,
+    blocksReturned: 0, blocksDropped: 0,
+    docIds: ctx.docIds,
+    warnings: [message],
+  });
+
+  if (retryAfter !== null) res.setHeader('Retry-After', String(retryAfter));
+  sendError(res, httpStatus, code, message);
+}

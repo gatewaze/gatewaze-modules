@@ -1,0 +1,103 @@
+{{- if .Values.podMonitor.enabled }}
+{{/*
+PodMonitors for the three Gatewaze processes that emit Prometheus metrics:
+  - worker  — port 9090, /metrics
+  - scheduler — port 9091, /metrics
+  - api — main HTTP port (default 3002), /metrics
+
+Selectors target pods labelled by the core gatewaze chart, which uses
+`app.kubernetes.io/name` + `app.kubernetes.io/instance` (matching
+`gatewaze.instanceName`) and `app.kubernetes.io/component` = worker /
+scheduler / api.
+
+`namespaceSelector` restricts discovery to the namespace the core chart
+is installed in (`gatewaze.namespace`). The Prometheus Operator must be
+allowed to read PodMonitors in this monitoring namespace AND scrape pods
+in `gatewaze.namespace`; the kube-prometheus-stack values above set
+`*SelectorNilUsesHelmValues: false` so cluster-wide discovery works out
+of the box.
+*/}}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "gatewaze-monitoring.fullname" . }}-worker
+  labels:
+    {{- include "gatewaze-monitoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+    {{- with .Values.podMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.gatewaze.namespace | quote }}
+  selector:
+    matchLabels:
+      {{- include "gatewaze-monitoring.gatewazeSelectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.podMonitor.scrapeTimeout }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+          targetLabel: gatewaze_component
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "gatewaze-monitoring.fullname" . }}-scheduler
+  labels:
+    {{- include "gatewaze-monitoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+    {{- with .Values.podMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.gatewaze.namespace | quote }}
+  selector:
+    matchLabels:
+      {{- include "gatewaze-monitoring.gatewazeSelectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scheduler
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.podMonitor.scrapeTimeout }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+          targetLabel: gatewaze_component
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "gatewaze-monitoring.fullname" . }}-api
+  labels:
+    {{- include "gatewaze-monitoring.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    {{- with .Values.podMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.gatewaze.namespace | quote }}
+  selector:
+    matchLabels:
+      {{- include "gatewaze-monitoring.gatewazeSelectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  podMetricsEndpoints:
+    # API exposes /metrics on its main HTTP port. The core chart names
+    # this port `http`; if a future change renames it, update here.
+    - port: http
+      path: /metrics
+      interval: {{ .Values.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.podMonitor.scrapeTimeout }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+          targetLabel: gatewaze_component
+{{- end }}

@@ -1,15 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import {
-  ArrowLeftIcon,
   Cog6ToothIcon,
   PencilSquareIcon,
   PaperAirplaneIcon,
+  RectangleGroupIcon,
+  DocumentTextIcon,
+  PhotoIcon,
+  DocumentArrowDownIcon,
+  ChatBubbleLeftRightIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
-import { Badge } from '@/components/ui';
-import { Tabs } from '@/components/ui';
+import { Badge, WorkspaceLayout } from '@/components/ui';
 import type { Tab } from '@/components/ui/Tabs';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { NewsletterCanvasEditor } from '../../components/puck/NewsletterCanvasEditor';
@@ -555,40 +559,59 @@ export default function EditionEditorPage() {
     return <Page title="Not Found"><div className="p-6 text-center text-[var(--gray-9)]">Edition not found</div></Page>;
   }
 
-  const accentColor = collection?.accent_color || '#00a2c7';
   const status = (edition as any).status || 'draft';
   const statusColor = status === 'published' ? 'green' : status === 'archived' ? 'orange' : 'gray';
 
   const ic = 'size-4';
-  const tabs: Tab[] = [
+  const subTabs: Tab[] = [
     { id: 'editor', label: 'Editor', icon: <PencilSquareIcon className={ic} /> },
     { id: 'details', label: 'Details', icon: <Cog6ToothIcon className={ic} /> },
     ...(hasBulkEmailing ? [{ id: 'sending', label: 'Sending', icon: <PaperAirplaneIcon className={ic} /> }] : []),
   ];
 
+  // Primary tab row = this newsletter's sections (mirrors the newsletter
+  // detail page), with "Editions" lit since an edition lives under it.
+  // Clicking a tab navigates to that section on the newsletter detail page.
+  const newsletterTabs: Tab[] = [
+    { id: 'details', label: 'Details', icon: <Cog6ToothIcon className={ic} /> },
+    { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
+    { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
+    { id: 'media', label: 'Media', icon: <PhotoIcon className={ic} /> },
+    { id: 'import', label: 'Import', icon: <DocumentArrowDownIcon className={ic} /> },
+    ...(hasBulkEmailing
+      ? [
+          { id: 'replies', label: 'Replies', icon: <ChatBubbleLeftRightIcon className={ic} /> },
+          { id: 'stats', label: 'Stats', icon: <ChartBarIcon className={ic} /> },
+        ]
+      : []),
+  ];
+
+  const editionDateLabel = new Date(edition.edition_date).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+
   return (
     <Page title={edition.subject || 'Newsletter Edition'}>
-      {/* Hero Header */}
-      <div
-        className="relative -mx-(--margin-x) -mt-(--margin-x) overflow-hidden"
-        style={{ background: `linear-gradient(135deg, #1a1a2e 0%, ${accentColor}30 50%, #1a1a2e 100%)` }}
-      >
-        <div className="absolute inset-0 bg-gradient-to-b from-black/40 to-black/60 pointer-events-none" />
-        <div className="relative" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem) 1.75rem' }}>
-          <button
-            onClick={() => navigate(newsletterSlug ? `/newsletters/${newsletterSlug}/editions` : '/newsletters')}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md bg-white/90 backdrop-blur-md border border-white/40 text-gray-900 shadow-sm hover:bg-white transition-colors mb-3"
-          >
-            <ArrowLeftIcon className="w-4 h-4" /> Back
-          </button>
-          <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-white mb-2">{edition.subject || 'New Edition'}</h1>
-          <div className="flex items-center gap-3 flex-wrap">
-            {collection && (
-              <span className="px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-sm text-white/90">{collection.name}</span>
-            )}
-            <span className="px-3 py-1.5 bg-white/10 backdrop-blur-sm rounded-lg text-sm text-white/90">
-              {new Date(edition.edition_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
-            </span>
+      <WorkspaceLayout
+        title={collection?.name ? `Newsletters: ${collection.name}` : 'Newsletters'}
+        tabs={newsletterTabs}
+        activeTabId="editions"
+        onTabChange={(t) => navigate(newsletterSlug ? `/newsletters/${newsletterSlug}/${t}` : '/newsletters')}
+        breadcrumbs={[
+          {
+            label: 'Editions',
+            to: newsletterSlug ? `/newsletters/${newsletterSlug}/editions` : '/newsletters',
+          },
+          { label: editionDateLabel },
+        ]}
+        onBreadcrumbNavigate={(to) => navigate(to)}
+        subTabs={subTabs}
+        activeSubTabId={activeTab}
+        onSubTabChange={handleTabChange}
+        actions={
+          <div className="flex items-center gap-2 flex-wrap">
             <Badge variant="soft" color={statusColor as any} size="1">
               {status.charAt(0).toUpperCase() + status.slice(1)}
             </Badge>
@@ -596,19 +619,18 @@ export default function EditionEditorPage() {
               <Badge variant="soft" color="blue" size="1">{collection.content_category}</Badge>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Tab Bar */}
-      <div className="-mx-(--margin-x)">
-        <Tabs fullWidth value={activeTab} onChange={handleTabChange} tabs={tabs} />
-      </div>
-
+        }
+      >
       {/* Tab Content */}
       {activeTab === 'editor' && (
         <div
           ref={editorWrapperRef}
-          className="-mx-(--margin-x)"
+          // Escape WorkspaceLayout's content padding (px-6 + the page
+          // margin-x, plus pt-4/pb-6) so the editor canvas stays full-bleed
+          // and reclaims full height. The inner padding below re-insets the
+          // canvas to line up with the content gutter. Height is measured
+          // dynamically so it adapts to the new chrome above.
+          className="-mx-[calc(var(--margin-x)+1.5rem)] -mt-4 -mb-6"
           // The curved-corner panel inside NewsletterPuckCanvas sits
           // inside the same hero-matching horizontal padding as
           // every other admin page chrome — so the panel's left
@@ -663,10 +685,7 @@ export default function EditionEditorPage() {
       )}
 
       {activeTab === 'details' && (
-        <div
-          className="-mx-(--margin-x) py-6"
-          style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}
-        >
+        <div className="py-2">
           <div className="max-w-2xl space-y-5">
             <div>
               <label className="block text-sm font-medium text-[var(--gray-12)] mb-1.5">
@@ -733,7 +752,7 @@ export default function EditionEditorPage() {
       )}
 
       {activeTab === 'sending' && hasBulkEmailing && (
-        <div className="-mx-(--margin-x) py-6" style={{ padding: '1.5rem calc(var(--margin-x) + 1.5rem)' }}>
+        <div className="py-2">
           <EditionSendingTab
             editionId={edition.id}
             editionDate={edition.edition_date}
@@ -766,6 +785,7 @@ export default function EditionEditorPage() {
           />
         </div>
       )}
+      </WorkspaceLayout>
     </Page>
   );
 }

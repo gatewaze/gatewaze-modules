@@ -1,0 +1,8 @@
+{
+  "name": "@gatewaze/engagement",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "index.ts",
+  "type": "module"
+}

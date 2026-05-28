@@ -1,0 +1,133 @@
+{{- if .Values.alerts.enabled }}
+{{/*
+PrometheusRule with the alert thresholds from
+spec-job-queue-redis-architecture.md §11.4.
+
+Each rule carries `severity` + `app: gatewaze` labels so the operator's
+existing Alertmanager routing can match on them. Rule expressions
+reference the metric names emitted by the queue layer:
+  - gatewaze_queue_depth{queue, state, module}
+  - gatewaze_job_duration_seconds_{count,bucket}{queue, name, status, module}
+  - gatewaze_job_terminal_failures_total{queue, name, module}
+  - gatewaze_queue_health{queue}
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "gatewaze-monitoring.fullname" . }}-queue
+  labels:
+    {{- include "gatewaze-monitoring.labels" . | nindent 4 }}
+    {{- with .Values.alerts.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: gatewaze.queue
+      rules:
+        - alert: GatewazeQueueBacklog
+          expr: |
+            gatewaze_queue_depth{state="waiting"} > {{ .Values.alerts.thresholds.queueBacklogWaiting }}
+          for: {{ .Values.alerts.thresholds.queueBacklogFor }}
+          labels:
+            severity: {{ .Values.alerts.severity.warning | quote }}
+            {{- with .Values.alerts.additionalLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Gatewaze queue backlog ({{`{{ $labels.queue }}`}})"
+            description: |
+              Queue {{`{{ $labels.queue }}`}} (module {{`{{ $labels.module }}`}})
+              has more than {{ .Values.alerts.thresholds.queueBacklogWaiting }} waiting
+              jobs for {{ .Values.alerts.thresholds.queueBacklogFor }}.
+              Current depth: {{`{{ $value }}`}}.
+
+        - alert: GatewazeQueueStuck
+          expr: |
+            gatewaze_queue_depth{state="waiting"} > 0
+            and on (queue) rate(gatewaze_job_duration_seconds_count[5m]) == 0
+          for: {{ .Values.alerts.thresholds.queueStuckFor }}
+          labels:
+            severity: {{ .Values.alerts.severity.critical | quote }}
+            {{- with .Values.alerts.additionalLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Gatewaze queue stuck ({{`{{ $labels.queue }}`}})"
+            description: |
+              Queue {{`{{ $labels.queue }}`}} has waiting jobs but no jobs
+              have completed in the last 5 minutes for at least
+              {{ .Values.alerts.thresholds.queueStuckFor }}. Worker may be
+              hung, missing a handler, or unable to reach Redis.
+
+        - alert: GatewazeJobTerminalFailureRate
+          expr: |
+            rate(gatewaze_job_terminal_failures_total[10m]) > {{ .Values.alerts.thresholds.terminalFailuresPerSecond }}
+          for: {{ .Values.alerts.thresholds.terminalFailuresFor }}
+          labels:
+            severity: {{ .Values.alerts.severity.critical | quote }}
+            {{- with .Values.alerts.additionalLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Gatewaze terminal failure rate high ({{`{{ $labels.queue }}/{{ $labels.name }}`}})"
+            description: |
+              Job {{`{{ $labels.name }}`}} on queue {{`{{ $labels.queue }}`}}
+              (module {{`{{ $labels.module }}`}}) is failing terminally at
+              {{`{{ $value | humanize }}`}}/s. Threshold:
+              {{ .Values.alerts.thresholds.terminalFailuresPerSecond }}/s for
+              {{ .Values.alerts.thresholds.terminalFailuresFor }}.
+
+        - alert: GatewazeEmailJobFailures
+          expr: |
+            rate(gatewaze_job_terminal_failures_total{queue="email"}[10m]) > 0
+          for: {{ .Values.alerts.thresholds.emailFailuresFor }}
+          labels:
+            severity: {{ .Values.alerts.severity.critical | quote }}
+            {{- with .Values.alerts.additionalLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Gatewaze email job(s) failing terminally"
+            description: |
+              At least one email job on queue `email` has failed terminally
+              in the last 10 minutes. Email is zero-tolerance — investigate
+              the Supabase `email-send` edge function or the job payload.
+
+        - alert: GatewazeJobDurationP99High
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (queue, name, le) (rate(gatewaze_job_duration_seconds_bucket[10m]))
+            ) > 60
+          for: {{ .Values.alerts.thresholds.durationP99For }}
+          labels:
+            severity: {{ .Values.alerts.severity.warning | quote }}
+            {{- with .Values.alerts.additionalLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Gatewaze job p99 duration high ({{`{{ $labels.queue }}/{{ $labels.name }}`}})"
+            description: |
+              p99 duration of {{`{{ $labels.name }}`}} on
+              {{`{{ $labels.queue }}`}} is {{`{{ $value | humanize }}`}}s
+              for {{ .Values.alerts.thresholds.durationP99For }}. Default
+              threshold is 60s — set per-job targets explicitly if your
+              job's expected duration differs.
+
+        - alert: GatewazeRedisDown
+          expr: |
+            gatewaze_queue_health == 0
+          for: {{ .Values.alerts.thresholds.redisHealthFor }}
+          labels:
+            severity: {{ .Values.alerts.severity.critical | quote }}
+            {{- with .Values.alerts.additionalLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: "Gatewaze Redis unreachable"
+            description: |
+              gatewaze_queue_health is 0 for at least
+              {{ .Values.alerts.thresholds.redisHealthFor }}. The queue
+              layer cannot reach Redis. New enqueues are returning 503; in-
+              flight jobs may stall.
+{{- end }}

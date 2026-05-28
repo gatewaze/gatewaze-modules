@@ -1,0 +1,106 @@
+###############################################################################
+# Prefect Server — API + UI
+#
+# Single replica, Recreate strategy. All state of record lives in the
+# Supabase `prefect` schema; the container is stateless. Brief downtime
+# during rollout is acceptable — Worker-owned flow runs survive a
+# Server restart.
+###############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "prefect-worker.fullname" . }}-server
+  labels:
+    {{- include "prefect-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "prefect-worker.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "prefect-worker.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "prefect-worker.serviceAccountName" . }}
+      containers:
+        - name: prefect-server
+          image: {{ .Values.server.image | quote }}
+          imagePullPolicy: {{ .Values.server.imagePullPolicy }}
+          command:
+            - prefect
+            - server
+            - start
+            - --host
+            - "0.0.0.0"
+          ports:
+            - name: http
+              containerPort: 4200
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "prefect-worker.fullname" . }}-config
+            - secretRef:
+                name: {{ include "prefect-worker.fullname" . }}-secret
+          env:
+            - name: PREFECT_API_SERVICES_FLOW_RUN_RETENTION_SECONDS
+              value: {{ .Values.server.retentionSeconds | quote }}
+            - name: PREFECT_UI_API_URL
+              value: "/api"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "prefect-worker.fullname" . }}-server
+  labels:
+    {{- include "prefect-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  ports:
+    - port: 4200
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "prefect-worker.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server

@@ -8,7 +8,7 @@ import {
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
-import { Card, Button, Badge } from '@/components/ui';
+import { Card, Button, Badge, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { supabase } from '@/lib/supabase';
 import NewsletterSetupWizard from '../components/NewsletterSetupWizard';
@@ -95,16 +95,14 @@ export default function NewsletterListPage() {
 
   return (
     <Page title="Newsletters">
-      <div className="p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-semibold text-[var(--gray-12)]">Newsletters</h1>
-            <p className="text-[var(--gray-11)] mt-1">Create and manage your newsletter publications</p>
-          </div>
+      <WorkspaceLayout
+        title="Newsletters"
+        actions={
           <Button variant="solid" onClick={() => setShowWizard(true)}>
             <PlusIcon className="h-4 w-4 mr-1" /> Create Newsletter
           </Button>
-        </div>
+        }
+      >
 
         {loading ? (
           <div className="flex justify-center py-16">
@@ -178,7 +176,7 @@ export default function NewsletterListPage() {
             ))}
           </div>
         )}
-      </div>
+      </WorkspaceLayout>
 
       <NewsletterSetupWizard
         isOpen={showWizard}

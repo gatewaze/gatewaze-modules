@@ -1,0 +1,19 @@
+apiVersion: v2
+name: prefect-worker
+description: |
+  Self-hosted Prefect Server + Python worker that runs the Gatewaze
+  content discovery pipeline and (Phase 3) AI newsletter generation flows.
+
+  Installs independently from the core Gatewaze chart. Creates its own
+  ConfigMap + Secret which the operator wires into core Gatewaze pods via
+  the core chart's `extraEnvFrom` hook so the content-discovery module's
+  API routes (running in the core gatewaze-api pod) can reach Prefect.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - gatewaze
+  - prefect
+  - content-pipeline
+maintainers:
+  - name: Gatewaze

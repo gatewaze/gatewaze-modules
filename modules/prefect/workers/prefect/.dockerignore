@@ -1,0 +1,17 @@
+# Keep the build context tiny — only source + packaging get in.
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+.env.*
+*.egg-info/
+build/
+dist/
+tests/
+*.md
+!README.md

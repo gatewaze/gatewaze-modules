@@ -1,0 +1,8 @@
+{
+  "kiosk": {
+    "label": "Kiosk",
+    "icon": "clipboard-list",
+    "order": 95,
+    "requiresAdmin": true
+  }
+}

@@ -1,0 +1,25 @@
+apiVersion: v2
+name: gatewaze-monitoring
+description: |
+  Prometheus + Grafana for the Gatewaze cluster. Ships PodMonitors,
+  PrometheusRules, and Grafana dashboards for the BullMQ queue layer
+  (workers, scheduler, API). Bundles kube-prometheus-stack as an optional
+  dependency — disable when an existing Prometheus Operator install
+  already provides Prometheus / Grafana / Alertmanager.
+
+  Independent Helm release; sits alongside the core gatewaze chart.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - gatewaze
+  - monitoring
+  - prometheus
+  - grafana
+maintainers:
+  - name: Gatewaze
+dependencies:
+  - name: kube-prometheus-stack
+    version: "65.x.x"
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: prometheusStack.enabled

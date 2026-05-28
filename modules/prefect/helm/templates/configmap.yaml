@@ -1,0 +1,49 @@
+{{- /*
+Non-secret config for the Prefect Server + Worker, AND the values that
+need to reach core Gatewaze pods via the core chart's `extraEnvFrom`.
+
+Operator wires this into core Gatewaze via core values.yaml:
+
+  extraEnvFrom:
+    - configMapRef:
+        name: {{ include "prefect-worker.fullname" . }}-config
+    - secretRef:
+        name: {{ include "prefect-worker.fullname" . }}-secret
+
+The same ConfigMap is mounted by Server + Worker directly (see
+deployments). Duplication is acceptable — it keeps the subchart's public
+contract simple (one CM + one Secret per module).
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prefect-worker.fullname" . }}-config
+  labels:
+    {{- include "prefect-worker.labels" . | nindent 4 }}
+data:
+  # --- Core contract: variables the content-discovery module reads in
+  # the core gatewaze-api pod via extraEnvFrom ---
+  PREFECT_API_URL: {{ printf "http://%s-server:4200/api" (include "prefect-worker.fullname" .) | quote }}
+  {{- if .Values.server.discoveryDeploymentId }}
+  PREFECT_DISCOVERY_DEPLOYMENT_ID: {{ .Values.server.discoveryDeploymentId | quote }}
+  {{- end }}
+
+  # --- Worker-only runtime config ---
+  {{- if .Values.supabase.url }}
+  SUPABASE_URL: {{ .Values.supabase.url | quote }}
+  {{- end }}
+  {{- if .Values.firecrawl.apiUrl }}
+  FIRECRAWL_API_URL: {{ .Values.firecrawl.apiUrl | quote }}
+  {{- end }}
+  {{- if .Values.webhook.gatewazeBaseUrl }}
+  GATEWAZE_BASE_URL: {{ .Values.webhook.gatewazeBaseUrl | quote }}
+  {{- end }}
+  {{- if .Values.redisUrl }}
+  REDIS_URL: {{ .Values.redisUrl | quote }}
+  {{- end }}
+
+  DISCOVERY_COST_BUDGET_USD: {{ .Values.worker.costBudgets.discoveryUsd | quote }}
+  TRIAGE_COST_BUDGET_USD: {{ .Values.worker.costBudgets.triageUsd | quote }}
+  PROCESSING_COST_BUDGET_USD: {{ .Values.worker.costBudgets.processingUsd | quote }}
+  AGENT_MAX_TURNS: {{ .Values.worker.agentMaxTurns | quote }}
+  PREFECT_WORK_POOL: {{ .Values.worker.workPool | quote }}

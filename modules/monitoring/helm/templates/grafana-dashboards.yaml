@@ -1,0 +1,28 @@
+{{- if .Values.dashboards.enabled }}
+{{/*
+Grafana dashboards as ConfigMaps. The kube-prometheus-stack Grafana
+deployment runs a sidecar (sidecar.dashboards.enabled=true above) that
+watches all namespaces for ConfigMaps carrying the
+`grafana_dashboard: "1"` label and auto-imports them.
+
+Dashboard JSON lives under helm/dashboards/. We `tpl` each file so that
+template directives inside the JSON (currently none) would work; the
+.Files.Glob loop drops one ConfigMap per dashboard file.
+*/}}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $name := base $path | trimSuffix ".json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gatewaze-monitoring.fullname" $ }}-dashboard-{{ $name }}
+  labels:
+    {{- include "gatewaze-monitoring.labels" $ | nindent 4 }}
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: {{ $.Values.dashboards.folder | quote }}
+data:
+  {{ $name }}.json: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}
