@@ -37,40 +37,59 @@ export function useAiGenerate(): UseAiGenerateState & { generate: (args: Generat
   const abort = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    // Re-enable the composer immediately on cancel — the in-flight request
+    // rejects via its signal and is swallowed in generate()'s catch.
+    setState((prev) => (prev.status === 'loading' ? { ...prev, status: 'idle' } : prev));
   }, []);
 
   const generate = useCallback(async (args: GenerateArgs): Promise<void> => {
     abort();
-    abortRef.current = new AbortController();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setState({ status: 'loading', error: null, warnings: [], lastUsage: null });
 
-    const res = await CanvasAiService.generate(args.request);
-    if (!res.ok) {
-      setState({ status: 'error', error: res.error, warnings: [], lastUsage: null });
-      return;
+    try {
+      const res = await CanvasAiService.generate(args.request, controller.signal);
+      if (!res.ok) {
+        setState({ status: 'error', error: res.error, warnings: [], lastUsage: null });
+        return;
+      }
+      const mode = args.request.mode as MergeMode;
+      const merge = mergeAiResponse({
+        mode,
+        prev: args.currentData,
+        ai: res.response.data,
+        ...(args.request.anchorBlockId ? { anchorBlockId: args.request.anchorBlockId } : {}),
+        ...(args.request.blockId ? { blockId: args.request.blockId } : {}),
+      });
+
+      // Token-to-cost approximate. Haiku 4.5: $1/M input, $5/M output.
+      const tokens = res.response.usage.input_tokens + res.response.usage.output_tokens;
+      const costApprox =
+        (res.response.usage.input_tokens / 1_000_000) * 1.0 +
+        (res.response.usage.output_tokens / 1_000_000) * 5.0;
+
+      args.onApply(merge.data);
+      setState({
+        status: 'success',
+        error: null,
+        warnings: [...res.response.warnings, ...merge.warnings],
+        lastUsage: { tokens, cost_approx: costApprox, duration_ms: res.response.usage.duration_ms },
+      });
+    } catch (err) {
+      // User-initiated cancel already reset status to idle — don't surface it.
+      if (controller.signal.aborted) return;
+      setState({
+        status: 'error',
+        error: {
+          code: 'client_error',
+          message: err instanceof Error ? err.message : 'Generation failed',
+          httpStatus: 0,
+        },
+        warnings: [],
+        lastUsage: null,
+      });
     }
-    const mode = args.request.mode as MergeMode;
-    const merge = mergeAiResponse({
-      mode,
-      prev: args.currentData,
-      ai: res.response.data,
-      ...(args.request.anchorBlockId ? { anchorBlockId: args.request.anchorBlockId } : {}),
-      ...(args.request.blockId ? { blockId: args.request.blockId } : {}),
-    });
-
-    // Token-to-cost approximate. Haiku 4.5: $1/M input, $5/M output.
-    const tokens = res.response.usage.input_tokens + res.response.usage.output_tokens;
-    const costApprox =
-      (res.response.usage.input_tokens / 1_000_000) * 1.0 +
-      (res.response.usage.output_tokens / 1_000_000) * 5.0;
-
-    args.onApply(merge.data);
-    setState({
-      status: 'success',
-      error: null,
-      warnings: [...res.response.warnings, ...merge.warnings],
-      lastUsage: { tokens, cost_approx: costApprox, duration_ms: res.response.usage.duration_ms },
-    });
   }, [abort]);
 
   return { ...state, generate, abort };
