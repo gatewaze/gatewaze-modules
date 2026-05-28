@@ -108,7 +108,7 @@ const eventsModule: GatewazeModule = {
     {
       path: '/events',
       label: 'Events',
-      icon: 'admin.events',
+      icon: 'Ticket',
       requiredFeature: 'events',
       parentGroup: 'dashboards',
       order: 15,
