@@ -103,7 +103,9 @@ CREATE TABLE IF NOT EXISTS public.events (
   account_id_text          text,
   -- Portal theme columns
   portal_theme             text,
-  theme_colors             jsonb
+  theme_colors             jsonb,
+  -- Platform content category (folded from 003_content_category)
+  content_category         varchar(100)
 );
 
 -- Self-referencing FK for recommended_event_id
@@ -123,6 +125,7 @@ CREATE INDEX IF NOT EXISTS idx_events_event_slug ON public.events (event_slug);
 CREATE INDEX IF NOT EXISTS idx_events_luma_event_id ON public.events (luma_event_id);
 CREATE INDEX IF NOT EXISTS idx_events_is_listed ON public.events (is_listed) WHERE is_listed = true;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_custom_domain ON public.events (custom_domain) WHERE custom_domain IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_content_category ON public.events (content_category);
 
 CREATE TRIGGER events_updated_at
   BEFORE UPDATE ON public.events

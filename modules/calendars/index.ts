@@ -52,15 +52,15 @@ const calendarsModule: GatewazeModule = {
     'migrations/003_calendar_microsite.sql',
     'migrations/004_calendar_messaging.sql',
     'migrations/005_calendar_email_groups.sql',
-    'migrations/006_fix_members_dynamic_function.sql',
-    'migrations/007_fix_audience_event_column.sql',
     'migrations/008_admin_calendar_rpcs.sql',
-    'migrations/009_fix_audience_email_type.sql',
     'migrations/010_calendar_luma_stats.sql',
     'migrations/011_calendar_luma_robust_stats.sql',
     'migrations/012_about_pages_and_audience_scope.sql',
     'migrations/013_calendars_public_read_policy.sql',
     'migrations/014_calendars_events_public_read_policy.sql',
+    'migrations/014_calendars_admin_write_policies.sql',
+    'migrations/015_register_pages_host.sql',
+    'migrations/016_luma_sync_enabled.sql',
   ],
 
   adminRoutes: [

@@ -59,11 +59,14 @@ CREATE TABLE IF NOT EXISTS public.events_competitions (
   sponsor_id uuid,
   rules text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  -- Platform content category (folded from 002_content_category)
+  content_category varchar(100)
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_competitions_event ON public.events_competitions (event_id);
 CREATE INDEX IF NOT EXISTS idx_events_competitions_slug ON public.events_competitions (slug);
+CREATE INDEX IF NOT EXISTS idx_events_competitions_content_category ON public.events_competitions (content_category);
 
 DROP TRIGGER IF EXISTS events_competitions_updated_at ON public.events_competitions;
 CREATE TRIGGER events_competitions_updated_at
