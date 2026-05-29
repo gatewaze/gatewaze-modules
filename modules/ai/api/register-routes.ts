@@ -37,6 +37,7 @@ import { mountMcpServerRoutes } from './mcp-servers.js';
 import { mountMcpAllowlistRoutes } from './mcp-allowlist.js';
 import { mountUseCaseTemplateRoutes } from './use-case-templates.js';
 import { mountMemoryRoutes } from './memory.js';
+import { mountWikiRoutes } from './wiki.js';
 import { setProjectRoot } from '../lib/jobs/redis-client.js';
 
 interface PlatformLogger {
@@ -162,6 +163,18 @@ export function registerRoutes(app: Express, ctx?: any): void {
   mountUseCaseTemplateRoutes(router as any, { supabase });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mountMemoryRoutes(router as any, { supabase });
+
+  // Wiki layer (spec-ai-memory-wiki.md). Embedding goes through aiEmbed so
+  // spend lands on ai_usage_events (cost-tracked); null-safe if a provider
+  // is unavailable (search degrades to keyword, page embeds defer).
+  const wikiEmbed = async (texts: string[], useCase: string): Promise<number[][]> => {
+    const { aiEmbed } = await import('../lib/runner.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = await aiEmbed({ supabase } as any, { useCase, userId: null, texts, systemRun: true });
+    return r.vectors;
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mountWikiRoutes(router as any, { supabase, embed: wikiEmbed, enqueueJob });
 
   // ── Skills subsystem (moved from editor-ai-copilot, Phase 2) ──────────
   //

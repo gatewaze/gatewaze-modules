@@ -19,8 +19,8 @@ import { fuseRRF, type RankedItem } from './rrf.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type WikiDbClient = { from(table: string): any; rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }> };
 
-/** Embed N texts → N vectors (caller wires aiEmbed); null ⇒ defer embedding. */
-export type EmbedFn = ((texts: string[]) => Promise<number[][]>) | null;
+/** Embed N texts → N vectors for a use case (caller wires aiEmbed); null ⇒ defer. */
+export type EmbedFn = ((texts: string[], useCase: string) => Promise<number[][]>) | null;
 
 export const WIKI_PAGE_COLS =
   'id, use_case, slug, title, body, summary, category, metadata, kind, embedded_at, content_hash, git_synced_hash, source, conflict, conflict_detail, version, created_at, updated_at, deleted_at';
@@ -139,7 +139,7 @@ export async function upsertPage(client: WikiDbClient, input: UpsertPageInput, e
   let warning: string | undefined;
   if (embed) {
     try {
-      const [vec] = await embed([`${input.title}\n${input.body}`]);
+      const [vec] = await embed([`${input.title}\n${input.body}`], input.useCase);
       if (vec) {
         await client
           .from('ai_wiki_page')
@@ -265,7 +265,7 @@ export async function searchPages(client: WikiDbClient, opts: SearchOpts, embed:
 
   if (mode !== 'keyword' && embed) {
     try {
-      const [qvec] = await embed([opts.query]);
+      const [qvec] = await embed([opts.query], opts.useCase);
       if (qvec) {
         const sem = await client.rpc('ai_wiki_match', {
           p_use_cases: useCases,
