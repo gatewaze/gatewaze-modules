@@ -20,8 +20,29 @@ CREATE TABLE IF NOT EXISTS public.lists (
   webhook_events    text[] DEFAULT '{}',
   metadata          jsonb DEFAULT '{}',
   created_at        timestamptz NOT NULL DEFAULT now(),
-  updated_at        timestamptz NOT NULL DEFAULT now()
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  -- External-system auth key (folded from 003_external_api_key)
+  api_key           text,
+  -- Git provenance + send config (folded from 004_lists_git_provenance)
+  git_provenance    text NOT NULL DEFAULT 'internal'
+                    CHECK (git_provenance IN ('internal', 'external')),
+  git_url           text,
+  git_lfs_enabled   boolean NOT NULL DEFAULT false,
+  wrapper_id        uuid REFERENCES public.templates_wrappers(id),
+  snapshot_delay_days integer NOT NULL DEFAULT 6
+                    CHECK (snapshot_delay_days BETWEEN 1 AND 90),
+  send_schedule_cron text,
+  republish_webhook_secret text
 );
+
+COMMENT ON COLUMN public.lists.git_provenance IS
+  'internal = bare repo on PVC at /var/gatewaze/git/list/<slug>.git; external = user-provided GitHub/GitLab URL with deploy key.';
+COMMENT ON COLUMN public.lists.wrapper_id IS
+  'Per spec §10.4: single email wrapper per list (theme_kind=email, role=site). Editions can override via newsletters_editions.wrapper_id_override.';
+COMMENT ON COLUMN public.lists.snapshot_delay_days IS
+  'Per spec §15.4: days post-send before edition stats are frozen and per-recipient HTML purged from DB.';
+COMMENT ON COLUMN public.lists.republish_webhook_secret IS
+  'HMAC-SHA256 secret for /api/webhooks/republish/list/:listSlug.';
 
 CREATE INDEX IF NOT EXISTS idx_lists_slug ON public.lists (slug);
 CREATE INDEX IF NOT EXISTS idx_lists_is_active ON public.lists (is_active);
