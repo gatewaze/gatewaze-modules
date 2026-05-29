@@ -51,11 +51,24 @@ $$;
 -- Trigger: enqueue match work on insert/update of keyword-relevant columns
 -- and on delete.
 -- ----------------------------------------------------------------------------
+-- SECURITY DEFINER + uninstall guard (was 009_fix_keyword_trigger_definer):
+-- runs as gatewaze_module_writer so the AFTER trigger can bypass the
+-- service-role-only RLS on content_keyword_match_queue when an admin edits
+-- an event; without this an admin UPDATE trips 42501.
 CREATE OR REPLACE FUNCTION public.events_ck_enqueue() RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 BEGIN
+  -- Skip cleanly if content-keywords was uninstalled after this trigger was
+  -- attached to the events table.
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema='public' AND table_name='content_keyword_match_queue'
+  ) THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
   IF (TG_OP = 'DELETE') THEN
     INSERT INTO public.content_keyword_match_queue (content_type, content_id, op)
       VALUES ('event', OLD.id, 'delete')

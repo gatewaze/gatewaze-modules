@@ -21,19 +21,28 @@
 -- 1. Trigger function — INSERT INTO analytics_properties on host insert
 -- ----------------------------------------------------------------------------
 
+-- SECURITY DEFINER (was 00007_auto_provision_security_definer): the trigger
+-- is platform-internal and must INSERT into analytics_properties regardless of
+-- the inserting user's role, else RLS rolls back the whole `INSERT INTO sites`.
 CREATE OR REPLACE FUNCTION public.trg_analytics_auto_provision_for_site()
 RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 DECLARE
   v_initial_domain text;
 BEGIN
-  -- Only fire when the sites table actually exists (defensive — see header)
-  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'sites') THEN
+  -- Defensive: only fire when the sites table exists (analytics module
+  -- might be installed before sites; the trigger is reattached when
+  -- sites lands).
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'sites'
+  ) THEN
     RETURN NEW;
   END IF;
 
-  -- Per spec: domains seed = the site's slug + the brand's portal host.
-  -- For v1 we use just the slug (operator can edit afterwards).
   v_initial_domain := COALESCE(NEW.slug, 'unspecified');
 
   INSERT INTO public.analytics_properties (kind, name, host_kind, host_id, domains, status)
@@ -43,6 +52,9 @@ BEGIN
 
   RETURN NEW;
 END $$;
+
+COMMENT ON FUNCTION public.trg_analytics_auto_provision_for_site() IS
+  'SECURITY DEFINER — runs with the function owner''s privileges so RLS on analytics_properties does not block site inserts by ordinary users.';
 
 DO $$
 BEGIN
