@@ -1,36 +1,10 @@
 -- ============================================================================
 -- blog — register with content-platform.
--- Adds publish_state column, backfills from existing `status`, defines
--- inbox preview, registers as publish + category adapter.
+-- Defines inbox preview, registers as publish + category adapter. The
+-- publish_state column + its index are created up-front in 001_blog_tables.
 --
 -- Soft-guarded: skips registration cleanly if content-platform isn't installed.
 -- ============================================================================
-
-ALTER TABLE public.blog_posts
-  ADD COLUMN IF NOT EXISTS publish_state text NOT NULL DEFAULT 'published'
-  CHECK (publish_state IN
-    ('draft','pending_review','auto_suppressed','rejected','published','unpublished'));
-
--- Backfill from existing status (added by 004_triage_adapter).
-DO $backfill$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema='public' AND table_name='blog_posts' AND column_name='status'
-  ) THEN
-    UPDATE public.blog_posts SET publish_state = CASE
-      WHEN status = 'pending_review' THEN 'pending_review'
-      WHEN status = 'rejected'       THEN 'rejected'
-      WHEN status = 'archived'       THEN 'unpublished'
-      WHEN status = 'draft'          THEN 'draft'
-      WHEN status = 'published'      THEN 'published'
-      ELSE 'published'
-    END WHERE TRUE;
-  END IF;
-END $backfill$;
-
-CREATE INDEX IF NOT EXISTS blog_posts_publish_state_live
-  ON public.blog_posts(publish_state) WHERE publish_state = 'published';
 
 -- Inbox preview.
 CREATE OR REPLACE FUNCTION public.blog_inbox_preview(p_id uuid)

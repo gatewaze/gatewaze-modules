@@ -24,7 +24,6 @@ const cohortsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_cohorts_tables.sql',
-    'migrations/002_content_category.sql',
   ],
 
   adminRoutes: [

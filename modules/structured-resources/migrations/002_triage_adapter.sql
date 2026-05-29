@@ -1,31 +1,9 @@
 -- ============================================================================
 -- structured-resources — triage adapter
--- Extends sr_items.status with pending_review/rejected + triage RPCs.
--- Guarded: no-op if content-triage isn't installed.
+-- Triage RPCs (approve/reject/submit/suggest). The sr_items schema this relies
+-- on (extended status CHECK, rejection_reason) is created up-front in
+-- 001_structured_resources.
 -- ============================================================================
-DO $migration$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'content_triage_adapters'
-  ) THEN
-    RAISE NOTICE '[structured-resources/002_triage_adapter] content-triage not installed; skipping';
-    RETURN;
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint c
-    WHERE c.conrelid = 'public.sr_items'::regclass
-      AND pg_get_constraintdef(c.oid) ILIKE '%pending_review%'
-  ) THEN
-    ALTER TABLE public.sr_items DROP CONSTRAINT IF EXISTS sr_items_status_check;
-    ALTER TABLE public.sr_items ADD CONSTRAINT sr_items_status_check
-      CHECK (status IN ('draft','published','archived','pending_review','rejected'));
-  END IF;
-
-  ALTER TABLE public.sr_items ADD COLUMN IF NOT EXISTS rejection_reason text;
-END
-$migration$;
 
 CREATE OR REPLACE FUNCTION public.sr_items_triage_approve(
   p_content_id  uuid,

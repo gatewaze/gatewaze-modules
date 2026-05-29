@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS public.blog_posts (
   featured_image        text,
   featured_image_alt    varchar(500),
   status                varchar(20) NOT NULL DEFAULT 'draft'
-                        CHECK (status IN ('draft', 'published', 'archived')),
+                        CHECK (status IN ('draft', 'published', 'archived', 'pending_review', 'rejected')),
   visibility            varchar(20) NOT NULL DEFAULT 'public'
                         CHECK (visibility IN ('public', 'private', 'password_protected')),
   password              varchar(255),
@@ -89,7 +89,15 @@ CREATE TABLE IF NOT EXISTS public.blog_posts (
   category_id           uuid REFERENCES public.blog_categories (id) ON DELETE SET NULL,
   author_id             uuid NOT NULL,
   created_at            timestamptz NOT NULL DEFAULT now(),
-  updated_at            timestamptz NOT NULL DEFAULT now()
+  updated_at            timestamptz NOT NULL DEFAULT now(),
+  -- Platform content category (folded from 003_content_category)
+  content_category      varchar(100),
+  -- Triage rejection detail (folded from 004_triage_adapter)
+  rejection_reason      text,
+  -- Publish-state machine, integrates with content-platform (folded from 006_register_with_platform)
+  publish_state         text NOT NULL DEFAULT 'published'
+                        CHECK (publish_state IN
+                          ('draft','pending_review','auto_suppressed','rejected','published','unpublished'))
 );
 
 COMMENT ON TABLE public.blog_posts IS 'Blog posts with SEO, social media, and analytics fields';
@@ -99,6 +107,9 @@ CREATE INDEX IF NOT EXISTS idx_blog_posts_status       ON public.blog_posts (sta
 CREATE INDEX IF NOT EXISTS idx_blog_posts_category     ON public.blog_posts (category_id);
 CREATE INDEX IF NOT EXISTS idx_blog_posts_author       ON public.blog_posts (author_id);
 CREATE INDEX IF NOT EXISTS idx_blog_posts_published_at ON public.blog_posts (published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_blog_posts_content_category ON public.blog_posts (content_category);
+CREATE INDEX IF NOT EXISTS blog_posts_publish_state_live
+  ON public.blog_posts(publish_state) WHERE publish_state = 'published';
 
 CREATE TRIGGER blog_posts_updated_at
   BEFORE UPDATE ON public.blog_posts

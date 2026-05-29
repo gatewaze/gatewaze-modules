@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS public.sr_items (
   subtitle TEXT,
   external_url TEXT,
   featured_image_url TEXT,
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived', 'pending_review', 'rejected')),
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_by UUID REFERENCES auth.users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -93,6 +93,17 @@ ALTER TABLE public.sr_items ADD COLUMN IF NOT EXISTS search_vector tsvector
   ) STORED;
 
 CREATE INDEX IF NOT EXISTS idx_sr_items_search ON public.sr_items USING GIN(search_vector);
+
+-- Triage rejection detail (folded from 002_triage_adapter)
+ALTER TABLE public.sr_items ADD COLUMN IF NOT EXISTS rejection_reason text;
+
+-- Publish-state machine, integrates with content-platform (folded from 004_register_with_platform)
+ALTER TABLE public.sr_items
+  ADD COLUMN IF NOT EXISTS publish_state text NOT NULL DEFAULT 'published'
+  CHECK (publish_state IN
+    ('draft','pending_review','auto_suppressed','rejected','published','unpublished'));
+CREATE INDEX IF NOT EXISTS sr_items_publish_state_live
+  ON public.sr_items(publish_state) WHERE publish_state = 'published';
 
 -- ============================================================
 -- Sections: content blocks within an item

@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS public.cohorts (
   why_heading             text,
   why_description         text,
   created_at              timestamptz NOT NULL DEFAULT now(),
-  updated_at              timestamptz NOT NULL DEFAULT now()
+  updated_at              timestamptz NOT NULL DEFAULT now(),
+  -- Platform content category (folded from 002_content_category)
+  content_category        varchar(100)
 );
 
 COMMENT ON TABLE public.cohorts IS 'Cohort-based training courses';
@@ -70,6 +72,7 @@ COMMENT ON TABLE public.cohorts IS 'Cohort-based training courses';
 CREATE INDEX IF NOT EXISTS idx_cohorts_instructor   ON public.cohorts (instructor_id);
 CREATE INDEX IF NOT EXISTS idx_cohorts_is_active    ON public.cohorts (is_active);
 CREATE INDEX IF NOT EXISTS idx_cohorts_start_date   ON public.cohorts (start_date DESC);
+CREATE INDEX IF NOT EXISTS idx_cohorts_content_category ON public.cohorts (content_category);
 
 CREATE TRIGGER cohorts_updated_at
   BEFORE UPDATE ON public.cohorts
