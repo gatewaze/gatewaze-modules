@@ -6,26 +6,31 @@
 -- ck_evaluate_inner: pure evaluator. Calls adapter text_fn, evaluates active
 -- in-scope rules, returns (is_visible, matched_rule_ids).
 -- ----------------------------------------------------------------------------
+-- 3-OUT form with tier_rank (was 004_metadata_and_tier_rank): also computes
+-- the highest tier_rank across matched rules from each rule's metadata.
 CREATE OR REPLACE FUNCTION public.ck_evaluate_inner(
   p_content_type text,
   p_content_id   uuid,
-  OUT v_is_visible boolean,
-  OUT v_matched   uuid[]
+  OUT v_is_visible    boolean,
+  OUT v_matched       uuid[],
+  OUT v_tier_rank     int
 ) RETURNS record
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_adapter      record;
-  v_default      boolean;
-  r_rule         record;
-  v_text_rec     record;
-  v_match        boolean;
-  v_text_query   text;
-  v_pattern      text;
-  v_op           text;
+  v_adapter    record;
+  v_default    boolean;
+  r_rule       record;
+  v_text_rec   record;
+  v_match      boolean;
+  v_text_query text;
+  v_pattern    text;
+  v_op         text;
+  v_rule_rank  int;
 BEGIN
   v_matched := ARRAY[]::uuid[];
+  v_tier_rank := NULL;
 
   SELECT * INTO v_adapter FROM public.content_keyword_adapters
   WHERE content_type = p_content_type;
@@ -34,7 +39,6 @@ BEGIN
   END IF;
   v_default := v_adapter.default_visible_when_no_rules;
 
-  -- No active rules for this type → adapter default.
   IF NOT EXISTS (
     SELECT 1 FROM public.content_keyword_rules
     WHERE p_content_type = ANY(content_types) AND is_active
@@ -43,14 +47,12 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Iterate rules, calling adapter text_fn lazily.
   FOR r_rule IN
     SELECT * FROM public.content_keyword_rules
     WHERE p_content_type = ANY(content_types) AND is_active
     ORDER BY id
   LOOP
     v_match := false;
-    -- Build pattern matcher per rule type.
     v_pattern := r_rule.pattern;
     v_op := CASE r_rule.pattern_type
       WHEN 'substring' THEN CASE WHEN r_rule.case_sensitive THEN 'pos' ELSE 'pos_ci' END
@@ -58,20 +60,15 @@ BEGIN
       WHEN 'regex'     THEN CASE WHEN r_rule.case_sensitive THEN 'regex_cs' ELSE 'regex_ci' END
     END;
 
-    -- Iterate adapter text rows for this content_id. text_fn is a
-    -- regprocedure (e.g. 'events_keyword_text(uuid)'); cast to regproc
-    -- to get just the schema-qualified name without args, then invoke.
     v_text_query := format(
       'SELECT field, value, source FROM %s($1) WHERE value IS NOT NULL AND value <> %L',
       v_adapter.text_fn::regproc::text, '');
     FOR v_text_rec IN EXECUTE v_text_query USING p_content_id LOOP
-      -- Source scope check.
       IF r_rule.sources IS NOT NULL THEN
         IF v_text_rec.source IS NULL OR NOT (v_text_rec.source = ANY(r_rule.sources)) THEN
           CONTINUE;
         END IF;
       END IF;
-      -- Field scope check.
       IF r_rule.fields <> ARRAY['any'] THEN
         IF NOT (v_text_rec.field = ANY(r_rule.fields)) THEN
           CONTINUE;
@@ -89,14 +86,18 @@ BEGIN
 
       IF v_match THEN
         v_matched := v_matched || r_rule.id;
-        EXIT;  -- one field match is enough for this rule
+        -- Pick up tier_rank from the rule's metadata, track max.
+        v_rule_rank := NULLIF(r_rule.metadata->>'tier_rank', '')::int;
+        IF v_rule_rank IS NOT NULL AND (v_tier_rank IS NULL OR v_rule_rank > v_tier_rank) THEN
+          v_tier_rank := v_rule_rank;
+        END IF;
+        EXIT;
       END IF;
     END LOOP;
 
-    IF array_length(v_matched, 1) >= 50 THEN EXIT; END IF;  -- storage cap
+    IF array_length(v_matched, 1) >= 50 THEN EXIT; END IF;
   END LOOP;
 
-  -- Sort matched_rule_ids ascending for determinism.
   v_matched := ARRAY(SELECT unnest(v_matched) ORDER BY 1);
   v_is_visible := COALESCE(array_length(v_matched, 1), 0) > 0;
 END $$;
@@ -107,6 +108,9 @@ GRANT EXECUTE ON FUNCTION public.ck_evaluate_inner(text, uuid) TO service_role;
 -- ----------------------------------------------------------------------------
 -- ck_evaluate_item: writes evaluation result to content_keyword_item_state.
 -- ----------------------------------------------------------------------------
+-- Writes the verdict and (was 005_emit_verdict_changes) enqueues a
+-- content_publish_state_event_queue row on first eval or visibility transition
+-- so the events verdict-handler propagates is_visible into publish_state.
 CREATE OR REPLACE FUNCTION public.ck_evaluate_item(
   p_content_type text,
   p_content_id   uuid
@@ -115,13 +119,20 @@ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_version      bigint;
-  v_eval         record;
+  v_version       bigint;
+  v_eval          record;
+  v_prev_visible  boolean;
+  v_has_queue     boolean;
 BEGIN
   SELECT version INTO v_version
   FROM public.content_keyword_ruleset_versions
   WHERE content_type = p_content_type;
   IF NOT FOUND THEN v_version := 1; END IF;
+
+  -- Snapshot prior state so we can detect transitions.
+  SELECT is_visible INTO v_prev_visible
+    FROM public.content_keyword_item_state
+   WHERE content_type = p_content_type AND content_id = p_content_id;
 
   SELECT * INTO v_eval FROM public.ck_evaluate_inner(p_content_type, p_content_id);
 
@@ -133,10 +144,41 @@ BEGIN
         matched_rule_ids = EXCLUDED.matched_rule_ids,
         evaluated_at     = EXCLUDED.evaluated_at,
         ruleset_version  = EXCLUDED.ruleset_version;
+
+  -- Emit a verdict-change event when:
+  --   - first evaluation (v_prev_visible IS NULL), or
+  --   - transition between true/false.
+  v_has_queue := EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema='public' AND table_name='content_publish_state_event_queue'
+  );
+
+  IF v_has_queue AND (v_prev_visible IS NULL OR v_prev_visible IS DISTINCT FROM v_eval.v_is_visible) THEN
+    INSERT INTO public.content_publish_state_event_queue
+      (content_type, content_id, trigger, payload)
+    VALUES (
+      p_content_type, p_content_id, 'keyword_verdict',
+      jsonb_build_object('is_visible', v_eval.v_is_visible,
+                         'previous',   v_prev_visible)
+    );
+  END IF;
 END $$;
 ALTER FUNCTION public.ck_evaluate_item(text, uuid) OWNER TO gatewaze_module_writer;
 REVOKE ALL ON FUNCTION public.ck_evaluate_item(text, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.ck_evaluate_item(text, uuid) TO service_role;
+
+-- Install the universal category-sync trigger if content-platform is present
+-- (was 005_emit_verdict_changes). content-platform also installs it but skips
+-- if content_keyword_item_state didn't exist yet at that time.
+DO $trg$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'cm_category_sync_universal') THEN
+    EXECUTE 'DROP TRIGGER IF EXISTS cm_category_sync_universal_trg ON public.content_keyword_item_state';
+    EXECUTE 'CREATE TRIGGER cm_category_sync_universal_trg
+             AFTER INSERT OR UPDATE OF matched_rule_ids ON public.content_keyword_item_state
+             FOR EACH ROW EXECUTE FUNCTION public.cm_category_sync_universal()';
+  END IF;
+END $trg$;
 
 -- ----------------------------------------------------------------------------
 -- ck_drain_queue: returns up to N due rows, locking them via SKIP LOCKED.

@@ -66,7 +66,10 @@ CREATE TABLE IF NOT EXISTS public.content_keyword_rules (
 
   created_by      uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at      timestamptz NOT NULL DEFAULT now(),
-  updated_at      timestamptz NOT NULL DEFAULT now()
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  -- Per-rule metadata for external modules; tier_rank drives match_tier_rank
+  -- (folded from 004_metadata_and_tier_rank).
+  metadata        jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 ALTER TABLE public.content_keyword_rules OWNER TO gatewaze_module_writer;
 
@@ -222,6 +225,8 @@ CREATE TABLE IF NOT EXISTS public.content_keyword_item_state (
   matched_rule_ids uuid[] NOT NULL DEFAULT ARRAY[]::uuid[],
   evaluated_at     timestamptz NOT NULL DEFAULT now(),
   ruleset_version  bigint NOT NULL,
+  -- Highest tier_rank across matched rules (folded from 004_metadata_and_tier_rank).
+  match_tier_rank  int,
   PRIMARY KEY (content_type, content_id)
 );
 ALTER TABLE public.content_keyword_item_state OWNER TO gatewaze_module_writer;
@@ -229,6 +234,9 @@ CREATE INDEX IF NOT EXISTS idx_ckis_type_visible
   ON public.content_keyword_item_state (content_type, is_visible);
 CREATE INDEX IF NOT EXISTS idx_ckis_stale
   ON public.content_keyword_item_state (content_type, ruleset_version);
+CREATE INDEX IF NOT EXISTS idx_ckis_tier_rank
+  ON public.content_keyword_item_state (content_type, match_tier_rank DESC NULLS LAST)
+  WHERE is_visible;
 
 -- ============================================================================
 -- content_keyword_match_queue — DB-backed queue, drained by worker
