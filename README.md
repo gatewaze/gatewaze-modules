@@ -12,29 +12,30 @@
 
 **Open-source modules for [Gatewaze](https://github.com/gatewaze/gatewaze).**
 
-This repository contains the official open-source module collection for the Gatewaze platform. Modules are self-contained packages that extend Gatewaze with additional capabilities — database migrations, admin UI pages, API routes, portal components, and background jobs.
+This repository contains the official open-source module collection for the Gatewaze platform. Modules are self-contained packages that extend Gatewaze with additional capabilities: database migrations, admin UI pages, API routes, portal components, and background jobs.
 
 ---
 
 ## Highlights
 
-- **Run AI in production, in-house** — the `ai` module is a self-hosted AI runtime: one provider router (OpenAI, Anthropic, Gemini), an embeddable chat widget, per-user/per-use-case credentials, model allow-lists, and a per-call cost ledger. Pair it with `cost-governance` for hard budget caps.
-- **Bring your own agent** — author a [Goose](https://github.com/aaif-goose/goose) recipe locally and run it *unchanged* in production. Gatewaze runs the Goose CLI server-side — no rewrite, no local-to-cloud translation.
-- **MCP server library** — bundled MCP servers expose your platform to agents: platform data (events, speakers, sponsors, health), a whitelisted API proxy, and a headless browser (local Chromium or Browserbase).
-- **Automation** — `gatewaze-fetch` (governed web fetch with quotas, domain rules, robots.txt, audit + billing) and `scrapers` (Luma / dev.events / LF events), backed by a fetch service with eight swappable residential-proxy providers.
-- **Integrations** — Cloudflare Pages, Netlify, Bunny CDN, Luma, Cvent, Gradual, Slack, Twilio SMS/WhatsApp, SendGrid, Customer.io, Google Sheets, BigQuery, Stripe, Bitly, Short.io, Beehiiv, Substack, Browserbase, Umami, Prometheus/Grafana, and more.
+- **Each module is a mini-application**: a module can ship its own admin UI, API routes, background jobs, database migrations, and public-facing portal pages out of the box. The platform auto-discovers modules from the workspace, and each can be enabled or disabled independently.
+- **Build a module for anything**: start from the `_template`, add your tables, admin pages, and portal, and it goes live. The 76 pre-built modules below cover common community needs; your own modules cover the rest.
+- **Run AI in production, in-house**: the `ai` module is a self-hosted AI runtime with one provider router (OpenAI, Anthropic, Gemini), an embeddable chat widget, per-user and per-use-case credentials, model allow-lists, and a per-call cost ledger. Pair it with `cost-governance` for hard budget caps.
+- **Bring your own agent**: author a [Goose](https://github.com/aaif-goose/goose) recipe locally and run it unchanged in production. Gatewaze runs the Goose CLI server-side, with no rewrite and no local-to-cloud translation.
+- **MCP server library**: bundled MCP servers expose your platform to agents, including platform data (events, speakers, sponsors, health), a whitelisted API proxy, and a headless browser (local Chromium or Browserbase).
+- **Automation and integrations**: governed web fetch (`gatewaze-fetch`) and scrapers backed by a fetch service with eight swappable residential-proxy providers, plus integrations for Cloudflare Pages, Netlify, Luma, Slack, Twilio SMS/WhatsApp, SendGrid, Customer.io, Google Sheets, BigQuery, Stripe, Beehiiv, Substack, Browserbase, Umami, and more.
 
 ---
 
 ## Available Modules
 
-The collection ships **76 modules** spanning events, content, people, sites, marketing, communications, integrations, and platform infrastructure. Every module is self-contained — install only what you need; the platform discovers them automatically from the workspace.
+The collection ships **76 modules** spanning events, content, people, sites, marketing, communications, integrations, and platform infrastructure. Every module is self-contained: install only what you need; the platform discovers them automatically from the workspace.
 
 ### Events
 
 | Module | Description |
 |--------|-------------|
-| **events** | Core event management — registrations, attendance tracking, and check-in. Foundational module others build on. |
+| **events** | Core event management: registrations, attendance tracking, and check-in. Foundational module others build on. |
 | **calendars** | Curated collections of events with discovery, CSV import, scheduling APIs, and per-calendar permissions |
 | **event-agenda** | Sessions, time slots, and tracks with speaker assignments |
 | **event-speakers** | Speaker profiles, talk submissions, and cross-event speaker management |
@@ -87,7 +88,7 @@ The collection ships **76 modules** spanning events, content, people, sites, mar
 |--------|-------------|
 | **sites** | Multi-site web builder with drafts, A/B experiments, and multiple publishing targets |
 | **site-runtime** | React helper that surfaces analytics + A/B into rendered operator themes |
-| **templates** | Block/wrapper authoring system — parser, content forms, A/B engine, version pinning |
+| **templates** | Block/wrapper authoring system: parser, content forms, A/B engine, version pinning |
 | **custom-domains** | White-label custom domains with automatic DNS verification and HTTPS |
 | **redirects** | URL redirects and short links with click tracking |
 | **redirects-bitly** | Bitly backend adapter for the Redirects module |
@@ -132,8 +133,8 @@ The collection ships **76 modules** spanning events, content, people, sites, mar
 
 | Module | Description |
 |--------|-------------|
-| **ai** | Unified AI infrastructure — provider router, credential resolution, cost ledger, and chat widget |
-| **compliance** | GDPR/CCPA/SOC 2 tooling — consent, privacy requests, breach tracking, and audit logging |
+| **ai** | Unified AI infrastructure: provider router, credential resolution, cost ledger, and chat widget |
+| **compliance** | GDPR/CCPA/SOC 2 tooling: consent, privacy requests, breach tracking, and audit logging |
 | **cost-governance** | Cost ledger and per-brand budgets for paid external APIs |
 | **environments** | Sync database rows, edge functions, storage, and auth config across Supabase environments |
 | **scrapers** | Configurable web scraping jobs for event and content discovery |
@@ -160,7 +161,7 @@ This repository is designed to sit alongside the main Gatewaze repository:
 ```
 parent-directory/
   gatewaze/                # Core platform
-  gatewaze-modules/        # This repo — open-source modules
+  gatewaze-modules/        # This repo: open-source modules
 ```
 
 The core platform's `pnpm-workspace.yaml` already references `../gatewaze-modules/modules/*`, so modules are automatically available after cloning.
@@ -181,10 +182,10 @@ cp -r modules/_template modules/my-feature
 
 Then update the module to fit your needs:
 
-1. **`package.json`** — Set the module name, description, and any dependencies.
-2. **`index.ts`** — Define the module's ID, features, routes, nav items, migrations, and lifecycle hooks.
-3. **`migrations/`** — Add SQL migration files for your module's database schema.
-4. **`admin/`** — Add React components for the admin interface.
+1. **`package.json`**: Set the module name, description, and any dependencies.
+2. **`index.ts`**: Define the module's ID, features, routes, nav items, migrations, and lifecycle hooks.
+3. **`migrations/`**: Add SQL migration files for your module's database schema.
+4. **`admin/`**: Add React components for the admin interface.
 
 ### Module Structure
 
@@ -263,14 +264,14 @@ export default myModule;
 
 ### What Modules Can Provide
 
-- **Database migrations** — SQL files that create tables, indexes, RLS policies, and functions.
-- **Admin routes** — React pages added to the admin dashboard.
-- **Admin navigation** — Sidebar items linking to your admin pages.
-- **Portal navigation** — Links added to the public-facing portal.
-- **API routes** — Express routes registered with the API server.
-- **Edge functions** — Supabase Edge Functions (Deno).
-- **Configuration** — Schema-defined settings that admins can configure.
-- **Lifecycle hooks** — Code that runs on install, enable, or disable.
+- **Database migrations**: SQL files that create tables, indexes, RLS policies, and functions.
+- **Admin routes**: React pages added to the admin dashboard.
+- **Admin navigation**: Sidebar items linking to your admin pages.
+- **Portal navigation**: Links added to the public-facing portal.
+- **API routes**: Express routes registered with the API server.
+- **Edge functions**: Supabase Edge Functions (Deno).
+- **Configuration**: Schema-defined settings that admins can configure.
+- **Lifecycle hooks**: Code that runs on install, enable, or disable.
 
 For full documentation on the module system, see the [Module System Guide](https://github.com/gatewaze/gatewaze/blob/main/docs/modules.md) in the core repository.
 
