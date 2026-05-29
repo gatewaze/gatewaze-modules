@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS public.events_media (
   album         text,
   sort_order    integer DEFAULT 0,
   sponsor_id    uuid,
-  uploaded_by   uuid,
+  -- text (was uuid; folded from 004_uploaded_by_text): holds the role marker
+  -- 'admin' | 'attendee'. The uploader user UUID lives in uploader_id below.
+  uploaded_by   text CHECK (uploaded_by IS NULL OR uploaded_by IN ('admin', 'attendee')),
   file_name     text,
   storage_path  text,
   file_size     bigint,
@@ -27,10 +29,39 @@ CREATE TABLE IF NOT EXISTS public.events_media (
   is_featured   boolean DEFAULT false,
   display_order integer DEFAULT 0,
   created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz DEFAULT now()
+  updated_at    timestamptz DEFAULT now(),
+  -- YouTube integration + upload metadata (folded from 003_event_media_youtube)
+  is_approved                      boolean       DEFAULT true,
+  metadata                         jsonb         DEFAULT '{}'::jsonb,
+  thumbnail_path                   text,
+  upload_method                    text,
+  upload_source                    text,
+  uploader_id                      uuid,
+  duration                         integer,
+  youtube_channel_id               text,
+  youtube_video_id                 text,
+  youtube_url                      text,
+  youtube_embed_url                text,
+  youtube_thumbnail_url            text,
+  youtube_upload_status            text,
+  youtube_uploaded_at              timestamptz,
+  youtube_processing_started_at    timestamptz,
+  youtube_processing_completed_at  timestamptz,
+  youtube_retry_count              integer       DEFAULT 0,
+  youtube_last_retry_at            timestamptz,
+  youtube_next_retry_at            timestamptz,
+  youtube_error_message            text
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_media_event ON public.events_media (event_id);
+CREATE INDEX IF NOT EXISTS idx_events_media_youtube_video_id
+  ON public.events_media (youtube_video_id)
+  WHERE youtube_video_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_media_youtube_upload_status
+  ON public.events_media (youtube_upload_status)
+  WHERE youtube_upload_status IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_media_is_approved
+  ON public.events_media (is_approved);
 
 -- Conditional FK: sponsor_id → events_sponsor_profiles (if sponsors module installed)
 DO $$ BEGIN
