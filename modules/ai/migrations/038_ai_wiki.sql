@@ -2,16 +2,18 @@
 -- Module: ai
 -- Migration: 038_ai_wiki
 -- Description: Wiki layer for the AI module (spec-ai-memory-wiki.md). Per-use-case
---              hierarchical markdown knowledge base: durable, searchable
---              (FTS + pgvector), bidirectionally git-synced, with an immutable
---              raw-source layer and an opt-in cross-use-case graph. Opt-in per
---              use case via the 'wiki' MCP extension; zero impact otherwise.
+--              hierarchical markdown knowledge base: durable, searchable (FTS
+--              always; pgvector semantic search when available), bidirectionally
+--              git-synced, with an immutable raw-source layer and an opt-in
+--              cross-use-case graph. Opt-in per use case via the 'wiki' MCP
+--              extension; zero impact otherwise.
+--
+--              pgvector is OPTIONAL (handled in a guarded block at the end): the
+--              migration ALWAYS succeeds. Without pgvector the wiki runs
+--              keyword-only and the AI module still enables; enabling pgvector
+--              later + re-running this migration lights up semantic search
+--              (every statement here is idempotent).
 -- ============================================================================
-
--- pgvector gate (spec §14). Fails fast if the role can't create the extension;
--- on self-hosted Supabase, enable pgvector first. Hosted hybrid search needs it;
--- the local Goose backend (§5.8) does not.
-CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ----------------------------------------------------------------------------
 -- ai_wiki_page — LLM-authored synthesis pages (spec §4.1). slug is a PATH.
@@ -34,8 +36,7 @@ CREATE TABLE IF NOT EXISTS public.ai_wiki_page (
                     setweight(to_tsvector('english', coalesce(summary, '')), 'B') ||
                     setweight(to_tsvector('english', coalesce(body, '')), 'C')
                   ) STORED,
-  embedding       vector(1536),                  -- dim PINNED to text-embedding-3-small
-  embedding_model text,
+  embedding_model text,                          -- 'text-embedding-3-small'; `embedding vector(1536)` ADD'd in the guarded block below iff pgvector is available
   embedded_at     timestamptz,
   content_hash    text NOT NULL,                 -- sha256(title||\n||body)
 
@@ -59,8 +60,6 @@ CREATE TABLE IF NOT EXISTS public.ai_wiki_page (
 
 CREATE INDEX IF NOT EXISTS ai_wiki_page_tsv_idx
   ON public.ai_wiki_page USING gin (search_tsv);
-CREATE INDEX IF NOT EXISTS ai_wiki_page_embed_idx
-  ON public.ai_wiki_page USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS ai_wiki_page_meta_idx
   ON public.ai_wiki_page USING gin (metadata jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS ai_wiki_page_use_case_idx
@@ -137,8 +136,7 @@ CREATE TABLE IF NOT EXISTS public.ai_wiki_raw_source (
   content       text NOT NULL,
   content_hash  text NOT NULL,
   metadata      jsonb NOT NULL DEFAULT '{}'::jsonb,
-  embedding     vector(1536),
-  embedded_at   timestamptz,
+  embedded_at   timestamptz,                       -- `embedding vector(1536)` ADD'd in the guarded block below iff pgvector is available
   fetched_at    timestamptz NOT NULL DEFAULT now(),
   created_by    uuid,
   expired_at    timestamptz,
@@ -147,8 +145,6 @@ CREATE TABLE IF NOT EXISTS public.ai_wiki_raw_source (
 
 CREATE INDEX IF NOT EXISTS ai_wiki_raw_use_case_idx
   ON public.ai_wiki_raw_source (use_case) WHERE expired_at IS NULL;
-CREATE INDEX IF NOT EXISTS ai_wiki_raw_embed_idx
-  ON public.ai_wiki_raw_source USING hnsw (embedding vector_cosine_ops);
 
 -- ----------------------------------------------------------------------------
 -- ai_wiki_alloc_seq — atomic per-use-case change_seq allocator (spec §7.1).
@@ -171,35 +167,56 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ----------------------------------------------------------------------------
--- ai_wiki_match — semantic (vector) search over pages (+ raw sources) for a
--- readable use-case set, ordered by cosine distance (spec §8). Keyword search
--- uses the PostgREST full-text operator directly; only the vector side needs
--- a function (PostgREST can't express the <=> operator).
+-- pgvector (semantic search) — OPTIONAL, guarded. spec §8/§14.
+-- If `vector` can be enabled, add the embedding columns + HNSW indexes + the
+-- ai_wiki_match() cosine-search function. If pgvector is unavailable (or the
+-- role can't create it), this block NOTICEs and returns — the migration still
+-- succeeds and the wiki runs keyword-only (FTS). The MCP/repository degrade to
+-- keyword when ai_wiki_match is absent. Enabling pgvector later + re-running
+-- 038 lights up semantic search (all statements here are idempotent).
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.ai_wiki_match(
-  p_use_cases text[],
-  p_query_vec vector(1536),
-  p_kinds     text[],
-  p_limit     int
-)
-RETURNS TABLE (use_case text, slug text, kind text, title text, summary text, snippet text, distance float4)
-AS $$
-  SELECT use_case, slug, 'page'::text AS kind, title, summary,
-         left(coalesce(summary, body), 400) AS snippet,
-         (embedding <=> p_query_vec)::float4 AS distance
-  FROM public.ai_wiki_page
-  WHERE use_case = ANY(p_use_cases) AND deleted_at IS NULL AND embedding IS NOT NULL
-    AND 'page' = ANY(p_kinds)
-  UNION ALL
-  SELECT use_case, slug, 'raw'::text AS kind, title, NULL::text AS summary,
-         left(content, 400) AS snippet,
-         (embedding <=> p_query_vec)::float4 AS distance
-  FROM public.ai_wiki_raw_source
-  WHERE use_case = ANY(p_use_cases) AND expired_at IS NULL AND embedding IS NOT NULL
-    AND 'raw' = ANY(p_kinds)
-  ORDER BY distance ASC
-  LIMIT p_limit;
-$$ LANGUAGE sql STABLE;
+DO $do$
+BEGIN
+  BEGIN
+    CREATE EXTENSION IF NOT EXISTS vector;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'ai_wiki: pgvector unavailable (%) — semantic search disabled; wiki runs keyword-only', SQLERRM;
+    RETURN;
+  END;
+
+  ALTER TABLE public.ai_wiki_page       ADD COLUMN IF NOT EXISTS embedding vector(1536);
+  ALTER TABLE public.ai_wiki_raw_source ADD COLUMN IF NOT EXISTS embedding vector(1536);
+
+  CREATE INDEX IF NOT EXISTS ai_wiki_page_embed_idx
+    ON public.ai_wiki_page USING hnsw (embedding vector_cosine_ops);
+  CREATE INDEX IF NOT EXISTS ai_wiki_raw_embed_idx
+    ON public.ai_wiki_raw_source USING hnsw (embedding vector_cosine_ops);
+
+  EXECUTE $fn$
+    CREATE OR REPLACE FUNCTION public.ai_wiki_match(
+      p_use_cases text[], p_query_vec vector(1536), p_kinds text[], p_limit int
+    )
+    RETURNS TABLE (use_case text, slug text, kind text, title text, summary text, snippet text, distance float4)
+    AS $body$
+      SELECT use_case, slug, 'page'::text AS kind, title, summary,
+             left(coalesce(summary, body), 400) AS snippet,
+             (embedding <=> p_query_vec)::float4 AS distance
+      FROM public.ai_wiki_page
+      WHERE use_case = ANY(p_use_cases) AND deleted_at IS NULL AND embedding IS NOT NULL
+        AND 'page' = ANY(p_kinds)
+      UNION ALL
+      SELECT use_case, slug, 'raw'::text AS kind, title, NULL::text AS summary,
+             left(content, 400) AS snippet,
+             (embedding <=> p_query_vec)::float4 AS distance
+      FROM public.ai_wiki_raw_source
+      WHERE use_case = ANY(p_use_cases) AND expired_at IS NULL AND embedding IS NOT NULL
+        AND 'raw' = ANY(p_kinds)
+      ORDER BY distance ASC
+      LIMIT p_limit;
+    $body$ LANGUAGE sql STABLE;
+  $fn$;
+END
+$do$;
 
 -- ----------------------------------------------------------------------------
 -- updated_at touch triggers (mirrors ai_memory).
