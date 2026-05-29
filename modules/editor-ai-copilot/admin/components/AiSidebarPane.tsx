@@ -635,6 +635,10 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
   const dispatch = usePuck((s) => s.dispatch);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Prompts typed while a turn is running are parked here and sent one
+  // at a time once the canvas is free (Claude-Code-style queueing).
+  const [queued, setQueued] = useState<string[]>([]);
+  const drainLockRef = useRef(false);
   const [prompt, setPrompt] = useState('');
   const [attached, setAttached] = useState<AttachedDoc[]>([]);
   const [attachOpen, setAttachOpen] = useState(false);
@@ -668,7 +672,7 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
   // Auto-scroll messages to bottom when new ones arrive.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages.length]);
+  }, [messages.length, queued.length]);
 
   // On mount (and when the target changes) rehydrate the transcript from
   // the DB so the conversation survives a page reload. Only applied when
@@ -848,9 +852,34 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
     ]);
   }, [status, lastUsage]);
 
+  // Drain queued prompts one at a time once the active turn settles, so
+  // messages typed while a turn was running send automatically in order.
+  // The canvas can only safely apply one generation at a time, so we
+  // never run them concurrently.
+  useEffect(() => {
+    if (drainLockRef.current) return;
+    if (status === 'loading') return;
+    if (queued.length === 0) return;
+    drainLockRef.current = true;
+    const [next, ...rest] = queued;
+    setQueued(rest);
+    void submitPrompt(next!).finally(() => {
+      drainLockRef.current = false;
+    });
+  }, [status, queued, submitPrompt]);
+
   const onSubmit = useCallback(() => {
+    const text = prompt.trim();
+    if (!text) return;
+    // Queue while a turn is running (or others are already waiting) and
+    // let the drain effect send them sequentially.
+    if (status === 'loading' || queued.length > 0) {
+      setQueued((q) => [...q, text]);
+      setPrompt('');
+      return;
+    }
     void submitPrompt(prompt);
-  }, [prompt, submitPrompt]);
+  }, [prompt, status, queued.length, submitPrompt]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -870,7 +899,11 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
     : `What do you want to build?`;
 
   const isInitial = messages.length === 0 && status === 'idle';
-  const canSend = !!prompt.trim() && status !== 'loading';
+  const isLoading = status === 'loading';
+  // The composer stays usable while a turn runs — submitting queues.
+  const canSend = !!prompt.trim();
+  // The send button only doubles as cancel when there's nothing to queue.
+  const showCancel = isLoading && !prompt.trim();
 
   const composer = (
     <>
@@ -884,7 +917,6 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
           onFocus={() => setComposerFocused(true)}
           onBlur={() => setComposerFocused(false)}
           placeholder={placeholder}
-          disabled={status === 'loading'}
           maxLength={2000}
           style={S.textarea}
           autoFocus={isInitial}
@@ -917,12 +949,13 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
 
           <button
             type="button"
-            aria-label={status === 'loading' ? 'Cancel generation' : 'Send prompt'}
-            onClick={status === 'loading' ? () => { abort(); animationAbortRef.current?.abort(); } : onSubmit}
-            disabled={status !== 'loading' && !canSend}
-            style={{ ...S.sendButton, ...(status !== 'loading' && !canSend ? S.sendButtonDisabled : {}) }}
+            aria-label={showCancel ? 'Cancel generation' : isLoading ? 'Queue prompt' : 'Send prompt'}
+            title={isLoading && prompt.trim() ? 'Will send when the current turn finishes' : undefined}
+            onClick={showCancel ? () => { abort(); animationAbortRef.current?.abort(); } : onSubmit}
+            disabled={!showCancel && !canSend}
+            style={{ ...S.sendButton, ...(!showCancel && !canSend ? S.sendButtonDisabled : {}) }}
           >
-            {status === 'loading' ? '×' : <SendIcon />}
+            {showCancel ? '×' : <SendIcon />}
           </button>
         </div>
       </div>
@@ -1000,6 +1033,12 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
 
       <div style={S.messages} aria-live="polite">
         {messages.map((m) => renderMessage(m))}
+        {queued.map((q, i) => (
+          <div key={`queued-${i}`} style={{ ...S.userBubble, opacity: 0.5 }}>
+            {q}
+            <span style={{ display: 'block', fontSize: 11, opacity: 0.85, marginTop: 2 }}>queued</span>
+          </div>
+        ))}
         <div ref={messagesEndRef} />
       </div>
 
