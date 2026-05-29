@@ -17,8 +17,6 @@ const eventMediaModule: GatewazeModule = {
   migrations: [
     'migrations/001_event_media_tables.sql',
     'migrations/002_event_media_albums.sql',
-    'migrations/003_event_media_youtube.sql',
-    'migrations/004_uploaded_by_text.sql',
   ],
 
   edgeFunctions: [
