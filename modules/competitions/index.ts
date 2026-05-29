@@ -68,7 +68,6 @@ const competitionsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_competitions_tables.sql',
-    'migrations/002_content_category.sql',
     'migrations/003_winner_lifecycle.sql',
     'migrations/004_triage_adapter.sql',
     'migrations/005_keyword_adapter.sql',

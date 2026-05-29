@@ -36,42 +36,55 @@ BEGIN
     cm.id,
     cm.calendar_id,
     cm.person_id,
-    COALESCE(cm.email, pp.email)::TEXT AS email,
+    COALESCE(cm.email, p.email)::TEXT AS email,
     cm.people_profile_id,
     cm.membership_type::TEXT,
     cm.membership_status::TEXT,
     cm.import_source::TEXT AS source,
     'direct'::TEXT AS source_type,
-    pp.first_name::TEXT,
-    pp.last_name::TEXT,
-    pp.company::TEXT,
-    pp.job_title::TEXT,
-    pp.avatar_url::TEXT,
+    (p.attributes->>'first_name')::TEXT AS first_name,
+    (p.attributes->>'last_name')::TEXT  AS last_name,
+    (p.attributes->>'company')::TEXT    AS company,
+    (p.attributes->>'job_title')::TEXT  AS job_title,
+    p.avatar_url::TEXT,
     cm.luma_user_id::TEXT,
     cm.joined_at,
     COALESCE(
-      (SELECT COUNT(*) FROM public.registrations r
-       WHERE r.person_id = cm.person_id
-       AND r.event_id IN (SELECT ce.event_id FROM public.calendars_events ce WHERE ce.calendar_id = p_calendar_id)),
+      (
+        SELECT COUNT(*)
+        FROM public.events_registrations er
+        WHERE er.person_id = cm.person_id
+          AND er.event_id IN (
+            SELECT ce.event_id FROM public.calendars_events ce WHERE ce.calendar_id = p_calendar_id
+          )
+      ),
       0
     ) AS event_count
   FROM public.calendars_members cm
-  LEFT JOIN public.people_profiles pp ON pp.id = cm.people_profile_id
+  LEFT JOIN public.people p ON p.id = cm.person_id
   WHERE cm.calendar_id = p_calendar_id
     AND (p_membership_type IS NULL OR cm.membership_type = p_membership_type)
-    AND (p_search IS NULL OR p_search = '' OR
-         cm.email ILIKE '%' || p_search || '%' OR
-         pp.first_name ILIKE '%' || p_search || '%' OR
-         pp.last_name ILIKE '%' || p_search || '%' OR
-         pp.company ILIKE '%' || p_search || '%')
-  ORDER BY cm.joined_at DESC
+    AND (
+      p_search IS NULL
+      OR p_search = ''
+      OR cm.email ILIKE '%' || p_search || '%'
+      OR p.email  ILIKE '%' || p_search || '%'
+      OR (p.attributes->>'first_name') ILIKE '%' || p_search || '%'
+      OR (p.attributes->>'last_name')  ILIKE '%' || p_search || '%'
+      OR (p.attributes->>'company')    ILIKE '%' || p_search || '%'
+    )
+  ORDER BY cm.joined_at DESC NULLS LAST
   LIMIT p_limit
   OFFSET p_offset;
 END;
 $$;
 
-COMMENT ON FUNCTION public.get_calendar_members_dynamic(UUID, TEXT, TEXT, INTEGER, INTEGER)
-  IS 'Get calendar members with profile data, filtering, search, and pagination';
+-- Rewritten (was 006_fix_members_dynamic_function): use the modular people
+-- schema — person fields live on people.attributes jsonb, not people_profiles.
+COMMENT ON FUNCTION public.get_calendar_members_dynamic(UUID, TEXT, TEXT, INTEGER, INTEGER) IS
+  'List calendar members with person name/company/title flattened from '
+  'people.attributes jsonb. Replaces the 002 version which incorrectly '
+  'assumed people_profiles held these columns.';
 
 -- ==========================================================================
 -- Calendar members count
