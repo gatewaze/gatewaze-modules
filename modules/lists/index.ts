@@ -25,9 +25,6 @@ const listsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_lists_tables.sql',
-    'migrations/002_migrate_from_email_subscriptions.sql',
-    'migrations/003_external_api_key.sql',
-    'migrations/004_lists_git_provenance.sql',
   ],
 
   adminRoutes: [

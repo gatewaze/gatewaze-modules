@@ -148,8 +148,20 @@ CREATE TABLE IF NOT EXISTS public.integrations_luma_csv_uploads (
   processing_started_at timestamptz,
   processing_completed_at timestamptz,
   created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
+  updated_at timestamptz DEFAULT now(),
+  -- Gatewaze-side calendar UUID (folded from 003_add_calendar_id_to_uploads).
+  -- Soft reference to calendars(id) — no hard FK so luma stays independent of
+  -- the optional calendars module. luma_calendar_id holds the Luma-side string.
+  calendar_id uuid
 );
+
+CREATE INDEX IF NOT EXISTS idx_integrations_luma_csv_uploads_calendar
+  ON public.integrations_luma_csv_uploads (calendar_id)
+  WHERE calendar_id IS NOT NULL;
+
+COMMENT ON COLUMN public.integrations_luma_csv_uploads.calendar_id IS
+  'Gatewaze-side calendar UUID. Soft reference to calendars(id). The '
+  'luma_calendar_id column still holds the Luma-side string identifier.';
 
 CREATE INDEX IF NOT EXISTS idx_integrations_luma_csv_uploads_brand ON public.integrations_luma_csv_uploads(brand_id);
 CREATE INDEX IF NOT EXISTS idx_integrations_luma_csv_uploads_status ON public.integrations_luma_csv_uploads(status);
