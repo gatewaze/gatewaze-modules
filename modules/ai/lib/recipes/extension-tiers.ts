@@ -65,6 +65,7 @@ const TIER1_NATIVE_TOOL_MAPPINGS = new Set([
  */
 const TIER2_RECOGNISED_BUILTINS = new Set([
   'memory',         // §4.10 — wired to ai_recipe_memory in the executor
+  'wiki',           // spec-ai-memory-wiki.md — substituted to gatewaze-wiki-mcp
   'chatrecall',
   'todo',
   'tom',

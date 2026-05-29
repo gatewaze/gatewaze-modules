@@ -174,7 +174,7 @@ export function registerRoutes(app: Express, ctx?: any): void {
     return r.vectors;
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mountWikiRoutes(router as any, { supabase, embed: wikiEmbed, enqueueJob });
+  mountWikiRoutes(router as any, { supabase, embed: wikiEmbed, enqueueJob, internalKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? null });
 
   // ── Skills subsystem (moved from editor-ai-copilot, Phase 2) ──────────
   //

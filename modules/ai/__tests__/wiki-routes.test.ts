@@ -94,4 +94,35 @@ describe('wiki routes', () => {
     expect(out.status).toBe(401);
     expect(out.json.error.code).toBe('webhook_unverified');
   });
+
+  it('GET /internal/wiki/read 401 without the service key', async () => {
+    const { r, find } = makeRouter();
+    mountWikiRoutes(r, { supabase: makeClient({}) as any, internalKey: 'secret-key' });
+    const { res, out } = makeRes();
+    await find('get', '/internal/wiki/read')({ query: { use_case: 'cfp', slug: 'a' }, headers: {} }, res);
+    expect(out.status).toBe(401);
+    expect(out.json.error.code).toBe('unauthenticated');
+  });
+
+  it('GET /internal/wiki/read 200 with the matching service key', async () => {
+    const { r, find } = makeRouter();
+    const client = makeClient({ tables: { ai_wiki_page: { single: { data: { use_case: 'cfp', slug: 'a', title: 'T', body: 'B', deleted_at: null }, error: null } }, ai_wiki_link: { list: { data: [], error: null } } } });
+    mountWikiRoutes(r, { supabase: client as any, internalKey: 'secret-key' });
+    const { res, out } = makeRes();
+    await find('get', '/internal/wiki/read')({ query: { use_case: 'cfp', slug: 'a' }, headers: { 'x-gatewaze-internal-key': 'secret-key' } }, res);
+    expect(out.status).toBe(200);
+    expect(out.json.found).toBe(true);
+    expect(out.json.page.slug).toBe('a');
+  });
+
+  it('POST /internal/wiki/upsert 200 with the service key', async () => {
+    const { r, find } = makeRouter();
+    const client = makeClient({ rpc: { ai_wiki_alloc_seq: { data: 3, error: null } }, tables: { ai_wiki_page: { single: { data: null, error: null }, write: { data: { id: 'p', version: 1 }, error: null } }, ai_wiki_link: {} } });
+    mountWikiRoutes(r, { supabase: client as any, internalKey: 'secret-key' });
+    const { res, out } = makeRes();
+    await find('post', '/internal/wiki/upsert')({ headers: { 'x-gatewaze-internal-key': 'secret-key' }, body: { use_case: 'cfp', slug: 'conferences/x', title: 'T', body: 'B' } }, res);
+    expect(out.status).toBe(200);
+    expect(out.json.ok).toBe(true);
+    expect(out.json.version).toBe(1);
+  });
 });
