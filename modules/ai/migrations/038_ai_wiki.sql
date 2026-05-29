@@ -151,6 +151,57 @@ CREATE INDEX IF NOT EXISTS ai_wiki_raw_embed_idx
   ON public.ai_wiki_raw_source USING hnsw (embedding vector_cosine_ops);
 
 -- ----------------------------------------------------------------------------
+-- ai_wiki_alloc_seq — atomic per-use-case change_seq allocator (spec §7.1).
+-- Ensures the sync_state row exists, bumps seq_counter, advances pending_seq,
+-- and returns the new sequence. Called via PostgREST rpc on every page write.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.ai_wiki_alloc_seq(p_use_case text)
+RETURNS bigint AS $$
+DECLARE next_seq bigint;
+BEGIN
+  INSERT INTO public.ai_wiki_sync_state (use_case) VALUES (p_use_case)
+    ON CONFLICT (use_case) DO NOTHING;
+  UPDATE public.ai_wiki_sync_state
+    SET seq_counter = seq_counter + 1,
+        pending_seq = seq_counter + 1
+    WHERE use_case = p_use_case
+    RETURNING seq_counter INTO next_seq;
+  RETURN next_seq;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ----------------------------------------------------------------------------
+-- ai_wiki_match — semantic (vector) search over pages (+ raw sources) for a
+-- readable use-case set, ordered by cosine distance (spec §8). Keyword search
+-- uses the PostgREST full-text operator directly; only the vector side needs
+-- a function (PostgREST can't express the <=> operator).
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.ai_wiki_match(
+  p_use_cases text[],
+  p_query_vec vector(1536),
+  p_kinds     text[],
+  p_limit     int
+)
+RETURNS TABLE (use_case text, slug text, kind text, title text, summary text, snippet text, distance float4)
+AS $$
+  SELECT use_case, slug, 'page'::text AS kind, title, summary,
+         left(coalesce(summary, body), 400) AS snippet,
+         (embedding <=> p_query_vec)::float4 AS distance
+  FROM public.ai_wiki_page
+  WHERE use_case = ANY(p_use_cases) AND deleted_at IS NULL AND embedding IS NOT NULL
+    AND 'page' = ANY(p_kinds)
+  UNION ALL
+  SELECT use_case, slug, 'raw'::text AS kind, title, NULL::text AS summary,
+         left(content, 400) AS snippet,
+         (embedding <=> p_query_vec)::float4 AS distance
+  FROM public.ai_wiki_raw_source
+  WHERE use_case = ANY(p_use_cases) AND expired_at IS NULL AND embedding IS NOT NULL
+    AND 'raw' = ANY(p_kinds)
+  ORDER BY distance ASC
+  LIMIT p_limit;
+$$ LANGUAGE sql STABLE;
+
+-- ----------------------------------------------------------------------------
 -- updated_at touch triggers (mirrors ai_memory).
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.touch_ai_wiki_updated_at()
