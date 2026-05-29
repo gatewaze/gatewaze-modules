@@ -35,6 +35,7 @@ import AiCredentialsAdmin from './AiCredentialsAdmin';
 import AiJobsAdmin from './AiJobsAdmin';
 import AiMcpServersAdmin from './AiMcpServersAdmin';
 import AiMemoryAdmin from './AiMemoryAdmin';
+import AiWikiAdmin from './AiWikiAdmin';
 import AiModelsAdmin from './AiModelsAdmin';
 import AiRecipesAdmin from './AiRecipesAdmin';
 import AiUsageDashboard from './AiUsageDashboard';
@@ -65,6 +66,9 @@ const BUILTIN_TABS: BuiltinTab[] = [
   // store. Shows what models have written via store_memory + scope,
   // TTL, originating message.
   { id: 'memory', label: 'Memory', order: 68, render: () => <AiMemoryAdmin /> },
+  // Wiki — per-use-case durable knowledge base (pages, search, git sync,
+  // cross-wiki grants). Spec: spec-ai-memory-wiki.md.
+  { id: 'wiki', label: 'Wiki', order: 69, render: () => <AiWikiAdmin /> },
   // Jobs — live queue inspection (active/waiting/delayed/failed) +
   // per-job stop/retry/promote + live-tail of the SSE stream.
   // Cross-module toggle surfaces the wider BullMQ queue.
