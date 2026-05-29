@@ -16,6 +16,16 @@ This repository contains the official open-source module collection for the Gate
 
 ---
 
+## Highlights
+
+- **Run AI in production, in-house** — the `ai` module is a self-hosted AI runtime: one provider router (OpenAI, Anthropic, Gemini), an embeddable chat widget, per-user/per-use-case credentials, model allow-lists, and a per-call cost ledger. Pair it with `cost-governance` for hard budget caps.
+- **Bring your own agent** — author a [Goose](https://github.com/block/goose) recipe locally and run it *unchanged* in production. Gatewaze runs the Goose CLI server-side — no rewrite, no local-to-cloud translation.
+- **MCP server library** — bundled MCP servers expose your platform to agents: platform data (events, speakers, sponsors, health), a whitelisted API proxy, and a headless browser (local Chromium or Browserbase).
+- **Automation** — `gatewaze-fetch` (governed web fetch with quotas, domain rules, robots.txt, audit + billing) and `scrapers` (Luma / dev.events / LF events), backed by a fetch service with eight swappable residential-proxy providers.
+- **Integrations** — Cloudflare Pages, Netlify, Bunny CDN, Luma, Cvent, Gradual, Slack, Twilio SMS/WhatsApp, SendGrid, Customer.io, Google Sheets, BigQuery, Stripe, Bitly, Short.io, Beehiiv, Substack, Browserbase, Umami, Prometheus/Grafana, and more.
+
+---
+
 ## Available Modules
 
 The collection ships **76 modules** spanning events, content, people, sites, marketing, communications, integrations, and platform infrastructure. Every module is self-contained — install only what you need; the platform discovers them automatically from the workspace.
