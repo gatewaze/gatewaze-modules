@@ -58,7 +58,6 @@ const eventsModule: GatewazeModule = {
     'migrations/005_keyword_adapter.sql',
     'migrations/006_publish_state.sql',
     'migrations/008_register_with_platform.sql',
-    'migrations/009_fix_keyword_trigger_definer.sql',
     'migrations/012_nearby_hotels.sql',
     'migrations/013_speakers_extracted_at.sql',
     'migrations/014_register_event_host_media.sql',
