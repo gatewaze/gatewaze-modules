@@ -20,17 +20,19 @@
 -- ==========================================================================
 -- events_registrations: event.registered + event.attended
 -- ==========================================================================
+-- event_id (was 005_fix_trigger_event_columns): events_registrations' uuid FK
+-- column is event_id, not the non-existent event_uuid the original referenced.
 CREATE OR REPLACE FUNCTION public.emit_event_registration_signal()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW.person_id IS NULL OR NEW.event_uuid IS NULL THEN
+  IF NEW.person_id IS NULL OR NEW.event_id IS NULL THEN
     RETURN NEW;
   END IF;
   PERFORM public.emit_engagement_signal(
     'event.registered',
     NEW.person_id,
     jsonb_build_object(
-      'event_id', NEW.event_uuid,
+      'event_id', NEW.event_id,
       'source_module', 'events',
       'source_record_id', NEW.id
     )
@@ -49,7 +51,7 @@ BEGIN
       'event.attended',
       NEW.person_id,
       jsonb_build_object(
-        'event_id', NEW.event_uuid,
+        'event_id', NEW.event_id,
         'source_module', 'events',
         'source_record_id', NEW.id
       )
