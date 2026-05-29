@@ -48,8 +48,6 @@ const contentKeywordsModule: GatewazeModule = {
     'migrations/001_schema.sql',
     'migrations/002_rpcs.sql',
     'migrations/003_preview_and_helpers.sql',
-    'migrations/004_metadata_and_tier_rank.sql',
-    'migrations/005_emit_verdict_changes.sql',
   ],
 
   // Surfaced inside the Content hub via adminSlots below.
