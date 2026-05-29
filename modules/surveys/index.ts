@@ -16,7 +16,6 @@ const surveysModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_surveys_tables.sql',
-    'migrations/002_content_category.sql',
   ],
 
   adminRoutes: [

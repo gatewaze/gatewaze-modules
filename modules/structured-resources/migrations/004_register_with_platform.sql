@@ -2,26 +2,8 @@
 -- structured-resources — register sr_item with content-platform.
 -- ============================================================================
 
-ALTER TABLE public.sr_items
-  ADD COLUMN IF NOT EXISTS publish_state text NOT NULL DEFAULT 'published'
-  CHECK (publish_state IN
-    ('draft','pending_review','auto_suppressed','rejected','published','unpublished'));
-
-DO $backfill$
-BEGIN
-  -- sr_items.status enum is (draft/published/archived). 002_triage_adapter may
-  -- have widened it; backfill conservatively.
-  UPDATE public.sr_items SET publish_state = CASE
-    WHEN status = 'pending_review' THEN 'pending_review'
-    WHEN status = 'rejected'       THEN 'rejected'
-    WHEN status = 'draft'          THEN 'draft'
-    WHEN status = 'archived'       THEN 'unpublished'
-    ELSE 'published'
-  END WHERE TRUE;
-END $backfill$;
-
-CREATE INDEX IF NOT EXISTS sr_items_publish_state_live
-  ON public.sr_items(publish_state) WHERE publish_state = 'published';
+-- The publish_state column + its index are created up-front in
+-- 001_structured_resources.
 
 CREATE OR REPLACE FUNCTION public.sr_items_inbox_preview(p_id uuid)
 RETURNS TABLE(title text, subtitle text, thumbnail_url text)

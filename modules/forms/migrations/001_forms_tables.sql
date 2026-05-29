@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS public.forms (
   is_active       boolean NOT NULL DEFAULT true,
   settings        jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at      timestamptz NOT NULL DEFAULT now(),
-  updated_at      timestamptz NOT NULL DEFAULT now()
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  -- Platform content category (folded from 002_content_category)
+  content_category varchar(100)
 );
 
 COMMENT ON TABLE public.forms IS 'Form definitions with field schema and configuration';
@@ -26,6 +28,7 @@ COMMENT ON COLUMN public.forms.settings IS 'Additional form settings: {submitBut
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_forms_slug ON public.forms (slug);
 CREATE INDEX IF NOT EXISTS idx_forms_is_active ON public.forms (is_active);
+CREATE INDEX IF NOT EXISTS idx_forms_content_category ON public.forms (content_category);
 
 CREATE TRIGGER forms_updated_at
   BEFORE UPDATE ON public.forms

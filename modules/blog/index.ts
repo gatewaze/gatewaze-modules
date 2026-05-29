@@ -19,7 +19,6 @@ const blogModule: GatewazeModule = {
   migrations: [
     'migrations/001_blog_tables.sql',
     'migrations/002_blog_embeddings.sql',
-    'migrations/003_content_category.sql',
     'migrations/004_triage_adapter.sql',
     'migrations/005_keyword_adapter.sql',
     'migrations/006_register_with_platform.sql',

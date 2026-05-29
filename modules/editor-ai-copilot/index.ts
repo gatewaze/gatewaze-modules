@@ -118,7 +118,6 @@ const editorAiCopilotModule: GatewazeModule = {
     'migrations/002_canvas_ai_documents.sql',
     'migrations/003_ai_skills.sql',
     'migrations/004_canvas_ai_web_tools.sql',
-    'migrations/005_drop_canvas_ai_daily_tool_usage.sql',
     // 006_ai_skills_reference_image.sql was folded into the ai module's
     // 009_ai_skills.sql when the skills subsystem moved over in Phase 2.
     // Intentionally not listed here.

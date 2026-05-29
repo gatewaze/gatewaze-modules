@@ -1,31 +1,10 @@
 -- ============================================================================
 -- blog — triage adapter
--- Extends blog_posts.status with pending_review/rejected + triage RPCs.
--- Guarded: no-op if content-triage isn't installed.
+-- Triage RPCs (approve/reject/submit/suggest). The blog_posts schema this
+-- relies on (extended status CHECK, rejection_reason) is created up-front in
+-- 001_blog_tables. Guarded function bodies are no-ops if content-triage
+-- isn't installed.
 -- ============================================================================
-DO $migration$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'content_triage_adapters'
-  ) THEN
-    RAISE NOTICE '[blog/004_triage_adapter] content-triage not installed; skipping';
-    RETURN;
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint c
-    WHERE c.conrelid = 'public.blog_posts'::regclass
-      AND pg_get_constraintdef(c.oid) ILIKE '%pending_review%'
-  ) THEN
-    ALTER TABLE public.blog_posts DROP CONSTRAINT IF EXISTS blog_posts_status_check;
-    ALTER TABLE public.blog_posts ADD CONSTRAINT blog_posts_status_check
-      CHECK (status IN ('draft','published','archived','pending_review','rejected'));
-  END IF;
-
-  ALTER TABLE public.blog_posts ADD COLUMN IF NOT EXISTS rejection_reason text;
-END
-$migration$;
 
 CREATE OR REPLACE FUNCTION public.blog_triage_approve(
   p_content_id  uuid,
