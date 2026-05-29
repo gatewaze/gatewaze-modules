@@ -31,7 +31,6 @@ const engagementModule: GatewazeModule = {
     'migrations/002_engagement_rollup_views.sql',
     'migrations/003_engagement_default_rules.sql',
     'migrations/004_signal_emission_triggers.sql',
-    'migrations/005_fix_trigger_event_columns.sql',
   ],
 
   adminRoutes: [
