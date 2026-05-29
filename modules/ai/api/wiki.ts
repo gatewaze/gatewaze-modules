@@ -37,8 +37,10 @@ import { contentHash } from '../lib/wiki/hash.js';
 
 interface MountDeps {
   supabase: { from(table: string): any; rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }> };
-  embed?: ((texts: string[]) => Promise<number[][]>) | null;
+  embed?: ((texts: string[], useCase: string) => Promise<number[][]>) | null;
   enqueueJob?: (queue: string, name: string, data: Record<string, unknown>) => Promise<{ id: string }>;
+  /** Service-role key the wiki MCP presents on /internal/wiki/* (service-to-service auth). */
+  internalKey?: string | null;
   logger?: { warn: (m: string, f?: Record<string, unknown>) => void };
 }
 
@@ -291,5 +293,89 @@ export function mountWikiRoutes(router: Router, deps: MountDeps): void {
     if ((st!.data as { pull_enabled?: boolean }).pull_enabled === false) return res.status(202).json({ enqueued: false });
     if (deps.enqueueJob) await deps.enqueueJob('jobs', 'ai:wiki-pull', { useCase }); // worker: phase 5
     res.status(202).json({ enqueued: true });
+  });
+
+  // --- internal (service-to-service) surface for the wiki MCP --------------
+  // Not under /admin, so it isn't gated by the operator JWT; instead it is
+  // authenticated by the service-role key the MCP already holds. This lets the
+  // spawned MCP be a thin stdio→HTTP adapter while all logic (hash, links,
+  // embedding, cost-tracking) stays here over the shared repository. spec §5.8.
+  function internalAuth(req: Request, res: Response): boolean {
+    const key = deps.internalKey;
+    const presented = String(req.headers['x-gatewaze-internal-key'] ?? '');
+    if (!key || presented.length !== key.length) { sendError(res, 401, 'unauthenticated', 'internal key required'); return false; }
+    try {
+      if (!timingSafeEqual(Buffer.from(presented), Buffer.from(key))) { sendError(res, 401, 'unauthenticated', 'bad internal key'); return false; }
+    } catch { sendError(res, 401, 'unauthenticated', 'bad internal key'); return false; }
+    return true;
+  }
+
+  router.get('/internal/wiki/search', async (req: Request, res: Response): Promise<void> => {
+    if (!internalAuth(req, res)) return;
+    const useCase = String(req.query.use_case ?? ''); const q = String(req.query.q ?? '');
+    if (!useCase || !q) return sendError(res, 400, 'invalid_input', 'use_case and q required');
+    const results = await searchPages(deps.supabase, {
+      useCase, query: q,
+      ...(req.query.k ? { k: Number(req.query.k) } : {}),
+      ...(req.query.mode ? { mode: req.query.mode as any } : {}),
+      ...(req.query.scope ? { scope: req.query.scope as any } : {}),
+      ...(typeof req.query.kinds === 'string' ? { kinds: req.query.kinds.split(',') } : {}),
+    }, embed);
+    res.status(200).json({ results });
+  });
+
+  router.get('/internal/wiki/read', async (req: Request, res: Response): Promise<void> => {
+    if (!internalAuth(req, res)) return;
+    const useCase = String(req.query.use_case ?? ''); const slug = String(req.query.slug ?? '');
+    if (!useCase || !slug) return sendError(res, 400, 'invalid_input', 'use_case and slug required');
+    const page = await readPage(deps.supabase, useCase, slug);
+    res.status(200).json({ found: !!page, ...(page ? { page } : {}) });
+  });
+
+  router.get('/internal/wiki/list', async (req: Request, res: Response): Promise<void> => {
+    if (!internalAuth(req, res)) return;
+    const useCase = String(req.query.use_case ?? '');
+    if (!useCase) return sendError(res, 400, 'invalid_input', 'use_case required');
+    let where: unknown;
+    if (typeof req.query.where === 'string') { try { where = JSON.parse(req.query.where); } catch { /* ignore */ } }
+    const pages = await listPages(deps.supabase, useCase, {
+      ...(typeof req.query.prefix === 'string' ? { prefix: req.query.prefix } : {}),
+      ...(typeof req.query.category === 'string' ? { category: req.query.category } : {}),
+      ...(where !== undefined ? { where } : {}),
+      ...(req.query.limit ? { limit: Number(req.query.limit) } : {}),
+    });
+    res.status(200).json({ pages });
+  });
+
+  router.post('/internal/wiki/upsert', async (req: Request, res: Response): Promise<void> => {
+    if (!internalAuth(req, res)) return;
+    const b = req.body as { use_case?: string; slug?: string; title?: string; body?: string; summary?: string; category?: string; metadata?: Record<string, unknown>; message_id?: string };
+    if (!b?.use_case || !b?.slug || typeof b.title !== 'string') return sendError(res, 400, 'invalid_input', 'use_case, slug, title required');
+    const r = await upsertPage(deps.supabase, {
+      useCase: b.use_case, slug: b.slug, title: b.title, body: String(b.body ?? ''),
+      summary: b.summary ?? null, category: b.category ?? null, metadata: b.metadata ?? {},
+      source: 'model', messageId: b.message_id ?? null,
+    }, embed);
+    if (!r.ok) return sendError(res, r.error?.startsWith('invalid_slug') ? 400 : 500, r.error?.startsWith('invalid_slug') ? 'invalid_input' : 'internal_error', r.error ?? 'upsert failed');
+    res.status(200).json({ ok: true, slug: r.slug, version: r.version, ...(r.warning ? { warning: r.warning } : {}) });
+  });
+
+  router.get('/internal/wiki/source', async (req: Request, res: Response): Promise<void> => {
+    if (!internalAuth(req, res)) return;
+    const useCase = String(req.query.use_case ?? ''); const slug = String(req.query.slug ?? '');
+    if (!useCase || !slug) return sendError(res, 400, 'invalid_input', 'use_case and slug required');
+    const source = await readSource(deps.supabase, useCase, slug);
+    res.status(200).json({ found: !!source, ...(source ? { source } : {}) });
+  });
+
+  router.get('/internal/wiki/sources', async (req: Request, res: Response): Promise<void> => {
+    if (!internalAuth(req, res)) return;
+    const useCase = String(req.query.use_case ?? '');
+    if (!useCase) return sendError(res, 400, 'invalid_input', 'use_case required');
+    const sources = await listSources(deps.supabase, useCase, {
+      ...(typeof req.query.prefix === 'string' ? { prefix: req.query.prefix } : {}),
+      ...(req.query.limit ? { limit: Number(req.query.limit) } : {}),
+    });
+    res.status(200).json({ sources });
   });
 }
