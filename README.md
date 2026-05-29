@@ -18,12 +18,13 @@ This repository contains the official open-source module collection for the Gate
 
 ## Highlights
 
-- **Each module is a mini-application**: a module can ship its own admin UI, API routes, background jobs, database migrations, and public-facing portal pages out of the box. The platform auto-discovers modules from the workspace, and each can be enabled or disabled independently.
+- **Each module is a mini-application**: a module can ship its own admin UI, API routes, background jobs (on [Redis](https://redis.io) + [BullMQ](https://bullmq.io)), database migrations (on [Supabase](https://supabase.com) Postgres), and public-facing portal pages out of the box. The platform auto-discovers modules from the workspace, and each can be enabled or disabled independently.
 - **Build a module for anything**: start from the `_template`, add your tables, admin pages, and portal, and it goes live. The 76 pre-built modules below cover common community needs; your own modules cover the rest.
 - **Run AI in production, in-house**: the `ai` module is a self-hosted AI runtime with one provider router (OpenAI, Anthropic, Gemini), an embeddable chat widget, per-user and per-use-case credentials, model allow-lists, and a per-call cost ledger. Pair it with `cost-governance` for hard budget caps.
-- **Bring your own agent**: author a [Goose](https://github.com/aaif-goose/goose) recipe locally and run it unchanged in production. Gatewaze runs the Goose CLI server-side, with no rewrite and no local-to-cloud translation.
-- **MCP server library**: bundled MCP servers expose your platform to agents, including platform data (events, speakers, sponsors, health), a whitelisted API proxy, and a headless browser (local Chromium or Browserbase).
-- **Automation and integrations**: governed web fetch (`gatewaze-fetch`) and scrapers backed by a fetch service with eight swappable residential-proxy providers, plus integrations for Cloudflare Pages, Netlify, Luma, Slack, Twilio SMS/WhatsApp, SendGrid, Customer.io, Google Sheets, BigQuery, Stripe, Beehiiv, Substack, Browserbase, Umami, and more.
+- **Bring your own agent**: author a [Goose](https://github.com/aaif-goose/goose) recipe locally and run it unchanged in production. Gatewaze runs Goose, Block's open-source agent runtime, as a server-side CLI, with no rewrite and no local-to-cloud translation.
+- **MCP server library**: bundled [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers expose your platform to agents, including platform data (events, speakers, sponsors, health), a whitelisted API proxy, and a headless browser (local Chromium or [Browserbase](https://www.browserbase.com)).
+- **Agent memory that compounds**: the `ai` module gives agents a durable, git-synced knowledge base based on [Andrej Karpathy's LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) design, distilling immutable raw sources into LLM-authored, cross-linked wiki pages with full-text and vector search.
+- **Automation and integrations**: governed web fetch (`gatewaze-fetch`) and scrapers backed by a fetch service built on [Scrapling](https://github.com/D4Vinci/Scrapling), with eight swappable residential-proxy providers, plus integrations for Cloudflare Pages, Netlify, Luma, Slack, Twilio SMS/WhatsApp, SendGrid, Customer.io, Google Sheets, BigQuery, Stripe, Beehiiv, Substack, Browserbase, Umami, and more.
 
 ---
 
