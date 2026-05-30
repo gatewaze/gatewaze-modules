@@ -306,7 +306,15 @@ export default function RsvpPageClient({ eventIdentifier, primaryColor }: Props)
     setError(null)
 
     try {
-      const token = localStorage.getItem('invite_short_code')
+      // Mirror loadParty's fallback chain. If we only read the legacy global
+      // here, a stale or cleared `invite_short_code` triggers the server's
+      // "Token is required" path → VALIDATION_ERROR → the client maps that
+      // to "Please fill in all required fields", which is the transient
+      // bug guests have been hitting.
+      const token =
+        searchParams.get('invite') ||
+        localStorage.getItem(storageKey) ||
+        localStorage.getItem('invite_short_code')
       const responses = Object.entries(rsvpData).map(([member_event_id, data]) => ({
         member_event_id,
         rsvp_status: data.rsvp_status,
@@ -330,13 +338,18 @@ export default function RsvpPageClient({ eventIdentifier, primaryColor }: Props)
 
       const result = await res.json()
       if (!res.ok) {
-        const msgs: Record<string, string> = {
+        // Prefer the server's specific message. VALIDATION_ERROR covers
+        // multiple cases — "Token is required" vs "Some required questions
+        // were not answered" — and the previous blanket
+        // "Please fill in all required fields" string for everything sent
+        // guests chasing fields they'd already filled.
+        const fallbackByCode: Record<string, string> = {
           VERSION_CONFLICT: 'Someone else updated this RSVP. Please refresh.',
-          VALIDATION_ERROR: 'Please fill in all required fields.',
           DEADLINE_PASSED: 'The RSVP deadline has passed for some events.',
-          PLUS_ONE_LIMIT: result.message || 'Plus-one limit exceeded.',
+          PLUS_ONE_LIMIT: 'Plus-one limit exceeded.',
+          INVITE_NOT_FOUND: 'This invite link is no longer valid. Please open the link from your email again.',
         }
-        setError(msgs[result.error] || result.message || 'Something went wrong.')
+        setError(result.message || fallbackByCode[result.error] || 'Something went wrong.')
         return
       }
 
@@ -647,7 +660,32 @@ export default function RsvpPageClient({ eventIdentifier, primaryColor }: Props)
           return s !== 'accepted' && s !== 'declined'
         }).length
         const allResponded = requiredIds.length > 0 && pendingCount === 0
-        const disabled = submitting || !allResponded
+
+        // Required-question check: for every accepted sub-event, every
+        // is_required question that targets that response must have an
+        // answer. Without this the user can submit, hit the server-side
+        // VALIDATION_ERROR, and have to scroll back up to find the missing
+        // dropdown — the "Please fill in all required fields" experience.
+        const missingAnswers: { memberName: string; question: string }[] = []
+        for (const m of members) {
+          for (const e of m.events) {
+            const entry = rsvpData[e.member_event_id]
+            if (entry?.rsvp_status !== 'accepted') continue
+            for (const q of e.questions) {
+              if (!q.is_required) continue
+              if (q.applies_to === 'declined_only') continue
+              const a = entry.answers[q.id]
+              const empty = a == null || a === '' || (Array.isArray(a) && a.length === 0)
+              if (empty) {
+                missingAnswers.push({
+                  memberName: getMemberName(m),
+                  question: q.question_text.replace(/<[^>]*>/g, '').trim(),
+                })
+              }
+            }
+          }
+        }
+        const disabled = submitting || !allResponded || missingAnswers.length > 0
 
         return (
           <>
@@ -657,6 +695,17 @@ export default function RsvpPageClient({ eventIdentifier, primaryColor }: Props)
                   ? '1 response remaining before you can confirm'
                   : `${pendingCount} responses remaining before you can confirm`}
               </p>
+            )}
+            {allResponded && missingAnswers.length > 0 && (
+              <div className="text-sm text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 space-y-1">
+                <p className="font-medium">Required answers still missing:</p>
+                <ul className="list-disc list-inside opacity-90">
+                  {missingAnswers.slice(0, 4).map((m, i) => (
+                    <li key={i}>{m.question} (for {m.memberName})</li>
+                  ))}
+                  {missingAnswers.length > 4 && <li>{missingAnswers.length - 4} more…</li>}
+                </ul>
+              </div>
             )}
             <button
               onClick={handleSubmit}
