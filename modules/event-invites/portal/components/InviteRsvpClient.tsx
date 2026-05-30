@@ -188,13 +188,16 @@ export function InviteRsvpClient({ party, members, token, primaryColor, brandNam
       const result = await res.json()
 
       if (!res.ok) {
-        const messages: Record<string, string> = {
+        // Prefer the server's message — VALIDATION_ERROR covers several
+        // shapes (missing token, missing required answer, …) and a single
+        // blanket string sent guests chasing fields they had already filled.
+        const fallbackByCode: Record<string, string> = {
           VERSION_CONFLICT: 'Someone else updated this RSVP. Please refresh and try again.',
-          VALIDATION_ERROR: 'Please fill in all required fields.',
           DEADLINE_PASSED: 'The RSVP deadline has passed for some events.',
-          PLUS_ONE_LIMIT: result.message || 'Plus-one limit exceeded.',
+          PLUS_ONE_LIMIT: 'Plus-one limit exceeded.',
+          INVITE_NOT_FOUND: 'This invite link is no longer valid. Please open the link from your email again.',
         }
-        setError(messages[result.error] || result.message || 'Something went wrong.')
+        setError(result.message || fallbackByCode[result.error] || 'Something went wrong.')
         return
       }
 
@@ -401,7 +404,28 @@ export function InviteRsvpClient({ party, members, token, primaryColor, brandNam
           return s !== 'accepted' && s !== 'declined'
         }).length
         const allResponded = requiredIds.length > 0 && pendingCount === 0
-        const disabled = submitting || !allResponded
+        // Mirror rsvp.tsx — surface missing required answers in-line so the
+        // user can fix them before submit, rather than hitting the server
+        // VALIDATION_ERROR and seeing a generic "fields are missing" toast.
+        const missingAnswers: { memberName: string; question: string }[] = []
+        for (const m of members) {
+          for (const e of m.events) {
+            const entry = rsvpData[e.member_event_id]
+            if (entry?.rsvp_status !== 'accepted') continue
+            for (const q of e.questions) {
+              if (!q.is_required) continue
+              const a = entry.answers[q.id]
+              const empty = a == null || a === '' || (Array.isArray(a) && a.length === 0)
+              if (empty) {
+                missingAnswers.push({
+                  memberName: getMemberName(m),
+                  question: q.question_text.replace(/<[^>]*>/g, '').trim(),
+                })
+              }
+            }
+          }
+        }
+        const disabled = submitting || !allResponded || missingAnswers.length > 0
         return (
           <>
             {!allResponded && requiredIds.length > 0 && (
@@ -410,6 +434,17 @@ export function InviteRsvpClient({ party, members, token, primaryColor, brandNam
                   ? '1 response remaining before you can confirm'
                   : `${pendingCount} responses remaining before you can confirm`}
               </p>
+            )}
+            {allResponded && missingAnswers.length > 0 && (
+              <div className="text-sm text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 space-y-1">
+                <p className="font-medium">Required answers still missing:</p>
+                <ul className="list-disc list-inside opacity-90">
+                  {missingAnswers.slice(0, 4).map((m, i) => (
+                    <li key={i}>{m.question} (for {m.memberName})</li>
+                  ))}
+                  {missingAnswers.length > 4 && <li>{missingAnswers.length - 4} more…</li>}
+                </ul>
+              </div>
             )}
             <button onClick={handleSubmit} disabled={disabled}
               className="w-full py-4 rounded-xl text-white font-semibold text-lg shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
