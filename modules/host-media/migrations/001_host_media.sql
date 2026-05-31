@@ -84,6 +84,13 @@ CREATE INDEX IF NOT EXISTS idx_host_media_youtube_status
   ON public.host_media (youtube_upload_status)
   WHERE youtube_upload_status IS NOT NULL;
 
+-- Index for the youtube-poll worker to find pending uploads efficiently
+-- (folded from former migration 007_youtube_columns).
+CREATE INDEX IF NOT EXISTS idx_host_media_youtube_poll
+  ON public.host_media (youtube_next_retry_at)
+  WHERE youtube_upload_status IN ('pending','failed')
+    AND youtube_next_retry_at IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_host_media_album
   ON public.host_media (album_id) WHERE album_id IS NOT NULL;
 
