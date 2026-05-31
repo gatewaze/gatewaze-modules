@@ -37,11 +37,9 @@ const hostMediaModule: GatewazeModule = {
   migrations: [
     'migrations/001_host_media.sql',
     'migrations/002_host_media_albums.sql',
-    'migrations/003_host_media_album_circular_fks.sql',
     'migrations/004_host_media_zip_uploads.sql',
     'migrations/005_host_media_quotas.sql',
     'migrations/006_host_media_used_in_rpcs.sql',
-    'migrations/007_host_media_youtube_columns.sql',
     'migrations/008_host_media_rls_dispatch.sql',
     'migrations/009_host_media_signed_url_log.sql',
     'migrations/010_host_media_chunked_uploads.sql',
