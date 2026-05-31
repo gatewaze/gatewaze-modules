@@ -131,10 +131,19 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-DECLARE v_item public.content_triage_items;
+DECLARE
+  v_item   public.content_triage_items;
+  v_claims jsonb;
 BEGIN
-  -- is_admin() runs in the caller's context via SET ROLE-style check; we
-  -- fall back to conservative deny if the function isn't present (bootstrap).
+  -- Service-role calls come from the trusted api server.
+  BEGIN
+    v_claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb;
+    IF v_claims->>'role' = 'service_role' THEN RETURN true; END IF;
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+
+  -- User-context path: must be an admin.
   BEGIN
     IF NOT public.is_admin() THEN RETURN false; END IF;
   EXCEPTION WHEN OTHERS THEN
@@ -144,8 +153,6 @@ BEGIN
   SELECT * INTO v_item FROM public.content_triage_items WHERE id = p_item_id;
   IF NOT FOUND THEN RETURN false; END IF;
 
-  -- Override permission (stubbed: admin is enough for v1; future: has_feature check)
-  -- For v1, admin with assignee-match or team-member is the rule.
   IF v_item.assigned_to IS NOT DISTINCT FROM p_actor_id AND v_item.assigned_to IS NOT NULL THEN
     RETURN true;
   END IF;
@@ -155,7 +162,6 @@ BEGIN
   ) THEN
     RETURN true;
   END IF;
-  -- Unassigned items: any admin can claim/act.
   IF v_item.assigned_to IS NULL AND v_item.team_name IS NULL THEN
     RETURN true;
   END IF;
@@ -175,7 +181,7 @@ CREATE OR REPLACE FUNCTION public.triage_submit(
   p_content_id           uuid,
   p_source               text,
   p_source_ref           text,
-  p_mode                 text,              -- 'auto_publish' | 'auto_approve' | 'review'
+  p_mode                 text,
   p_suggested_categories text[],
   p_suggested_from       text,
   p_auto_approved_reason text,
@@ -200,7 +206,6 @@ DECLARE
   v_categories  text[];
   v_sug_from    text;
 BEGIN
-  -- Idempotency check (only when a key was supplied).
   IF p_idempotency_key IS NOT NULL THEN
     SELECT * INTO v_cached FROM public.content_triage_idempotency
     WHERE user_id = p_actor_id AND route = '/api/triage/items' AND key = p_idempotency_key;
@@ -208,7 +213,6 @@ BEGIN
       IF v_cached.request_hash IS DISTINCT FROM p_request_hash THEN
         RAISE EXCEPTION 'IDEMPOTENCY_KEY_REUSED' USING ERRCODE = '23505';
       END IF;
-      -- Replay: unpack the cached body. item_id stored under 'itemId'.
       RETURN QUERY
         SELECT v_cached.response_body->>'status',
                (v_cached.response_body->>'itemId')::uuid,
@@ -222,7 +226,6 @@ BEGIN
     RAISE EXCEPTION 'VALIDATION_ERROR: no adapter for content_type=%', p_content_type USING ERRCODE = '23514';
   END IF;
 
-  -- Existing active item?
   SELECT * INTO v_existing FROM public.content_triage_items
   WHERE content_type = p_content_type
     AND content_id   = p_content_id
@@ -236,12 +239,11 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Suggest categories if not supplied and adapter has suggest_fn.
   v_categories := p_suggested_categories;
   v_sug_from   := COALESCE(p_suggested_from, 'none');
   IF (v_categories IS NULL OR array_length(v_categories, 1) IS NULL) AND v_adapter.suggest_fn IS NOT NULL THEN
     BEGIN
-      v_sql := format('SELECT categories, source FROM %s($1)', v_adapter.suggest_fn::text);
+      v_sql := format('SELECT categories, source FROM %s($1)', v_adapter.suggest_fn::regproc::text);
       EXECUTE v_sql INTO v_categories, v_sug_from USING p_content_id;
     EXCEPTION WHEN OTHERS THEN
       v_categories := '{}';
@@ -249,21 +251,18 @@ BEGIN
     END;
   END IF;
 
-  -- Apply route match to potentially override mode.
   v_route := public.triage_match_route(p_content_type, p_source, p_source_ref,
                                        v_categories, COALESCE(p_metadata, '{}'::jsonb));
   v_final_mode := COALESCE(v_route.mode_override, p_mode, 'review');
 
   IF v_final_mode = 'auto_publish' THEN
-    -- Short-circuit: no triage row, call adapter's submit_fn if present.
     IF v_adapter.submit_fn IS NOT NULL THEN
-      v_sql := format('SELECT %s($1, $2)', v_adapter.submit_fn::text);
+      v_sql := format('SELECT %s($1, $2)', v_adapter.submit_fn::regproc::text);
       EXECUTE v_sql USING p_content_id, false;
     END IF;
     status := 'auto_published';
     item_id := NULL;
     lifecycle_key := NULL;
-    -- Write idempotency row even on short-circuit.
     IF p_idempotency_key IS NOT NULL THEN
       INSERT INTO public.content_triage_idempotency
         (user_id, route, key, request_hash, response_status, response_body)
@@ -274,7 +273,6 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Create the triage row (review or auto_approve).
   INSERT INTO public.content_triage_items (
     content_type, content_id, source, source_ref,
     suggested_categories, suggested_from,
@@ -305,12 +303,10 @@ BEGIN
           p_actor_id, jsonb_build_object('mode', v_final_mode, 'route_id', v_route.id));
 
   IF v_final_mode = 'auto_approve' THEN
-    -- Call adapter approve_fn. Categories may be empty.
-    v_sql := format('SELECT %s($1, $2, $3, $4)', v_adapter.approve_fn::text);
+    v_sql := format('SELECT %s($1, $2, $3, $4)', v_adapter.approve_fn::regproc::text);
     EXECUTE v_sql USING p_content_id, COALESCE(v_categories, '{}'), false, p_actor_id;
     status := 'auto_approved';
   ELSE
-    -- review: fire assigned notifications if route matched.
     IF v_route.id IS NOT NULL THEN
       PERFORM public.triage_fanout_notifications(v_new_id, v_route.id, 'assigned');
     END IF;
@@ -369,11 +365,13 @@ BEGIN
   SELECT * INTO v_adapter FROM public.content_triage_adapters WHERE content_type = v_item.content_type;
   IF NOT FOUND THEN RAISE EXCEPTION 'ADAPTER_NOT_REGISTERED'; END IF;
 
-  v_sql := format('SELECT %s($1, $2, $3, $4)', v_adapter.approve_fn::text);
+  v_sql := format('SELECT %s($1, $2, $3, $4)', v_adapter.approve_fn::regproc::text);
   EXECUTE v_sql USING v_item.content_id, COALESCE(p_applied_categories, '{}'),
                       COALESCE(p_featured, false), p_actor_id;
 
-  UPDATE public.content_triage_items
+  -- Alias the table so RETURNING clauses can disambiguate from the OUT
+  -- parameters (status / item_id / updated_at).
+  UPDATE public.content_triage_items AS t
      SET status = 'approved',
          applied_categories = COALESCE(p_applied_categories, '{}'),
          is_featured = COALESCE(p_featured, false),
@@ -381,8 +379,8 @@ BEGIN
          reviewed_at = now(),
          reviewed_by = p_actor_id,
          updated_at = now()
-   WHERE id = p_item_id
-   RETURNING status, id, updated_at INTO status, item_id, updated_at;
+   WHERE t.id = p_item_id
+   RETURNING t.status, t.id, t.updated_at INTO status, item_id, updated_at;
 
   INSERT INTO public.content_triage_events (item_id, event_type, from_status, to_status, actor_id)
   VALUES (p_item_id, 'reviewed', 'pending', 'approved', p_actor_id);
@@ -425,17 +423,17 @@ BEGIN
   SELECT * INTO v_adapter FROM public.content_triage_adapters WHERE content_type = v_item.content_type;
   IF NOT FOUND THEN RAISE EXCEPTION 'ADAPTER_NOT_REGISTERED'; END IF;
 
-  v_sql := format('SELECT %s($1, $2, $3)', v_adapter.reject_fn::text);
+  v_sql := format('SELECT %s($1, $2, $3)', v_adapter.reject_fn::regproc::text);
   EXECUTE v_sql USING v_item.content_id, COALESCE(p_reason, ''), p_actor_id;
 
-  UPDATE public.content_triage_items
+  UPDATE public.content_triage_items AS t
      SET status = 'rejected',
          reject_reason = p_reason,
          reviewed_at = now(),
          reviewed_by = p_actor_id,
          updated_at = now()
-   WHERE id = p_item_id
-   RETURNING status, id, updated_at INTO status, item_id, updated_at;
+   WHERE t.id = p_item_id
+   RETURNING t.status, t.id, t.updated_at INTO status, item_id, updated_at;
 
   INSERT INTO public.content_triage_events (item_id, event_type, from_status, to_status, actor_id)
   VALUES (p_item_id, 'reviewed', 'pending', 'rejected', p_actor_id);
