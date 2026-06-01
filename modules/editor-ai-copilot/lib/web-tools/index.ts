@@ -22,7 +22,6 @@ export {
 export { fetchViaGatewazeFetch, type FetchUrlOptions } from './fetch-via-gatewaze-fetch.js';
 export {
   readTodayUsage,
-  bumpTodayUsage,
   shouldAllowToolCall,
   type ToolName,
   type UsageSnapshot,

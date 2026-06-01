@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  bumpTodayUsage,
   injectAiCostModuleForTesting,
   __setAiCostModuleForTesting,
   readTodayUsage,
@@ -8,30 +7,19 @@ import {
 } from '../lib/web-tools/quota.js';
 
 /**
- * Build an injectable ai-cost stub. Tests configure the sum response
- * and inspect the recordUsage calls, bypassing the dynamic-import
- * resolution entirely.
+ * Build an injectable ai-cost stub. Tests configure the sum response,
+ * bypassing the dynamic-import resolution entirely. The quota module is
+ * read-only (the runner writes the rows), so the stub only needs
+ * sumTodayToolUsage.
  */
 function makeAiCostStub(sumResult: { callCount: number; costMicroUsd: number } = { callCount: 0, costMicroUsd: 0 }) {
-  const calls: Array<{
-    provider: string;
-    model: string;
-    kind: string;
-    costMicroUsdOverride: number;
-    useCase: string;
-  }> = [];
   const stub = {
     sumTodayToolUsage: vi.fn(async () => sumResult),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recordUsage: vi.fn(async (_supabase: unknown, event: any) => {
-      calls.push(event);
-      return event;
-    }),
   };
-  return { stub, calls };
+  return { stub };
 }
 
-const supabaseStub = {} as Parameters<typeof bumpTodayUsage>[0];
+const supabaseStub = {} as Parameters<typeof readTodayUsage>[0];
 
 afterEach(() => {
   __setAiCostModuleForTesting(null);
@@ -65,55 +53,11 @@ describe('readTodayUsage', () => {
       model: 'fetch_url:fast',
     });
   });
-});
-
-describe('bumpTodayUsage', () => {
-  it('writes one recordUsage row per callDelta', async () => {
-    const { stub, calls } = makeAiCostStub({ callCount: 1, costMicroUsd: 10_000 });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    injectAiCostModuleForTesting(stub as any);
-
-    const r = await bumpTodayUsage(supabaseStub, 'web_search', 1, 10_000);
-    expect(r).toEqual({ callCount: 1, costMicroUsd: 10_000 });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      useCase: 'editor-ai-copilot',
-      provider: 'anthropic',
-      model: 'web_search',
-      kind: 'tool',
-      costMicroUsdOverride: 10_000,
-    });
-  });
-
-  it('writes N rows when callDelta=N (batched web_search count)', async () => {
-    const { stub, calls } = makeAiCostStub({ callCount: 3, costMicroUsd: 30_000 });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    injectAiCostModuleForTesting(stub as any);
-
-    await bumpTodayUsage(supabaseStub, 'web_search', 3, 30_000);
-    expect(calls).toHaveLength(3);
-    expect(calls[0]?.costMicroUsdOverride).toBe(10_000);
-  });
-
-  it('maps fetch_url to (scrapling, fetch_url:fast)', async () => {
-    const { stub, calls } = makeAiCostStub();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    injectAiCostModuleForTesting(stub as any);
-
-    await bumpTodayUsage(supabaseStub, 'fetch_url', 1, 5_000);
-    expect(calls[0]).toMatchObject({
-      provider: 'scrapling',
-      model: 'fetch_url:fast',
-    });
-  });
 
   it('fails open (returns zeros) when ai-cost is absent', async () => {
     __setAiCostModuleForTesting(null);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    injectAiCostModuleForTesting(null as any);
-    const r = await bumpTodayUsage(supabaseStub, 'fetch_url', 1, 5_000);
-    expect(r.callCount).toBe(0);
+    const r = await readTodayUsage(supabaseStub, 'fetch_url');
+    expect(r).toEqual({ callCount: 0, costMicroUsd: 0 });
   });
 });
 

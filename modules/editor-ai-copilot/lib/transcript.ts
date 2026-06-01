@@ -84,11 +84,6 @@ export function copilotStatusLabel(mode: GenerateMode, blocksReturned: number): 
   return `${base} (${blocksReturned} block${blocksReturned === 1 ? '' : 's'})`;
 }
 
-/** Approximate USD cost — same Haiku-4.5 rates the sidebar uses. */
-export function approxCostUsd(inputTokens: number, outputTokens: number): number {
-  return (inputTokens / 1_000_000) * 1.0 + (outputTokens / 1_000_000) * 5.0;
-}
-
 function readStructured(row: AiMessageRow): CopilotAssistantStructured | null {
   const s = row.structured;
   if (!s || typeof s !== 'object') return null;

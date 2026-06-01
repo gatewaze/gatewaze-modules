@@ -1084,7 +1084,7 @@ function renderMessage(m: ChatMessage): ReactNode {
     case 'meta':
       return (
         <div key={m.id} style={S.metaLine}>
-          {m.tokens.toLocaleString()} tokens · ~${m.cost_approx.toFixed(3)} ·{' '}
+          {m.tokens.toLocaleString()} tokens · ${m.cost_approx.toFixed(3)} ·{' '}
           {(m.duration_ms / 1000).toFixed(1)}s
         </div>
       );
