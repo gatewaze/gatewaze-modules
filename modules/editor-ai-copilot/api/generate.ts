@@ -26,7 +26,7 @@ import {
   validateEditBlockOutput,
 } from '../lib/output-validator.js';
 import { dispatchToolCall } from '../lib/web-tools/dispatch.js';
-import { copilotStatusLabel, approxCostUsd } from '../lib/transcript.js';
+import { copilotStatusLabel } from '../lib/transcript.js';
 // Phase-2: full skills-repo moved to @gatewaze-modules/ai. Editor
 // keeps a minimal local shim with just the SkillRow type + the
 // readSkillsByIds helper — see lib/skills/skills-repo.ts for the
@@ -305,7 +305,13 @@ export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
         toolDescription: 'Emit the page content in the structured format described.',
         toolInputSchema: toolSchemaResult.schema,
         maxOutputTokens: canvasAiConfig.maxOutputTokens,
-        timeoutMs: canvasAiConfig.providerTimeoutMs,
+        // Full-page/newsletter compose enables the web-tools loop
+        // (web_search + fetch_url do multiple AI-module round-trips), so
+        // it needs the longer web-tools wall-clock — not the 30s
+        // single-shot providerTimeoutMs. Capping it at 30s is what made
+        // a "build me a newsletter about <event>" request 504 with
+        // ai_timeout mid-search. The AI module itself budgets 120s.
+        timeoutMs: canvasAiConfig.webToolsTimeoutMs,
         userId,
         ...(body.provider ? { providerOverride: body.provider } : {}),
         ...(body.model ? { modelOverride: body.model } : {}),
@@ -383,7 +389,7 @@ export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
       inputTokens: toolCall.inputTokens,
       outputTokens: toolCall.outputTokens,
       durationMs: toolCall.durationMs,
-      costApprox: approxCostUsd(toolCall.inputTokens, toolCall.outputTokens),
+      costApprox: toolCall.costMicroUsd / 1_000_000,
       provider: editorProvider(toolCall.providerName),
       model: toolCall.model,
     });
@@ -397,6 +403,7 @@ export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
         provider: editorProvider(toolCall.providerName),
         model: toolCall.model,
         duration_ms: toolCall.durationMs,
+        cost_micro_usd: toolCall.costMicroUsd,
       },
       // Per spec-ai-chatbot-web-search.md §5.2 — operators see what
       // tools the model used. Both arrays are empty unless web tools
@@ -539,7 +546,7 @@ async function handleEditBlockMode(args: HandleEditBlockArgs): Promise<void> {
     inputTokens: toolCall.inputTokens,
     outputTokens: toolCall.outputTokens,
     durationMs: toolCall.durationMs,
-    costApprox: approxCostUsd(toolCall.inputTokens, toolCall.outputTokens),
+    costApprox: toolCall.costMicroUsd / 1_000_000,
     provider: editorProvider(toolCall.providerName),
     model: toolCall.model,
   });
@@ -556,6 +563,7 @@ async function handleEditBlockMode(args: HandleEditBlockArgs): Promise<void> {
       provider: editorProvider(toolCall.providerName),
       model: toolCall.model,
       duration_ms: toolCall.durationMs,
+      cost_micro_usd: toolCall.costMicroUsd,
     },
     tool_calls: {
       web_searches: toolCall.webSearches,
@@ -681,57 +689,18 @@ async function writeAudit(deps: CreateGenerateRouteDeps, row: Parameters<typeof 
     deps.logger.warn('canvas_ai_audit_insert_failed', { error: r.error });
     return null;
   }
-  // Phase C of spec-ai-module §16. The canvas_ai_audit_log row still
-  // carries the block-level audit (which blocks were dropped, which
-  // skills were active, etc.) — but every editor-ai-copilot call now
-  // ALSO writes one ai_usage_events row so spend lands on the unified
-  // cost dashboard. Errors here are non-fatal; the editor flow
-  // continues even if the ai module isn't installed yet.
-  void recordEditorUsage(deps, row, r.id).catch((err) => {
-    deps.logger.warn('ai.usage_record_failed', {
-      audit_id: r.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  });
+  // NOTE: the cost row in ai_usage_events is written by
+  // @gatewaze-modules/ai's runChat (the single source of truth for
+  // billing), tagged use_case='editor-ai-copilot', on every terminal
+  // path — success, provider error/timeout/rate-limit, and budget-block.
+  // The canvas_ai_audit_log row written here is the editor's own
+  // block-level audit (which blocks dropped, which skills were active),
+  // NOT a second billing record. A prior `recordEditorUsage` helper that
+  // also wrote to ai_usage_events was removed: it read snake_case fields
+  // off the camelCase AuditRow (so it was silently a no-op) and, had it
+  // ever resolved, would have double-counted every LLM row runChat
+  // already records.
   return r.id;
-}
-
-/**
- * Lazy-resolve @gatewaze-modules/ai's recordUsage + write the cost row.
- * The mapping from canvas_ai_audit_log columns to ai_usage_events is
- * straightforward: tokens + provider + model are direct; status maps
- * 'ok'→'ok' and everything else to 'error'; the cross-reference to
- * canvas_ai_audit_log lives in usage_event_id (FK already added by
- * migration 005 of the ai module — that table doesn't enforce the FK
- * yet for cross-module compatibility, but the join works for queries).
- */
-async function recordEditorUsage(
-  deps: CreateGenerateRouteDeps,
-  row: Parameters<typeof insertAuditRow>[1],
-  auditId: string | null,
-): Promise<void> {
-  if (!auditId) return;
-  // Skip non-completed rows — we record them on the final attempt only.
-  if (row.status !== 'ok' && row.status !== 'block_validation_failed') return;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod = await import('@gatewaze-modules/ai/lib/runner.js' as any).catch(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    () => import('../../../../gatewaze-modules/modules/ai/lib/runner.ts' as any),
-  );
-  if (typeof mod.recordUsage !== 'function') return;
-  await mod.recordUsage(deps.supabase, {
-    userId: row.user_id ?? null,
-    useCase: 'editor-ai-copilot',
-    threadId: null,
-    messageId: null,
-    kind: 'llm',
-    provider: row.provider,
-    model: row.model,
-    inputTokens: row.input_tokens ?? 0,
-    outputTokens: row.output_tokens ?? 0,
-    latencyMs: row.duration_ms ?? 0,
-    status: row.status === 'ok' ? 'ok' : 'error',
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -741,10 +710,9 @@ async function recordEditorUsage(
 // ai_threads / ai_messages tables, keyed by the natural 4-tuple
 // (use_case='editor-ai-copilot', host_kind, host_id, thread_key=target_id).
 // The sidebar rehydrates from these on reload. Best-effort: a failure
-// here never blocks the generate response (mirrors writeAudit /
-// recordEditorUsage). The server is the source of truth and re-derives
-// the thread from the request on every call, so the client never has to
-// track a thread id.
+// here never blocks the generate response (mirrors writeAudit). The
+// server is the source of truth and re-derives the thread from the
+// request on every call, so the client never has to track a thread id.
 
 const COPILOT_USE_CASE = 'editor-ai-copilot';
 

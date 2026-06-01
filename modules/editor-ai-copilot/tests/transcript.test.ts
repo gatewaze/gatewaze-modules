@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   rowsToTranscript,
   copilotStatusLabel,
-  approxCostUsd,
   statusBaseLabel,
   type AiMessageRow,
 } from '../lib/transcript.js';
@@ -26,14 +25,6 @@ describe('copilotStatusLabel', () => {
   it('omits the count for edit and edit-block', () => {
     expect(copilotStatusLabel('edit', 5)).toBe('Edited page');
     expect(copilotStatusLabel('edit-block', 1)).toBe('Updated block');
-  });
-});
-
-describe('approxCostUsd', () => {
-  it('uses 1/M input + 5/M output (Haiku 4.5 approximation)', () => {
-    expect(approxCostUsd(1_000_000, 0)).toBeCloseTo(1.0);
-    expect(approxCostUsd(0, 1_000_000)).toBeCloseTo(5.0);
-    expect(approxCostUsd(0, 0)).toBe(0);
   });
 });
 

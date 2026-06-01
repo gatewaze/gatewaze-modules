@@ -24,7 +24,6 @@ import {
   buildSystemPromptWithWebTools,
 } from './system-prompt.js';
 import {
-  bumpTodayUsage,
   readTodayUsage,
   shouldAllowToolCall,
   type SupabaseLikeRpc,
@@ -96,7 +95,27 @@ export interface DispatchToolCallResult extends ProviderToolCall {
   webSearches: ReadonlyArray<WebSearchAuditEntry>;
   fetchedUrls: ReadonlyArray<FetchedUrlAuditEntry>;
   providerName: 'anthropic' | 'openai' | 'gemini';
+  /**
+   * True turn cost in micro-USD — the authoritative figure the runner
+   * wrote to ai_usage_events for this turn, NOT a client-side token
+   * estimate. It's the LLM row's price-book cost (returned by runChat)
+   * plus the billed web_search tool rows. fetch_url is excluded because
+   * scrapling fetches are priced at $0 in the ledger. Surfacing this lets
+   * the editor's cost chip match the AI usage dashboard exactly.
+   */
+  costMicroUsd: number;
 }
+
+/**
+ * Per-request web_search cost basis. Mirrors the runner's hardcoded
+ * Anthropic rate ($10 / 1000 requests = 10_000 micro-USD/request) so the
+ * cost we surface here reconciles to the exact ai_usage_events row the
+ * runner records. Kept as a literal rather than reading the editor's
+ * quota-gating config (canvasAiConfig.webSearchCostMicroUsd) because the
+ * latter can be overridden for budgeting and would then drift from the
+ * ledger.
+ */
+const WEB_SEARCH_MICRO_USD_PER_REQUEST = 10_000;
 
 /** Structural shape of the AI module's runChat — dynamic-loaded so
  *  the editor's TypeScript compilation doesn't bind to the AI module's
@@ -179,8 +198,11 @@ export async function dispatchToolCall(
 
   const fetchedUrls: FetchedUrlAuditEntry[] = [];
 
-  // Web-tools wiring: the AI module's runChat calls resolveFetchUrl
-  // per tool-use; we wrap it to bump the editor's per-call ledger.
+  // Web-tools wiring: the AI module's runChat calls resolveFetchUrl per
+  // tool-use; we wrap it only to record the editor's audit entry. The
+  // ai_usage_events cost row for the fetch is written by the runner
+  // itself (runner.ts wraps this resolver in its own recordUsage), so we
+  // must NOT also write one here — that double-counted the tool spend.
   const resolveFetchUrl = fetchGated.ok && fetchOptions
     ? async (url: string, reason: string) => {
         const started = Date.now();
@@ -207,9 +229,6 @@ export async function dispatchToolCall(
               error_code: r.errorCode,
             };
         fetchedUrls.push(entry);
-        if (entry.error_code === null) {
-          void bumpTodayUsage(args.supabase, 'fetch_url', 1, canvasAiConfig.fetchUrlCostMicroUsd);
-        }
         return {
           ok: r.ok,
           content: r.ok ? r.text : (r.errorMessage ?? ''),
@@ -276,14 +295,19 @@ export async function dispatchToolCall(
       billed: true,
     });
   }
-  if (result.webSearchCount > 0) {
-    void bumpTodayUsage(
-      args.supabase,
-      'web_search',
-      result.webSearchCount,
-      result.webSearchCount * canvasAiConfig.webSearchCostMicroUsd,
-    );
-  }
+  // NOTE: the web_search ai_usage_events cost row is written by the runner
+  // (runner.ts records one anthropic/web_search row per turn, user-
+  // attributed, at $0.01/request). The editor used to ALSO write one here
+  // via bumpTodayUsage — that produced a duplicate, system-attributed row
+  // and double-counted web_search spend on the usage dashboard. The
+  // editor's daily-budget gate reads those runner-written rows directly
+  // (readTodayUsage), so no editor-side write is needed.
+
+  // True turn cost = LLM (price-book cost computed by runChat) + the
+  // billed web_search rows the runner wrote. This is what landed in
+  // ai_usage_events, so the editor chip will match the usage dashboard.
+  const costMicroUsd =
+    result.costMicroUsd + result.webSearchCount * WEB_SEARCH_MICRO_USD_PER_REQUEST;
 
   return {
     input: result.structured,
@@ -294,6 +318,7 @@ export async function dispatchToolCall(
     webSearches,
     fetchedUrls,
     providerName: result.provider,
+    costMicroUsd,
   };
 }
 

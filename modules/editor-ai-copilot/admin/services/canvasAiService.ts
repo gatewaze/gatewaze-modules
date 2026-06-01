@@ -49,6 +49,12 @@ export interface GenerateUsage {
   provider: 'anthropic' | 'openai';
   model: string;
   duration_ms: number;
+  /**
+   * True turn cost in micro-USD, straight from the server's ledger
+   * (LLM price-book cost + billed web_search). Divide by 1e6 for USD.
+   * Use this for the cost chip — never re-estimate from token counts.
+   */
+  cost_micro_usd: number;
 }
 
 export interface GenerateResponse {

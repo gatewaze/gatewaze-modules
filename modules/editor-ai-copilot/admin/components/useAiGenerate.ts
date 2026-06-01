@@ -63,11 +63,13 @@ export function useAiGenerate(): UseAiGenerateState & { generate: (args: Generat
         ...(args.request.blockId ? { blockId: args.request.blockId } : {}),
       });
 
-      // Token-to-cost approximate. Haiku 4.5: $1/M input, $5/M output.
+      // Cost is the server's authoritative ledger figure (LLM price-book
+      // cost + billed web_search), so the chip matches the AI usage
+      // dashboard. Do NOT re-estimate from token counts — that's how this
+      // drifted ~3× low (it priced Sonnet calls at Haiku rates and ignored
+      // tool spend).
       const tokens = res.response.usage.input_tokens + res.response.usage.output_tokens;
-      const costApprox =
-        (res.response.usage.input_tokens / 1_000_000) * 1.0 +
-        (res.response.usage.output_tokens / 1_000_000) * 5.0;
+      const costApprox = res.response.usage.cost_micro_usd / 1_000_000;
 
       args.onApply(merge.data);
       setState({

@@ -1,24 +1,24 @@
 /**
  * Daily quota + cost-budget tracking for the AI chatbot tools.
  *
- * After spec-ai-module follow-up #1: backed by `ai_usage_events` from
- * the @gatewaze-modules/ai module instead of the legacy
- * `canvas_ai_daily_tool_usage` table. The behaviour from the editor's
- * perspective is unchanged — same per-call gate, same fixed
- * per-tool cost (from canvasAiConfig.{fetchUrlCostMicroUsd,
- * webSearchCostMicroUsd}). The diff is that:
+ * READ-ONLY against `ai_usage_events` from the @gatewaze-modules/ai
+ * module. `readTodayUsage` sums today's rows filtered to
+ * use_case='editor-ai-copilot' AND matching (provider, model), and the
+ * pre-call gate (`shouldAllowToolCall`) decides whether the next call
+ * fits the daily call-count + cost budget.
  *
- *   - Reads sum today's rows from ai_usage_events filtered to
- *     use_case='editor-ai-copilot' AND matching (provider, model).
- *   - Writes go through the ai module's recordUsage with a
- *     costMicroUsdOverride so the editor's fixed per-call estimate is
- *     preserved (rather than re-computed from the price book — which
- *     for scrapling tools is $0).
+ * This module does NOT write rows. The runner (@gatewaze-modules/ai's
+ * runChat) is the single source of truth for tool spend: it records one
+ * anthropic/web_search row per turn and one scrapling/fetch_url:fast row
+ * per fetch, all tagged use_case='editor-ai-copilot'. An earlier
+ * `bumpTodayUsage` writer here produced a SECOND, system-attributed row
+ * per call, which double-counted tool spend on the usage dashboard and in
+ * this gate's own reads. It was removed; the gate now reads the runner's
+ * authoritative rows.
  *
  * If the ai module isn't on the runtime require-path (defensive — the
- * editor can boot standalone) we fall through silently: readTodayUsage
- * returns zero and bumpTodayUsage is a no-op. The gate stays open, the
- * editor still works, just without per-tool cost containment.
+ * editor can boot standalone) readTodayUsage returns zero, so the gate
+ * stays open and the editor still works (without per-tool containment).
  *
  * Spec §6.6 / §6.7 unchanged — same envvar names + defaults.
  */
@@ -67,21 +67,6 @@ type AiCostModule = {
     supabase: SupabaseLikeRpc,
     args: { useCase: string; provider: string; model: string },
   ) => Promise<{ callCount: number; costMicroUsd: number }>;
-  recordUsage: (
-    supabase: SupabaseLikeRpc,
-    event: {
-      userId: string | null;
-      useCase: string;
-      threadId: string | null;
-      messageId: string | null;
-      kind: 'llm' | 'tool' | 'embedding' | 'image';
-      provider: string;
-      model: string;
-      status: 'ok' | 'error' | 'rate_limited' | 'timeout' | 'budget_blocked' | 'cancelled';
-      costMicroUsdOverride?: number;
-      latencyMs?: number;
-    },
-  ) => Promise<unknown>;
 };
 
 let cachedAiCost: AiCostModule | null | undefined;
@@ -95,7 +80,7 @@ async function loadAiCost(): Promise<AiCostModule | null> {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const mod = (await import(path)) as AiCostModule;
-      if (typeof mod.sumTodayToolUsage === 'function' && typeof mod.recordUsage === 'function') {
+      if (typeof mod.sumTodayToolUsage === 'function') {
         cachedAiCost = mod;
         return cachedAiCost;
       }
@@ -149,51 +134,6 @@ export async function readTodayUsage(
     // /admin/ai/usage dashboard.
     return { callCount: 0, costMicroUsd: 0 };
   }
-}
-
-/**
- * Bump the daily counter by writing one ai_usage_events row. callDelta
- * is implicitly 1 per insert (the ledger is row-per-call); the cost
- * delta is passed through as costMicroUsdOverride so the editor's
- * fixed per-call estimate is preserved.
- *
- * Returns the post-write totals so the caller can decide whether the
- * NEXT call would breach a cap. Fail-open: the editor's flow continues
- * even if the row insert fails (we lose one increment of counter
- * accuracy, the user's request still completes).
- */
-export async function bumpTodayUsage(
-  supabase: SupabaseLikeRpc,
-  tool: ToolName,
-  callDelta: number,
-  costMicroUsdDelta: number,
-): Promise<UsageSnapshot> {
-  const ai = await loadAiCost();
-  if (!ai) return { callCount: 0, costMicroUsd: 0 };
-  const key = toolToLedgerKey(tool);
-  // Write `callDelta` rows so the row count == call count. In practice
-  // callDelta is always 1 (fetch_url is per-fetch) or N (web_search
-  // billed count from Anthropic usage), so this loop is cheap.
-  const perCallCost = callDelta > 0 ? Math.round(costMicroUsdDelta / callDelta) : 0;
-  for (let i = 0; i < callDelta; i++) {
-    try {
-      await ai.recordUsage(supabase, {
-        userId: null, // editor calls are user-bound upstream via canvas_ai_audit_log; the per-tool ledger is system-attributable
-        useCase: USE_CASE,
-        threadId: null,
-        messageId: null,
-        kind: 'tool',
-        provider: key.provider,
-        model: key.model,
-        status: 'ok',
-        costMicroUsdOverride: perCallCost,
-      });
-    } catch {
-      /* fail-open per JSDoc */
-    }
-  }
-  // Re-read to return the canonical post-write totals.
-  return readTodayUsage(supabase, tool);
 }
 
 export interface QuotaPolicy {
