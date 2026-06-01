@@ -623,8 +623,9 @@ function sshCommandFor(keyPath: string): string {
 
 async function pickLocalSourceBranch(workTree: string): Promise<string> {
   // Boilerplate clones might use `theme` as the source-of-truth branch
-  // (NEWSLETTERS_BOILERPLATE_BRANCH default in publish-to-git.ts is
-  // 'theme'). Prefer `main` when present, then `theme`, then `master`.
+  // (GATEWAZE_NEWSLETTER_BOILERPLATE_BRANCH default is `theme`, matching
+  // gatewaze-template-email). Prefer `main` when present, then `theme`,
+  // then `master`.
   for (const candidate of ['main', 'theme', 'master']) {
     const res = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${candidate}`], { cwd: workTree });
     if (res.exitCode === 0) return candidate;

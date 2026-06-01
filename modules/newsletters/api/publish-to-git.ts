@@ -12,7 +12,9 @@
  * Lazy clone: if the newsletter doesn't yet have an internal repo
  * (no `gatewaze_internal_repos` row with host_kind='newsletter',
  * host_id=<newsletter_id>), the first publish creates it via
- * `gitServer.createRepo({ boilerplateUrl: NEWSLETTERS_BOILERPLATE_URL })`.
+ * `gitServer.createRepo({ boilerplateUrl })`, where the URL comes from
+ * `getBoilerplateConfig('newsletter')` (env-overridable via
+ * GATEWAZE_NEWSLETTER_BOILERPLATE_URL).
  *
  * The endpoint is deliberately tolerant of missing pieces: when the
  * boilerplate URL is unset OR the gitServer dep isn't wired in this
@@ -241,7 +243,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         if (!deps.boilerplateUrl) {
           res.status(200).json({
             kind: 'skipped',
-            reason: 'NEWSLETTERS_BOILERPLATE_URL not set; edition saved to DB only',
+            reason: 'GATEWAZE_NEWSLETTER_BOILERPLATE_URL not set; edition saved to DB only',
           });
           return;
         }

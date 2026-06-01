@@ -4,8 +4,8 @@ import { getBoilerplateConfig, isUsingDefaultBoilerplate } from '../index.js';
 describe('getBoilerplateConfig', () => {
   it('returns the canonical newsletter URL when no env override', () => {
     const config = getBoilerplateConfig('newsletter', {});
-    expect(config.url).toContain('gatewaze-template-newsletter');
-    expect(config.branch).toBe('main');
+    expect(config.url).toContain('gatewaze-template-email');
+    expect(config.branch).toBe('theme');
     expect(config.label).toMatch(/newsletter/i);
   });
 
@@ -37,7 +37,7 @@ describe('getBoilerplateConfig', () => {
     const config = getBoilerplateConfig('newsletter', {
       GATEWAZE_NEWSLETTER_BOILERPLATE_URL: '   ',
     });
-    expect(config.url).toContain('gatewaze-template-newsletter');
+    expect(config.url).toContain('gatewaze-template-email');
   });
 
   it('site + newsletter envs are independent', () => {

@@ -368,7 +368,7 @@ export function SitePagesTab({ site }: { site: SiteRow }) {
             // would be blank otherwise.
             return (
               <p className="text-xs text-[var(--orange-11)] -mt-1">
-                The visual canvas needs a theme repo with template blocks. Use the Source tab to import one (e.g. <span className="font-mono">gatewaze-template-blocks</span>) before authoring in this mode.
+                The visual canvas needs a theme repo with template blocks. Use the Source tab to import one (e.g. <span className="font-mono">gatewaze-template-site</span>) before authoring in this mode.
               </p>
             );
           })()}

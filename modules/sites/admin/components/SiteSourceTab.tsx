@@ -364,7 +364,7 @@ export function SiteSourceTab({ site, onSiteUpdated }: SiteSourceTabProps) {
           </p>
           <Input
             label="HTTPS git URL"
-            placeholder="https://github.com/gatewaze/gatewaze-template-blocks.git"
+            placeholder="https://github.com/gatewaze/gatewaze-template-site.git"
             {...importForm.register('git_url', {
               required: 'Required',
               pattern: { value: /^https:\/\/.+/, message: 'Must be https://' },

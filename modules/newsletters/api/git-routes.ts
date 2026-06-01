@@ -64,7 +64,7 @@ export interface GitRoutesDeps {
 // Init-repo — eager boilerplate clone at newsletter creation. Called by the
 // Setup Wizard after the `newsletters_template_collections` row inserts.
 // Idempotent: when a repo already exists for this collection, returns the
-// existing repo unchanged. When `NEWSLETTERS_BOILERPLATE_URL` is unset OR
+// existing repo unchanged. When the resolved boilerplate URL is empty OR
 // `gitServer` isn't wired, returns `{ kind: 'skipped' }` so the wizard
 // proceeds even in dev environments without the boilerplate.
 // ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ export function createInitRepoRoute(deps: GitRoutesDeps) {
       return;
     }
     if (!deps.boilerplateUrl) {
-      res.status(200).json({ kind: 'skipped', reason: 'NEWSLETTERS_BOILERPLATE_URL not set' });
+      res.status(200).json({ kind: 'skipped', reason: 'GATEWAZE_NEWSLETTER_BOILERPLATE_URL not set' });
       return;
     }
 
