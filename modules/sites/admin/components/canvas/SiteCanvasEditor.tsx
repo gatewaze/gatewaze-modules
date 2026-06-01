@@ -525,7 +525,7 @@ export function SiteCanvasEditor({ pageId, siteSlug }: SiteCanvasEditorProps) {
                   <p className="text-sm font-medium text-[var(--gray-12)]">No blocks yet</p>
                   <p className="mt-1 text-xs text-[var(--gray-a9)]">
                     Add blocks from the palette on the left. If the palette is empty, connect a theme git
-                    repo via the Source tab (e.g. <span className="font-mono">gatewaze-template-blocks</span>) to
+                    repo via the Source tab (e.g. <span className="font-mono">gatewaze-template-site</span>) to
                     populate this site's block library.
                   </p>
                 </div>

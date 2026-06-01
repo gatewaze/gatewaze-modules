@@ -2,26 +2,21 @@
  * Boilerplate-template helpers — implements the auto-clone path from
  * spec-content-modules-git-architecture §5.
  *
- * Two canonical boilerplate repos are referenced in the spec:
- *   - github.com/gatewaze/gatewaze-template-site       (Next.js + Tailwind)
- *   - github.com/gatewaze/gatewaze-template-newsletter (MJML)
+ * Two canonical boilerplate repos live as separate public repos so
+ * non-Gatewaze users can fork/customise them without touching the
+ * platform monorepo:
+ *   - github.com/gatewaze/gatewaze-template-site   (Next.js + Tailwind, branch: main)
+ *   - github.com/gatewaze/gatewaze-template-email  (react-email, branch: theme)
  *
- * These exist as separate repos so non-Gatewaze users can fork/customise
- * them without touching the platform monorepo. Operators override via env
- * (e.g. an internal mirror or a brand-customised fork):
+ * Operators override via env (e.g. an internal mirror or a brand-customised fork):
  *
- *   GATEWAZE_NEWSLETTER_BOILERPLATE_URL    default: github.com/gatewaze/gatewaze-template-newsletter
- *   GATEWAZE_NEWSLETTER_BOILERPLATE_BRANCH default: main
+ *   GATEWAZE_NEWSLETTER_BOILERPLATE_URL    default: github.com/gatewaze/gatewaze-template-email
+ *   GATEWAZE_NEWSLETTER_BOILERPLATE_BRANCH default: theme
  *   GATEWAZE_NEWSLETTER_BOILERPLATE_PATH   default: <repo root>
  *
  *   GATEWAZE_SITE_BOILERPLATE_URL          default: github.com/gatewaze/gatewaze-template-site
  *   GATEWAZE_SITE_BOILERPLATE_BRANCH       default: main
  *   GATEWAZE_SITE_BOILERPLATE_PATH         default: <repo root>
- *
- * The canonical repos are not published yet (see spec §4.4). Until they
- * land, this helper returns the URL anyway — the actual clone fails with a
- * clear error and the admin UI surfaces it. Operators with their own theme
- * repo can override the env to point at it.
  */
 
 export type HostKind = 'newsletter' | 'site';
@@ -39,8 +34,8 @@ export interface BoilerplateConfig {
 
 const DEFAULTS: Record<HostKind, BoilerplateConfig> = {
   newsletter: {
-    url: 'https://github.com/gatewaze/gatewaze-template-newsletter.git',
-    branch: 'main',
+    url: 'https://github.com/gatewaze/gatewaze-template-email.git',
+    branch: 'theme',
     label: 'Gatewaze newsletter boilerplate',
   },
   site: {

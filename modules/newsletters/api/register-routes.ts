@@ -67,16 +67,19 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     createDeleteCollectionRoute,
   } = await import('./index.js');
 
+  // Resolve the boilerplate URL + branch via the central templates helper
+  // so a single env-var pair (GATEWAZE_NEWSLETTER_BOILERPLATE_URL /
+  // GATEWAZE_NEWSLETTER_BOILERPLATE_BRANCH) governs every newsletter
+  // boilerplate consumer. Unset env → canonical defaults
+  // (github.com/gatewaze/gatewaze-template-email, branch `theme`).
+  const { getBoilerplateConfig } = await import('../../templates/lib/boilerplate/index.js');
+  const boilerplate = getBoilerplateConfig('newsletter');
+
   const baseDeps = {
     supabase,
     ...(gitServer ? { gitServer } : {}),
-    boilerplateUrl: process.env.NEWSLETTERS_BOILERPLATE_URL ?? null,
-    // The boilerplate repo's theme content lives on the `theme` branch
-    // (renamed from `main` so the per-newsletter internal repos can
-    // distinguish theme/source from publish/output cleanly). Override
-    // via NEWSLETTERS_BOILERPLATE_BRANCH if a tenant ships their
-    // theme on a different branch.
-    boilerplateBranch: process.env.NEWSLETTERS_BOILERPLATE_BRANCH ?? 'theme',
+    boilerplateUrl: boilerplate.url,
+    boilerplateBranch: boilerplate.branch,
   } as never;
 
   const publishHandler = createPublishToGitRoute(baseDeps);
