@@ -29,7 +29,8 @@ function slugify(text: string): string {
 
 // Per spec-builder-evaluation §3.6 (extended). The "Template" step was
 // removed — every newsletter automatically clones the email boilerplate
-// (NEWSLETTERS_BOILERPLATE_URL) on creation and stamps the four
+// (gatewaze-template-email by default; override via
+// GATEWAZE_NEWSLETTER_BOILERPLATE_URL) on creation and stamps the four
 // react-email registry blocks (header / content_section / ai_section /
 // footer). Operators can swap to a custom boilerplate or graduate to
 // an external repo from the channel's Source tab afterwards.
@@ -179,11 +180,12 @@ export default function NewsletterSetupWizard({ isOpen = true, onClose }: Wizard
       // Per spec-builder-evaluation §3.6 (extended). Eager boilerplate
       // clone — fire the init-repo endpoint so the channel's bare repo
       // is provisioned at creation time (matches sites' behaviour). The
-      // endpoint is best-effort: when NEWSLETTERS_BOILERPLATE_URL is
-      // unset OR the clone fails (network / auth / missing repo), it
-      // returns 200 { kind: 'skipped' | 'failed' } and the wizard
-      // proceeds. A retry is available from the channel's Source tab
-      // once the cause is fixed.
+      // endpoint is best-effort: when the resolved boilerplate URL is
+      // empty (GATEWAZE_NEWSLETTER_BOILERPLATE_URL explicitly cleared)
+      // OR the clone fails (network / auth / missing repo), it returns
+      // 200 { kind: 'skipped' | 'failed' } and the wizard proceeds. A
+      // retry is available from the channel's Source tab once the
+      // cause is fixed.
       try {
         const { data: sessionData } = await supabase.auth.getSession();
         const token = sessionData.session?.access_token;

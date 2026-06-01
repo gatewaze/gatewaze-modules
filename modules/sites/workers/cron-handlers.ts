@@ -39,7 +39,7 @@ export interface CronHandlerDeps {
 
 const BOILERPLATES = [
   'gatewaze/gatewaze-template-site',
-  'gatewaze/gatewaze-template-newsletter',
+  'gatewaze/gatewaze-template-email',
 ];
 
 export async function runBoilerplateVersionPoll(deps: CronHandlerDeps): Promise<{ checked: number; updated: number }> {
