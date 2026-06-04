@@ -32,10 +32,12 @@ CREATE TRIGGER registration_field_mappings_updated_at
 
 ALTER TABLE public.registration_field_mappings ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "auth_all_registration_field_mappings" ON public.registration_field_mappings;
 CREATE POLICY "auth_all_registration_field_mappings"
   ON public.registration_field_mappings FOR ALL TO authenticated
   USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "service_role_all_registration_field_mappings" ON public.registration_field_mappings;
 CREATE POLICY "service_role_all_registration_field_mappings"
   ON public.registration_field_mappings FOR ALL TO service_role
   USING (true) WITH CHECK (true);
