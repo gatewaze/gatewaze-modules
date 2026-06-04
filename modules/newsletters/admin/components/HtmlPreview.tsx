@@ -4,13 +4,13 @@ import {
   CheckIcon,
   PaperAirplaneIcon,
   XMarkIcon,
-  ExclamationTriangleIcon,
   ComputerDesktopIcon,
   DevicePhoneMobileIcon,
   SunIcon,
   MoonIcon,
 } from '@heroicons/react/24/outline';
 import { Card, Button, Badge } from '@/components/ui';
+import { EmailSizeIndicator } from './EmailSizeIndicator.js';
 import { getNewsletterConfig } from '@/config/brands';
 import { toast } from 'sonner';
 import {
@@ -536,70 +536,12 @@ export function HtmlPreview({ edition, redirectsReady = false, generatedLinks = 
       </div>
 
       {/* Footer with stats and Gmail clipping warning */}
-      {(() => {
-        // Calculate email size in KB (using UTF-8 byte size for accuracy)
-        const sizeInBytes = new Blob([html]).size;
-        const sizeInKB = sizeInBytes / 1024;
-        const GMAIL_CLIP_LIMIT = 102; // Gmail clips at 102KB
-        const WARNING_THRESHOLD = 90; // Warn at 90KB (88% of limit)
+      <EmailSizeIndicator
+        sizeInBytes={new Blob([html]).size}
+        blocksCount={edition.blocks.length}
+        charCount={html.length}
+      />
 
-        const isOverLimit = sizeInKB >= GMAIL_CLIP_LIMIT;
-        const isNearLimit = sizeInKB >= WARNING_THRESHOLD && !isOverLimit;
-
-        return (
-          <div className={`px-4 py-2 border-t ${
-            isOverLimit
-              ? 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20'
-              : isNearLimit
-                ? 'border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/20'
-                : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50'
-          }`}>
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-gray-500 dark:text-gray-400">
-                {edition.blocks.length} block{edition.blocks.length !== 1 ? 's' : ''}
-              </span>
-
-              <div className="flex items-center gap-3">
-                <span className="text-gray-500 dark:text-gray-400">
-                  {html.length.toLocaleString()} chars
-                </span>
-
-                <span className={`font-medium ${
-                  isOverLimit
-                    ? 'text-red-600 dark:text-red-400'
-                    : isNearLimit
-                      ? 'text-yellow-600 dark:text-yellow-400'
-                      : 'text-gray-500 dark:text-gray-400'
-                }`}>
-                  {sizeInKB.toFixed(1)} KB
-                </span>
-
-                {(isOverLimit || isNearLimit) && (
-                  <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full ${
-                    isOverLimit
-                      ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
-                      : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
-                  }`}>
-                    <ExclamationTriangleIcon className="w-3.5 h-3.5" />
-                    <span className="font-medium">
-                      {isOverLimit
-                        ? 'Gmail will clip this email'
-                        : 'Approaching Gmail limit'}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {isOverLimit && (
-              <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                Gmail clips emails over 102KB. Recipients will see "[Message clipped]" with a link to view the full content.
-                Consider removing blocks or reducing content to stay under the limit.
-              </p>
-            )}
-          </div>
-        );
-      })()}
     </Card>
   );
 }

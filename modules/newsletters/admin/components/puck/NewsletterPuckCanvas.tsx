@@ -60,6 +60,7 @@ import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
 import { getSupabaseConfig } from '@/config/brands';
 import { NewsletterEditingProvider } from './NewsletterEditingContext.js';
+import { EmailSizeIndicator } from '../EmailSizeIndicator.js';
 import { UserBlocksProvider, useUserBlocks } from './user-blocks/UserBlocksContext.js';
 import { SaveAsBlockAction } from './user-blocks/SaveAsBlockAction.js';
 import { MyBlocksPanel } from './user-blocks/MyBlocksPanel.js';
@@ -252,6 +253,15 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   const [testSendEmail, setTestSendEmail] = useState('');
   const [testSendBusy, setTestSendBusy] = useState(false);
 
+  // Live Gmail-clipping size indicator. Re-render exportEditionHtml on
+  // a debounced idle so we can show "X.X KB" + the 90/102 KB warnings
+  // while editing — not just in the HTML preview tab. exportEditionHtml
+  // is the same path used by Send + HTML export, so the count matches
+  // what actually goes out (incl. boilerplate). Debounce avoids running
+  // the renderer on every keystroke; we only need a refresh after the
+  // operator pauses.
+  const [emailSizeBytes, setEmailSizeBytes] = useState<number | null>(null);
+
   // Publish flow:
   //   1. Confirm with the operator (the act is recipient-visible).
   //   2. Save the edition to the database first so the publish-to-
@@ -404,6 +414,39 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   useEffect(() => {
     setData(editionToPuckData(edition, emailBlockRegistry));
   }, [edition.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Debounced email-size compute for the Gmail clipping indicator.
+  // exportEditionHtml runs the same render path as Send so the count
+  // matches the wire bytes. 600ms idle window: long enough to skip
+  // per-keystroke renders, short enough to feel live after a paste.
+  // We ignore stale resolves via a guard token so racy edits don't
+  // flicker the indicator to a previous value.
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      (async () => {
+        try {
+          const blockMeta = buildBlockMeta();
+          const html = await exportEditionHtml({
+            edition,
+            format: 'email',
+            blockMeta,
+            pretty: false,
+          });
+          if (cancelled) return;
+          setEmailSizeBytes(new Blob([html]).size);
+        } catch {
+          // Renderer error during a partial edit (e.g. catalogue
+          // mismatch). Leave the previous size in place; the next
+          // successful render will refresh it.
+        }
+      })();
+    }, 600);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [edition]);
 
   function buildBlockMeta() {
     const blockMeta = new Map<string, import('./email-blocks/EditionEmail.js').BlockRenderMeta>();
@@ -929,6 +972,17 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           }}
         />
       )}
+
+      {/* Gmail clipping indicator — same component the HTML preview tab
+          uses. Sits below the canvas in both wysiwyg and html views so
+          the operator can watch the size grow as blocks are added. The
+          first paint shows "…" until the debounced exportEditionHtml
+          resolves; subsequent edits update after a 600ms idle. */}
+      <EmailSizeIndicator
+        sizeInBytes={emailSizeBytes ?? 0}
+        blocksCount={edition.blocks.length}
+        ready={emailSizeBytes !== null}
+      />
     </div>
     </NewsletterEditingProvider>
   );
