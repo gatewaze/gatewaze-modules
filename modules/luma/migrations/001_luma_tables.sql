@@ -184,7 +184,11 @@ ALTER TABLE public.integrations_luma_event_registrations ENABLE ROW LEVEL SECURI
 ALTER TABLE public.integrations_luma_pending_registrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.integrations_luma_csv_uploads ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "auth_all_integrations_luma_calendar_members" ON public.integrations_luma_calendar_members;
 CREATE POLICY "auth_all_integrations_luma_calendar_members" ON public.integrations_luma_calendar_members FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "auth_all_integrations_luma_event_registrations" ON public.integrations_luma_event_registrations;
 CREATE POLICY "auth_all_integrations_luma_event_registrations" ON public.integrations_luma_event_registrations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "auth_all_integrations_luma_pending_registrations" ON public.integrations_luma_pending_registrations;
 CREATE POLICY "auth_all_integrations_luma_pending_registrations" ON public.integrations_luma_pending_registrations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "auth_all_integrations_luma_csv_uploads" ON public.integrations_luma_csv_uploads;
 CREATE POLICY "auth_all_integrations_luma_csv_uploads" ON public.integrations_luma_csv_uploads FOR ALL TO authenticated USING (true) WITH CHECK (true);
