@@ -121,6 +121,9 @@ const editorAiCopilotModule: GatewazeModule = {
     // 006_ai_skills_reference_image.sql was folded into the ai module's
     // 009_ai_skills.sql when the skills subsystem moved over in Phase 2.
     // Intentionally not listed here.
+    // Per-host skill selection gains an "inherit the use-case default"
+    // state (NULL) alongside explicit-none ('{}') and override ('{...}').
+    'migrations/005_active_skill_ids_inherit.sql',
   ],
 
   // API routes mounted under /api/admin/modules/editor-ai-copilot/.

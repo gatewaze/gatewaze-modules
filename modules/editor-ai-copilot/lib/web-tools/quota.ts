@@ -2,15 +2,15 @@
  * Daily quota + cost-budget tracking for the AI chatbot tools.
  *
  * READ-ONLY against `ai_usage_events` from the @gatewaze-modules/ai
- * module. `readTodayUsage` sums today's rows filtered to
- * use_case='editor-ai-copilot' AND matching (provider, model), and the
- * pre-call gate (`shouldAllowToolCall`) decides whether the next call
- * fits the daily call-count + cost budget.
+ * module. `readTodayUsage` sums today's rows filtered to the caller's
+ * editor use case (newsletter-editor / site-editor) AND matching
+ * (provider, model), and the pre-call gate (`shouldAllowToolCall`)
+ * decides whether the next call fits the daily call-count + cost budget.
  *
  * This module does NOT write rows. The runner (@gatewaze-modules/ai's
  * runChat) is the single source of truth for tool spend: it records one
  * anthropic/web_search row per turn and one scrapling/fetch_url:fast row
- * per fetch, all tagged use_case='editor-ai-copilot'. An earlier
+ * per fetch, all tagged with the same editor use case. An earlier
  * `bumpTodayUsage` writer here produced a SECOND, system-attributed row
  * per call, which double-counted tool spend on the usage dashboard and in
  * this gate's own reads. It was removed; the gate now reads the runner's
@@ -22,8 +22,6 @@
  *
  * Spec §6.6 / §6.7 unchanged — same envvar names + defaults.
  */
-
-const USE_CASE = 'editor-ai-copilot';
 
 export interface SupabaseLikeRpc {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -117,13 +115,14 @@ export function injectAiCostModuleForTesting(mod: AiCostModule): void {
 export async function readTodayUsage(
   supabase: SupabaseLikeRpc,
   tool: ToolName,
+  useCase: string,
 ): Promise<UsageSnapshot> {
   const ai = await loadAiCost();
   if (!ai) return { callCount: 0, costMicroUsd: 0 };
   const key = toolToLedgerKey(tool);
   try {
     const result = await ai.sumTodayToolUsage(supabase, {
-      useCase: USE_CASE,
+      useCase,
       provider: key.provider,
       model: key.model,
     });
