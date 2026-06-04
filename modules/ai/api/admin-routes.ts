@@ -844,6 +844,34 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     res.status(204).end();
   }
 
+  // ── Price-book refresh from upstream (LiteLLM) ─────────────────────────
+  //
+  // Manual trigger that enqueues the same BullMQ job the weekly cron
+  // runs. The worker (workers/refresh-model-prices.js) pulls the latest
+  // LiteLLM JSON, diffs against the latest row per (provider, model),
+  // and writes a new effective-dated row for every delta. Hand-curated
+  // rows (provider not in LiteLLM's keep list — `scrapling`, internal
+  // tool-cost markers, etc.) are left alone.
+  async function refreshPrices(req: Request, res: Response): Promise<void> {
+    if (!deps.enqueueJob) {
+      sendError(res, 503, 'enqueue_unavailable', 'enqueueJob not wired by host');
+      return;
+    }
+    const body = (req.body as Record<string, unknown> | undefined) ?? {};
+    const dryRun = body.dry_run === true;
+    const url = typeof body.url === 'string' ? body.url : undefined;
+    try {
+      const job = await deps.enqueueJob('jobs', 'ai:refresh-model-prices', {
+        kind: 'ai:refresh-model-prices',
+        ...(dryRun ? { dry_run: true } : {}),
+        ...(url ? { url } : {}),
+      });
+      res.status(202).json({ job_id: job?.id ?? null, dry_run: dryRun });
+    } catch (err) {
+      sendError(res, 500, 'enqueue_failed', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   // ── Credentials ────────────────────────────────────────────────────────
 
   async function listCredentials(_req: Request, res: Response): Promise<void> {
@@ -1255,6 +1283,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     createModel,
     updateModel,
     deleteModel,
+    refreshPrices,
     listCredentials,
     createUserCredential,
     deleteUserCredential,
@@ -1292,6 +1321,7 @@ export function mountAdminAiRoutes(
   router.post('/admin/models', routes.createModel);
   router.patch('/admin/models/:provider/:model', routes.updateModel);
   router.delete('/admin/models/:provider/:model', routes.deleteModel);
+  router.post('/admin/prices/refresh', routes.refreshPrices);
 
   router.get('/admin/credentials', routes.listCredentials);
   router.post('/admin/credentials/user', routes.createUserCredential);

@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { PencilIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, PencilIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 
 import { Modal, Button, Badge } from '@/components/ui';
@@ -25,6 +25,7 @@ import {
   createCatalogModel,
   deleteCatalogModel,
   listCatalogModels,
+  refreshCatalogModels,
   updateCatalogModel,
   type AiCatalogModel,
 } from '../utils/aiService';
@@ -101,6 +102,7 @@ export default function AiModelsAdmin() {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState<{ provider: AiCatalogModel['provider']; model: string } | null>(null);
 
   useEffect(() => {
@@ -193,10 +195,40 @@ export default function AiModelsAdmin() {
           in any use-case's allowed list. Backed by <code>ai_model_prices</code>;
           edits update the latest effective-from row in place.
         </p>
-        <Button onClick={() => setDraft(blankDraft())}>
-          <PlusIcon className="size-4 mr-2" />
-          Add model
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            disabled={refreshing}
+            onClick={async () => {
+              setRefreshing(true);
+              try {
+                const { job_id } = await refreshCatalogModels();
+                toast.success(
+                  job_id
+                    ? 'Refresh queued — the catalog will update once the worker finishes (~30s).'
+                    : 'Refresh queued.',
+                );
+                // Poll the catalog a couple of times so the UI reflects
+                // the changes without making the user click reload.
+                setTimeout(() => void load(), 8000);
+                setTimeout(() => void load(), 20000);
+              } catch (err) {
+                console.error('[ai-models] refresh failed', err);
+                toast.error('Refresh failed — see console');
+              } finally {
+                setRefreshing(false);
+              }
+            }}
+            title="Pull the latest model pricing from LiteLLM's public price book and write any deltas into ai_model_prices"
+          >
+            <ArrowPathIcon className={`size-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Refreshing…' : 'Refresh from upstream'}
+          </Button>
+          <Button onClick={() => setDraft(blankDraft())}>
+            <PlusIcon className="size-4 mr-2" />
+            Add model
+          </Button>
+        </div>
       </div>
 
       {models.length === 0 ? (

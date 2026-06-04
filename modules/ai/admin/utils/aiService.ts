@@ -551,6 +551,24 @@ export async function deleteCatalogModel(
   if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
 }
 
+/**
+ * Kick off the LiteLLM-backed price refresh. Returns the BullMQ job id
+ * (when wired) so the caller can show progress. The worker writes any
+ * price/flag deltas as new effective-dated rows; rows that haven't
+ * changed are left alone.
+ */
+export async function refreshCatalogModels(opts: { dryRun?: boolean } = {}): Promise<{
+  job_id: string | null;
+  dry_run: boolean;
+}> {
+  const res = await authedFetch('/api/modules/ai/admin/prices/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts.dryRun ? { dry_run: true } : {}),
+  });
+  return jsonOrThrow(res);
+}
+
 // ─── Credentials ──────────────────────────────────────────────────────────
 
 export async function listCredentials(): Promise<{
