@@ -77,68 +77,51 @@ export default async function BlogDetailPage({ params }: Props) {
   const post = await getBlogPost(slug)
   if (!post) notFound()
 
+  // White-label: portal workspace-shell `pub-*` article layout (two-column body + sticky sidebar),
+  // token-driven so it inverts per brand UI mode. Renders inside the shell content area.
   return (
-    <main className="relative z-10">
-      <div className="max-w-3xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <Link
-          href="/blog"
-          className="inline-flex items-center gap-1 text-white/60 hover:text-white text-sm mb-6 transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m15 18-6-6 6-6" />
-          </svg>
-          Back to Blog
-        </Link>
-
-        {post.featured_image && (
-          <div className="aspect-[16/9] overflow-hidden rounded-xl mb-8">
-            <img
-              src={post.featured_image}
-              alt={post.featured_image_alt || post.title}
-              className="w-full h-full object-cover"
-            />
+    <div className="pub-article-wrap pub-fade">
+      <div className="pub-article-grid">
+        <article className="pub-article-main">
+          <h1>{post.title}</h1>
+          <div className="pub-byline">
+            {post.published_at && formatDate(post.published_at)}
+            {post.reading_time ? ` · ${post.reading_time} min read` : ''}
           </div>
-        )}
-
-        <div className="flex items-center gap-3 mb-4">
-          {post.category && (
-            <span
-              className="inline-block text-xs font-medium px-2 py-0.5 rounded-full"
-              style={{ backgroundColor: post.category.color + '33', color: post.category.color }}
-            >
-              {post.category.name}
-            </span>
+          {post.featured_image && (
+            <div className="pub-cover lg">
+              <img src={post.featured_image} alt={post.featured_image_alt || post.title} />
+            </div>
           )}
-          <div className="flex items-center gap-3 text-white/40 text-xs">
-            {post.published_at && <span>{formatDate(post.published_at)}</span>}
-            {post.reading_time && <span>{post.reading_time} min read</span>}
-          </div>
-        </div>
+          <div className="pub-body" dangerouslySetInnerHTML={{ __html: post.content }} />
+        </article>
 
-        <h1 className="text-3xl sm:text-4xl font-bold text-white mb-6">{post.title}</h1>
-
-        {post.tags.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-8">
-            {post.tags.map((tag) => (
-              <span
-                key={tag.slug}
-                className="text-xs text-white/50 bg-white/5 border border-white/10 px-2 py-0.5 rounded-full"
-              >
-                {tag.name}
+        <aside className="pub-article-side">
+          {post.category && (
+            <div className="pub-side-card">
+              <div className="pub-side-h">Category</div>
+              <span className="pub-cat" style={post.category.color ? { color: post.category.color } : undefined}>
+                {post.category.name}
               </span>
-            ))}
+            </div>
+          )}
+          <div className="pub-side-card">
+            <div className="pub-side-h">Published</div>
+            <div className="pub-side-val">{post.published_at && formatDate(post.published_at)}</div>
+            {post.reading_time ? <div className="pub-side-sub">{post.reading_time} min read</div> : null}
           </div>
-        )}
-
-        <article
-          className="prose prose-invert prose-lg max-w-none
-                     prose-headings:text-white prose-p:text-white/80
-                     prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
-                     prose-strong:text-white prose-code:text-white/90
-                     prose-img:rounded-xl"
-          dangerouslySetInnerHTML={{ __html: post.content }}
-        />
+          {post.tags.length > 0 && (
+            <div className="pub-side-card">
+              <div className="pub-side-h">Tags</div>
+              <div className="pub-tags">
+                {post.tags.map((tag) => (
+                  <span key={tag.slug} className="pub-tag">{tag.name}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </aside>
       </div>
-    </main>
+    </div>
   )
 }

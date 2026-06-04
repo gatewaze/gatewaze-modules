@@ -61,57 +61,50 @@ function formatDate(dateStr: string | null): string {
 export default async function BlogListingPage() {
   const posts = await getBlogPosts()
 
+  // White-label: uses the portal workspace-shell `pub-*` design system (token-driven, inverts per
+  // brand UI mode) instead of hard-coded white-on-dark. Renders inside the shell content area.
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <h1 className="text-3xl sm:text-4xl font-bold text-white mb-8">Blog</h1>
-
-        {posts.length === 0 ? (
-          <p className="text-white/60 text-center py-12">No posts published yet.</p>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {posts.map((post) => (
-              <Link
-                key={post.id}
-                href={`/blog/${post.slug}`}
-                className="group block"
-              >
-                <div className="relative bg-white/5 rounded-xl border border-white/10 overflow-hidden hover:bg-white/10 hover:border-white/20 transition-all duration-200">
-                  {post.featured_image && (
-                    <div className="aspect-[16/9] overflow-hidden">
-                      <img
-                        src={post.featured_image}
-                        alt={post.featured_image_alt || post.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
-                    </div>
-                  )}
-                  <div className="p-4">
-                    {post.category && (
-                      <span
-                        className="inline-block text-xs font-medium px-2 py-0.5 rounded-full mb-2"
-                        style={{ backgroundColor: post.category.color + '33', color: post.category.color }}
-                      >
-                        {post.category.name}
-                      </span>
-                    )}
-                    <h2 className="text-white font-semibold text-base group-hover:text-white/90 transition-colors line-clamp-2">
-                      {post.title}
-                    </h2>
-                    {post.excerpt && (
-                      <p className="text-white/60 text-sm mt-2 line-clamp-3">{post.excerpt}</p>
-                    )}
-                    <div className="flex items-center gap-3 mt-3 text-white/40 text-xs">
-                      {post.published_at && <span>{formatDate(post.published_at)}</span>}
-                      {post.reading_time && <span>{post.reading_time} min read</span>}
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
+    <div className="pub-wrap pub-fade">
+      <div className="pub-h">
+        <h1>Blog</h1>
+        <p>Field notes, updates and stories from the community.</p>
       </div>
-    </main>
+
+      {posts.length === 0 ? (
+        <div className="pub-empty">No posts published yet.</div>
+      ) : (
+        <div className="pub-grid">
+          {posts.map((post) => (
+            <Link key={post.id} href={`/blog/${post.slug}`} className="pub-card">
+              <div className="pub-cover">
+                {post.featured_image ? (
+                  <img src={post.featured_image} alt={post.featured_image_alt || post.title} />
+                ) : (
+                  <span className="pub-cover-ph">cover</span>
+                )}
+              </div>
+              <div className="pub-card-body">
+                {post.category && (
+                  <span className="pub-cat" style={post.category.color ? { color: post.category.color } : undefined}>
+                    {post.category.name}
+                  </span>
+                )}
+                <h3>{post.title}</h3>
+                {post.excerpt && <p>{post.excerpt}</p>}
+                <div className="pub-meta">
+                  {post.published_at && formatDate(post.published_at)}
+                  {post.reading_time ? (
+                    <>
+                      <span className="dotsep" />
+                      {post.reading_time} min read
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
