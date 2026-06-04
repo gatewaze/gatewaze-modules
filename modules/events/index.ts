@@ -128,6 +128,12 @@ const eventsModule: GatewazeModule = {
     icon: 'calendar',
     order: 10,
   },
+  // Workspace-shell rail item (spec-portal-workspace-shell.md §8). Public top-level module.
+  portalShell: {
+    rail: { label: 'Events', full: 'Events', icon: 'calendar', order: 10, visibility: 'public' },
+    nav: [],
+    publicNav: [],
+  },
 
   publicApiScopes: [
     { action: 'read', description: 'Read public events, including speakers and sponsors via sub-resources' },
