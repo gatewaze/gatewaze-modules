@@ -608,16 +608,6 @@ export default function EditionEditorPage() {
         subTabs={subTabs}
         activeSubTabId={activeTab}
         onSubTabChange={handleTabChange}
-        actions={
-          <div className="flex items-center gap-2 flex-wrap">
-            <Badge variant="soft" color={statusColor as any} size="1">
-              {status.charAt(0).toUpperCase() + status.slice(1)}
-            </Badge>
-            {collection?.content_category && (
-              <Badge variant="soft" color="blue" size="1">{collection.content_category}</Badge>
-            )}
-          </div>
-        }
       >
       {/* Tab Content */}
       {activeTab === 'editor' && (
