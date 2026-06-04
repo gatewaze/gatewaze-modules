@@ -133,11 +133,20 @@ async function handler(req: Request) {
       inReplyTo = inReplyToMatch[1];
     }
 
-    // Find the newsletter collection(s) that match the recipient address
+    // Find the newsletter collection(s) that match the recipient address.
+    // Replies can land at either:
+    //   - `from_email` (most common — no separate Reply-To set), or
+    //   - `reply_to` (explicit Reply-To header on outbound; replies route
+    //     to a different mailbox than the From, e.g. mailing from a
+    //     branded sub-domain but collecting replies at a unified inbox).
+    // Match on EITHER so a Reply-To-only mailbox still surfaces replies.
+    // OR is a comma-separated PostgREST filter; values must be lowercased
+    // to match the toEmails normalisation above.
+    const inList = toEmails.map((e) => `"${e}"`).join(',');
     const { data: collections } = await supabase
       .from('newsletters_template_collections')
-      .select('id, name, from_email, forward_replies_to')
-      .in('from_email', toEmails);
+      .select('id, name, from_email, reply_to, forward_replies_to')
+      .or(`from_email.in.(${inList}),reply_to.in.(${inList})`);
 
     if (!collections || collections.length === 0) {
       console.warn('No newsletter collection found for addresses:', toEmails);
