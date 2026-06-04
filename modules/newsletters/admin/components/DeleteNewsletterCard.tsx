@@ -34,7 +34,13 @@ export const DeleteNewsletterCard: FC<DeleteNewsletterCardProps> = ({ newsletter
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const res = await fetch(`/api/admin/newsletters/collections/${newsletterId}`, {
+      // VITE_API_URL is required in production: admin nginx doesn't proxy
+      // /api requests (it serves a static SPA), so a bare relative fetch
+      // hits nginx and gets a 405 for DELETE/POST. The api lives at
+      // VITE_API_URL (e.g. https://api.aaif.live) which has full CORS
+      // + method support.
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
+      const res = await fetch(`${apiUrl}/api/admin/newsletters/collections/${newsletterId}`, {
         method: 'DELETE',
         credentials: 'include',
         headers: {
