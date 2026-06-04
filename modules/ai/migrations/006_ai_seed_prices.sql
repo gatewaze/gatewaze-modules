@@ -10,11 +10,18 @@
 -- ============================================================================
 
 -- ── Anthropic ───────────────────────────────────────────────────────────────
+-- Tier prices have been stable across the entire 4.x family: Opus
+-- $15/$75/$1.50, Sonnet $3/$15/$0.30, Haiku $0.80/$4/$0.08. Newer
+-- versions inherit the tier rate. Older versions kept in the book so
+-- recipes / use_cases pinned to a specific minor still cost-track.
 INSERT INTO public.ai_model_prices
   (provider, model, input_per_million_usd, output_per_million_usd, cached_per_million_usd,
    supports_chat, supports_tools, supports_web_search, label)
 VALUES
+  ('anthropic', 'claude-opus-4-8',      15.00,  75.00,  1.50, true, true, true,  'Claude Opus 4.8'),
+  ('anthropic', 'claude-opus-4-7',      15.00,  75.00,  1.50, true, true, true,  'Claude Opus 4.7'),
   ('anthropic', 'claude-opus-4-5',      15.00,  75.00,  1.50, true, true, true,  'Claude Opus 4.5'),
+  ('anthropic', 'claude-sonnet-4-6',     3.00,  15.00,  0.30, true, true, true,  'Claude Sonnet 4.6'),
   ('anthropic', 'claude-sonnet-4-5',     3.00,  15.00,  0.30, true, true, true,  'Claude Sonnet 4.5'),
   ('anthropic', 'claude-haiku-4-5',      0.80,   4.00,  0.08, true, true, false, 'Claude Haiku 4.5')
 ON CONFLICT (provider, model, effective_from) DO NOTHING;
@@ -24,9 +31,11 @@ INSERT INTO public.ai_model_prices
   (provider, model, input_per_million_usd, output_per_million_usd, cached_per_million_usd,
    supports_chat, supports_tools, supports_web_search, supports_image_gen, supports_embeddings, label)
 VALUES
+  ('openai',    'gpt-5.5',               2.50,  10.00,  0.25, true,  true, false, false, false, 'GPT-5.5'),
   ('openai',    'gpt-5',                 2.50,  10.00,  0.25, true,  true, false, false, false, 'GPT-5'),
   ('openai',    'gpt-5-mini',            0.40,   1.60,  0.04, true,  true, false, false, false, 'GPT-5 mini'),
   ('openai',    'gpt-5-nano',            0.10,   0.40,  0.01, true,  true, false, false, false, 'GPT-5 nano'),
+  ('openai',    'o3',                    2.00,   8.00,  0.50, true,  true, false, false, false, 'o3'),
   ('openai',    'o3-mini',               1.10,   4.40,  0.11, true,  true, false, false, false, 'o3-mini'),
   ('openai',    'gpt-image-1',           0.00,   0.00,  NULL, false, false,false, true,  false, 'GPT-Image-1'),
   ('openai',    'text-embedding-3-small',0.02,   0.00,  NULL, false, false,false, false, true,  'text-embedding-3-small'),

@@ -109,6 +109,18 @@ const aiModule: GatewazeModule = {
       schedule: { pattern: '0 * * * *' },
       data: { kind: 'ai:cleanup-expired-memory' },
     },
+    // Pull the latest model pricing from LiteLLM's public JSON once a
+    // week. Writes a new effective-dated row only when a price or
+    // capability flag actually changes — keeps the ai_model_prices
+    // history meaningful. Operators can also trigger this on demand
+    // via POST /api/modules/ai/admin/prices/refresh (UI button on
+    // /admin/ai/models).
+    {
+      name: 'ai:refresh-model-prices',
+      queue: 'jobs',
+      schedule: { pattern: '17 3 * * 0' },  // Sundays 03:17 UTC; off-peak.
+      data: { kind: 'ai:refresh-model-prices' },
+    },
   ],
 
   // Worker handler registry — the platform's shared `jobs` worker
@@ -167,6 +179,15 @@ const aiModule: GatewazeModule = {
       name: 'ai:test-mcp-server',
       handler: 'workers/test-mcp-server.js',
       concurrency: Number(process.env.AI_MCP_TEST_MAX_CONCURRENCY ?? 2),
+    },
+    // Weekly + on-demand price-book refresh from LiteLLM. Same dispatch
+    // pattern as the rest: the cron above enqueues onto `jobs`; this
+    // entry registers the consumer. concurrency=1 — there's no benefit
+    // to parallel runs and they'd race on the same upsert.
+    {
+      name: 'ai:refresh-model-prices',
+      handler: 'workers/refresh-model-prices.js',
+      concurrency: 1,
     },
   ],
 
