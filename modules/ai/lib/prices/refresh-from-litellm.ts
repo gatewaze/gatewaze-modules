@@ -129,7 +129,12 @@ export function normalizeModelName(provider: string, raw: string): string {
   // with `noUncheckedIndexedAccess` returns a possibly-undefined; the
   // ternary preserves `raw` as the fallback so the type stays `string`.
   const parts = raw.split('/');
-  const m: string = parts.length > 1 ? parts[parts.length - 1] ?? raw : raw;
+  let m: string = parts.length > 1 ? parts[parts.length - 1] ?? raw : raw;
+  // Vertex AI dated aliases use `@YYYYMMDD` or `@default` rather than
+  // a hyphen — e.g. `vertex_ai/claude-opus-4-5@20251101`,
+  // `claude-opus-4-6@default`. Collapse to the bare name so they
+  // dedupe against the unsuffixed entry.
+  m = m.replace(/@[A-Za-z0-9-]+$/, '');
   if (provider === 'anthropic') {
     // Trim `-YYYYMMDD` exactly. Don't trim shorter trailing numbers
     // because they're part of the version (4-5 / 4-7).

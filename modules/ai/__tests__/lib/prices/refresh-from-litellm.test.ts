@@ -180,6 +180,12 @@ describe('normalizeModelName', () => {
   it('strips vertex_ai/ prefix', () => {
     expect(normalizeModelName('anthropic', 'vertex_ai/claude-opus-4-5')).toBe('claude-opus-4-5');
   });
+  it('strips Vertex @YYYYMMDD suffix', () => {
+    expect(normalizeModelName('anthropic', 'vertex_ai/claude-opus-4-5@20251101')).toBe('claude-opus-4-5');
+  });
+  it('strips Vertex @default suffix', () => {
+    expect(normalizeModelName('anthropic', 'claude-opus-4-6@default')).toBe('claude-opus-4-6');
+  });
   it('passes OpenAI names through unchanged', () => {
     expect(normalizeModelName('openai', 'gpt-5-mini')).toBe('gpt-5-mini');
   });
