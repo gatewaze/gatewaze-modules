@@ -89,6 +89,12 @@ export interface DispatchToolCallArgs {
   modelOverride?: string;
   /** Used to attribute fetch_url + web_search calls in ai_usage_events. */
   userId?: string;
+  /**
+   * Billing/quota use case — `newsletter-editor` or `site-editor`
+   * (editorUseCaseFor(hostKind)). Tags the runner's ai_usage_events rows
+   * and scopes the per-tool quota reads, so the two must match.
+   */
+  useCase: string;
 }
 
 export interface DispatchToolCallResult extends ProviderToolCall {
@@ -143,10 +149,30 @@ interface AiRunnerModule {
 let cachedAiRunner: AiRunnerModule | null | undefined;
 async function loadRunChat(): Promise<AiRunnerModule['runChat']> {
   if (cachedAiRunner !== undefined && cachedAiRunner !== null) return cachedAiRunner.runChat;
+  // Candidate resolution paths, in preference order. The runtime may be:
+  //   - admin's vite build, where the @gatewaze-modules namespace
+  //     resolves via the gatewaze-modules vite plugin
+  //   - the api server, where modules are cloned to
+  //     /app/.gatewaze-modules/<slug>/modules/<id>/... — the slug is
+  //     derived from the git URL (e.g. github-com-gatewaze-gatewaze-
+  //     modules), NOT a fixed "gatewaze-modules" segment, so any
+  //     relative path that bakes in that name is fragile
+  //
+  // The sibling path `../../../ai/lib/runner.js` works in both: from
+  // dispatch.ts at `editor-ai-copilot/lib/web-tools/dispatch.ts`, walk
+  // up three levels to `modules/`, then into the sibling `ai` module.
+  // tsx swaps .js → .ts on resolution so the same path covers both
+  // built dist and source-tree contexts.
   const attempts = [
     '@gatewaze-modules/ai/lib/runner.js',
+    '../../../ai/lib/runner.js',
     '../../../../../gatewaze-modules/modules/ai/lib/runner.ts',
+    '/tmp/module-repos/gatewaze-modules/modules/ai/lib/runner.ts',
   ];
+  // Collect each path's failure so the error surfaced to the editor
+  // names what was tried — silently iterating over a swallowed catch
+  // is how this regressed undetected on AAIF prod.
+  const failures: Array<{ path: string; err: string }> = [];
   for (const path of attempts) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -155,12 +181,18 @@ async function loadRunChat(): Promise<AiRunnerModule['runChat']> {
         cachedAiRunner = mod;
         return mod.runChat;
       }
-    } catch {
-      // try the next path
+      failures.push({ path, err: `loaded but runChat is ${typeof mod.runChat}` });
+    } catch (e) {
+      failures.push({ path, err: e instanceof Error ? e.message.split('\n')[0] : String(e) });
     }
   }
   cachedAiRunner = null;
-  throw new Error('@gatewaze-modules/ai runChat unavailable — required for editor-ai-copilot');
+  // eslint-disable-next-line no-console
+  console.error('[editor-ai-copilot] loadRunChat failed all paths', { failures });
+  throw new Error(
+    '@gatewaze-modules/ai runChat unavailable — required for editor-ai-copilot. Tried: '
+      + failures.map((f) => `${f.path} (${f.err})`).join('; '),
+  );
 }
 
 export async function dispatchToolCall(
@@ -168,8 +200,8 @@ export async function dispatchToolCall(
 ): Promise<DispatchToolCallResult> {
   // Quota / cost gates — same per-tool decision points as before so
   // the editor's hard-cap behaviour is unchanged.
-  const fetchUrlUsage = await readTodayUsage(args.supabase, 'fetch_url');
-  const webSearchUsage = await readTodayUsage(args.supabase, 'web_search');
+  const fetchUrlUsage = await readTodayUsage(args.supabase, 'fetch_url', args.useCase);
+  const webSearchUsage = await readTodayUsage(args.supabase, 'web_search', args.useCase);
   const combinedCostMicroUsd = fetchUrlUsage.costMicroUsd + webSearchUsage.costMicroUsd;
   const fetchOptions = canvasAiConfig.fetchUrlEnabled ? buildFetchOptions() : null;
 
@@ -257,7 +289,7 @@ export async function dispatchToolCall(
   let result;
   try {
     result = await runChat(ctx, {
-      useCase: 'editor-ai-copilot',
+      useCase: args.useCase,
       userId: args.userId ?? null,
       threadId: null,
       messageId: null,
