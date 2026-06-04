@@ -932,7 +932,16 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           // its prompt context (library, blocks, preheader), and would
           // 404 with `newsletter_edition_not_found` otherwise. Save
           // the draft first, then come back to the AI tab.
-          aiEnabled={hasEditorAi && edition.id !== 'new'}
+          //
+          // Gating: prefer the dynamic-import outcome over
+          // `useHasModule('editor-ai-copilot')`. The dynamic import is
+          // the actual proof the plugin is loadable in this bundle on
+          // this brand; the modules-context hook reads the
+          // installed_modules table and was flaky on AAIF (returned
+          // false even when the row was status='enabled'). Keep
+          // hasEditorAi as a belt-and-braces OR so the gate still
+          // honours a deliberate disable from the modules admin.
+          aiEnabled={(aiCopilotPlugins.length > 0 || hasEditorAi) && edition.id !== 'new'}
           {...(edition.id === 'new'
             ? { aiDisabledReason: 'Save the edition first, then come back to use AI to generate content.' }
             : {})}
