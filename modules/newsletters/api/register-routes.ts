@@ -120,11 +120,100 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   router.get('/newsletters/collections/:collectionId/manifest', wrap(manifestHandler));
   router.delete('/newsletters/collections/:collectionId', wrap(deleteCollectionHandler));
 
+  // POST /api/admin/newsletters/editions/:editionId/test-send
+  //
+  // One-off send of the rendered HTML to a single email. Used by the
+  // edition editor's "Test Send" toolbar — the operator gets the email
+  // in their own inbox to sanity-check formatting against the real
+  // Gmail / Outlook / Apple Mail rendering before scheduling the
+  // actual send. Body shape mirrors the legacy
+  // `functions/v1/send-email` call gatewaze-admin used:
+  //   { recipient_email, html, subject, from_email?, from_name? }
+  // — except the html is rendered by the client and posted up, rather
+  // than re-rendered server-side, so this endpoint stays a thin
+  // SendGrid wrapper (no DB read, no template plumbing). The subject
+  // is prefixed with "[TEST] " so the recipient never confuses a
+  // preview with a real edition.
+  router.post('/newsletters/editions/:editionId/test-send', wrap(async (req, res) => {
+    const editionId = req.params.editionId;
+    const { recipient_email, html, subject, from_email, from_name } = (req.body ?? {}) as Record<string, string | undefined>;
+    if (!recipient_email || !recipient_email.includes('@')) {
+      res.status(400).json({ error: { code: 'invalid_recipient', message: 'recipient_email must be a valid email address' } });
+      return;
+    }
+    if (!html || typeof html !== 'string' || html.length < 16) {
+      res.status(400).json({ error: { code: 'invalid_html', message: 'html is required' } });
+      return;
+    }
+    const apiKey = process.env.SENDGRID_API_KEY;
+    if (!apiKey) {
+      res.status(500).json({ error: { code: 'sendgrid_not_configured', message: 'SENDGRID_API_KEY is not set on the api process' } });
+      return;
+    }
+    // Resolve the From identity. Prefer client-supplied values (so the
+    // operator can preview "what the recipient will actually see"),
+    // then fall back to the edition's collection, then the platform
+    // EMAIL_FROM env var. SendGrid requires the From address to be
+    // verified in the SendGrid account; mismatches return a 403 which
+    // we surface verbatim.
+    let resolvedFrom = from_email && from_email.includes('@') ? from_email : null;
+    let resolvedFromName = from_name && from_name.trim() ? from_name.trim() : null;
+    if (!resolvedFrom) {
+      const { data: edition } = await supabase
+        .from('newsletters_editions')
+        .select('collection_id')
+        .eq('id', editionId)
+        .maybeSingle();
+      if (edition?.collection_id) {
+        const { data: col } = await supabase
+          .from('newsletters_template_collections')
+          .select('from_email, from_name')
+          .eq('id', edition.collection_id)
+          .maybeSingle();
+        if (col?.from_email) resolvedFrom = col.from_email;
+        if (!resolvedFromName && col?.from_name) resolvedFromName = col.from_name;
+      }
+    }
+    if (!resolvedFrom) resolvedFrom = process.env.EMAIL_FROM ?? null;
+    if (!resolvedFrom) {
+      res.status(400).json({ error: { code: 'no_from_address', message: 'No verified from address configured on the newsletter or platform' } });
+      return;
+    }
+    const finalSubject = `[TEST] ${(subject && subject.trim()) || 'Newsletter preview'}`;
+    try {
+      const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: recipient_email }] }],
+          from: { email: resolvedFrom, ...(resolvedFromName ? { name: resolvedFromName } : {}) },
+          subject: finalSubject,
+          content: [{ type: 'text/html', value: html }],
+        }),
+      });
+      if (!sgRes.ok) {
+        const errText = await sgRes.text();
+        res.status(sgRes.status).json({
+          error: { code: 'sendgrid_error', message: `SendGrid ${sgRes.status}: ${errText.slice(0, 500)}` },
+        });
+        return;
+      }
+      res.json({ success: true, recipient: recipient_email, from: resolvedFrom });
+    } catch (err) {
+      res.status(502).json({
+        error: { code: 'sendgrid_unreachable', message: err instanceof Error ? err.message : String(err) },
+      });
+    }
+  }));
+
   // Mount under /api/admin so the URL ends up at
   //   /api/admin/newsletters/editions/:editionId/publish-to-git etc.
   app.use('/api/admin', router);
 
   void context;
   // eslint-disable-next-line no-console
-  console.log('[newsletters] routes registered (publish-to-git, init-repo, graduate, drift, manifest, delete-collection)');
+  console.log('[newsletters] routes registered (publish-to-git, init-repo, graduate, drift, manifest, delete-collection, test-send)');
 }

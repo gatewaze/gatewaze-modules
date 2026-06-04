@@ -31,6 +31,8 @@ import {
   ArrowDownTrayIcon,
   ClipboardDocumentIcon,
   GlobeAltIcon,
+  PaperAirplaneIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import {
   buildPuckConfig,
@@ -242,6 +244,13 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   const [htmlSource, setHtmlSource] = useState<string>('');
   const [htmlBuilding, setHtmlBuilding] = useState(false);
   const [publishBusy, setPublishBusy] = useState(false);
+  // Test Send: minimal inline picker — operator types a recipient,
+  // we render the current draft's email HTML and POST it to the
+  // newsletters api which fans out to SendGrid. Subject lands as
+  // "[TEST] <edition title>" so the inbox is unambiguous.
+  const [testSendOpen, setTestSendOpen] = useState(false);
+  const [testSendEmail, setTestSendEmail] = useState('');
+  const [testSendBusy, setTestSendBusy] = useState(false);
 
   // Publish flow:
   //   1. Confirm with the operator (the act is recipient-visible).
@@ -283,7 +292,10 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       const { url } = getSupabaseConfig();
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not signed in');
-      const res = await fetch(`/api/admin/newsletters/editions/${edition.id}/publish-to-git`, {
+      // Admin nginx doesn't proxy /api — see DeleteNewsletterCard for the
+      // same VITE_API_URL pattern.
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
+      const res = await fetch(`${apiUrl}/api/admin/newsletters/editions/${edition.id}/publish-to-git`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -441,6 +453,57 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     }
   };
 
+  const handleTestSend = async () => {
+    if (edition.id === 'new') {
+      toast.error('Save the edition first, then send a test.');
+      return;
+    }
+    const recipient = testSendEmail.trim();
+    if (!recipient || !recipient.includes('@')) {
+      toast.error('Enter a valid email address.');
+      return;
+    }
+    setTestSendBusy(true);
+    try {
+      const blockMeta = buildBlockMeta();
+      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, pretty: false });
+      // Mirror DeleteNewsletterCard's URL form — admin nginx has no /api
+      // proxy, so we hit api.<brand>.live directly.
+      const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? null;
+      const subjectLine = (edition as { subject?: string; title?: string }).subject
+        ?? (edition as { title?: string }).title
+        ?? 'Newsletter preview';
+      const res = await fetch(`${apiUrl}/api/admin/newsletters/editions/${edition.id}/test-send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          recipient_email: recipient,
+          html,
+          subject: subjectLine,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+        toast.error(body?.error?.message ?? `Test send failed (${res.status})`);
+        return;
+      }
+      toast.success(`Test email sent to ${recipient}.`);
+      setTestSendOpen(false);
+      setTestSendEmail('');
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[newsletter-puck] test-send failed:', e);
+      toast.error(e instanceof Error ? e.message : 'Test send failed.');
+    } finally {
+      setTestSendBusy(false);
+    }
+  };
+
   // The AI plugin (editor-ai-copilot) needs the available block defs
   // to constrain its output. For newsletters those come from BOTH the
   // DB-backed Mustache templates AND the react-email registry; the
@@ -573,6 +636,18 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                 <span>{exportBusy === 'beehiiv' ? 'Copying…' : 'Beehiiv'}</span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setTestSendOpen((v) => !v)}
+              disabled={exportBusy !== null || edition.id === 'new'}
+              style={segmentTextBtn(false, testSendOpen)}
+              title={edition.id === 'new'
+                ? 'Save the edition first, then send a test'
+                : 'Send a one-off preview to your inbox via SendGrid'}
+            >
+              <PaperAirplaneIcon className="w-4 h-4 shrink-0" />
+              <span>Test Send</span>
+            </button>
           </div>
 
           {/* Save — persists the edition's draft to the database
@@ -612,6 +687,92 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Test Send inline panel — slides under the toolbar when the
+          "Test Send" button is active. Enter a recipient, hit Send,
+          we render the current draft as email HTML and POST it to
+          the newsletters api which forwards to SendGrid. The
+          recipient sees a "[TEST] …" subject so the inbox is
+          unambiguous. Persists across re-renders so the operator
+          can re-send to the same address without retyping. */}
+      {testSendOpen && (
+        <div
+          style={{
+            margin: '8px 0',
+            padding: 12,
+            background: 'var(--accent-a2, rgba(59,130,246,0.08))',
+            border: '1px solid var(--accent-a4, rgba(59,130,246,0.25))',
+            borderRadius: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+          role="region"
+          aria-label="Send a test email"
+        >
+          <PaperAirplaneIcon className="w-4 h-4 shrink-0" style={{ color: 'var(--accent-11, #2563eb)' }} />
+          <span style={{ fontSize: 13, color: 'var(--gray-12, #111)', fontWeight: 500 }}>
+            Send a test email to
+          </span>
+          <input
+            type="email"
+            autoFocus
+            value={testSendEmail}
+            onChange={(e) => setTestSendEmail(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !testSendBusy) { e.preventDefault(); void handleTestSend(); }
+              if (e.key === 'Escape') { setTestSendOpen(false); }
+            }}
+            placeholder="your@email.com"
+            style={{
+              flex: 1,
+              minWidth: 240,
+              padding: '6px 10px',
+              fontSize: 13,
+              border: '1px solid var(--gray-a6, #d1d5db)',
+              borderRadius: 6,
+              background: 'var(--color-panel-solid, white)',
+              color: 'var(--gray-12, #111)',
+              outline: 'none',
+            }}
+          />
+          <button
+            type="button"
+            onClick={handleTestSend}
+            disabled={testSendBusy || !testSendEmail.includes('@')}
+            style={{
+              padding: '6px 14px',
+              fontSize: 13,
+              fontWeight: 500,
+              border: 'none',
+              borderRadius: 6,
+              background: 'var(--accent-9, #2563eb)',
+              color: 'white',
+              cursor: testSendBusy || !testSendEmail.includes('@') ? 'not-allowed' : 'pointer',
+              opacity: testSendBusy || !testSendEmail.includes('@') ? 0.55 : 1,
+            }}
+          >
+            {testSendBusy ? 'Sending…' : 'Send'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setTestSendOpen(false)}
+            aria-label="Close test send"
+            style={{
+              padding: 4,
+              border: 'none',
+              borderRadius: 6,
+              background: 'transparent',
+              color: 'var(--gray-11, #6b7280)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <XMarkIcon className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* MyBlocksPanel now only opens for the "Save current selection
           as block" flow — operators browse + insert via the Puck
