@@ -31,8 +31,9 @@ import { copilotStatusLabel } from '../lib/transcript.js';
 // keeps a minimal local shim with just the SkillRow type + the
 // readSkillsByIds helper — see lib/skills/skills-repo.ts for the
 // rationale (single-purpose, no business logic).
-import { readSkillsByIds } from '../lib/skills/skills-repo.js';
+import { readSkillsByIds, readSkillByRef } from '../lib/skills/skills-repo.js';
 import { selectActiveSkillsForPrompt, type SkillSelectionResult } from '../lib/skills/select-for-prompt.js';
+import { editorUseCaseFor } from '../lib/use-case.js';
 import {
   InvalidToolOutputError,
   ProviderError,
@@ -313,6 +314,7 @@ export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
         // ai_timeout mid-search. The AI module itself budgets 120s.
         timeoutMs: canvasAiConfig.webToolsTimeoutMs,
         userId,
+        useCase: editorUseCaseFor(hostKind),
         ...(body.provider ? { providerOverride: body.provider } : {}),
         ...(body.model ? { modelOverride: body.model } : {}),
       });
@@ -491,6 +493,7 @@ async function handleEditBlockMode(args: HandleEditBlockArgs): Promise<void> {
       maxOutputTokens: canvasAiConfig.maxOutputTokens,
       timeoutMs: canvasAiConfig.providerTimeoutMs,
       userId: args.userId,
+      useCase: editorUseCaseFor(args.hostKind),
       ...(args.body.provider ? { providerOverride: args.body.provider } : {}),
       ...(args.body.model ? { modelOverride: args.body.model } : {}),
     });
@@ -634,12 +637,18 @@ function findBlock(content: ReadonlyArray<BlockEntry>, blockId: string): BlockEn
 // ---------------------------------------------------------------------------
 
 /**
- * Read the host's `active_skill_ids`, fetch the matching skill bodies,
- * and run them through the budget enforcer. When `skillsEnabled` is
- * false (killswitch) we return an empty selection — same effect as
- * "no skills configured." Errors are swallowed and reported via the
- * empty selection: generation proceeds without brand voice rather
- * than failing.
+ * Resolve the active skills for a host, applying the inherit/override
+ * model introduced in migration 005:
+ *
+ *   - host.active_skill_ids = NULL  → INHERIT the use case's default
+ *     brand skill (ai_use_cases.skill_source_id / skill_path for
+ *     newsletter-editor / site-editor).
+ *   - host.active_skill_ids = '{}'  → explicit opt-out, no skills.
+ *   - host.active_skill_ids = '{…}' → override with exactly that list.
+ *
+ * When `skillsEnabled` is false (killswitch) we return an empty
+ * selection. Errors are swallowed and reported via the empty selection:
+ * generation proceeds without brand voice rather than failing.
  */
 async function loadActiveSkills(
   supabase: SupabaseLike,
@@ -656,7 +665,16 @@ async function loadActiveSkills(
       .select('active_skill_ids')
       .eq('id', hostId)
       .maybeSingle();
-    const activeIds = ((hostRes?.data as { active_skill_ids?: string[] } | null)?.active_skill_ids ?? []);
+    // `null`/`undefined` (column NULL) = inherit; an array (incl. empty)
+    // = explicit override.
+    const activeIds = (hostRes?.data as { active_skill_ids?: string[] | null } | null)?.active_skill_ids;
+
+    if (activeIds == null) {
+      const defaultSkill = await loadUseCaseDefaultSkill(supabase, hostKind);
+      if (!defaultSkill) return empty;
+      return selectActiveSkillsForPrompt([defaultSkill], canvasAiConfig.maxSkillsBytes);
+    }
+
     if (activeIds.length === 0) return empty;
 
     const skills = await readSkillsByIds(supabase, activeIds);
@@ -664,6 +682,26 @@ async function loadActiveSkills(
   } catch {
     return empty;
   }
+}
+
+/**
+ * Resolve the default brand skill bound to this host kind's editor use
+ * case via its (skill_source_id, skill_path) soft reference. Returns
+ * null when the use case has no skill bound or the row is missing/
+ * unparsed, in which case inheriting hosts simply get no skills.
+ */
+async function loadUseCaseDefaultSkill(
+  supabase: SupabaseLike,
+  hostKind: HostKind,
+): Promise<Awaited<ReturnType<typeof readSkillByRef>> | null> {
+  const ucRes = await supabase
+    .from('ai_use_cases')
+    .select('skill_source_id, skill_path')
+    .eq('id', editorUseCaseFor(hostKind))
+    .maybeSingle();
+  const ref = ucRes?.data as { skill_source_id?: string | null; skill_path?: string | null } | null;
+  if (!ref?.skill_source_id || !ref.skill_path) return null;
+  return readSkillByRef(supabase, ref.skill_source_id, ref.skill_path);
 }
 
 /**
@@ -691,7 +729,8 @@ async function writeAudit(deps: CreateGenerateRouteDeps, row: Parameters<typeof 
   }
   // NOTE: the cost row in ai_usage_events is written by
   // @gatewaze-modules/ai's runChat (the single source of truth for
-  // billing), tagged use_case='editor-ai-copilot', on every terminal
+  // billing), tagged with the host-kind editor use case
+  // (newsletter-editor / site-editor), on every terminal
   // path — success, provider error/timeout/rate-limit, and budget-block.
   // The canvas_ai_audit_log row written here is the editor's own
   // block-level audit (which blocks dropped, which skills were active),
@@ -708,13 +747,12 @@ async function writeAudit(deps: CreateGenerateRouteDeps, row: Parameters<typeof 
 //
 // Each completed turn writes a user + assistant row to the ai module's
 // ai_threads / ai_messages tables, keyed by the natural 4-tuple
-// (use_case='editor-ai-copilot', host_kind, host_id, thread_key=target_id).
+// (use_case, host_kind, host_id, thread_key=target_id) where use_case is
+// the host-kind editor use case (newsletter-editor / site-editor).
 // The sidebar rehydrates from these on reload. Best-effort: a failure
 // here never blocks the generate response (mirrors writeAudit). The
 // server is the source of truth and re-derives the thread from the
 // request on every call, so the client never has to track a thread id.
-
-const COPILOT_USE_CASE = 'editor-ai-copilot';
 
 interface TurnContext {
   hostKind: HostKind;
@@ -739,11 +777,12 @@ type TurnOutcome =
 
 async function ensureCopilotThread(deps: CreateGenerateRouteDeps, ctx: TurnContext): Promise<string | null> {
   const sb = deps.supabase;
+  const useCase = editorUseCaseFor(ctx.hostKind);
   const byKey = () =>
     sb
       .from('ai_threads')
       .select('id')
-      .eq('use_case', COPILOT_USE_CASE)
+      .eq('use_case', useCase)
       .eq('host_kind', ctx.hostKind)
       .eq('host_id', ctx.hostId)
       .eq('thread_key', ctx.targetId)
@@ -755,7 +794,7 @@ async function ensureCopilotThread(deps: CreateGenerateRouteDeps, ctx: TurnConte
   const ins = await sb
     .from('ai_threads')
     .insert({
-      use_case: COPILOT_USE_CASE,
+      use_case: useCase,
       host_kind: ctx.hostKind,
       host_id: ctx.hostId,
       thread_key: ctx.targetId,

@@ -5,11 +5,9 @@ function skill(id: string, bodyChars: number) {
   return {
     id,
     source_id: 'src',
-    path: `${id}.md`,
-    name: `Skill ${id}`,
+    dir_path: `skills/${id}`,
+    name: id,
     description: null,
-    tags: [],
-    applies_to: [],
     body: 'x'.repeat(bodyChars),
     body_chars: bodyChars,
     content_hash: `hash-${id}`,

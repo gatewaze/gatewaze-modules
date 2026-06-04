@@ -30,7 +30,7 @@ describe('readTodayUsage', () => {
     const { stub } = makeAiCostStub({ callCount: 0, costMicroUsd: 0 });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     injectAiCostModuleForTesting(stub as any);
-    const r = await readTodayUsage(supabaseStub, 'web_search');
+    const r = await readTodayUsage(supabaseStub, 'web_search', 'newsletter-editor');
     expect(r).toEqual({ callCount: 0, costMicroUsd: 0 });
   });
 
@@ -38,7 +38,7 @@ describe('readTodayUsage', () => {
     const { stub } = makeAiCostStub({ callCount: 5, costMicroUsd: 50_000 });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     injectAiCostModuleForTesting(stub as any);
-    const r = await readTodayUsage(supabaseStub, 'fetch_url');
+    const r = await readTodayUsage(supabaseStub, 'fetch_url', 'newsletter-editor');
     expect(r).toEqual({ callCount: 5, costMicroUsd: 50_000 });
   });
 
@@ -46,9 +46,9 @@ describe('readTodayUsage', () => {
     const { stub } = makeAiCostStub();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     injectAiCostModuleForTesting(stub as any);
-    await readTodayUsage(supabaseStub, 'fetch_url');
+    await readTodayUsage(supabaseStub, 'fetch_url', 'newsletter-editor');
     expect(stub.sumTodayToolUsage).toHaveBeenCalledWith(supabaseStub, {
-      useCase: 'editor-ai-copilot',
+      useCase: 'newsletter-editor',
       provider: 'scrapling',
       model: 'fetch_url:fast',
     });
@@ -56,7 +56,7 @@ describe('readTodayUsage', () => {
 
   it('fails open (returns zeros) when ai-cost is absent', async () => {
     __setAiCostModuleForTesting(null);
-    const r = await readTodayUsage(supabaseStub, 'fetch_url');
+    const r = await readTodayUsage(supabaseStub, 'fetch_url', 'newsletter-editor');
     expect(r).toEqual({ callCount: 0, costMicroUsd: 0 });
   });
 });
