@@ -305,6 +305,25 @@ async function processSend(
     return { success: false, delivered: 0, failed: 0, error: 'Send not found' }
   }
 
+  // Collection-level Reply-To: when the operator wants outbound mail to
+  // appear from one address but replies to land at another (common when
+  // sending from a branded sub-domain — e.g. demetrios@news.mlops.community
+  // — but routing replies to a unified inbox like demetrios@aaif.live).
+  // newsletter_sends doesn't carry reply_to of its own; pull it off the
+  // collection and forward to the provider via the existing replyTo
+  // hook. Persist on email_send_log too so email-retry-send (which reads
+  // log.reply_to) keeps the header on retries.
+  let collectionReplyTo: string | null = null
+  const collectionId: string | null = (send.edition as { collection_id?: string | null } | null)?.collection_id ?? null
+  if (collectionId) {
+    const { data: coll } = await supabase
+      .from('newsletters_template_collections')
+      .select('reply_to')
+      .eq('id', collectionId)
+      .maybeSingle()
+    collectionReplyTo = coll?.reply_to || null
+  }
+
   if (!['scheduled', 'draft', 'sending'].includes(send.status)) {
     return { success: false, delivered: 0, failed: 0, error: `Send is in ${send.status} state` }
   }
@@ -451,6 +470,7 @@ async function processSend(
           const { data: logEntry } = await supabase.from('email_send_log').insert({
             recipient_email: email,
             from_address: fromEmail,
+            reply_to: collectionReplyTo,
             subject,
             content_html: personalizedHtml,
             provider: provider.name,
@@ -464,6 +484,7 @@ async function processSend(
             to: email,
             from: fromEmail,
             fromName,
+            ...(collectionReplyTo ? { replyTo: collectionReplyTo } : {}),
             subject,
             html: personalizedHtml,
             headers: emailHeaders,
