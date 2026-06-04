@@ -262,6 +262,39 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   // operator pauses.
   const [emailSizeBytes, setEmailSizeBytes] = useState<number | null>(null);
 
+  // Pull the AI Puck plugin via dynamic import + pass through
+  // `extraPlugins`. The original design used a shared canvas-puck-plugin-
+  // registry (sites/admin/.../canvas-puck-plugin-registry.ts) into which
+  // editor-ai-copilot's admin/index.ts would push its plugin as a
+  // side-effect. Rollup tree-shook the side-effect call out of the
+  // production bundle no matter how we annotated it (sideEffects in
+  // package.json, namespace import + globalThis pin, moduleSideEffects:
+  // 'no-treeshake' from the resolver — verified empirically v1.2.47
+  // through v1.2.51). The aiPlugin object literal survived but the
+  // register call didn't, so the registry stayed empty in prod.
+  //
+  // Dynamic import sidesteps the whole tree-shake question: the chunk
+  // is always emitted, the await always runs, and we wire the plugin
+  // into CanvasShell's existing extraPlugins prop. Catch swallows the
+  // import error on brands that don't have editor-ai-copilot installed
+  // so the editor still mounts (without an AI tab).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [aiCopilotPlugins, setAiCopilotPlugins] = useState<ReadonlyArray<any>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mod = await import('@gatewaze-modules/editor-ai-copilot/admin' as any);
+        if (cancelled) return;
+        if (mod && mod.aiPlugin) setAiCopilotPlugins([mod.aiPlugin]);
+      } catch {
+        // editor-ai-copilot not in this brand's MODULE_SOURCES — fine.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Publish flow:
   //   1. Confirm with the operator (the act is recipient-visible).
   //   2. Save the edition to the database first so the publish-to-
@@ -893,6 +926,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           hostKind="newsletter"
           hostId={collectionId ?? edition.id}
           targetId={edition.id}
+          extraPlugins={aiCopilotPlugins}
           // Disable AI on unsaved editions — the generate endpoint
           // looks up the edition row in newsletters_editions to build
           // its prompt context (library, blocks, preheader), and would
