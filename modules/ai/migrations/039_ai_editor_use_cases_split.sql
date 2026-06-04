@@ -69,9 +69,21 @@ BEGIN
      WHERE use_case = 'editor-ai-copilot';
 
     -- Recipes (none expected for the editor) → fold into newsletter-editor.
-    UPDATE public.ai_recipes
-       SET use_case = 'newsletter-editor'
-     WHERE use_case = 'editor-ai-copilot';
+    -- Guard on column existence: ai_recipes.use_case was added by a
+    -- later schema-evolution step on some projects but never landed on
+    -- AAIF, where this UPDATE would otherwise hard-fail the migration.
+    -- The comment above is the canonical statement: no editor recipes
+    -- are expected, so a no-op is correct when the column is absent.
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'ai_recipes'
+         AND column_name = 'use_case'
+    ) THEN
+      UPDATE public.ai_recipes
+         SET use_case = 'newsletter-editor'
+       WHERE use_case = 'editor-ai-copilot';
+    END IF;
 
     -- 3. Remove the old row. CASCADE handles ai_credentials /
     --    ai_use_case_mcp_allowlist / ai_memory rows tagged to it.
