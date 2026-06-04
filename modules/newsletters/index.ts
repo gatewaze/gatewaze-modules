@@ -88,6 +88,7 @@ const newslettersModule: GatewazeModule = {
     'migrations/026_fix_keyword_trigger_definer.sql',
     'migrations/027_collection_git_provenance.sql',
     'migrations/028_enable_host_registration.sql',
+    'migrations/031_realtime_sends_and_log.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
