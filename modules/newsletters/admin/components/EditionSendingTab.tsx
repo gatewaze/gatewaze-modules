@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   PaperAirplaneIcon,
   ClockIcon,
@@ -124,15 +124,74 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
 
   useEffect(() => { loadSendLog(); }, [loadSendLog]);
 
-  // Poll sends and delivery log
-  // Fast polling (3s) during active sends, slower (15s) for completed sends to catch webhook updates
+  // Live updates via Supabase Realtime — replaces the previous polling
+  // loop. Subscribes to:
+  //   • newsletter_sends rows for this edition (status / counters change
+  //     as the send worker progresses)
+  //   • email_send_log rows for the currently-selected send (per-recipient
+  //     state transitions driven by the email-webhook function:
+  //     delivered → opened → clicked, bounced, failed)
+  // Both tables were added to the supabase_realtime publication in
+  // newsletters migration 030 (newsletter sends + send-log realtime).
+  // RLS still applies; the operator's session is exactly the same one
+  // the SELECTs above use, so visibility matches.
+  //
+  // Sends-channel handler applies the change in place so we don't lose
+  // selectedSendId on every tick. Log handler appends INSERTs and
+  // patches UPDATEs by id (sendgrid webhook updates the same row
+  // multiple times as state advances).
+  const editionIdRef = useRef(editionId);
+  editionIdRef.current = editionId;
   useEffect(() => {
-    if (!selectedSendId && sends.length === 0) return;
-    const isActiveSend = sends.some(s => s.status === 'sending' || s.status === 'scheduled');
-    const pollInterval = isActiveSend ? 3000 : 15000;
-    const interval = setInterval(() => { loadSends(); loadSendLog(); }, pollInterval);
-    return () => clearInterval(interval);
-  }, [sends, selectedSendId, loadSends, loadSendLog]);
+    if (editionId === 'new') return;
+    const channel = supabase
+      .channel(`newsletter-sends:${editionId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'newsletter_sends', filter: `edition_id=eq.${editionId}` },
+        (payload) => {
+          if (editionIdRef.current !== editionId) return;
+          if (payload.eventType === 'INSERT') {
+            const row = payload.new as SendRecord;
+            setSends((prev) => (prev.some((s) => s.id === row.id) ? prev : [row, ...prev]));
+            // Auto-select the new send if nothing's selected yet.
+            setSelectedSendId((cur) => cur ?? row.id);
+          } else if (payload.eventType === 'UPDATE') {
+            const row = payload.new as SendRecord;
+            setSends((prev) => prev.map((s) => (s.id === row.id ? { ...s, ...row } : s)));
+          } else if (payload.eventType === 'DELETE') {
+            const row = payload.old as { id: string };
+            setSends((prev) => prev.filter((s) => s.id !== row.id));
+          }
+        },
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [editionId]);
+
+  useEffect(() => {
+    if (!selectedSendId) return;
+    const channel = supabase
+      .channel(`email-send-log:${selectedSendId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'email_send_log', filter: `newsletter_send_id=eq.${selectedSendId}` },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const row = payload.new as SendLogEntry;
+            setSendLog((prev) => (prev.some((e) => e.id === row.id) ? prev : [...prev, row]));
+          } else if (payload.eventType === 'UPDATE') {
+            const row = payload.new as SendLogEntry;
+            setSendLog((prev) => prev.map((e) => (e.id === row.id ? { ...e, ...row } : e)));
+          } else if (payload.eventType === 'DELETE') {
+            const row = payload.old as { id: string };
+            setSendLog((prev) => prev.filter((e) => e.id !== row.id));
+          }
+        },
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [selectedSendId]);
 
   const handleSend = async () => {
     if (editionId === 'new') {
