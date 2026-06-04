@@ -9,13 +9,13 @@
 -- The `0` value previously used for "blocked pre-fetch" is removed —
 -- 403 + blocked_stage is the canonical encoding now.
 
-create table if not exists fetch.audit_log (
+create table if not exists gw_fetch.audit_log (
   request_id text primary key,                    -- ULID; matches X-Request-Id
   -- ON DELETE SET NULL: defensive measure for the rare case a superuser
   -- bypasses the admin API and forces a hard-delete via direct SQL.
   api_key_id uuid references public.api_keys(id) on delete set null,
   -- ULID; nullable for blocked-pre-debit rows (domain/robots/quota
-  -- blocks). FK to fetch.usage_ledger(id) is added in migration 005
+  -- blocks). FK to gw_fetch.usage_ledger(id) is added in migration 005
   -- (forward dep — 005 runs after 003).
   debit_id text,
   fetched_at timestamptz not null default now(),
@@ -66,20 +66,20 @@ create table if not exists fetch.audit_log (
 );
 
 create index if not exists idx_fetch_audit_key_time
-  on fetch.audit_log (api_key_id, fetched_at desc);
+  on gw_fetch.audit_log (api_key_id, fetched_at desc);
 create index if not exists idx_fetch_audit_host
-  on fetch.audit_log (url_host, fetched_at desc);
+  on gw_fetch.audit_log (url_host, fetched_at desc);
 create index if not exists idx_fetch_audit_robots_bypass
-  on fetch.audit_log (api_key_id, fetched_at desc)
+  on gw_fetch.audit_log (api_key_id, fetched_at desc)
   where ignored_robots = true;
 create index if not exists idx_fetch_audit_blocked
-  on fetch.audit_log (api_key_id, fetched_at desc)
+  on gw_fetch.audit_log (api_key_id, fetched_at desc)
   where blocked_by is not null;
 
 -- Retention contract (§11.3 retention sub-section).
 -- Default 90 days; pruned by either the platform `data-retention` job
 -- or this local fallback function called by pg_cron / systemd timer.
-create or replace function fetch.prune_audit_log(
+create or replace function gw_fetch.prune_audit_log(
   retention_days int,
   batch_size int default 5000
 ) returns int
@@ -90,13 +90,13 @@ declare
 begin
   loop
     with victims as (
-      select request_id from fetch.audit_log
+      select request_id from gw_fetch.audit_log
        where fetched_at < now() - make_interval(days => retention_days)
        order by fetched_at
        limit batch_size
        for update skip locked
     )
-    delete from fetch.audit_log a
+    delete from gw_fetch.audit_log a
      using victims v
      where a.request_id = v.request_id;
     get diagnostics rows_this_batch = row_count;

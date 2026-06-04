@@ -36,6 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_integrations_luma_calendar_members_email ON publi
 
 COMMENT ON TABLE public.integrations_luma_calendar_members IS 'Stores Luma calendar member data from CSV uploads';
 
+DROP TRIGGER IF EXISTS integrations_luma_calendar_members_updated_at ON public.integrations_luma_calendar_members;
 CREATE TRIGGER integrations_luma_calendar_members_updated_at
   BEFORE UPDATE ON public.integrations_luma_calendar_members
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -84,6 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_integrations_luma_event_registrations_status ON p
 
 COMMENT ON TABLE public.integrations_luma_event_registrations IS 'Stores Luma event guest data from CSV uploads';
 
+DROP TRIGGER IF EXISTS integrations_luma_event_registrations_updated_at ON public.integrations_luma_event_registrations;
 CREATE TRIGGER integrations_luma_event_registrations_updated_at
   BEFORE UPDATE ON public.integrations_luma_event_registrations
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -122,6 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_integrations_luma_pending_registrations_status ON
 
 COMMENT ON TABLE public.integrations_luma_pending_registrations IS 'Queues Luma registration notifications until user identity can be resolved';
 
+DROP TRIGGER IF EXISTS integrations_luma_pending_registrations_updated_at ON public.integrations_luma_pending_registrations;
 CREATE TRIGGER integrations_luma_pending_registrations_updated_at
   BEFORE UPDATE ON public.integrations_luma_pending_registrations
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -168,6 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_integrations_luma_csv_uploads_status ON public.in
 
 COMMENT ON TABLE public.integrations_luma_csv_uploads IS 'Tracks Luma CSV uploads for background processing';
 
+DROP TRIGGER IF EXISTS integrations_luma_csv_uploads_updated_at ON public.integrations_luma_csv_uploads;
 CREATE TRIGGER integrations_luma_csv_uploads_updated_at
   BEFORE UPDATE ON public.integrations_luma_csv_uploads
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();

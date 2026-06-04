@@ -118,7 +118,7 @@ interface CacheRow {
 async function readCache(db: DbClient, origin: string): Promise<CacheRow | null> {
   const r = await db.query(
     `select origin, fetched_at, expires_at, status, body, parse_error
-       from fetch.robots_cache where origin = $1`,
+       from gw_fetch.robots_cache where origin = $1`,
     [origin],
   );
   return (r.rows[0] as CacheRow | undefined) ?? null;
@@ -135,7 +135,7 @@ async function writeCache(
   const now = new Date();
   const expires = new Date(now.getTime() + ttlMs);
   await db.query(
-    `insert into fetch.robots_cache (origin, fetched_at, expires_at, status, body, parse_error)
+    `insert into gw_fetch.robots_cache (origin, fetched_at, expires_at, status, body, parse_error)
      values ($1, $2, $3, $4, $5, $6)
      on conflict (origin) do update set
        fetched_at = excluded.fetched_at,
@@ -155,7 +155,7 @@ async function writeCache(
 export async function getOriginVersion(db: DbClient, origin: string): Promise<number> {
   const r = await db.query(
     `select extract(epoch from fetched_at)::bigint as v
-       from fetch.robots_cache where origin = $1`,
+       from gw_fetch.robots_cache where origin = $1`,
     [origin],
   );
   const row = r.rows[0] as { v: number } | undefined;

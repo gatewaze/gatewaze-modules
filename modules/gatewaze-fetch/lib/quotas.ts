@@ -3,7 +3,7 @@
  *
  * Phase 1 (pre-debit): atomic UPDATE … RETURNING with bounded estimates
  *   for `requests` (always +1) and `browser_seconds_estimate` (60s for
- *   browser mode, 0 otherwise). Proxy bytes are NOT bounded pre-fetch.
+ *   browser mode, 0 otherwise). Proxy bytes are NOT bounded pre-gw_fetch.
  *
  * Phase 2 (post-reconcile): apply actual values; if exceeds limit, the
  *   request still completes (work was done) but the key is marked
@@ -80,7 +80,7 @@ export function buildDebitSql(
     -- Lazy-create the quota row if absent. Uses the CALLER-supplied
     -- limits rather than reading defaults from a config table — caller
     -- is the public-API handler which already has settings in memory.
-    insert into fetch.quotas (
+    insert into gw_fetch.quotas (
       api_key_id, period_start, period_end,
       requests_limit, requests_used,
       browser_seconds_limit, browser_seconds_used,
@@ -91,7 +91,7 @@ export function buildDebitSql(
 
     -- Atomic debit + period roll-forward. The CASE rolls the period if
     -- the existing row is for an older month.
-    update fetch.quotas
+    update gw_fetch.quotas
        set requests_used = (case
              when period_end <= $2 then 1
              else requests_used + 1
@@ -148,7 +148,7 @@ export function buildReconcileSql(
 ): { sql: string; values: unknown[] } {
   return {
     sql: `
-      update fetch.quotas
+      update gw_fetch.quotas
          set browser_seconds_used = browser_seconds_used + $2::numeric,
              proxy_bytes_used     = proxy_bytes_used + $3::bigint,
              updated_at = now()
@@ -174,7 +174,7 @@ export function buildQuotaReadSql(apiKeyId: string): {
              requests_limit, requests_used,
              browser_seconds_limit, browser_seconds_used,
              proxy_bytes_limit, proxy_bytes_used
-        from fetch.quotas
+        from gw_fetch.quotas
        where api_key_id = $1;
     `,
     values: [apiKeyId],

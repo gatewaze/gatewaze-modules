@@ -16,7 +16,7 @@ Every request is authenticated by a platform API key whose scopes gate what it c
 4. **Circuit breaker** — if the upstream is unhealthy, returns `503` with `Retry-After` (`lib/circuitBreaker.ts`).
 5. **Idempotency** — an `Idempotency-Key` header within the TTL window replays the prior response without re-billing (`lib/idempotency.ts`).
 6. **Domain governance** — instance and per-key allow/deny lists are evaluated against the requested host (`lib/domains.ts`).
-7. **robots.txt** — unless `ignore_robots` (and the scope) is set, robots.txt is fetched through the same backend and cached (`lib/robots.ts`, `fetch.robots_cache`).
+7. **robots.txt** — unless `ignore_robots` (and the scope) is set, robots.txt is fetched through the same backend and cached (`lib/robots.ts`, `gw_fetch.robots_cache`).
 8. **Debit + audit-start** — quota is debited, a ledger debit row and an audit row are written in one step (`lib/db.ts`, `lib/ledger.ts`).
 9. **Upstream fetch** — the backend renders/scrapes the page; success/failure feeds the circuit breaker.
 10. **Reconcile** — actual browser-seconds and proxy-bytes are reconciled against the reservation in the ledger.
@@ -30,7 +30,7 @@ Refunds are issued automatically when an upstream call is retryable, the media t
 
 | Endpoint | Scope | Notes |
 |---|---|---|
-| `POST /api/v1/fetch` | `read` | Core fetch. `mode: fast` default; `stealth`/`browser` and `screenshot` need extra scopes. |
+| `POST /api/v1/fetch` | `read` | Core gw_fetch. `mode: fast` default; `stealth`/`browser` and `screenshot` need extra scopes. |
 | `POST /api/v1/fetch/screenshot` | `screenshot` | Convenience wrapper; forces `mode: browser` and reshapes into the canonical fetch body. |
 | `GET /api/v1/fetch/quota` | `read` | Current monthly quota state (requests, browser-minutes, proxy-GB) and per-minute rate cap. |
 | `GET /api/v1/fetch/audit` | `read` | Tenant-scoped audit log; filterable by host, mode, blocked-reason, error class, and time range. |
@@ -41,11 +41,11 @@ MCP tool output is truncated at 256 KiB; agents are directed to the REST endpoin
 
 | Table | Purpose |
 |---|---|
-| `fetch.quotas` | Fast per-key monthly counter used for rate-limit decisions. |
-| `fetch.instance_domain_rules` / `fetch.key_domain_rules` | Allow/deny patterns at instance and per-key scope. A monotonic `domain_rules_version` feeds the idempotency cache key so rule changes invalidate cached responses. The instance denylist is seeded with loopback, link-local, mDNS, and cloud-metadata hosts. |
-| `fetch.audit_log` | One row per request with blocked-reason, stage, byte/timing counters, and error class. |
-| `fetch.robots_cache` | Parsed robots.txt per origin with a configurable TTL. |
-| `fetch.usage_ledger` | Append-only billing source of truth (`debit` / `reconcile` / `refund` / `adjustment`). Update/delete are revoked from app roles; `(request_id, kind)` is unique to prevent double-refunds. |
+| `gw_fetch.quotas` | Fast per-key monthly counter used for rate-limit decisions. |
+| `gw_fetch.instance_domain_rules` / `gw_fetch.key_domain_rules` | Allow/deny patterns at instance and per-key scope. A monotonic `domain_rules_version` feeds the idempotency cache key so rule changes invalidate cached responses. The instance denylist is seeded with loopback, link-local, mDNS, and cloud-metadata hosts. |
+| `gw_fetch.audit_log` | One row per request with blocked-reason, stage, byte/timing counters, and error class. |
+| `gw_fetch.robots_cache` | Parsed robots.txt per origin with a configurable TTL. |
+| `gw_fetch.usage_ledger` | Append-only billing source of truth (`debit` / `reconcile` / `refund` / `adjustment`). Update/delete are revoked from app roles; `(request_id, kind)` is unique to prevent double-refunds. |
 
 ## Configuration
 
