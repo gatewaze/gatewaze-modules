@@ -85,93 +85,66 @@ export default function NewsletterListingPage() {
     load()
   }, [])
 
+  // White-label: workspace-shell pub-* design system; renders inside the shell content area.
   if (loading) {
     return (
-      <main className="relative z-10">
-        <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-          <h1 className="text-3xl sm:text-4xl font-bold text-white mb-8">Newsletters</h1>
-          <div className="flex justify-center py-12">
-            <div className="animate-spin w-6 h-6 border-2 border-white/30 border-t-white rounded-full" />
-          </div>
-        </div>
-      </main>
+      <div className="pub-wrap">
+        <div className="pub-h"><h1>Newsletters</h1></div>
+        <div className="pub-empty">Loading…</div>
+      </div>
     )
   }
 
   if (data.length === 0) {
     return (
-      <main className="relative z-10">
-        <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-          <h1 className="text-3xl sm:text-4xl font-bold text-white mb-8">Newsletters</h1>
-          <p className="text-white/60 text-center py-12">No newsletters available yet.</p>
-        </div>
-      </main>
+      <div className="pub-wrap">
+        <div className="pub-h"><h1>Newsletters</h1></div>
+        <div className="pub-empty">No newsletters available yet.</div>
+      </div>
     )
   }
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <h1 className="text-3xl sm:text-4xl font-bold text-white mb-8">Newsletters</h1>
-
-        <div className="space-y-16">
-          {data.map(({ newsletter, editions }) => (
-            <section key={newsletter.id}>
-              <div className="flex items-center gap-3 mb-6">
-                <div
-                  className="w-1 h-8 rounded-full"
-                  style={{ backgroundColor: newsletter.accent_color || '#00a2c7' }}
-                />
-                <div>
-                  <h2 className="text-xl sm:text-2xl font-bold text-white">{newsletter.name}</h2>
-                  {newsletter.description && (
-                    <p className="text-white/60 text-base mt-0.5">{newsletter.description}</p>
-                  )}
-                </div>
-                {newsletter.require_login && (
-                  <span className="text-base font-medium px-3 py-1 rounded-full bg-white/10 text-white/70">
-                    Subscribers only
-                  </span>
-                )}
-                {newsletter.content_category && (
-                  <span
-                    className="text-base font-medium px-3 py-1 rounded-full"
-                    style={{
-                      backgroundColor: (newsletter.accent_color || '#00a2c7') + '33',
-                      color: newsletter.accent_color || '#00a2c7',
-                    }}
-                  >
-                    {newsletter.content_category}
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {editions.map((edition) => (
-                  <Link
-                    key={edition.id}
-                    href={`/newsletters/${newsletter.slug}--${edition.edition_date}`}
-                    className="group block"
-                  >
-                    <div
-                      className="relative bg-white/5 rounded-xl border border-white/10 overflow-hidden hover:bg-white/10 hover:border-white/20 transition-all duration-200 p-5"
-                      style={{ borderTopColor: newsletter.accent_color || '#00a2c7', borderTopWidth: '3px' }}
-                    >
-                      <div className="text-white/50 text-base mb-2">{formatDate(edition.edition_date)}</div>
-                      <h3 className="text-white font-semibold text-lg group-hover:text-white/90 transition-colors line-clamp-2">
-                        {edition.title || 'Untitled Edition'}
-                      </h3>
-                      {edition.preheader && (
-                        <p className="text-white/60 text-base mt-2 line-clamp-2">{edition.preheader}</p>
-                      )}
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
+    <div className="pub-wrap pub-fade">
+      <div className="pub-h">
+        <h1>Newsletters</h1>
+        <p>Subscribe to our editions and read the latest issues.</p>
       </div>
-    </main>
+
+      {data.map(({ newsletter, editions }) => (
+        <section key={newsletter.id} className="pub-sec">
+          <div className="pub-nl-head">
+            <span className="pub-nl-bar" style={{ background: newsletter.accent_color || 'var(--accent)' }} />
+            <div className="grow">
+              <h2 className="pub-nl-name">{newsletter.name}</h2>
+              {newsletter.description && <p className="pub-nl-desc">{newsletter.description}</p>}
+            </div>
+            {newsletter.require_login && <span className="pub-cat">Subscribers only</span>}
+            {newsletter.content_category && (
+              <span className="pub-cat" style={newsletter.accent_color ? { color: newsletter.accent_color } : undefined}>
+                {newsletter.content_category}
+              </span>
+            )}
+          </div>
+
+          <div className="pub-grid">
+            {editions.map((edition) => (
+              <Link
+                key={edition.id}
+                href={`/newsletters/${newsletter.slug}--${edition.edition_date}`}
+                className="pub-card"
+                style={{ borderTop: `3px solid ${newsletter.accent_color || 'var(--accent)'}` }}
+              >
+                <div className="pub-card-body" style={{ padding: '4px 6px' }}>
+                  <div className="pub-meta" style={{ marginTop: 0 }}>{formatDate(edition.edition_date)}</div>
+                  <h3>{edition.title || 'Untitled Edition'}</h3>
+                  {edition.preheader && <p>{edition.preheader}</p>}
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
   )
 }
