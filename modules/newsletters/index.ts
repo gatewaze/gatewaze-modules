@@ -176,6 +176,12 @@ const newslettersModule: GatewazeModule = {
     icon: 'newspaper',
     order: 30,
   },
+  // Workspace-shell rail item (spec-portal-workspace-shell.md §8). Public top-level module.
+  portalShell: {
+    rail: { label: 'News', full: 'Newsletters', icon: 'msg', order: 30, visibility: 'public' },
+    nav: [],
+    publicNav: [],
+  },
 
   portalRoutes: [
     { path: '/newsletters', component: () => import('./portal/pages/index') },
