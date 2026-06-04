@@ -317,6 +317,33 @@ export default function EditionEditorPage() {
         bricksData = bricks || [];
       }
 
+      // loadTemplates already adapts flat DB rows (`schema`, `html`,
+      // `has_bricks`) into the canvas-facing `.content` nested shape.
+      // The edition's joined `block_template` / `brick_template` come
+      // out of `select('*, block_template:templates_block_defs!…(…)')`
+      // with the same flat columns and need the same adaptation —
+      // otherwise editionToPuckData throws on
+      // `b.block_template.content.has_bricks` (undefined.has_bricks)
+      // the moment an edition has at least one saved block. The
+      // loadTemplates fix (f800d20) missed this twin call site.
+      const adaptBlockTemplate = (r: DbBlockTemplate): BlockTemplate => ({
+        ...r,
+        content: {
+          html_template: r.html ?? '',
+          rich_text_template: r.rich_text_template ?? null,
+          has_bricks: r.has_bricks ?? false,
+          schema: r.schema ?? {},
+        },
+      } as unknown as BlockTemplate);
+      const adaptBrickTemplate = (r: DbBrickTemplate): BrickTemplate => ({
+        ...r,
+        content: {
+          html_template: r.html ?? '',
+          rich_text_template: r.rich_text_template ?? null,
+          schema: r.schema ?? {},
+        },
+      } as unknown as BrickTemplate);
+
       setEdition({
         id: editionData.id,
         edition_date: editionData.edition_date,
@@ -332,19 +359,21 @@ export default function EditionEditorPage() {
           // recognises it as a registry block. The downstream Puck
           // adapter looks up `block_type` (= the registry componentId)
           // against the registry to mount the right JSX component.
-          block_template: block.block_template ?? {
-            id: '',
-            name: block.block_type,
-            block_type: block.block_type,
-            content: { html_template: '', schema: {}, has_bricks: false },
-          },
+          block_template: block.block_template
+            ? adaptBlockTemplate(block.block_template)
+            : {
+                id: '',
+                name: block.block_type,
+                block_type: block.block_type,
+                content: { html_template: '', schema: {}, has_bricks: false },
+              },
           content: block.content || {},
           sort_order: block.sort_order,
           bricks: bricksData
             .filter((brick: DbEditionBrick) => brick.block_id === block.id)
             .map((brick: DbEditionBrick) => ({
               id: brick.id,
-              brick_template: brick.brick_template,
+              brick_template: brick.brick_template ? adaptBrickTemplate(brick.brick_template) : brick.brick_template,
               content: brick.content || {},
               sort_order: brick.sort_order,
             })),
