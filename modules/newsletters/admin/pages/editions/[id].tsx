@@ -6,7 +6,6 @@ import {
   PaperAirplaneIcon,
   RectangleGroupIcon,
   DocumentTextIcon,
-  PhotoIcon,
   DocumentArrowDownIcon,
   ChatBubbleLeftRightIcon,
   ChartBarIcon,
@@ -576,7 +575,6 @@ export default function EditionEditorPage() {
     { id: 'details', label: 'Details', icon: <Cog6ToothIcon className={ic} /> },
     { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
     { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
-    { id: 'media', label: 'Media', icon: <PhotoIcon className={ic} /> },
     { id: 'import', label: 'Import', icon: <DocumentArrowDownIcon className={ic} /> },
     ...(hasBulkEmailing
       ? [
