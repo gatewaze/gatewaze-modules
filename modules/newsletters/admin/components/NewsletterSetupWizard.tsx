@@ -189,8 +189,11 @@ export default function NewsletterSetupWizard({ isOpen = true, onClose }: Wizard
       try {
         const { data: sessionData } = await supabase.auth.getSession();
         const token = sessionData.session?.access_token;
+        // Use VITE_API_URL — admin nginx doesn't proxy /api. See
+        // DeleteNewsletterCard for the same reasoning.
+        const apiUrl = import.meta.env.VITE_API_URL ?? '';
         const initRes = await fetch(
-          `/api/admin/newsletters/collections/${newsletter.id}/init-repo`,
+          `${apiUrl}/api/admin/newsletters/collections/${newsletter.id}/init-repo`,
           {
             method: 'POST',
             credentials: 'include',
