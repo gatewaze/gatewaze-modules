@@ -6,7 +6,7 @@
 -- CHECK would either be incomplete (allowing subtle bypasses) or duplicate
 -- the application logic.
 
-create table if not exists fetch.robots_cache (
+create table if not exists gw_fetch.robots_cache (
   origin text primary key,                        -- normalized "scheme://host[:port]"
   fetched_at timestamptz not null,
   expires_at timestamptz not null,
@@ -16,4 +16,4 @@ create table if not exists fetch.robots_cache (
 );
 
 create index if not exists idx_fetch_robots_expires
-  on fetch.robots_cache (expires_at);
+  on gw_fetch.robots_cache (expires_at);

@@ -2,10 +2,10 @@
  * MCP tool contributions (spec §6).
  *
  * Tools registered:
- *   fetch.fetch_url       — mirror of POST /api/v1/fetch
- *   fetch.extract_content — convenience: fetch + markdown + json_ld
- *   fetch.screenshot      — mirror of POST /api/v1/fetch/screenshot
- *   fetch.get_quota       — mirror of GET /api/v1/fetch/quota
+ *   gw_fetch.fetch_url       — mirror of POST /api/v1/fetch
+ *   gw_fetch.extract_content — convenience: fetch + markdown + json_ld
+ *   gw_fetch.screenshot      — mirror of POST /api/v1/fetch/screenshot
+ *   gw_fetch.get_quota       — mirror of GET /api/v1/fetch/quota
  *
  * Implementation: each handler makes an HTTP call to the Gatewaze
  * public API using the X-API-Key resolved from one of two sources:
@@ -112,7 +112,7 @@ export function buildMcpContributions(_ctx: ModuleRuntimeContext): McpContributi
         name: 'fetch_url',
         title: 'Fetch a URL',
         description:
-          'Fetch a single URL and return its content as markdown plus structured metadata. Defaults to a fast HTTP fetch with no JavaScript rendering — pass mode: "browser" only when the page requires JS to render. Requires the gatewaze-fetch:read scope; mode: "browser" additionally requires gatewaze-fetch:browser. Robots.txt is obeyed by default. Best for: reading articles, checking page metadata, scraping non-JS sites. Use fetch.screenshot if you need a rendered image. For pages above ~256 KiB of content, the response will be truncated; in that case, call the equivalent REST endpoint POST /api/v1/fetch with response_storage: "signed_url" and read the full body from the signed URL.',
+          'Fetch a single URL and return its content as markdown plus structured metadata. Defaults to a fast HTTP fetch with no JavaScript rendering — pass mode: "browser" only when the page requires JS to render. Requires the gatewaze-fetch:read scope; mode: "browser" additionally requires gatewaze-fetch:browser. Robots.txt is obeyed by default. Best for: reading articles, checking page metadata, scraping non-JS sites. Use gw_fetch.screenshot if you need a rendered image. For pages above ~256 KiB of content, the response will be truncated; in that case, call the equivalent REST endpoint POST /api/v1/fetch with response_storage: "signed_url" and read the full body from the signed URL.',
         inputSchema: z.object({
           url: z.string().url(),
           mode: z.enum(['fast', 'stealth', 'browser']).default('fast'),
@@ -153,7 +153,7 @@ export function buildMcpContributions(_ctx: ModuleRuntimeContext): McpContributi
         name: 'extract_content',
         title: 'Fetch and extract structured content',
         description:
-          'Fetch a URL and return its content with markdown, metadata, and JSON-LD extraction applied. Equivalent to fetch.fetch_url with mode: "fast" and extract: ["markdown","metadata","json_ld"]. Requires the gatewaze-fetch:read and gatewaze-fetch:extract scopes.',
+          'Fetch a URL and return its content with markdown, metadata, and JSON-LD extraction applied. Equivalent to gw_fetch.fetch_url with mode: "fast" and extract: ["markdown","metadata","json_ld"]. Requires the gatewaze-fetch:read and gatewaze-fetch:extract scopes.',
         inputSchema: z.object({
           url: z.string().url(),
           timeout_ms: z.number().int().min(1000).max(60000).default(30000),

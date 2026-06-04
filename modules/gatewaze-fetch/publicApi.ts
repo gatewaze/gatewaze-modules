@@ -191,7 +191,7 @@ export async function registerPublicApiRoutes(
     if (breaker.isOpen()) {
       const retryAfter = breaker.retryAfterSeconds();
       res.setHeader('Retry-After', String(retryAfter));
-      ctx.logger.warn('fetch.circuit_open_reject', {
+      ctx.logger.warn('gw_fetch.circuit_open_reject', {
         request_id: requestId,
         api_key_prefix: apiKey.prefix,
         url_host: url.host,
@@ -1018,7 +1018,7 @@ function makeDbAdapter(
       // Branch on the SQL fragment we know we get from the helpers.
       // This is a Phase 2 pragmatic compromise — Phase 3 will route
       // these through dedicated supabase.rpc() functions.
-      if (sql.includes('from fetch.robots_cache') && sql.startsWith('\n      select')) {
+      if (sql.includes('from gw_fetch.robots_cache') && sql.startsWith('\n      select')) {
         const origin = values![0] as string;
         const { data } = await supabase
           .schema('fetch')
@@ -1028,7 +1028,7 @@ function makeDbAdapter(
           .maybeSingle();
         return { rows: data ? [data] : [] };
       }
-      if (sql.includes('insert into fetch.robots_cache')) {
+      if (sql.includes('insert into gw_fetch.robots_cache')) {
         const [origin, fetchedAt, expiresAt, status, body, parseError] = values as [
           string, Date, Date, number, string, string | null,
         ];
@@ -1057,7 +1057,7 @@ function makeDbAdapter(
         const v = Math.floor(new Date((data as { fetched_at: string }).fetched_at).getTime() / 1000);
         return { rows: [{ v }] };
       }
-      if (sql.includes('insert into fetch.usage_ledger') && sql.includes("'refund'")) {
+      if (sql.includes('insert into gw_fetch.usage_ledger') && sql.includes("'refund'")) {
         const [id, requestId, apiKeyId, costDelta, reason] = values as [
           string, string, string, number, string,
         ];
@@ -1075,7 +1075,7 @@ function makeDbAdapter(
         );
         return { rows: [] };
       }
-      if (sql.includes('update fetch.quotas set requests_used')) {
+      if (sql.includes('update gw_fetch.quotas set requests_used')) {
         const apiKeyId = values![0] as string;
         const { data: cur } = await supabase
           .schema('fetch')

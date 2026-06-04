@@ -8,9 +8,9 @@
 -- platform module contract does not allow modules to install triggers
 -- on platform tables.
 
-create schema if not exists fetch;
+create schema if not exists gw_fetch;
 
-create table if not exists fetch.quotas (
+create table if not exists gw_fetch.quotas (
   -- ON DELETE RESTRICT (default) matches the soft-delete-only policy
   -- for keys with usage history (§11.3). Hard-delete of a key with
   -- ledger rows is rejected by the platform admin API.
@@ -30,9 +30,9 @@ create table if not exists fetch.quotas (
 -- (now()) in partial-index predicates; even where allowed the predicate's
 -- truthiness drifts with wall clock. Filter "active period" in the query.
 create index if not exists idx_fetch_quotas_period_end
-  on fetch.quotas (period_end);
+  on gw_fetch.quotas (period_end);
 
-create table if not exists fetch.quota_drift_alerts (
+create table if not exists gw_fetch.quota_drift_alerts (
   id uuid primary key default gen_random_uuid(),
   detected_at timestamptz not null default now(),
   api_key_id uuid not null references public.api_keys(id) on delete cascade,
@@ -44,5 +44,5 @@ create table if not exists fetch.quota_drift_alerts (
 );
 
 create index if not exists idx_fetch_quota_drift_unnotified
-  on fetch.quota_drift_alerts (detected_at desc)
+  on gw_fetch.quota_drift_alerts (detected_at desc)
   where notified = false;

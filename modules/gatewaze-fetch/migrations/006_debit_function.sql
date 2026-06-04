@@ -5,7 +5,7 @@
 -- run a transaction correctly. Returns either the committed debit_id or
 -- a sentinel indicating which dimension failed.
 
-create or replace function fetch.debit_and_start(
+create or replace function gw_fetch.debit_and_start(
   p_api_key_id    uuid,
   p_request_id    text,
   p_debit_id      text,
@@ -36,7 +36,7 @@ begin
   v_period_end   := (date_trunc('month', v_now at time zone 'UTC') + interval '1 month') at time zone 'UTC';
 
   -- Lazy-create row if absent.
-  insert into fetch.quotas (
+  insert into gw_fetch.quotas (
     api_key_id, period_start, period_end,
     requests_limit, browser_seconds_limit, proxy_bytes_limit,
     requests_used, browser_seconds_used, proxy_bytes_used,
@@ -50,10 +50,10 @@ begin
 
   -- Roll the period if the row is for an older calendar month.
   select period_end into v_existing_period_end
-    from fetch.quotas where api_key_id = p_api_key_id
+    from gw_fetch.quotas where api_key_id = p_api_key_id
     for update;
   if v_existing_period_end <= v_now then
-    update fetch.quotas
+    update gw_fetch.quotas
        set period_start = v_period_start,
            period_end   = v_period_end,
            requests_used = 0,
@@ -68,7 +68,7 @@ begin
 
   -- Atomic debit guarded by request and browser-seconds bounds.
   -- Proxy bytes are NOT pre-bounded (estimate is 0; reconciled later).
-  update fetch.quotas
+  update gw_fetch.quotas
      set requests_used = requests_used + 1,
          browser_seconds_used = browser_seconds_used + p_browser_seconds_estimate,
          updated_at = v_now
@@ -89,7 +89,7 @@ begin
       select requests_used, requests_limit,
              browser_seconds_used, browser_seconds_limit
         into v_req_used, v_req_limit, v_bs_used, v_bs_limit
-        from fetch.quotas where api_key_id = p_api_key_id;
+        from gw_fetch.quotas where api_key_id = p_api_key_id;
       if v_req_used + 1 > v_req_limit then
         v_dim := 'requests';
       elsif v_bs_used + p_browser_seconds_estimate > v_bs_limit then
@@ -102,7 +102,7 @@ begin
   end if;
 
   -- Insert the kind='debit' ledger row.
-  insert into fetch.usage_ledger (
+  insert into gw_fetch.usage_ledger (
     id, request_id, api_key_id, kind,
     request_count_delta, browser_seconds_delta, proxy_bytes_delta,
     cost_usd_estimate_delta, reason
@@ -113,7 +113,7 @@ begin
   );
 
   -- Insert the audit "started" row in the same transaction.
-  insert into fetch.audit_log (
+  insert into gw_fetch.audit_log (
     request_id, api_key_id, debit_id, fetched_at, surface,
     requested_url, url_host, mode, status,
     ignored_robots, user_agent_used, truncated_request
@@ -131,7 +131,7 @@ end $$;
 -- calls inherit the caller's privileges, but the function itself
 -- encapsulates the multi-table writes that would otherwise need to
 -- be threaded through a transactional client.
-grant execute on function fetch.debit_and_start(
+grant execute on function gw_fetch.debit_and_start(
   uuid, text, text, text, text, text, text, boolean,
   text, jsonb, integer, numeric, bigint, numeric, numeric
 ) to public;

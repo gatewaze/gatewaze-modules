@@ -1,6 +1,6 @@
 -- gatewaze-fetch — append-only usage ledger (spec §11.4 + §12.2.1).
 --
--- The ledger is the BILLING SOURCE OF TRUTH. The fetch.quotas counter is
+-- The ledger is the BILLING SOURCE OF TRUTH. The gw_fetch.quotas counter is
 -- a fast cache for rate-limit decisions; the ledger is what's exported
 -- for invoicing.
 --
@@ -17,9 +17,9 @@
 --                     cost_usd_estimate_delta = -(per-request component)
 --   kind='adjustment' operator-set values
 
-create table if not exists fetch.usage_ledger (
+create table if not exists gw_fetch.usage_ledger (
   id text primary key,                            -- ULID = debit_id (for kind='debit')
-  request_id text not null,                       -- joins to fetch.audit_log
+  request_id text not null,                       -- joins to gw_fetch.audit_log
   -- NOT NULL with default RESTRICT semantics: the FK blocks any
   -- hard-delete that would orphan ledger rows. This is the
   -- load-bearing referential-integrity guard for billing history
@@ -36,9 +36,9 @@ create table if not exists fetch.usage_ledger (
 );
 
 create index if not exists idx_fetch_ledger_key_time
-  on fetch.usage_ledger (api_key_id, occurred_at desc);
+  on gw_fetch.usage_ledger (api_key_id, occurred_at desc);
 create index if not exists idx_fetch_ledger_request
-  on fetch.usage_ledger (request_id);
+  on gw_fetch.usage_ledger (request_id);
 
 -- Now that the ledger exists, complete the audit_log.debit_id FK.
 -- (Deferred from migration 003 because audit_log is created before the
@@ -48,12 +48,12 @@ begin
   if not exists (
     select 1 from pg_constraint
      where conname = 'fk_fetch_audit_debit'
-       and conrelid = 'fetch.audit_log'::regclass
+       and conrelid = 'gw_fetch.audit_log'::regclass
   ) then
-    alter table fetch.audit_log
+    alter table gw_fetch.audit_log
       add constraint fk_fetch_audit_debit
       foreign key (debit_id)
-      references fetch.usage_ledger(id)
+      references gw_fetch.usage_ledger(id)
       on delete set null;
   end if;
 end $$;
@@ -75,7 +75,7 @@ begin
     loop
       r := btrim(r);
       if r <> '' then
-        execute format('revoke update, delete on fetch.usage_ledger from %I', r);
+        execute format('revoke update, delete on gw_fetch.usage_ledger from %I', r);
       end if;
     end loop;
   end if;
@@ -87,13 +87,13 @@ end $$;
 do $$
 begin
   begin
-    revoke update, delete on fetch.usage_ledger from authenticated;
+    revoke update, delete on gw_fetch.usage_ledger from authenticated;
   exception when undefined_object then
     -- role doesn't exist; skip
     null;
   end;
   begin
-    revoke update, delete on fetch.usage_ledger from anon;
+    revoke update, delete on gw_fetch.usage_ledger from anon;
   exception when undefined_object then
     null;
   end;

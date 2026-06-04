@@ -9,11 +9,11 @@
 --   3. Returns the count of rows recovered.
 --
 -- Operators schedule this with pg_cron (cloud Supabase) or a systemd
--- timer (self-host) calling SELECT fetch.recover_stuck_started(); —
+-- timer (self-host) calling SELECT gw_fetch.recover_stuck_started(); —
 -- typical schedule: hourly. The 1-hour floor on fetched_at avoids
 -- racing legitimately long browser fetches.
 
-create or replace function fetch.recover_stuck_started(
+create or replace function gw_fetch.recover_stuck_started(
   recovery_age_seconds int default 3600
 ) returns int
 language plpgsql as $$
@@ -24,7 +24,7 @@ declare
 begin
   for victim in
     select request_id, api_key_id, debit_id, mode
-      from fetch.audit_log
+      from gw_fetch.audit_log
      where status = -1
        and fetched_at < now() - make_interval(secs => recovery_age_seconds)
      for update skip locked
@@ -35,7 +35,7 @@ begin
       into v_browser_seconds_estimate;
 
     if victim.debit_id is not null then
-      insert into fetch.usage_ledger (
+      insert into gw_fetch.usage_ledger (
         id, request_id, api_key_id, kind,
         request_count_delta, browser_seconds_delta, proxy_bytes_delta,
         cost_usd_estimate_delta, reason
@@ -51,14 +51,14 @@ begin
         'stuck_started_recovery'
       ) on conflict (request_id, kind) do nothing;
 
-      -- Mirror into fetch.quotas counter.
-      update fetch.quotas
+      -- Mirror into gw_fetch.quotas counter.
+      update gw_fetch.quotas
          set browser_seconds_used = greatest(0, browser_seconds_used - v_browser_seconds_estimate)
        where api_key_id = victim.api_key_id;
     end if;
 
     -- Mark the audit row recovered (synthetic status 599 + error_class).
-    update fetch.audit_log
+    update gw_fetch.audit_log
        set status = 599,
            error_class = 'internal_error',
            blocked_by = null

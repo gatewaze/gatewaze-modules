@@ -5,7 +5,7 @@
  * `(request_id, kind)` is unique — `INSERT … ON CONFLICT DO NOTHING`
  * makes refund/reconcile idempotent on retry.
  *
- * The ledger is the BILLING SOURCE OF TRUTH; `fetch.quotas` is a fast
+ * The ledger is the BILLING SOURCE OF TRUTH; `gw_fetch.quotas` is a fast
  * counter cache that's reconciled nightly.
  */
 
@@ -31,7 +31,7 @@ export async function insertDebitTx(
   input: LedgerInsertInput,
 ): Promise<string> {
   await tx.query(
-    `insert into fetch.usage_ledger (
+    `insert into gw_fetch.usage_ledger (
        id, request_id, api_key_id, kind,
        request_count_delta, browser_seconds_delta, proxy_bytes_delta,
        cost_usd_estimate_delta, reason
@@ -59,7 +59,7 @@ export async function insertReconcile(
   input: Omit<LedgerInsertInput, 'request_count_delta'>,
 ): Promise<void> {
   await db.query(
-    `insert into fetch.usage_ledger (
+    `insert into gw_fetch.usage_ledger (
        id, request_id, api_key_id, kind,
        request_count_delta, browser_seconds_delta, proxy_bytes_delta,
        cost_usd_estimate_delta, reason
@@ -93,7 +93,7 @@ export async function insertRefund(
   },
 ): Promise<void> {
   await db.query(
-    `insert into fetch.usage_ledger (
+    `insert into gw_fetch.usage_ledger (
        id, request_id, api_key_id, kind,
        request_count_delta, browser_seconds_delta, proxy_bytes_delta,
        cost_usd_estimate_delta, reason
@@ -107,11 +107,11 @@ export async function insertRefund(
       input.reason,
     ],
   );
-  // Mirror the requests refund into fetch.quotas so the counter
+  // Mirror the requests refund into gw_fetch.quotas so the counter
   // matches the ledger immediately. Reconciliation jobs pick up any
   // mismatch nightly.
   await db.query(
-    `update fetch.quotas set requests_used = greatest(0, requests_used - 1) where api_key_id = $1`,
+    `update gw_fetch.quotas set requests_used = greatest(0, requests_used - 1) where api_key_id = $1`,
     [input.api_key_id],
   );
 }

@@ -35,7 +35,7 @@ export async function startTx(
   input: AuditStartInput,
 ): Promise<void> {
   await tx.query(
-    `insert into fetch.audit_log (
+    `insert into gw_fetch.audit_log (
        request_id, api_key_id, debit_id, fetched_at, surface,
        requested_url, url_host, mode, status,
        ignored_robots, user_agent_used, truncated_request
@@ -94,7 +94,7 @@ export async function finalizeByRequestId(
 
   if (sets.length === 0) return;
   await db.query(
-    `update fetch.audit_log set ${sets.join(', ')} where request_id = $1`,
+    `update gw_fetch.audit_log set ${sets.join(', ')} where request_id = $1`,
     values,
   );
 }
@@ -119,7 +119,7 @@ export async function writeBlocked(
   },
 ): Promise<void> {
   await db.query(
-    `insert into fetch.audit_log (
+    `insert into gw_fetch.audit_log (
        request_id, api_key_id, fetched_at, surface,
        requested_url, url_host, mode, status,
        blocked_by, blocked_stage, truncated_request

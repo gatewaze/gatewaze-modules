@@ -2,7 +2,7 @@
  * Admin: audit log search (spec §3.1).
  *
  * Phase 1: stub. Phase 3 implements paginated search over
- * fetch.audit_log with redaction (per §11.6) of cross-tenant URLs.
+ * gw_fetch.audit_log with redaction (per §11.6) of cross-tenant URLs.
  */
 
 export default function FetchAuditLogPage() {

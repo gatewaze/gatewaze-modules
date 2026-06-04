@@ -1,7 +1,7 @@
 /**
  * gatewaze-fetch — external web-fetch product.
  *
- * Spec: gatewaze-environments/specs/spec-gatewaze-fetch.md
+ * Spec: gatewaze-environments/specs/spec-gatewaze-gw_fetch.md
  *
  * Wraps the internal scrapling-fetcher service in a per-tenant external
  * surface (REST + MCP) with quotas, domain governance, robots.txt
