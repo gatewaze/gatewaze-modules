@@ -104,7 +104,7 @@ export async function runWikiPush(deps: WikiSyncDeps, useCase: string): Promise<
     await markSynced(deps, useCase, state.pending_seq, plan.toWrite, byslug);
     return { pushed: false, reason: 'no_diff' };
   }
-  await runGit(['commit', '-m', `wiki: ${useCase} seq${state.pending_seq}`], { cwd: dir, timeoutMs: deps.timeoutMs ?? GIT_TIMEOUT });
+  await runGit(['-c', 'user.email=wiki@gatewaze.local', '-c', 'user.name=Gatewaze Wiki', 'commit', '-m', `wiki: ${useCase} seq${state.pending_seq}`], { cwd: dir, timeoutMs: deps.timeoutMs ?? GIT_TIMEOUT });
   await runGit(['push', 'origin', `HEAD:${state.git_branch}`], { cwd: dir, timeoutMs: deps.timeoutMs ?? GIT_TIMEOUT, authToken: deps.gitToken ?? null });
   const head = (await runGit(['rev-parse', 'HEAD'], { cwd: dir, timeoutMs: deps.timeoutMs ?? GIT_TIMEOUT })).stdout.trim();
 
