@@ -194,6 +194,20 @@ const aiModule: GatewazeModule = {
       handler: 'workers/refresh-model-prices.js',
       concurrency: 1,
     },
+    // spec-ai-memory-wiki.md §7 — bidirectional git sync. The API enqueues
+    // ai:wiki-push (debounced, DB → git) and ai:wiki-pull (webhook/manual,
+    // git → DB); these register the consumers. concurrency=1 per use case:
+    // both halves mutate one working tree and must not race.
+    {
+      name: 'ai:wiki-push',
+      handler: 'workers/wiki-push-handler.js',
+      concurrency: 1,
+    },
+    {
+      name: 'ai:wiki-pull',
+      handler: 'workers/wiki-pull-handler.js',
+      concurrency: 1,
+    },
   ],
 
   apiRoutes: async (app: unknown, ctx: unknown) => {
