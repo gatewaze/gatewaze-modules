@@ -274,6 +274,12 @@ const aiModule: GatewazeModule = {
       requiredFeature: 'ai.usage.read',
       guard: 'admin',
     },
+    {
+      path: 'ai/wiki',
+      component: () => import('./admin/components/AiDashboard'),
+      requiredFeature: 'ai.usage.read',
+      guard: 'admin',
+    },
   ],
 
   adminNavItems: [
