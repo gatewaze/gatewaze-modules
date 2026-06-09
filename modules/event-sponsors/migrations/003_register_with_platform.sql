@@ -54,6 +54,22 @@ SET search_path = public, pg_temp AS $$
 $$;
 ALTER FUNCTION public.event_sponsors_inbox_preview(uuid) OWNER TO gatewaze_module_writer;
 
+-- register_content_type() is SECURITY DEFINER and (depending on which role
+-- owns it after content-platform's own migrations) runs its internal
+-- `GRANT SELECT, UPDATE(publish_state) ON events_sponsors TO
+-- gatewaze_module_writer` as gatewaze_module_writer. That role neither owns
+-- this table (supabase_admin does) nor holds the privilege WITH GRANT OPTION,
+-- so the internal grant trips 42501. This migration runs as the table owner,
+-- so pre-grant the privileges WITH GRANT OPTION here; the internal re-grant
+-- then succeeds regardless of register_content_type's owner. (Sibling
+-- event-speakers/006 only avoided this by lucky reconcile ordering.)
+DO $grant$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gatewaze_module_writer') THEN
+    GRANT SELECT, UPDATE ON public.events_sponsors TO gatewaze_module_writer WITH GRANT OPTION;
+  END IF;
+END $grant$;
+
 DO $register$
 BEGIN
   IF NOT EXISTS (

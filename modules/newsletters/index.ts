@@ -88,6 +88,17 @@ const newslettersModule: GatewazeModule = {
     'migrations/026_fix_keyword_trigger_definer.sql',
     'migrations/027_collection_git_provenance.sql',
     'migrations/028_enable_host_registration.sql',
+    // 029 provides can_admin_newsletter(uuid) and re-points the host
+    // registration at it. Without it, templates.can_read_host resolves
+    // can_admin_fn as <fn>(uuid), fails to find is_admin(uuid), and returns
+    // FALSE for everyone — so the templates_libraries insert during
+    // newsletter creation 403s even for admins. 028 (host enable) is
+    // incomplete without it.
+    'migrations/029_can_admin_newsletter_uuid.sql',
+    // 030 adds the config/git_url_theme columns for the separate theme +
+    // publish repo layout (additive; the only DROP COLUMNs are in a
+    // commented-out down-migration reference).
+    'migrations/030_separate_publish_repo.sql',
     'migrations/031_realtime_sends_and_log.sql',
   ],
 

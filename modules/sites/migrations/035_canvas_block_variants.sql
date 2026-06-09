@@ -81,7 +81,8 @@ CREATE POLICY page_block_variants_admin_select ON public.page_block_variants
       SELECT 1 FROM public.page_blocks pb
         JOIN public.pages p ON p.id = pb.page_id
        WHERE pb.id = page_block_variants.page_block_id
-         AND public.can_admin_site(auth.uid(), p.site_id)
+         AND p.host_kind = 'site'
+         AND public.can_admin_site(p.host_id)
     )
   );
 
@@ -93,7 +94,8 @@ CREATE POLICY page_block_brick_variants_admin_select ON public.page_block_brick_
         JOIN public.page_blocks pb ON pb.id = bk.page_block_id
         JOIN public.pages p        ON p.id  = pb.page_id
        WHERE bk.id = page_block_brick_variants.page_block_brick_id
-         AND public.can_admin_site(auth.uid(), p.site_id)
+         AND p.host_kind = 'site'
+         AND public.can_admin_site(p.host_id)
     )
   );
 
@@ -260,10 +262,12 @@ DECLARE
   v_block_count    integer;
 BEGIN
   BEGIN
-    SELECT version, l.editor_id, l.client_token, s.templates_library_id
+    -- pages now carries templates_library_id directly (host_kind/host_id
+    -- model superseded the old pages.site_id FK), so read it from the page
+    -- rather than joining sites on a column that no longer exists.
+    SELECT p.version, l.editor_id, l.client_token, p.templates_library_id
       INTO v_actual_version, v_lock_editor, v_lock_token, v_library_id
       FROM public.pages p
-      JOIN public.sites s ON s.id = p.site_id
       LEFT JOIN public.page_canvas_locks l ON l.page_id = p.id
      WHERE p.id = p_page_id
      FOR UPDATE OF p NOWAIT;
