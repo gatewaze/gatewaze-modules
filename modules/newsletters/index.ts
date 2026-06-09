@@ -178,7 +178,7 @@ const newslettersModule: GatewazeModule = {
   },
   // Workspace-shell rail item (spec-portal-workspace-shell.md §8). Public top-level module.
   portalShell: {
-    rail: { label: 'News', full: 'Newsletters', icon: 'msg', order: 30, visibility: 'public' },
+    rail: { label: 'News', full: 'Newsletters', icon: 'newspaper', order: 30, visibility: 'public' },
     nav: [],
     publicNav: [],
   },

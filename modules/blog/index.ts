@@ -46,7 +46,7 @@ const blogModule: GatewazeModule = {
   },
   // Workspace-shell rail item (spec-portal-workspace-shell.md §8). Public top-level module.
   portalShell: {
-    rail: { label: 'Blog', full: 'Blog', icon: 'file', order: 20, visibility: 'public' },
+    rail: { label: 'Blog', full: 'Blog', icon: 'pencil', order: 20, visibility: 'public' },
     nav: [],
     publicNav: [],
   },
