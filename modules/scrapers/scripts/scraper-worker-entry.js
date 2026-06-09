@@ -45,22 +45,82 @@ function ensureInitialized() {
  * BullMQ job handler for scraper:run jobs.
  * @param {import('bullmq').Job} job
  */
+function redisConnFromEnv() {
+  const url = process.env.REDIS_URL;
+  if (url) {
+    try {
+      const u = new URL(url);
+      return {
+        host: u.hostname,
+        port: parseInt(u.port || '6379', 10),
+        password: u.password || undefined,
+        maxRetriesPerRequest: null,
+      };
+    } catch {
+      // fall through
+    }
+  }
+  return {
+    host: process.env.REDIS_HOST || 'redis',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    maxRetriesPerRequest: null,
+  };
+}
+
 export default async function handler(job) {
   ensureInitialized();
 
   const { scraperJobId, scraperName } = job.data;
+  // The admin "Running Scrapers" modal tails an SSE stream that api.ts backs
+  // with Redis pub/sub on `scraper:<jobId>:logs`. Publish log/progress/
+  // complete events there so the UI updates live and its completion counter
+  // advances. ioredis is resolved from the API package (not a module dep).
+  const channel = `scraper:${scraperJobId}:logs`;
+  let publisher = null;
+  try {
+    const req = createRequire(path.resolve(process.cwd(), 'packages/api/package.json'));
+    const IORedis = req('ioredis').default || req('ioredis');
+    publisher = new IORedis(redisConnFromEnv());
+  } catch {
+    // Streaming degrades to worker logs only; the job still runs + records
+    // its status via updateJobStatus in the handler.
+  }
+  const publish = (payload) => {
+    if (!publisher) return;
+    try {
+      publisher
+        .publish(channel, JSON.stringify({ ...payload, timestamp: new Date().toISOString() }))
+        .catch(() => {});
+    } catch {
+      // non-fatal — never let a streaming hiccup fail the scrape
+    }
+  };
 
-  // Create a logger that publishes to Redis for SSE streaming
   const logger = {
     log: (message) => {
       console.log(`[scraper:${scraperName}] ${message}`);
       job.log(message).catch(() => {});
+      publish({ type: 'log', message: String(message) });
     },
     error: (message) => {
-      console.error(`[scraper:${scraperName}] ${message}`);
-      job.log(`ERROR: ${message}`).catch(() => {});
+      const m = message instanceof Error ? message.message : String(message);
+      console.error(`[scraper:${scraperName}] ${m}`);
+      job.log(`ERROR: ${m}`).catch(() => {});
+      publish({ type: 'log', message: `ERROR: ${m}` });
+    },
+    progress: (stats) => {
+      publish({ type: 'progress', stats: stats || {} });
+    },
+    complete: (success, result) => {
+      publish(success ? { type: 'complete' } : { type: 'error', error: (result && result.error) || 'Scraper failed' });
     },
   };
 
-  await runScraperJob(scraperJobId, logger, job);
+  try {
+    await runScraperJob(scraperJobId, logger, job);
+  } finally {
+    if (publisher) {
+      try { await publisher.quit(); } catch { /* ignore */ }
+    }
+  }
 }

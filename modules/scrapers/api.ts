@@ -53,7 +53,13 @@ function isQueueAvailable(): boolean {
   return !!(process.env.REDIS_URL || process.env.REDIS_HOST);
 }
 
-const QUEUE_NAME = `jobs-${process.env.BRAND || 'default'}`;
+// Enqueue onto the platform's main worker queue (name + prefix must match
+// packages/api queue registry: queue 'jobs', prefix `bull:${BRAND}`), so the
+// scraper:run handler registered via the module worker registry (index.ts)
+// actually consumes these jobs. Previously this used a standalone
+// `jobs-default` queue that no running worker drained.
+const QUEUE_NAME = 'jobs';
+const QUEUE_PREFIX = `bull:${process.env.BRAND || 'default'}`;
 
 function getQueue(projectRoot: string) {
   if (_queue) return _queue;
@@ -64,6 +70,7 @@ function getQueue(projectRoot: string) {
   }
   _queue = new _Queue(QUEUE_NAME, {
     connection: getRedisConnection(),
+    prefix: QUEUE_PREFIX,
     defaultJobOptions: {
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
