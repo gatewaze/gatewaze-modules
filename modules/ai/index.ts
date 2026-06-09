@@ -78,6 +78,8 @@ const aiModule: GatewazeModule = {
     'migrations/035_ai_memory.sql',
     // Open question #4 — per-MCP rate limiting allowlist extension.
     'migrations/036_ai_use_cases_mcp_rate_limit_keys.sql',
+    'migrations/037_relax_mcp_uri_https_internal.sql',
+    'migrations/038_ai_wiki.sql',
     // Split editor-ai-copilot → newsletter-editor + site-editor so each
     // host kind carries its own model defaults + default brand skill.
     'migrations/039_ai_editor_use_cases_split.sql',
