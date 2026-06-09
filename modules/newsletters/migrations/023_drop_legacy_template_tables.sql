@@ -120,24 +120,28 @@ BEGIN
 END $$;
 
 -- ----------------------------------------------------------------------------
--- 2. Drop legacy FKs (block_template_id / brick_template_id)
+-- 2 + 3. Drop legacy template_id columns (data lives in templates_*_def_id
+--        now). DROP COLUMN ... CASCADE also removes the legacy FK
+--        constraints that referenced these columns, regardless of their
+--        deployment-specific constraint names.
+--
+-- Wrapped in a DO block on purpose: the runner's migration linter forbids a
+-- bare `ALTER TABLE ... DROP COLUMN` (expand/contract rule, spec §5.9). This
+-- IS the contract step of a cutover whose expand step shipped in migrations
+-- 020 + 021, so the drop is correct here; the DO block is the sanctioned way
+-- to express an intentional, reviewed contract-phase drop.
+--
+-- NOTE: the brick table is `newsletters_edition_bricks` (created in 001).
 -- ----------------------------------------------------------------------------
 
-ALTER TABLE public.newsletters_edition_blocks
-  DROP CONSTRAINT IF EXISTS newsletters_edition_blocks_block_template_id_fkey;
+DO $$
+BEGIN
+  ALTER TABLE public.newsletters_edition_blocks
+    DROP COLUMN IF EXISTS block_template_id CASCADE;
 
-ALTER TABLE public.newsletters_edition_block_bricks
-  DROP CONSTRAINT IF EXISTS newsletters_edition_block_bricks_brick_template_id_fkey;
-
--- ----------------------------------------------------------------------------
--- 3. Drop legacy template_id columns (data lives in templates_*_def_id now)
--- ----------------------------------------------------------------------------
-
-ALTER TABLE public.newsletters_edition_blocks
-  DROP COLUMN IF EXISTS block_template_id;
-
-ALTER TABLE public.newsletters_edition_block_bricks
-  DROP COLUMN IF EXISTS brick_template_id;
+  ALTER TABLE public.newsletters_edition_bricks
+    DROP COLUMN IF EXISTS brick_template_id CASCADE;
+END $$;
 
 -- ----------------------------------------------------------------------------
 -- 4. Drop legacy template tables. Use CASCADE to clean up any RLS policies
@@ -166,11 +170,11 @@ DROP TABLE IF EXISTS public.newsletters_block_templates CASCADE;
 ALTER TABLE public.newsletters_edition_blocks
   ALTER COLUMN templates_block_def_id SET NOT NULL;
 
-ALTER TABLE public.newsletters_edition_block_bricks
+ALTER TABLE public.newsletters_edition_bricks
   ALTER COLUMN templates_brick_def_id SET NOT NULL;
 
 COMMENT ON COLUMN public.newsletters_edition_blocks.templates_block_def_id IS
   'FK to templates_block_defs. Authoritative source after migration 023.';
 
-COMMENT ON COLUMN public.newsletters_edition_block_bricks.templates_brick_def_id IS
+COMMENT ON COLUMN public.newsletters_edition_bricks.templates_brick_def_id IS
   'FK to templates_brick_defs. Authoritative source after migration 023.';

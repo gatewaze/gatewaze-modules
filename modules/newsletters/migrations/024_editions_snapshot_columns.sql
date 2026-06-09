@@ -29,6 +29,16 @@ ALTER TABLE public.newsletters_editions
 COMMENT ON COLUMN public.newsletters_editions.publish_tag IS
   'Git tag e.g. edition/2026-05-03-0900-monthly-news.';
 
+-- When the edition was sent. Drives the snapshot job's delay window (see the
+-- index comment below). Populated by the send flow; NULL until the edition is
+-- actually sent. Added here because the snapshot lifecycle this migration
+-- introduces is keyed off the send time.
+ALTER TABLE public.newsletters_editions
+  ADD COLUMN IF NOT EXISTS sent_at timestamptz;
+
+COMMENT ON COLUMN public.newsletters_editions.sent_at IS
+  'When this edition was sent. Drives snapshot_status transitions (spec §15.4).';
+
 -- ============================================================================
 -- Index supporting the snapshot job: find editions due for snapshotting
 -- ============================================================================

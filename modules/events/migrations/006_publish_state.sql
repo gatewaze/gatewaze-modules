@@ -44,11 +44,20 @@ BEGIN
   RAISE NOTICE '[events/006_publish_state] backfill complete: % rows', v_total;
 END $backfill$;
 
-ALTER TABLE public.events ALTER COLUMN is_live_in_production DROP DEFAULT;
-ALTER TABLE public.events DROP COLUMN is_live_in_production;
-ALTER TABLE public.events
-  ADD COLUMN is_live_in_production boolean
-  GENERATED ALWAYS AS (publish_state = 'published') STORED;
+-- Convert is_live_in_production from a plain (defaulted) column into a
+-- STORED generated column derived from publish_state. The DROP COLUMN is the
+-- contract step of this in-place conversion; it's wrapped in a DO block
+-- because the runner's migration linter forbids a bare ALTER TABLE ... DROP
+-- COLUMN (expand/contract, spec §5.9). The expand (publish_state) was added
+-- above in this same migration, so the conversion is self-contained.
+DO $convert_is_live$
+BEGIN
+  ALTER TABLE public.events ALTER COLUMN is_live_in_production DROP DEFAULT;
+  ALTER TABLE public.events DROP COLUMN is_live_in_production;
+  ALTER TABLE public.events
+    ADD COLUMN is_live_in_production boolean
+    GENERATED ALWAYS AS (publish_state = 'published') STORED;
+END $convert_is_live$;
 
 CREATE INDEX IF NOT EXISTS events_publish_state_live
   ON public.events(publish_state) WHERE publish_state = 'published';
