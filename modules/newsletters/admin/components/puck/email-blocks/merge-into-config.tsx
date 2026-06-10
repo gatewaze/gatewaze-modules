@@ -23,6 +23,43 @@ import type { Config, Field } from '@puckeditor/core';
 import type { EmailBlockEntry, EmailBlockRegistry } from './registry-types.js';
 import { NewsletterPaddingSliderField } from './number-slider-field-adapter.js';
 import { wrapWithSpacing } from './spacing-wrapper.js';
+import { resolveCustomField } from '../../../../../sites/admin/components/canvas/puck/fields/index.js';
+import type { CustomFormat } from '../../../../../sites/admin/components/canvas/puck/json-schema-to-puck-fields.js';
+import type { PuckRenderHost } from '../../../../../sites/admin/components/canvas/puck/types.js';
+
+/**
+ * Wire `customFormat` → render for a registry block's fields, recursing
+ * into array/object fields. The sites PuckConfigAdapter does this for
+ * schema-driven blocks; registry blocks went through this merge layer
+ * which previously skipped it, so a `{ type:'custom', customFormat:'richtext' }`
+ * field shipped without a render and Puck threw. Fields that already carry
+ * a `render` (e.g. the spacing sliders) are left untouched.
+ */
+function resolveCustomRenders(
+  fields: Record<string, Field>,
+  ctx: { renderHost: PuckRenderHost },
+): Record<string, Field> {
+  const out: Record<string, Field> = {};
+  for (const [k, f] of Object.entries(fields)) {
+    const field = f as {
+      type?: string;
+      customFormat?: string;
+      render?: unknown;
+      arrayFields?: Record<string, Field>;
+      objectFields?: Record<string, Field>;
+    };
+    if (field.type === 'custom' && field.customFormat && typeof field.render !== 'function') {
+      out[k] = { ...f, render: resolveCustomField(field.customFormat as CustomFormat, ctx) } as Field;
+    } else if (field.type === 'array' && field.arrayFields) {
+      out[k] = { ...f, arrayFields: resolveCustomRenders(field.arrayFields, ctx) } as Field;
+    } else if (field.type === 'object' && field.objectFields) {
+      out[k] = { ...f, objectFields: resolveCustomRenders(field.objectFields, ctx) } as Field;
+    } else {
+      out[k] = f;
+    }
+  }
+  return out;
+}
 
 /**
  * Uniform spacing fields auto-injected into every registry block. The
@@ -114,6 +151,8 @@ export interface MergeArgs {
   base: Config;
   /** The registry to merge in. */
   registry: EmailBlockRegistry;
+  /** Host hooks (media picker etc.) threaded into custom-field renders. */
+  renderHost: PuckRenderHost;
   /**
    * Optional filter — only include registry entries whose componentId
    * appears in this set. Lets the caller scope the available react-email
@@ -178,7 +217,7 @@ export function mergeRegistryIntoConfig(args: MergeArgs): MergeResult {
       continue;
     }
 
-    components[entry.componentId] = puckEntryFromRegistry(entry);
+    components[entry.componentId] = puckEntryFromRegistry(entry, args.renderHost);
 
     // Bucket the registry entry into its declared category. Entries
     // without a `category` field fall under "Other" — Puck shows those
@@ -204,7 +243,10 @@ export function mergeRegistryIntoConfig(args: MergeArgs): MergeResult {
   };
 }
 
-function puckEntryFromRegistry(entry: EmailBlockEntry): Config['components'][string] {
+function puckEntryFromRegistry(
+  entry: EmailBlockEntry,
+  renderHost: PuckRenderHost,
+): Config['components'][string] {
   const Component = entry.Component;
   // Components that declare a `children` slot field need the slot value
   // forwarded; primitive leaf components ignore it. Detect via the field
@@ -219,10 +261,13 @@ function puckEntryFromRegistry(entry: EmailBlockEntry): Config['components'][str
   // the field map and default `contentEditable: true` on every text /
   // textarea field — that's what gives every block in-canvas inline
   // editing without needing per-block `contentEditable: true` flags.
-  const mergedFields = enableInlineEditing({
-    ...SPACING_FIELDS,
-    ...(entry.fields as Record<string, Field>),
-  });
+  const mergedFields = resolveCustomRenders(
+    enableInlineEditing({
+      ...SPACING_FIELDS,
+      ...(entry.fields as Record<string, Field>),
+    }),
+    { renderHost },
+  );
   assertCustomFieldsHaveRender(entry.componentId, mergedFields);
   const mergedDefaults = {
     ...SPACING_DEFAULTS,
