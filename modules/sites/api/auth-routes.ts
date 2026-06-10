@@ -36,6 +36,16 @@ export interface AuthRoutesDeps {
     resetPasswordForEmail(email: string, opts?: { redirectTo?: string }): Promise<{ data: unknown; error: { message: string } | null }>;
     signOut(): Promise<{ error: { message: string } | null }>;
   };
+  /**
+   * Ensure a public.people row exists for a freshly signed-up user, linked
+   * by auth_user_id. Without this, a website signup creates an auth.users
+   * row but no person — the /people admin list (which filters
+   * auth_user_id IS NOT NULL) and every people-keyed feature then miss them.
+   * The portal's people-signup edge function already does this; mirror it
+   * here. Implemented by the caller with a service-role client. Best-effort:
+   * a failure here must NOT fail the signup (the user still has an account).
+   */
+  ensurePerson?: (args: { authUserId: string | null; email: string; fullName?: string }) => Promise<void>;
   /** Cookie domain for the auth cookie (e.g. `.brandname.com` or `.example.localhost`). */
   cookieDomain: string;
   /** True when serving over HTTPS (sets Secure flag). */
@@ -125,6 +135,23 @@ export function createAuthRoutes(deps: AuthRoutesDeps) {
       deps.logger.warn('signup failed', { email, error: result.error.message });
       res.status(400).json({ error: 'signup_failed', message: result.error.message } satisfies ErrorEnvelope);
       return;
+    }
+    // Mirror the portal's people-signup flow: a website signup must also get
+    // a public.people row, linked by auth_user_id, or it shows up nowhere in
+    // admin. Best-effort — never fail the signup if person creation errors.
+    if (deps.ensurePerson) {
+      try {
+        await deps.ensurePerson({
+          authUserId: result.data?.user?.id ?? null,
+          email,
+          fullName: fullName || undefined,
+        });
+      } catch (err) {
+        deps.logger.warn('signup: ensurePerson failed (account created without person row)', {
+          email,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     // Supabase Auth returns the session if email confirmation is disabled,
     // otherwise it requires a magic-link confirmation. We surface a
