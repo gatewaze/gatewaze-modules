@@ -1,6 +1,80 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 import { getEmailProvider } from '../_shared/provider-registry.ts'
 import type { EmailProviderModule } from '../_shared/email-provider.ts'
+import {
+  extractTrackableLinks,
+  generateTrackingKey,
+  tagHtmlLinks,
+  type LinkSourceBlock,
+  type TaggableLink,
+} from '../_shared/link-tracking.ts'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SB = ReturnType<typeof createClient<any, any, any>>
+
+/**
+ * Per-collection feature flag for link tracking. Default ON; an explicit
+ * `false`/`'off'` in collection metadata disables it.
+ */
+async function isLinkTrackingEnabled(supabase: SB, collectionId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('newsletters_template_collections')
+    .select('metadata')
+    .eq('id', collectionId)
+    .maybeSingle()
+  const meta = (data as { metadata?: Record<string, unknown> } | null)?.metadata ?? {}
+  return meta.link_tracking !== false && meta.link_tracking !== 'off'
+}
+
+/**
+ * Extract every trackable link in the edition, upsert the per-occurrence
+ * registry (assigning a stable tracking_key per (block, field, index)), and
+ * return the rows in document order for HTML tagging.
+ */
+async function syncEditionLinkRegistry(supabase: SB, editionId: string): Promise<TaggableLink[]> {
+  const { data: blocks, error } = await supabase
+    .from('newsletters_edition_blocks')
+    .select(
+      'id, block_type, content, sort_order, tracking_slug, bricks:newsletters_edition_bricks(id, brick_type, content, sort_order)',
+    )
+    .eq('edition_id', editionId)
+  if (error || !blocks) return []
+
+  const occ = extractTrackableLinks(blocks as unknown as LinkSourceBlock[])
+  if (occ.length === 0) return []
+
+  const { data: existing } = await supabase
+    .from('newsletters_edition_links')
+    .select('block_id, field, link_index, tracking_key')
+    .eq('edition_id', editionId)
+  const occKey = (b: string, f: string, i: number) => `${b}|${f}|${i}`
+  const existingKey = new Map<string, string>()
+  for (const r of (existing ?? []) as Array<{ block_id: string; field: string; link_index: number; tracking_key: string }>) {
+    existingKey.set(occKey(r.block_id, r.field, r.link_index), r.tracking_key)
+  }
+
+  const rows = occ.map((o) => ({
+    edition_id: editionId,
+    block_id: o.block_id,
+    brick_id: o.brick_id,
+    block_type: o.block_type,
+    tracking_slug: o.tracking_slug,
+    field: o.field,
+    link_index: o.link_index,
+    original_url: o.original_url,
+    tracking_key: existingKey.get(occKey(o.block_id, o.field, o.link_index)) ?? generateTrackingKey(),
+  }))
+
+  const { error: upsertError } = await supabase
+    .from('newsletters_edition_links')
+    .upsert(rows, { onConflict: 'block_id,field,link_index' })
+  if (upsertError) {
+    console.warn('[newsletter-send] registry upsert failed:', upsertError.message)
+    return []
+  }
+
+  return rows.map((r) => ({ original_url: r.original_url, tracking_key: r.tracking_key }))
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -334,9 +408,27 @@ async function processSend(
     .eq('id', sendId)
 
   try {
-    const html = send.rendered_html as string
+    let html = send.rendered_html as string
     if (!html) {
       throw new Error('No rendered HTML found. Render the edition first.')
+    }
+
+    // ── Block-level click tracking ──────────────────────────────────────────
+    // Sync the per-occurrence link registry for this edition and rewrite the
+    // base HTML so each tracked link carries ?nlb=<tracking_key>. Done once
+    // (keys are per-link, not per-recipient) before personalisation. Wrapped so
+    // any failure falls back to an untagged send (deliverability over tracking).
+    // See spec-newsletter-link-tracking.md §4.3.
+    try {
+      const editionId = (send.edition as { id?: string } | null)?.id
+      const trackingEnabled =
+        collectionId == null ? true : await isLinkTrackingEnabled(supabase, collectionId)
+      if (editionId && trackingEnabled) {
+        const orderedRows = await syncEditionLinkRegistry(supabase, editionId)
+        if (orderedRows.length > 0) html = tagHtmlLinks(html, orderedRows)
+      }
+    } catch (err) {
+      console.warn('[newsletter-send] link tracking skipped:', err instanceof Error ? err.message : err)
     }
 
     const subject = send.subject || send.edition?.subject || 'Newsletter'

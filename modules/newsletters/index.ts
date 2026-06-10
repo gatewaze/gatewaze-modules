@@ -32,6 +32,12 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletter:helix-output-sync',
       handler: './workers/helix-output-sync.ts',
     },
+    {
+      // Re-resolves click interactions stored with a NULL edition_link_id
+      // (late-registered links / webhook redeliveries). Idempotent.
+      name: 'newsletter:link-reconcile',
+      handler: './workers/link-reconciler.ts',
+    },
   ],
 
   crons: [
@@ -49,6 +55,15 @@ const newslettersModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 5 * 60_000 },
       data: { kind: 'newsletter:edition-snapshot' },
+    },
+    {
+      // Back-fill block resolution for clicks that landed before their
+      // registry row existed (spec-newsletter-link-tracking.md §8). Cheap +
+      // idempotent; every 6h keeps the unresolved backlog small.
+      name: 'newsletter-link-reconcile',
+      queue: 'jobs',
+      schedule: { every: 6 * 60 * 60_000 },
+      data: { kind: 'newsletter:link-reconcile' },
     },
   ],
 
@@ -100,6 +115,10 @@ const newslettersModule: GatewazeModule = {
     // commented-out down-migration reference).
     'migrations/030_separate_publish_repo.sql',
     'migrations/031_realtime_sends_and_log.sql',
+    // 032 repurposes newsletters_edition_links as the per-occurrence link
+    // registry (opaque tracking_key) for block-level click tracking, and adds
+    // tracking_slug to edition blocks. See spec-newsletter-link-tracking.md.
+    'migrations/032_link_tracking.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

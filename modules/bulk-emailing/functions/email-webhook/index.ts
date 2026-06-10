@@ -26,6 +26,62 @@ async function findLogByMessageId(messageId: string) {
   return data
 }
 
+interface NewsletterLinkResolution {
+  edition_link_id: string
+  block_id: string | null
+  block_type: string | null
+  edition_id: string | null
+}
+
+/** Extract the `nlb` tracking key from a clicked URL (last value wins). */
+function parseNlb(url: string): string | null {
+  const qIdx = url.indexOf('?')
+  if (qIdx < 0) return null
+  const hashIdx = url.indexOf('#', qIdx)
+  const query = url.slice(qIdx + 1, hashIdx >= 0 ? hashIdx : undefined)
+  let key: string | null = null
+  for (const part of query.split('&')) {
+    const m = /^nlb=(.*)$/i.exec(part)
+    if (m) {
+      try { key = decodeURIComponent(m[1]) } catch { key = m[1] }
+    }
+  }
+  return key && key.length > 0 ? key : null
+}
+
+/** Look up the newsletter link registry by tracking key. NULL if not found or
+ *  the newsletters module isn't installed (table absent). */
+async function resolveNewsletterLink(trackingKey: string): Promise<NewsletterLinkResolution | null> {
+  try {
+    const { data } = await supabase
+      .from('newsletters_edition_links')
+      .select('id, block_id, block_type, edition_id')
+      .eq('tracking_key', trackingKey)
+      .maybeSingle()
+    if (!data) return null
+    const r = data as { id: string; block_id: string | null; block_type: string | null; edition_id: string | null }
+    return { edition_link_id: r.id, block_id: r.block_id, block_type: r.block_type, edition_id: r.edition_id }
+  } catch {
+    return null
+  }
+}
+
+/** Consent check at ingest: recipients who opted out of tracking are recorded
+ *  as consent_suppressed so reporting never attributes the event to them. */
+async function isTrackingSuppressed(email: string): Promise<boolean> {
+  try {
+    const { data } = await supabase
+      .from('people')
+      .select('attributes')
+      .eq('email', email)
+      .maybeSingle()
+    const attrs = (data as { attributes?: Record<string, unknown> } | null)?.attributes ?? {}
+    return attrs.newsletter_tracking_opt_out === true || attrs.tracking_opt_out === true
+  } catch {
+    return false
+  }
+}
+
 async function processNormalizedEvent(event: NormalizedEmailEvent) {
   const log = await findLogByMessageId(event.messageId)
   if (!log) {
@@ -77,6 +133,21 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
   // Create interaction records for open/click events
   if (event.eventType !== 'open' && event.eventType !== 'click') return
 
+  // Resolve newsletter block from the ?nlb= tracking key (clicks only), and
+  // make the consent decision at ingest. See spec-newsletter-link-tracking.md
+  // §4.4 / §7. Both are best-effort: failures leave NULL/false, never blocking.
+  let resolved: NewsletterLinkResolution | null = null
+  if (event.eventType === 'click' && event.clickedUrl) {
+    const nlb = parseNlb(event.clickedUrl)
+    if (nlb) {
+      resolved = await resolveNewsletterLink(nlb)
+      if (!resolved) {
+        console.warn(`[email-webhook] unresolved nlb '${nlb}' on click: ${event.clickedUrl}`)
+      }
+    }
+  }
+  const consentSuppressed = await isTrackingSuppressed(log.recipient_email)
+
   // Insert raw interaction (default human_confidence = 1.0)
   const { data: interaction } = await supabase.from('email_interactions').insert({
     email_send_log_id: log.id,
@@ -87,6 +158,11 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
     ip_address: event.ip || null,
     human_confidence: 1.0,
     bot_signals: [],
+    edition_link_id: resolved?.edition_link_id ?? null,
+    block_id: resolved?.block_id ?? null,
+    block_type: resolved?.block_type ?? null,
+    edition_id: resolved?.edition_id ?? null,
+    consent_suppressed: consentSuppressed,
   }).select('id').single()
 
   if (!interaction) return

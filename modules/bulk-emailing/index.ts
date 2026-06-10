@@ -39,6 +39,9 @@ const bulkEmailingModule: GatewazeModule = {
     'migrations/003_communication_settings.sql',
     'migrations/005_template_scope.sql',
     'migrations/006_email_batch_polymorphic_source.sql',
+    // 007 adds newsletter block-level click-tracking resolution columns to
+    // email_interactions (spec-newsletter-link-tracking.md).
+    'migrations/007_newsletter_link_tracking.sql',
   ],
 
   configSchema: {
