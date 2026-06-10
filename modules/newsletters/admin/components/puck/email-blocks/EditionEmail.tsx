@@ -146,12 +146,24 @@ function BlockSlot({ block, format, meta }: BlockSlotProps): ReactElement | null
     const { padding, margin } = extractSpacing(props);
     delete props._spacing_padding;
     delete props._spacing_margin;
-    // Slot containers: the `children` field is a serialised tree under
-    // content.children. Recursively render it into JSX before passing
-    // through to the component, so the component sees a ReactNode and
-    // not raw entry data.
-    if (entryHasSlot(entry) && Array.isArray(props.children)) {
-      props.children = renderTree(props.children as ReadonlyArray<unknown>, format);
+    // Slot containers: render the recursive children tree. Prefer the
+    // serialised tree under content.children (native authoring); fall back to
+    // the edition block's legacy `bricks` (community blocks store their bricks
+    // separately, not in content) so converted bricked blocks still render
+    // their bricks in the export.
+    if (entryHasSlot(entry)) {
+      let tree: ReadonlyArray<unknown> | null = Array.isArray(props.children)
+        ? (props.children as ReadonlyArray<unknown>)
+        : null;
+      if (!tree && Array.isArray(block.bricks) && block.bricks.length > 0) {
+        tree = [...block.bricks]
+          .sort((a, b) => a.sort_order - b.sort_order)
+          .map((br) => ({
+            type: br.brick_template.brick_type,
+            props: { ...(br.content as Record<string, unknown>) },
+          }));
+      }
+      props.children = tree ? renderTree(tree, format) : undefined;
     } else if ('children' in props && !entryHasSlot(entry)) {
       // Leaf primitive accidentally carrying children — strip so the
       // component's own intrinsic `children` (if any) wins.

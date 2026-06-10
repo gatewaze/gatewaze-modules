@@ -42,3 +42,15 @@ export const BODY: CSSProperties = { fontSize: '16px', color: '#555', lineHeight
 
 /** Brand-blue underlined link. */
 export const LINK: CSSProperties = { textDecoration: 'underline', color: '#4086c6' };
+
+/** Brick heading (community sub-items). */
+export const BRICK_TITLE: CSSProperties = {
+  margin: '0 0 8px',
+  fontSize: '20px',
+  fontWeight: 'bold',
+  color: '#000',
+  lineHeight: 1.2,
+};
+
+/** Thin divider between bricks. */
+export const DIVIDER: CSSProperties = { border: 0, borderTop: '1px solid #bbb', margin: '10px 0' };
