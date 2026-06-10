@@ -20,7 +20,7 @@
     "@babel/parser": "^7.27.0",
     "@babel/traverse": "^7.27.0",
     "@babel/types": "^7.27.0",
-    "@puckeditor/core": "~0.21.2",
+    "@puckeditor/core": "~0.21.3",
     "@react-email/components": "^1.0.12",
     "@react-email/render": "^2.0.8"
   },
