@@ -146,7 +146,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       // Newsletter blocks are always email-channel.
       theme_kind: 'email',
     }));
-    const br: BrickDefRow[] = brickTemplates.map((t) => ({
+    const br: BrickDefRow[] = brickTemplates
+      .filter((t) => !emailBlockRegistry.has(t.brick_type))
+      .map((t) => ({
       id: t.id,
       key: t.brick_type,
       name: t.name,

@@ -126,6 +126,11 @@ import { MemeOfWeekBlock } from './blocks/MemeOfWeek.js';
 import { AiSummaryBlock } from './blocks/AiSummary.js';
 import { NewsletterHeaderBlock } from './blocks/NewsletterHeader.js';
 import { NewsletterFooterBlock } from './blocks/NewsletterFooter.js';
+import { MlopsCommunityBlock } from './blocks/MlopsCommunity.js';
+import { PodcastBlock } from './blocks/Podcast.js';
+import { BlogPostBlock } from './blocks/BlogPost.js';
+import { ReadingGroupBlock } from './blocks/ReadingGroup.js';
+import { GenericSectionBlock } from './blocks/GenericSection.js';
 
 const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   // Navigation — composites
@@ -157,6 +162,12 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   // Layout — newsletter header/footer (distinct ids; generic header/footer exist)
   NewsletterHeaderBlock as unknown as EmailBlockEntry,
   NewsletterFooterBlock as unknown as EmailBlockEntry,
+  // Community — slot container + its bricks
+  MlopsCommunityBlock as unknown as EmailBlockEntry,
+  PodcastBlock as unknown as EmailBlockEntry,
+  BlogPostBlock as unknown as EmailBlockEntry,
+  ReadingGroupBlock as unknown as EmailBlockEntry,
+  GenericSectionBlock as unknown as EmailBlockEntry,
   HelixAiContentBlock as unknown as EmailBlockEntry,
   // Content — composites (data-driven via Puck resolveData)
   WeatherBlock as unknown as EmailBlockEntry,
