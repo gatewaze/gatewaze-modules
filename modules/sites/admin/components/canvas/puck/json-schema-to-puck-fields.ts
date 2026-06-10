@@ -178,6 +178,13 @@ function mapStringProperty(
   if (format === 'textarea') {
     return { type: 'textarea', ...base };
   }
+  // Legacy email rich-text formats: newsletter/email templates author
+  // rich-text fields with `format: 'html'` (and AI sections with
+  // `ai_content`). Treat both as richtext so they get the inline
+  // rich-text editor instead of a plain text input showing raw HTML.
+  if (format === 'html' || format === 'ai_content') {
+    return { type: 'custom', ...base, customFormat: 'richtext' };
+  }
   if (CUSTOM_FORMATS.has(format as CustomFormat)) {
     return { type: 'custom', ...base, customFormat: format as CustomFormat };
   }
