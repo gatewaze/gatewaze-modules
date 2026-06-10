@@ -4,11 +4,12 @@
  * of the legacy `sponsored_ad` Mustache block.
  */
 
-import { Section, Heading, Text, Img, Link } from '@react-email/components';
+import { Heading, Text, Img, Link } from '@react-email/components';
 import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { normalizeRichText } from '../rich-text.js';
-import { BORDERED_CARD, EYEBROW, BODY, LINK } from './_shared.js';
+import { Card } from './_card.js';
+import { EYEBROW, BODY, LINK } from './_shared.js';
 
 interface SponsoredAdProps extends Record<string, unknown> {
   sponsor_name: string;
@@ -43,7 +44,7 @@ export const SponsoredAdBlock: EmailBlockEntry<SponsoredAdProps> = {
     cta_link: '',
   },
   Component: ({ sponsor_name, headline, image_url, image_link, body, cta_text, cta_link }) => (
-    <Section style={BORDERED_CARD}>
+    <Card>
       <Text style={{ ...EYEBROW, textTransform: 'uppercase' }}>PRESENTED BY {sponsor_name}</Text>
       {headline ? (
         <Heading as="h2" style={{ margin: '0 0 10px', fontSize: '23px', fontWeight: 'bold', color: '#555', lineHeight: 1.2 }}>
@@ -69,6 +70,6 @@ export const SponsoredAdBlock: EmailBlockEntry<SponsoredAdProps> = {
           </strong>
         </Text>
       ) : null}
-    </Section>
+    </Card>
   ),
 };

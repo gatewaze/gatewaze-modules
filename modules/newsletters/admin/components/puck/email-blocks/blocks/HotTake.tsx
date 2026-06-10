@@ -70,16 +70,17 @@ export const HotTakeBlock: EmailBlockEntry<HotTakeProps> = {
             borderBottom: hasPoll ? 'none' : '1px solid #4086c6',
             borderRadius: hasPoll ? '15px 15px 0 0' : '15px',
             color: '#000',
-            padding: '15px 15px 5px',
           }}
         >
-          <Text style={EYEBROW}>HOT TAKE</Text>
-          {title ? (
-            <Heading as="h2" style={TITLE}>
-              {title}
-            </Heading>
-          ) : null}
-          <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(body) }} />
+          <div style={{ padding: '15px 15px 5px' }}>
+            <Text style={EYEBROW}>HOT TAKE</Text>
+            {title ? (
+              <Heading as="h2" style={TITLE}>
+                {title}
+              </Heading>
+            ) : null}
+            <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(body) }} />
+          </div>
         </Section>
         {hasPoll ? (
           <Section

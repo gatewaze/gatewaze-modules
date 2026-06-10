@@ -3,9 +3,10 @@
  * react-email port of the legacy `meme_of_week` Mustache block.
  */
 
-import { Section, Text, Img } from '@react-email/components';
+import { Text, Img } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { BORDERED_CARD, EYEBROW } from './_shared.js';
+import { Card } from './_card.js';
+import { EYEBROW } from './_shared.js';
 
 interface MemeOfWeekProps extends Record<string, unknown> {
   image_url: string;
@@ -20,7 +21,7 @@ export const MemeOfWeekBlock: EmailBlockEntry<MemeOfWeekProps> = {
   },
   defaultProps: { image_url: '' },
   Component: ({ image_url }) => (
-    <Section style={BORDERED_CARD}>
+    <Card>
       <Text style={EYEBROW}>MEME OF THE WEEK</Text>
       {image_url ? (
         <Img
@@ -29,6 +30,6 @@ export const MemeOfWeekBlock: EmailBlockEntry<MemeOfWeekProps> = {
           style={{ display: 'block', width: '100%', maxWidth: '100%', height: 'auto', border: 0 }}
         />
       ) : null}
-    </Section>
+    </Card>
   ),
 };

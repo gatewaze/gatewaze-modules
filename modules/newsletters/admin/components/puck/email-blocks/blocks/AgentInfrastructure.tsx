@@ -4,11 +4,12 @@
  * `agent_infrastructure` Mustache block.
  */
 
-import { Section, Heading, Text, Hr, Link } from '@react-email/components';
+import { Heading, Text, Hr, Link } from '@react-email/components';
 import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { normalizeRichText } from '../rich-text.js';
-import { BORDERED_CARD, EYEBROW, TITLE, BODY, LINK } from './_shared.js';
+import { Card } from './_card.js';
+import { EYEBROW, TITLE, BODY, LINK } from './_shared.js';
 
 interface UsefulLink extends Record<string, unknown> {
   title: string;
@@ -44,7 +45,7 @@ export const AgentInfrastructureBlock: EmailBlockEntry<AgentInfraProps> = {
   Component: ({ title, body, useful_links }) => {
     const links = Array.isArray(useful_links) ? useful_links : [];
     return (
-      <Section style={BORDERED_CARD}>
+      <Card>
         <Text style={EYEBROW}>AGENT INFRASTRUCTURE</Text>
         {title ? (
           <Heading as="h2" style={TITLE}>
@@ -70,7 +71,7 @@ export const AgentInfrastructureBlock: EmailBlockEntry<AgentInfraProps> = {
             ))}
           </>
         ) : null}
-      </Section>
+      </Card>
     );
   },
 };

@@ -4,11 +4,12 @@
  * Mustache block.
  */
 
-import { Section, Heading, Text, Link } from '@react-email/components';
+import { Heading, Text, Link } from '@react-email/components';
 import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { normalizeRichText } from '../rich-text.js';
-import { BORDERED_CARD, EYEBROW, TITLE, BODY, LINK } from './_shared.js';
+import { Card } from './_card.js';
+import { EYEBROW, TITLE, BODY, LINK } from './_shared.js';
 
 interface MlConfessionsProps extends Record<string, unknown> {
   title: string;
@@ -29,7 +30,7 @@ export const MlConfessionsBlock: EmailBlockEntry<MlConfessionsProps> = {
   },
   defaultProps: { title: '', story: '', confess_link: FALLBACK_LINK },
   Component: ({ title, story, confess_link = FALLBACK_LINK }) => (
-    <Section style={BORDERED_CARD}>
+    <Card>
       <Text style={EYEBROW}>ML CONFESSIONS</Text>
       {title ? (
         <Heading as="h2" style={TITLE}>
@@ -46,6 +47,6 @@ export const MlConfessionsBlock: EmailBlockEntry<MlConfessionsProps> = {
         </strong>
         .
       </Text>
-    </Section>
+    </Card>
   ),
 };

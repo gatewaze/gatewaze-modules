@@ -48,7 +48,8 @@ export const NewsletterFooterBlock: EmailBlockEntry<NewsletterFooterProps> = {
     linkedin_link: 'https://go.mlops.community/NL_LinkedIn',
   },
   Component: ({ partner_email, slack_link, youtube_link, podcast_link, x_link, linkedin_link }) => (
-    <Section style={{ ...COLUMN, padding: '10px 0' }}>
+    <Section style={COLUMN}>
+      <div style={{ padding: '10px 0' }}>
       <Text style={CENTER}>Interested in partnering with us? Get in touch: {partner_email}</Text>
       <Text style={CENTER}>
         Thanks for reading. See you in{' '}
@@ -73,6 +74,7 @@ export const NewsletterFooterBlock: EmailBlockEntry<NewsletterFooterProps> = {
         </Link>
         .
       </Text>
+      </div>
     </Section>
   ),
 };
