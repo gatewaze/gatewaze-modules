@@ -60,6 +60,36 @@ export interface BlockRenderMeta {
 export function EditionEmail(props: EditionEmailProps): ReactElement {
   const { edition, format, blockMeta } = props;
 
+  const sorted = [...edition.blocks].sort((a, z) => a.sort_order - z.sort_order);
+
+  // Legacy editions are 100% Mustache — imported email templates that already
+  // carry their own 650px self-centering layout. For those we use a
+  // transparent full-width wrapper and 10px inter-block spacers so the output
+  // matches the original single-document email exactly. Editions that use
+  // react-email registry blocks keep the standard 600px Container (those
+  // blocks target 600px and self-space via the universal _spacing_* props).
+  const allMustache = sorted.every(
+    (b) => (blockMeta.get(b.id)?.render_kind ?? 'mustache') === 'mustache',
+  );
+
+  const blockEls = sorted.map((block) => (
+    <BlockSlot key={block.id} block={block} format={format} meta={blockMeta.get(block.id)} />
+  ));
+
+  const body = allMustache ? (
+    <Body style={{ margin: 0, padding: 0, backgroundColor: '#ffffff', fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif" }}>
+      <Container style={{ width: '100%', maxWidth: '100%', margin: 0, padding: '10px' }}>
+        {blockEls.flatMap((el, i) =>
+          i < blockEls.length - 1 ? [el, <Spacer key={`sp-${i}`} />] : [el],
+        )}
+      </Container>
+    </Body>
+  ) : (
+    <Body style={{ margin: 0, padding: 0, fontFamily: 'Helvetica, Arial, sans-serif' }}>
+      <Container style={{ maxWidth: 600, margin: '0 auto', padding: '24px' }}>{blockEls}</Container>
+    </Body>
+  );
+
   return (
     <Html lang="en">
       <Head>
@@ -67,21 +97,21 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
         {edition.subject && <title>{edition.subject}</title>}
       </Head>
       {edition.preheader && <Preview>{edition.preheader}</Preview>}
-      <Body style={{ margin: 0, padding: 0, fontFamily: 'Helvetica, Arial, sans-serif' }}>
-        <Container style={{ maxWidth: 600, margin: '0 auto', padding: '24px' }}>
-          {[...edition.blocks]
-            .sort((a, z) => a.sort_order - z.sort_order)
-            .map((block) => (
-              <BlockSlot
-                key={block.id}
-                block={block}
-                format={format}
-                meta={blockMeta.get(block.id)}
-              />
-            ))}
-        </Container>
-      </Body>
+      {body}
     </Html>
+  );
+}
+
+/** 10px vertical spacer between blocks — matches the legacy SPACER_TEMPLATE. */
+function Spacer(): ReactElement {
+  return (
+    <table width="100%" cellPadding={0} cellSpacing={0} role="presentation" style={{ borderCollapse: 'collapse' }}>
+      <tbody>
+        <tr>
+          <td style={{ height: 10, fontSize: 1, lineHeight: '1px' }}>{' '}</td>
+        </tr>
+      </tbody>
+    </table>
   );
 }
 
@@ -133,9 +163,32 @@ function BlockSlot({ block, format, meta }: BlockSlotProps): ReactElement | null
   // Mustache path
   const html = effective.mustache_html ?? '';
   if (!html) return null;
+
+  // Render the block's bricks and expose them as `bricks` so a bricked
+  // template's `{{{bricks}}}` placeholder is filled, mirroring the legacy
+  // previewRenderer. Leaf blocks have no bricks and ignore it. Without
+  // this, bricked mustache blocks (e.g. the community section) render the
+  // wrapper only and drop all brick content.
+  const bricksHtml = [...(block.bricks ?? [])]
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((brick) => {
+      const tpl = brick.brick_template?.content?.html_template ?? '';
+      if (!tpl) return '';
+      try {
+        return renderTemplate(tpl, brick.content, { partials: new Map<string, string>() });
+      } catch {
+        return '';
+      }
+    })
+    .join('\n');
+
   let rendered: string;
   try {
-    rendered = renderTemplate(html, block.content, { partials: new Map<string, string>() });
+    rendered = renderTemplate(
+      html,
+      { ...block.content, bricks: bricksHtml },
+      { partials: new Map<string, string>() },
+    );
   } catch (e) {
     return <Fallback message={`block ${block.id}: mustache render error: ${e instanceof Error ? e.message : String(e)}`} />;
   }

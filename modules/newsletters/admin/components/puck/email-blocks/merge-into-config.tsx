@@ -132,6 +132,13 @@ export interface MergeResult {
 
 export function mergeRegistryIntoConfig(args: MergeArgs): MergeResult {
   const collisions: string[] = [];
+  // NOTE: We deliberately do NOT apply `enableInlineEditing` to the base
+  // (Mustache) components. Their canvas render is string-template
+  // substitution mounted via dangerouslySetInnerHTML, so Puck's
+  // `contentEditable` can't inject an editable region — and worse, it makes
+  // Puck pass the field value as a React node, which the template stringifies
+  // to "[object Object]". Inline editing only works for react-email registry
+  // blocks (whose render exposes the value as an editable text node).
   const components = { ...(args.base.components ?? {}) };
   const categories: Record<string, { components: string[]; title?: string; defaultExpanded?: boolean }> = {};
 

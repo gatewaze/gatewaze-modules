@@ -948,11 +948,11 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           blockDefs={aiBlockDefs}
           config={configWithUserBlocks.config as never}
           data={data as never}
-          // Newsletters lock to the email column widths — 600px desktop
-          // (industry-standard email width), 375px mobile. Sites uses
-          // CanvasShell's default 1280/375.
+          // Newsletters lock to the email column width — 650px desktop (the
+          // authored email column width; the imported templates center 650px
+          // tables), 375px mobile. Sites uses CanvasShell's default 1280/375.
           viewports={[
-            { width: 600, height: 'auto', label: 'Desktop', icon: 'Monitor' },
+            { width: 650, height: 'auto', label: 'Desktop', icon: 'Monitor' },
             { width: 375, height: 'auto', label: 'Mobile', icon: 'Smartphone' },
           ]}
           overrides={{
@@ -1246,7 +1246,7 @@ const BASE_CANVAS_CSS = `
     box-sizing: border-box;
   }
   .gw-email-card {
-    max-width: 600px;
+    max-width: 650px;
     margin: 0 auto;
     border-radius: 6px;
     overflow: hidden;
