@@ -44,7 +44,7 @@ export const SponsoredAdBlock: EmailBlockEntry<SponsoredAdProps> = {
   },
   Component: ({ sponsor_name, headline, image_url, image_link, body, cta_text, cta_link }) => (
     <Section style={BORDERED_CARD}>
-      <Text style={EYEBROW}>PRESENTED BY {(sponsor_name || '').toUpperCase()}</Text>
+      <Text style={{ ...EYEBROW, textTransform: 'uppercase' }}>PRESENTED BY {sponsor_name}</Text>
       {headline ? (
         <Heading as="h2" style={{ margin: '0 0 10px', fontSize: '23px', fontWeight: 'bold', color: '#555', lineHeight: 1.2 }}>
           {headline}
