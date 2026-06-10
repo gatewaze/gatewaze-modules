@@ -4,10 +4,11 @@
  * `hidden_gems` Mustache block.
  */
 
-import { Section, Heading, Text, Link } from '@react-email/components';
+import { Heading, Text, Link } from '@react-email/components';
 import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { BORDERED_CARD, EYEBROW, TITLE, BODY, LINK } from './_shared.js';
+import { Card } from './_card.js';
+import { EYEBROW, TITLE, BODY, LINK } from './_shared.js';
 
 interface Gem extends Record<string, unknown> {
   link_text: string;
@@ -41,7 +42,7 @@ export const HiddenGemsBlock: EmailBlockEntry<HiddenGemsProps> = {
   Component: ({ title, gems }) => {
     const list = Array.isArray(gems) ? gems : [];
     return (
-      <Section style={BORDERED_CARD}>
+      <Card>
         <Text style={EYEBROW}>HIDDEN GEMS</Text>
         {title ? (
           <Heading as="h2" style={TITLE}>
@@ -58,7 +59,7 @@ export const HiddenGemsBlock: EmailBlockEntry<HiddenGemsProps> = {
             {g.description ? ` ${g.description}` : ''}
           </Text>
         ))}
-      </Section>
+      </Card>
     );
   },
 };

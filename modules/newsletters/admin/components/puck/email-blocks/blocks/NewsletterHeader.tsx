@@ -36,7 +36,8 @@ export const NewsletterHeaderBlock: EmailBlockEntry<NewsletterHeaderProps> = {
     subscribe_link: 'https://go.mlops.community/NL_Sub_Here',
   },
   Component: ({ shop_link, view_online_link, edition_date, subscribe_link }) => (
-    <Section style={{ ...COLUMN, padding: '15px 0' }}>
+    <Section style={COLUMN}>
+      <div style={{ padding: '15px 0' }}>
       <Text style={{ ...CENTER, fontSize: '16px' }}>
         <Link href={shop_link} style={LINK}>
           Shop
@@ -53,6 +54,7 @@ export const NewsletterHeaderBlock: EmailBlockEntry<NewsletterHeaderProps> = {
           Subscribe here
         </Link>
       </Text>
+      </div>
     </Section>
   ),
 };

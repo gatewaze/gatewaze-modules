@@ -6,10 +6,11 @@
  * export, so the brick components render inside this card.
  */
 
-import { Section, Text } from '@react-email/components';
+import { Text } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { renderSlot } from '../render-slot.js';
-import { BORDERED_CARD, EYEBROW } from './_shared.js';
+import { Card } from './_card.js';
+import { EYEBROW } from './_shared.js';
 
 interface MlopsCommunityProps extends Record<string, unknown> {
   children?: unknown;
@@ -24,9 +25,9 @@ export const MlopsCommunityBlock: EmailBlockEntry<MlopsCommunityProps> = {
   },
   defaultProps: { children: [] },
   Component: ({ children }) => (
-    <Section style={BORDERED_CARD}>
+    <Card>
       <Text style={EYEBROW}>MLOPS COMMUNITY</Text>
       {renderSlot(children)}
-    </Section>
+    </Card>
   ),
 };

@@ -4,11 +4,12 @@
  * and body are editable rich text with the original copy as defaults).
  */
 
-import { Section, Heading, Text } from '@react-email/components';
+import { Heading, Text } from '@react-email/components';
 import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { normalizeRichText } from '../rich-text.js';
-import { BORDERED_CARD, EYEBROW, TITLE, BODY } from './_shared.js';
+import { Card } from './_card.js';
+import { EYEBROW, TITLE, BODY } from './_shared.js';
 
 interface HowWeHelpProps extends Record<string, unknown> {
   title: string;
@@ -34,7 +35,7 @@ export const HowWeHelpBlock: EmailBlockEntry<HowWeHelpProps> = {
   },
   defaultProps: { title: 'Making the hard stuff simpler', body: DEFAULT_BODY },
   Component: ({ title = 'Making the hard stuff simpler', body = DEFAULT_BODY }) => (
-    <Section style={BORDERED_CARD}>
+    <Card>
       <Text style={EYEBROW}>HOW WE CAN HELP</Text>
       {title ? (
         <Heading as="h2" style={TITLE}>
@@ -42,6 +43,6 @@ export const HowWeHelpBlock: EmailBlockEntry<HowWeHelpProps> = {
         </Heading>
       ) : null}
       <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(body) }} />
-    </Section>
+    </Card>
   ),
 };

@@ -4,29 +4,17 @@
  * Mustache block (componentId === block_type so migrated content maps).
  */
 
-import { Section, Heading, Text } from '@react-email/components';
+import { Heading, Text } from '@react-email/components';
 import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { normalizeRichText } from '../rich-text.js';
+import { Card } from './_card.js';
+import { EYEBROW, TITLE, BODY } from './_shared.js';
 
 interface LastWeeksTakeProps extends Record<string, unknown> {
   title: string;
   body: string;
 }
-
-const CARD = {
-  border: '1px solid #4086c6',
-  borderRadius: '15px',
-  width: '650px',
-  maxWidth: '650px',
-  margin: '0 auto',
-  color: '#000',
-  padding: '15px',
-} as const;
-
-const EYEBROW = { margin: 0, fontSize: '12px', color: '#4086c6', fontWeight: 'bold' as const };
-const TITLE = { margin: '0 0 8px', fontSize: '24px', fontWeight: 'bold' as const, color: '#000', lineHeight: 1.2 };
-const BODY = { fontSize: '16px', color: '#555', lineHeight: 1.5 } as const;
 
 export const LastWeeksTakeBlock: EmailBlockEntry<LastWeeksTakeProps> = {
   componentId: 'last_weeks_take',
@@ -38,7 +26,7 @@ export const LastWeeksTakeBlock: EmailBlockEntry<LastWeeksTakeProps> = {
   },
   defaultProps: { title: '', body: '' },
   Component: ({ title, body }) => (
-    <Section style={CARD}>
+    <Card>
       <Text style={EYEBROW}>LAST WEEK&apos;S TAKE</Text>
       {title ? (
         <Heading as="h2" style={TITLE}>
@@ -46,6 +34,6 @@ export const LastWeeksTakeBlock: EmailBlockEntry<LastWeeksTakeProps> = {
         </Heading>
       ) : null}
       <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(body) }} />
-    </Section>
+    </Card>
   ),
 };

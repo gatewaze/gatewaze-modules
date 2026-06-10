@@ -11,13 +11,17 @@ import type { CSSProperties } from 'react';
 /** 650px centred column — the authored email width. */
 export const COLUMN: CSSProperties = { width: '650px', maxWidth: '650px', margin: '0 auto' };
 
-/** Fully-bordered rounded card (most content blocks). */
+/**
+ * Fully-bordered rounded card (most content blocks). NOTE: no padding here —
+ * react-email's <Section> renders a <table> and padding on the table doesn't
+ * push content inward. Content padding goes on the inner <div> (see the Card
+ * wrapper in _card.tsx), matching the legacy `td.pad` padding.
+ */
 export const BORDERED_CARD: CSSProperties = {
   ...COLUMN,
   border: '1px solid #4086c6',
   borderRadius: '15px',
   color: '#000',
-  padding: '15px',
 };
 
 /** Small uppercase brand-blue label above a heading. */
