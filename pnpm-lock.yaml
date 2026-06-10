@@ -60,8 +60,8 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1
       '@puckeditor/core':
-        specifier: ~0.21.2
-        version: 0.21.2(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))
+        specifier: ~0.21.3
+        version: 0.21.3(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))
       '@radix-ui/themes':
         specifier: ^3.3.0
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -1254,8 +1254,8 @@ importers:
         specifier: '*'
         version: link:../../../gatewaze/packages/shared
       '@puckeditor/core':
-        specifier: ~0.21.2
-        version: 0.21.2(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))
+        specifier: ~0.21.3
+        version: 0.21.3(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))
       '@react-email/components':
         specifier: ^1.0.12
         version: 1.0.12(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -1381,8 +1381,8 @@ importers:
         specifier: '*'
         version: link:../../../gatewaze/packages/shared
       '@puckeditor/core':
-        specifier: ~0.21.2
-        version: 0.21.2(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))
+        specifier: ~0.21.3
+        version: 0.21.3(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))
       isomorphic-dompurify:
         specifier: ^3.1.0
         version: 3.13.0(@noble/hashes@1.8.0)
@@ -4302,8 +4302,8 @@ packages:
   '@protobufjs/utf8@1.1.1':
     resolution: {integrity: sha512-oOAWABowe8EAbMyWKM0tYDKi8Yaox52D+HWZhAIJqQXbqe0xI/GV7FhLWqlEKreMkfDjshR5FKgi3mnle0h6Eg==}
 
-  '@puckeditor/core@0.21.2':
-    resolution: {integrity: sha512-XFkIb2Q5f74bG6FmNlupOfythTszythVSOm2ByeUwez5ePpWSUl94zy8GGxAbDLLqja4Pkx9TnLuuwZx2225aQ==}
+  '@puckeditor/core@0.21.3':
+    resolution: {integrity: sha512-KWjmBFAvCugl99ZqXuytPdBLh9V2WkKWb6nEu1bEuG0bVCy+w53o5C+rutcC+os+TfvjJbz5Q7Uvt1fyxvDOZg==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
 
@@ -14599,7 +14599,7 @@ snapshots:
 
   '@protobufjs/utf8@1.1.1': {}
 
-  '@puckeditor/core@0.21.2(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))':
+  '@puckeditor/core@0.21.3(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))':
     dependencies:
       '@dnd-kit/helpers': 0.1.18
       '@dnd-kit/react': 0.1.18(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
