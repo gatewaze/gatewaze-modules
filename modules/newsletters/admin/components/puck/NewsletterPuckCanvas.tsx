@@ -958,11 +958,17 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           blockDefs={aiBlockDefs}
           config={configWithUserBlocks.config as never}
           data={data as never}
-          // Newsletters lock to the email column width — 650px desktop (the
-          // authored email column width; the imported templates center 650px
-          // tables), 375px mobile. Sites uses CanvasShell's default 1280/375.
+          // Newsletters lock to the email column width. The Desktop frame is
+          // 682, not 650: the authored email column is 650px and the canvas
+          // body adds 16px of horizontal padding each side (see
+          // BASE_CANVAS_CSS), so a 650px frame left only 618px usable and
+          // clipped the right ~32px of the email. 682 = 650 + 2×16 gives the
+          // full 650px column room with its intended side margins. Mobile
+          // (375) is narrower than any 650px email; the .gw-email-card rules
+          // let the content shrink to fit rather than clip. Sites uses
+          // CanvasShell's default 1280/375.
           viewports={[
-            { width: 650, height: 'auto', label: 'Desktop', icon: 'Monitor' },
+            { width: 682, height: 'auto', label: 'Desktop', icon: 'Monitor' },
             { width: 375, height: 'auto', label: 'Mobile', icon: 'Smartphone' },
           ]}
           overrides={{
@@ -1256,11 +1262,20 @@ const BASE_CANVAS_CSS = `
     box-sizing: border-box;
   }
   .gw-email-card {
+    width: 100%;
     max-width: 650px;
     margin: 0 auto;
     border-radius: 6px;
     overflow: hidden;
     transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  /* The email column is authored at a fixed 650px. When the viewport is
+     narrower than that (the Mobile frame, or any pane tighter than 650),
+     cap the top-level tables to the card width so the template REDUCES to
+     fit instead of overflowing and being clipped by the card's
+     overflow:hidden. Scoped to the card so Puck's own chrome is untouched. */
+  .gw-email-card table {
+    max-width: 100%;
   }
   /* Reset table defaults for react-email components so authored padding
      / backgroundColor styles render predictably in the editor iframe. */
