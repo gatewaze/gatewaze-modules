@@ -7,14 +7,15 @@
  *   {{{key}}}          — raw HTML pass-through (only for format:"html"|"trusted-html")
  *   {{>children}}      — partial; expands to the rendered children HTML
  *                       (the only supported partial)
- *   {{#key}}…{{/key}}  — section (truthy renders body once)
+ *   {{#key}}…{{/key}}  — section: truthy scalar renders body once; an array
+ *                       value iterates, rendering the body per item with the
+ *                       item merged onto the parent context ({{.}} for scalars)
  *   {{^key}}…{{/key}}  — inverse section
  *
  * NOT supported (validated at ingest, rejected with templates.apply.unsupported_mustache_feature):
  *   - Lambdas / functions
  *   - Custom delimiters {{=…=}}
  *   - Comments {{! … }} (stripped at ingest)
- *   - Array iteration {{#items}}…{{/items}}
  *
  * Missing-field contract (§4.6):
  *   - {{key}} missing  → empty string
@@ -141,11 +142,26 @@ function renderTokens(
       case 'inverse_open': {
         const inverse = t.kind === 'inverse_open';
         const value = lookup(content, t.value);
-        const truthy = isTruthy(value);
-        const renderBody = inverse ? !truthy : truthy;
-        const inner = renderTokens(tokens, i + 1, content, options, { name: t.value, inverse });
-        if (renderBody) html += inner.html;
-        i = inner.end;
+        // Render once against the current context to locate the matching
+        // close (and to reuse the body for the scalar/inverse cases).
+        const base = renderTokens(tokens, i + 1, content, options, { name: t.value, inverse });
+        if (inverse) {
+          if (!isTruthy(value)) html += base.html;
+        } else if (Array.isArray(value)) {
+          // Array iteration (Mustache semantics): render the body once per
+          // item, with the item merged onto the parent context. Object items
+          // expose their own keys; scalar items are reachable via {{.}}.
+          for (const item of value) {
+            const itemCtx =
+              item !== null && typeof item === 'object' && !Array.isArray(item)
+                ? { ...content, ...(item as Record<string, unknown>) }
+                : { ...content, '.': item };
+            html += renderTokens(tokens, i + 1, itemCtx, options, { name: t.value }).html;
+          }
+        } else if (isTruthy(value)) {
+          html += base.html;
+        }
+        i = base.end;
         break;
       }
       case 'section_close':
