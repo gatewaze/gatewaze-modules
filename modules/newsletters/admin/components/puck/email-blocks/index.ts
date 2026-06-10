@@ -113,6 +113,19 @@ import { ProductGridBlock } from './blocks/ProductGrid.js';
 import { CartSummaryBlock } from './blocks/CartSummary.js';
 import { OrderReceiptBlock } from './blocks/OrderReceipt.js';
 import { ShippingTrackerBlock } from './blocks/ShippingTracker.js';
+import { JobOfWeekBlock } from './blocks/JobOfWeek.js';
+import { LastWeeksTakeBlock } from './blocks/LastWeeksTake.js';
+import { MlConfessionsBlock } from './blocks/MlConfessions.js';
+import { IntroParagraphBlock } from './blocks/IntroParagraph.js';
+import { HowWeHelpBlock } from './blocks/HowWeHelp.js';
+import { HotTakeBlock } from './blocks/HotTake.js';
+import { AgentInfrastructureBlock } from './blocks/AgentInfrastructure.js';
+import { HiddenGemsBlock } from './blocks/HiddenGems.js';
+import { SponsoredAdBlock } from './blocks/SponsoredAd.js';
+import { MemeOfWeekBlock } from './blocks/MemeOfWeek.js';
+import { AiSummaryBlock } from './blocks/AiSummary.js';
+import { NewsletterHeaderBlock } from './blocks/NewsletterHeader.js';
+import { NewsletterFooterBlock } from './blocks/NewsletterFooter.js';
 
 const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   // Navigation — composites
@@ -129,6 +142,21 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   IconListBlock as unknown as EmailBlockEntry,
   // Content — composites (basic / wizard)
   ContentSectionBlock as unknown as EmailBlockEntry,
+  // Content — newsletter (native ports of legacy mustache blocks)
+  JobOfWeekBlock as unknown as EmailBlockEntry,
+  IntroParagraphBlock as unknown as EmailBlockEntry,
+  HotTakeBlock as unknown as EmailBlockEntry,
+  LastWeeksTakeBlock as unknown as EmailBlockEntry,
+  MlConfessionsBlock as unknown as EmailBlockEntry,
+  HowWeHelpBlock as unknown as EmailBlockEntry,
+  AiSummaryBlock as unknown as EmailBlockEntry,
+  SponsoredAdBlock as unknown as EmailBlockEntry,
+  HiddenGemsBlock as unknown as EmailBlockEntry,
+  AgentInfrastructureBlock as unknown as EmailBlockEntry,
+  MemeOfWeekBlock as unknown as EmailBlockEntry,
+  // Layout — newsletter header/footer (distinct ids; generic header/footer exist)
+  NewsletterHeaderBlock as unknown as EmailBlockEntry,
+  NewsletterFooterBlock as unknown as EmailBlockEntry,
   HelixAiContentBlock as unknown as EmailBlockEntry,
   // Content — composites (data-driven via Puck resolveData)
   WeatherBlock as unknown as EmailBlockEntry,

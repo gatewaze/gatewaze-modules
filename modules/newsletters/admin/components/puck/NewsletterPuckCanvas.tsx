@@ -128,7 +128,14 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   // so we can reuse the existing Puck Config builder. Memoised — these
   // change rarely (only when the library reloads).
   const { blockDefs, brickDefs, lookup } = useMemo(() => {
-    const bd: BlockDefRow[] = blockTemplates.map((t) => ({
+    // Skip any mustache block_def whose block_type has a native react-email
+    // registry component — the registry block takes over (in the editor here
+    // and in the export via buildBlockMeta), so we don't build a shadowing
+    // mustache component for it. This is how a legacy block is "converted":
+    // ship the registry component with componentId === block_type.
+    const bd: BlockDefRow[] = blockTemplates
+      .filter((t) => !emailBlockRegistry.has(t.block_type))
+      .map((t) => ({
       id: t.id,
       key: t.block_type,
       name: t.name,
@@ -204,6 +211,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     const merged = mergeRegistryIntoConfig({
       base: base.config,
       registry: emailBlockRegistry,
+      renderHost,
       ...(enabledSet ? { enabledComponentIds: enabledSet } : {}),
     });
     // Replace the canvas root.render with a newsletter-specific shell
