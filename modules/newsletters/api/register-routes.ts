@@ -209,6 +209,147 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     }
   }));
 
+  // Admin guard for reporting. requireJwt sets req.userId; the service-role
+  // client bypasses RLS, so we verify admin explicitly here.
+  const requireAdmin = async (req: Request, res: Response): Promise<boolean> => {
+    const userId = (req as Request & { userId?: string }).userId;
+    if (!userId) {
+      res.status(401).json({ error: { code: 'unauthenticated', message: 'No session' } });
+      return false;
+    }
+    const { data } = await supabase
+      .from('admin_profiles')
+      .select('role, is_active')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const ok = !!data && data.is_active && ['super_admin', 'admin', 'editor'].includes(data.role);
+    if (!ok) {
+      res.status(403).json({ error: { code: 'forbidden', message: 'Admin access required' } });
+      return false;
+    }
+    return true;
+  };
+
+  // GET /api/admin/newsletters/reports/block-engagement
+  // Block-level click rollup. See spec-newsletter-link-tracking.md §6.1.
+  router.get('/newsletters/reports/block-engagement', wrap(async (req, res) => {
+    if (!(await requireAdmin(req, res))) return;
+    const q = req.query as Record<string, string | undefined>;
+    const { from, to } = q;
+    if (!from || !to || Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to))) {
+      res.status(400).json({ error: { code: 'invalid_range', message: 'from and to (ISO-8601) are required' } });
+      return;
+    }
+    const groupBy = q.group_by ?? 'block_type';
+    if (!['block_type', 'slug', 'edition', 'persona'].includes(groupBy)) {
+      res.status(400).json({ error: { code: 'invalid_group_by', message: 'group_by must be block_type|slug|edition|persona' } });
+      return;
+    }
+    const includeBots = q.include_bots === 'true';
+
+    // Tracked clicks in scope (edition_link_id resolved = tracked link).
+    let iq = supabase
+      .from('email_interactions')
+      .select('email_send_log_id, edition_link_id, block_id, block_type, edition_id, consent_suppressed, is_bot')
+      .eq('event_type', 'click')
+      .not('edition_link_id', 'is', null)
+      .gte('event_timestamp', from)
+      .lte('event_timestamp', to);
+    if (q.edition_id) iq = iq.eq('edition_id', q.edition_id);
+    if (q.block_type) iq = iq.eq('block_type', q.block_type);
+    const { data: clicks, error: iErr } = await iq.limit(200000);
+    if (iErr) {
+      res.status(500).json({ error: { code: 'query_failed', message: iErr.message } });
+      return;
+    }
+    const rows = (clicks ?? []) as Array<{
+      email_send_log_id: string; edition_link_id: string; block_id: string | null;
+      block_type: string | null; edition_id: string | null; consent_suppressed: boolean; is_bot: boolean;
+    }>;
+
+    // Optional dimension lookups.
+    const linkIds = [...new Set(rows.map((r) => r.edition_link_id))];
+    const slugByLink = new Map<string, string | null>();
+    if (groupBy === 'slug' && linkIds.length) {
+      const { data: links } = await supabase
+        .from('newsletters_edition_links')
+        .select('id, tracking_slug, block_type')
+        .in('id', linkIds);
+      for (const l of (links ?? []) as Array<{ id: string; tracking_slug: string | null; block_type: string }>) {
+        slugByLink.set(l.id, l.tracking_slug ?? l.block_type);
+      }
+    }
+    const personaByLog = new Map<string, string>();
+    if (groupBy === 'persona') {
+      const logIds = [...new Set(rows.filter((r) => !r.consent_suppressed).map((r) => r.email_send_log_id))];
+      const emailByLog = new Map<string, string>();
+      for (let i = 0; i < logIds.length; i += 500) {
+        const { data: logs } = await supabase
+          .from('email_send_log').select('id, recipient_email').in('id', logIds.slice(i, i + 500));
+        for (const l of (logs ?? []) as Array<{ id: string; recipient_email: string }>) emailByLog.set(l.id, l.recipient_email);
+      }
+      const emails = [...new Set([...emailByLog.values()])];
+      const personaByEmail = new Map<string, string>();
+      for (let i = 0; i < emails.length; i += 500) {
+        const { data: ppl } = await supabase
+          .from('people').select('email, attributes').in('email', emails.slice(i, i + 500));
+        for (const p of (ppl ?? []) as Array<{ email: string; attributes: Record<string, unknown> | null }>) {
+          const a = p.attributes ?? {};
+          const persona = (a.job_title ?? a.persona ?? a.segment ?? 'unknown') as string;
+          personaByEmail.set(p.email, String(persona) || 'unknown');
+        }
+      }
+      for (const [logId, email] of emailByLog) personaByLog.set(logId, personaByEmail.get(email) ?? 'unknown');
+    }
+
+    // sent_count for CTR (per edition in scope).
+    const editionIds = [...new Set(rows.map((r) => r.edition_id).filter(Boolean))] as string[];
+    let totalSent = 0;
+    if (editionIds.length) {
+      const { data: sends } = await supabase
+        .from('newsletter_sends').select('edition_id, sent_count').in('edition_id', editionIds);
+      for (const s of (sends ?? []) as Array<{ sent_count: number | null }>) totalSent += s.sent_count ?? 0;
+    }
+
+    // Aggregate.
+    interface Agg { key: string; edition_id: string | null; raw: number; humanPairs: Set<string>; recipients: Set<string>; }
+    const groups = new Map<string, Agg>();
+    for (const r of rows) {
+      let key: string;
+      if (groupBy === 'edition') key = r.edition_id ?? 'unknown';
+      else if (groupBy === 'slug') key = slugByLink.get(r.edition_link_id) ?? r.block_type ?? 'unknown';
+      else if (groupBy === 'persona') {
+        if (r.consent_suppressed) continue; // never attribute suppressed to a person
+        key = personaByLog.get(r.email_send_log_id) ?? 'unknown';
+      } else key = r.block_type ?? 'unknown';
+
+      let g = groups.get(key);
+      if (!g) { g = { key, edition_id: q.edition_id ?? (groupBy === 'edition' ? r.edition_id : null), raw: 0, humanPairs: new Set(), recipients: new Set() }; groups.set(key, g); }
+      if (includeBots || !r.is_bot) g.raw++;
+      if (!r.is_bot) {
+        g.humanPairs.add(`${r.email_send_log_id}|${r.edition_link_id}`);
+        if (!r.consent_suppressed) g.recipients.add(r.email_send_log_id);
+      }
+    }
+
+    const out = [...groups.values()].map((g) => {
+      const clicksN = g.humanPairs.size;
+      return {
+        block_type: groupBy === 'block_type' ? g.key : null,
+        tracking_slug: groupBy === 'slug' ? g.key : null,
+        edition_id: groupBy === 'edition' ? g.key : (q.edition_id ?? null),
+        persona: groupBy === 'persona' ? g.key : null,
+        clicks: clicksN,
+        raw_clicks: g.raw,
+        recipients: g.recipients.size,
+        sent: totalSent,
+        ctr: totalSent > 0 ? Number((clicksN / totalSent).toFixed(4)) : null,
+      };
+    }).sort((a, b) => b.clicks - a.clicks);
+
+    res.json({ group_by: groupBy, from, to, rows: out });
+  }));
+
   // Mount under /api/admin so the URL ends up at
   //   /api/admin/newsletters/editions/:editionId/publish-to-git etc.
   app.use('/api/admin', router);
