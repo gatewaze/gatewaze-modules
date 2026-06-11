@@ -5,9 +5,8 @@
  */
 
 import { Heading, Text, Img, Link } from '@react-email/components';
-import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { Card } from './_card.js';
 import { EYEBROW, BODY, LINK } from './_shared.js';
 
@@ -30,7 +29,7 @@ export const SponsoredAdBlock: EmailBlockEntry<SponsoredAdProps> = {
     headline: { type: 'text', label: 'Headline' },
     image_url: { type: 'text', label: 'Image URL' },
     image_link: { type: 'text', label: 'Image click link' },
-    body: { type: 'custom', customFormat: 'richtext', label: 'Body' } as Field,
+    body: { type: 'richtext', label: 'Body' },
     cta_text: { type: 'text', label: 'CTA text' },
     cta_link: { type: 'text', label: 'CTA link' },
   },
@@ -60,7 +59,7 @@ export const SponsoredAdBlock: EmailBlockEntry<SponsoredAdProps> = {
           />
         </Link>
       ) : null}
-      <div style={{ ...BODY, marginTop: '12px' }} dangerouslySetInnerHTML={{ __html: normalizeRichText(body) }} />
+      <RichText value={body} style={{ ...BODY, marginTop: '12px' }} />
       {cta_text ? (
         <Text style={{ ...BODY, marginTop: '12px' }}>
           <strong>

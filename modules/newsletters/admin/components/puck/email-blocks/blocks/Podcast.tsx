@@ -4,9 +4,8 @@
  */
 
 import { Section, Heading, Text, Link, Hr } from '@react-email/components';
-import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { BODY, LINK, DIVIDER } from './_shared.js';
 
 interface PodcastProps extends Record<string, unknown> {
@@ -23,7 +22,7 @@ export const PodcastBlock: EmailBlockEntry<PodcastProps> = {
   category: 'Community',
   fields: {
     title: { type: 'text', label: 'Title' },
-    description: { type: 'custom', customFormat: 'richtext', label: 'Description' } as Field,
+    description: { type: 'richtext', label: 'Description' },
     video_link: { type: 'text', label: 'Video link' },
     spotify_link: { type: 'text', label: 'Spotify link' },
     apple_link: { type: 'text', label: 'Apple link' },
@@ -36,7 +35,7 @@ export const PodcastBlock: EmailBlockEntry<PodcastProps> = {
           {title}
         </Heading>
       ) : null}
-      <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(description) }} />
+      <RichText value={description} style={BODY} />
       <Text style={{ ...BODY, marginTop: '8px' }}>
         <strong>
           {video_link ? (

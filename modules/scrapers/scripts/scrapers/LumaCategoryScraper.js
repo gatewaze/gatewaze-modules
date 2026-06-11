@@ -294,7 +294,7 @@ export class LumaCategoryScraper extends LumaSearchScraper {
     const { data: newScraper, error: insertErr } = await supabase
       .from('scrapers')
       .insert({
-        name, description: null, scraper_type: 'LumaICalScraper',
+        name, description: null, scraper_type: 'LumaICalScraperFast',
         event_type: 'mixed', base_url: calendarUrl, enabled: true,
         schedule_enabled: true, schedule_frequency: 'daily',
         schedule_time: scheduleTime, timezone: 'UTC', config: childConfig,

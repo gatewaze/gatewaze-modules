@@ -114,7 +114,7 @@ async function findOrCreateCalendarForScraper(scraperId) {
     .select('id, name, scraper_type, base_url, config')
     .eq('id', scraperId)
     .maybeSingle();
-  if (!scraper || scraper.scraper_type !== 'LumaICalScraper') {
+  if (!scraper || (scraper.scraper_type !== 'LumaICalScraper' && scraper.scraper_type !== 'LumaICalScraperFast')) {
     _scraperCalendarMissCache.add(scraperId);
     return null;
   }

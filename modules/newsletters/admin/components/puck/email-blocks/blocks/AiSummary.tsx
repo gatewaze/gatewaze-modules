@@ -6,9 +6,8 @@
  */
 
 import { Section, Heading } from '@react-email/components';
-import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { COLUMN, BODY } from './_shared.js';
 
 interface AiSummaryProps extends Record<string, unknown> {
@@ -22,7 +21,7 @@ export const AiSummaryBlock: EmailBlockEntry<AiSummaryProps> = {
   category: 'Content',
   fields: {
     section_title: { type: 'text', label: 'Section title' },
-    ai_body: { type: 'custom', customFormat: 'richtext', label: 'Content' } as Field,
+    ai_body: { type: 'richtext', label: 'Content' },
   },
   defaultProps: { section_title: '', ai_body: '' },
   Component: ({ section_title, ai_body }) => (
@@ -33,7 +32,7 @@ export const AiSummaryBlock: EmailBlockEntry<AiSummaryProps> = {
             {section_title}
           </Heading>
         ) : null}
-        <div style={{ ...BODY, fontSize: '16px', lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: normalizeRichText(ai_body) }} />
+        <RichText value={ai_body} style={{ ...BODY, fontSize: '16px', lineHeight: 1.6 }} />
       </div>
     </Section>
   ),

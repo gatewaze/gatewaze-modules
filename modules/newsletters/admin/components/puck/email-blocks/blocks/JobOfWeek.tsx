@@ -17,7 +17,7 @@
 import { Section, Text, Link, Hr } from '@react-email/components';
 import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 
 interface Job extends Record<string, unknown> {
   job_title: string;
@@ -50,7 +50,7 @@ export const JobOfWeekBlock: EmailBlockEntry<JobOfWeekProps> = {
         company: { type: 'text', label: 'Company' },
         location: { type: 'text', label: 'Location' },
         apply_link: { type: 'text', label: 'Apply Link' },
-        description: { type: 'custom', customFormat: 'richtext', label: 'Description' } as Field,
+        description: { type: 'richtext', label: 'Description' },
       },
       defaultItemProps: {
         job_title: 'Job title',
@@ -77,10 +77,11 @@ export const JobOfWeekBlock: EmailBlockEntry<JobOfWeekProps> = {
       <Section
         style={{
           backgroundColor: '#d7d7d7',
+          borderCollapse: 'separate',
           borderRadius: '15px',
           width: '650px',
           maxWidth: '650px',
-          margin: '0 auto',
+          margin: '0 auto 20px',
           color: '#000',
           paddingTop: '5px',
         }}
@@ -111,9 +112,9 @@ export const JobOfWeekBlock: EmailBlockEntry<JobOfWeekProps> = {
               </strong>
             </Text>
             {job.description ? (
-              <div
+              <RichText
+                value={job.description}
                 style={{ padding: '8px 15px 0 20px', fontSize: '16px', color: '#555', lineHeight: 1.5 }}
-                dangerouslySetInnerHTML={{ __html: normalizeRichText(job.description) }}
               />
             ) : null}
             {i < list.length - 1 ? <Hr style={DIVIDER_STYLE} /> : null}

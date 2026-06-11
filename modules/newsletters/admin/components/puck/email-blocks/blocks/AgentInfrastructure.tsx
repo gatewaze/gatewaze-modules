@@ -7,7 +7,7 @@
 import { Heading, Text, Hr, Link } from '@react-email/components';
 import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { Card } from './_card.js';
 import { EYEBROW, TITLE, BODY, LINK } from './_shared.js';
 
@@ -29,7 +29,7 @@ export const AgentInfrastructureBlock: EmailBlockEntry<AgentInfraProps> = {
   category: 'Content',
   fields: {
     title: { type: 'text', label: 'Title' },
-    body: { type: 'custom', customFormat: 'richtext', label: 'Body' } as Field,
+    body: { type: 'richtext', label: 'Body' },
     useful_links: {
       type: 'array',
       label: 'Useful links',
@@ -52,7 +52,7 @@ export const AgentInfrastructureBlock: EmailBlockEntry<AgentInfraProps> = {
             {title}
           </Heading>
         ) : null}
-        <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(body) }} />
+        <RichText value={body} style={BODY} />
         {links.length > 0 ? (
           <>
             <Hr style={{ border: 0, borderTop: '1px solid #bbb', margin: '16px 0' }} />

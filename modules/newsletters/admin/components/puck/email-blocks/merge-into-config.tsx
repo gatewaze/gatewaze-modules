@@ -19,13 +19,30 @@
  * dev mode so authors can notice.
  */
 
+import type { ReactNode } from 'react';
 import type { Config, Field } from '@puckeditor/core';
+import type { Editor } from '@tiptap/react';
+import Image from '@tiptap/extension-image';
 import type { EmailBlockEntry, EmailBlockRegistry } from './registry-types.js';
 import { NewsletterPaddingSliderField } from './number-slider-field-adapter.js';
+import { RichtextMenu } from './richtext-menu.js';
 import { wrapWithSpacing } from './spacing-wrapper.js';
 import { resolveCustomField } from '../../../../../sites/admin/components/canvas/puck/fields/index.js';
 import type { CustomFormat } from '../../../../../sites/admin/components/canvas/puck/json-schema-to-puck-fields.js';
 import type { PuckRenderHost } from '../../../../../sites/admin/components/canvas/puck/types.js';
+
+/** Email-safe Image extension for the richtext fields — full-width, block. */
+const RICHTEXT_IMAGE = Image.configure({
+  inline: false,
+  HTMLAttributes: { style: 'max-width:100%;height:auto;display:block;' },
+});
+
+type MenuRenderProps = {
+  children: ReactNode;
+  editor: Editor | null;
+  readOnly: boolean;
+  editorState?: unknown;
+};
 
 /**
  * Wire `customFormat` → render for a registry block's fields, recursing
@@ -91,27 +108,96 @@ const SPACING_DEFAULTS = {
 };
 
 /**
- * Default `contentEditable: true` on every text / textarea field that
- * doesn't explicitly opt out. This is what makes the canvas an inline
- * editor: Puck wraps the field's rendered text node in an editable
- * span. If a field's value isn't rendered as visible text (URLs on
- * `href`, colors as `style` values, sizes in `px`), `contentEditable`
- * is a no-op for it, so defaulting universally is safe — it only
- * kicks in where the prop shows as visible text.
+ * A field key whose value is rendered into an HTML *attribute* (href, src)
+ * rather than as visible text. Puck's `contentEditable` transform replaces
+ * the field's string value with a React node BEFORE the component renders —
+ * so `href={value}` / `src={value}` would stringify the node to
+ * "[object Object]" (and an `<Img src={node}>` shows a broken image). These
+ * fields must stay non-editable so Puck passes the raw string through; they
+ * are edited in the sidebar drawer instead.
  *
- * Blocks can still opt out per-field by setting
- * `contentEditable: false` explicitly. Custom / select / number /
- * boolean fields are left untouched (they have their own UI).
+ * Heuristic over the consistent field naming the blocks use: bare
+ * link/url/href/src, or any `*_link` / `*_url` / `*_href` / `*_src` suffix.
+ * Visible-text fields deliberately escape it — `link_text` (ends `_text`),
+ * `*_label`, `partner_email`, `edition_date`, titles, headlines.
+ */
+function isAttributeField(key: string): boolean {
+  if (['link', 'url', 'href', 'src'].includes(key)) return true;
+  return /_(?:link|url|href|src)$/.test(key);
+}
+
+/**
+ * Default `contentEditable: true` on every visible-text `text` / `textarea`
+ * field that doesn't explicitly opt out. This is what makes the canvas an
+ * inline editor: Puck wraps the field's rendered text node in an editable
+ * span.
+ *
+ * Attribute-valued fields (URLs on `href`, image `src`) are skipped — see
+ * `isAttributeField`. Unlike the prior assumption, `contentEditable` is NOT
+ * a no-op for those: Puck swaps the string for a React node regardless of how
+ * the component consumes it, so leaving them editable yields "[object Object]"
+ * in the attribute. Blocks can still force a choice per-field by setting
+ * `contentEditable` explicitly. Array/object child fields are intentionally
+ * left alone (several blocks string-concatenate item fields, which a node
+ * would break) — those edit in the sidebar.
  */
 function enableInlineEditing(fields: Record<string, Field>): Record<string, Field> {
   const out: Record<string, Field> = {};
   for (const [key, field] of Object.entries(fields)) {
     const type = (field as { type?: string }).type;
     const hasExplicit = (field as { contentEditable?: boolean }).contentEditable !== undefined;
-    if ((type === 'text' || type === 'textarea') && !hasExplicit) {
+    if ((type === 'text' || type === 'textarea') && !hasExplicit && !isAttributeField(key)) {
       out[key] = { ...field, contentEditable: true } as Field;
     } else {
       out[key] = field;
+    }
+  }
+  return out;
+}
+
+/**
+ * Apply newsletter defaults to every native `type:'richtext'` field, recursing
+ * into array/object child fields.
+ *
+ * `link.openOnClick: false` — tiptap's Link extension defaults to opening links
+ * on click, which fires even inside the inline editor: every click on linked
+ * text navigates away instead of placing a cursor, so the field reads as
+ * "not editable". Disabling it lets the operator click into linked text to
+ * edit. Per-field `options` still win (spread last).
+ */
+function applyRichtextDefaults(fields: Record<string, Field>): Record<string, Field> {
+  const out: Record<string, Field> = {};
+  for (const [key, f] of Object.entries(fields)) {
+    const field = f as {
+      type?: string;
+      options?: { link?: unknown };
+      arrayFields?: Record<string, Field>;
+      objectFields?: Record<string, Field>;
+    };
+    if (field.type === 'richtext') {
+      const existing = (field.options ?? {}) as Record<string, unknown>;
+      const existingLink = (existing.link ?? {}) as Record<string, unknown>;
+      const tiptap = (field as { tiptap?: { extensions?: unknown[] } }).tiptap;
+      out[key] = {
+        ...f,
+        // REQUIRED for inline canvas editing. Puck's richtext transform
+        // defaults contentEditable=true for ITS check, but the InlineEditor
+        // it mounts re-checks the RAW field — `if (!field.contentEditable)`
+        // — and an undefined value renders the static read-only RichTextRender
+        // (no caret, no overlay portal). Setting it explicitly mounts the
+        // editable tiptap editor inline, exactly like the single-line fields.
+        contentEditable: true,
+        options: { ...existing, link: { openOnClick: false, ...existingLink } },
+        tiptap: { ...tiptap, extensions: [RICHTEXT_IMAGE, ...(tiptap?.extensions ?? [])] },
+        renderMenu: (props: MenuRenderProps) => <RichtextMenu {...props} />,
+        renderInlineMenu: (props: MenuRenderProps) => <RichtextMenu {...props} />,
+      } as Field;
+    } else if (field.type === 'array' && field.arrayFields) {
+      out[key] = { ...f, arrayFields: applyRichtextDefaults(field.arrayFields) } as Field;
+    } else if (field.type === 'object' && field.objectFields) {
+      out[key] = { ...f, objectFields: applyRichtextDefaults(field.objectFields) } as Field;
+    } else {
+      out[key] = f;
     }
   }
   return out;
@@ -261,12 +347,14 @@ function puckEntryFromRegistry(
   // the field map and default `contentEditable: true` on every text /
   // textarea field — that's what gives every block in-canvas inline
   // editing without needing per-block `contentEditable: true` flags.
-  const mergedFields = resolveCustomRenders(
-    enableInlineEditing({
-      ...SPACING_FIELDS,
-      ...(entry.fields as Record<string, Field>),
-    }),
-    { renderHost },
+  const mergedFields = applyRichtextDefaults(
+    resolveCustomRenders(
+      enableInlineEditing({
+        ...SPACING_FIELDS,
+        ...(entry.fields as Record<string, Field>),
+      }),
+      { renderHost },
+    ),
   );
   assertCustomFieldsHaveRender(entry.componentId, mergedFields);
   const mergedDefaults = {

@@ -1382,6 +1382,23 @@ const BASE_CANVAS_CSS = `
   [class*="DraggableComponent"]:focus-within [class*="DraggableComponent-overlay"] {
     outline: none !important;
   }
+
+  /* Inline rich-text editing: dnd-kit marks the draggable component
+     wrapper user-select:none (so a drag doesn't select page text). The
+     tiptap contentEditable inside inherits it, which silently blocks
+     placing a cursor / selecting text — the editor renders but feels
+     "not editable". Force text selection + a text caret back on the
+     editable regions (tiptap's .ProseMirror / Puck's .rich-text and any
+     contenteditable). Scoped to the email card so Puck chrome is
+     untouched. */
+  .gw-email-card [data-puck-overlay-portal],
+  .gw-email-card .rich-text,
+  .gw-email-card .ProseMirror,
+  .gw-email-card [contenteditable="true"] {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    cursor: text;
+  }
 `;
 
 const CANVAS_LIGHT_CSS = `
