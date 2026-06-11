@@ -8,8 +8,12 @@
 
 import type { CSSProperties } from 'react';
 
-/** 650px centred column — the authored email width. */
-export const COLUMN: CSSProperties = { width: '650px', maxWidth: '650px', margin: '0 auto' };
+/**
+ * 650px centred column — the authored email width. The 20px bottom margin is
+ * the inter-block gap (the legacy editions used standalone 10px spacer tables
+ * between blocks; in the registry world each block self-spaces instead).
+ */
+export const COLUMN: CSSProperties = { width: '650px', maxWidth: '650px', margin: '0 auto 20px' };
 
 /**
  * Fully-bordered rounded card (most content blocks). NOTE: no padding here —
@@ -20,6 +24,10 @@ export const COLUMN: CSSProperties = { width: '650px', maxWidth: '650px', margin
 export const BORDERED_CARD: CSSProperties = {
   ...COLUMN,
   border: '1px solid #4086c6',
+  // <Section> is a <table>; the editor's CSS reset forces border-collapse:
+  // collapse, which silently drops border-radius. Force `separate` so the
+  // rounded corners actually render (border-spacing stays 0 via cellSpacing).
+  borderCollapse: 'separate',
   borderRadius: '15px',
   color: '#000',
 };

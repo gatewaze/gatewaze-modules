@@ -19,7 +19,7 @@ import { NewsletterCanvasEditor } from '../../components/puck/NewsletterCanvasEd
 import { EditionSendingTab } from '../../components/EditionSendingTab';
 import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
-import { stripStorageUrlsInJson } from '@gatewaze/shared';
+import { stripStorageUrlsInJson, resolveStoragePathsInJson } from '@gatewaze/shared';
 import {
   type NewsletterEdition,
   type BlockTemplate,
@@ -344,6 +344,11 @@ export default function EditionEditorPage() {
         },
       } as unknown as BrickTemplate);
 
+      // Content is persisted with RELATIVE storage paths (stripStorageUrlsInJson
+      // runs on save, below). Resolve them back to full public URLs for the
+      // editor — including `<img src>` inside rich-text HTML — so images render
+      // in the canvas. Save strips them again, keeping the DB env-portable.
+      const bucketUrl = `${(import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? ''}/storage/v1/object/public/media`;
       setEdition({
         id: editionData.id,
         edition_date: editionData.edition_date,
@@ -367,14 +372,14 @@ export default function EditionEditorPage() {
                 block_type: block.block_type,
                 content: { html_template: '', schema: {}, has_bricks: false },
               },
-          content: block.content || {},
+          content: resolveStoragePathsInJson(block.content || {}, bucketUrl),
           sort_order: block.sort_order,
           bricks: bricksData
             .filter((brick: DbEditionBrick) => brick.block_id === block.id)
             .map((brick: DbEditionBrick) => ({
               id: brick.id,
               brick_template: brick.brick_template ? adaptBrickTemplate(brick.brick_template) : brick.brick_template,
-              content: brick.content || {},
+              content: resolveStoragePathsInJson(brick.content || {}, bucketUrl),
               sort_order: brick.sort_order,
             })),
         })),

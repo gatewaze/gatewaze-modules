@@ -5,9 +5,8 @@
  */
 
 import { Section, Row, Column, Heading, Text, Button } from '@react-email/components';
-import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { COLUMN, EYEBROW, TITLE, BODY } from './_shared.js';
 
 interface HotTakeProps extends Record<string, unknown> {
@@ -36,7 +35,7 @@ export const HotTakeBlock: EmailBlockEntry<HotTakeProps> = {
   category: 'Content',
   fields: {
     title: { type: 'text', label: 'Title' },
-    body: { type: 'custom', customFormat: 'richtext', label: 'Body' } as Field,
+    body: { type: 'richtext', label: 'Body' },
     poll_option_1_label: { type: 'text', label: 'Poll option 1 label' },
     poll_option_1_link: { type: 'text', label: 'Poll option 1 link' },
     poll_option_2_label: { type: 'text', label: 'Poll option 2 label' },
@@ -64,6 +63,10 @@ export const HotTakeBlock: EmailBlockEntry<HotTakeProps> = {
         <Section
           style={{
             ...COLUMN,
+            // When a poll is attached, the body and poll are one visual card:
+            // drop the inter-block gap so the poll sits flush beneath.
+            marginBottom: hasPoll ? 0 : '20px',
+            borderCollapse: 'separate',
             borderLeft: '1px solid #4086c6',
             borderRight: '1px solid #4086c6',
             borderTop: '1px solid #4086c6',
@@ -79,13 +82,14 @@ export const HotTakeBlock: EmailBlockEntry<HotTakeProps> = {
                 {title}
               </Heading>
             ) : null}
-            <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(body) }} />
+            <RichText value={body} style={BODY} />
           </div>
         </Section>
         {hasPoll ? (
           <Section
             style={{
               ...COLUMN,
+              borderCollapse: 'separate',
               borderLeft: '1px solid #4086c6',
               borderRight: '1px solid #4086c6',
               borderBottom: '1px solid #4086c6',

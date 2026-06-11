@@ -5,9 +5,8 @@
  */
 
 import { Heading, Text } from '@react-email/components';
-import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { Card } from './_card.js';
 import { EYEBROW, TITLE, BODY } from './_shared.js';
 
@@ -31,7 +30,7 @@ export const HowWeHelpBlock: EmailBlockEntry<HowWeHelpProps> = {
   category: 'Content',
   fields: {
     title: { type: 'text', label: 'Title' },
-    body: { type: 'custom', customFormat: 'richtext', label: 'Body' } as Field,
+    body: { type: 'richtext', label: 'Body' },
   },
   defaultProps: { title: 'Making the hard stuff simpler', body: DEFAULT_BODY },
   Component: ({ title = 'Making the hard stuff simpler', body = DEFAULT_BODY }) => (
@@ -42,7 +41,7 @@ export const HowWeHelpBlock: EmailBlockEntry<HowWeHelpProps> = {
           {title}
         </Heading>
       ) : null}
-      <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(body) }} />
+      <RichText value={body} style={BODY} />
     </Card>
   ),
 };

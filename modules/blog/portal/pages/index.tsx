@@ -75,7 +75,7 @@ export default async function BlogListingPage() {
       ) : (
         <div className="pub-grid">
           {posts.map((post) => (
-            <Link key={post.id} href={`/blog/${post.slug}`} className="pub-card">
+            <Link key={post.id} href={`/blog/${post.slug}`} className="pub-card gw-card-glow">
               <div className="pub-cover">
                 {post.featured_image ? (
                   <img src={post.featured_image} alt={post.featured_image_alt || post.title} />

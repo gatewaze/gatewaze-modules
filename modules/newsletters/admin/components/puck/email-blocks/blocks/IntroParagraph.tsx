@@ -4,9 +4,8 @@
  */
 
 import { Section } from '@react-email/components';
-import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { COLUMN } from './_shared.js';
 
 interface IntroParagraphProps extends Record<string, unknown> {
@@ -18,12 +17,13 @@ export const IntroParagraphBlock: EmailBlockEntry<IntroParagraphProps> = {
   label: 'Intro Paragraph',
   category: 'Content',
   fields: {
-    text: { type: 'custom', customFormat: 'richtext', label: 'Intro Text' } as Field,
+    text: { type: 'richtext', label: 'Intro Text' },
   },
   defaultProps: { text: '' },
   Component: ({ text }) => (
     <Section style={COLUMN}>
-      <div
+      <RichText
+        value={text}
         style={{
           fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif",
           fontSize: '20px',
@@ -31,7 +31,6 @@ export const IntroParagraphBlock: EmailBlockEntry<IntroParagraphProps> = {
           color: '#555',
           padding: '20px 15px',
         }}
-        dangerouslySetInnerHTML={{ __html: normalizeRichText(text) }}
       />
     </Section>
   ),

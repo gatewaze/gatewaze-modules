@@ -5,9 +5,8 @@
  */
 
 import { Section, Heading, Text, Link, Hr } from '@react-email/components';
-import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { EYEBROW, BODY, LINK, BRICK_TITLE, DIVIDER } from './_shared.js';
 
 interface GenericSectionProps extends Record<string, unknown> {
@@ -25,7 +24,7 @@ export const GenericSectionBlock: EmailBlockEntry<GenericSectionProps> = {
   fields: {
     section_title: { type: 'text', label: 'Eyebrow label' },
     title: { type: 'text', label: 'Title' },
-    description: { type: 'custom', customFormat: 'richtext', label: 'Description' } as Field,
+    description: { type: 'richtext', label: 'Description' },
     link: { type: 'text', label: 'Link URL' },
     link_text: { type: 'text', label: 'Link text' },
   },
@@ -38,7 +37,7 @@ export const GenericSectionBlock: EmailBlockEntry<GenericSectionProps> = {
           {title}
         </Heading>
       ) : null}
-      <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(description) }} />
+      <RichText value={description} style={BODY} />
       {link && link_text ? (
         <Text style={{ ...BODY, marginTop: '8px' }}>
           <strong>

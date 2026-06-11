@@ -5,9 +5,8 @@
  */
 
 import { Heading, Text, Link } from '@react-email/components';
-import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
-import { normalizeRichText } from '../rich-text.js';
+import { RichText } from './_richtext.js';
 import { Card } from './_card.js';
 import { EYEBROW, TITLE, BODY, LINK } from './_shared.js';
 
@@ -25,7 +24,7 @@ export const MlConfessionsBlock: EmailBlockEntry<MlConfessionsProps> = {
   category: 'Content',
   fields: {
     title: { type: 'text', label: 'Title' },
-    story: { type: 'custom', customFormat: 'richtext', label: 'Story' } as Field,
+    story: { type: 'richtext', label: 'Story' },
     confess_link: { type: 'text', label: 'Confession form link' },
   },
   defaultProps: { title: '', story: '', confess_link: FALLBACK_LINK },
@@ -37,7 +36,7 @@ export const MlConfessionsBlock: EmailBlockEntry<MlConfessionsProps> = {
           {title}
         </Heading>
       ) : null}
-      <div style={BODY} dangerouslySetInnerHTML={{ __html: normalizeRichText(story) }} />
+      <RichText value={story} style={BODY} />
       <Text style={{ ...BODY, marginTop: '12px' }}>
         {'Share your confession '}
         <strong>
