@@ -16,6 +16,7 @@ import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
 import { NewsletterDetailsForm } from '../components/NewsletterDetailsForm';
 import { DeleteNewsletterCard } from '../components/DeleteNewsletterCard';
+import { GitPublishingSettings } from '../components/GitPublishingSettings';
 import { DefaultEditionTemplateCard } from '../components/DefaultEditionTemplateCard';
 import { NewsletterStatsTab } from '../components/NewsletterStatsTab';
 import { NewsletterRepliesTab } from '../components/NewsletterRepliesTab';
@@ -150,6 +151,7 @@ export default function NewsletterDetailPage() {
       {activeTab === 'details' && (
         <div className="py-2 space-y-6">
           <NewsletterDetailsForm newsletter={newsletter} onSave={loadNewsletter} />
+          <GitPublishingSettings collectionId={newsletter.id} />
           <DeleteNewsletterCard newsletterId={newsletter.id} newsletterName={newsletter.name} />
         </div>
       )}
