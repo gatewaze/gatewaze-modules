@@ -351,6 +351,13 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
           // — the operator needs to re-create the source to populate.
           token: persistedToken && persistedToken !== '<redacted>' ? persistedToken : null,
         });
+        // A successful manual check means upstream is reachable and parses;
+        // clear any stale error a prior failed check (or the drift-monitor)
+        // recorded, and stamp the check time. Best-effort, non-fatal.
+        await deps.supabase
+          .from('templates_sources')
+          .update({ last_check_error: null, last_checked_at: new Date().toISOString() })
+          .eq('id', sourceId);
         res.status(200).json({
           source: sourcePublic,
           preview: probe.hasChanges ? { headSha: probe.headSha, previousSha: probe.previousSha } : null,
@@ -358,6 +365,10 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
         return;
       } catch (e) {
         const message = e instanceof Error ? e.message : 'unknown error';
+        await deps.supabase
+          .from('templates_sources')
+          .update({ last_check_error: message, last_checked_at: new Date().toISOString() })
+          .eq('id', sourceId);
         return sendError(res, 502, 'upstream_error', `git check failed: ${message}`, { last_check_error: message });
       }
     }
