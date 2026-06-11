@@ -250,7 +250,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     // Tracked clicks in scope (edition_link_id resolved = tracked link).
     let iq = supabase
       .from('email_interactions')
-      .select('email_send_log_id, edition_link_id, block_id, block_type, edition_id, consent_suppressed, is_bot')
+      .select('email_send_log_id, edition_link_id, block_id, block_type, edition_id, personalization_consent, is_bot')
       .eq('event_type', 'click')
       .not('edition_link_id', 'is', null)
       .gte('event_timestamp', from)
@@ -264,7 +264,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     }
     const rows = (clicks ?? []) as Array<{
       email_send_log_id: string; edition_link_id: string; block_id: string | null;
-      block_type: string | null; edition_id: string | null; consent_suppressed: boolean; is_bot: boolean;
+      block_type: string | null; edition_id: string | null; personalization_consent: boolean; is_bot: boolean;
     }>;
 
     // Optional dimension lookups.
@@ -281,7 +281,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     }
     const personaByLog = new Map<string, string>();
     if (groupBy === 'persona') {
-      const logIds = [...new Set(rows.filter((r) => !r.consent_suppressed).map((r) => r.email_send_log_id))];
+      const logIds = [...new Set(rows.filter((r) => r.personalization_consent).map((r) => r.email_send_log_id))];
       const emailByLog = new Map<string, string>();
       for (let i = 0; i < logIds.length; i += 500) {
         const { data: logs } = await supabase
@@ -319,7 +319,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
       if (groupBy === 'edition') key = r.edition_id ?? 'unknown';
       else if (groupBy === 'slug') key = slugByLink.get(r.edition_link_id) ?? r.block_type ?? 'unknown';
       else if (groupBy === 'persona') {
-        if (r.consent_suppressed) continue; // never attribute suppressed to a person
+        if (!r.personalization_consent) continue; // opt-in: only attribute consented users
         key = personaByLog.get(r.email_send_log_id) ?? 'unknown';
       } else key = r.block_type ?? 'unknown';
 
@@ -328,7 +328,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
       if (includeBots || !r.is_bot) g.raw++;
       if (!r.is_bot) {
         g.humanPairs.add(`${r.email_send_log_id}|${r.edition_link_id}`);
-        if (!r.consent_suppressed) g.recipients.add(r.email_send_log_id);
+        g.recipients.add(r.email_send_log_id); // aggregate distinct-clicker count (no individual attribution)
       }
     }
 

@@ -16,10 +16,11 @@ ALTER TABLE public.email_interactions
   ADD COLUMN IF NOT EXISTS block_id        uuid,   -- denormalised for fast rollups
   ADD COLUMN IF NOT EXISTS block_type      text,
   ADD COLUMN IF NOT EXISTS edition_id      uuid,
-  -- Consent decision made AT INGEST (spec §7). When true the row still counts
-  -- toward aggregate block/edition metrics but must NEVER be attributed to an
-  -- individual; per-persona reporting filters these out.
-  ADD COLUMN IF NOT EXISTS consent_suppressed boolean NOT NULL DEFAULT false;
+  -- Personalization consent captured AT INGEST (spec §7). Opt-in model:
+  -- default false = consent NOT given. The row still counts toward aggregate
+  -- block/edition metrics, but is NEVER attributed to the individual.
+  -- Per-persona reporting only includes rows where this is true.
+  ADD COLUMN IF NOT EXISTS personalization_consent boolean NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_ei_edition_link
   ON public.email_interactions (edition_link_id)
