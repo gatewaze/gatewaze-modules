@@ -187,7 +187,7 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
 
   const handleCreateNew = async () => {
     if (!setupComplete) {
-      toast.error('Complete the newsletter setup first (Details tab)');
+      toast.error('Complete the newsletter setup first (Settings tab)');
       return;
     }
 
