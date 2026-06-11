@@ -5,7 +5,6 @@ import {
   RectangleGroupIcon,
   DocumentTextIcon,
   ChartBarIcon,
-  DocumentArrowDownIcon,
   ChatBubbleLeftRightIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
@@ -20,7 +19,6 @@ import { DeleteNewsletterCard } from '../components/DeleteNewsletterCard';
 import { DefaultEditionTemplateCard } from '../components/DefaultEditionTemplateCard';
 import { NewsletterStatsTab } from '../components/NewsletterStatsTab';
 import { NewsletterRepliesTab } from '../components/NewsletterRepliesTab';
-import { GDocImportTab } from '../components/GDocImportTab';
 import { EditorTab } from './EditorTab';
 
 interface Newsletter {
@@ -40,7 +38,7 @@ interface Newsletter {
   edition_count?: number;
 }
 
-type NewsletterTab = 'details' | 'template' | 'editions' | 'import' | 'replies' | 'stats';
+type NewsletterTab = 'details' | 'template' | 'editions' | 'replies' | 'stats';
 
 export default function NewsletterDetailPage() {
   const { slug, tab: tabFromUrl } = useParams<{ slug: string; tab?: string }>();
@@ -50,7 +48,7 @@ export default function NewsletterDetailPage() {
   const [newsletter, setNewsletter] = useState<Newsletter | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const validTabs: NewsletterTab[] = ['details', 'template', 'editions', 'import', ...(hasBulkEmailing ? ['replies' as NewsletterTab, 'stats' as NewsletterTab] : [])];
+  const validTabs: NewsletterTab[] = ['details', 'template', 'editions', ...(hasBulkEmailing ? ['replies' as NewsletterTab, 'stats' as NewsletterTab] : [])];
   const defaultTab: NewsletterTab = 'editions';
   const activeTab: NewsletterTab = validTabs.includes(tabFromUrl as NewsletterTab) ? (tabFromUrl as NewsletterTab) : defaultTab;
 
@@ -113,10 +111,9 @@ export default function NewsletterDetailPage() {
   const ic = 'size-4';
 
   const tabs: Tab[] = [
-    { id: 'details', label: 'Details', icon: <Cog6ToothIcon className={ic} /> },
+    { id: 'details', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
     { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
     { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
-    { id: 'import', label: 'Import', icon: <DocumentArrowDownIcon className={ic} /> },
     ...(hasBulkEmailing ? [
       { id: 'replies', label: 'Replies', icon: <ChatBubbleLeftRightIcon className={ic} /> },
       { id: 'stats', label: 'Stats', icon: <ChartBarIcon className={ic} /> },
@@ -166,12 +163,6 @@ export default function NewsletterDetailPage() {
       {activeTab === 'editions' && (
         <div className="py-2">
           <EditorTab newsletterId={newsletter.id} newsletterSlug={newsletter.slug} setupComplete={newsletter.setup_complete} />
-        </div>
-      )}
-
-      {activeTab === 'import' && (
-        <div className="py-2">
-          <GDocImportTab newsletterId={newsletter.id} newsletterSlug={newsletter.slug} />
         </div>
       )}
 
