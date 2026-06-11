@@ -17,7 +17,6 @@ import { useHasModule } from '@/hooks/useModuleFeature';
 import { NewsletterDetailsForm } from '../components/NewsletterDetailsForm';
 import { DeleteNewsletterCard } from '../components/DeleteNewsletterCard';
 import { GitPublishingSettings } from '../components/GitPublishingSettings';
-import { DefaultEditionTemplateCard } from '../components/DefaultEditionTemplateCard';
 import { NewsletterStatsTab } from '../components/NewsletterStatsTab';
 import { NewsletterRepliesTab } from '../components/NewsletterRepliesTab';
 import { EditorTab } from './EditorTab';
@@ -212,7 +211,6 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
   const [blocks, setBlocks] = useState<any[]>([]);
   const [sources, setSources] = useState<TemplatesSourceRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showGitForm, setShowGitForm] = useState(false);
 
   const reload = useCallback(async () => {
     const [blocksRes, sourcesRes] = await Promise.all([
@@ -267,38 +265,24 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
 
   return (
     <div className="space-y-8">
-      {/* Default edition template — picked once at the newsletter level
-          so each new edition starts from the same layout. Operators can
-          still customise per-edition; this just sets the starting point. */}
-      <section>
-        <DefaultEditionTemplateCard newsletterId={newsletterId} />
-      </section>
-
-      {/* Source section — git repo / uploads provenance */}
+      {/* Source section — provenance of this newsletter's templates. The
+          git repo is configured on the Settings tab (Git & Publishing);
+          this view shows the connected source read-only, plus a one-off
+          HTML upload path. */}
       <section>
         <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="text-lg font-semibold text-[var(--gray-12)]">Source</h2>
             <p className="text-xs text-[var(--gray-9)] mt-0.5">
-              Where this newsletter&apos;s templates come from. Connect a git repo for version-controlled templates, or upload a one-off HTML file.
+              Where this newsletter&apos;s templates come from. Connect a git repo on the <strong>Settings</strong> tab, or upload a one-off HTML file here.
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setShowGitForm((v) => !v)}>
-              {showGitForm ? 'Cancel' : 'Connect git repo'}
-            </Button>
             <Button variant="outline" onClick={() => navigate(`/newsletters/templates/${newsletterSlug}/upload`)}>
               Upload HTML
             </Button>
           </div>
         </div>
-
-        {showGitForm && (
-          <ConfigureGitSourceForm
-            libraryId={newsletterId}
-            onSaved={() => { setShowGitForm(false); reload(); }}
-          />
-        )}
 
         {sources.length === 0 ? (
           <div className="text-sm text-[var(--gray-9)] italic mt-3">No sources configured yet.</div>
@@ -417,7 +401,7 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
   };
 
   return (
-    <li className="p-3 border border-[var(--gray-a5)] rounded-lg flex items-start justify-between gap-3">
+    <li className="p-3 border border-[var(--gray-a5)] rounded-lg flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-medium text-[var(--gray-12)]">{s.label}</span>
