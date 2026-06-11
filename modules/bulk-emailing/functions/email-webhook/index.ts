@@ -66,9 +66,11 @@ async function resolveNewsletterLink(trackingKey: string): Promise<NewsletterLin
   }
 }
 
-/** Consent check at ingest: recipients who opted out of tracking are recorded
- *  as consent_suppressed so reporting never attributes the event to them. */
-async function isTrackingSuppressed(email: string): Promise<boolean> {
+/** Personalization-consent check at ingest (opt-in model). Returns true only
+ *  when the recipient has affirmatively consented to individual-level tracking;
+ *  only then may reporting attribute the event to the person. Defaults to false
+ *  (no consent → aggregate-only). */
+async function hasPersonalizationConsent(email: string): Promise<boolean> {
   try {
     const { data } = await supabase
       .from('people')
@@ -76,7 +78,7 @@ async function isTrackingSuppressed(email: string): Promise<boolean> {
       .eq('email', email)
       .maybeSingle()
     const attrs = (data as { attributes?: Record<string, unknown> } | null)?.attributes ?? {}
-    return attrs.newsletter_tracking_opt_out === true || attrs.tracking_opt_out === true
+    return attrs.personalization_consent === true
   } catch {
     return false
   }
@@ -146,7 +148,7 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
       }
     }
   }
-  const consentSuppressed = await isTrackingSuppressed(log.recipient_email)
+  const personalizationConsent = await hasPersonalizationConsent(log.recipient_email)
 
   // Insert raw interaction (default human_confidence = 1.0)
   const { data: interaction } = await supabase.from('email_interactions').insert({
@@ -162,7 +164,7 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
     block_id: resolved?.block_id ?? null,
     block_type: resolved?.block_type ?? null,
     edition_id: resolved?.edition_id ?? null,
-    consent_suppressed: consentSuppressed,
+    personalization_consent: personalizationConsent,
   }).select('id').single()
 
   if (!interaction) return
