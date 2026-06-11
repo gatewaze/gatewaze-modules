@@ -18,7 +18,7 @@ interface BlogPostProps extends Record<string, unknown> {
 export const BlogPostBlock: EmailBlockEntry<BlogPostProps> = {
   componentId: 'blog_post',
   label: 'Blog Post (brick)',
-  category: 'Community',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     description: { type: 'richtext', label: 'Description' },

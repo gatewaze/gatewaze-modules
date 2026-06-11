@@ -15,7 +15,7 @@ interface IntroParagraphProps extends Record<string, unknown> {
 export const IntroParagraphBlock: EmailBlockEntry<IntroParagraphProps> = {
   componentId: 'intro_paragraph',
   label: 'Intro Paragraph',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     text: { type: 'richtext', label: 'Intro Text' },
   },

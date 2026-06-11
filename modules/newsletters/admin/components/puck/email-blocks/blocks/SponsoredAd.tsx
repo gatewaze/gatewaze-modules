@@ -23,7 +23,7 @@ interface SponsoredAdProps extends Record<string, unknown> {
 export const SponsoredAdBlock: EmailBlockEntry<SponsoredAdProps> = {
   componentId: 'sponsored_ad',
   label: 'Sponsored Ad',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     sponsor_name: { type: 'text', label: 'Sponsor name' },
     headline: { type: 'text', label: 'Headline' },

@@ -32,7 +32,7 @@ const POLL_BUTTON = {
 export const HotTakeBlock: EmailBlockEntry<HotTakeProps> = {
   componentId: 'hot_take',
   label: 'Hot Take',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     body: { type: 'richtext', label: 'Body' },

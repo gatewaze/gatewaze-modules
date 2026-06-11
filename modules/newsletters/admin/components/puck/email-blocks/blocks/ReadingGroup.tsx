@@ -18,7 +18,7 @@ interface ReadingGroupProps extends Record<string, unknown> {
 export const ReadingGroupBlock: EmailBlockEntry<ReadingGroupProps> = {
   componentId: 'reading_group',
   label: 'Reading Group (brick)',
-  category: 'Community',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     description: { type: 'richtext', label: 'Description' },

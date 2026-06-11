@@ -18,7 +18,7 @@ interface AiSummaryProps extends Record<string, unknown> {
 export const AiSummaryBlock: EmailBlockEntry<AiSummaryProps> = {
   componentId: 'ai_summary',
   label: 'AI Summary',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     section_title: { type: 'text', label: 'Section title' },
     ai_body: { type: 'richtext', label: 'Content' },

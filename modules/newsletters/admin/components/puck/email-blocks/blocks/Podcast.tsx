@@ -19,7 +19,7 @@ interface PodcastProps extends Record<string, unknown> {
 export const PodcastBlock: EmailBlockEntry<PodcastProps> = {
   componentId: 'podcast',
   label: 'Podcast (brick)',
-  category: 'Community',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     description: { type: 'richtext', label: 'Description' },

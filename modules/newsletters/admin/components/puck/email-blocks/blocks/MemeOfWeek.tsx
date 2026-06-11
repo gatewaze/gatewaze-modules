@@ -15,7 +15,7 @@ interface MemeOfWeekProps extends Record<string, unknown> {
 export const MemeOfWeekBlock: EmailBlockEntry<MemeOfWeekProps> = {
   componentId: 'meme_of_week',
   label: 'Meme of the Week',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     image_url: { type: 'text', label: 'Meme image URL' },
   },

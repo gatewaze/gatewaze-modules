@@ -26,7 +26,7 @@ interface AgentInfraProps extends Record<string, unknown> {
 export const AgentInfrastructureBlock: EmailBlockEntry<AgentInfraProps> = {
   componentId: 'agent_infrastructure',
   label: 'Agent Infrastructure',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     body: { type: 'richtext', label: 'Body' },

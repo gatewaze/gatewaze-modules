@@ -22,7 +22,7 @@ const CENTER: CSSProperties = { margin: 0, textAlign: 'center', fontSize: '14px'
 export const NewsletterHeaderBlock: EmailBlockEntry<NewsletterHeaderProps> = {
   componentId: 'newsletter_header',
   label: 'Newsletter Header',
-  category: 'Layout',
+  category: 'MLOps Template',
   fields: {
     shop_link: { type: 'text', label: 'Shop link' },
     view_online_link: { type: 'text', label: 'View online link' },

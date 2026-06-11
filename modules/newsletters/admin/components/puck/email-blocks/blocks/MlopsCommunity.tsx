@@ -19,7 +19,7 @@ interface MlopsCommunityProps extends Record<string, unknown> {
 export const MlopsCommunityBlock: EmailBlockEntry<MlopsCommunityProps> = {
   componentId: 'mlops_community',
   label: 'MLOps Community',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     children: { type: 'slot', label: 'Bricks' },
   },
