@@ -39,7 +39,7 @@ const DIVIDER_STYLE = { border: 0, borderTop: '1px solid #bbb', margin: '10px 20
 export const JobOfWeekBlock: EmailBlockEntry<JobOfWeekProps> = {
   componentId: 'job_of_week',
   label: 'Job of the Week',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     header_title: { type: 'text', label: 'Header' },
     jobs: {

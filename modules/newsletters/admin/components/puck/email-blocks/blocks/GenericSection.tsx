@@ -20,7 +20,7 @@ interface GenericSectionProps extends Record<string, unknown> {
 export const GenericSectionBlock: EmailBlockEntry<GenericSectionProps> = {
   componentId: 'generic_section',
   label: 'Generic Section (brick)',
-  category: 'Community',
+  category: 'MLOps Template',
   fields: {
     section_title: { type: 'text', label: 'Eyebrow label' },
     title: { type: 'text', label: 'Title' },

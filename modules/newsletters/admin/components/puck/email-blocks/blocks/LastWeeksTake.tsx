@@ -18,7 +18,7 @@ interface LastWeeksTakeProps extends Record<string, unknown> {
 export const LastWeeksTakeBlock: EmailBlockEntry<LastWeeksTakeProps> = {
   componentId: 'last_weeks_take',
   label: "Last Week's Take",
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     body: { type: 'richtext', label: 'Body' },

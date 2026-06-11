@@ -21,7 +21,7 @@ const FALLBACK_LINK = 'https://forms.gle/8EDvXGizxyFVKfwy8';
 export const MlConfessionsBlock: EmailBlockEntry<MlConfessionsProps> = {
   componentId: 'ml_confessions',
   label: 'ML Confessions',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     story: { type: 'richtext', label: 'Story' },

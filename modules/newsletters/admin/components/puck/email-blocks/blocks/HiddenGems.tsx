@@ -24,7 +24,7 @@ interface HiddenGemsProps extends Record<string, unknown> {
 export const HiddenGemsBlock: EmailBlockEntry<HiddenGemsProps> = {
   componentId: 'hidden_gems',
   label: 'Hidden Gems',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     gems: {

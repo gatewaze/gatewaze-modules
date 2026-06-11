@@ -30,7 +30,7 @@ const CENTER: CSSProperties = {
 export const NewsletterFooterBlock: EmailBlockEntry<NewsletterFooterProps> = {
   componentId: 'newsletter_footer',
   label: 'Newsletter Footer',
-  category: 'Layout',
+  category: 'MLOps Template',
   fields: {
     partner_email: { type: 'text', label: 'Partner email' },
     slack_link: { type: 'text', label: 'Slack link' },

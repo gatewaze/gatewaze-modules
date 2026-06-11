@@ -51,6 +51,7 @@ import type {
 import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js';
 import { emailBlockRegistry } from './email-blocks/index.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
+import { BlockSearchComponents } from './block-search.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
 import { CanvasShell } from '../../../../sites/admin/components/canvas/puck/CanvasShell.js';
 import { buildAiBlockDefs } from './email-blocks/build-ai-block-defs.js';
@@ -972,6 +973,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             { width: 375, height: 'auto', label: 'Mobile', icon: 'Smartphone' },
           ]}
           overrides={{
+            // Search box at the top of the Blocks drawer — filters the
+            // (now large) block palette by label / component id.
+            components: BlockSearchComponents as never,
             // Inject "Save block" alongside Puck's default
             // delete/duplicate buttons in the contextual action bar
             // that appears around the selected component. Mirrors the

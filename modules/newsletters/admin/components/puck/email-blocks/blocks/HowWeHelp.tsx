@@ -27,7 +27,7 @@ const DEFAULT_BODY =
 export const HowWeHelpBlock: EmailBlockEntry<HowWeHelpProps> = {
   componentId: 'how_we_help',
   label: 'How We Can Help',
-  category: 'Content',
+  category: 'MLOps Template',
   fields: {
     title: { type: 'text', label: 'Title' },
     body: { type: 'richtext', label: 'Body' },
