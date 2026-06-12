@@ -30,8 +30,17 @@ import { promisify } from 'node:util';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { editionFolderSlug } from '../lib/edition-slug.js';
 
 const execFileP = promisify(execFile);
+
+/** One entry in the publish branch's root `editions.json` archive manifest. */
+interface ArchiveEntry {
+  slug: string;
+  edition_date: string;
+  subject: string | null;
+  preheader: string | null;
+}
 
 /**
  * PostgREST returns bytea columns as `\\x<hex>` strings. Tokens written
@@ -180,7 +189,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
       }
       const collRes = await deps.supabase
         .from('newsletters_template_collections')
-        .select('id, slug, name, git_provenance, git_url, git_url_theme, git_branch, config')
+        .select('id, slug, name, git_provenance, git_url, git_url_theme, git_branch, config, view_online_external_base_url')
         .eq('id', ed.collection_id)
         .maybeSingle();
       if (collRes.error || !collRes.data) {
@@ -211,6 +220,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
             embed_media_in_git?: boolean;
           };
         } | null;
+        view_online_external_base_url: string | null;
       };
       const newsletterConfig = collection.config ?? {};
       const newsletterId = collection.id;
@@ -312,6 +322,12 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
       //    that exact shape.
       const files = new Map<string, Buffer | string>();
 
+      // Local workspace branch on the internal bare repo — always 'publish'
+      // (the edition-writer + snapshot-job target it). The REMOTE branch name
+      // is resolved separately at push time (step 7). Declared here so the
+      // archive-manifest read below can reference it.
+      const localPublishBranch = 'publish';
+
       // Theme overlay (optional). Failures are logged but non-fatal —
       // the edition still publishes with platform-only deltas. The
       // operator's deploy target needs to supply the theme separately
@@ -347,51 +363,79 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         }
       }
 
-      // Platform-emitted artifacts written LAST so they win any collision.
-      files.set(`editions/${ed.id}.html`, html);
-      files.set(`editions/${ed.id}.json`, JSON.stringify({
+      // Each edition is its own folder at the publish-branch root:
+      //   <date-subject>/index.html   — the rendered email, served at
+      //                                 <base>/<date-subject>/ (no .html suffix)
+      //   <date-subject>/edition.json — machine-readable snapshot alongside it
+      // The slug is shared with the send-time "View Online" link so the two
+      // always resolve to the same path.
+      const editionSlug = editionFolderSlug(ed.edition_date, ed.title);
+      files.set(`${editionSlug}/index.html`, html);
+      // Effective per-block render path sent by the editor (how the HTML was
+      // actually produced). Falls back to the templates_block_defs metadata
+      // for older clients that don't send it.
+      const blockRenderById = new Map<string, { render_kind?: string; component_id?: string }>();
+      if (Array.isArray(req.body?.blockRender)) {
+        for (const r of req.body.blockRender as Array<{ id?: unknown; render_kind?: unknown; component_id?: unknown }>) {
+          if (r && typeof r.id === 'string') {
+            blockRenderById.set(r.id, {
+              render_kind: typeof r.render_kind === 'string' ? r.render_kind : undefined,
+              component_id: typeof r.component_id === 'string' ? r.component_id : undefined,
+            });
+          }
+        }
+      }
+      files.set(`${editionSlug}/edition.json`, JSON.stringify({
         id: ed.id,
+        slug: editionSlug,
         edition_date: ed.edition_date,
         subject: ed.title,
         preheader: ed.preheader,
         status: ed.status,
-        blocks: blockRows.map((b) => ({
-          id: b.id,
-          block_type: b.block_type,
-          content: b.content,
-          sort_order: b.sort_order,
-          render_kind: b.block_template?.render_kind ?? 'react-email',
-          component_id: b.block_template?.component_id ?? b.block_type,
-        })),
+        blocks: blockRows.map((b) => {
+          const eff = blockRenderById.get(b.id);
+          return {
+            id: b.id,
+            block_type: b.block_type,
+            content: b.content,
+            sort_order: b.sort_order,
+            render_kind: eff?.render_kind ?? b.block_template?.render_kind ?? 'react-email',
+            component_id: eff?.component_id ?? b.block_template?.component_id ?? b.block_type,
+          };
+        }),
       }, null, 2));
 
-      // Browsable, slugged copy of this edition for the static publish site
-      // (clean URL like /editions/2026-06-04.html). The UUID artifacts above
-      // stay for machine consumers; this slugged path is what the email
-      // "View Online" link and the archive index point at. Slug = edition_date
-      // (one edition per date is the newsletter convention; a same-date
-      // re-publish overwrites that day's page).
-      const editionSlug = String(ed.edition_date);
-      files.set(`editions/${editionSlug}.html`, html);
-
-      // Regenerate the archive index from every published edition of this
-      // newsletter (plus the one being published now, which may not be flipped
-      // to 'published' in the DB yet). Written on each publish so the static
-      // site always has an up-to-date list. Non-fatal on failure.
+      // Maintain a root archive: `editions.json` (the manifest of everything
+      // published to this branch) drives a regenerated `index.html`. The
+      // manifest is the source of truth — NOT the DB — because editions are
+      // pushed to git while still in 'draft' status, so a status query would
+      // miss them. Read the existing manifest off the branch, upsert this
+      // edition, and rewrite. Non-fatal on failure.
       try {
-        const pubRes = await deps.supabase
-          .from('newsletters_editions')
-          .select('id, title, edition_date, preheader, status')
-          .eq('collection_id', ed.collection_id)
-          .eq('status', 'published')
-          .order('edition_date', { ascending: false });
-        const rows = (pubRes.data ?? []) as Array<{
-          id: string; title: string | null; edition_date: string; preheader: string | null;
-        }>;
-        if (!rows.some((r) => r.id === ed.id)) {
-          rows.unshift({ id: ed.id, title: ed.title, edition_date: String(ed.edition_date), preheader: ed.preheader });
+        let manifest: ArchiveEntry[] = [];
+        try {
+          const { stdout } = await execFileP(
+            'git',
+            ['show', `${localPublishBranch}:editions.json`],
+            { cwd: repo.barePath, timeout: 10_000 },
+          );
+          const parsed = JSON.parse(stdout);
+          if (Array.isArray(parsed)) manifest = parsed as ArchiveEntry[];
+        } catch {
+          // No manifest yet (first publish) — start fresh.
         }
-        files.set('index.html', renderArchiveIndex(collection.name || newsletterSlug, rows));
+        manifest = manifest.filter((e) => e.slug !== editionSlug);
+        manifest.push({
+          slug: editionSlug,
+          edition_date: String(ed.edition_date),
+          subject: ed.title,
+          preheader: ed.preheader,
+        });
+        manifest.sort((a, b) => b.edition_date.localeCompare(a.edition_date));
+        const siteBase = collection.view_online_external_base_url?.trim().replace(/\/+$/, '') || '';
+        files.set('editions.json', JSON.stringify(manifest, null, 2));
+        files.set('index.html', renderArchiveIndex(collection.name || newsletterSlug, manifest, { hasFeed: true }));
+        files.set('feed.xml', renderRssFeed(collection.name || newsletterSlug, siteBase, manifest));
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[newsletters publish-to-git] archive index generation failed (continuing)', {
@@ -399,14 +443,10 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         });
       }
 
-      // Commit to the configured local publish branch (always 'publish'
-      // on the internal bare repo — that's the workspace branch the
-      // edition-writer + snapshot-job already target). Migration 027
-      // stored a `git_branch` column for legacy reasons; for the
-      // INTERNAL commit we keep it as 'publish' because the publish-
-      // worker abstraction is the one that knows about the remote-side
-      // branch name (see step 7 below).
-      const localPublishBranch = 'publish';
+      // Commit to the local publish branch (localPublishBranch, declared
+      // above). Migration 027 stored a `git_branch` column for legacy
+      // reasons; the INTERNAL commit stays on 'publish' — the publish-worker
+      // abstraction owns the remote-side branch name (see step 7 below).
       const result = await deps.gitServer.publishCommit({
         repo: { id: repo.id, barePath: repo.barePath },
         branch: localPublishBranch,
@@ -621,28 +661,28 @@ function escapeHtml(s: string): string {
 
 /**
  * Render the static archive index for the publish branch — a self-contained
- * `index.html` listing every published edition, newest first, linking to the
- * slugged `editions/<edition_date>.html` pages. A static host (GitHub Pages /
- * Netlify / Cloudflare Pages) pointed at the publish branch serves this as the
- * newsletter's public archive with no build step.
+ * `index.html` listing every published edition, newest first, linking to each
+ * edition's `<slug>/` folder (clean URL, no `.html`). A static host (GitHub
+ * Pages / Netlify / Cloudflare Pages) pointed at the publish branch serves this
+ * as the newsletter's public archive with no build step.
  */
 export function renderArchiveIndex(
   title: string,
-  editions: Array<{ id: string; title: string | null; edition_date: string; preheader: string | null }>,
+  editions: Array<{ slug: string; edition_date: string; subject: string | null; preheader: string | null }>,
+  opts: { hasFeed?: boolean } = {},
 ): string {
   const items = editions
     .map((e) => {
-      const slug = String(e.edition_date);
       const dateLabel = (() => {
-        const d = new Date(`${slug}T00:00:00Z`);
+        const d = new Date(`${e.edition_date}T00:00:00Z`);
         return Number.isNaN(d.getTime())
-          ? slug
+          ? e.edition_date
           : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
       })();
-      const heading = escapeHtml(e.title?.trim() || dateLabel);
+      const heading = escapeHtml(e.subject?.trim() || dateLabel);
       const preheader = e.preheader?.trim() ? `<p class="pre">${escapeHtml(e.preheader.trim())}</p>` : '';
       return `      <li class="edition">
-        <a href="editions/${encodeURIComponent(slug)}.html">
+        <a href="${e.slug.split('/').map(encodeURIComponent).join('/')}/">
           <span class="date">${escapeHtml(dateLabel)}</span>
           <span class="title">${heading}</span>
           ${preheader}
@@ -652,12 +692,18 @@ export function renderArchiveIndex(
     .join('\n');
 
   const safeTitle = escapeHtml(title);
+  const feedLink = opts.hasFeed
+    ? `\n  <link rel="alternate" type="application/rss+xml" title="${safeTitle}" href="feed.xml" />`
+    : '';
+  const feedCta = opts.hasFeed
+    ? `\n  <p class="sub"><a href="feed.xml" class="rss">Subscribe via RSS</a></p>`
+    : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${safeTitle} — Archive</title>
+  <title>${safeTitle} — Archive</title>${feedLink}
   <style>
     :root { color-scheme: light dark; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -672,21 +718,76 @@ export function renderArchiveIndex(
     .date { display: block; font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: .04em; }
     .title { display: block; font-size: 18px; font-weight: 600; margin-top: 2px; }
     .pre { margin: 4px 0 0; color: #666; font-size: 14px; }
+    .rss { color: #c2570c; text-decoration: none; }
+    .rss:hover { text-decoration: underline; }
     @media (prefers-color-scheme: dark) {
       body { color: #eaeaea; background: #111; }
       .sub, .date, .pre { color: #999; }
       .edition { border-color: #2a2a2a; }
       .edition a:hover { background: #1a1a1a; }
+      .rss { color: #f0822e; }
     }
   </style>
 </head>
 <body>
   <h1>${safeTitle}</h1>
-  <p class="sub">Newsletter archive — ${editions.length} edition${editions.length === 1 ? '' : 's'}</p>
+  <p class="sub">Newsletter archive — ${editions.length} edition${editions.length === 1 ? '' : 's'}</p>${feedCta}
   <ul>
 ${items}
   </ul>
 </body>
 </html>
+`;
+}
+
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * Render an RSS 2.0 feed (feed.xml) for the publish-branch root. Items link to
+ * each edition's `<slug>/` folder, resolved against the newsletter's configured
+ * site base URL when present; otherwise links are folder-relative (feed readers
+ * resolve them against the feed URL). Referenced from index.html via
+ * <link rel="alternate" type="application/rss+xml">.
+ */
+export function renderRssFeed(
+  title: string,
+  siteBase: string,
+  editions: Array<{ slug: string; edition_date: string; subject: string | null; preheader: string | null }>,
+): string {
+  const base = siteBase.replace(/\/+$/, '');
+  const items = editions
+    .map((e) => {
+      const path = `${e.slug.split('/').map(encodeURIComponent).join('/')}/`;
+      const link = base ? `${base}/${path}` : path;
+      const d = new Date(`${e.edition_date}T00:00:00Z`);
+      const pubDate = Number.isNaN(d.getTime()) ? '' : `\n      <pubDate>${d.toUTCString()}</pubDate>`;
+      const desc = e.preheader?.trim() ? `\n      <description>${escapeXml(e.preheader.trim())}</description>` : '';
+      return `    <item>
+      <title>${escapeXml(e.subject?.trim() || e.edition_date)}</title>
+      <link>${escapeXml(link)}</link>
+      <guid isPermaLink="false">${escapeXml(e.slug)}</guid>${pubDate}${desc}
+    </item>`;
+    })
+    .join('\n');
+
+  const channelTitle = escapeXml(title);
+  const selfHref = base ? `${base}/feed.xml` : 'feed.xml';
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${channelTitle}</title>
+    <link>${escapeXml(base || '')}</link>
+    <description>${channelTitle} — newsletter archive</description>
+    <atom:link href="${escapeXml(selfHref)}" rel="self" type="application/rss+xml" />
+${items}
+  </channel>
+</rss>
 `;
 }
