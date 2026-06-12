@@ -690,10 +690,17 @@ export default function EditionEditorPage() {
             // blocks available out of the box. Mustache rows still appear
             // alongside whichever registry surface is active.
             {...(() => {
-              const explicit = (blockTemplates as Array<{ render_kind?: string; component_id?: string | null }>)
+              const blockIds = (blockTemplates as Array<{ render_kind?: string; component_id?: string | null }>)
                 .filter((t) => t.render_kind === 'react-email' && typeof t.component_id === 'string' && t.component_id.length > 0)
                 .map((t) => t.component_id as string);
-              return explicit.length > 0 ? { enabledRegistryComponentIds: explicit } : {};
+              if (blockIds.length === 0) return {};
+              // Slots (e.g. mlops_community) render their bricks via the registry
+              // too — include the brick component_ids (brick_type === registry
+              // key) so they aren't filtered out ("No configuration for podcast").
+              const brickIds = (brickTemplates as Array<{ brick_type?: string }>)
+                .map((b) => b.brick_type)
+                .filter((k): k is string => typeof k === 'string' && k.length > 0);
+              return { enabledRegistryComponentIds: [...new Set([...blockIds, ...brickIds])] };
             })()}
             onChange={setEdition}
             onSave={handleSave}
