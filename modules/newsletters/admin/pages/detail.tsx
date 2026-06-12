@@ -391,6 +391,7 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
       const session = await supabase.auth.getSession();
       const accessToken = session.data.session?.access_token;
       const auth = accessToken ? `Bearer ${accessToken}` : '';
+      let declCount = 0;
 
       const applyRes = await fetch(`/api/modules/templates/sources/${s.id}/apply`, {
         method: 'POST',
@@ -428,19 +429,23 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
           console.warn('[update] wrapper config sync failed', await cfgRes.json().catch(() => null));
         }
 
-        // Pull declarative (html-ish) blocks from the repo's blocks/ directory.
+        // Pull declarative (html-ish) blocks + bricks from the repo.
         const declRes = await fetch(
           `${apiUrl}/api/admin/newsletters/collections/${s.library_id}/sync-declarative-blocks`,
           { method: 'POST', headers: { Authorization: auth } },
         );
+        const declBody = (await declRes.json().catch(() => null)) as { synced?: number; bricksSynced?: number } | null;
         if (!declRes.ok) {
           // eslint-disable-next-line no-console
-          console.warn('[update] declarative block sync failed', await declRes.json().catch(() => null));
+          console.warn('[update] declarative block sync failed', declBody);
+        } else {
+          declCount = (declBody?.synced ?? 0) + (declBody?.bricksSynced ?? 0);
         }
       }
 
-      const count = Array.isArray(applyBody?.applied) ? applyBody.applied.length : 0;
-      toast.success(`Template updated — ${count} item${count === 1 ? '' : 's'} synced`);
+      const applyCount = Array.isArray(applyBody?.applied) ? applyBody.applied.length : 0;
+      const total = applyCount + declCount;
+      toast.success(`Template updated — ${total} item${total === 1 ? '' : 's'} synced`);
       onChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Update failed');
