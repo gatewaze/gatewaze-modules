@@ -32,6 +32,27 @@ import type { NewsletterEdition, EditionBlock } from '../../../utils/types.js';
 import { getEmailBlock, type FormatId } from './index.js';
 import { renderTemplate } from '../../../../../sites/lib/canvas-render/mustache-subset.js';
 import { extractSpacing, wrapWithSpacing } from './spacing-wrapper.js';
+import { NewsletterHeaderBlock } from './blocks/NewsletterHeader.js';
+import { NewsletterFooterBlock } from './blocks/NewsletterFooter.js';
+
+/**
+ * Fixed header/footer chrome for a newsletter, sourced from the template git
+ * repo (synced into `newsletters_template_collections.config.wrapper`). When
+ * present, every edition renders inside this header + footer and the
+ * header/footer are no longer editable blocks. Links are fixed in the
+ * template; only the edition date and view-online URL vary per edition.
+ */
+export interface EditionWrapperConfig {
+  header?: { shop_link?: string; subscribe_link?: string };
+  footer?: {
+    partner_email?: string;
+    slack_link?: string;
+    youtube_link?: string;
+    podcast_link?: string;
+    x_link?: string;
+    linkedin_link?: string;
+  };
+}
 
 export interface EditionEmailProps {
   edition: NewsletterEdition;
@@ -45,6 +66,17 @@ export interface EditionEmailProps {
    * loaded library.
    */
   blockMeta: ReadonlyMap<string, BlockRenderMeta>;
+  /**
+   * Fixed header/footer chrome from the template repo. When present the
+   * edition renders inside this header + footer (header/footer are not blocks).
+   * Absent → legacy behaviour (no auto chrome).
+   */
+  wrapper?: EditionWrapperConfig | null;
+  /**
+   * Resolved "View Online" URL for the header link. Defaults to the
+   * `{{web_version}}` token so the send pipeline substitutes it per recipient.
+   */
+  viewOnlineUrl?: string;
 }
 
 export interface BlockRenderMeta {
@@ -58,7 +90,7 @@ export interface BlockRenderMeta {
 }
 
 export function EditionEmail(props: EditionEmailProps): ReactElement {
-  const { edition, format, blockMeta } = props;
+  const { edition, format, blockMeta, wrapper, viewOnlineUrl } = props;
 
   const sorted = [...edition.blocks].sort((a, z) => a.sort_order - z.sort_order);
 
@@ -76,17 +108,25 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
     <BlockSlot key={block.id} block={block} format={format} meta={blockMeta.get(block.id)} />
   ));
 
+  // Fixed header/footer chrome from the template repo (collection.config.
+  // wrapper). Header links + footer social links are fixed in the template;
+  // only the edition date and view-online URL vary per edition.
+  const chrome = renderChrome(wrapper, edition.edition_date, viewOnlineUrl);
+  const composed = [chrome.header, ...blockEls, chrome.footer].filter(
+    (el): el is ReactElement => el != null,
+  );
+
   const body = allMustache ? (
     <Body style={{ margin: 0, padding: 0, backgroundColor: '#ffffff', fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif" }}>
       <Container style={{ width: '100%', maxWidth: '100%', margin: 0, padding: '10px' }}>
-        {blockEls.flatMap((el, i) =>
-          i < blockEls.length - 1 ? [el, <Spacer key={`sp-${i}`} />] : [el],
+        {composed.flatMap((el, i) =>
+          i < composed.length - 1 ? [el, <Spacer key={`sp-${i}`} />] : [el],
         )}
       </Container>
     </Body>
   ) : (
     <Body style={{ margin: 0, padding: 0, fontFamily: 'Helvetica, Arial, sans-serif' }}>
-      <Container style={{ maxWidth: 600, margin: '0 auto', padding: '24px' }}>{blockEls}</Container>
+      <Container style={{ maxWidth: 600, margin: '0 auto', padding: '24px' }}>{composed}</Container>
     </Body>
   );
 
@@ -100,6 +140,51 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
       {body}
     </Html>
   );
+}
+
+/**
+ * Build the fixed header/footer elements from the template's wrapper config.
+ * Returns nulls when no wrapper is configured (legacy behaviour). The header
+ * links and footer social links are fixed in the template; the edition date is
+ * formatted here and the view-online URL defaults to the `{{web_version}}`
+ * token so the send pipeline can substitute it per recipient.
+ */
+function renderChrome(
+  wrapper: EditionWrapperConfig | null | undefined,
+  editionDate: string,
+  viewOnlineUrl: string | undefined,
+): { header: ReactElement | null; footer: ReactElement | null } {
+  if (!wrapper) return { header: null, footer: null };
+  const fmtDate = (() => {
+    const d = new Date(`${editionDate}T00:00:00Z`);
+    return Number.isNaN(d.getTime())
+      ? String(editionDate ?? '')
+      : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+  })();
+  const h = wrapper.header ?? {};
+  const f = wrapper.footer ?? {};
+  return {
+    header: (
+      <NewsletterHeaderBlock.Component
+        key="__wrapper_header"
+        shop_link={h.shop_link ?? '#'}
+        subscribe_link={h.subscribe_link ?? '#'}
+        edition_date={fmtDate}
+        view_online_link={viewOnlineUrl ?? '{{web_version}}'}
+      />
+    ),
+    footer: (
+      <NewsletterFooterBlock.Component
+        key="__wrapper_footer"
+        partner_email={f.partner_email ?? ''}
+        slack_link={f.slack_link ?? '#'}
+        youtube_link={f.youtube_link ?? '#'}
+        podcast_link={f.podcast_link ?? '#'}
+        x_link={f.x_link ?? '#'}
+        linkedin_link={f.linkedin_link ?? '#'}
+      />
+    ),
+  };
 }
 
 /** 10px vertical spacer between blocks — matches the legacy SPACER_TEMPLATE. */

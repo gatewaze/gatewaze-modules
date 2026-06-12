@@ -22,7 +22,7 @@
 
 import { render } from '@react-email/render';
 import type { NewsletterEdition } from '../../../utils/types.js';
-import { EditionEmail, type BlockRenderMeta } from './EditionEmail.js';
+import { EditionEmail, type BlockRenderMeta, type EditionWrapperConfig } from './EditionEmail.js';
 import type { FormatId } from './registry-types.js';
 
 export interface ExportArgs {
@@ -39,6 +39,14 @@ export interface ExportArgs {
    */
   blockMeta: ReadonlyMap<string, BlockRenderMeta>;
   /**
+   * Fixed header/footer chrome from the newsletter's template repo
+   * (collection.config.wrapper). When present, the edition renders inside the
+   * fixed header + footer.
+   */
+  wrapper?: EditionWrapperConfig | null;
+  /** Resolved "View Online" URL for the header link (default `{{web_version}}`). */
+  viewOnlineUrl?: string;
+  /**
    * react-email's render() options. `pretty: true` is helpful while
    * debugging; production usually wants `false` for smaller payloads.
    */
@@ -51,6 +59,8 @@ export async function exportEditionHtml(args: ExportArgs): Promise<string> {
       edition={args.edition}
       format={args.format}
       blockMeta={args.blockMeta}
+      wrapper={args.wrapper}
+      viewOnlineUrl={args.viewOnlineUrl}
     />,
     { pretty: args.pretty ?? false },
   );

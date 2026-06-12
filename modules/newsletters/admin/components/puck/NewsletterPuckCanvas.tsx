@@ -51,6 +51,7 @@ import type {
 import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js';
 import { emailBlockRegistry } from './email-blocks/index.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
+import type { EditionWrapperConfig } from './email-blocks/EditionEmail.js';
 import { BlockSearchComponents } from './block-search.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
 import { CanvasShell } from '../../../../sites/admin/components/canvas/puck/CanvasShell.js';
@@ -96,6 +97,12 @@ interface NewsletterPuckCanvasProps {
    * effectively become per-edition rather than per-newsletter).
    */
   collectionId?: string;
+  /**
+   * Fixed header/footer chrome from the newsletter's template repo
+   * (collection.config.wrapper). Threaded into every exportEditionHtml call so
+   * preview, send, and publish all render inside the same header + footer.
+   */
+  wrapperConfig?: EditionWrapperConfig | null;
 }
 
 export const NewsletterPuckCanvas: FC<NewsletterPuckCanvasProps> = (props) => {
@@ -121,6 +128,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   enabledRegistryComponentIds,
   collectionMetadata,
   collectionId,
+  wrapperConfig,
 }) => {
   // Default false so the Publish button renders enabled when the
   // parent doesn't thread the saving state through.
@@ -342,6 +350,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         edition,
         format: 'email',
         blockMeta: publishMeta,
+        wrapper: wrapperConfig,
         pretty: false,
       });
       // Send the EFFECTIVE render path per block so the published
@@ -488,6 +497,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             edition,
             format: 'email',
             blockMeta,
+            wrapper: wrapperConfig,
             pretty: false,
           });
           if (cancelled) return;
@@ -523,7 +533,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setExportBusy(format);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format, blockMeta, pretty: true });
+      const html = await exportEditionHtml({ edition, format, blockMeta, wrapper: wrapperConfig, pretty: true });
 
       if (format === 'email') {
         // Email HTML → download a .html file (recipient-safe full doc).
@@ -566,7 +576,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setTestSendBusy(true);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, pretty: false });
+      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: wrapperConfig, pretty: false });
       // Mirror DeleteNewsletterCard's URL form — admin nginx has no /api
       // proxy, so we hit api.<brand>.live directly.
       const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
@@ -674,6 +684,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                   edition,
                   format: 'email',
                   blockMeta: buildBlockMeta(),
+                  wrapper: wrapperConfig,
                   pretty: true,
                 });
                 setHtmlSource(html);

@@ -25,6 +25,7 @@ import {
   type BrickTemplate,
 } from '../../utils';
 import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
+import type { EditionWrapperConfig } from '../../components/puck/email-blocks/EditionEmail';
 import { emailBlockRegistry } from '../../components/puck/email-blocks';
 import type { BlockRenderMeta } from '../../components/puck/email-blocks/EditionEmail';
 
@@ -89,6 +90,7 @@ interface CollectionInfo {
   subscriber_count?: number;
   view_online_target?: string | null;
   view_online_external_base_url?: string | null;
+  config?: { wrapper?: EditionWrapperConfig | null } | null;
 }
 
 type EditionTab = 'details' | 'editor' | 'sending';
@@ -677,6 +679,7 @@ export default function EditionEditorPage() {
             blockTemplates={blockTemplates}
             brickTemplates={brickTemplates}
             collectionMetadata={collectionMetadata}
+            wrapperConfig={collection?.config?.wrapper ?? null}
             {...(collectionId ? { collectionId } : {})}
             // Per spec-builder-evaluation §3.6 (extended). When the bound
             // library has explicit `render_kind='react-email'` rows, surface
@@ -801,7 +804,7 @@ export default function EditionEditorPage() {
                       });
                     }
                   }
-                  return exportEditionHtml({ edition, format: 'email', blockMeta, pretty: false });
+                  return exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: collection?.config?.wrapper ?? null, pretty: false });
                 }
               : undefined}
           />
