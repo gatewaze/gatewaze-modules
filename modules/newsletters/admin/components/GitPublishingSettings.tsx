@@ -49,6 +49,7 @@ export function GitPublishingSettings({ collectionId }: { collectionId: string }
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const [url, setUrl] = useState('');
   const [token, setToken] = useState('');
@@ -164,6 +165,29 @@ export function GitPublishingSettings({ collectionId }: { collectionId: string }
     }
   };
 
+  const handleSyncConfig = async () => {
+    setSyncing(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token;
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
+      const res = await fetch(
+        `${apiUrl}/api/admin/newsletters/collections/${collectionId}/sync-template-config`,
+        { method: 'POST', headers: { Authorization: accessToken ? `Bearer ${accessToken}` : '' } },
+      );
+      const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+      if (!res.ok) {
+        toast.error(body?.error?.message ?? `Sync failed (${res.status})`);
+        return;
+      }
+      toast.success('Template config synced — header/footer links updated');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to sync template config');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center py-8">
@@ -216,13 +240,26 @@ export function GitPublishingSettings({ collectionId }: { collectionId: string }
         </div>
 
         {!editing ? (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="px-3 py-2 text-sm rounded-md border border-[var(--gray-a6)] bg-[var(--color-surface,#fff)] text-[var(--gray-12)] hover:bg-[var(--gray-a3)]"
-          >
-            {connected ? 'Edit connection' : 'Connect a repo'}
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="px-3 py-2 text-sm rounded-md border border-[var(--gray-a6)] bg-[var(--color-surface,#fff)] text-[var(--gray-12)] hover:bg-[var(--gray-a3)]"
+            >
+              {connected ? 'Edit connection' : 'Connect a repo'}
+            </button>
+            {connected && (
+              <button
+                type="button"
+                onClick={handleSyncConfig}
+                disabled={syncing}
+                className="px-3 py-2 text-sm rounded-md border border-[var(--gray-a6)] text-[var(--gray-11)] hover:bg-[var(--gray-a3)] disabled:opacity-60"
+                title="Pull the fixed header/footer links (wrapper.json) from the template repo"
+              >
+                {syncing ? 'Syncing…' : 'Sync template config'}
+              </button>
+            )}
+          </div>
         ) : (
           <form onSubmit={handleSave} className="space-y-3 border-t border-[var(--gray-a4)] pt-4">
             <div>
