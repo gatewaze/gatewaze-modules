@@ -111,6 +111,14 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
   // Re-establish a single wrapping toolbar row here.
   return (
     <div
+      // Keep focus (and the text selection) in the editor when a toolbar
+      // button is pressed. Without this, mousedown moves focus out of the
+      // contentEditable, the selection collapses, and B/I/U/link/image act on
+      // nothing. preventDefault on mousedown stops the focus shift; the
+      // buttons' onClick still fires. Covers Puck's default buttons (children)
+      // and our own. mouseDownCapture so it runs before the children's own
+      // handlers.
+      onMouseDownCapture={(e) => e.preventDefault()}
       style={{
         display: 'flex',
         flexDirection: 'row',
