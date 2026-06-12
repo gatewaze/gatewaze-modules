@@ -5,6 +5,7 @@
 
 import { Text, Img } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 import { Card } from './_card.js';
 import { EYEBROW } from './_shared.js';
 
@@ -17,7 +18,7 @@ export const MemeOfWeekBlock: EmailBlockEntry<MemeOfWeekProps> = {
   label: 'Meme of the Week',
   category: 'MLOps Template',
   fields: {
-    image_url: { type: 'text', label: 'Meme image URL' },
+    image_url: { type: 'custom', label: 'Meme image', render: NewsletterImageFieldAdapter as never },
   },
   defaultProps: { image_url: '' },
   Component: ({ image_url }) => (
