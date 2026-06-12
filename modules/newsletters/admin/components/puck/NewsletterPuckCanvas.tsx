@@ -51,7 +51,7 @@ import type {
 import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js';
 import { emailBlockRegistry } from './email-blocks/index.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
-import type { EditionWrapperConfig } from './email-blocks/EditionEmail.js';
+import { renderChrome, type EditionWrapperConfig } from './email-blocks/EditionEmail.js';
 import { BlockSearchComponents } from './block-search.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
 import { CanvasShell } from '../../../../sites/admin/components/canvas/puck/CanvasShell.js';
@@ -983,6 +983,10 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           blockDefs={aiBlockDefs}
           config={configWithUserBlocks.config as never}
           data={data as never}
+          // Surface the fixed header/footer chrome + edition date to the canvas
+          // root so it can render a non-editable preview of them around the
+          // editable blocks (they're page chrome, not blocks).
+          extraMetadata={{ wrapper: wrapperConfig ?? null, editionDate: edition.edition_date }}
           // Newsletters lock to the email column width. The Desktop frame is
           // 682, not 650: the authored email column is 650px and the canvas
           // body adds 16px of horizontal padding each side (see
@@ -1160,6 +1164,8 @@ interface RootProps {
   puck?: {
     metadata?: {
       previewMode?: 'light' | 'dark';
+      wrapper?: EditionWrapperConfig | null;
+      editionDate?: string;
     };
   };
 }
@@ -1266,12 +1272,34 @@ function NewsletterCanvasRoot(props: RootProps) {
     return () => obs.disconnect();
   }, []);
 
+  // Fixed header/footer chrome from the template (collection.config.wrapper),
+  // shown as a non-editable preview around the editable blocks so the operator
+  // sees the full edition. Links/date are not editable here — they come from
+  // the template + the edition date.
+  const chrome = renderChrome(
+    props.puck?.metadata?.wrapper,
+    props.puck?.metadata?.editionDate ?? '',
+    undefined,
+  );
+
   return (
     <>
       <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
       <FieldsAutoSwitcher />
       <UserBlockSyntheticExpander />
-      <div ref={wrapperRef} className="gw-email-card">{props.children}</div>
+      <div ref={wrapperRef} className="gw-email-card">
+        {chrome.header && (
+          <div className="gw-wrapper-chrome" style={{ pointerEvents: 'none', userSelect: 'none' }}>
+            {chrome.header}
+          </div>
+        )}
+        {props.children}
+        {chrome.footer && (
+          <div className="gw-wrapper-chrome" style={{ pointerEvents: 'none', userSelect: 'none' }}>
+            {chrome.footer}
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -1295,6 +1323,11 @@ const BASE_CANVAS_CSS = `
     margin: 0 auto;
     border-radius: 6px;
     overflow: hidden;
+    /* Small horizontal gutter so block content — and Puck's selection/hover
+       outline drawn at each block's right edge — sits inside the card's
+       overflow:hidden clip boundary instead of being shaved off on the right. */
+    padding: 0 8px;
+    box-sizing: border-box;
     transition: background-color 0.15s ease, box-shadow 0.15s ease;
   }
   /* The email column is authored at a fixed 650px. When the viewport is

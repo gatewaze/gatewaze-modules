@@ -96,20 +96,22 @@ export const HotTakeBlock: EmailBlockEntry<HotTakeProps> = {
               borderRadius: '0 0 15px 15px',
             }}
           >
-            <Row>
-              <Column style={{ width: '50%', textAlign: 'center', padding: '5px' }}>
-                <Button href={poll_option_1_link} style={POLL_BUTTON}>
-                  {poll_option_1_label}
-                </Button>
-              </Column>
-              <Column style={{ width: '50%', textAlign: 'center', padding: '5px' }}>
-                {poll_option_2_label ? (
-                  <Button href={poll_option_2_link} style={POLL_BUTTON}>
-                    {poll_option_2_label}
+            <div style={{ padding: '0 5px 15px' }}>
+              <Row>
+                <Column style={{ width: '50%', textAlign: 'center', padding: '5px' }}>
+                  <Button href={poll_option_1_link} style={POLL_BUTTON}>
+                    {poll_option_1_label}
                   </Button>
-                ) : null}
-              </Column>
-            </Row>
+                </Column>
+                <Column style={{ width: '50%', textAlign: 'center', padding: '5px' }}>
+                  {poll_option_2_label ? (
+                    <Button href={poll_option_2_link} style={POLL_BUTTON}>
+                      {poll_option_2_label}
+                    </Button>
+                  ) : null}
+                </Column>
+              </Row>
+            </div>
           </Section>
         ) : null}
       </>
