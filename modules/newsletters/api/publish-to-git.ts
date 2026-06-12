@@ -442,9 +442,16 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
           (m) => `${m}x-access-token:${encodeURIComponent(token)}@`,
         );
         try {
+          // --force: the internal bare repo is canonical for the publish
+          // branch — it accumulates every rendered edition. The external
+          // `publish` branch is a generated mirror, so we overwrite it
+          // rather than fast-forward (mirrors sites' mirrorBranchToExternal).
+          // Without this, an external `publish` branch that was created with
+          // its own initial commit diverges and rejects the push as
+          // non-fast-forward ("fetch first").
           await execFileP(
             'git',
-            ['push', urlWithAuth, `${localPublishBranch}:${remoteBranch}`],
+            ['push', '--force', urlWithAuth, `${localPublishBranch}:${remoteBranch}`],
             { cwd: repo.barePath, timeout: 30_000 },
           );
           externalPush = { pushed: true, branch: remoteBranch };
@@ -544,9 +551,12 @@ export async function pushWithDeployKey(args: {
   try {
     await writeFile(keyPath, args.deployKeyPem, { mode: 0o600 });
     const sshCmd = `ssh -i ${keyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes`;
+    // --force: the internal bare repo is canonical for the publish branch;
+    // the external mirror is overwritten, not fast-forwarded (see the PAT
+    // path above and sites' mirrorBranchToExternal for the same rationale).
     await execFileP(
       'git',
-      ['push', sshUrl, `${args.localBranch}:${args.remoteBranch}`],
+      ['push', '--force', sshUrl, `${args.localBranch}:${args.remoteBranch}`],
       {
         cwd: args.repoBarePath,
         timeout: 30_000,
