@@ -149,7 +149,7 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
  * formatted here and the view-online URL defaults to the `{{web_version}}`
  * token so the send pipeline can substitute it per recipient.
  */
-function renderChrome(
+export function renderChrome(
   wrapper: EditionWrapperConfig | null | undefined,
   editionDate: string,
   viewOnlineUrl: string | undefined,
