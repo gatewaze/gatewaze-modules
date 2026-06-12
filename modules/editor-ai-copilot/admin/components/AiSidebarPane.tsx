@@ -450,26 +450,6 @@ const S = {
     maxWidth: 160,
   } as CSSProperties,
 
-  suggestionsRow: {
-    display: 'flex',
-    flexWrap: 'wrap' as const,
-    gap: 6,
-    paddingTop: 2,
-  } as CSSProperties,
-  suggestionChip: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '6px 12px',
-    fontSize: 12,
-    color: 'var(--puck-color-grey-03, #374151)',
-    background: 'var(--puck-color-white, #fff)',
-    borderWidth: 1,
-    borderStyle: 'solid' as const,
-    borderColor: 'var(--puck-color-grey-09, #e5e7eb)',
-    borderRadius: 999,
-    cursor: 'pointer',
-  } as CSSProperties,
 };
 
 // ---------------------------------------------------------------------------
@@ -499,14 +479,6 @@ function CheckIcon() {
     </svg>
   );
 }
-function ArrowUpIcon() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 19V5" />
-      <path d="m5 12 7-7 7 7" />
-    </svg>
-  );
-}
 function SpinnerDots() {
   return (
     <span aria-hidden="true" style={{ display: 'inline-flex', gap: 3 }}>
@@ -530,11 +502,6 @@ function SpinnerDots() {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-const SUGGESTIONS: Record<HostKind, string[]> = {
-  newsletter: ['Welcome edition', 'Product update', 'Event announcement'],
-  site: ['Landing page', 'Pricing page', 'About us'],
-};
 
 function newId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1001,23 +968,6 @@ export function AiSidebarPane(props: AiSidebarPaneProps) {
       <div style={S.rootInitial} role="region" aria-label="AI copilot">
         <style>{KEYFRAMES_CSS}</style>
         <div style={S.footerInitial}>
-          {/* Suggestion chips ABOVE the composer — matches the
-              puckeditor.com / Claude / ChatGPT pattern where the
-              prompt input is always at the bottom of the panel and
-              preset prompts surface above it. */}
-          <div style={S.suggestionsRow}>
-            {(SUGGESTIONS[props.hostKind] ?? []).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => void submitPrompt(s)}
-                style={S.suggestionChip}
-              >
-                {s}
-                <ArrowUpIcon />
-              </button>
-            ))}
-          </div>
           {composer}
         </div>
       </div>
