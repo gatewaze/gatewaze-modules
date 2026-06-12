@@ -365,6 +365,40 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         })),
       }, null, 2));
 
+      // Browsable, slugged copy of this edition for the static publish site
+      // (clean URL like /editions/2026-06-04.html). The UUID artifacts above
+      // stay for machine consumers; this slugged path is what the email
+      // "View Online" link and the archive index point at. Slug = edition_date
+      // (one edition per date is the newsletter convention; a same-date
+      // re-publish overwrites that day's page).
+      const editionSlug = String(ed.edition_date);
+      files.set(`editions/${editionSlug}.html`, html);
+
+      // Regenerate the archive index from every published edition of this
+      // newsletter (plus the one being published now, which may not be flipped
+      // to 'published' in the DB yet). Written on each publish so the static
+      // site always has an up-to-date list. Non-fatal on failure.
+      try {
+        const pubRes = await deps.supabase
+          .from('newsletters_editions')
+          .select('id, title, edition_date, preheader, status')
+          .eq('collection_id', ed.collection_id)
+          .eq('status', 'published')
+          .order('edition_date', { ascending: false });
+        const rows = (pubRes.data ?? []) as Array<{
+          id: string; title: string | null; edition_date: string; preheader: string | null;
+        }>;
+        if (!rows.some((r) => r.id === ed.id)) {
+          rows.unshift({ id: ed.id, title: ed.title, edition_date: String(ed.edition_date), preheader: ed.preheader });
+        }
+        files.set('index.html', renderArchiveIndex(collection.name || newsletterSlug, rows));
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[newsletters publish-to-git] archive index generation failed (continuing)', {
+          editionId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       // Commit to the configured local publish branch (always 'publish'
       // on the internal bare repo — that's the workspace branch the
       // edition-writer + snapshot-job already target). Migration 027
@@ -575,4 +609,84 @@ export async function pushWithDeployKey(args: {
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Render the static archive index for the publish branch — a self-contained
+ * `index.html` listing every published edition, newest first, linking to the
+ * slugged `editions/<edition_date>.html` pages. A static host (GitHub Pages /
+ * Netlify / Cloudflare Pages) pointed at the publish branch serves this as the
+ * newsletter's public archive with no build step.
+ */
+export function renderArchiveIndex(
+  title: string,
+  editions: Array<{ id: string; title: string | null; edition_date: string; preheader: string | null }>,
+): string {
+  const items = editions
+    .map((e) => {
+      const slug = String(e.edition_date);
+      const dateLabel = (() => {
+        const d = new Date(`${slug}T00:00:00Z`);
+        return Number.isNaN(d.getTime())
+          ? slug
+          : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+      })();
+      const heading = escapeHtml(e.title?.trim() || dateLabel);
+      const preheader = e.preheader?.trim() ? `<p class="pre">${escapeHtml(e.preheader.trim())}</p>` : '';
+      return `      <li class="edition">
+        <a href="editions/${encodeURIComponent(slug)}.html">
+          <span class="date">${escapeHtml(dateLabel)}</span>
+          <span class="title">${heading}</span>
+          ${preheader}
+        </a>
+      </li>`;
+    })
+    .join('\n');
+
+  const safeTitle = escapeHtml(title);
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${safeTitle} — Archive</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+           max-width: 680px; margin: 0 auto; padding: 48px 20px; line-height: 1.5;
+           color: #1a1a1a; background: #fff; }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    .sub { color: #666; margin: 0 0 32px; font-size: 15px; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    .edition { border-top: 1px solid #eaeaea; }
+    .edition a { display: block; padding: 16px 4px; text-decoration: none; color: inherit; }
+    .edition a:hover { background: #fafafa; }
+    .date { display: block; font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: .04em; }
+    .title { display: block; font-size: 18px; font-weight: 600; margin-top: 2px; }
+    .pre { margin: 4px 0 0; color: #666; font-size: 14px; }
+    @media (prefers-color-scheme: dark) {
+      body { color: #eaeaea; background: #111; }
+      .sub, .date, .pre { color: #999; }
+      .edition { border-color: #2a2a2a; }
+      .edition a:hover { background: #1a1a1a; }
+    }
+  </style>
+</head>
+<body>
+  <h1>${safeTitle}</h1>
+  <p class="sub">Newsletter archive — ${editions.length} edition${editions.length === 1 ? '' : 's'}</p>
+  <ul>
+${items}
+  </ul>
+</body>
+</html>
+`;
 }

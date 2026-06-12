@@ -17,6 +17,7 @@ import { useHasModule } from '@/hooks/useModuleFeature';
 import { NewsletterDetailsForm } from '../components/NewsletterDetailsForm';
 import { DeleteNewsletterCard } from '../components/DeleteNewsletterCard';
 import { GitPublishingSettings } from '../components/GitPublishingSettings';
+import { ViewOnlineSettings } from '../components/ViewOnlineSettings';
 import { NewsletterStatsTab } from '../components/NewsletterStatsTab';
 import { NewsletterRepliesTab } from '../components/NewsletterRepliesTab';
 import { EditorTab } from './EditorTab';
@@ -148,10 +149,15 @@ export default function NewsletterDetailPage() {
       >
       {/* Tab Content */}
       {activeTab === 'details' && (
-        <div className="py-2 space-y-6">
-          <NewsletterDetailsForm newsletter={newsletter} onSave={loadNewsletter} />
-          <GitPublishingSettings collectionId={newsletter.id} />
-          <DeleteNewsletterCard newsletterId={newsletter.id} newsletterName={newsletter.name} />
+        <div className="py-2 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <div className="space-y-6">
+            <NewsletterDetailsForm newsletter={newsletter} onSave={loadNewsletter} />
+            <DeleteNewsletterCard newsletterId={newsletter.id} newsletterName={newsletter.name} />
+          </div>
+          <div className="space-y-6">
+            <GitPublishingSettings collectionId={newsletter.id} />
+            <ViewOnlineSettings collectionId={newsletter.id} />
+          </div>
         </div>
       )}
 

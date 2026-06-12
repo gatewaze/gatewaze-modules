@@ -44,6 +44,8 @@ interface CollectionInfo {
   list_id?: string | null;
   list_name?: string | null;
   subscriber_count?: number;
+  view_online_target?: string | null;
+  view_online_external_base_url?: string | null;
 }
 
 interface EditionSendingTabProps {
@@ -201,11 +203,21 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
 
     setSending(true);
     try {
-      const portalDomain = window.location.hostname.replace('-admin.', '-app.').replace('admin.', 'app.');
-      const portalProtocol = window.location.protocol;
-      const webVersionUrl = newsletterSlug && editionDate
-        ? `${portalProtocol}//${portalDomain}/newsletters/${newsletterSlug}--${editionDate}`
-        : `${portalProtocol}//${portalDomain}/newsletters`;
+      // The "View Online" link target is per-newsletter: 'external' points at
+      // the static site built from the publish branch (slugged by edition
+      // date, matching publish-to-git); anything else defaults to the portal
+      // web-version URL.
+      const externalBase = collection?.view_online_external_base_url?.trim().replace(/\/+$/, '');
+      let webVersionUrl: string;
+      if (collection?.view_online_target === 'external' && externalBase && editionDate) {
+        webVersionUrl = `${externalBase}/editions/${editionDate}.html`;
+      } else {
+        const portalDomain = window.location.hostname.replace('-admin.', '-app.').replace('admin.', 'app.');
+        const portalProtocol = window.location.protocol;
+        webVersionUrl = newsletterSlug && editionDate
+          ? `${portalProtocol}//${portalDomain}/newsletters/${newsletterSlug}--${editionDate}`
+          : `${portalProtocol}//${portalDomain}/newsletters`;
+      }
 
       // Render the edition's HTML on demand via the parent-supplied
       // async renderer. Doing it here (instead of eagerly on every
