@@ -6,7 +6,6 @@ import {
   PaperAirplaneIcon,
   RectangleGroupIcon,
   DocumentTextIcon,
-  DocumentArrowDownIcon,
   ChatBubbleLeftRightIcon,
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
@@ -606,10 +605,9 @@ export default function EditionEditorPage() {
   // detail page), with "Editions" lit since an edition lives under it.
   // Clicking a tab navigates to that section on the newsletter detail page.
   const newsletterTabs: Tab[] = [
-    { id: 'details', label: 'Details', icon: <Cog6ToothIcon className={ic} /> },
+    { id: 'details', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
     { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
     { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
-    { id: 'import', label: 'Import', icon: <DocumentArrowDownIcon className={ic} /> },
     ...(hasBulkEmailing
       ? [
           { id: 'replies', label: 'Replies', icon: <ChatBubbleLeftRightIcon className={ic} /> },
