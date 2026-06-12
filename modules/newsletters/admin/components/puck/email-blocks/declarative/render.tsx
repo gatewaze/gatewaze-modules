@@ -14,9 +14,9 @@
  *                       the caller via `slots[name]`).
  */
 
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, createElement, type ReactNode } from 'react';
 import type { TemplateNode } from './parse-template.js';
-import { TAG_COMPONENTS, classStyle, parseInlineStyle, PASSTHROUGH_ATTRS } from './component-map.js';
+import { TAG_COMPONENTS, INTRINSIC_TAGS, classStyle, parseInlineStyle, PASSTHROUGH_ATTRS } from './component-map.js';
 import { RichText } from '../blocks/_richtext.js';
 import { renderSlot } from '../render-slot.js';
 
@@ -94,7 +94,8 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   }
 
   const Comp = TAG_COMPONENTS[tag];
-  if (!Comp) {
+  const isIntrinsic = !Comp && INTRINSIC_TAGS.has(tag);
+  if (!Comp && !isIntrinsic) {
     // Not allowlisted — drop the element but keep its (possibly bound) children
     // so authors can use a bare wrapper without breaking content.
     return <Fragment key={key}>{children.map((c, i) => renderNode(c, ctx, `${key}-${i}`))}</Fragment>;
@@ -102,17 +103,17 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
 
   const style = { ...classStyle(attrs['class']), ...parseInlineStyle(attrs['style']) };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const props: Record<string, any> = { style };
+  const props: Record<string, any> = { style, key };
   for (const a of PASSTHROUGH_ATTRS) {
     if (attrs[a] !== undefined) props[a] = resolveBindings(attrs[a], ctx.content);
   }
 
   const kids = children.map((c, i) => renderNode(c, ctx, `${key}-${i}`));
-  return (
-    <Comp key={key} {...props}>
-      {kids.length > 0 ? kids : undefined}
-    </Comp>
-  );
+  const childrenOrNone = kids.length > 0 ? kids : undefined;
+  // Intrinsic HTML tag (div/span/strong/…) vs allowlisted react-email component.
+  return isIntrinsic
+    ? createElement(tag, props, childrenOrNone)
+    : createElement(Comp, props, childrenOrNone);
 }
 
 /** Extract `field` from a single `{{field}}` text child (richtext shorthand). */
