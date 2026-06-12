@@ -30,6 +30,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { editionFolderSlug } from '../lib/edition-slug.js';
 
 const execFileP = promisify(execFile);
@@ -370,7 +371,20 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
       // The slug is shared with the send-time "View Online" link so the two
       // always resolve to the same path.
       const editionSlug = editionFolderSlug(ed.edition_date, ed.title);
-      files.set(`${editionSlug}/index.html`, html);
+
+      // Embed media so the static archive is self-contained and survives a
+      // private/moved/offline Supabase (the published HTML otherwise points
+      // <img> at the storage CDN — unreachable from a public static host, and
+      // pointing at localhost in dev). Default ON; set
+      // config.publish.embed_media_in_git=false to keep CDN URLs instead.
+      const embedMedia = newsletterConfig.publish?.embed_media_in_git !== false;
+      const editionHtml = embedMedia
+        ? await embedPublishMedia(html, files, deps.supabase, (msg, meta) =>
+            // eslint-disable-next-line no-console
+            console.warn('[newsletters publish-to-git] media embed:', msg, meta ?? {}),
+          )
+        : html;
+      files.set(`${editionSlug}/index.html`, editionHtml);
       // Effective per-block render path sent by the editor (how the HTML was
       // actually produced). Falls back to the templates_block_defs metadata
       // for older clients that don't send it.
@@ -657,6 +671,56 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * Make the rendered edition self-contained: download every Supabase storage
+ * image it references and commit the bytes into the publish branch's root
+ * `assets/` folder (content-hashed, so identical images dedupe across editions
+ * and re-publishes). Rewrites each storage URL to a repo-relative path
+ * (`../assets/<hash>.<ext>`, relative to `<slug>/index.html`) so a static host
+ * serves the images itself — no dependency on Supabase being public, online, or
+ * even the same instance. Best-effort: an asset that can't be downloaded keeps
+ * its original URL.
+ */
+async function embedPublishMedia(
+  html: string,
+  files: Map<string, Buffer | string>,
+  supabase: SupabaseClient,
+  warn: (msg: string, meta?: Record<string, unknown>) => void,
+): Promise<string> {
+  // .../storage/v1/object/public/<bucket>/<path>
+  const urlRe = /https?:\/\/[^\s"'<>)]+\/storage\/v1\/object\/public\/([a-z0-9._-]+)\/([^\s"'<>)]+)/gi;
+  const seen = new Map<string, string>(); // full URL -> replacement (repo-relative path, or unchanged on failure)
+
+  for (const m of html.matchAll(urlRe)) {
+    const fullUrl = m[0];
+    if (seen.has(fullUrl)) continue;
+    const bucket = m[1];
+    const rawPath = decodeURIComponent((m[2] ?? '').split('?')[0].split('#')[0]);
+    try {
+      const { data, error } = await supabase.storage.from(bucket).download(rawPath);
+      if (error || !data) {
+        warn('download failed', { bucket, path: rawPath });
+        seen.set(fullUrl, fullUrl);
+        continue;
+      }
+      const buf = Buffer.from(await data.arrayBuffer());
+      const ext = rawPath.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase() ?? '';
+      const assetPath = `assets/${createHash('sha1').update(buf).digest('hex').slice(0, 16)}${ext}`;
+      files.set(assetPath, buf);
+      seen.set(fullUrl, `../${assetPath}`);
+    } catch (e) {
+      warn('embed error', { path: rawPath, error: e instanceof Error ? e.message : String(e) });
+      seen.set(fullUrl, fullUrl);
+    }
+  }
+
+  let out = html;
+  for (const [url, replacement] of seen) {
+    if (replacement !== url) out = out.split(url).join(replacement);
+  }
+  return out;
 }
 
 /**
