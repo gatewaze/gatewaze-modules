@@ -37,14 +37,17 @@ const logger = {
 /**
  * Resolves a `templates_sources.token_secret_ref` to the actual git PAT.
  *
- * In v0.1 the token is stored inline (we accept it on the create-source
- * route as a `token` body field; see api/sources.ts). The `token_secret_ref`
- * column is currently a placeholder for the future secrets-manager
- * integration. Until that lands, the drift monitor runs anonymously —
- * private repos won't auto-update via cron, only manual ingest works.
+ * In v0.1 the token is stored inline: the create-source route writes the raw
+ * PAT straight into `token_secret_ref` (see ingestGit / api/sources.ts) as a
+ * stop-gap until a real secrets-manager integration lands. So resolving is a
+ * pass-through — return the ref as-is. The one exception is the legacy
+ * `<redacted>` sentinel some older rows carry in place of a token; treat that
+ * as "no token" so the clone falls back to anonymous (and fails loudly for a
+ * private repo) rather than handing git a bogus credential.
  */
-async function resolveToken(_ref: string | null): Promise<string | null> {
-  return null;
+async function resolveToken(ref: string | null): Promise<string | null> {
+  if (!ref || ref === '<redacted>') return null;
+  return ref;
 }
 
 export default async function handler(job: BullJob): Promise<unknown> {
