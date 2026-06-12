@@ -380,27 +380,56 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
     }
   };
 
-  const callRoute = async (path: string, label: string) => {
-    setBusy(label === 'Checking…' ? 'check' : 'apply');
+  // Single "Update" action: re-apply the template (re-clones HEAD, upserts
+  // block/wrapper defs), keep this newsletter's block defs react-email so the
+  // editor surfaces them all, then sync the header/footer link config
+  // (wrapper.json → collection.config.wrapper). Replaces the separate
+  // Check / Apply / Sync-template-config buttons.
+  const handleUpdate = async () => {
+    setBusy('apply');
     try {
       const session = await supabase.auth.getSession();
       const accessToken = session.data.session?.access_token;
-      const res = await fetch(`/api/modules/templates/sources/${s.id}/${path}`, {
+      const auth = accessToken ? `Bearer ${accessToken}` : '';
+
+      const applyRes = await fetch(`/api/modules/templates/sources/${s.id}/apply`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: accessToken ? `Bearer ${accessToken}` : '',
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: auth },
       });
-      const body = await res.json().catch(() => null);
-      if (!res.ok) {
-        toast.error(body?.error?.message ?? `Request failed (${res.status})`);
+      const applyBody = await applyRes.json().catch(() => null);
+      if (!applyRes.ok) {
+        toast.error(applyBody?.error?.message ?? `Update failed (${applyRes.status})`);
         return;
       }
-      toast.success(label === 'Checking…' ? 'Source checked' : 'Applied');
+
+      if (s.library_id) {
+        // Newsletter blocks render react-email via the registry; keep the def
+        // render_kind in sync so a mixed library doesn't trip the editor's
+        // "show only react-email blocks" filter (which hides mustache defs).
+        await supabase
+          .from('templates_block_defs')
+          .update({ render_kind: 'react-email' })
+          .eq('library_id', s.library_id)
+          .neq('render_kind', 'react-email');
+
+        // Pull wrapper.json → collection.config.wrapper (fixed header/footer
+        // links). 404 = no wrapper.json on the template; that's fine.
+        const apiUrl = import.meta.env.VITE_API_URL ?? '';
+        const cfgRes = await fetch(
+          `${apiUrl}/api/admin/newsletters/collections/${s.library_id}/sync-template-config`,
+          { method: 'POST', headers: { Authorization: auth } },
+        );
+        if (!cfgRes.ok && cfgRes.status !== 404) {
+          // eslint-disable-next-line no-console
+          console.warn('[update] wrapper config sync failed', await cfgRes.json().catch(() => null));
+        }
+      }
+
+      const count = Array.isArray(applyBody?.applied) ? applyBody.applied.length : 0;
+      toast.success(`Template updated — ${count} item${count === 1 ? '' : 's'} synced`);
       onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Request failed');
+      toast.error(err instanceof Error ? err.message : 'Update failed');
     } finally {
       setBusy(null);
     }
@@ -438,23 +467,14 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
       {s.kind === 'git' && (
         <div className="flex flex-col gap-1.5 shrink-0">
           <Button
-            variant="outline"
+            variant={isDrifted ? 'solid' : 'outline'}
             size="1"
-            onClick={() => callRoute('check', 'Checking…')}
+            onClick={handleUpdate}
             disabled={busy !== null}
+            title="Pull the latest template from git: import block/wrapper changes and sync the header/footer links"
           >
-            {busy === 'check' ? 'Checking…' : 'Check now'}
+            {busy === 'apply' ? 'Updating…' : isDrifted ? 'Update available' : 'Update'}
           </Button>
-          {isDrifted && (
-            <Button
-              variant="solid"
-              size="1"
-              onClick={() => callRoute('apply', 'Applying…')}
-              disabled={busy !== null}
-            >
-              {busy === 'apply' ? 'Applying…' : 'Apply'}
-            </Button>
-          )}
           <Button
             variant="outline"
             size="1"
