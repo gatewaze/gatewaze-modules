@@ -376,7 +376,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         edition,
         format: 'email',
         blockMeta: publishMeta,
-        wrapper: resolvedWrapper,
+        wrapper: resolvedWrapper, registry,
         pretty: false,
       });
       // Send the EFFECTIVE render path per block so the published
@@ -523,7 +523,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             edition,
             format: 'email',
             blockMeta,
-            wrapper: resolvedWrapper,
+            wrapper: resolvedWrapper, registry,
             pretty: false,
           });
           if (cancelled) return;
@@ -559,7 +559,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setExportBusy(format);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format, blockMeta, wrapper: resolvedWrapper, pretty: true });
+      const html = await exportEditionHtml({ edition, format, blockMeta, wrapper: resolvedWrapper, registry, pretty: true });
 
       if (format === 'email') {
         // Email HTML → download a .html file (recipient-safe full doc).
@@ -602,7 +602,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setTestSendBusy(true);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: resolvedWrapper, pretty: false });
+      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: resolvedWrapper, registry, pretty: false });
       // Mirror DeleteNewsletterCard's URL form — admin nginx has no /api
       // proxy, so we hit api.<brand>.live directly.
       const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
@@ -710,7 +710,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                   edition,
                   format: 'email',
                   blockMeta: buildBlockMeta(),
-                  wrapper: resolvedWrapper,
+                  wrapper: resolvedWrapper, registry,
                   pretty: true,
                 });
                 setHtmlSource(html);
