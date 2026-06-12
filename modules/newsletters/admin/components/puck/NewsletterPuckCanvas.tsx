@@ -133,6 +133,26 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   // Default false so the Publish button renders enabled when the
   // parent doesn't thread the saving state through.
   const isSavingNow = isSaving ?? false;
+
+  // Header/footer chrome config. Prefer the prop; if the parent hasn't
+  // threaded it yet (load-order), fetch collection.config.wrapper directly by
+  // collectionId so the chrome doesn't silently miss.
+  const [resolvedWrapper, setResolvedWrapper] = useState<EditionWrapperConfig | null>(wrapperConfig ?? null);
+  useEffect(() => {
+    if (wrapperConfig) { setResolvedWrapper(wrapperConfig); return; }
+    if (!collectionId) { setResolvedWrapper(null); return; }
+    let cancelled = false;
+    void supabase
+      .from('newsletters_template_collections')
+      .select('config')
+      .eq('id', collectionId)
+      .single()
+      .then(({ data }) => {
+        if (cancelled) return;
+        setResolvedWrapper((data?.config as { wrapper?: EditionWrapperConfig } | null)?.wrapper ?? null);
+      });
+    return () => { cancelled = true; };
+  }, [wrapperConfig, collectionId]);
   // Adapt newsletter templates → sites' BlockDefRow / BrickDefRow shape
   // so we can reuse the existing Puck Config builder. Memoised — these
   // change rarely (only when the library reloads).
@@ -350,7 +370,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         edition,
         format: 'email',
         blockMeta: publishMeta,
-        wrapper: wrapperConfig,
+        wrapper: resolvedWrapper,
         pretty: false,
       });
       // Send the EFFECTIVE render path per block so the published
@@ -497,7 +517,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             edition,
             format: 'email',
             blockMeta,
-            wrapper: wrapperConfig,
+            wrapper: resolvedWrapper,
             pretty: false,
           });
           if (cancelled) return;
@@ -533,7 +553,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setExportBusy(format);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format, blockMeta, wrapper: wrapperConfig, pretty: true });
+      const html = await exportEditionHtml({ edition, format, blockMeta, wrapper: resolvedWrapper, pretty: true });
 
       if (format === 'email') {
         // Email HTML → download a .html file (recipient-safe full doc).
@@ -576,7 +596,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setTestSendBusy(true);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: wrapperConfig, pretty: false });
+      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: resolvedWrapper, pretty: false });
       // Mirror DeleteNewsletterCard's URL form — admin nginx has no /api
       // proxy, so we hit api.<brand>.live directly.
       const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
@@ -684,7 +704,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                   edition,
                   format: 'email',
                   blockMeta: buildBlockMeta(),
-                  wrapper: wrapperConfig,
+                  wrapper: resolvedWrapper,
                   pretty: true,
                 });
                 setHtmlSource(html);
@@ -986,7 +1006,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           // Surface the fixed header/footer chrome + edition date to the canvas
           // root so it can render a non-editable preview of them around the
           // editable blocks (they're page chrome, not blocks).
-          extraMetadata={{ wrapper: wrapperConfig ?? null, editionDate: edition.edition_date }}
+          extraMetadata={{ wrapper: resolvedWrapper, editionDate: edition.edition_date }}
           // Newsletters lock to the email column width. The Desktop frame is
           // 682, not 650: the authored email column is 650px and the canvas
           // body adds 16px of horizontal padding each side (see
