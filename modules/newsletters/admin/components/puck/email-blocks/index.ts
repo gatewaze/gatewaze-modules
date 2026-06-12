@@ -124,8 +124,6 @@ import { HiddenGemsBlock } from './blocks/HiddenGems.js';
 import { SponsoredAdBlock } from './blocks/SponsoredAd.js';
 import { MemeOfWeekBlock } from './blocks/MemeOfWeek.js';
 import { AiSummaryBlock } from './blocks/AiSummary.js';
-import { NewsletterHeaderBlock } from './blocks/NewsletterHeader.js';
-import { NewsletterFooterBlock } from './blocks/NewsletterFooter.js';
 import { MlopsCommunityBlock } from './blocks/MlopsCommunity.js';
 import { PodcastBlock } from './blocks/Podcast.js';
 import { BlogPostBlock } from './blocks/BlogPost.js';
@@ -159,9 +157,10 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   HiddenGemsBlock as unknown as EmailBlockEntry,
   AgentInfrastructureBlock as unknown as EmailBlockEntry,
   MemeOfWeekBlock as unknown as EmailBlockEntry,
-  // Layout — newsletter header/footer (distinct ids; generic header/footer exist)
-  NewsletterHeaderBlock as unknown as EmailBlockEntry,
-  NewsletterFooterBlock as unknown as EmailBlockEntry,
+  // NewsletterHeaderBlock / NewsletterFooterBlock are intentionally NOT
+  // registered as editable blocks: they're fixed page chrome applied by
+  // EditionEmail from the template's wrapper config (collection.config.wrapper),
+  // not blocks an operator adds to an edition.
   // Community — slot container + its bricks
   MlopsCommunityBlock as unknown as EmailBlockEntry,
   PodcastBlock as unknown as EmailBlockEntry,
