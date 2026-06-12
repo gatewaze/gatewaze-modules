@@ -14,7 +14,7 @@
  *                       the caller via `slots[name]`).
  */
 
-import { Fragment, createElement, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, createElement, isValidElement, type CSSProperties, type ReactNode } from 'react';
 import type { TemplateNode } from './parse-template.js';
 import { TAG_COMPONENTS, INTRINSIC_TAGS, classStyle, parseInlineStyle, PASSTHROUGH_ATTRS } from './component-map.js';
 import { RichText } from '../blocks/_richtext.js';
@@ -79,8 +79,23 @@ function mergeItem(content: Content, item: unknown): Content {
   return { ...content, $item: item };
 }
 
+// A text node that is exactly a single `{{field}}` (ignoring surrounding
+// whitespace) → the bound field key, else null. Used to detect whole-value
+// bindings that may carry a React node rather than a string.
+const WHOLE_BINDING_RE = /^\s*\{\{\s*([\w.$]+)\s*\}\}\s*$/;
+
 function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode {
   if (node.kind === 'text') {
+    // Whole-value binding passthrough. In the editor canvas Puck swaps a
+    // `contentEditable` field's string for a live inline-editor *node*; that
+    // node must be rendered as-is (String()-ing it emits "[object Object]" and
+    // the editor never mounts, so the field can't be clicked). This is what
+    // lets text fields — e.g. <Heading>{{title}}</Heading> — be edited inline.
+    const whole = node.value.match(WHOLE_BINDING_RE);
+    if (whole) {
+      const v = getPath(ctx.content, whole[1]);
+      if (isValidElement(v)) return <Fragment key={key}>{v}</Fragment>;
+    }
     const out = resolveBindings(node.value, ctx.content);
     return out === '' ? null : out;
   }

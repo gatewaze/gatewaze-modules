@@ -84,6 +84,18 @@ describe('declarative block format', () => {
     expect(html).not.toContain('<h2'); // no heading when title empty
   });
 
+  it('passes a React-node binding value through (Puck inline editor)', async () => {
+    // In the canvas Puck replaces a contentEditable field's string with an
+    // editor node; a whole-value {{binding}} must render that node, not
+    // String() it to "[object Object]".
+    const TEXT = `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading>{{title}}</Heading></Section>`;
+    const editorNode = createElement('span', { 'data-inline-editor': 'on' }, 'EDIT_ME');
+    const html = await renderEntry(TEXT, { title: editorNode });
+    expect(html).toContain('data-inline-editor');
+    expect(html).toContain('EDIT_ME');
+    expect(html).not.toContain('[object Object]');
+  });
+
   it('keeps an empty inline-editable `if` field visible in edit mode', async () => {
     // In the editor an empty <Heading if="title"> must still render so the
     // operator can click in and type — the `if` is a publish-time guard only.
