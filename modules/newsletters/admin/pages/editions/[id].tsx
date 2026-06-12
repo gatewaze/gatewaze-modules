@@ -87,6 +87,8 @@ interface CollectionInfo {
   metadata: Record<string, unknown>;
   list_name?: string | null;
   subscriber_count?: number;
+  view_online_target?: string | null;
+  view_online_external_base_url?: string | null;
 }
 
 type EditionTab = 'details' | 'editor' | 'sending';

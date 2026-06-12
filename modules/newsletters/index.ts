@@ -119,6 +119,7 @@ const newslettersModule: GatewazeModule = {
     // registry (opaque tracking_key) for block-level click tracking, and adds
     // tracking_slug to edition blocks. See spec-newsletter-link-tracking.md.
     'migrations/032_link_tracking.sql',
+    'migrations/033_view_online_target.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
