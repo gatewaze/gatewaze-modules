@@ -121,7 +121,13 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
         // Solid background so the floating inline toolbar doesn't let
         // editor content (e.g. a full-bleed image) bleed through behind it.
         background: '#ffffff',
+        // Dark icon/text colour: the inline toolbar lives inside Puck's dark
+        // overlay, whose `color` is near-white. On our white panel the default
+        // B/I/U buttons (color: inherit) and our own icons would be invisible
+        // without overriding it here.
+        color: '#1f2937',
         borderRadius: 4,
+        padding: '2px 4px',
       }}
     >
       {children}
