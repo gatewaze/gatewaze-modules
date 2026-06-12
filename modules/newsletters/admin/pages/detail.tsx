@@ -423,6 +423,16 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
           // eslint-disable-next-line no-console
           console.warn('[update] wrapper config sync failed', await cfgRes.json().catch(() => null));
         }
+
+        // Pull declarative (html-ish) blocks from the repo's blocks/ directory.
+        const declRes = await fetch(
+          `${apiUrl}/api/admin/newsletters/collections/${s.library_id}/sync-declarative-blocks`,
+          { method: 'POST', headers: { Authorization: auth } },
+        );
+        if (!declRes.ok) {
+          // eslint-disable-next-line no-console
+          console.warn('[update] declarative block sync failed', await declRes.json().catch(() => null));
+        }
       }
 
       const count = Array.isArray(applyBody?.applied) ? applyBody.applied.length : 0;

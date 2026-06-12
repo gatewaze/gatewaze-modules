@@ -209,6 +209,118 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     }),
   );
 
+  // POST /api/admin/newsletters/collections/:collectionId/sync-declarative-blocks
+  //
+  // Read the template repo's `blocks/` directory (declarative html-ish block
+  // sources) and upsert each as a render_kind='declarative' block def in this
+  // newsletter's library, so git-authored blocks drive the editor + render.
+  router.post(
+    '/newsletters/collections/:collectionId/sync-declarative-blocks',
+    wrap(async (req: Request, res: Response) => {
+      const collectionId = req.params['collectionId'];
+      if (!collectionId) {
+        res.status(400).json({ error: { code: 'validation_failed', message: 'collectionId required' } });
+        return;
+      }
+
+      const { data: coll } = await supabase
+        .from('newsletters_template_collections')
+        .select('id, git_url')
+        .eq('id', collectionId)
+        .maybeSingle();
+      if (!coll?.git_url) {
+        res.status(400).json({ error: { code: 'no_git_repo', message: 'Newsletter has no connected git repo' } });
+        return;
+      }
+
+      const { data: src } = await supabase
+        .from('templates_sources')
+        .select('token_secret_ref, branch')
+        .eq('library_id', collectionId)
+        .eq('kind', 'git')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const rawToken = (src as { token_secret_ref: string | null } | null)?.token_secret_ref ?? null;
+      const token = rawToken && rawToken !== '<redacted>' ? rawToken : null;
+      const branch = (src as { branch: string | null } | null)?.branch || 'main';
+
+      const m = /github\.com[/:]([^/]+)\/([^/.]+)/.exec(coll.git_url);
+      if (!m) {
+        res.status(400).json({ error: { code: 'unsupported_repo', message: 'Only github.com repos supported' } });
+        return;
+      }
+      const [, owner, repo] = m;
+      const gh = (path: string, raw: boolean): Promise<Response> =>
+        // eslint-disable-next-line no-undef
+        fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`, {
+          headers: {
+            Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
+            'User-Agent': 'gatewaze-newsletters',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        }) as unknown as Promise<Response>;
+
+      const listRes = await gh('blocks', false);
+      if (listRes.status === 404) {
+        res.status(200).json({ ok: true, synced: 0, message: 'no blocks/ directory in the template repo' });
+        return;
+      }
+      if (!listRes.ok) {
+        res.status(502).json({ error: { code: 'github_error', message: `GitHub returned ${listRes.status}` } });
+        return;
+      }
+      const listing = (await listRes.json().catch(() => null)) as Array<{ name: string; type: string }> | null;
+      const files = (listing ?? []).filter((f) => f.type === 'file' && /\.html?$/i.test(f.name));
+
+      const titleCase = (k: string): string => k.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      let synced = 0;
+      for (const f of files) {
+        const fileRes = await gh(`blocks/${encodeURIComponent(f.name)}`, true);
+        if (!fileRes.ok) continue;
+        const source = await fileRes.text();
+        const key = f.name.replace(/\.html?$/i, '');
+        const schemaMatch = source.match(/<!--\s*SCHEMA:\s*([\s\S]*?)-->/i);
+        let schema: unknown = {};
+        if (schemaMatch) {
+          try {
+            schema = JSON.parse(schemaMatch[1].trim());
+          } catch {
+            schema = {};
+          }
+        }
+
+        const { data: existing } = await supabase
+          .from('templates_block_defs')
+          .select('id')
+          .eq('library_id', collectionId)
+          .eq('key', key)
+          .maybeSingle();
+        if (existing?.id) {
+          await supabase
+            .from('templates_block_defs')
+            .update({ name: titleCase(key), schema, html: source, render_kind: 'declarative', component_id: key })
+            .eq('id', existing.id);
+        } else {
+          await supabase.from('templates_block_defs').insert({
+            library_id: collectionId,
+            key,
+            name: titleCase(key),
+            description: '',
+            schema,
+            html: source,
+            has_bricks: false,
+            render_kind: 'declarative',
+            component_id: key,
+          });
+        }
+        synced++;
+      }
+
+      res.status(200).json({ ok: true, synced });
+    }),
+  );
+
   // POST /api/admin/newsletters/editions/:editionId/test-send
   //
   // One-off send of the rendered HTML to a single email. Used by the
