@@ -42,10 +42,17 @@ export const NewsletterHeaderBlock: EmailBlockEntry<NewsletterHeaderProps> = {
         <Link href={shop_link} style={LINK}>
           Shop
         </Link>
-        {' // '}
-        <Link href={view_online_link || '#'} style={LINK}>
-          View Online
-        </Link>
+        {/* Omit the "View Online" link when there's no target — the publish
+            pipeline passes an empty value so the published page (already being
+            viewed online) doesn't show a redundant self-link. */}
+        {view_online_link ? (
+          <>
+            {' // '}
+            <Link href={view_online_link} style={LINK}>
+              View Online
+            </Link>
+          </>
+        ) : null}
       </Text>
       {edition_date ? <Text style={{ ...CENTER, marginTop: '8px' }}>{edition_date}</Text> : null}
       <Text style={{ ...CENTER, fontSize: '12px', marginTop: '8px' }}>

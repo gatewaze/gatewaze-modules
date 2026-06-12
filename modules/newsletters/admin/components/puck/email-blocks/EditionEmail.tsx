@@ -85,6 +85,12 @@ export interface EditionEmailProps {
    */
   viewOnlineUrl?: string;
   /**
+   * Suppress the header "View Online" link. Set by the publish pipeline: the
+   * published page IS the online version, so a self-referential link is
+   * redundant. The sent email and editor preview leave it on.
+   */
+  hideViewOnline?: boolean;
+  /**
    * Per-edition registry (static code blocks + this newsletter's declarative
    * blocks). Looked up before the global registry so declarative blocks render
    * in export/publish/send. Absent → global registry only.
@@ -103,7 +109,7 @@ export interface BlockRenderMeta {
 }
 
 export function EditionEmail(props: EditionEmailProps): ReactElement {
-  const { edition, format, blockMeta, wrapper, viewOnlineUrl, registry } = props;
+  const { edition, format, blockMeta, wrapper, viewOnlineUrl, hideViewOnline, registry } = props;
 
   const sorted = [...edition.blocks].sort((a, z) => a.sort_order - z.sort_order);
 
@@ -124,7 +130,7 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
   // Fixed header/footer chrome from the template repo (collection.config.
   // wrapper). Header links + footer social links are fixed in the template;
   // only the edition date and view-online URL vary per edition.
-  const chrome = renderChrome(wrapper, edition.edition_date, viewOnlineUrl);
+  const chrome = renderChrome(wrapper, edition.edition_date, hideViewOnline ? '' : viewOnlineUrl);
   const composed = [chrome.header, ...blockEls, chrome.footer].filter(
     (el): el is ReactElement => el != null,
   );
