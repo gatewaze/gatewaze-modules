@@ -744,14 +744,11 @@ export function renderArchiveIndex(
           : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
       })();
       const heading = escapeHtml(e.subject?.trim() || dateLabel);
-      const preheader = e.preheader?.trim() ? `<p class="pre">${escapeHtml(e.preheader.trim())}</p>` : '';
-      return `      <li class="edition">
-        <a href="${e.slug.split('/').map(encodeURIComponent).join('/')}/">
-          <span class="date">${escapeHtml(dateLabel)}</span>
-          <span class="title">${heading}</span>
-          ${preheader}
-        </a>
-      </li>`;
+      const preheader = e.preheader?.trim() ? `\n        <p class="pre">${escapeHtml(e.preheader.trim())}</p>` : '';
+      return `      <a class="card edition" href="${e.slug.split('/').map(encodeURIComponent).join('/')}/">
+        <span class="date">${escapeHtml(dateLabel)}</span>
+        <span class="title">${heading}</span>${preheader}
+      </a>`;
     })
     .join('\n');
 
@@ -760,7 +757,7 @@ export function renderArchiveIndex(
     ? `\n  <link rel="alternate" type="application/rss+xml" title="${safeTitle}" href="feed.xml" />`
     : '';
   const feedCta = opts.hasFeed
-    ? `\n  <p class="sub"><a href="feed.xml" class="rss">Subscribe via RSS</a></p>`
+    ? `\n      <p class="sub"><a href="feed.xml" class="rss">Subscribe via RSS</a></p>`
     : '';
   return `<!DOCTYPE html>
 <html lang="en">
@@ -769,36 +766,39 @@ export function renderArchiveIndex(
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${safeTitle} — Archive</title>${feedLink}
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-           max-width: 680px; margin: 0 auto; padding: 48px 20px; line-height: 1.5;
-           color: #1a1a1a; background: #fff; }
-    h1 { font-size: 28px; margin: 0 0 8px; }
-    .sub { color: #666; margin: 0 0 32px; font-size: 15px; }
-    ul { list-style: none; padding: 0; margin: 0; }
-    .edition { border-top: 1px solid #eaeaea; }
-    .edition a { display: block; padding: 16px 4px; text-decoration: none; color: inherit; }
-    .edition a:hover { background: #fafafa; }
-    .date { display: block; font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: .04em; }
-    .title { display: block; font-size: 18px; font-weight: 600; margin-top: 2px; }
-    .pre { margin: 4px 0 0; color: #666; font-size: 14px; }
-    .rss { color: #c2570c; text-decoration: none; }
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { font-family: "Google Sans", Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+           margin: 0; line-height: 1.5; color: #202124; background: #e9edf2;
+           -webkit-font-smoothing: antialiased; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+    .card { background: #fff; border-radius: 8px;
+            box-shadow: 0 1px 2px 0 rgba(60,64,67,.3), 0 1px 3px 1px rgba(60,64,67,.15); }
+    .header-card { padding: 28px 32px; margin-bottom: 24px; }
+    .header-card h1 { font-size: 22px; font-weight: 500; margin: 0; color: #202124; }
+    .sub { color: #5f6368; font-size: 14px; margin: 8px 0 0; }
+    .rss { color: #1a73e8; text-decoration: none; }
     .rss:hover { text-decoration: underline; }
-    @media (prefers-color-scheme: dark) {
-      body { color: #eaeaea; background: #111; }
-      .sub, .date, .pre { color: #999; }
-      .edition { border-color: #2a2a2a; }
-      .edition a:hover { background: #1a1a1a; }
-      .rss { color: #f0822e; }
-    }
+    .editions { display: flex; flex-direction: column; gap: 16px; }
+    .edition { display: block; padding: 24px 32px; text-decoration: none; color: inherit;
+               transition: box-shadow .15s ease; }
+    .edition:hover { box-shadow: 0 1px 3px 0 rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15); }
+    .date { display: block; font-size: 12px; color: #5f6368; text-transform: uppercase; letter-spacing: .05em; }
+    .title { display: block; font-size: 18px; font-weight: 500; margin-top: 6px; color: #202124; }
+    .pre { margin: 8px 0 0; color: #5f6368; font-size: 14px; }
+    .empty { padding: 24px 32px; color: #5f6368; font-size: 14px; }
   </style>
 </head>
 <body>
-  <h1>${safeTitle}</h1>
-  <p class="sub">Newsletter archive — ${editions.length} edition${editions.length === 1 ? '' : 's'}</p>${feedCta}
-  <ul>
-${items}
-  </ul>
+  <div class="wrap">
+    <section class="card header-card">
+      <h1>${safeTitle}</h1>
+      <p class="sub">Newsletter archive — ${editions.length} edition${editions.length === 1 ? '' : 's'}</p>${feedCta}
+    </section>
+    <div class="editions">
+${items || '      <div class="card empty">No editions published yet.</div>'}
+    </div>
+  </div>
 </body>
 </html>
 `;
