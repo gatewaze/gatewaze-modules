@@ -19,7 +19,7 @@
  * EditionCanvas doesn't have them either).
  */
 
-import { useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode, type CSSProperties } from 'react';
 import {
   type Config,
   ActionBar,
@@ -51,7 +51,7 @@ import type {
 import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js';
 import { emailBlockRegistry } from './email-blocks/index.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
-import { renderChrome, type EditionWrapperConfig } from './email-blocks/EditionEmail.js';
+import type { EditionWrapperConfig } from './email-blocks/EditionEmail.js';
 import { BlockSearchComponents } from './block-search.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
 import { CanvasShell } from '../../../../sites/admin/components/canvas/puck/CanvasShell.js';
@@ -1274,12 +1274,13 @@ function NewsletterCanvasRoot(props: RootProps) {
 
   // Fixed header/footer chrome from the template (collection.config.wrapper),
   // shown as a non-editable preview around the editable blocks so the operator
-  // sees the full edition. Links/date are not editable here — they come from
-  // the template + the edition date.
-  const chrome = renderChrome(
+  // sees the full edition. Rendered as plain HTML (not the react-email
+  // components) so it always paints in the live canvas; the actual email render
+  // still uses the react-email components. Links/date come from the template +
+  // the edition date and aren't editable here.
+  const chrome = renderCanvasChrome(
     props.puck?.metadata?.wrapper,
     props.puck?.metadata?.editionDate ?? '',
-    undefined,
   );
 
   return (
@@ -1288,20 +1289,69 @@ function NewsletterCanvasRoot(props: RootProps) {
       <FieldsAutoSwitcher />
       <UserBlockSyntheticExpander />
       <div ref={wrapperRef} className="gw-email-card">
-        {chrome.header && (
-          <div className="gw-wrapper-chrome" style={{ pointerEvents: 'none', userSelect: 'none' }}>
-            {chrome.header}
-          </div>
-        )}
+        {chrome.header}
         {props.children}
-        {chrome.footer && (
-          <div className="gw-wrapper-chrome" style={{ pointerEvents: 'none', userSelect: 'none' }}>
-            {chrome.footer}
-          </div>
-        )}
+        {chrome.footer}
       </div>
     </>
   );
+}
+
+/**
+ * Plain-HTML preview of the fixed header/footer chrome for the live canvas.
+ * Mirrors the NewsletterHeader/Footer react-email components (which render the
+ * real email) but as ordinary divs, so it always paints inside the Puck iframe.
+ * Non-interactive (pointer-events:none).
+ */
+function renderCanvasChrome(
+  wrapper: EditionWrapperConfig | null | undefined,
+  editionDate: string,
+): { header: ReactNode; footer: ReactNode } {
+  if (!wrapper) return { header: null, footer: null };
+  const link: CSSProperties = { color: '#4086c6', textDecoration: 'underline' };
+  const center: CSSProperties = { margin: 0, textAlign: 'center', color: '#4086c6' };
+  const wrap: CSSProperties = { pointerEvents: 'none', userSelect: 'none', padding: '15px 10px' };
+  const h = wrapper.header ?? {};
+  const f = wrapper.footer ?? {};
+  const dateLabel = (() => {
+    const s = String(editionDate ?? '').slice(0, 10);
+    const d = new Date(`${s}T00:00:00Z`);
+    return Number.isNaN(d.getTime())
+      ? s
+      : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+  })();
+
+  return {
+    header: (
+      <div className="gw-wrapper-chrome" style={wrap}>
+        <p style={{ ...center, fontSize: 16 }}>
+          <a href={h.shop_link || '#'} style={link}>Shop</a>
+          {' // '}
+          <a href="#" style={link}>View Online</a>
+        </p>
+        {dateLabel ? <p style={{ ...center, fontSize: 14, marginTop: 8 }}>{dateLabel}</p> : null}
+        <p style={{ ...center, fontSize: 12, marginTop: 8 }}>
+          Forwarded this email? <a href={h.subscribe_link || '#'} style={link}>Subscribe here</a>
+        </p>
+      </div>
+    ),
+    footer: (
+      <div className="gw-wrapper-chrome" style={{ ...wrap, color: '#555' }}>
+        {f.partner_email ? (
+          <p style={{ margin: '0 0 12px', textAlign: 'center', fontSize: 14, color: '#555' }}>
+            Interested in partnering with us? Get in touch: {f.partner_email}
+          </p>
+        ) : null}
+        <p style={{ margin: 0, textAlign: 'center', fontSize: 14, color: '#555', lineHeight: 1.4 }}>
+          Thanks for reading. See you in <a href={f.slack_link || '#'} style={link}>Slack</a>,{' '}
+          <a href={f.youtube_link || '#'} style={link}>YouTube</a>, and{' '}
+          <a href={f.podcast_link || '#'} style={link}>podcast</a> land. Oh yeah, and we are also on{' '}
+          <a href={f.x_link || '#'} style={link}>X</a> and{' '}
+          <a href={f.linkedin_link || '#'} style={link}>LinkedIn</a>.
+        </p>
+      </div>
+    ),
+  };
 }
 
 const BASE_CANVAS_CSS = `
@@ -1322,12 +1372,12 @@ const BASE_CANVAS_CSS = `
     max-width: 650px;
     margin: 0 auto;
     border-radius: 6px;
-    overflow: hidden;
-    /* Small horizontal gutter so block content — and Puck's selection/hover
-       outline drawn at each block's right edge — sits inside the card's
-       overflow:hidden clip boundary instead of being shaved off on the right. */
-    padding: 0 8px;
-    box-sizing: border-box;
+    /* overflow:visible (was hidden): the authored blocks are a fixed 650px and
+       some carry their own 1px border + rounded corners flush to that width.
+       Clipping at the 650px card edge shaved the right border/corner. The
+       Desktop frame (682 = 650 + 2×16 body padding) already gives the column
+       room, so let block borders paint to their full width. */
+    overflow: visible;
     transition: background-color 0.15s ease, box-shadow 0.15s ease;
   }
   /* The email column is authored at a fixed 650px. When the viewport is
