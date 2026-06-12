@@ -198,7 +198,7 @@ const newslettersModule: GatewazeModule = {
     { path: 'newsletters/sends/:id', component: () => import('./admin/pages/sends/[id]'), requiredFeature: 'newsletters.sending', guard: 'none' },
   ],
   adminNavItems: [
-    { path: '/newsletters', label: 'Newsletters', icon: 'Newspaper', requiredFeature: 'newsletters', order: 16 },
+    { path: '/newsletters', label: 'Newsletters', icon: 'Newspaper', requiredFeature: 'newsletters', defaultSection: 'Content', defaultLocation: 'sidebar', order: 10 },
   ],
 
   portalNav: {

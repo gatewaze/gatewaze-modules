@@ -194,7 +194,9 @@ const sitesModule: GatewazeModule = {
       icon: 'Globe',
       requiredFeature: 'sites',
       parentGroup: 'dashboards',
-      order: 16,
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      order: 40,
     },
   ],
 

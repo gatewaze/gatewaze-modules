@@ -70,7 +70,7 @@ const calendarsModule: GatewazeModule = {
   ],
 
   adminNavItems: [
-    { path: '/calendars', label: 'Calendars', icon: 'Calendar', requiredFeature: 'calendars', order: 13 },
+    { path: '/calendars', label: 'Calendars', icon: 'Calendar', requiredFeature: 'calendars', defaultSection: 'Events', defaultLocation: 'sidebar', order: 110 },
   ],
 
   // Portal nav entry. Visibility (show/hide), label, and order are configurable
