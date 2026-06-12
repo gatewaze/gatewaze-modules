@@ -120,6 +120,7 @@ import { IntroParagraphBlock } from './blocks/IntroParagraph.js';
 import { HowWeHelpBlock } from './blocks/HowWeHelp.js';
 import { HotTakeBlock } from './blocks/HotTake.js';
 import { AgentInfrastructureBlock } from './blocks/AgentInfrastructure.js';
+import { GenericBlock } from './blocks/GenericBlock.js';
 import { HiddenGemsBlock } from './blocks/HiddenGems.js';
 import { SponsoredAdBlock } from './blocks/SponsoredAd.js';
 import { MemeOfWeekBlock } from './blocks/MemeOfWeek.js';
@@ -156,6 +157,7 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   SponsoredAdBlock as unknown as EmailBlockEntry,
   HiddenGemsBlock as unknown as EmailBlockEntry,
   AgentInfrastructureBlock as unknown as EmailBlockEntry,
+  GenericBlock as unknown as EmailBlockEntry,
   MemeOfWeekBlock as unknown as EmailBlockEntry,
   // NewsletterHeaderBlock / NewsletterFooterBlock are intentionally NOT
   // registered as editable blocks: they're fixed page chrome applied by
