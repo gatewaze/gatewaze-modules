@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   Cog6ToothIcon,
@@ -111,6 +111,28 @@ export default function EditionEditorPage() {
   const [collectionId, setCollectionId] = useState<string | null>(null);
   const [collection, setCollection] = useState<CollectionInfo | null>(null);
   const [collectionMetadata, setCollectionMetadata] = useState<Record<string, unknown>>({});
+
+  // The set of registry component_ids to surface (production opt-in pattern).
+  // MUST be a stable reference: it feeds NewsletterPuckCanvas's `config`
+  // useMemo, and a fresh array each render rebuilds the Puck config on every
+  // keystroke — remounting every block and dropping inline-editor focus after
+  // one character. Memoise on the only inputs that actually change it.
+  //   - react-email blocks surface by component_id; declarative (git-authored)
+  //     blocks surface by block_type (the combiner registers them under it).
+  //   - Slots render their bricks via the registry too, so include brick
+  //     component_ids (brick_type === registry key) or they'd be filtered out.
+  // Empty → undefined, so the merge helper falls back to the full registry.
+  const enabledRegistryComponentIds = useMemo<string[] | undefined>(() => {
+    const blockIds = (blockTemplates as Array<{ render_kind?: string; component_id?: string | null; block_type?: string }>)
+      .filter((t) => t.render_kind === 'react-email' || t.render_kind === 'declarative')
+      .map((t) => t.component_id || t.block_type || '')
+      .filter((id): id is string => id.length > 0);
+    if (blockIds.length === 0) return undefined;
+    const brickIds = (brickTemplates as Array<{ brick_type?: string }>)
+      .map((b) => b.brick_type)
+      .filter((k): k is string => typeof k === 'string' && k.length > 0);
+    return [...new Set([...blockIds, ...brickIds])];
+  }, [blockTemplates, brickTemplates]);
 
   // Pin the editor wrapper to the available viewport space below the
   // hero + tab bar. Hard-coding a calc() offset (e.g. `100vh - 220px`)
@@ -690,23 +712,7 @@ export default function EditionEditorPage() {
             // as a sensible default so a fresh edition has email-safe
             // blocks available out of the box. Mustache rows still appear
             // alongside whichever registry surface is active.
-            {...(() => {
-              // react-email blocks surface by component_id; declarative
-              // (git-authored) blocks surface by block_type (the combiner
-              // registers them under block_type). Include both.
-              const blockIds = (blockTemplates as Array<{ render_kind?: string; component_id?: string | null; block_type?: string }>)
-                .filter((t) => t.render_kind === 'react-email' || t.render_kind === 'declarative')
-                .map((t) => t.component_id || t.block_type || '')
-                .filter((id): id is string => id.length > 0);
-              if (blockIds.length === 0) return {};
-              // Slots (e.g. mlops_community) render their bricks via the registry
-              // too — include the brick component_ids (brick_type === registry
-              // key) so they aren't filtered out ("No configuration for podcast").
-              const brickIds = (brickTemplates as Array<{ brick_type?: string }>)
-                .map((b) => b.brick_type)
-                .filter((k): k is string => typeof k === 'string' && k.length > 0);
-              return { enabledRegistryComponentIds: [...new Set([...blockIds, ...brickIds])] };
-            })()}
+            {...(enabledRegistryComponentIds ? { enabledRegistryComponentIds } : {})}
             onChange={setEdition}
             onSave={handleSave}
             onStatusChange={async (newStatus) => {
