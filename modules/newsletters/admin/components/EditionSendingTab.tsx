@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { Card, Button, Badge } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { getSupabaseConfig } from '@/config/brands';
+import { editionFolderSlug } from '../../lib/edition-slug';
 
 interface SendRecord {
   id: string;
@@ -210,7 +211,8 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
       const externalBase = collection?.view_online_external_base_url?.trim().replace(/\/+$/, '');
       let webVersionUrl: string;
       if (collection?.view_online_target === 'external' && externalBase && editionDate) {
-        webVersionUrl = `${externalBase}/editions/${editionDate}.html`;
+        // Matches the publish-branch folder layout: <base>/<date-subject>/
+        webVersionUrl = `${externalBase}/${editionFolderSlug(editionDate, subject)}/`;
       } else {
         const portalDomain = window.location.hostname.replace('-admin.', '-app.').replace('admin.', 'app.');
         const portalProtocol = window.location.protocol;

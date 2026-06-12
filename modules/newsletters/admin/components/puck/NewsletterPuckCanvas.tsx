@@ -337,11 +337,24 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       // RichTextEditor (via the `@/` alias), none of which resolve
       // in the API container. Producing the HTML here uses the same
       // exportEditionHtml path as the Send and HTML-export buttons.
+      const publishMeta = buildBlockMeta();
       const publishHtml = await exportEditionHtml({
         edition,
         format: 'email',
-        blockMeta: buildBlockMeta(),
+        blockMeta: publishMeta,
         pretty: false,
+      });
+      // Send the EFFECTIVE render path per block so the published
+      // edition.json reflects how the HTML was actually produced (react-email
+      // via the registry), not the stale templates_block_defs.render_kind the
+      // git-HTML import recorded.
+      const blockRender = edition.blocks.map((b) => {
+        const m = publishMeta.get(b.id);
+        return {
+          id: b.id,
+          render_kind: m?.render_kind ?? 'mustache',
+          component_id: m?.component_id ?? b.block_template.block_type,
+        };
       });
       const { url } = getSupabaseConfig();
       const { data: { session } } = await supabase.auth.getSession();
@@ -355,7 +368,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ html: publishHtml }),
+        body: JSON.stringify({ html: publishHtml, blockRender }),
       });
       // The publish-to-git endpoint uses 200 + `kind: 'skipped'` to
       // signal a graceful no-op (e.g. newsletter still on the
