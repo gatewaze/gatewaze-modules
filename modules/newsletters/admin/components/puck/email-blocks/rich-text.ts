@@ -37,5 +37,15 @@ export function normalizeRichText(html: unknown): string {
       '<ol style="margin:8px 0;padding-left:20px;list-style-type:decimal">',
     )
     // Bare paragraphs (TipTap emits `text-align: left;` with no margin).
-    .replace(/<p style="text-align:\s*left;?">/gi, '<p style="margin:0 0 12px 0;text-align:left">');
+    .replace(/<p style="text-align:\s*left;?">/gi, '<p style="margin:0 0 12px 0;text-align:left">')
+    // Constrain inline images to the email column. A wide image (e.g. a chart
+    // pasted into the body) otherwise renders at its natural width and
+    // stretches its card past the others. `max-width:100%` caps it to the
+    // container even if the image carries a larger fixed width/attribute;
+    // `height:auto` keeps the aspect ratio.
+    .replace(/<img\b([^>]*?)\/?>/gi, (_m, attrs: string) =>
+      /\sstyle=/i.test(attrs)
+        ? `<img${attrs.replace(/(\sstyle=(["']))/i, '$1max-width:100%;height:auto;')}>`
+        : `<img${attrs} style="max-width:100%;height:auto">`,
+    );
 }
