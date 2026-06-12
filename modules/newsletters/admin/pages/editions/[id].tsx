@@ -690,9 +690,13 @@ export default function EditionEditorPage() {
             // blocks available out of the box. Mustache rows still appear
             // alongside whichever registry surface is active.
             {...(() => {
-              const blockIds = (blockTemplates as Array<{ render_kind?: string; component_id?: string | null }>)
-                .filter((t) => t.render_kind === 'react-email' && typeof t.component_id === 'string' && t.component_id.length > 0)
-                .map((t) => t.component_id as string);
+              // react-email blocks surface by component_id; declarative
+              // (git-authored) blocks surface by block_type (the combiner
+              // registers them under block_type). Include both.
+              const blockIds = (blockTemplates as Array<{ render_kind?: string; component_id?: string | null; block_type?: string }>)
+                .filter((t) => t.render_kind === 'react-email' || t.render_kind === 'declarative')
+                .map((t) => t.component_id || t.block_type || '')
+                .filter((id): id is string => id.length > 0);
               if (blockIds.length === 0) return {};
               // Slots (e.g. mlops_community) render their bricks via the registry
               // too — include the brick component_ids (brick_type === registry

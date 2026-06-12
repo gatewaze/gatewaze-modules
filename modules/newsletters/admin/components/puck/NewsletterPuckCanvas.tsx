@@ -49,7 +49,7 @@ import type {
   BrickTemplate,
 } from '../../utils/types.js';
 import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js';
-import { emailBlockRegistry } from './email-blocks/index.js';
+import { buildEmailRegistry } from './email-blocks/declarative/registry.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
 import type { EditionWrapperConfig } from './email-blocks/EditionEmail.js';
 import { BlockSearchComponents } from './block-search.js';
@@ -153,6 +153,12 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       });
     return () => { cancelled = true; };
   }, [wrapperConfig, collectionId]);
+
+  // Per-edition registry: the static code blocks + this newsletter's
+  // declarative (git-authored) blocks. Superset of the static registry, so
+  // newsletters without declarative blocks are unchanged.
+  const registry = useMemo(() => buildEmailRegistry(blockTemplates), [blockTemplates]);
+
   // Adapt newsletter templates → sites' BlockDefRow / BrickDefRow shape
   // so we can reuse the existing Puck Config builder. Memoised — these
   // change rarely (only when the library reloads).
@@ -163,7 +169,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     // mustache component for it. This is how a legacy block is "converted":
     // ship the registry component with componentId === block_type.
     const bd: BlockDefRow[] = blockTemplates
-      .filter((t) => !emailBlockRegistry.has(t.block_type))
+      .filter((t) => !registry.has(t.block_type))
       .map((t) => ({
       id: t.id,
       key: t.block_type,
@@ -176,7 +182,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       theme_kind: 'email',
     }));
     const br: BrickDefRow[] = brickTemplates
-      .filter((t) => !emailBlockRegistry.has(t.brick_type))
+      .filter((t) => !registry.has(t.brick_type))
       .map((t) => ({
       id: t.id,
       key: t.brick_type,
@@ -198,7 +204,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       ]),
     };
     return { blockDefs: bd, brickDefs: br, lookup: tplLookup };
-  }, [blockTemplates, brickTemplates]);
+  }, [blockTemplates, brickTemplates, registry]);
 
   const renderHost: PuckRenderHost = useMemo(
     () => ({
@@ -241,7 +247,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       : undefined;
     const merged = mergeRegistryIntoConfig({
       base: base.config,
-      registry: emailBlockRegistry,
+      registry: registry,
       renderHost,
       ...(enabledSet ? { enabledComponentIds: enabledSet } : {}),
     });
@@ -265,9 +271,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       },
     } as Config;
     return { ...base, config: finalConfig, registryCollisions: merged.collisions };
-  }, [edition.id, blockDefs, brickDefs, renderHost, enabledRegistryComponentIds]);
+  }, [edition.id, blockDefs, brickDefs, renderHost, enabledRegistryComponentIds, registry]);
 
-  const [data, setData] = useState(() => editionToPuckData(edition, emailBlockRegistry));
+  const [data, setData] = useState(() => editionToPuckData(edition, registry));
   // previewMode (light/dark) state lives inside CanvasShell now — it
   // owns the Sun/Moon portal AND threads previewMode into Puck's
   // metadata so the canvas root sees `puck.metadata.previewMode` and
@@ -493,12 +499,12 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       myBlocks: { components: myBlocksIds, title: 'My blocks', defaultExpanded: true },
     };
     return { ...config, config: { ...cfg, components, categories } as Config };
-  }, [config, userBlocks.blocks]);
+  }, [config, userBlocks.blocks, registry]);
 
   // Re-sync from upstream when the parent edition changes by id
   // (e.g. user navigates to a different edition).
   useEffect(() => {
-    setData(editionToPuckData(edition, emailBlockRegistry));
+    setData(editionToPuckData(edition, registry));
   }, [edition.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Debounced email-size compute for the Gmail clipping indicator.
@@ -538,7 +544,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   function buildBlockMeta() {
     const blockMeta = new Map<string, import('./email-blocks/EditionEmail.js').BlockRenderMeta>();
     for (const block of edition.blocks) {
-      const isRegistry = emailBlockRegistry.has(block.block_template.block_type);
+      const isRegistry = registry.has(block.block_template.block_type);
       blockMeta.set(
         block.id,
         isRegistry
@@ -645,7 +651,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     () =>
       buildAiBlockDefs({
         blockTemplates,
-        registry: emailBlockRegistry,
+        registry: registry,
         ...(enabledRegistryComponentIds
           ? { enabledRegistryComponentIds: new Set(enabledRegistryComponentIds) }
           : {}),
@@ -915,7 +921,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         open={userBlocks.pendingSave !== null}
         mode="save"
         edition={edition}
-        registry={emailBlockRegistry}
+        registry={registry}
         onApply={onChange}
         onClose={() => {
           userBlocks.clearPendingSave();
@@ -1068,7 +1074,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                 data: nextPuck,
                 blockTemplates,
                 brickTemplates,
-                registry: emailBlockRegistry,
+                registry: registry,
               });
               onChange(nextEdition);
             } catch (e) {
