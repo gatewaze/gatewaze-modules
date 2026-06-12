@@ -185,17 +185,5 @@ export function DeclarativeBlock({
   editableFields?: Set<string>;
 }): ReactNode {
   const ctx: RenderCtx = { content, editMode: content.editMode === true, editableFields };
-  // TEMP DIAGNOSTIC — remove once the title inline-edit issue is understood.
-  // Logs, per declarative block render, the edit-mode flag and the runtime
-  // type of every field value (ELEMENT = Puck swapped in an inline editor).
-  if (typeof window !== 'undefined') {
-    const fieldTypes: Record<string, string> = {};
-    for (const k of Object.keys(content)) {
-      const v = (content as Record<string, unknown>)[k];
-      fieldTypes[k] = isValidElement(v) ? 'ELEMENT' : v === '' ? "'' (empty)" : typeof v;
-    }
-    // eslint-disable-next-line no-console
-    console.log('[declarative]', { editMode: content.editMode, editable: [...editableFields], fieldTypes });
-  }
   return <>{nodes.map((n, i) => renderNode(n, ctx, String(i)))}</>;
 }
