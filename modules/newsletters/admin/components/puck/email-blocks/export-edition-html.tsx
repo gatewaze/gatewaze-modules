@@ -47,6 +47,9 @@ export interface ExportArgs {
   wrapper?: EditionWrapperConfig | null;
   /** Resolved "View Online" URL for the header link (default `{{web_version}}`). */
   viewOnlineUrl?: string;
+  /** Suppress the header "View Online" link (set when rendering for the
+   *  publish branch — the page is already the online version). */
+  hideViewOnline?: boolean;
   /** Per-edition registry (code + declarative blocks) for export-side lookup. */
   registry?: EmailBlockRegistry;
   /**
@@ -64,6 +67,7 @@ export async function exportEditionHtml(args: ExportArgs): Promise<string> {
       blockMeta={args.blockMeta}
       wrapper={args.wrapper}
       viewOnlineUrl={args.viewOnlineUrl}
+      hideViewOnline={args.hideViewOnline}
       registry={args.registry}
     />,
     { pretty: args.pretty ?? false },

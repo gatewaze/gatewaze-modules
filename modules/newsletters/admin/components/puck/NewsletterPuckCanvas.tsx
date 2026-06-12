@@ -377,6 +377,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         format: 'email',
         blockMeta: publishMeta,
         wrapper: resolvedWrapper, registry,
+        // The published page is the online version — drop the redundant
+        // "View Online" self-link from its header.
+        hideViewOnline: true,
         pretty: false,
       });
       // Send the EFFECTIVE render path per block so the published
