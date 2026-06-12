@@ -23,7 +23,14 @@ import { createHash } from 'node:crypto';
 import { parse } from '../lib/parser/parse.js';
 import { applySource } from '../lib/sources/apply.js';
 import { ingestUpload, ingestInline } from '../lib/sources/ingest.js';
-import { ingestGit, checkGitSourceForUpdates, assertHostInEgressAllowlist } from '../lib/sources/git.js';
+import {
+  ingestGit,
+  checkGitSourceForUpdates,
+  assertHostInEgressAllowlist,
+  cloneOrUpdateGitSource,
+  readHeadSha,
+  walkSourceFiles,
+} from '../lib/sources/git.js';
 import { getBoilerplateConfig, type HostKind } from '../lib/boilerplate/index.js';
 
 // ---------------------------------------------------------------------------
@@ -392,31 +399,69 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
 
     const sourceQ = await deps.supabase
       .from('templates_sources')
-      .select('id, kind, status, inline_html, upload_blob_ref')
+      .select('id, kind, status, inline_html, upload_blob_ref, url, branch, manifest_path, token_secret_ref, installed_git_sha')
       .eq('id', sourceId)
-      .maybeSingle<{ id: string; kind: string; status: string; inline_html: string | null; upload_blob_ref: string | null }>();
+      .maybeSingle<{
+        id: string; kind: string; status: string; inline_html: string | null; upload_blob_ref: string | null;
+        url: string | null; branch: string | null; manifest_path: string | null;
+        token_secret_ref: string | null; installed_git_sha: string | null;
+      }>();
     if (sourceQ.error) return sendError(res, 500, 'internal_error', sourceQ.error.message);
     if (!sourceQ.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
     if (sourceQ.data.status === 'paused') return sendError(res, 409, 'source_paused', 'source is paused; unpause first');
 
-    const html = sourceQ.data.inline_html;
-    if (!html) {
-      // For git, the cloned working tree's HTML lives elsewhere; not wired up yet.
-      return sendError(res, 501, 'not_implemented', `apply for kind=${sourceQ.data.kind} is not implemented in v0.1`);
+    // Git apply: re-clone HEAD, parse the working tree, and persist via the
+    // same applySource() path as the initial ingest. (The old code only
+    // handled inline/upload and 501'd here for git.)
+    let parsed: ReturnType<typeof parse>;
+    let sha: string;
+    let appliedSha: string | null = null;
+    if (sourceQ.data.kind === 'git') {
+      if (!sourceQ.data.url) return sendError(res, 500, 'internal_error', 'git source has no url stored');
+      const persistedToken = sourceQ.data.token_secret_ref;
+      try {
+        const repoDir = cloneOrUpdateGitSource({
+          url: sourceQ.data.url,
+          branch: sourceQ.data.branch ?? undefined,
+          token: persistedToken && persistedToken !== '<redacted>' ? persistedToken : undefined,
+        });
+        appliedSha = readHeadSha(repoDir);
+        const files = walkSourceFiles(repoDir, sourceQ.data.manifest_path ?? undefined);
+        const concatenated = files
+          .map((f) => `<!-- file: ${f.relativePath} -->\n${f.content}`)
+          .join('\n\n');
+        parsed = parse(concatenated, { sourcePath: `git:${sourceQ.data.url}#${appliedSha.slice(0, 8)}` });
+        sha = createHash('sha256').update(concatenated).digest('hex');
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'unknown error';
+        return sendError(res, 502, 'upstream_error', `git apply failed: ${message}`);
+      }
+    } else {
+      const html = sourceQ.data.inline_html;
+      if (!html) return sendError(res, 501, 'not_implemented', `apply for kind=${sourceQ.data.kind} is not implemented`);
+      parsed = parse(html, { sourcePath: `source-${sourceId}` });
+      sha = createHash('sha256').update(html).digest('hex');
     }
 
-    const parsed = parse(html, { sourcePath: `source-${sourceId}` });
     if (parsed.errors.length > 0) {
       return sendError(res, 422, 'parse_failed', 'source contains parse errors', { errors: parsed.errors });
     }
 
-    const sha = createHash('sha256').update(html).digest('hex');
     const result = await applySource(deps.supabase, sourceId, parsed, { sourceSha: sha, dryRun: false });
     if (result.errors.length > 0) {
       return sendError(res, 500, 'internal_error', 'apply failed', { errors: result.errors });
     }
 
-    res.status(200).json({ applied: result.artifacts, source: sourceQ.data });
+    // Mark the source as up to date: installed == applied HEAD, clear the
+    // available-drift pointer + any stale error.
+    if (appliedSha) {
+      await deps.supabase
+        .from('templates_sources')
+        .update({ installed_git_sha: appliedSha, available_git_sha: null, last_check_error: null, last_checked_at: new Date().toISOString() })
+        .eq('id', sourceId);
+    }
+
+    res.status(200).json({ applied: result.artifacts, installed_git_sha: appliedSha, source: sourceQ.data });
   }
 
   // -------------------------------------------------------------------------
