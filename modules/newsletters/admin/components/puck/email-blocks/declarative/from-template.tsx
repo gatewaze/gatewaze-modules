@@ -14,9 +14,10 @@ import type { Field } from '@puckeditor/core';
 import type { EmailBlockEntry } from '../registry-types.js';
 import { parseTemplate } from './parse-template.js';
 import { DeclarativeBlock, type Content } from './render.js';
+import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 
 interface DeclField {
-  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number' | 'slot';
+  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number' | 'slot' | 'image';
   label?: string;
   fields?: Record<string, DeclField>;
   default?: unknown;
@@ -39,6 +40,11 @@ function toField(key: string, def: DeclField): Field {
       // Puck slot field — entryHasSlot() looks for a `children` field of this
       // type; the renderer's <slot> element fills it.
       return { type: 'slot', label } as Field;
+    case 'image':
+      // Drag-drop / choose-file / paste-URL uploader (host-media → CDN URL),
+      // the same field every hand-coded image block uses. Edited in the
+      // sidebar, not inline.
+      return { type: 'custom', label, render: NewsletterImageFieldAdapter as never } as Field;
     case 'array': {
       const arrayFields: Record<string, Field> = {};
       const sub = def.fields ?? {};
