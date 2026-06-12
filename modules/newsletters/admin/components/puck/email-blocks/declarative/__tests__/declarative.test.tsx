@@ -98,6 +98,24 @@ describe('declarative block format', () => {
     expect(html).toContain('https://b');
   });
 
+  it('exposes a slot field and renders its children', async () => {
+    const SLOT = `
+<!-- SCHEMA: { "children": {"type":"slot"} } -->
+<Section class="card">
+  <Text class="eyebrow">COMMUNITY</Text>
+  <slot name="children" />
+</Section>`;
+    const entry = declarativeBlockEntry({ componentId: 'community', label: 'Community', source: SLOT });
+    // entryHasSlot() looks for a `children` field of type 'slot'.
+    expect(entry.fields['children']?.type).toBe('slot');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const html = await render(
+      createElement(entry.Component as any, { children: createElement('div', null, 'BRICK_CONTENT') }),
+    );
+    expect(html).toContain('COMMUNITY');
+    expect(html).toContain('BRICK_CONTENT');
+  });
+
   it('only ever emits allowlisted components', async () => {
     // A non-allowlisted tag is dropped (its children survive); no script leaks.
     const html = await renderEntry(

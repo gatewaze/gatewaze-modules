@@ -209,7 +209,7 @@ export default function EditionEditorPage() {
       // Bricks: filter by parent block_def's library via inner-embed join.
       let bricksQuery = supabase
         .from('templates_brick_defs')
-        .select('id, block_def_id, key, name, schema, html, rich_text_template, sort_order, brick_type:key, templates_block_defs!inner(library_id)')
+        .select('id, block_def_id, key, name, schema, html, rich_text_template, sort_order, brick_type:key, render_kind, component_id, templates_block_defs!inner(library_id)')
         .order('sort_order');
       if (filterCollectionId) {
         blocksQuery = blocksQuery.eq('library_id', filterCollectionId);
@@ -314,7 +314,7 @@ export default function EditionEditorPage() {
       if (blockIds.length > 0) {
         const { data: bricks, error: bricksError } = await supabase
           .from('newsletters_edition_bricks')
-          .select('*, brick_template:templates_brick_defs!templates_brick_def_id(id, block_def_id, key, name, schema, html, rich_text_template, sort_order, brick_type:key)')
+          .select('*, brick_template:templates_brick_defs!templates_brick_def_id(id, block_def_id, key, name, schema, html, rich_text_template, sort_order, brick_type:key, render_kind, component_id)')
           .in('block_id', blockIds)
           .order('sort_order');
         if (bricksError) throw bricksError;
@@ -816,7 +816,7 @@ export default function EditionEditorPage() {
                       });
                     }
                   }
-                  return exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: collection?.config?.wrapper ?? null, registry: buildEmailRegistry(blockTemplates), pretty: false });
+                  return exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: collection?.config?.wrapper ?? null, registry: buildEmailRegistry(blockTemplates, brickTemplates), pretty: false });
                 }
               : undefined}
           />

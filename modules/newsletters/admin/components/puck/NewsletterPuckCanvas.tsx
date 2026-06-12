@@ -157,7 +157,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   // Per-edition registry: the static code blocks + this newsletter's
   // declarative (git-authored) blocks. Superset of the static registry, so
   // newsletters without declarative blocks are unchanged.
-  const registry = useMemo(() => buildEmailRegistry(blockTemplates), [blockTemplates]);
+  const registry = useMemo(() => buildEmailRegistry(blockTemplates, brickTemplates), [blockTemplates, brickTemplates]);
 
   // Adapt newsletter templates → sites' BlockDefRow / BrickDefRow shape
   // so we can reuse the existing Puck Config builder. Memoised — these
