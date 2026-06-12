@@ -30,6 +30,13 @@ import { cloneElement, isValidElement } from 'react';
 import type { ComponentType, ReactElement, ReactNode } from 'react';
 import type { NewsletterEdition, EditionBlock } from '../../../utils/types.js';
 import { getEmailBlock, type FormatId } from './index.js';
+import type { EmailBlockRegistry } from './registry-types.js';
+
+/** Resolve a component id against an optional per-edition registry, then the
+ *  static one — so declarative (git-authored) blocks resolve in export too. */
+function resolveEntry(id: string, registry: EmailBlockRegistry | undefined) {
+  return registry?.get(id) ?? getEmailBlock(id);
+}
 import { renderTemplate } from '../../../../../sites/lib/canvas-render/mustache-subset.js';
 import { extractSpacing, wrapWithSpacing } from './spacing-wrapper.js';
 import { NewsletterHeaderBlock } from './blocks/NewsletterHeader.js';
@@ -77,6 +84,12 @@ export interface EditionEmailProps {
    * `{{web_version}}` token so the send pipeline substitutes it per recipient.
    */
   viewOnlineUrl?: string;
+  /**
+   * Per-edition registry (static code blocks + this newsletter's declarative
+   * blocks). Looked up before the global registry so declarative blocks render
+   * in export/publish/send. Absent → global registry only.
+   */
+  registry?: EmailBlockRegistry;
 }
 
 export interface BlockRenderMeta {
@@ -90,7 +103,7 @@ export interface BlockRenderMeta {
 }
 
 export function EditionEmail(props: EditionEmailProps): ReactElement {
-  const { edition, format, blockMeta, wrapper, viewOnlineUrl } = props;
+  const { edition, format, blockMeta, wrapper, viewOnlineUrl, registry } = props;
 
   const sorted = [...edition.blocks].sort((a, z) => a.sort_order - z.sort_order);
 
@@ -105,7 +118,7 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
   );
 
   const blockEls = sorted.map((block) => (
-    <BlockSlot key={block.id} block={block} format={format} meta={blockMeta.get(block.id)} />
+    <BlockSlot key={block.id} block={block} format={format} meta={blockMeta.get(block.id)} registry={registry} />
   ));
 
   // Fixed header/footer chrome from the template repo (collection.config.
@@ -204,9 +217,10 @@ interface BlockSlotProps {
   block: EditionBlock;
   format: 'email' | FormatId;
   meta: BlockRenderMeta | undefined;
+  registry?: EmailBlockRegistry;
 }
 
-function BlockSlot({ block, format, meta }: BlockSlotProps): ReactElement | null {
+function BlockSlot({ block, format, meta, registry }: BlockSlotProps): ReactElement | null {
   // No metadata — fall back to treating it as Mustache with the
   // block_template's html_template, since that's the legacy default.
   const effective: BlockRenderMeta = meta ?? {
@@ -218,7 +232,7 @@ function BlockSlot({ block, format, meta }: BlockSlotProps): ReactElement | null
     if (!effective.component_id) {
       return <Fallback message={`block ${block.id}: react-email render_kind missing component_id`} />;
     }
-    const entry = getEmailBlock(effective.component_id);
+    const entry = resolveEntry(effective.component_id, registry);
     if (!entry) {
       return <Fallback message={`block ${block.id}: unknown component_id '${effective.component_id}'`} />;
     }
@@ -248,7 +262,7 @@ function BlockSlot({ block, format, meta }: BlockSlotProps): ReactElement | null
             props: { ...(br.content as Record<string, unknown>) },
           }));
       }
-      props.children = tree ? renderTree(tree, format) : undefined;
+      props.children = tree ? renderTree(tree, format, registry) : undefined;
     } else if ('children' in props && !entryHasSlot(entry)) {
       // Leaf primitive accidentally carrying children — strip so the
       // component's own intrinsic `children` (if any) wins.
@@ -300,12 +314,13 @@ function BlockSlot({ block, format, meta }: BlockSlotProps): ReactElement | null
 export function renderTree(
   entries: ReadonlyArray<unknown>,
   format: 'email' | FormatId,
+  registry?: EmailBlockRegistry,
 ): ReactNode {
   return entries.map((raw, idx) => {
     if (!raw || typeof raw !== 'object') return null;
     const e = raw as { type?: unknown; props?: unknown };
     if (typeof e.type !== 'string') return null;
-    const entry = getEmailBlock(e.type);
+    const entry = resolveEntry(e.type, registry);
     if (!entry) {
       return <Fallback key={idx} message={`unknown component_id '${e.type}'`} />;
     }
@@ -318,7 +333,7 @@ export function renderTree(
     delete props._spacing_padding;
     delete props._spacing_margin;
     if (entryHasSlot(entry) && Array.isArray(props.children)) {
-      props.children = renderTree(props.children as ReadonlyArray<unknown>, format);
+      props.children = renderTree(props.children as ReadonlyArray<unknown>, format, registry);
     } else if ('children' in props && !entryHasSlot(entry)) {
       delete props.children;
     }

@@ -25,6 +25,7 @@ import {
   type BrickTemplate,
 } from '../../utils';
 import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
+import { buildEmailRegistry } from '../../components/puck/email-blocks/declarative/registry';
 import type { EditionWrapperConfig } from '../../components/puck/email-blocks/EditionEmail';
 import { emailBlockRegistry } from '../../components/puck/email-blocks';
 import type { BlockRenderMeta } from '../../components/puck/email-blocks/EditionEmail';
@@ -815,7 +816,7 @@ export default function EditionEditorPage() {
                       });
                     }
                   }
-                  return exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: collection?.config?.wrapper ?? null, pretty: false });
+                  return exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: collection?.config?.wrapper ?? null, registry: buildEmailRegistry(blockTemplates), pretty: false });
                 }
               : undefined}
           />

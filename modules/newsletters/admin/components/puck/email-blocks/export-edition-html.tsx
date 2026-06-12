@@ -23,6 +23,7 @@
 import { render } from '@react-email/render';
 import type { NewsletterEdition } from '../../../utils/types.js';
 import { EditionEmail, type BlockRenderMeta, type EditionWrapperConfig } from './EditionEmail.js';
+import type { EmailBlockRegistry } from './registry-types.js';
 import type { FormatId } from './registry-types.js';
 
 export interface ExportArgs {
@@ -46,6 +47,8 @@ export interface ExportArgs {
   wrapper?: EditionWrapperConfig | null;
   /** Resolved "View Online" URL for the header link (default `{{web_version}}`). */
   viewOnlineUrl?: string;
+  /** Per-edition registry (code + declarative blocks) for export-side lookup. */
+  registry?: EmailBlockRegistry;
   /**
    * react-email's render() options. `pretty: true` is helpful while
    * debugging; production usually wants `false` for smaller payloads.
@@ -61,6 +64,7 @@ export async function exportEditionHtml(args: ExportArgs): Promise<string> {
       blockMeta={args.blockMeta}
       wrapper={args.wrapper}
       viewOnlineUrl={args.viewOnlineUrl}
+      registry={args.registry}
     />,
     { pretty: args.pretty ?? false },
   );
