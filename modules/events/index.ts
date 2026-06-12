@@ -109,7 +109,9 @@ const eventsModule: GatewazeModule = {
       icon: 'Ticket',
       requiredFeature: 'events',
       parentGroup: 'dashboards',
-      order: 15,
+      defaultSection: 'Events',
+      defaultLocation: 'sidebar',
+      order: 100,
     },
   ],
 

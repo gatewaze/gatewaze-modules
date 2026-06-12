@@ -29,7 +29,7 @@ const blogModule: GatewazeModule = {
     { path: 'blog/posts', component: () => import('./admin/pages/posts/index'), requiredFeature: 'blog', guard: 'none' },
   ],
   adminNavItems: [
-    { path: '/blog/posts', label: 'Blog', icon: 'FileText', requiredFeature: 'blog', order: 16 },
+    { path: '/blog/posts', label: 'Blog', icon: 'FileText', requiredFeature: 'blog', defaultSection: 'Content', defaultLocation: 'sidebar', order: 20 },
   ],
 
   apiRoutes: async (app: unknown) => {
