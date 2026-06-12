@@ -317,7 +317,67 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
         synced++;
       }
 
-      res.status(200).json({ ok: true, synced });
+      // Declarative bricks: a `bricks/` directory of html-ish brick sources.
+      // Bricks need a parent block_def_id (NOT NULL); attach them to a
+      // has_bricks slot block in this library (any one — the newsletter brick
+      // model allows any brick in any slot).
+      let bricksSynced = 0;
+      const bricksList = await gh('bricks', false);
+      if (bricksList.ok) {
+        const { data: slotBlock } = await supabase
+          .from('templates_block_defs')
+          .select('id')
+          .eq('library_id', collectionId)
+          .eq('has_bricks', true)
+          .limit(1)
+          .maybeSingle();
+        const parentId = (slotBlock as { id: string } | null)?.id ?? null;
+        const brickFiles = (((await bricksList.json().catch(() => null)) as Array<{ name: string; type: string }> | null) ?? [])
+          .filter((f) => f.type === 'file' && /\.html?$/i.test(f.name));
+        if (parentId) {
+          for (const f of brickFiles) {
+            const fileRes = await gh(`bricks/${encodeURIComponent(f.name)}`, true);
+            if (!fileRes.ok) continue;
+            const source = await fileRes.text();
+            const key = f.name.replace(/\.html?$/i, '');
+            const schemaMatch = source.match(/<!--\s*SCHEMA:\s*([\s\S]*?)-->/i);
+            let schema: unknown = {};
+            if (schemaMatch) {
+              try {
+                schema = JSON.parse(schemaMatch[1].trim());
+              } catch {
+                schema = {};
+              }
+            }
+            const { data: existing } = await supabase
+              .from('templates_brick_defs')
+              .select('id')
+              .eq('block_def_id', parentId)
+              .eq('key', key)
+              .maybeSingle();
+            if (existing?.id) {
+              await supabase
+                .from('templates_brick_defs')
+                .update({ name: titleCase(key), schema, html: source, render_kind: 'declarative', component_id: key })
+                .eq('id', existing.id);
+            } else {
+              await supabase.from('templates_brick_defs').insert({
+                block_def_id: parentId,
+                key,
+                name: titleCase(key),
+                schema,
+                html: source,
+                sort_order: 0,
+                render_kind: 'declarative',
+                component_id: key,
+              });
+            }
+            bricksSynced++;
+          }
+        }
+      }
+
+      res.status(200).json({ ok: true, synced, bricksSynced });
     }),
   );
 

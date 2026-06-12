@@ -15,35 +15,50 @@ import type { EmailBlockEntry, EmailBlockRegistry } from '../registry-types.js';
 import { declarativeBlockEntry } from './from-template.js';
 
 interface DeclarativeSource {
-  block_type: string;
+  block_type?: string;
+  brick_type?: string;
   name?: string;
   render_kind?: string;
   content?: { html_template?: string };
 }
 
-export function buildEmailRegistry(blockTemplates: ReadonlyArray<DeclarativeSource>): EmailBlockRegistry {
-  const declarative = blockTemplates.filter(
-    (t) => t.render_kind === 'declarative' && !!t.content?.html_template,
-  );
-  if (declarative.length === 0) return emailBlockRegistry;
-
-  const merged = new Map<string, EmailBlockEntry>(emailBlockRegistry);
-  for (const t of declarative) {
+function addDeclarative(merged: Map<string, EmailBlockEntry>, items: ReadonlyArray<DeclarativeSource>): void {
+  for (const t of items) {
+    const id = t.block_type ?? t.brick_type;
+    if (!id || t.render_kind !== 'declarative' || !t.content?.html_template) continue;
     try {
       const entry = declarativeBlockEntry({
-        componentId: t.block_type,
-        label: t.name ?? t.block_type,
+        componentId: id,
+        label: t.name ?? id,
         category: 'Template',
-        source: t.content!.html_template!,
+        source: t.content.html_template,
       });
       merged.set(entry.componentId, entry);
     } catch (err) {
-      // A malformed declarative block shouldn't break the whole editor — skip
-      // it (the block falls through to the mustache/registry path or shows as
-      // unconfigured) and log for the operator.
+      // A malformed declarative block/brick shouldn't break the editor — skip
+      // it (shows as unconfigured) and log for the operator.
       // eslint-disable-next-line no-console
-      console.warn('[declarative] failed to build block', t.block_type, err);
+      console.warn('[declarative] failed to build', id, err);
     }
   }
+}
+
+/**
+ * @param blockTemplates per-newsletter block defs (declarative ones are added)
+ * @param brickTemplates per-newsletter brick defs (declarative ones are added,
+ *        so slot containers can resolve their bricks)
+ */
+export function buildEmailRegistry(
+  blockTemplates: ReadonlyArray<DeclarativeSource>,
+  brickTemplates: ReadonlyArray<DeclarativeSource> = [],
+): EmailBlockRegistry {
+  const hasDeclarative =
+    blockTemplates.some((t) => t.render_kind === 'declarative' && t.content?.html_template) ||
+    brickTemplates.some((t) => t.render_kind === 'declarative' && t.content?.html_template);
+  if (!hasDeclarative) return emailBlockRegistry;
+
+  const merged = new Map<string, EmailBlockEntry>(emailBlockRegistry);
+  addDeclarative(merged, blockTemplates);
+  addDeclarative(merged, brickTemplates);
   return merged;
 }

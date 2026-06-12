@@ -16,7 +16,7 @@ import { parseTemplate } from './parse-template.js';
 import { DeclarativeBlock, type Content } from './render.js';
 
 interface DeclField {
-  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number';
+  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number' | 'slot';
   label?: string;
   fields?: Record<string, DeclField>;
   default?: unknown;
@@ -35,6 +35,10 @@ function toField(key: string, def: DeclField): Field {
       return { type: 'textarea', label } as Field;
     case 'number':
       return { type: 'number', label } as Field;
+    case 'slot':
+      // Puck slot field — entryHasSlot() looks for a `children` field of this
+      // type; the renderer's <slot> element fills it.
+      return { type: 'slot', label } as Field;
     case 'array': {
       const arrayFields: Record<string, Field> = {};
       const sub = def.fields ?? {};
@@ -48,7 +52,7 @@ function toField(key: string, def: DeclField): Field {
 
 function defaultFor(def: DeclField): unknown {
   if (def.default !== undefined) return def.default;
-  if (def.type === 'array') return [];
+  if (def.type === 'array' || def.type === 'slot') return [];
   if (def.type === 'number') return 0;
   return '';
 }

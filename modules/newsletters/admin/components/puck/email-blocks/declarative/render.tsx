@@ -18,13 +18,12 @@ import { Fragment, type ReactNode } from 'react';
 import type { TemplateNode } from './parse-template.js';
 import { TAG_COMPONENTS, classStyle, parseInlineStyle, PASSTHROUGH_ATTRS } from './component-map.js';
 import { RichText } from '../blocks/_richtext.js';
+import { renderSlot } from '../render-slot.js';
 
 export type Content = Record<string, unknown>;
 
 interface RenderCtx {
   content: Content;
-  /** Named slot content (for <slot name="…" />), e.g. the slot children tree. */
-  slots?: Record<string, ReactNode>;
 }
 
 function getPath(obj: Content, path: string): unknown {
@@ -78,10 +77,12 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
     );
   }
 
-  // <slot name="x" /> — caller-provided content
+  // <slot name="x" /> — render the slot field's value (the bricks). Defaults
+  // to the `children` field (the convention entryHasSlot looks for). Uses
+  // renderSlot so it works for both the live Puck DropZone and the export tree.
   if (tag === 'slot') {
-    const name = attrs['name'] ?? 'default';
-    return <Fragment key={key}>{ctx.slots?.[name] ?? null}</Fragment>;
+    const name = attrs['name'] ?? 'children';
+    return <Fragment key={key}>{renderSlot(ctx.content[name])}</Fragment>;
   }
 
   // <richtext field="x" class="y" /> or <richtext>{{x}}</richtext>
@@ -128,11 +129,9 @@ function bindingKeyFromChildren(children: TemplateNode[]): string | undefined {
 export function DeclarativeBlock({
   nodes,
   content,
-  slots,
 }: {
   nodes: TemplateNode[];
   content: Content;
-  slots?: Record<string, ReactNode>;
 }): ReactNode {
-  return <>{nodes.map((n, i) => renderNode(n, { content, slots }, String(i)))}</>;
+  return <>{nodes.map((n, i) => renderNode(n, { content }, String(i)))}</>;
 }
