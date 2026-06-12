@@ -14,7 +14,7 @@
  *                       the caller via `slots[name]`).
  */
 
-import { Fragment, createElement, type ReactNode } from 'react';
+import { Fragment, createElement, type CSSProperties, type ReactNode } from 'react';
 import type { TemplateNode } from './parse-template.js';
 import { TAG_COMPONENTS, INTRINSIC_TAGS, classStyle, parseInlineStyle, PASSTHROUGH_ATTRS } from './component-map.js';
 import { RichText } from '../blocks/_richtext.js';
@@ -24,6 +24,26 @@ export type Content = Record<string, unknown>;
 
 interface RenderCtx {
   content: Content;
+}
+
+/**
+ * Per-node style cache. Parsed nodes are stable for a block's lifetime, so the
+ * merged class+inline style for each one is computed once and reused. This
+ * keeps the `style` prop a STABLE reference across re-renders — matching the
+ * hand-coded blocks (which pass module-constant style objects). Without it,
+ * every keystroke handed React a fresh style object on the `<div>` that hosts
+ * Puck's inline rich-text editor, remounting the editor and dropping focus
+ * after one character.
+ */
+type ElementNode = Extract<TemplateNode, { kind: 'element' }>;
+const styleCache = new WeakMap<ElementNode, CSSProperties>();
+
+function nodeStyle(node: ElementNode): CSSProperties {
+  const cached = styleCache.get(node);
+  if (cached) return cached;
+  const style = { ...classStyle(node.attrs['class']), ...parseInlineStyle(node.attrs['style']) };
+  styleCache.set(node, style);
+  return style;
 }
 
 function getPath(obj: Content, path: string): unknown {
@@ -89,8 +109,7 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   if (tag === 'richtext') {
     const field = attrs['field'] ?? bindingKeyFromChildren(children);
     const value = field ? getPath(ctx.content, field) : undefined;
-    const style = { ...classStyle(attrs['class']), ...parseInlineStyle(attrs['style']) };
-    return <RichText key={key} value={value} style={style} />;
+    return <RichText key={key} value={value} style={nodeStyle(node)} />;
   }
 
   const Comp = TAG_COMPONENTS[tag];
@@ -101,9 +120,8 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
     return <Fragment key={key}>{children.map((c, i) => renderNode(c, ctx, `${key}-${i}`))}</Fragment>;
   }
 
-  const style = { ...classStyle(attrs['class']), ...parseInlineStyle(attrs['style']) };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const props: Record<string, any> = { style, key };
+  const props: Record<string, any> = { style: nodeStyle(node), key };
   for (const a of PASSTHROUGH_ATTRS) {
     if (attrs[a] !== undefined) props[a] = resolveBindings(attrs[a], ctx.content);
   }
