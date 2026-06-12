@@ -84,6 +84,31 @@ describe('declarative block format', () => {
     expect(html).not.toContain('<h2'); // no heading when title empty
   });
 
+  it('keeps an empty inline-editable `if` field visible in edit mode', async () => {
+    // In the editor an empty <Heading if="title"> must still render so the
+    // operator can click in and type — the `if` is a publish-time guard only.
+    const html = await renderEntry(HOT_TAKE, {
+      title: '',
+      body: '<p>x</p>',
+      poll_option_1_label: '',
+      poll_option_1_link: '',
+      poll_option_2_label: '',
+      poll_option_2_link: '',
+      editMode: true,
+    });
+    expect(html).toContain('<h1'); // title heading rendered (empty) for inline editing
+  });
+
+  it('still collapses an empty structural (array) `if` in edit mode', async () => {
+    const ARRAY_GUARD = `
+<!-- SCHEMA: { "items": {"type":"array","fields":{"title":{"type":"text"}}} } -->
+<Section class="card">
+  <Section if="items"><Text>HAS_ITEMS</Text></Section>
+</Section>`;
+    const html = await renderEntry(ARRAY_GUARD, { items: [], editMode: true });
+    expect(html).not.toContain('HAS_ITEMS');
+  });
+
   it('repeats `each` per array item', async () => {
     const html = await renderEntry(GENERIC, {
       heading: 'LINKS',

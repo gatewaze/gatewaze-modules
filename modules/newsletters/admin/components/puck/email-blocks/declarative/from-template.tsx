@@ -77,13 +77,20 @@ export function declarativeBlockEntry(opts: DeclarativeBlockOptions): EmailBlock
 
   const fields: Record<string, Field> = {};
   const defaultProps: Content = {};
+  // Inline-editable field keys (text / textarea / richtext, plus the bare-text
+  // default). An empty one of these stays visible in the editor even behind an
+  // `if` guard, so the operator can click in and fill it.
+  const editableFields = new Set<string>();
   for (const [k, v] of Object.entries(schemaMap)) {
     fields[k] = toField(k, v);
     defaultProps[k] = defaultFor(v);
+    if (v.type === undefined || v.type === 'text' || v.type === 'textarea' || v.type === 'richtext') {
+      editableFields.add(k);
+    }
   }
 
   const Component = ((props: Content) => (
-    <DeclarativeBlock nodes={nodes} content={props} />
+    <DeclarativeBlock nodes={nodes} content={props} editableFields={editableFields} />
   )) as EmailBlockEntry['Component'];
 
   return {

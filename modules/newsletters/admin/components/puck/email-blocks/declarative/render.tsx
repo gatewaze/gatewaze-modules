@@ -24,6 +24,13 @@ export type Content = Record<string, unknown>;
 
 interface RenderCtx {
   content: Content;
+  // True inside the Puck editor canvas (forwarded by the merge layer), false
+  // at publish. Lets `if`-guarded inline-editable fields stay visible so an
+  // empty field can still be clicked and filled in the editor.
+  editMode: boolean;
+  // Field keys that are edited inline (text / textarea / richtext). An empty
+  // one of these is kept visible in edit mode despite an `if` guard.
+  editableFields: Set<string>;
 }
 
 /**
@@ -80,8 +87,14 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
 
   const { tag, attrs, children } = node;
 
-  // Conditional
-  if (attrs['if'] !== undefined && !truthy(getPath(ctx.content, attrs['if']))) return null;
+  // Conditional. `if` is a publish-time guard — it hides empty optional
+  // content in the sent email. In the editor we keep an empty *inline-editable*
+  // field visible so the operator can click in and fill it (otherwise an empty
+  // <Heading if="title"> has nothing to click). Structural guards (arrays,
+  // slots) still collapse when empty so the canvas isn't cluttered.
+  if (attrs['if'] !== undefined && !truthy(getPath(ctx.content, attrs['if']))) {
+    if (!(ctx.editMode && ctx.editableFields.has(attrs['if']))) return null;
+  }
 
   // Loop — repeat this element (minus `each`) per array item.
   if (attrs['each'] !== undefined) {
@@ -145,12 +158,17 @@ function bindingKeyFromChildren(children: TemplateNode[]): string | undefined {
   return undefined;
 }
 
+const EMPTY_FIELDS: Set<string> = new Set();
+
 export function DeclarativeBlock({
   nodes,
   content,
+  editableFields = EMPTY_FIELDS,
 }: {
   nodes: TemplateNode[];
   content: Content;
+  editableFields?: Set<string>;
 }): ReactNode {
-  return <>{nodes.map((n, i) => renderNode(n, { content }, String(i)))}</>;
+  const ctx: RenderCtx = { content, editMode: content.editMode === true, editableFields };
+  return <>{nodes.map((n, i) => renderNode(n, ctx, String(i)))}</>;
 }

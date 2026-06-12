@@ -393,10 +393,20 @@ function puckEntryFromRegistry(
         _spacing_margin?: string;
         [k: string]: unknown;
       };
-      void id; void variant_key; void puck;
+      void id; void variant_key;
+      // Editor-vs-publish discriminator. Puck only ever supplies this through
+      // `puck.isEditing` (true inside the canvas, false at publish); the
+      // top-level `editMode` prop is never populated by Puck, so fall back to
+      // it. Blocks read `editMode` to render live previews vs. Mustache
+      // placeholders, and the declarative renderer uses it to keep empty
+      // inline-editable fields clickable.
+      const resolvedEditMode =
+        typeof editMode === 'boolean'
+          ? editMode
+          : (puck as { isEditing?: boolean } | undefined)?.isEditing === true;
       const props = hasSlotChildren
-        ? { ...rest, children, editMode }
-        : { ...rest, editMode };
+        ? { ...rest, children, editMode: resolvedEditMode }
+        : { ...rest, editMode: resolvedEditMode };
       // Shared wrapper helper — same logic the publish path uses, so
       // canvas and final email render identically.
       const padding = typeof _spacing_padding === 'string' ? _spacing_padding : '0px';
