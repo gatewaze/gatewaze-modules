@@ -10,6 +10,13 @@ export interface BlockTemplate {
   id: string;
   name: string;
   block_type: string;
+  /**
+   * How this block renders: 'mustache' (legacy html template), 'react-email'
+   * (a hand-coded registry component, componentId === block_type), or
+   * 'declarative' (an html-ish source in `content.html_template` interpreted
+   * into react-email by the declarative engine).
+   */
+  render_kind?: 'mustache' | 'react-email' | 'declarative';
   content: {
     html_template: string;
     rich_text_template?: string | null;
