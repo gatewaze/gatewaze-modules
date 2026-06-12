@@ -398,8 +398,12 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
       });
       const applyBody = await applyRes.json().catch(() => null);
       if (!applyRes.ok) {
-        toast.error(applyBody?.error?.message ?? `Update failed (${applyRes.status})`);
-        return;
+        // Best-effort: a fully-declarative newsletter has no template.html
+        // blocks to apply (its blocks live under blocks/ and load via
+        // sync-declarative-blocks below), so a no-op/failed apply must not
+        // short-circuit the rest of the Update.
+        // eslint-disable-next-line no-console
+        console.warn('[update] template apply skipped/failed (continuing)', applyBody);
       }
 
       if (s.library_id) {
