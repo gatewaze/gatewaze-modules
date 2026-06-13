@@ -553,6 +553,20 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         }
       }
 
+      // Publishing makes the edition live. `publish_state` tracks the git
+      // snapshot; `status` gates portal visibility (the portal lists
+      // status='published'). Promote a draft so a freshly-published edition
+      // shows on the portal without a separate manual status change. Don't
+      // downgrade a 'sent' edition.
+      await deps.supabase
+        .from('newsletters_editions')
+        .update({
+          publish_state: 'published',
+          ...(ed.status === 'draft' ? { status: 'published' } : {}),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', ed.id);
+
       res.status(200).json({
         kind: 'published',
         editionId: ed.id,
