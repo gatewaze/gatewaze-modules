@@ -6,7 +6,7 @@
  * Phase 2.2: manifest read for per-channel block config.
  * Phase 2.3: drift detection between internal + external HEAD.
  */
-export { createPublishToGitRoute, mountPublishToGitRoute } from './publish-to-git.js';
+export { createPublishToGitRoute, createUnpublishFromGitRoute, mountPublishToGitRoute } from './publish-to-git.js';
 export type { PublishToGitDeps } from './publish-to-git.js';
 export {
   createInitRepoRoute,

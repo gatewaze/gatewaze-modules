@@ -593,6 +593,148 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
   };
 }
 
+/**
+ * Mirror the internal `publish` branch out to the collection's external repo,
+ * using the persisted deploy key (SSH) or PAT (HTTPS). Used by the unpublish
+ * route to keep the external mirror in sync after a removal. Mirrors the
+ * inline logic in the publish route.
+ */
+async function mirrorPublishBranchToExternal(args: {
+  deps: PublishToGitDeps;
+  collection: { id: string; git_url: string | null };
+  repo: { barePath: string };
+  localPublishBranch: string;
+  remoteBranch: string;
+  editionId: string;
+}): Promise<null | { pushed: true; branch: string } | { pushed: false; error: string }> {
+  const { deps, collection, repo, localPublishBranch, remoteBranch, editionId } = args;
+  const sourceRes = await deps.supabase
+    .from('templates_sources')
+    .select('token_secret_ref')
+    .eq('library_id', collection.id)
+    .eq('kind', 'git')
+    .eq('url', collection.git_url)
+    .maybeSingle();
+  const tokenRaw = (sourceRes.data as { token_secret_ref: string | null } | null)?.token_secret_ref;
+  const token = tokenRaw ? decodeMaybeBytea(tokenRaw) : null;
+  if (!token || token === '<redacted>') return { pushed: false, error: 'no_token_persisted' };
+  if (isOpenSshPrivateKey(token)) {
+    return pushWithDeployKey({
+      repoBarePath: repo.barePath,
+      externalUrl: collection.git_url!,
+      remoteBranch,
+      localBranch: localPublishBranch,
+      deployKeyPem: token,
+      editionId,
+    });
+  }
+  const urlWithAuth = collection.git_url!.replace(/^https?:\/\//, (m) => `${m}x-access-token:${encodeURIComponent(token)}@`);
+  try {
+    await execFileP('git', ['push', '--force', urlWithAuth, `${localPublishBranch}:${remoteBranch}`], { cwd: repo.barePath, timeout: 30_000 });
+    return { pushed: true, branch: remoteBranch };
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    const safe = raw.replace(urlWithAuth, collection.git_url!).slice(0, 500);
+    // eslint-disable-next-line no-console
+    console.warn('[newsletters unpublish-from-git] external mirror push failed', { editionId, error: safe });
+    return { pushed: false, error: safe };
+  }
+}
+
+/**
+ * Unpublish an edition from the git archive: drop it from the `editions.json`
+ * manifest, regenerate `index.html` + `feed.xml` without it (so the RSS feed
+ * and archive index no longer list it), tombstone its page, commit, mirror to
+ * the external repo, and clear `publish_state`. The portal hides it separately
+ * via its `status='published'` filter. Shared `assets/` are left intact (a
+ * `replaceTree` would prune other editions' media), so the only residue is the
+ * tombstoned page redirecting to the archive.
+ */
+export function createUnpublishFromGitRoute(deps: PublishToGitDeps) {
+  return async function unpublishFromGit(req: RequestWithUser, res: Response, _next: NextFunction): Promise<void> {
+    if (!req.userId) { res.status(401).json({ error: { code: 'unauthenticated', message: 'session required' } }); return; }
+    const editionId = req.params.editionId;
+    if (!editionId) { res.status(400).json({ error: { code: 'missing_edition_id' } }); return; }
+    if (!deps.gitServer) { res.status(200).json({ kind: 'skipped', reason: 'gitServer dependency not wired in this deployment' }); return; }
+    try {
+      const editionRes = await deps.supabase
+        .from('newsletters_editions')
+        .select('id, title, edition_date, preheader, collection_id')
+        .eq('id', editionId)
+        .maybeSingle();
+      if (editionRes.error || !editionRes.data) {
+        res.status(404).json({ error: { code: 'edition_not_found', message: `No newsletters_editions row with id=${editionId}.` } });
+        return;
+      }
+      const ed = editionRes.data as { id: string; title: string | null; edition_date: string; preheader: string | null; collection_id: string | null };
+      if (!ed.collection_id) { res.status(200).json({ kind: 'skipped', reason: 'edition has no parent collection' }); return; }
+
+      const collRes = await deps.supabase
+        .from('newsletters_template_collections')
+        .select('id, slug, name, git_url, config, view_online_external_base_url')
+        .eq('id', ed.collection_id)
+        .maybeSingle();
+      if (collRes.error || !collRes.data) { res.status(200).json({ kind: 'skipped', reason: 'collection lookup failed' }); return; }
+      const collection = collRes.data as {
+        id: string; slug: string; name: string | null; git_url: string | null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        config: any; view_online_external_base_url: string | null;
+      };
+      const newsletterSlug = collection.slug;
+
+      const repo = await deps.gitServer.lookupRepo('newsletter', collection.id);
+      if (!repo) {
+        // Never published to git — just clear the flag.
+        await deps.supabase.from('newsletters_editions').update({ publish_state: 'draft', updated_at: new Date().toISOString() }).eq('id', ed.id);
+        res.status(200).json({ kind: 'not_in_git', editionId: ed.id });
+        return;
+      }
+      const localPublishBranch = 'publish';
+      const editionSlug = editionFolderSlug(ed.edition_date, ed.title);
+
+      let manifest: ArchiveEntry[] = [];
+      try {
+        const { stdout } = await execFileP('git', ['show', `${localPublishBranch}:editions.json`], { cwd: repo.barePath, timeout: 10_000 });
+        const parsed = JSON.parse(stdout);
+        if (Array.isArray(parsed)) manifest = parsed as ArchiveEntry[];
+      } catch { /* no manifest yet — nothing to drop, but still tombstone + clear flag */ }
+      manifest = manifest.filter((e) => e.slug !== editionSlug);
+      manifest.sort((a, b) => b.edition_date.localeCompare(a.edition_date));
+      const siteBase = collection.view_online_external_base_url?.trim().replace(/\/+$/, '') || '';
+
+      const files = new Map<string, Buffer | string>();
+      files.set('editions.json', JSON.stringify(manifest, null, 2));
+      files.set('index.html', renderArchiveIndex(collection.name || newsletterSlug, manifest, { hasFeed: true }));
+      files.set('feed.xml', renderRssFeed(collection.name || newsletterSlug, siteBase, manifest));
+      files.set(
+        `${editionSlug}/index.html`,
+        '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=../">' +
+          '<title>No longer available</title></head><body>This edition is no longer published. ' +
+          '<a href="../">Back to the archive.</a></body></html>',
+      );
+
+      const result = await deps.gitServer.publishCommit({
+        repo: { id: repo.id, barePath: repo.barePath },
+        branch: localPublishBranch,
+        files,
+        message: `Unpublish edition ${ed.title ?? ed.edition_date}`,
+        author: { name: 'gatewaze-publisher', email: 'noreply@gatewaze' },
+      });
+
+      const remoteBranch = collection.config?.publish?.external_branch || 'publish';
+      const externalPush = await mirrorPublishBranchToExternal({ deps, collection, repo, localPublishBranch, remoteBranch, editionId });
+
+      await deps.supabase.from('newsletters_editions').update({ publish_state: 'draft', updated_at: new Date().toISOString() }).eq('id', ed.id);
+
+      res.status(200).json({ kind: 'unpublished', editionId: ed.id, commitSha: result.sha, externalPush });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[newsletters unpublish-from-git] unexpected error', err);
+      res.status(500).json({ error: { code: 'unpublish_from_git_failed', message: err instanceof Error ? err.message : String(err) } });
+    }
+  };
+}
+
 export function mountPublishToGitRoute(
   router: Router,
   handler: ReturnType<typeof createPublishToGitRoute>,
