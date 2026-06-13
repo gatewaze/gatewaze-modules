@@ -54,6 +54,7 @@ const templatesModule: GatewazeModule = {
     'migrations/020_fix_apply_source_unassigned_record.sql',
     'migrations/021_brick_def_render_kind.sql',
     'migrations/022_block_def_declarative_render_kind.sql',
+    'migrations/023_anon_read_defs_for_public_newsletters.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under
