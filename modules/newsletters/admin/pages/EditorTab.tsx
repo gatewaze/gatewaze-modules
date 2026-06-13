@@ -5,6 +5,8 @@ import {
   PencilSquareIcon,
   TrashIcon,
   DocumentDuplicateIcon,
+  CloudArrowUpIcon,
+  ArrowUturnLeftIcon,
   ArrowPathIcon,
   MagnifyingGlassIcon,
   RectangleGroupIcon,
@@ -34,6 +36,8 @@ import {
 import { DataTable } from '@/components/shared/table/DataTable';
 import { RowActions } from '@/components/shared/table/RowActions';
 import { supabase } from '@/lib/supabase';
+import { exportEditionHtml } from '../components/puck/email-blocks/export-edition-html';
+import { buildEmailRegistry } from '../components/puck/email-blocks/declarative/registry';
 
 const PAGE_SIZE = 25;
 
@@ -43,6 +47,7 @@ interface Edition {
   subject: string | null; // mapped from title for display
   edition_date: string;
   status: 'draft' | 'published' | 'archived';
+  publish_state?: string | null;
   collection_id: string | null;
   collection_name?: string | null;
   created_at: string;
@@ -335,6 +340,106 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
     }
   };
 
+  // Render the edition the same way the editor's Publish does (declarative/
+  // react-email via the registry) and POST the HTML to publish-to-git. The
+  // endpoint commits it + promotes status to 'published'. Rendering runs here
+  // (admin) because the email-blocks barrel doesn't resolve in the API.
+  const handlePublishEdition = async (edition: Edition) => {
+    const tid = toast.loading('Publishing…');
+    try {
+      const collectionId = edition.collection_id;
+      const { data: coll } = await supabase
+        .from('newsletters_template_collections')
+        .select('config')
+        .eq('id', collectionId)
+        .maybeSingle();
+      const wrapper = (coll?.config as { wrapper?: unknown } | null)?.wrapper ?? null;
+
+      const [blocksRes, bricksRes] = await Promise.all([
+        supabase
+          .from('templates_block_defs')
+          .select('id, key, name, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key')
+          .eq('library_id', collectionId)
+          .order('key'),
+        supabase
+          .from('templates_brick_defs')
+          .select('id, block_def_id, key, name, schema, html, rich_text_template, sort_order, brick_type:key, render_kind, component_id, templates_block_defs!inner(library_id)')
+          .eq('templates_block_defs.library_id', collectionId)
+          .order('sort_order'),
+      ]);
+      const adapt = (r: any) => ({ ...r, content: { html_template: r.html ?? '', rich_text_template: r.rich_text_template ?? null, has_bricks: r.has_bricks ?? false, schema: r.schema ?? {} } });
+      const registry = buildEmailRegistry((blocksRes.data ?? []).map(adapt) as never, (bricksRes.data ?? []).map(adapt) as never);
+
+      const { data: rawBlocks } = await supabase
+        .from('newsletters_edition_blocks')
+        .select('*, block_template:templates_block_defs!templates_block_def_id(id, key, name, schema, html, rich_text_template, has_bricks, block_type:key)')
+        .eq('edition_id', edition.id)
+        .order('sort_order');
+      const blocks = (rawBlocks ?? []).map((b: any) => ({
+        ...b,
+        block_template: b.block_template
+          ? { ...b.block_template, content: { html_template: b.block_template.html ?? '', rich_text_template: b.block_template.rich_text_template ?? null, has_bricks: b.block_template.has_bricks ?? false, schema: b.block_template.schema ?? {} } }
+          : b.block_template,
+      }));
+
+      const blockMeta = new Map<string, { render_kind: 'react-email' | 'mustache'; component_id?: string; mustache_html?: string }>();
+      for (const block of blocks) {
+        const key = block.block_template?.block_type;
+        blockMeta.set(block.id, registry.has(key)
+          ? { render_kind: 'react-email', component_id: key }
+          : { render_kind: 'mustache', mustache_html: block.block_template?.content?.html_template ?? '' });
+      }
+
+      const html = await exportEditionHtml({
+        edition: { id: edition.id, edition_date: edition.edition_date, blocks } as never,
+        format: 'email',
+        blockMeta: blockMeta as never,
+        wrapper: wrapper as never,
+        registry,
+        hideViewOnline: true,
+        pretty: false,
+      });
+      const blockRender = blocks.map((b: any) => {
+        const m = blockMeta.get(b.id);
+        return { id: b.id, render_kind: m?.render_kind ?? 'mustache', component_id: m?.component_id ?? b.block_type };
+      });
+
+      const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${apiUrl}/api/admin/newsletters/editions/${edition.id}/publish-to-git`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ html, blockRender }),
+      });
+      if (!res.ok) throw new Error(`publish-to-git ${res.status}`);
+      toast.success('Published to git', { id: tid });
+      loadEditions();
+    } catch (error) {
+      console.error('[newsletters] publish failed:', error);
+      toast.error('Publish failed', { id: tid });
+    }
+  };
+
+  // Move a published edition back to draft: hide from the portal (status) and
+  // remove it from the git archive + RSS feed.
+  const handleMakeDraft = async (edition: Edition) => {
+    const tid = toast.loading('Making draft…');
+    try {
+      await supabase.from('newsletters_editions').update({ status: 'draft', updated_at: new Date().toISOString() }).eq('id', edition.id);
+      const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
+      const { data: { session } } = await supabase.auth.getSession();
+      await fetch(`${apiUrl}/api/admin/newsletters/editions/${edition.id}/unpublish-from-git`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      });
+      toast.success('Moved to draft', { id: tid });
+      loadEditions();
+    } catch (error) {
+      console.error('[newsletters] make-draft failed:', error);
+      toast.error('Failed to make draft', { id: tid });
+    }
+  };
+
   const columns = useMemo(
     () => [
       columnHelper.accessor('edition_date', {
@@ -371,6 +476,15 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
           </Badge>
         ),
       }),
+      columnHelper.accessor('publish_state' as any, {
+        header: 'Git',
+        cell: (info: any) =>
+          info.getValue() === 'published' ? (
+            <Badge color="success">In git</Badge>
+          ) : (
+            <span className="text-sm text-[var(--gray-a8)]">—</span>
+          ),
+      }),
       columnHelper.accessor('block_count', {
         header: 'Blocks',
         cell: (info) => (
@@ -406,6 +520,18 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
                 icon: <DocumentDuplicateIcon className="size-4" />,
                 onClick: () => handleDuplicate(info.row.original),
               },
+              {
+                label: info.row.original.publish_state === 'published' ? 'Re-publish' : 'Publish',
+                icon: <CloudArrowUpIcon className="size-4" />,
+                onClick: () => handlePublishEdition(info.row.original),
+              },
+              ...(info.row.original.publish_state === 'published'
+                ? [{
+                    label: 'Make Draft',
+                    icon: <ArrowUturnLeftIcon className="size-4" />,
+                    onClick: () => handleMakeDraft(info.row.original),
+                  }]
+                : []),
               {
                 label: 'Delete',
                 icon: <TrashIcon className="size-4" />,
