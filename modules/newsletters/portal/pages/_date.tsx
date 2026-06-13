@@ -243,7 +243,7 @@ export default function NewsletterEditionPage({ params }: { params: { date: stri
           <h1>{edition.title || 'Newsletter Edition'}</h1>
           {edition.preheader && <p className="pub-byline" style={{ marginTop: 0 }}>{edition.preheader}</p>}
 
-          <div className="nl-edition-render" style={{ background: '#fff', borderRadius: 14, overflow: 'hidden', padding: '8px 0', marginTop: 20 }}>
+          <div className="nl-edition-render" style={{ background: '#fff', borderRadius: 14, overflow: 'hidden', padding: '12px 16px', marginTop: 20 }}>
             {edition.blocks
               .sort((a, b) => a.sort_order - b.sort_order)
               .map((block) => {
