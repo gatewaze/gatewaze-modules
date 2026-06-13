@@ -222,17 +222,28 @@ export default function NewsletterEditionPage({ params }: { params: { date: stri
 
   return (
     <div className="pub-article-wrap pub-fade">
+      {/* The edition renders as a fixed ~650px email; constrain its tables and
+          images so the panel shrinks to fit narrow viewports instead of forcing
+          the column (and the title) wider than the screen. min-width:0 lets the
+          grid column shrink below its email content's intrinsic width. */}
+      <style>{`
+        .pub-article-main { min-width: 0; }
+        .pub-article-main h1 { overflow-wrap: anywhere; }
+        .nl-edition-render { max-width: 100%; }
+        .nl-edition-render table { max-width: 100% !important; }
+        .nl-edition-render img { max-width: 100% !important; height: auto !important; }
+      `}</style>
       <div className="pub-article-grid">
         {/* Left: the real edition, rendered with the declarative renderer so it
             matches the sent/published newsletter exactly. */}
-        <article className="pub-article-main">
+        <article className="pub-article-main" style={{ minWidth: 0 }}>
           <div className="pub-byline">
             {edition.newsletter_name} · {formatDate(edition.edition_date)}
           </div>
           <h1>{edition.title || 'Newsletter Edition'}</h1>
           {edition.preheader && <p className="pub-byline" style={{ marginTop: 0 }}>{edition.preheader}</p>}
 
-          <div style={{ background: '#fff', borderRadius: 14, overflow: 'hidden', padding: '8px 0', marginTop: 20 }}>
+          <div className="nl-edition-render" style={{ background: '#fff', borderRadius: 14, overflow: 'hidden', padding: '8px 0', marginTop: 20 }}>
             {edition.blocks
               .sort((a, b) => a.sort_order - b.sort_order)
               .map((block) => {
