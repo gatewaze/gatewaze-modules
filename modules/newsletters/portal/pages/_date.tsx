@@ -6,12 +6,6 @@ import Link from 'next/link'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { resolveStoragePathsInJson } from '@gatewaze/shared'
 import { getClientBrandConfig } from '@/config/brand'
-// Render the edition with the SAME declarative renderer the email/publish use,
-// so the portal shows the real newsletter. The declarative path is dependency-
-// light (react + @react-email/components + DOMParser) — no Puck/heroicons — so
-// it's safe to pull into the portal bundle.
-import { parseTemplate } from '@gatewaze-modules/newsletters/admin/components/puck/email-blocks/declarative/parse-template'
-import { DeclarativeBlock } from '@gatewaze-modules/newsletters/admin/components/puck/email-blocks/declarative/render'
 
 interface EditionData {
   id: string
@@ -105,7 +99,6 @@ function formatDate(dateStr: string): string {
 
 export default function NewsletterEditionPage({ params }: { params: { date: string } }) {
   const [edition, setEdition] = useState<EditionData | null>(null)
-  const [others, setOthers] = useState<Array<{ id: string; title: string | null; edition_date: string }>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -173,17 +166,6 @@ export default function NewsletterEditionPage({ params }: { params: { date: stri
             block_template: Array.isArray(b.block_template) ? b.block_template[0] : b.block_template,
           })),
         })
-
-        // Other published editions of this newsletter — for the sidebar.
-        const { data: otherEds } = await supabase
-          .from('newsletters_editions')
-          .select('id, title, edition_date')
-          .eq('collection_id', newsletter.id)
-          .eq('status', 'published')
-          .neq('id', editionData.id)
-          .order('edition_date', { ascending: false })
-          .limit(20)
-        setOthers(otherEds || [])
       } catch (err) {
         console.error('Error loading edition:', err)
         setError('Failed to load newsletter')
@@ -218,65 +200,85 @@ export default function NewsletterEditionPage({ params }: { params: { date: stri
     )
   }
 
-  const brand = getClientBrandConfig()
+  const accentColor = edition.accent_color || '#00a2c7'
 
   return (
-    <div className="pub-article-wrap pub-fade">
-      <div className="pub-article-grid">
-        {/* Left: the real edition, rendered with the declarative renderer so it
-            matches the sent/published newsletter exactly. */}
-        <article className="pub-article-main">
-          <div className="pub-byline">
-            {edition.newsletter_name} · {formatDate(edition.edition_date)}
-          </div>
-          <h1>{edition.title || 'Newsletter Edition'}</h1>
-          {edition.preheader && <p className="pub-byline" style={{ marginTop: 0 }}>{edition.preheader}</p>}
+    <main className="relative z-10">
+      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-2 text-base text-white/50 mb-6">
+          <Link href="/newsletters" className="hover:text-white/80 transition-colors">
+            Newsletters
+          </Link>
+          <span>/</span>
+          <Link href="/newsletters" className="hover:text-white/80 transition-colors">
+            {edition.newsletter_name}
+          </Link>
+        </div>
 
-          <div style={{ background: '#fff', borderRadius: 14, overflow: 'hidden', padding: '8px 0', marginTop: 20 }}>
-            {edition.blocks
-              .sort((a, b) => a.sort_order - b.sort_order)
-              .map((block) => {
-                const tpl = block.block_template
-                const source = (tpl?.html || tpl?.rich_text_template || '') as string
-                const resolvedContent = brand.storageBucketUrl
-                  ? resolveStoragePathsInJson(block.content, brand.storageBucketUrl)
-                  : block.content
-                let nodes: any[] = []
-                try { nodes = parseTemplate(source).nodes } catch { nodes = [] }
-                if (!nodes.length) return null
-                return <DeclarativeBlock key={block.id} nodes={nodes} content={resolvedContent as any} />
-              })}
+        {/* Header */}
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-1 h-6 rounded-full" style={{ backgroundColor: accentColor }} />
+            <span className="text-white/50 text-base">{edition.newsletter_name}</span>
+            <span className="text-white/30">·</span>
+            <span className="text-white/50 text-base">{formatDate(edition.edition_date)}</span>
           </div>
-        </article>
+          <h1 className="text-3xl sm:text-4xl font-bold text-white">
+            {edition.title || 'Newsletter Edition'}
+          </h1>
+          {edition.preheader && (
+            <p className="text-white/60 text-lg mt-2">{edition.preheader}</p>
+          )}
+        </div>
 
-        {/* Right: other editions of this newsletter. */}
-        <aside className="pub-article-side">
-          <div className="pub-side-card">
-            <div className="pub-side-h">More from {edition.newsletter_name}</div>
-            {others.length === 0 ? (
-              <div className="pub-side-sub">No other editions yet.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {others.map((o) => (
-                  <Link
-                    key={o.id}
-                    href={`/newsletters/${edition.newsletter_slug}--${o.edition_date}`}
-                    style={{ display: 'block', textDecoration: 'none' }}
-                  >
-                    <div className="pub-side-val">{o.title || 'Untitled'}</div>
-                    <div className="pub-side-sub">{formatDate(o.edition_date)}</div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="pub-side-card">
-            <Link href="/newsletters" className="pub-side-val" style={{ textDecoration: 'none' }}>
-              ← All newsletters
-            </Link>
-          </div>
-        </aside>
+        {/* Content */}
+        <div className="bg-white/5 rounded-2xl border border-white/10 overflow-hidden">
+          {edition.blocks
+            .sort((a, b) => a.sort_order - b.sort_order)
+            .map((block) => {
+              const tpl = block.block_template
+              const htmlTemplate = (tpl?.rich_text_template || tpl?.html || '') as string
+              const brand = getClientBrandConfig()
+              const resolvedContent = brand.storageBucketUrl
+                ? resolveStoragePathsInJson(block.content, brand.storageBucketUrl)
+                : block.content
+              let rendered = renderTemplate(htmlTemplate, resolvedContent as Record<string, unknown>)
+
+              if (!rendered.trim()) return null
+
+              rendered = stripEmailHtml(rendered)
+
+              return (
+                <div
+                  key={block.id}
+                  className="px-6 sm:px-10 py-6 border-b border-white/5 last:border-0"
+                >
+                  <div
+                    className="prose prose-invert prose-lg max-w-none
+                      prose-headings:text-white prose-headings:font-bold
+                      prose-p:text-white/80 prose-p:leading-relaxed
+                      prose-a:text-sky-400 prose-a:no-underline hover:prose-a:underline
+                      prose-li:text-white/80
+                      prose-strong:text-white
+                      prose-img:rounded-xl prose-img:mx-auto"
+                    dangerouslySetInnerHTML={{ __html: rendered }}
+                  />
+                </div>
+              )
+            })}
+        </div>
+
+        {/* Back link */}
+        <div className="mt-8 text-center">
+          <Link
+            href="/newsletters"
+            className="text-white/50 hover:text-white text-base transition-colors"
+          >
+            ← Back to all newsletters
+          </Link>
+        </div>
       </div>
-    </div>
+    </main>
   )
 }
