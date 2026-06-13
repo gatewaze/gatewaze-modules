@@ -411,12 +411,15 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify({ html, blockRender }),
       });
-      if (!res.ok) throw new Error(`publish-to-git ${res.status}`);
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`publish-to-git ${res.status}: ${body.slice(0, 200)}`);
+      }
       toast.success('Published to git', { id: tid });
       loadEditions();
     } catch (error) {
       console.error('[newsletters] publish failed:', error);
-      toast.error('Publish failed', { id: tid });
+      toast.error(`Publish failed: ${error instanceof Error ? error.message : String(error)}`, { id: tid, duration: 10000 });
     }
   };
 
