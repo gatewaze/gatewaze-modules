@@ -106,6 +106,11 @@ function formatDate(dateStr: string): string {
 export default function NewsletterEditionPage({ params }: { params: { date: string } }) {
   const [edition, setEdition] = useState<EditionData | null>(null)
   const [others, setOthers] = useState<Array<{ id: string; title: string | null; edition_date: string }>>([])
+  // Slot-block bricks: edition bricks grouped by block id, plus a brick_type →
+  // declarative-source map, so slot blocks (e.g. mlops_community) render their
+  // bricks as the slot's children.
+  const [bricksByBlock, setBricksByBlock] = useState<Record<string, any[]>>({})
+  const [brickTpls, setBrickTpls] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -184,6 +189,29 @@ export default function NewsletterEditionPage({ params }: { params: { date: stri
           .order('edition_date', { ascending: false })
           .limit(20)
         setOthers(otherEds || [])
+
+        // Slot-block bricks + their declarative templates (for mlops_community
+        // etc.). Bricks join to templates_brick_defs by brick_type === key.
+        const blockIds = (blocks || []).map((b: any) => b.id)
+        if (blockIds.length) {
+          const [bricksRes, brickDefsRes] = await Promise.all([
+            supabase
+              .from('newsletters_edition_bricks')
+              .select('id, block_id, brick_type, content, sort_order')
+              .in('block_id', blockIds)
+              .order('sort_order'),
+            supabase
+              .from('templates_brick_defs')
+              .select('key, html, templates_block_defs!inner(library_id)')
+              .eq('templates_block_defs.library_id', newsletter.id),
+          ])
+          const byBlock: Record<string, any[]> = {}
+          for (const br of bricksRes.data || []) (byBlock[br.block_id] ||= []).push(br)
+          setBricksByBlock(byBlock)
+          const tplMap: Record<string, string> = {}
+          for (const d of (brickDefsRes.data as any[]) || []) tplMap[d.key] = d.html || ''
+          setBrickTpls(tplMap)
+        }
       } catch (err) {
         console.error('Error loading edition:', err)
         setError('Failed to load newsletter')
@@ -255,7 +283,22 @@ export default function NewsletterEditionPage({ params }: { params: { date: stri
                 let nodes: any[] = []
                 try { nodes = parseTemplate(source).nodes } catch { nodes = [] }
                 if (!nodes.length) return null
-                return <DeclarativeBlock key={block.id} nodes={nodes} content={resolvedContent as any} />
+                // Slot blocks: render their bricks as the slot's children.
+                const blockBricks = bricksByBlock[block.id] || []
+                let content: any = resolvedContent
+                if (blockBricks.length) {
+                  const children = blockBricks.map((br: any, i: number) => {
+                    let bNodes: any[] = []
+                    try { bNodes = parseTemplate(brickTpls[br.brick_type] || '').nodes } catch { bNodes = [] }
+                    if (!bNodes.length) return null
+                    const bContent = brand.storageBucketUrl
+                      ? resolveStoragePathsInJson(br.content, brand.storageBucketUrl)
+                      : br.content
+                    return <DeclarativeBlock key={br.id || i} nodes={bNodes} content={bContent as any} />
+                  }).filter(Boolean)
+                  content = { ...(resolvedContent as any), children }
+                }
+                return <DeclarativeBlock key={block.id} nodes={nodes} content={content} />
               })}
           </div>
         </article>

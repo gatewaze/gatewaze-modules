@@ -120,6 +120,7 @@ const newslettersModule: GatewazeModule = {
     // tracking_slug to edition blocks. See spec-newsletter-link-tracking.md.
     'migrations/032_link_tracking.sql',
     'migrations/033_view_online_target.sql',
+    'migrations/034_anon_read_edition_bricks.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
