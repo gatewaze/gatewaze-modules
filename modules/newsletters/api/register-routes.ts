@@ -60,6 +60,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
 
   const {
     createPublishToGitRoute,
+    createUnpublishFromGitRoute,
     createInitRepoRoute,
     createGraduateToExternalRoute,
     createDriftRoute,
@@ -83,6 +84,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   } as never;
 
   const publishHandler = createPublishToGitRoute(baseDeps);
+  const unpublishHandler = createUnpublishFromGitRoute(baseDeps);
   const initRepoHandler = createInitRepoRoute(baseDeps);
   const graduateHandler = createGraduateToExternalRoute(baseDeps);
   const driftHandler = createDriftRoute(baseDeps);
@@ -114,6 +116,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   router.use(requireJwt());
 
   router.post('/newsletters/editions/:editionId/publish-to-git', wrap(publishHandler));
+  router.post('/newsletters/editions/:editionId/unpublish-from-git', wrap(unpublishHandler));
   router.post('/newsletters/collections/:collectionId/init-repo', wrap(initRepoHandler));
   router.post('/newsletters/collections/:collectionId/graduate-to-external', wrap(graduateHandler));
   router.get('/newsletters/collections/:collectionId/drift', wrap(driftHandler));
