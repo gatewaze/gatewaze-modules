@@ -198,6 +198,113 @@ const TEMPLATE_FILE_EXTS = new Set(['.html', '.htm', '.mjml']);
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.turbo']);
 
 /**
+ * Stitch a set of walked source files into a single parseable stream,
+ * auto-synthesising BLOCK / BRICK / WRAPPER markers for the file-per-asset
+ * repo layout that wasn't in the single-file v0.1 design:
+ *
+ *   blocks/<key>.html       → wrapped in `<!-- BLOCK:<key> | name=… -->` ...
+ *   bricks/<key>.html       → wrapped in `<!-- BRICK:<key> | name=… -->` ...
+ *                             and nested INSIDE the slot block (the BLOCK whose
+ *                             body contains a `<slot ...>` element), because
+ *                             the parser only recognises bricks as children of
+ *                             a parent block.
+ *   wrappers/<key>.html     → wrapped in `<!-- WRAPPER:<key> | name=… -->` ...
+ *
+ * Files that already carry an explicit BLOCK / BRICK / WRAPPER marker pass
+ * through unchanged — so legacy single-file or hand-marked repos keep working.
+ *
+ * If bricks exist but no slot block is found, bricks are dropped with a
+ * stderr warning; without a parent BLOCK the parser can't attach them, and
+ * silently fabricating a host block would surprise the operator more.
+ */
+export function autoMarkRepoFiles(
+  files: ReadonlyArray<{ relativePath: string; content: string }>,
+): string {
+  const blocks: Array<{ key: string; relativePath: string; content: string; isSlot: boolean }> = [];
+  const bricks: Array<{ key: string; relativePath: string; content: string }> = [];
+  const wrappers: Array<{ key: string; relativePath: string; content: string }> = [];
+  const passthrough: Array<{ relativePath: string; content: string }> = [];
+
+  const MARKER_RX = /<!--\s*(?:BLOCK|BRICK|WRAPPER):/i;
+  const SLOT_RX = /<slot[\s/>]/i;
+  const humanise = (s: string): string =>
+    s.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+  for (const f of files) {
+    if (MARKER_RX.test(f.content)) {
+      passthrough.push(f);
+      continue;
+    }
+    const segments = f.relativePath.split('/');
+    if (segments.length < 2) {
+      passthrough.push(f);
+      continue;
+    }
+    const file = segments[segments.length - 1] ?? '';
+    const dir = segments[segments.length - 2] ?? '';
+    const stem = file.replace(/\.(html|htm|mjml)$/i, '');
+    if (!stem) {
+      passthrough.push(f);
+      continue;
+    }
+    if (dir === 'blocks') {
+      blocks.push({ key: stem, relativePath: f.relativePath, content: f.content, isSlot: SLOT_RX.test(f.content) });
+    } else if (dir === 'bricks') {
+      bricks.push({ key: stem, relativePath: f.relativePath, content: f.content });
+    } else if (dir === 'wrappers') {
+      wrappers.push({ key: stem, relativePath: f.relativePath, content: f.content });
+    } else {
+      passthrough.push(f);
+    }
+  }
+
+  const slotBlock = blocks.find((b) => b.isSlot);
+  if (bricks.length > 0 && !slotBlock) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[templates] ${bricks.length} brick file(s) found but no slot block (a block whose body contains a <slot ...> element) — bricks dropped`,
+    );
+  }
+
+  const parts: string[] = [];
+
+  for (const p of passthrough) {
+    parts.push(`<!-- file: ${p.relativePath} -->\n${p.content}`);
+  }
+
+  for (const w of wrappers) {
+    parts.push(
+      `<!-- file: ${w.relativePath} -->\n` +
+        `<!-- WRAPPER:${w.key} | name=${humanise(w.key)} -->\n${w.content}\n<!-- /WRAPPER:${w.key} -->`,
+    );
+  }
+
+  let nextSort = 1;
+  for (const b of blocks) {
+    if (b.isSlot && bricks.length > 0) {
+      const brickMarkers = bricks
+        .map(
+          (br, i) =>
+            `<!-- BRICK:${br.key} | name=${humanise(br.key)} | sort_order=${(i + 1) * 1000} -->\n${br.content}\n<!-- /BRICK:${br.key} -->`,
+        )
+        .join('\n\n');
+      parts.push(
+        `<!-- file: ${b.relativePath} -->\n` +
+          `<!-- BLOCK:${b.key} | name=${humanise(b.key)} | has_bricks=true | sort_order=${nextSort * 1000} -->\n${b.content}\n\n${brickMarkers}\n<!-- /BLOCK:${b.key} -->`,
+      );
+    } else {
+      parts.push(
+        `<!-- file: ${b.relativePath} -->\n` +
+          `<!-- BLOCK:${b.key} | name=${humanise(b.key)} | sort_order=${nextSort * 1000} -->\n${b.content}\n<!-- /BLOCK:${b.key} -->`,
+      );
+    }
+    nextSort++;
+  }
+
+  return parts.join('\n\n');
+}
+
+/**
  * Walk a directory and return all template-source files, relative to the
  * walk root. When `manifestPath` is set, walk only that subdirectory (or
  * read the single file if `manifestPath` ends with a recognised extension).
@@ -311,9 +418,7 @@ export async function ingestGit(
   //    in v0.1 (TODO when migrating to a real manifest), so concatenation is
   //    the simplest correct path.
   const files = walkSourceFiles(repoDir, input.manifest_path);
-  const concatenated = files
-    .map((f) => `<!-- file: ${f.relativePath} -->\n${f.content}`)
-    .join('\n\n');
+  const concatenated = autoMarkRepoFiles(files);
   const parsed = parse(concatenated, { sourcePath: `git:${input.url}#${headSha.slice(0, 8)}` });
 
   // 3. If parse produced errors, persist a source row with status='error' so
