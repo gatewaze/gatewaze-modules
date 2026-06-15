@@ -209,6 +209,29 @@ function detectSignals(ctx: InteractionContext): BotSignal[] {
     }
   }
 
+  // --- Provider MPP/prefetch signals ---
+  // ESP-reported flags (Customer.io's proxied/prefetched/email_client) catch
+  // Apple MPP where IP-range matching can't — notably IPv6 proxy opens, which
+  // the IPv4-only CIDR check above silently misses. These are machine-leaning
+  // but still recoverable by positive corroboration (clicks, repeat opens).
+  const ps = ctx.providerSignals;
+  if (ps) {
+    const isApple = /apple|protected/i.test(ps.emailClient ?? '');
+    if ((ps.proxied || isApple) && !signals.some((s) => s.id === 'ua_apple_mpp')) {
+      signals.push({
+        id: 'ua_apple_mpp',
+        adjustment: -0.50,
+        detail: 'Apple Mail Privacy Protection (provider flag)',
+      });
+    }
+    if (ps.proxied && !signals.some((s) => s.id === 'ip_known_proxy')) {
+      signals.push({ id: 'ip_known_proxy', adjustment: -0.60, detail: 'Proxied open (provider flag)' });
+    }
+    if (ps.prefetched) {
+      signals.push({ id: 'mpp_prefetch', adjustment: -0.60, detail: 'Prefetched open (provider flag)' });
+    }
+  }
+
   // --- Positive corroboration signals ---
   if (ctx.eventType === 'click' && ctx.deliveredAt) {
     const secondsSinceDelivery =
@@ -234,6 +257,19 @@ function detectSignals(ctx: InteractionContext): BotSignal[] {
       id: 'corroboration_repeat_opener',
       adjustment: 0.20,
       detail: `${ctx.recipientHistory.humanOpenCount} previous human opens`,
+    });
+  }
+
+  // A recipient who has clicked anywhere in their history is a PROVEN human, and
+  // identity persists across editions — so their opens are human-attributable
+  // even through Apple MPP. This override is strong enough to clear the MPP
+  // penalty, making signals-v1 at least as inclusive as the confirmed-human
+  // floor (clicked → human) while still adding humans from other signals.
+  if (ctx.recipientHistory.humanClickCount >= 1) {
+    signals.push({
+      id: 'corroboration_confirmed_clicker',
+      adjustment: 3.0,
+      detail: `Confirmed human: clicked in ${ctx.recipientHistory.humanClickCount} edition(s)`,
     });
   }
 
