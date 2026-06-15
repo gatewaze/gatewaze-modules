@@ -8,7 +8,8 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { walkSourceFiles, cloneOrUpdateGitSource, assertHostInEgressAllowlist } from '../git.js';
+import { walkSourceFiles, cloneOrUpdateGitSource, assertHostInEgressAllowlist, autoMarkRepoFiles } from '../git.js';
+import { parse } from '../../parser/parse.js';
 
 describe('walkSourceFiles', () => {
   let dir: string;
@@ -77,6 +78,63 @@ describe('walkSourceFiles', () => {
     write('greeting.html', '<p>hello world</p>');
     const files = walkSourceFiles(dir);
     expect(files[0]?.content).toBe('<p>hello world</p>');
+  });
+});
+
+describe('autoMarkRepoFiles', () => {
+  it('wraps file-per-block layout with BLOCK markers; parser then sees each block', () => {
+    const stitched = autoMarkRepoFiles([
+      { relativePath: 'blocks/intro_paragraph.html', content: '<!-- SCHEMA: { "text": {"type":"richtext"} } -->\n<p>{{text}}</p>' },
+      { relativePath: 'blocks/job_of_week.html', content: '<!-- SCHEMA: { "url": {"type":"text"} } -->\n<a href="{{url}}">Job</a>' },
+    ]);
+    const result = parse(stitched);
+    expect(result.errors).toEqual([]);
+    const keys = result.block_defs.map((b) => b.key).sort();
+    expect(keys).toEqual(['intro_paragraph', 'job_of_week']);
+    expect(result.block_defs.find((b) => b.key === 'intro_paragraph')?.name).toBe('Intro Paragraph');
+  });
+
+  it('nests bricks/ under the slot block (the one whose body contains <slot>)', () => {
+    const stitched = autoMarkRepoFiles([
+      { relativePath: 'blocks/intro.html', content: '<p>{{x}}</p>' },
+      { relativePath: 'blocks/mlops_community.html', content: '<!-- SCHEMA: { "children": {"type":"slot"} } -->\n<section><slot name="children" /></section>' },
+      { relativePath: 'bricks/blog_post.html', content: '<!-- SCHEMA: { "title": {"type":"text"} } -->\n<h2>{{title}}</h2>' },
+      { relativePath: 'bricks/podcast.html', content: '<!-- SCHEMA: { "url": {"type":"text"} } -->\n<a href="{{url}}">listen</a>' },
+    ]);
+    const result = parse(stitched);
+    expect(result.errors).toEqual([]);
+    const slot = result.block_defs.find((b) => b.key === 'mlops_community');
+    expect(slot?.has_bricks).toBe(true);
+    expect(slot?.bricks.map((br) => br.key).sort()).toEqual(['blog_post', 'podcast']);
+    // Non-slot blocks should not absorb bricks
+    expect(result.block_defs.find((b) => b.key === 'intro')?.bricks).toEqual([]);
+  });
+
+  it('passes through files that already carry explicit markers (legacy single-file layout)', () => {
+    const explicit = '<!-- BLOCK:hero | name=Hero -->\n<h1>Hi</h1>\n<!-- /BLOCK:hero -->';
+    const stitched = autoMarkRepoFiles([{ relativePath: 'hero.html', content: explicit }]);
+    expect(stitched).toContain(explicit);
+    // and parser still sees exactly one block (no double-wrapping)
+    const result = parse(stitched);
+    expect(result.errors).toEqual([]);
+    expect(result.block_defs.map((b) => b.key)).toEqual(['hero']);
+  });
+
+  it('drops bricks with a warning when no slot block is present', () => {
+    const warn = console.warn;
+    const captured: string[] = [];
+    console.warn = (msg: string): void => { captured.push(msg); };
+    try {
+      const stitched = autoMarkRepoFiles([
+        { relativePath: 'blocks/intro.html', content: '<p>x</p>' },
+        { relativePath: 'bricks/orphan.html', content: '<h2>orphan</h2>' },
+      ]);
+      const result = parse(stitched);
+      expect(result.block_defs.flatMap((b) => b.bricks)).toEqual([]);
+      expect(captured.join('\n')).toMatch(/no slot block/);
+    } finally {
+      console.warn = warn;
+    }
   });
 });
 

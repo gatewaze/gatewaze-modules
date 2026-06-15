@@ -30,6 +30,7 @@ import {
   cloneOrUpdateGitSource,
   readHeadSha,
   walkSourceFiles,
+  autoMarkRepoFiles,
 } from '../lib/sources/git.js';
 import { getBoilerplateConfig, type HostKind } from '../lib/boilerplate/index.js';
 
@@ -427,9 +428,7 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
         });
         appliedSha = readHeadSha(repoDir);
         const files = walkSourceFiles(repoDir, sourceQ.data.manifest_path ?? undefined);
-        const concatenated = files
-          .map((f) => `<!-- file: ${f.relativePath} -->\n${f.content}`)
-          .join('\n\n');
+        const concatenated = autoMarkRepoFiles(files);
         parsed = parse(concatenated, { sourcePath: `git:${sourceQ.data.url}#${appliedSha.slice(0, 8)}` });
         sha = createHash('sha256').update(concatenated).digest('hex');
       } catch (e) {
