@@ -22,7 +22,8 @@ export default function PropertyListPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/analytics/properties', { credentials: 'include' })
+    const apiUrl = import.meta.env.VITE_API_URL ?? '';
+    fetch(`${apiUrl}/api/analytics/properties`, { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((body: { properties: Property[] }) => setProperties(body.properties ?? []))
       .catch((e: Error) => setError(e.message))

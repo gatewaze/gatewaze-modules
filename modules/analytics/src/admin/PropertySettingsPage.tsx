@@ -39,10 +39,11 @@ export default function PropertySettingsPage() {
 
   useEffect(() => {
     if (!id) return;
+    const apiUrl = import.meta.env.VITE_API_URL ?? '';
     Promise.all([
-      fetch(`/api/analytics/properties/${id}`, { credentials: 'include' }).then((r) => r.json()),
-      fetch(`/api/analytics/properties/${id}/scripts`, { credentials: 'include' }).then((r) => r.json()),
-      fetch(`/api/analytics/properties/${id}/segment`, { credentials: 'include' }).then((r) => r.json()),
+      fetch(`${apiUrl}/api/analytics/properties/${id}`, { credentials: 'include' }).then((r) => r.json()),
+      fetch(`${apiUrl}/api/analytics/properties/${id}/scripts`, { credentials: 'include' }).then((r) => r.json()),
+      fetch(`${apiUrl}/api/analytics/properties/${id}/segment`, { credentials: 'include' }).then((r) => r.json()),
     ])
       .then(([prop, sc, seg]) => {
         setProperty((prop as { property: Property }).property);
@@ -56,7 +57,8 @@ export default function PropertySettingsPage() {
     if (!id) return;
     setSavingScripts(true);
     try {
-      await fetch(`/api/analytics/properties/${id}/scripts`, {
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
+      await fetch(`${apiUrl}/api/analytics/properties/${id}/scripts`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -69,7 +71,8 @@ export default function PropertySettingsPage() {
 
   async function saveSegment() {
     if (!id || !segmentWriteKey.trim()) return;
-    await fetch(`/api/analytics/properties/${id}/segment`, {
+    const apiUrl = import.meta.env.VITE_API_URL ?? '';
+    await fetch(`${apiUrl}/api/analytics/properties/${id}/segment`, {
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
