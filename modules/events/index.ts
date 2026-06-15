@@ -62,6 +62,11 @@ const eventsModule: GatewazeModule = {
     'migrations/013_speakers_extracted_at.sql',
     'migrations/014_register_event_host_media.sql',
     'migrations/015_speakers_extracted_content_hash.sql',
+    // 017 adds next_local_event(): cascade geo->city->region->country lookup of
+    // a recipient's next nearby published event, for the newsletter
+    // next-local-event personalisation provider
+    // (spec-newsletter-personalised-delivery.md B.2).
+    'migrations/017_next_local_event.sql',
   ],
 
   edgeFunctions: [
