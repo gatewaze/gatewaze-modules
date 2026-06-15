@@ -19,9 +19,13 @@ import {
   getSortedRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
+  getExpandedRowModel,
   createColumnHelper,
   SortingState,
+  ExpandedState,
+  type Row,
 } from '@tanstack/react-table';
+import { ChevronRightIcon } from '@heroicons/react/24/outline';
 import {
   Card,
   Button,
@@ -53,6 +57,30 @@ interface Edition {
   created_at: string;
   updated_at: string;
   block_count?: number;
+  engagement?: EditionEngagement | null;
+}
+
+interface EditionEngagement {
+  sent: number;
+  delivered: number;
+  unique_opens: number;
+  unique_clicks: number;
+  human_clicks: number;      // ours: clicks minus detected machine/scanner clickers
+  human_opens: number;       // ours: confirmed human (clicked anywhere)
+  machine_opens: number;     // unique_opens − human_opens
+  bounced: number;
+  cio_human_opens: number;   // Customer.io reference (0 for pre-2025 editions)
+  cio_machine_opens: number;
+  cio_human_clicks: number;
+}
+
+interface DetectionSourceRow {
+  detection_source: string;
+  human_openers: number;
+  machine_openers: number;
+  human_clickers: number;
+  reconciled_human_openers: number;
+  rescued_by_click: number;
 }
 
 interface NewsletterType {
@@ -103,6 +131,138 @@ const statusColors: Record<string, 'neutral' | 'warning' | 'success'> = {
 
 const columnHelper = createColumnHelper<Edition>();
 
+function fmtNum(n: number): string {
+  return n.toLocaleString();
+}
+function pct(n: number, d: number): string {
+  return d > 0 ? `${((n / d) * 100).toFixed(1)}%` : '—';
+}
+
+// Expanded-row detail: full tracked engagement for one edition, including the
+// human-vs-bot split that the raw open count hides.
+function EngagementDetail({ edition }: { edition: Edition }) {
+  const e = edition.engagement;
+  if (!e) {
+    return <div className="px-6 py-4 text-sm text-[var(--gray-a8)]">Loading engagement…</div>;
+  }
+  if (e.sent === 0) {
+    return <div className="px-6 py-4 text-sm text-[var(--gray-a8)]">No send/engagement data recorded for this edition.</div>;
+  }
+  const Stat = ({ label, value, sub }: { label: string; value: string; sub?: string }) => (
+    <div className="flex flex-col">
+      <span className="text-xs text-[var(--gray-10)]">{label}</span>
+      <span className="text-lg font-semibold text-[var(--gray-12)]">{value}</span>
+      {sub && <span className="text-xs text-[var(--gray-10)]">{sub}</span>}
+    </div>
+  );
+  const openRate = pct(e.human_opens, e.delivered);
+  return (
+    <div className="bg-[var(--gray-a2)] px-6 py-4 border-t border-[var(--gray-a4)]">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-5">
+        <Stat label="Sent" value={fmtNum(e.sent)} />
+        <Stat label="Delivered" value={fmtNum(e.delivered)} sub={pct(e.delivered, e.sent) + ' of sent'} />
+        <Stat label="Opens" value={fmtNum(e.unique_opens)} sub={pct(e.unique_opens, e.delivered) + ' open rate'} />
+        <Stat label="Clicks" value={fmtNum(e.unique_clicks)} sub={pct(e.unique_clicks, e.delivered) + ' CTR'} />
+        <Stat label="Confirmed human" value={fmtNum(e.human_opens)} sub={openRate + ' human open rate'} />
+        <Stat label="Bounced" value={fmtNum(e.bounced)} sub={pct(e.bounced, e.sent)} />
+      </div>
+      <DetectionSourceComparison editionId={edition.id} eng={e} />
+    </div>
+  );
+}
+
+// Per-edition comparison of human-open estimators. Our figures are primary;
+// Customer.io is shown only as a reference (and is blank before its human
+// metric launched in 2025). Loaded lazily when the row expands.
+function DetectionSourceComparison({ editionId, eng }: { editionId: string; eng: EditionEngagement }) {
+  const [rows, setRows] = useState<DetectionSourceRow[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    supabase.rpc('edition_detection_comparison', { p_edition_id: editionId }).then(({ data }: { data: any[] | null }) => {
+      if (active) setRows((data || []).map((r) => ({
+        detection_source: r.detection_source,
+        human_openers: Number(r.human_openers),
+        machine_openers: Number(r.machine_openers),
+        human_clickers: Number(r.human_clickers),
+        reconciled_human_openers: Number(r.reconciled_human_openers),
+        rescued_by_click: Number(r.rescued_by_click),
+      })));
+    });
+    return () => { active = false; };
+  }, [editionId]);
+
+  const openers = eng.unique_opens;
+  const cioHasHuman = eng.cio_human_opens > 0;
+
+  return (
+    <div className="mt-4 pt-4 border-t border-[var(--gray-a4)]">
+      <div className="text-xs font-medium text-[var(--gray-11)] mb-2">
+        Human-open estimators (of {fmtNum(openers)} openers)
+      </div>
+      <div className="overflow-x-auto">
+        <table className="text-sm min-w-[640px]">
+          <thead>
+            <tr className="text-xs text-[var(--gray-10)] text-left">
+              <th className="pr-6 py-1 font-medium">Source</th>
+              <th className="pr-6 py-1 font-medium">Human opens</th>
+              <th className="pr-6 py-1 font-medium">Machine opens</th>
+              <th className="pr-6 py-1 font-medium">Human clicks</th>
+              <th className="pr-6 py-1 font-medium">Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {/* Our primary: confirmed-human floor (cross-edition clicks) */}
+            <tr className="border-t border-[var(--gray-a3)]">
+              <td className="pr-6 py-1.5 font-medium text-[var(--gray-12)]">
+                Confirmed human <span className="text-[var(--accent-9)] text-xs">ours</span>
+              </td>
+              <td className="pr-6 py-1.5">{fmtNum(eng.human_opens)} <span className="text-xs text-[var(--gray-10)]">({pct(eng.human_opens, openers)})</span></td>
+              <td className="pr-6 py-1.5">{fmtNum(eng.machine_opens)} <span className="text-xs text-[var(--gray-10)]">({pct(eng.machine_opens, openers)})</span></td>
+              <td className="pr-6 py-1.5">{fmtNum(eng.human_clicks)}</td>
+              <td className="pr-6 py-1.5 text-[var(--gray-10)]">defensible floor — clicked any edition</td>
+            </tr>
+            {/* signals-v1 (only where we have raw events to score) */}
+            {(rows || []).filter((r) => r.detection_source === 'bot-detector-signals').map((r) => {
+              const o = r.human_openers + r.machine_openers;
+              return (
+                <tr key={r.detection_source} className="border-t border-[var(--gray-a3)]">
+                  <td className="pr-6 py-1.5 text-[var(--gray-12)]">signals-v1 <span className="text-[var(--gray-9)] text-xs">ours</span></td>
+                  <td className="pr-6 py-1.5">{fmtNum(r.human_openers)} <span className="text-xs text-[var(--gray-10)]">({pct(r.human_openers, o)})</span></td>
+                  <td className="pr-6 py-1.5">{fmtNum(r.machine_openers)} <span className="text-xs text-[var(--gray-10)]">({pct(r.machine_openers, o)})</span></td>
+                  <td className="pr-6 py-1.5">{fmtNum(r.human_clickers)}</td>
+                  <td className="pr-6 py-1.5 text-[var(--gray-10)]">MPP-aware + clicker corroboration</td>
+                </tr>
+              );
+            })}
+            {/* Customer.io reference */}
+            <tr className="border-t border-[var(--gray-a3)]">
+              <td className="pr-6 py-1.5 text-[var(--gray-12)]">Customer.io <span className="text-[var(--gray-9)] text-xs">reference</span></td>
+              {cioHasHuman ? (
+                <>
+                  <td className="pr-6 py-1.5">{fmtNum(eng.cio_human_opens)} <span className="text-xs text-[var(--gray-10)]">({pct(eng.cio_human_opens, eng.cio_human_opens + eng.cio_machine_opens)})</span></td>
+                  <td className="pr-6 py-1.5">{fmtNum(eng.cio_machine_opens)}</td>
+                  <td className="pr-6 py-1.5">{fmtNum(eng.cio_human_clicks)}</td>
+                  <td className="pr-6 py-1.5 text-[var(--gray-10)]">credits unverifiable MPP opens</td>
+                </>
+              ) : (
+                <>
+                  <td className="pr-6 py-1.5 text-[var(--gray-a8)]">n/a</td>
+                  <td className="pr-6 py-1.5 text-[var(--gray-a8)]">n/a</td>
+                  <td className="pr-6 py-1.5 text-[var(--gray-a8)]">n/a</td>
+                  <td className="pr-6 py-1.5 text-[var(--gray-10)]">metric began 2025</td>
+                </>
+              )}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-2 text-xs text-[var(--gray-9)]">
+        Opens/clicks are all-time from our own data. <strong>Confirmed human</strong> is our primary metric — openers who clicked somewhere in the full history (provably human, MPP-proof), available for every edition. Customer.io is a reference only: its human metric began in 2025 (blank before) and additionally credits no-click MPP opens that can&apos;t be verified.
+      </div>
+    </div>
+  );
+}
+
 interface TemplateOption {
   id: string;
   name: string;
@@ -128,6 +288,7 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
   const [templates, setTemplates] = useState<TemplateOption[]>([]);
   const [newsletterTypes, setNewsletterTypes] = useState<NewsletterType[]>([]);
   const [selectedType, setSelectedType] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<ExpandedState>({});
 
   const loadEditions = useCallback(async () => {
     try {
@@ -170,6 +331,19 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
       });
 
       setEditions(editionsWithCount);
+
+      // Engagement aggregates — progressive: render the table first, then fill
+      // in opens/clicks/bot columns once this returns.
+      const editionIds = editionsWithCount.map((e: any) => e.id);
+      if (editionIds.length) {
+        supabase
+          .rpc('newsletter_edition_engagement', { p_edition_ids: editionIds })
+          .then(({ data: eng }: { data: any[] | null }) => {
+            if (!eng) return;
+            const byId = new Map(eng.map((r: any) => [r.edition_id, r]));
+            setEditions((prev) => prev.map((e) => ({ ...e, engagement: byId.get(e.id) ?? null })));
+          });
+      }
 
       if (collections) {
         const typesWithCounts = collections.map((c: any) => ({
@@ -445,6 +619,22 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
 
   const columns = useMemo(
     () => [
+      columnHelper.display({
+        id: 'expander',
+        header: '',
+        cell: ({ row }) => (
+          <button
+            onClick={(e) => { e.stopPropagation(); row.toggleExpanded(); }}
+            className="p-1 text-[var(--gray-10)] hover:text-[var(--gray-12)]"
+            aria-label={row.getIsExpanded() ? 'Collapse' : 'Expand'}
+          >
+            <ChevronRightIcon
+              className="size-4 transition-transform"
+              style={{ transform: row.getIsExpanded() ? 'rotate(90deg)' : 'none' }}
+            />
+          </button>
+        ),
+      }),
       columnHelper.accessor('edition_date', {
         header: 'Date',
         cell: (info) => (
@@ -461,7 +651,9 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
           </div>
         ),
       }),
-      ...(newsletterTypes.length > 1 ? [
+      // Hide the Newsletter column when scoped to one newsletter (we're already
+      // inside it): either opened via a newsletter route or filtered to a type.
+      ...(newsletterTypes.length > 1 && !newsletterId && !selectedType ? [
         columnHelper.accessor('collection_name' as any, {
           header: 'Newsletter',
           cell: (info: any) => (
@@ -487,6 +679,45 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
           ) : (
             <span className="text-sm text-[var(--gray-a8)]">—</span>
           ),
+      }),
+      columnHelper.accessor((row) => row.engagement?.unique_opens ?? -1, {
+        id: 'opens',
+        header: 'Opens',
+        cell: (info) => {
+          const eng = info.row.original.engagement;
+          if (!eng || eng.sent === 0) return <span className="text-sm text-[var(--gray-a8)]">—</span>;
+          return (
+            <div className="text-sm text-[var(--gray-12)] whitespace-nowrap" title="Unique opens (all-time)">
+              {fmtNum(eng.unique_opens)} <span className="text-[var(--gray-10)]">({pct(eng.unique_opens, eng.delivered)})</span>
+            </div>
+          );
+        },
+      }),
+      columnHelper.accessor((row) => row.engagement?.unique_clicks ?? -1, {
+        id: 'clicks',
+        header: 'Clicks',
+        cell: (info) => {
+          const eng = info.row.original.engagement;
+          if (!eng || eng.sent === 0) return <span className="text-sm text-[var(--gray-a8)]">—</span>;
+          return (
+            <div className="text-sm text-[var(--gray-12)] whitespace-nowrap">
+              {fmtNum(eng.unique_clicks)} <span className="text-[var(--gray-10)]">({pct(eng.unique_clicks, eng.delivered)})</span>
+            </div>
+          );
+        },
+      }),
+      columnHelper.accessor((row) => row.engagement?.human_clicks ?? -1, {
+        id: 'human_clicks',
+        header: 'Human clicks',
+        cell: (info) => {
+          const eng = info.row.original.engagement;
+          if (!eng || eng.sent === 0) return <span className="text-sm text-[var(--gray-a8)]">—</span>;
+          return (
+            <div className="text-sm text-[var(--gray-12)] whitespace-nowrap" title="Clicks minus machine/scanner clickers we detect">
+              {fmtNum(eng.human_clicks)} <span className="text-[var(--gray-10)]">({pct(eng.human_clicks, eng.delivered)})</span>
+            </div>
+          );
+        },
       }),
       columnHelper.accessor('block_count', {
         header: 'Blocks',
@@ -547,7 +778,7 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
       }),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [navigate, loadEditions, newsletterTypes.length]
+    [navigate, loadEditions, newsletterTypes.length, newsletterId, selectedType]
   );
 
   const filteredEditions = useMemo(() => {
@@ -561,13 +792,16 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
     state: {
       sorting,
       globalFilter,
+      expanded,
     },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
+    onExpandedChange: setExpanded,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
     initialState: {
       pagination: {
         pageSize: PAGE_SIZE,
@@ -724,7 +958,12 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
 
       {/* Editions Table */}
       <Card className="overflow-hidden">
-        <DataTable table={table} loading={loading} onRowDoubleClick={(edition) => handleEdit(edition.id)} />
+        <DataTable
+          table={table}
+          loading={loading}
+          onRowDoubleClick={(edition) => handleEdit(edition.id)}
+          renderSubComponent={(row: Row<Edition>) => <EngagementDetail edition={row.original} />}
+        />
 
         {/* Pagination */}
         {!loading && table.getRowModel().rows.length > 0 && (

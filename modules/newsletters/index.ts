@@ -121,6 +121,19 @@ const newslettersModule: GatewazeModule = {
     'migrations/032_link_tracking.sql',
     'migrations/033_view_online_target.sql',
     'migrations/034_anon_read_edition_bricks.sql',
+    // 035 adds delivery_strategy + the newsletter_send_recipients per-recipient
+    // timing queue for tz-local / personalised delivery
+    // (spec-newsletter-personalised-delivery.md Part A).
+    'migrations/035_personalised_delivery.sql',
+    // 036 adds the newsletter_edition_engagement() aggregate RPC powering the
+    // editions table's open/click + bot-filter columns.
+    'migrations/036_edition_engagement_rpc.sql',
+    // 037/038 add the multi-source bot-detection comparison + cross-edition
+    // click-corroboration RPCs (spec §6, Part C). 039 adds the per-recipient
+    // engagement profile (full CIO history) that powers corroboration.
+    'migrations/037_detection_comparison_rpc.sql',
+    'migrations/038_corroborated_engagement_rpc.sql',
+    'migrations/039_cio_recipient_engagement.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
@@ -217,7 +230,10 @@ const newslettersModule: GatewazeModule = {
 
   portalRoutes: [
     { path: '/newsletters', component: () => import('./portal/pages/index') },
-    { path: '/newsletters/:slug/:date', component: () => import('./portal/pages/_date') },
+    // Canonical edition URL: /newsletters/<collection>/<date-subject-slug>
+    { path: '/newsletters/:collection/:edition', component: () => import('./portal/pages/[collection]/[edition]') },
+    // Legacy /newsletters/<slug>--<date> → redirects to the canonical URL.
+    { path: '/newsletters/:date', component: () => import('./portal/pages/_date') },
   ],
 
   publicApiScopes: [

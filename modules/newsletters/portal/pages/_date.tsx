@@ -1,336 +1,81 @@
 // @ts-nocheck — portal deps are resolved at build time via webpack alias
 'use client'
 
-import { useState, useEffect } from 'react'
+// Legacy route: /newsletters/<slug>--<date>. Editions now live at the canonical
+// nested path /newsletters/<collection>/<date-subject-slug> (rendered by
+// _collection/_edition.tsx). This page resolves the old single-segment link and
+// redirects to the canonical URL so previously-shared links keep working.
+
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase/client'
-import { resolveStoragePathsInJson } from '@gatewaze/shared'
-import { getClientBrandConfig } from '@/config/brand'
-// Render the edition with the SAME declarative renderer the email/publish use,
-// so the portal shows the real newsletter. The declarative path is dependency-
-// light (react + @react-email/components + DOMParser) — no Puck/heroicons — so
-// it's safe to pull into the portal bundle.
-import { parseTemplate } from '@gatewaze-modules/newsletters/admin/components/puck/email-blocks/declarative/parse-template'
-import { DeclarativeBlock } from '@gatewaze-modules/newsletters/admin/components/puck/email-blocks/declarative/render'
+import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slug'
 
-interface EditionData {
-  id: string
-  title: string | null
-  edition_date: string
-  preheader: string | null
-  collection_id: string
-  newsletter_name: string
-  newsletter_slug: string
-  accent_color: string | null
-  blocks: Array<{
-    id: string
-    block_type: string
-    content: Record<string, unknown>
-    sort_order: number
-    block_template: {
-      name: string
-      html: string | null
-      rich_text_template: string | null
-    }
-  }>
-}
-
-function renderTemplate(template: string, data: Record<string, unknown>): string {
-  if (!template) return ''
-  let result = template
-
-  // Sections: {{#key}}...{{/key}}
-  result = result.replace(/\{\{#(\w+)\}\}([\s\S]*?)\{\{\/\1\}\}/g, (_, key, inner) => {
-    const val = data[key]
-    if (!val) return ''
-    if (Array.isArray(val)) return val.map(item => renderTemplate(inner, item)).join('')
-    return renderTemplate(inner, typeof val === 'object' ? val as Record<string, unknown> : data)
-  })
-
-  // Inverted sections: {{^key}}...{{/key}}
-  result = result.replace(/\{\{\^(\w+)\}\}([\s\S]*?)\{\{\/\1\}\}/g, (_, key, inner) => {
-    const val = data[key]
-    if (!val || (Array.isArray(val) && val.length === 0)) return inner
-    return ''
-  })
-
-  // Variables: {{key}}
-  result = result.replace(/\{\{(\w+)\}\}/g, (_, key) => {
-    const val = data[key]
-    return val != null ? String(val) : ''
-  })
-
-  return result
-}
-
-function stripEmailHtml(html: string): string {
-  let clean = html
-  clean = clean.replace(/<!--\[if[^\]]*\]>[\s\S]*?<!\[endif\]-->/gi, '')
-  clean = clean.replace(/\s*style="[^"]*"/gi, '')
-  clean = clean.replace(/\s*style='[^']*'/gi, '')
-  clean = clean.replace(/<table[^>]*>/gi, '')
-  clean = clean.replace(/<\/table>/gi, '')
-  clean = clean.replace(/<tbody[^>]*>/gi, '')
-  clean = clean.replace(/<\/tbody>/gi, '')
-  clean = clean.replace(/<thead[^>]*>/gi, '')
-  clean = clean.replace(/<\/thead>/gi, '')
-  clean = clean.replace(/<tr[^>]*>/gi, '')
-  clean = clean.replace(/<\/tr>/gi, '')
-  clean = clean.replace(/<td[^>]*>/gi, '')
-  clean = clean.replace(/<\/td>/gi, '')
-  clean = clean.replace(/<th[^>]*>/gi, '')
-  clean = clean.replace(/<\/th>/gi, '')
-  clean = clean.replace(/\s*align="[^"]*"/gi, '')
-  clean = clean.replace(/\s*bgcolor="[^"]*"/gi, '')
-  clean = clean.replace(/\s*border="[^"]*"/gi, '')
-  clean = clean.replace(/\s*cellpadding="[^"]*"/gi, '')
-  clean = clean.replace(/\s*cellspacing="[^"]*"/gi, '')
-  clean = clean.replace(/\s*width="[^"]*"/gi, '')
-  clean = clean.replace(/\s*height="[^"]*"/gi, '')
-  clean = clean.replace(/\s*role="[^"]*"/gi, '')
-  clean = clean.replace(/\s*class="[^"]*"/gi, '')
-  clean = clean.replace(/<div>\s*<\/div>/gi, '')
-  clean = clean.replace(/<span>\s*<\/span>/gi, '')
-  clean = clean.replace(/\n{3,}/g, '\n\n')
-  return clean.trim()
-}
-
-function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
-}
-
-export default function NewsletterEditionPage({ params }: { params: { date: string } }) {
-  const [edition, setEdition] = useState<EditionData | null>(null)
-  const [others, setOthers] = useState<Array<{ id: string; title: string | null; edition_date: string }>>([])
-  // Slot-block bricks: edition bricks grouped by block id, plus a brick_type →
-  // declarative-source map, so slot blocks (e.g. mlops_community) render their
-  // bricks as the slot's children.
-  const [bricksByBlock, setBricksByBlock] = useState<Record<string, any[]>>({})
-  const [brickTpls, setBrickTpls] = useState<Record<string, string>>({})
-  const [loading, setLoading] = useState(true)
+export default function LegacyNewsletterEditionRedirect({ params }: { params: { date: string } }) {
+  const router = useRouter()
   const [error, setError] = useState<string | null>(null)
 
-  // URL format: /newsletters/{slug}--{date}
+  // Old format: /newsletters/{slug}--{date}
   const parts = params.date?.split('--') || []
   const slug = parts.length > 1 ? parts[0] : ''
   const date = parts.length > 1 ? parts[1] : params.date
 
   useEffect(() => {
-    if (!slug) {
+    if (!slug || !date) {
       setError('Invalid URL')
-      setLoading(false)
       return
     }
 
-    async function load() {
+    async function resolve() {
       try {
         const supabase = getSupabaseClient()
-
-        // Get newsletter (RLS handles visibility)
         const { data: newsletter } = await supabase
           .from('newsletters_template_collections')
-          .select('id, name, slug, accent_color')
+          .select('id, slug')
           .eq('slug', slug)
           .single()
-
         if (!newsletter) {
           setError('Newsletter not found')
-          setLoading(false)
           return
         }
-
-        // Get edition by date
-        const { data: editionData } = await supabase
+        const { data: ed } = await supabase
           .from('newsletters_editions')
-          .select('id, title, edition_date, preheader, collection_id')
+          .select('title, edition_date')
           .eq('collection_id', newsletter.id)
           .eq('edition_date', date)
           .eq('status', 'published')
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
-
-        if (!editionData) {
+        if (!ed) {
           setError('Edition not found')
-          setLoading(false)
           return
         }
-
-        // Get blocks with templates (joined to templates_block_defs).
-        // The block_def_id FK is templates_block_def_id (added in migration 020).
-        const { data: blocks } = await supabase
-          .from('newsletters_edition_blocks')
-          .select('id, block_type, content, sort_order, block_template:templates_block_defs!templates_block_def_id(name, html, rich_text_template)')
-          .eq('edition_id', editionData.id)
-          .order('sort_order')
-
-        setEdition({
-          ...editionData,
-          newsletter_name: newsletter.name,
-          newsletter_slug: newsletter.slug,
-          accent_color: newsletter.accent_color,
-          blocks: (blocks || []).map((b: any) => ({
-            ...b,
-            block_template: Array.isArray(b.block_template) ? b.block_template[0] : b.block_template,
-          })),
-        })
-
-        // Other published editions of this newsletter — for the sidebar.
-        const { data: otherEds } = await supabase
-          .from('newsletters_editions')
-          .select('id, title, edition_date')
-          .eq('collection_id', newsletter.id)
-          .eq('status', 'published')
-          .neq('id', editionData.id)
-          .order('edition_date', { ascending: false })
-          .limit(20)
-        setOthers(otherEds || [])
-
-        // Slot-block bricks + their declarative templates (for mlops_community
-        // etc.). Bricks join to templates_brick_defs by brick_type === key.
-        const blockIds = (blocks || []).map((b: any) => b.id)
-        if (blockIds.length) {
-          const [bricksRes, brickDefsRes] = await Promise.all([
-            supabase
-              .from('newsletters_edition_bricks')
-              .select('id, block_id, brick_type, content, sort_order')
-              .in('block_id', blockIds)
-              .order('sort_order'),
-            supabase
-              .from('templates_brick_defs')
-              .select('key, html, templates_block_defs!inner(library_id)')
-              .eq('templates_block_defs.library_id', newsletter.id),
-          ])
-          const byBlock: Record<string, any[]> = {}
-          for (const br of bricksRes.data || []) (byBlock[br.block_id] ||= []).push(br)
-          setBricksByBlock(byBlock)
-          const tplMap: Record<string, string> = {}
-          for (const d of (brickDefsRes.data as any[]) || []) tplMap[d.key] = d.html || ''
-          setBrickTpls(tplMap)
-        }
-      } catch (err) {
-        console.error('Error loading edition:', err)
+        router.replace(`/newsletters/${newsletter.slug}/${editionFolderSlug(ed.edition_date, ed.title)}`)
+      } catch {
         setError('Failed to load newsletter')
-      } finally {
-        setLoading(false)
       }
     }
-
-    load()
-  }, [slug, date])
-
-  if (loading) {
-    return (
-      <main className="relative z-10">
-        <div className="max-w-7xl mx-auto px-6 py-12 flex justify-center">
-          <div className="animate-spin w-6 h-6 border-2 border-white/30 border-t-white rounded-full" />
-        </div>
-      </main>
-    )
-  }
-
-  if (error || !edition) {
-    return (
-      <main className="relative z-10">
-        <div className="max-w-7xl mx-auto px-6 py-12 text-center">
-          <h1 className="text-2xl font-bold text-white mb-4">{error || 'Edition not found'}</h1>
-          <Link href="/newsletters" className="text-white/60 hover:text-white underline">
-            Back to newsletters
-          </Link>
-        </div>
-      </main>
-    )
-  }
-
-  const brand = getClientBrandConfig()
+    resolve()
+  }, [slug, date, router])
 
   return (
-    <div className="pub-article-wrap pub-fade">
-      {/* The edition renders as a fixed ~650px email; constrain its tables and
-          images so the panel shrinks to fit narrow viewports instead of forcing
-          the column (and the title) wider than the screen. min-width:0 lets the
-          grid column shrink below its email content's intrinsic width. */}
-      <style>{`
-        .pub-article-main { min-width: 0; }
-        .pub-article-main h1 { overflow-wrap: anywhere; }
-        .nl-edition-render { max-width: 100%; }
-        .nl-edition-render table { max-width: 100% !important; }
-        .nl-edition-render img { max-width: 100% !important; height: auto !important; }
-      `}</style>
-      <div className="pub-article-grid">
-        {/* Left: the real edition, rendered with the declarative renderer so it
-            matches the sent/published newsletter exactly. */}
-        <article className="pub-article-main" style={{ minWidth: 0 }}>
-          <div className="pub-byline">
-            {edition.newsletter_name} · {formatDate(edition.edition_date)}
-          </div>
-          <h1>{edition.title || 'Newsletter Edition'}</h1>
-          {edition.preheader && <p className="pub-byline" style={{ marginTop: 0 }}>{edition.preheader}</p>}
-
-          <div className="nl-edition-render" style={{ background: '#fff', borderRadius: 14, overflow: 'hidden', padding: '12px 16px', marginTop: 20 }}>
-            {edition.blocks
-              .sort((a, b) => a.sort_order - b.sort_order)
-              .map((block) => {
-                const tpl = block.block_template
-                const source = (tpl?.html || tpl?.rich_text_template || '') as string
-                const resolvedContent = brand.storageBucketUrl
-                  ? resolveStoragePathsInJson(block.content, brand.storageBucketUrl)
-                  : block.content
-                let nodes: any[] = []
-                try { nodes = parseTemplate(source).nodes } catch { nodes = [] }
-                if (!nodes.length) return null
-                // Slot blocks: render their bricks as the slot's children.
-                const blockBricks = bricksByBlock[block.id] || []
-                let content: any = resolvedContent
-                if (blockBricks.length) {
-                  const children = blockBricks.map((br: any, i: number) => {
-                    let bNodes: any[] = []
-                    try { bNodes = parseTemplate(brickTpls[br.brick_type] || '').nodes } catch { bNodes = [] }
-                    if (!bNodes.length) return null
-                    const bContent = brand.storageBucketUrl
-                      ? resolveStoragePathsInJson(br.content, brand.storageBucketUrl)
-                      : br.content
-                    return <DeclarativeBlock key={br.id || i} nodes={bNodes} content={bContent as any} />
-                  }).filter(Boolean)
-                  content = { ...(resolvedContent as any), children }
-                }
-                return <DeclarativeBlock key={block.id} nodes={nodes} content={content} />
-              })}
-          </div>
-        </article>
-
-        {/* Right: other editions of this newsletter. */}
-        <aside className="pub-article-side">
-          <div className="pub-side-card">
-            <div className="pub-side-h">More from {edition.newsletter_name}</div>
-            {others.length === 0 ? (
-              <div className="pub-side-sub">No other editions yet.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {others.map((o) => (
-                  <Link
-                    key={o.id}
-                    href={`/newsletters/${edition.newsletter_slug}--${o.edition_date}`}
-                    style={{ display: 'block', textDecoration: 'none' }}
-                  >
-                    <div className="pub-side-val">{o.title || 'Untitled'}</div>
-                    <div className="pub-side-sub">{formatDate(o.edition_date)}</div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="pub-side-card">
-            <Link href="/newsletters" className="pub-side-val" style={{ textDecoration: 'none' }}>
-              ← All newsletters
+    <main className="relative z-10">
+      <div className="max-w-7xl mx-auto px-6 py-12 text-center">
+        {error ? (
+          <>
+            <h1 className="text-2xl font-bold text-white mb-4">{error}</h1>
+            <Link href="/newsletters" className="text-white/60 hover:text-white underline">
+              Back to newsletters
             </Link>
+          </>
+        ) : (
+          <div className="flex justify-center">
+            <div className="animate-spin w-6 h-6 border-2 border-white/30 border-t-white rounded-full" />
           </div>
-        </aside>
+        )}
       </div>
-    </div>
+    </main>
   )
 }

@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { getSupabaseClient } from '@/lib/supabase/client'
+import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slug'
 
 interface Newsletter {
   id: string
@@ -131,7 +132,7 @@ export default function NewsletterListingPage() {
             {editions.map((edition) => (
               <Link
                 key={edition.id}
-                href={`/newsletters/${newsletter.slug}--${edition.edition_date}`}
+                href={`/newsletters/${newsletter.slug}/${editionFolderSlug(edition.edition_date, edition.title)}`}
                 className="pub-card"
                 style={{ borderTop: `3px solid ${newsletter.accent_color || 'var(--accent)'}` }}
               >
