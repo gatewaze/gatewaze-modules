@@ -11,6 +11,7 @@
 
 import type { Request, Response } from 'express';
 import { canvasAiConfig, isCanvasAiUsable } from '../lib/canvas-ai-config.js';
+import { coerceBlockSchema } from '../lib/coerce-block-schema.js';
 import { checkGenerateRateLimit } from '../lib/rate-limiter.js';
 import { insertAuditRow } from '../lib/audit-log.js';
 import { getHostAdapter } from '../lib/host-adapter-registry.js';
@@ -208,6 +209,15 @@ export function createGenerateRoute(deps: CreateGenerateRouteDeps) {
       blockDefs = ((blockDefsRes?.data as BlockDefView[] | null) ?? [])
         .filter((d) => d.theme_kind === loaded.themeKind);
     }
+
+    // DB-backed templates (`templates_block_defs`) store the Puck field
+    // map verbatim under `schema` rather than JSON Schema — so values like
+    // `type: 'richtext' | 'image' | 'text'` would otherwise reach
+    // Anthropic's strict draft-2020-12 tool validator and 400 the whole
+    // request. Coerce every def's schema to valid JSON Schema once here so
+    // the same value safely feeds both the tool-schema builder and the ajv
+    // output-validator. Idempotent for already-valid (registry) defs.
+    blockDefs = blockDefs.map((d) => ({ ...d, schema: coerceBlockSchema(d.schema) }));
 
     if (blockDefs.length === 0) {
       await writeAudit(deps, {
