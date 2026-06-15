@@ -43,7 +43,8 @@ export default function BackupPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const response = await fetch('/api/environments/backup');
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
+      const response = await fetch(`${apiUrl}/api/environments/backup`);
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({ error: 'Export failed' }));

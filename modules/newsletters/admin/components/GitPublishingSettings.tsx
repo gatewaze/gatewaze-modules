@@ -101,9 +101,10 @@ export function GitPublishingSettings({ collectionId }: { collectionId: string }
       const { data } = await supabase.auth.getSession();
       const accessToken = data.session?.access_token;
       const isEdit = !!source;
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
       const endpoint = isEdit
-        ? `/api/modules/templates/sources/${source!.id}`
-        : '/api/modules/templates/sources';
+        ? `${apiUrl}/api/modules/templates/sources/${source!.id}`
+        : `${apiUrl}/api/modules/templates/sources`;
       const body = isEdit
         ? {
             branch: templateBranch.trim() || null,

@@ -80,9 +80,10 @@ export default function ProvisionPage() {
     try {
       setLoading(true);
 
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
       const [envRes, previewRes] = await Promise.all([
         supabase.from('environments').select('*').eq('id', environmentId).single(),
-        fetch(`/api/environments/provision/preview?environmentId=${environmentId}`).then((r) => r.json()),
+        fetch(`${apiUrl}/api/environments/provision/preview?environmentId=${environmentId}`).then((r) => r.json()),
       ]);
 
       if (envRes.error) throw envRes.error;
@@ -106,7 +107,8 @@ export default function ProvisionPage() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/environments/sync/${operationId}`);
+        const apiUrl = import.meta.env.VITE_API_URL ?? '';
+        const res = await fetch(`${apiUrl}/api/environments/sync/${operationId}`);
         const data = await res.json();
 
         if (data.operation) {
@@ -147,7 +149,8 @@ export default function ProvisionPage() {
     setOperationStatus('running');
 
     try {
-      const res = await fetch('/api/environments/provision', {
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
+      const res = await fetch(`${apiUrl}/api/environments/provision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

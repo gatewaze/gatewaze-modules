@@ -31,8 +31,9 @@ export default function PropertyDashboardPage() {
     if (!id) return;
     setLoading(true);
     setError(null);
+    const apiUrl = import.meta.env.VITE_API_URL ?? '';
     const params = new URLSearchParams({ from: isoNDaysAgo(days), to: new Date().toISOString() });
-    fetch(`/api/analytics/properties/${id}/summary?${params}`, { credentials: 'include' })
+    fetch(`${apiUrl}/api/analytics/properties/${id}/summary?${params}`, { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((body: { summary: Summary }) => setSummary(body.summary))
       .catch((e: Error) => setError(e.message))

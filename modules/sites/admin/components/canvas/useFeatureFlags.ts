@@ -50,7 +50,8 @@ async function fetchFlagsOnce(): Promise<FeatureFlags> {
     const { supabase } = await import('@/lib/supabase');
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
-    const res = await fetch('/api/admin/feature-flags', {
+    const apiUrl = import.meta.env.VITE_API_URL ?? '';
+    const res = await fetch(`${apiUrl}/api/admin/feature-flags`, {
       method: 'GET',
       credentials: 'include',
       headers: {

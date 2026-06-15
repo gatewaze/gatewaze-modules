@@ -391,9 +391,10 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
       const session = await supabase.auth.getSession();
       const accessToken = session.data.session?.access_token;
       const auth = accessToken ? `Bearer ${accessToken}` : '';
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
       let declCount = 0;
 
-      const applyRes = await fetch(`/api/modules/templates/sources/${s.id}/apply`, {
+      const applyRes = await fetch(`${apiUrl}/api/modules/templates/sources/${s.id}/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: auth },
       });
@@ -540,7 +541,8 @@ function SeedFromBoilerplateButton({ libraryId, onSeeded }: { libraryId: string;
     try {
       const session = await supabase.auth.getSession();
       const accessToken = session.data.session?.access_token;
-      const res = await fetch(`/api/modules/templates/libraries/${libraryId}/seed-from-boilerplate`, {
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
+      const res = await fetch(`${apiUrl}/api/modules/templates/libraries/${libraryId}/seed-from-boilerplate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

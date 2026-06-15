@@ -58,10 +58,11 @@ export default function CostPage() {
     setLoading(true);
     setError(null);
     try {
+      const apiUrl = import.meta.env.VITE_API_URL ?? '';
       const [s, b, r] = await Promise.all([
-        fetch(`/api/cost-governance/usage-summary?window_days=30&group_by=${groupBy}`).then((res) => res.json()),
-        fetch('/api/cost-governance/budgets').then((res) => res.json()),
-        fetch('/api/cost-governance/recent?limit=100').then((res) => res.json()),
+        fetch(`${apiUrl}/api/cost-governance/usage-summary?window_days=30&group_by=${groupBy}`).then((res) => res.json()),
+        fetch(`${apiUrl}/api/cost-governance/budgets`).then((res) => res.json()),
+        fetch(`${apiUrl}/api/cost-governance/recent?limit=100`).then((res) => res.json()),
       ]);
       setSummary(s.rows ?? []);
       setBudgets(b.budgets ?? []);
