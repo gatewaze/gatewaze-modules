@@ -16,7 +16,10 @@
 //   newsletters/<id>/messages.json: msg_template_id → newsletter_id
 //   → newsletter id → edition_date → gatewaze edition (by date, in collection)
 //
-// Idempotent: per send it deletes prior source='customer.io' rows, then reloads.
+// Idempotent: re-links each weekly to the CURRENT edition by date, sweeps any
+// customer.io rows orphaned by edition-id churn (editions recreated with new ids
+// cascade-delete the synthetic send, leaving dangling send_log/events), and per
+// send deletes prior source='customer.io' rows before reloading.
 // DRY-RUN by default; pass --apply to write.
 //
 // Usage:
@@ -68,6 +71,50 @@ async function rest(path, { method = 'GET', body, prefer } = {}) {
   }
   const txt = await res.text()
   return txt ? JSON.parse(txt) : null
+}
+
+// Exact row count via PostgREST's Content-Range header (cheap; Range 0-0).
+async function countRows(path) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'GET',
+    headers: { ...H, Prefer: 'count=exact', Range: '0-0' },
+  })
+  const total = (res.headers.get('content-range') || '').split('/')[1]
+  return total && total !== '*' ? Number(total) : 0
+}
+
+// ── orphan GC ────────────────────────────────────────────────────────────────
+// We map each weekly to the CURRENT edition for its date (editionByDate), so the
+// import already re-links to whichever edition exists now. But editions are
+// recreated with NEW ids by the content-migration tooling, which cascade-deletes
+// the synthetic newsletter_sends row — and email_send_log / email_events have no
+// FK back to the send, so those rows are left dangling (newsletter_send_id points
+// at a deleted send). Without cleanup, a re-run just inserts a fresh set
+// alongside the dead ones, accumulating bloat each churn. This removes any
+// customer.io-sourced row whose send no longer exists, keeping re-runs idempotent.
+const GC_SQL = `
+DELETE FROM public.email_event_classifications c
+USING public.email_events e
+WHERE c.event_id = e.id
+  AND e.source = 'customer.io'
+  AND NOT EXISTS (SELECT 1 FROM public.newsletter_sends s WHERE s.id = e.newsletter_send_id);
+DELETE FROM public.email_events e
+WHERE e.source = 'customer.io'
+  AND NOT EXISTS (SELECT 1 FROM public.newsletter_sends s WHERE s.id = e.newsletter_send_id);
+DELETE FROM public.email_send_log l
+WHERE l.provider = 'customer.io'
+  AND NOT EXISTS (SELECT 1 FROM public.newsletter_sends s WHERE s.id = l.newsletter_send_id);
+`
+async function gcOrphans() {
+  const logBefore = await countRows('email_send_log?provider=eq.customer.io')
+  const evBefore = await countRows('email_events?source=eq.customer.io')
+  await rest('rpc/exec_sql', { method: 'POST', body: { sql_text: GC_SQL } })
+  const logAfter = await countRows('email_send_log?provider=eq.customer.io')
+  const evAfter = await countRows('email_events?source=eq.customer.io')
+  console.log(
+    `[import] orphan GC: removed ${logBefore - logAfter} send_log + ${evBefore - evAfter} events ` +
+      `(dangling after edition-id churn); kept ${logAfter} send_log + ${evAfter} events`,
+  )
 }
 
 // ── event type mapping ──────────────────────────────────────────────────────
@@ -178,6 +225,10 @@ async function main() {
   const unmatched = weekly.size - [...weekly.values()].filter((i) => editionByDate.has(i.date)).length
   console.log(`[import] mapped newsletters→edition: ${nlList.length}; unmatched (no edition yet): ${unmatched}`)
 
+  // Sweep dangling customer.io rows left behind by edition-id churn before we
+  // re-link, so re-runs stay idempotent instead of accumulating dead rows.
+  if (APPLY) await gcOrphans()
+
   // newsletterId → sendId (synthetic send per CIO newsletter, idempotent).
   const sendIdByNl = new Map()
   for (const n of nlList) {
@@ -251,6 +302,12 @@ async function main() {
         delivered_at: isoFromUnix(mx.delivered),
         first_opened_at: isoFromUnix(mx.opened),
         first_clicked_at: isoFromUnix(mx.clicked),
+        // List-churn signals (drives the SENT-drop breakdown): a genuine opt-out
+        // (global or topic unsubscribe) vs system suppression (bounce/drop/spam).
+        unsubscribed_at: isoFromUnix(mx.unsubscribed || mx.topic_unsubscribed),
+        bounced_at: isoFromUnix(mx.bounced),
+        dropped_at: isoFromUnix(mx.dropped),
+        spam_reported_at: isoFromUnix(mx.spammed),
         subject: m.subject || null,
         queued_at: isoFromUnix(mx.sent || m.created),
         sent_at: isoFromUnix(mx.sent),
@@ -286,13 +343,18 @@ async function main() {
     stats.inserted += inserted.length
   }
 
-  const activitiesDir = join(RAW_DIR, 'activities')
-  const pages = existsSync(activitiesDir) ? readdirSync(activitiesDir).filter((f) => f.endsWith('.json')) : []
-  console.log(`[import] activity pages: ${pages.length}`)
+  // Prefer the fuller fresh per-type pull (activities-full/{opened,clicked}_email);
+  // fall back to the original mixed activities/ slice.
+  const fullDirs = ['opened_email', 'clicked_email']
+    .map((t) => join(RAW_DIR, 'activities-full', t))
+    .filter((d) => existsSync(d))
+  const actDirs = fullDirs.length ? fullDirs : [join(RAW_DIR, 'activities')]
+  const pageRefs = actDirs.flatMap((dir) => readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => join(dir, f)))
+  console.log(`[import] activity dirs: ${actDirs.map((d) => d.split('/').slice(-1)[0]).join(', ')} — ${pageRefs.length} pages`)
 
-  for (const page of pages) {
+  for (const pagePath of pageRefs) {
     let parsed
-    try { parsed = JSON.parse(readFileSync(join(activitiesDir, page), 'utf8')) } catch { continue }
+    try { parsed = JSON.parse(readFileSync(pagePath, 'utf8')) } catch { continue }
     const acts = parsed.activities || (Array.isArray(parsed) ? parsed : [])
     for (const a of acts) {
       stats.scanned++

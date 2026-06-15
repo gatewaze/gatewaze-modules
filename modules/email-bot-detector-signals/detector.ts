@@ -260,18 +260,11 @@ function detectSignals(ctx: InteractionContext): BotSignal[] {
     });
   }
 
-  // A recipient who has clicked anywhere in their history is a PROVEN human, and
-  // identity persists across editions — so their opens are human-attributable
-  // even through Apple MPP. This override is strong enough to clear the MPP
-  // penalty, making signals-v1 at least as inclusive as the confirmed-human
-  // floor (clicked → human) while still adding humans from other signals.
-  if (ctx.recipientHistory.humanClickCount >= 1) {
-    signals.push({
-      id: 'corroboration_confirmed_clicker',
-      adjustment: 3.0,
-      detail: `Confirmed human: clicked in ${ctx.recipientHistory.humanClickCount} edition(s)`,
-    });
-  }
+  // NOTE: we deliberately do NOT rescue an open just because the recipient
+  // clicked in some other edition. The question is per-edition — "was THIS open
+  // a genuine human action" — and an Apple-MPP prefetch is a machine open even
+  // for a person who is demonstrably human elsewhere. Cross-edition identity is
+  // the wrong signal for per-edition open classification.
 
   return signals;
 }

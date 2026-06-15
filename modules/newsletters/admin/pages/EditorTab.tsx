@@ -57,18 +57,26 @@ interface Edition {
   created_at: string;
   updated_at: string;
   block_count?: number;
+  // Trend vs the chronologically-previous edition: 'up' | 'down' | null.
+  // sent compares raw counts (list size); clicks/opens compare rates.
+  sentTrend?: 'up' | 'down' | null;
+  clicksTrend?: 'up' | 'down' | null;
+  opensTrend?: 'up' | 'down' | null;
   engagement?: EditionEngagement | null;
 }
 
 interface EditionEngagement {
   sent: number;
   delivered: number;
-  unique_opens: number;
-  unique_clicks: number;
-  human_clicks: number;      // ours: clicks minus detected machine/scanner clickers
-  human_opens: number;       // ours: confirmed human (clicked anywhere)
-  machine_opens: number;     // unique_opens − human_opens
-  bounced: number;
+  unique_opens: number;      // raw total opens (all-time)
+  unique_clicks: number;     // raw total clicks
+  human_opens: number | null;   // per-edition human (hybrid); null if undetermined
+  human_clicks: number | null;
+  machine_opens: number | null;
+  machine_clicks: number | null;
+  human_source: 'signals-v1' | 'customer.io' | 'estimate' | null;
+  bounced: number;        // system suppression (bounce/drop)
+  unsubscribed: number;   // genuine opt-out (global or topic)
   cio_human_opens: number;   // Customer.io reference (0 for pre-2025 editions)
   cio_machine_opens: number;
   cio_human_clicks: number;
@@ -134,12 +142,43 @@ const columnHelper = createColumnHelper<Edition>();
 function fmtNum(n: number): string {
   return n.toLocaleString();
 }
+
+// Inline spinner shown in metric cells while engagement is still loading.
+const CellSpin = () => (
+  <span className="inline-block size-3.5 border-2 border-[var(--gray-a5)] border-t-[var(--gray-9)] rounded-full animate-spin align-middle" />
+);
+
+type Trend = 'up' | 'down' | null | undefined;
+const trendColor = (dir: Trend, fallback: string) =>
+  dir === 'up' ? 'text-[var(--green-11)]' : dir === 'down' ? 'text-[var(--red-11)]' : fallback;
 function pct(n: number, d: number): string {
   return d > 0 ? `${((n / d) * 100).toFixed(1)}%` : '—';
 }
 
-// Expanded-row detail: full tracked engagement for one edition, including the
-// human-vs-bot split that the raw open count hides.
+// Fixed-width arrow slot so the percentage and count segments line up vertically
+// across rows regardless of whether a given row has an up/down/flat trend.
+const ArrowSlot = ({ dir }: { dir: Trend }) => (
+  <span className="inline-block w-3 text-left text-xs">
+    {dir === 'up' ? <span className="text-[var(--green-9)]">↑</span>
+      : dir === 'down' ? <span className="text-[var(--red-9)]">↓</span> : null}
+  </span>
+);
+
+// Metric cell: percentage (+trend arrow) and the raw count as two right-aligned
+// segments with fixed widths, so both line up as their own visual columns.
+const MetricCell = ({ pctText, dir, count, dimPct }: { pctText: string; dir: Trend; count: string; dimPct?: boolean }) => (
+  <div className="flex items-center justify-end text-sm whitespace-nowrap">
+    <span className={`font-bold ${trendColor(dir, dimPct ? 'text-[var(--gray-10)]' : 'text-[var(--gray-12)]')}`}>{pctText}</span>
+    <ArrowSlot dir={dir} />
+    <span className="w-10 text-right text-[11px] text-[var(--gray-12)]">{count}</span>
+  </div>
+);
+const RightDash = () => <div className="flex justify-end text-sm text-[var(--gray-a8)]">—</div>;
+const rightHeader = (label: string) => () => <div className="grow text-right">{label}</div>;
+
+// Expanded-row detail: raw delivery, the per-edition human/machine split, and a
+// source comparison. The top-level table shows the clean human numbers; this is
+// the full/raw picture.
 function EngagementDetail({ edition }: { edition: Edition }) {
   const e = edition.engagement;
   if (!e) {
@@ -155,18 +194,60 @@ function EngagementDetail({ edition }: { edition: Edition }) {
       {sub && <span className="text-xs text-[var(--gray-10)]">{sub}</span>}
     </div>
   );
-  const openRate = pct(e.human_opens, e.delivered);
+  const measured = e.human_source === 'signals-v1';
+  const sourceLabel = measured ? 'signals-v1 (ours, per-event detection)'
+    : 'estimate (calibrated from the editions we have scored)';
   return (
     <div className="bg-[var(--gray-a2)] px-6 py-4 border-t border-[var(--gray-a4)]">
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-5">
-        <Stat label="Sent" value={fmtNum(e.sent)} />
-        <Stat label="Delivered" value={fmtNum(e.delivered)} sub={pct(e.delivered, e.sent) + ' of sent'} />
-        <Stat label="Opens" value={fmtNum(e.unique_opens)} sub={pct(e.unique_opens, e.delivered) + ' open rate'} />
-        <Stat label="Clicks" value={fmtNum(e.unique_clicks)} sub={pct(e.unique_clicks, e.delivered) + ' CTR'} />
-        <Stat label="Confirmed human" value={fmtNum(e.human_opens)} sub={openRate + ' human open rate'} />
-        <Stat label="Bounced" value={fmtNum(e.bounced)} sub={pct(e.bounced, e.sent)} />
+      {/* Edition meta (moved out of the table columns) */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 mb-4 text-xs text-[var(--gray-10)]">
+        <span>
+          Git:{' '}
+          {edition.publish_state === 'published'
+            ? <Badge color="success" size="1">In git</Badge>
+            : <span className="text-[var(--gray-a8)]">not published</span>}
+        </span>
+        <span>Blocks: <span className="text-[var(--gray-12)] font-medium">{edition.block_count ?? 0}</span></span>
+        <span title={new Date(edition.updated_at).toLocaleString()}>
+          Last updated: <span className="text-[var(--gray-12)]">{timeAgo(edition.updated_at)}</span>
+        </span>
       </div>
-      <DetectionSourceComparison editionId={edition.id} eng={e} />
+      {/* Side-by-side: stats panel (left) + detection-source table (right) */}
+      <div className="grid lg:grid-cols-5 gap-5 items-start">
+        <div className="lg:col-span-3 rounded-lg border border-[var(--gray-a4)] bg-[var(--color-panel-solid)] p-4">
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-4">
+            <Stat label="Sent" value={fmtNum(e.sent)} />
+            <Stat label="Delivered" value={fmtNum(e.delivered)} sub={pct(e.delivered, e.sent) + ' of sent'} />
+            <Stat label="Bounced" value={fmtNum(e.bounced)} sub={pct(e.bounced, e.sent)} />
+            <Stat label="Opens (raw)" value={fmtNum(e.unique_opens)} sub={pct(e.unique_opens, e.delivered) + ' open rate'} />
+            <Stat label="Clicks (raw)" value={fmtNum(e.unique_clicks)} sub={pct(e.unique_clicks, e.delivered) + ' CTR'} />
+          </div>
+          <div className="mt-4 pt-4 border-t border-[var(--gray-a4)]">
+            <div className="text-xs font-medium text-[var(--gray-11)] mb-3">
+              Human engagement · {sourceLabel}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <Stat label="Human clicks" value={e.human_clicks == null ? '—' : (measured ? '' : '~') + fmtNum(e.human_clicks)} sub={e.human_clicks == null ? undefined : pct(e.human_clicks, e.delivered) + ' human CTR'} />
+              <Stat label="Machine clicks" value={e.machine_clicks == null ? '—' : fmtNum(e.machine_clicks)} sub="scanners / bots" />
+              <Stat label="Human opens (est.)" value={e.human_opens == null ? '—' : '~' + fmtNum(e.human_opens)} sub={e.human_opens == null ? undefined : pct(e.human_opens, e.delivered) + ' of delivered'} />
+              <Stat label="Machine opens" value={e.machine_opens == null ? '—' : fmtNum(e.machine_opens)} sub="incl. Apple MPP" />
+            </div>
+          </div>
+          <div className="mt-4 pt-4 border-t border-[var(--gray-a4)]">
+            <div className="text-xs font-medium text-[var(--gray-11)] mb-3">
+              List churn · why the sent count moves week-to-week
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              <Stat label="Unsubscribed" value={fmtNum(e.unsubscribed)} sub={pct(e.unsubscribed, e.sent) + ' · opt-out'} />
+              <Stat label="Bounced / suppressed" value={fmtNum(e.bounced)} sub={pct(e.bounced, e.sent) + ' · delivery failure'} />
+              <Stat label="Total removed" value={fmtNum(e.unsubscribed + e.bounced)} sub={pct(e.unsubscribed + e.bounced, e.sent) + ' of sent'} />
+            </div>
+          </div>
+        </div>
+        <div className="lg:col-span-2">
+          <DetectionSourceComparison editionId={edition.id} eng={e} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -194,70 +275,53 @@ function DetectionSourceComparison({ editionId, eng }: { editionId: string; eng:
   const openers = eng.unique_opens;
   const cioHasHuman = eng.cio_human_opens > 0;
 
+  const numCell = (v: number, sub?: string) => (
+    <td className="px-3 py-1.5 text-right whitespace-nowrap text-[var(--gray-11)]">
+      {fmtNum(v)}{sub != null && <span className="text-xs text-[var(--gray-a8)] ml-1">{sub}</span>}
+    </td>
+  );
   return (
-    <div className="mt-4 pt-4 border-t border-[var(--gray-a4)]">
-      <div className="text-xs font-medium text-[var(--gray-11)] mb-2">
-        Human-open estimators (of {fmtNum(openers)} openers)
+    <div className="rounded-lg border border-[var(--gray-a4)] bg-[var(--color-panel-solid)] overflow-hidden">
+      <div className="px-3 py-2 text-xs font-medium text-[var(--gray-11)] bg-[var(--gray-a2)] border-b border-[var(--gray-a4)]">
+        Detection sources · {fmtNum(openers)} openers
       </div>
-      <div className="overflow-x-auto">
-        <table className="text-sm min-w-[640px]">
-          <thead>
-            <tr className="text-xs text-[var(--gray-10)] text-left">
-              <th className="pr-6 py-1 font-medium">Source</th>
-              <th className="pr-6 py-1 font-medium">Human opens</th>
-              <th className="pr-6 py-1 font-medium">Machine opens</th>
-              <th className="pr-6 py-1 font-medium">Human clicks</th>
-              <th className="pr-6 py-1 font-medium">Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {/* Our primary: confirmed-human floor (cross-edition clicks) */}
-            <tr className="border-t border-[var(--gray-a3)]">
-              <td className="pr-6 py-1.5 font-medium text-[var(--gray-12)]">
-                Confirmed human <span className="text-[var(--accent-9)] text-xs">ours</span>
-              </td>
-              <td className="pr-6 py-1.5">{fmtNum(eng.human_opens)} <span className="text-xs text-[var(--gray-10)]">({pct(eng.human_opens, openers)})</span></td>
-              <td className="pr-6 py-1.5">{fmtNum(eng.machine_opens)} <span className="text-xs text-[var(--gray-10)]">({pct(eng.machine_opens, openers)})</span></td>
-              <td className="pr-6 py-1.5">{fmtNum(eng.human_clicks)}</td>
-              <td className="pr-6 py-1.5 text-[var(--gray-10)]">defensible floor — clicked any edition</td>
-            </tr>
-            {/* signals-v1 (only where we have raw events to score) */}
-            {(rows || []).filter((r) => r.detection_source === 'bot-detector-signals').map((r) => {
-              const o = r.human_openers + r.machine_openers;
-              return (
-                <tr key={r.detection_source} className="border-t border-[var(--gray-a3)]">
-                  <td className="pr-6 py-1.5 text-[var(--gray-12)]">signals-v1 <span className="text-[var(--gray-9)] text-xs">ours</span></td>
-                  <td className="pr-6 py-1.5">{fmtNum(r.human_openers)} <span className="text-xs text-[var(--gray-10)]">({pct(r.human_openers, o)})</span></td>
-                  <td className="pr-6 py-1.5">{fmtNum(r.machine_openers)} <span className="text-xs text-[var(--gray-10)]">({pct(r.machine_openers, o)})</span></td>
-                  <td className="pr-6 py-1.5">{fmtNum(r.human_clickers)}</td>
-                  <td className="pr-6 py-1.5 text-[var(--gray-10)]">MPP-aware + clicker corroboration</td>
-                </tr>
-              );
-            })}
-            {/* Customer.io reference */}
-            <tr className="border-t border-[var(--gray-a3)]">
-              <td className="pr-6 py-1.5 text-[var(--gray-12)]">Customer.io <span className="text-[var(--gray-9)] text-xs">reference</span></td>
-              {cioHasHuman ? (
-                <>
-                  <td className="pr-6 py-1.5">{fmtNum(eng.cio_human_opens)} <span className="text-xs text-[var(--gray-10)]">({pct(eng.cio_human_opens, eng.cio_human_opens + eng.cio_machine_opens)})</span></td>
-                  <td className="pr-6 py-1.5">{fmtNum(eng.cio_machine_opens)}</td>
-                  <td className="pr-6 py-1.5">{fmtNum(eng.cio_human_clicks)}</td>
-                  <td className="pr-6 py-1.5 text-[var(--gray-10)]">credits unverifiable MPP opens</td>
-                </>
-              ) : (
-                <>
-                  <td className="pr-6 py-1.5 text-[var(--gray-a8)]">n/a</td>
-                  <td className="pr-6 py-1.5 text-[var(--gray-a8)]">n/a</td>
-                  <td className="pr-6 py-1.5 text-[var(--gray-a8)]">n/a</td>
-                  <td className="pr-6 py-1.5 text-[var(--gray-10)]">metric began 2025</td>
-                </>
-              )}
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div className="mt-2 text-xs text-[var(--gray-9)]">
-        Opens/clicks are all-time from our own data. <strong>Confirmed human</strong> is our primary metric — openers who clicked somewhere in the full history (provably human, MPP-proof), available for every edition. Customer.io is a reference only: its human metric began in 2025 (blank before) and additionally credits no-click MPP opens that can&apos;t be verified.
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-xs text-[var(--gray-10)] border-b border-[var(--gray-a3)]">
+            <th className="px-3 py-1.5 font-medium text-left">Source</th>
+            <th className="px-3 py-1.5 font-medium text-right">Human opens</th>
+            <th className="px-3 py-1.5 font-medium text-right">Machine</th>
+            <th className="px-3 py-1.5 font-medium text-right">Human clicks</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(rows || []).filter((r) => r.detection_source === 'bot-detector-signals').map((r) => {
+            const o = r.human_openers + r.machine_openers;
+            return (
+              <tr key={r.detection_source} className="border-b border-[var(--gray-a3)] last:border-0">
+                <td className="px-3 py-1.5 text-[var(--gray-12)]">signals-v1</td>
+                {numCell(r.human_openers, pct(r.human_openers, o))}
+                {numCell(r.machine_openers, pct(r.machine_openers, o))}
+                {numCell(r.human_clickers)}
+              </tr>
+            );
+          })}
+          <tr className="border-b border-[var(--gray-a3)] last:border-0">
+            <td className="px-3 py-1.5 text-[var(--gray-11)]">Customer.io</td>
+            {cioHasHuman ? (
+              <>
+                {numCell(eng.cio_human_opens, pct(eng.cio_human_opens, eng.cio_human_opens + eng.cio_machine_opens))}
+                {numCell(eng.cio_machine_opens)}
+                {numCell(eng.cio_human_clicks)}
+              </>
+            ) : (
+              <td className="px-3 py-1.5 text-right text-[var(--gray-a8)]" colSpan={3}>no CIO data (pre-2025)</td>
+            )}
+          </tr>
+        </tbody>
+      </table>
+      <div className="px-3 py-2 text-xs text-[var(--gray-9)] border-t border-[var(--gray-a4)] leading-relaxed">
+        <strong>Clicks</strong> are reliable (MPP never clicks; ~27% stripped as scanners). <strong>Opens</strong> are an estimate — Apple MPP hides the real read. All figures are our own; Customer.io is a frozen historical reference (we&apos;re leaving it), and its open number was a generous estimate, not a measurement.
       </div>
     </div>
   );
@@ -332,16 +396,20 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
 
       setEditions(editionsWithCount);
 
-      // Engagement aggregates — progressive: render the table first, then fill
-      // in opens/clicks/bot columns once this returns.
+      // Engagement aggregates — progressive + batched. The aggregate RPC scans a
+      // lot of send-log rows; one call for all editions exceeds PostgREST's
+      // statement timeout, so chunk it (each small batch is fast) and merge as
+      // each returns. Newest editions first so the visible page fills in first.
       const editionIds = editionsWithCount.map((e: any) => e.id);
-      if (editionIds.length) {
+      const CHUNK = 10;
+      for (let i = 0; i < editionIds.length; i += CHUNK) {
+        const chunk = editionIds.slice(i, i + CHUNK);
         supabase
-          .rpc('newsletter_edition_engagement', { p_edition_ids: editionIds })
+          .rpc('newsletter_edition_engagement', { p_edition_ids: chunk })
           .then(({ data: eng }: { data: any[] | null }) => {
             if (!eng) return;
             const byId = new Map(eng.map((r: any) => [r.edition_id, r]));
-            setEditions((prev) => prev.map((e) => ({ ...e, engagement: byId.get(e.id) ?? null })));
+            setEditions((prev) => prev.map((e) => (byId.has(e.id) ? { ...e, engagement: byId.get(e.id) } : e)));
           });
       }
 
@@ -622,6 +690,7 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
       columnHelper.display({
         id: 'expander',
         header: '',
+        size: 44,
         cell: ({ row }) => (
           <button
             onClick={(e) => { e.stopPropagation(); row.toggleExpanded(); }}
@@ -637,6 +706,7 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
       }),
       columnHelper.accessor('edition_date', {
         header: 'Date',
+        size: 120,
         cell: (info) => (
           <div className="text-sm font-medium text-[var(--gray-12)] whitespace-nowrap">
             {formatDate(info.getValue())}
@@ -665,82 +735,69 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
       ] : []),
       columnHelper.accessor('status', {
         header: 'Status',
+        size: 110,
         cell: (info) => (
           <Badge color={statusColors[info.getValue()]}>
             {info.getValue().charAt(0).toUpperCase() + info.getValue().slice(1)}
           </Badge>
         ),
       }),
-      columnHelper.accessor('publish_state' as any, {
-        header: 'Git',
-        cell: (info: any) =>
-          info.getValue() === 'published' ? (
-            <Badge color="success">In git</Badge>
-          ) : (
-            <span className="text-sm text-[var(--gray-a8)]">—</span>
-          ),
-      }),
-      columnHelper.accessor((row) => row.engagement?.unique_opens ?? -1, {
-        id: 'opens',
-        header: 'Opens',
+      columnHelper.accessor((row) => row.engagement?.sent ?? -1, {
+        id: 'sent',
+        header: rightHeader('Sent'),
+        size: 95,
         cell: (info) => {
           const eng = info.row.original.engagement;
-          if (!eng || eng.sent === 0) return <span className="text-sm text-[var(--gray-a8)]">—</span>;
+          if (!eng) return <div className="flex justify-end"><CellSpin /></div>;
+          if (eng.sent === 0) return <RightDash />;
+          const t = info.row.original.sentTrend;
           return (
-            <div className="text-sm text-[var(--gray-12)] whitespace-nowrap" title="Unique opens (all-time)">
-              {fmtNum(eng.unique_opens)} <span className="text-[var(--gray-10)]">({pct(eng.unique_opens, eng.delivered)})</span>
+            <div className="flex items-center justify-end text-sm whitespace-nowrap">
+              <span className={`font-bold ${trendColor(t, 'text-[var(--gray-12)]')}`}>{fmtNum(eng.sent)}</span>
+              <ArrowSlot dir={t} />
             </div>
           );
         },
       }),
-      columnHelper.accessor((row) => row.engagement?.unique_clicks ?? -1, {
-        id: 'clicks',
-        header: 'Clicks',
+      // Secondary: human opens — always an estimate (MPP makes opens unreliable).
+      columnHelper.accessor((row) => row.engagement?.human_opens ?? -1, {
+        id: 'human_opens',
+        header: rightHeader('Opens (human)'),
+        size: 160,
         cell: (info) => {
           const eng = info.row.original.engagement;
-          if (!eng || eng.sent === 0) return <span className="text-sm text-[var(--gray-a8)]">—</span>;
+          if (!eng) return <div className="flex justify-end"><CellSpin /></div>;
+          if (eng.sent === 0 || eng.human_opens == null) return <RightDash />;
+          const t = info.row.original.opensTrend;
           return (
-            <div className="text-sm text-[var(--gray-12)] whitespace-nowrap">
-              {fmtNum(eng.unique_clicks)} <span className="text-[var(--gray-10)]">({pct(eng.unique_clicks, eng.delivered)})</span>
+            <div title={`Estimated human opens — MPP hides most real opens (${eng.human_source})`}>
+              <MetricCell pctText={`~${pct(eng.human_opens, eng.delivered)}`} dir={t} count={fmtNum(eng.human_opens)} dimPct />
             </div>
           );
         },
       }),
+      // Primary engagement metric: human clicks (reliable, MPP-proof).
       columnHelper.accessor((row) => row.engagement?.human_clicks ?? -1, {
         id: 'human_clicks',
-        header: 'Human clicks',
+        header: rightHeader('Clicks (human)'),
+        size: 150,
         cell: (info) => {
           const eng = info.row.original.engagement;
-          if (!eng || eng.sent === 0) return <span className="text-sm text-[var(--gray-a8)]">—</span>;
+          if (!eng) return <div className="flex justify-end"><CellSpin /></div>;
+          if (eng.sent === 0 || eng.human_clicks == null) return <RightDash />;
+          const est = eng.human_source === 'estimate';
+          const t = info.row.original.clicksTrend;
           return (
-            <div className="text-sm text-[var(--gray-12)] whitespace-nowrap" title="Clicks minus machine/scanner clickers we detect">
-              {fmtNum(eng.human_clicks)} <span className="text-[var(--gray-10)]">({pct(eng.human_clicks, eng.delivered)})</span>
+            <div title={est ? 'Estimated (clicks × measured human-click rate)' : 'Measured (clicks minus detected scanners)'}>
+              <MetricCell pctText={pct(eng.human_clicks, eng.delivered)} dir={t} count={fmtNum(eng.human_clicks)} />
             </div>
           );
         },
-      }),
-      columnHelper.accessor('block_count', {
-        header: 'Blocks',
-        cell: (info) => (
-          <div className="text-sm text-[var(--gray-11)]">
-            {info.getValue() || 0}
-          </div>
-        ),
-      }),
-      columnHelper.accessor('updated_at', {
-        header: 'Last Updated',
-        cell: (info) => (
-          <div
-            className="text-sm text-[var(--gray-11)] cursor-help whitespace-nowrap"
-            title={new Date(info.getValue()).toLocaleString()}
-          >
-            {timeAgo(info.getValue())}
-          </div>
-        ),
       }),
       columnHelper.display({
         id: 'actions',
         header: '',
+        size: 56,
         cell: (info) => (
           <RowActions
             actions={[
@@ -782,8 +839,31 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
   );
 
   const filteredEditions = useMemo(() => {
-    if (!selectedType) return editions;
-    return editions.filter(e => e.collection_id === selectedType);
+    const base = selectedType ? editions.filter(e => e.collection_id === selectedType) : editions;
+    // `editions` is date-desc, so the next index is the chronologically-PREVIOUS
+    // (older) edition. Compare engagement RATES (per delivered) so list-size
+    // growth doesn't dominate, and annotate each edition with up/down trend.
+    const rate = (e: Edition, key: 'human_clicks' | 'human_opens'): number | null => {
+      const eng = e.engagement;
+      if (!eng || !eng.delivered || eng[key] == null) return null;
+      return (eng[key] as number) / eng.delivered;
+    };
+    const trend = (cur: number | null, prev: number | null): 'up' | 'down' | null => {
+      if (cur == null || prev == null) return null;
+      if (cur > prev) return 'up';
+      if (cur < prev) return 'down';
+      return null;
+    };
+    return base.map((e, i) => {
+      const older = base[i + 1];
+      const sentOf = (x?: Edition) => (x?.engagement?.sent ? x.engagement.sent : null);
+      return {
+        ...e,
+        sentTrend: trend(sentOf(e), older ? sentOf(older) : null),
+        clicksTrend: trend(rate(e, 'human_clicks'), older ? rate(older, 'human_clicks') : null),
+        opensTrend: trend(rate(e, 'human_opens'), older ? rate(older, 'human_opens') : null),
+      };
+    });
   }, [editions, selectedType]);
 
   const table = useReactTable({
@@ -809,8 +889,6 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
     },
   });
 
-  const draftCount = filteredEditions.filter((e) => e.status === 'draft').length;
-  const readyCount = filteredEditions.filter((e) => e.status === 'ready').length;
 
   return (
     <div className="space-y-6">
@@ -864,43 +942,6 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
           ))}
         </div>
       )}
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card variant="surface" className="p-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-[var(--accent-a3)] rounded-lg">
-              <PencilSquareIcon className="size-6 text-[var(--accent-9)]" />
-            </div>
-            <div>
-              <div className="text-sm font-medium text-[var(--gray-11)]">Total Editions</div>
-              <div className="text-2xl font-bold mt-1">{editions.length}</div>
-            </div>
-          </div>
-        </Card>
-        <Card variant="surface" className="p-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-[var(--amber-a3)] rounded-lg">
-              <PencilSquareIcon className="size-6 text-[var(--amber-9)]" />
-            </div>
-            <div>
-              <div className="text-sm font-medium text-[var(--gray-11)]">Drafts</div>
-              <div className="text-2xl font-bold mt-1">{draftCount}</div>
-            </div>
-          </div>
-        </Card>
-        <Card variant="surface" className="p-6">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-[var(--green-a3)] rounded-lg">
-              <PencilSquareIcon className="size-6 text-[var(--green-9)]" />
-            </div>
-            <div>
-              <div className="text-sm font-medium text-[var(--gray-11)]">Ready to Send</div>
-              <div className="text-2xl font-bold mt-1">{readyCount}</div>
-            </div>
-          </div>
-        </Card>
-      </div>
 
       {/* Search */}
       <Card variant="surface" className="p-4">
