@@ -27,6 +27,16 @@ export interface InteractionContext {
     humanOpenCount: number;
     humanClickCount: number;
   };
+  /**
+   * Optional ESP-provided MPP/prefetch signals (e.g. Customer.io's open
+   * metadata). IP-version-agnostic, so they detect Apple Mail Privacy
+   * Protection where IP-range matching can't (e.g. IPv6 proxy opens).
+   */
+  providerSignals?: {
+    prefetched?: boolean;
+    proxied?: boolean;
+    emailClient?: string | null;
+  };
 }
 
 export interface BotSignal {

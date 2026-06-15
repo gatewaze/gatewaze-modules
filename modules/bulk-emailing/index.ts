@@ -42,6 +42,10 @@ const bulkEmailingModule: GatewazeModule = {
     // 007 adds newsletter block-level click-tracking resolution columns to
     // email_interactions (spec-newsletter-link-tracking.md).
     'migrations/007_newsletter_link_tracking.sql',
+    // 008 adds the multi-source engagement model: source/UA/IP/send link on
+    // email_events + the email_event_classifications table
+    // (spec-newsletter-personalised-delivery.md Part C).
+    'migrations/008_engagement_multisource.sql',
   ],
 
   configSchema: {
