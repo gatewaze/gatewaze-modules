@@ -17,12 +17,14 @@ const slackIntegrationModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_slack_tables.sql',
+    'migrations/002_slack_invitation_rpcs.sql',
   ],
 
   edgeFunctions: [
     'integrations-slack-list-channels',
     'integrations-slack-notify',
     'integrations-slack-oauth-callback',
+    'integrations-slack-request-invite',
   ],
 
   adminRoutes: [
@@ -30,6 +32,17 @@ const slackIntegrationModule: GatewazeModule = {
   ],
   adminNavItems: [
     { path: '/slack/invitations', label: 'Slack', icon: 'MessageSquare', requiredFeature: 'slack', order: 18 },
+  ],
+
+  // Injects a "Slack" section into the people-detail dashboard: send an invite to
+  // an existing person and show the progress of their invitation.
+  adminSlots: [
+    {
+      slotName: 'person-detail:subscriptions',
+      component: () => import('./admin/components/PersonSlackInvite'),
+      order: 20,
+      requiredFeature: 'slack',
+    },
   ],
 
   configSchema: {
