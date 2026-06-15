@@ -125,15 +125,18 @@ const newslettersModule: GatewazeModule = {
     // timing queue for tz-local / personalised delivery
     // (spec-newsletter-personalised-delivery.md Part A).
     'migrations/035_personalised_delivery.sql',
+    // 035a adds the per-recipient CIO engagement profile that 036+038
+    // both depend on — must apply before either of those. Named with
+    // an alpha suffix so it sorts between 035 and 036 in a strict
+    // alphanumeric apply order, without re-numbering the others.
+    'migrations/035a_cio_recipient_engagement.sql',
     // 036 adds the newsletter_edition_engagement() aggregate RPC powering the
-    // editions table's open/click + bot-filter columns.
+    // editions table's open/click + bot-filter columns. Uses 035a.
     'migrations/036_edition_engagement_rpc.sql',
     // 037/038 add the multi-source bot-detection comparison + cross-edition
-    // click-corroboration RPCs (spec §6, Part C). 039 adds the per-recipient
-    // engagement profile (full CIO history) that powers corroboration.
+    // click-corroboration RPCs (spec §6, Part C). 038 uses 035a.
     'migrations/037_detection_comparison_rpc.sql',
     'migrations/038_corroborated_engagement_rpc.sql',
-    'migrations/039_cio_recipient_engagement.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
