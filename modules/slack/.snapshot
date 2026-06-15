@@ -1,6 +1,5 @@
 {
-  "moduleId": "slack-integration",
-  "sourceId": "0c081643-7601-40ca-a283-efc1eee52989",
-  "snapshotHash": "b5ab4a18355bd96afc50be61446b320c190b82d33e593729086f1f7e013bad0d",
-  "installedAt": "2026-04-26T18:42:16.082Z"
+  "moduleId": "slack",
+  "snapshotHash": "fc902f1b5b220a79be6a23c4f5862933ccc7d583de8ce39731e36b2c23ae0930",
+  "installedAt": "2026-06-13T12:03:37.863Z"
 }
