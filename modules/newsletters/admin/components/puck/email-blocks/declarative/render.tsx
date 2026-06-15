@@ -79,25 +79,31 @@ function mergeItem(content: Content, item: unknown): Content {
   return { ...content, $item: item };
 }
 
-// A text node that is exactly a single `{{field}}` (ignoring surrounding
-// whitespace) → the bound field key, else null. Used to detect whole-value
-// bindings that may carry a React node rather than a string.
-const WHOLE_BINDING_RE = /^\s*\{\{\s*([\w.$]+)\s*\}\}\s*$/;
-
 function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode {
   if (node.kind === 'text') {
-    // Whole-value binding passthrough. In the editor canvas Puck swaps a
-    // `contentEditable` field's string for a live inline-editor *node*; that
-    // node must be rendered as-is (String()-ing it emits "[object Object]" and
-    // the editor never mounts, so the field can't be clicked). This is what
-    // lets text fields — e.g. <Heading>{{title}}</Heading> — be edited inline.
-    const whole = node.value.match(WHOLE_BINDING_RE);
-    if (whole) {
-      const v = getPath(ctx.content, whole[1]);
-      if (isValidElement(v)) return <Fragment key={key}>{v}</Fragment>;
+    // Split the text into literal + `{{binding}}` segments. A binding can
+    // resolve to a React *node* — in the editor canvas Puck swaps a
+    // `contentEditable` field's string for a live inline-editor node — and that
+    // node must be emitted as-is. String()-ing it prints "[object Object]"
+    // (which is what broke e.g. the sponsored_ad eyebrow "PRESENTED BY
+    // {{sponsor_name}}"). This handles both whole-value bindings
+    // (<Heading>{{title}}</Heading>) and literal+binding mixes.
+    const re = /\{\{\s*([\w.$]+)\s*\}\}/g;
+    const parts: ReactNode[] = [];
+    let last = 0, hasNode = false, m: RegExpExecArray | null;
+    while ((m = re.exec(node.value)) !== null) {
+      if (m.index > last) parts.push(node.value.slice(last, m.index));
+      const v = getPath(ctx.content, m[1]);
+      if (isValidElement(v)) { parts.push(v); hasNode = true; }
+      else parts.push(v == null ? '' : String(v));
+      last = re.lastIndex;
     }
-    const out = resolveBindings(node.value, ctx.content);
-    return out === '' ? null : out;
+    if (last < node.value.length) parts.push(node.value.slice(last));
+    if (!hasNode) {
+      const out = parts.join('');
+      return out === '' ? null : out;
+    }
+    return <Fragment key={key}>{parts.map((p, i) => <Fragment key={i}>{p}</Fragment>)}</Fragment>;
   }
 
   const { tag, attrs, children } = node;

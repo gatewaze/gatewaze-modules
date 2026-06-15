@@ -88,14 +88,23 @@ function formatTime(dateStr: string | null): string {
   });
 }
 
+const SEND_LOG_PAGE_SIZE = 50;
+
 export function EditionSendingTab({ editionId, editionDate, subject, collection, newsletterSlug, getRenderedHtml }: EditionSendingTabProps) {
   const [sends, setSends] = useState<SendRecord[]>([]);
   const [sendLog, setSendLog] = useState<SendLogEntry[]>([]);
+  const [sendLogPage, setSendLogPage] = useState(0);
+  const [sendLogTotal, setSendLogTotal] = useState(0);
+  const [openedCount, setOpenedCount] = useState(0);
   const [selectedSendId, setSelectedSendId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [scheduleType, setScheduleType] = useState<'immediate' | 'scheduled'>('immediate');
   const [scheduledAt, setScheduledAt] = useState('');
+  // Per-recipient delivery timing (spec-newsletter-personalised-delivery Part A).
+  const [deliveryStrategy, setDeliveryStrategy] = useState<'global' | 'tz_local' | 'personalised'>('global');
+  const [targetLocal, setTargetLocal] = useState('09:00');
+  const [defaultTimezone, setDefaultTimezone] = useState('');
 
   const loadSends = useCallback(async () => {
     if (editionId === 'new') { setLoading(false); return; }
@@ -115,17 +124,46 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
   useEffect(() => { loadSends(); }, [loadSends]);
 
   // Load send log for the selected send
+  // Paginated: a send can have tens of thousands of recipients (e.g. imported
+  // Customer.io history), so load one page at a time + an exact total rather
+  // than the whole log.
   const loadSendLog = useCallback(async () => {
-    if (!selectedSendId) { setSendLog([]); return; }
-    const { data } = await supabase
+    if (!selectedSendId) { setSendLog([]); setSendLogTotal(0); return; }
+    const from = sendLogPage * SEND_LOG_PAGE_SIZE;
+    const { data, count } = await supabase
       .from('email_send_log')
-      .select('id, recipient_email, status, sent_at, delivered_at, first_opened_at, first_clicked_at, bounced_at, failure_error, created_at')
+      .select('id, recipient_email, status, sent_at, delivered_at, first_opened_at, first_clicked_at, bounced_at, failure_error, created_at', { count: 'exact' })
       .eq('newsletter_send_id', selectedSendId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true })
+      .range(from, from + SEND_LOG_PAGE_SIZE - 1);
     setSendLog(data || []);
+    if (count != null) setSendLogTotal(count);
+  }, [selectedSendId, sendLogPage]);
+
+  // "Opened" stat is a server-side count (not a filter over the loaded page).
+  const loadOpenedCount = useCallback(async () => {
+    if (!selectedSendId) { setOpenedCount(0); return; }
+    const { count } = await supabase
+      .from('email_send_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('newsletter_send_id', selectedSendId)
+      .not('first_opened_at', 'is', null);
+    setOpenedCount(count || 0);
   }, [selectedSendId]);
 
   useEffect(() => { loadSendLog(); }, [loadSendLog]);
+  useEffect(() => { loadOpenedCount(); }, [loadOpenedCount]);
+  // Reset to the first page when the selected send changes.
+  useEffect(() => { setSendLogPage(0); }, [selectedSendId]);
+
+  // Debounced refresh for realtime ticks (live sends fire many row updates).
+  const refreshRef = useRef<() => void>(() => {});
+  refreshRef.current = () => { loadSendLog(); loadOpenedCount(); };
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => refreshRef.current(), 400);
+  }, []);
 
   // Live updates via Supabase Realtime — replaces the previous polling
   // loop. Subscribes to:
@@ -179,17 +217,10 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'email_send_log', filter: `newsletter_send_id=eq.${selectedSendId}` },
-        (payload) => {
-          if (payload.eventType === 'INSERT') {
-            const row = payload.new as SendLogEntry;
-            setSendLog((prev) => (prev.some((e) => e.id === row.id) ? prev : [...prev, row]));
-          } else if (payload.eventType === 'UPDATE') {
-            const row = payload.new as SendLogEntry;
-            setSendLog((prev) => prev.map((e) => (e.id === row.id ? { ...e, ...row } : e)));
-          } else if (payload.eventType === 'DELETE') {
-            const row = payload.old as { id: string };
-            setSendLog((prev) => prev.filter((e) => e.id !== row.id));
-          }
+        () => {
+          // Paginated view: refresh the current page + counts (debounced)
+          // rather than mutating a full in-memory array.
+          scheduleRefresh();
         },
       )
       .subscribe();
@@ -217,7 +248,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         const portalDomain = window.location.hostname.replace('-admin.', '-app.').replace('admin.', 'app.');
         const portalProtocol = window.location.protocol;
         webVersionUrl = newsletterSlug && editionDate
-          ? `${portalProtocol}//${portalDomain}/newsletters/${newsletterSlug}--${editionDate}`
+          ? `${portalProtocol}//${portalDomain}/newsletters/${newsletterSlug}/${editionFolderSlug(editionDate, subject)}`
           : `${portalProtocol}//${portalDomain}/newsletters`;
       }
 
@@ -243,6 +274,9 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
           list_ids: collection?.list_id ? [collection.list_id] : [],
           schedule_type: scheduleType,
           scheduled_at: scheduleType === 'scheduled' ? scheduledAt : null,
+          delivery_strategy: deliveryStrategy,
+          target_local: deliveryStrategy === 'global' ? null : targetLocal,
+          default_timezone: deliveryStrategy === 'global' ? null : (defaultTimezone || null),
           adapter_id: 'html',
           rendered_html: finalHtml,
           metadata: { web_version_url: webVersionUrl },
@@ -351,6 +385,45 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
                   onChange={(e) => setScheduledAt(e.target.value)}
                   className="mt-2 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
                 />
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[var(--gray-9)] mb-2">Delivery timing</label>
+              <select
+                value={deliveryStrategy}
+                onChange={(e) => setDeliveryStrategy(e.target.value as 'global' | 'tz_local' | 'personalised')}
+                className="w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
+              >
+                <option value="global">Everyone at once</option>
+                <option value="tz_local">Recipient local time</option>
+                <option value="personalised">Personalised send-time</option>
+              </select>
+              {deliveryStrategy !== 'global' && (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <label className="text-xs text-[var(--gray-9)]">
+                    Local time
+                    <input
+                      type="time"
+                      value={targetLocal}
+                      onChange={(e) => setTargetLocal(e.target.value)}
+                      className="mt-1 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
+                    />
+                  </label>
+                  <label className="text-xs text-[var(--gray-9)]">
+                    Default timezone
+                    <input
+                      type="text"
+                      placeholder="e.g. Europe/London"
+                      value={defaultTimezone}
+                      onChange={(e) => setDefaultTimezone(e.target.value)}
+                      className="mt-1 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
+                    />
+                  </label>
+                </div>
+              )}
+              {deliveryStrategy === 'personalised' && (
+                <p className="mt-1 text-xs text-[var(--gray-8)]">Uses each recipient&apos;s modelled open time where known, otherwise falls back to their local time.</p>
               )}
             </div>
 
@@ -476,14 +549,15 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
               <StatCard label="Failed" value={selectedSend.failed_count || 0} color={(selectedSend.failed_count || 0) > 0 ? 'red' : undefined} />
               <StatCard
                 label="Opened"
-                value={sendLog.filter(l => l.first_opened_at).length}
+                value={openedCount}
                 color="green"
               />
             </div>
           )}
 
           {/* Recipient table */}
-          {sendLog.length > 0 ? (
+          {sendLogTotal > 0 ? (
+           <>
             <div className="border border-[var(--gray-a4)] rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
@@ -528,6 +602,32 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
                 </tbody>
               </table>
             </div>
+            {sendLogTotal > SEND_LOG_PAGE_SIZE && (
+              <div className="flex items-center justify-between mt-3 text-xs text-[var(--gray-10)]">
+                <span>
+                  {sendLogPage * SEND_LOG_PAGE_SIZE + 1}–{Math.min((sendLogPage + 1) * SEND_LOG_PAGE_SIZE, sendLogTotal)} of {sendLogTotal.toLocaleString()}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outlined"
+                    size="1"
+                    disabled={sendLogPage === 0}
+                    onClick={() => setSendLogPage((p) => Math.max(0, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="1"
+                    disabled={(sendLogPage + 1) * SEND_LOG_PAGE_SIZE >= sendLogTotal}
+                    onClick={() => setSendLogPage((p) => p + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+           </>
           ) : selectedSendId ? (
             <div className="text-center py-12 text-[var(--gray-9)]">
               <EnvelopeIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />
