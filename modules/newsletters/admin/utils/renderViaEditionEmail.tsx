@@ -89,7 +89,13 @@ export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Pr
 
   const blockMeta = new Map<string, BlockRenderMeta>();
   for (const b of context.blocks) {
-    if (b.render_kind === 'react-email' && b.component_id) {
+    // 'declarative' blocks (authored as html-ish files in the source repo and
+    // ingested with render_kind='declarative' + component_id=key) flow through
+    // the per-edition registry's declarative components, same as native
+    // react-email blocks — the editor's declarativeBlockEntry() wraps each
+    // one as a registry entry whose Component renders via the declarative
+    // renderer. So both modes resolve to a registered Component lookup here.
+    if ((b.render_kind === 'react-email' || b.render_kind === 'declarative') && b.component_id) {
       blockMeta.set(b.id, {
         render_kind: 'react-email',
         component_id: b.component_id,
@@ -109,11 +115,16 @@ export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Pr
 }
 
 /**
- * Convenience: returns true when at least one block in the context has
- * render_kind='react-email'. Adapters use this to decide whether to take
- * the EditionEmail path or the legacy per-block Mustache path. When all
- * blocks are Mustache, adapters keep their existing behaviour bit-for-bit.
+ * Convenience: returns true when at least one block in the context renders
+ * via the EditionEmail / declarative-renderer path (either explicit
+ * `render_kind='react-email'` from the legacy registry route, or
+ * `render_kind='declarative'` from the html-ish source-repo route). Adapters
+ * use this to decide whether to take the EditionEmail path or the legacy
+ * per-block Mustache path. When every block is Mustache, adapters keep their
+ * existing behaviour bit-for-bit.
  */
 export function hasReactEmailBlocks(context: OutputRenderContext): boolean {
-  return context.blocks.some((b) => b.render_kind === 'react-email');
+  return context.blocks.some(
+    (b) => b.render_kind === 'react-email' || b.render_kind === 'declarative',
+  );
 }
