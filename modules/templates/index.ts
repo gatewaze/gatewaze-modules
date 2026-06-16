@@ -57,6 +57,7 @@ const templatesModule: GatewazeModule = {
     'migrations/023_anon_read_defs_for_public_newsletters.sql',
     'migrations/024_prune_absent_block_defs.sql',
     'migrations/025_brick_def_is_current.sql',
+    'migrations/026_apply_source_declarative_render_kind.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under

@@ -410,14 +410,16 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
       }
 
       if (s.library_id) {
-        // Newsletter blocks render react-email via the registry; keep the def
-        // render_kind in sync so a mixed library doesn't trip the editor's
-        // "show only react-email blocks" filter (which hides mustache defs).
-        await supabase
-          .from('templates_block_defs')
-          .update({ render_kind: 'react-email' })
-          .eq('library_id', s.library_id)
-          .neq('render_kind', 'react-email');
+        // (Removed: client-side PATCH that force-set render_kind='react-email'
+        // for every block def in the library. It violated the
+        // templates_block_defs_render_kind_component_id constraint when the
+        // rows lacked a component_id, and it papered over the real issue —
+        // the apply_source SQL never set render_kind in the first place.
+        // Migration 026 fixes that at the source: every block/brick def
+        // ingested from the source repo lands with render_kind='declarative'
+        // + component_id=key, satisfying the constraint and routing the
+        // blocks through the declarative renderer just like react-email
+        // registry blocks.)
 
         // Pull declarative (html-ish) blocks + bricks from the repo.
         const declRes = await fetch(
