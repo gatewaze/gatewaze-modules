@@ -133,8 +133,13 @@ function extractWrappers(
     // />` element (for renderers that compile the wrapper into a react-email
     // tree — see modules/newsletters/admin/components/puck/email-blocks/
     // EditionEmail.tsx). Either form must appear exactly once.
-    const slotMatches = (body.match(/<slot\s+[^>]*name\s*=\s*["']body["'][^>]*>/gi) ?? []).length;
-    const contentMatches = countOccurrences(body, '{{content}}');
+    //
+    // Strip HTML comments before counting so authoring docs that mention
+    // `<slot name="body" />` or `{{content}}` inside `<!-- ... -->` don't
+    // double-count.
+    const bodyNoComments = body.replace(/<!--[\s\S]*?-->/g, '');
+    const slotMatches = (bodyNoComments.match(/<slot\s+[^>]*name\s*=\s*["']body["'][^>]*>/gi) ?? []).length;
+    const contentMatches = countOccurrences(bodyNoComments, '{{content}}');
     const totalSlots = slotMatches + contentMatches;
     if (totalSlots === 0) {
       errors.push({
