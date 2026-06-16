@@ -96,11 +96,13 @@ export default function TemplateDetailPage() {
           .from('templates_block_defs')
           .select('id, key, name, description, schema, html, rich_text_template, has_bricks, library_id, block_type:key')
           .eq('library_id', collectionData.id)
+          .eq('is_current', true)
           .order('key'),
         supabase
           .from('templates_brick_defs')
           .select('id, block_def_id, key, name, schema, html, rich_text_template, sort_order, brick_type:key, templates_block_defs!inner(library_id)')
           .eq('templates_block_defs.library_id', collectionData.id)
+          .eq('is_current', true)
           .order('sort_order'),
       ]);
 
