@@ -50,6 +50,8 @@ import type {
 } from '../../utils/types.js';
 import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js';
 import { buildEmailRegistry } from './email-blocks/declarative/registry.js';
+import { parseTemplate } from './email-blocks/declarative/parse-template.js';
+import { DeclarativeBlock } from './email-blocks/declarative/render.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
 import { BlockSearchComponents } from './block-search.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
@@ -1304,17 +1306,55 @@ function NewsletterCanvasRoot(props: RootProps) {
     return () => obs.disconnect();
   }, []);
 
-  // Wrapper chrome (header/footer) is rendered by EditionEmail at export /
-  // send / publish time using the declarative template from the newsletter's
-  // repo (templates_wrappers row). The live canvas shows only the editable
-  // body blocks — clicking "Preview" surfaces the full wrapped render.
+  // Live preview of the declarative wrapper (templates_wrappers row, key=
+  // 'default'). Parses the wrapper HTML and renders via DeclarativeBlock — the
+  // same path EditionEmail uses at export/send/publish time, so what the
+  // operator sees in the canvas matches what ships. The wrapper's
+  // `<slot name="body" />` resolves to props.children (the editable Puck
+  // DropZone), so header + footer wrap the editable body without making the
+  // chrome itself editable.
+  //
+  // When no wrapper is configured (fresh newsletter, no `wrappers/default.html`
+  // in the repo) we fall through to the unwrapped editable body.
+  const wrapperTemplate = props.puck?.metadata?.wrapperTemplate;
+  const editionDateRaw = props.puck?.metadata?.editionDate ?? '';
+  const editionDateFmt = (() => {
+    const s = String(editionDateRaw).slice(0, 10);
+    const d = new Date(`${s}T00:00:00Z`);
+    return Number.isNaN(d.getTime())
+      ? s
+      : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+  })();
+
+  const wrappedBody = wrapperTemplate
+    ? (() => {
+        try {
+          const parsed = parseTemplate(wrapperTemplate);
+          const content: Record<string, unknown> = {
+            edition: {
+              date: editionDateFmt,
+              title: '',
+              preheader: '',
+              view_online_link: '',
+            },
+            body: <>{props.children}</>,
+          };
+          return <DeclarativeBlock nodes={parsed.nodes} content={content} />;
+        } catch {
+          // Parse failure shouldn't break the canvas — fall back to the
+          // unwrapped body so the operator can still edit.
+          return props.children;
+        }
+      })()
+    : props.children;
+
   return (
     <>
       <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
       <FieldsAutoSwitcher />
       <UserBlockSyntheticExpander />
       <div ref={wrapperRef} className="gw-email-card">
-        {props.children}
+        {wrappedBody}
       </div>
     </>
   );
