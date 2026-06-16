@@ -28,6 +28,11 @@ interface NewsletterCanvasEditorProps {
   brickTemplates: BrickTemplate[];
   collectionMetadata?: Record<string, unknown>;
   collectionId?: string;
+  /** Declarative wrapper template HTML for this newsletter (templates_wrappers
+   *  row, key='default'). Threaded into the puck canvas so the live preview +
+   *  every exportEditionHtml call wrap the body in the same chrome. The legacy
+   *  EditionCanvas engine forwards it to HtmlPreview's production-HTML render. */
+  wrapperTemplate?: string | null;
   onChange: (edition: NewsletterEdition) => void;
   onSave: (options?: { silent?: boolean }) => Promise<void> | void;
   onStatusChange?: (status: string) => void;
@@ -62,6 +67,7 @@ export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) =
         {...(props.enabledRegistryComponentIds ? { enabledRegistryComponentIds: props.enabledRegistryComponentIds } : {})}
         {...(props.collectionMetadata ? { collectionMetadata: props.collectionMetadata } : {})}
         {...(props.collectionId ? { collectionId: props.collectionId } : {})}
+        {...(props.wrapperTemplate !== undefined ? { wrapperTemplate: props.wrapperTemplate } : {})}
       />
     );
   }
