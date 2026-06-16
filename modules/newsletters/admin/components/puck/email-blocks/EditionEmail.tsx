@@ -39,27 +39,8 @@ function resolveEntry(id: string, registry: EmailBlockRegistry | undefined) {
 }
 import { renderTemplate } from '../../../../../sites/lib/canvas-render/mustache-subset.js';
 import { extractSpacing, wrapWithSpacing } from './spacing-wrapper.js';
-import { NewsletterHeaderBlock } from './blocks/NewsletterHeader.js';
-import { NewsletterFooterBlock } from './blocks/NewsletterFooter.js';
-
-/**
- * Fixed header/footer chrome for a newsletter, sourced from the template git
- * repo (synced into `newsletters_template_collections.config.wrapper`). When
- * present, every edition renders inside this header + footer and the
- * header/footer are no longer editable blocks. Links are fixed in the
- * template; only the edition date and view-online URL vary per edition.
- */
-export interface EditionWrapperConfig {
-  header?: { shop_link?: string; subscribe_link?: string };
-  footer?: {
-    partner_email?: string;
-    slack_link?: string;
-    youtube_link?: string;
-    podcast_link?: string;
-    x_link?: string;
-    linkedin_link?: string;
-  };
-}
+import { parseTemplate } from './declarative/parse-template.js';
+import { DeclarativeBlock } from './declarative/render.js';
 
 export interface EditionEmailProps {
   edition: NewsletterEdition;
@@ -74,11 +55,21 @@ export interface EditionEmailProps {
    */
   blockMeta: ReadonlyMap<string, BlockRenderMeta>;
   /**
-   * Fixed header/footer chrome from the template repo. When present the
-   * edition renders inside this header + footer (header/footer are not blocks).
-   * Absent → legacy behaviour (no auto chrome).
+   * Declarative wrapper HTML from the newsletter's template repo
+   * (`wrappers/default.html`, parsed by the templates module into a
+   * `templates_wrappers` row). When present, the edition's body blocks render
+   * inside a `<slot name="body" />` in the wrapper template. The wrapper carries
+   * its own header/footer chrome — links, copy, layout, colours — so each
+   * newsletter's repo controls its visual identity.
+   *
+   * Wrapper-template mustache namespace: `{{edition.date}}`, `{{edition.title}}`,
+   * `{{edition.preheader}}`, `{{edition.view_online_link}}`. Per-brand values
+   * (shop links, partner email, social links, etc.) are baked into the
+   * template HTML directly — no separate config layer.
+   *
+   * Absent → no chrome added (just the body blocks).
    */
-  wrapper?: EditionWrapperConfig | null;
+  wrapperTemplate?: string | null;
   /**
    * Resolved "View Online" URL for the header link. Defaults to the
    * `{{web_version}}` token so the send pipeline substitutes it per recipient.
@@ -109,7 +100,7 @@ export interface BlockRenderMeta {
 }
 
 export function EditionEmail(props: EditionEmailProps): ReactElement {
-  const { edition, format, blockMeta, wrapper, viewOnlineUrl, hideViewOnline, registry } = props;
+  const { edition, format, blockMeta, wrapperTemplate, viewOnlineUrl, hideViewOnline, registry } = props;
 
   const sorted = [...edition.blocks].sort((a, z) => a.sort_order - z.sort_order);
 
@@ -127,13 +118,26 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
     <BlockSlot key={block.id} block={block} format={format} meta={blockMeta.get(block.id)} registry={registry} />
   ));
 
-  // Fixed header/footer chrome from the template repo (collection.config.
-  // wrapper). Header links + footer social links are fixed in the template;
-  // only the edition date and view-online URL vary per edition.
-  const chrome = renderChrome(wrapper, edition.edition_date, hideViewOnline ? '' : viewOnlineUrl);
-  const composed = [chrome.header, ...blockEls, chrome.footer].filter(
-    (el): el is ReactElement => el != null,
-  );
+  // Declarative wrapper from the newsletter's template repo (templates_wrappers
+  // row, key='default'). When present the edition body renders inside the
+  // wrapper's `<slot name="body" />`; per-edition mustache fields (date, title,
+  // view_online_link, ...) are interpolated through `{{edition.*}}`. When
+  // absent the body renders without chrome.
+  const composed: ReactNode = wrapperTemplate
+    ? (() => {
+        const parsed = parseTemplate(wrapperTemplate);
+        const content: Record<string, unknown> = {
+          edition: {
+            date: formatEditionDate(edition.edition_date),
+            title: edition.subject ?? '',
+            preheader: edition.preheader ?? '',
+            view_online_link: hideViewOnline ? '' : (viewOnlineUrl ?? '{{web_version}}'),
+          },
+          body: <>{blockEls}</>,
+        };
+        return <DeclarativeBlock nodes={parsed.nodes} content={content} />;
+      })()
+    : blockEls;
 
   const body = allMustache ? (
     <Body style={{ margin: 0, padding: 0, backgroundColor: '#ffffff', fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif" }}>
@@ -161,49 +165,14 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
   );
 }
 
-/**
- * Build the fixed header/footer elements from the template's wrapper config.
- * Returns nulls when no wrapper is configured (legacy behaviour). The header
- * links and footer social links are fixed in the template; the edition date is
- * formatted here and the view-online URL defaults to the `{{web_version}}`
- * token so the send pipeline can substitute it per recipient.
- */
-export function renderChrome(
-  wrapper: EditionWrapperConfig | null | undefined,
-  editionDate: string,
-  viewOnlineUrl: string | undefined,
-): { header: ReactElement | null; footer: ReactElement | null } {
-  if (!wrapper) return { header: null, footer: null };
-  const fmtDate = (() => {
-    const d = new Date(`${editionDate}T00:00:00Z`);
-    return Number.isNaN(d.getTime())
-      ? String(editionDate ?? '')
-      : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
-  })();
-  const h = wrapper.header ?? {};
-  const f = wrapper.footer ?? {};
-  return {
-    header: (
-      <NewsletterHeaderBlock.Component
-        key="__wrapper_header"
-        shop_link={h.shop_link ?? '#'}
-        subscribe_link={h.subscribe_link ?? '#'}
-        edition_date={fmtDate}
-        view_online_link={viewOnlineUrl ?? '{{web_version}}'}
-      />
-    ),
-    footer: (
-      <NewsletterFooterBlock.Component
-        key="__wrapper_footer"
-        partner_email={f.partner_email ?? ''}
-        slack_link={f.slack_link ?? '#'}
-        youtube_link={f.youtube_link ?? '#'}
-        podcast_link={f.podcast_link ?? '#'}
-        x_link={f.x_link ?? '#'}
-        linkedin_link={f.linkedin_link ?? '#'}
-      />
-    ),
-  };
+/** Format the edition date for `{{edition.date}}` interpolation in the
+ *  declarative wrapper template (e.g. "June 15, 2026"). Falls back to the
+ *  raw string if the date doesn't parse. */
+function formatEditionDate(editionDate: string): string {
+  const d = new Date(`${editionDate}T00:00:00Z`);
+  return Number.isNaN(d.getTime())
+    ? String(editionDate ?? '')
+    : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
 }
 
 /** 10px vertical spacer between blocks — matches the legacy SPACER_TEMPLATE. */

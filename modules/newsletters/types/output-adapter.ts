@@ -29,6 +29,14 @@ export interface OutputRenderContext {
   blocks: OutputBlock[];
   links: Map<string, string>; // original URL → short URL
   metadata: Record<string, unknown>;
+  /**
+   * Declarative wrapper template HTML for this newsletter's library
+   * (latest is_current `templates_wrappers` row, key='default'). When
+   * present, EditionEmail wraps the rendered body blocks inside the
+   * wrapper's `<slot name="body" />`. Caller resolves it when building
+   * the context (typically alongside the block fetch).
+   */
+  wrapperTemplate?: string | null;
 }
 
 export interface OutputBlock {

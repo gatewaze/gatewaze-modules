@@ -35,12 +35,19 @@ import type { NewsletterEdition, EditionBlock } from './types.js';
 export interface RenderViaEditionEmailArgs {
   context: OutputRenderContext;
   format: 'email' | FormatId;
+  /**
+   * Declarative wrapper template HTML from the newsletter's repo
+   * (templates_wrappers row, key='default'). When present the edition body
+   * renders inside the wrapper's `<slot name="body" />`. Caller is responsible
+   * for fetching this (typically alongside the OutputRenderContext build).
+   */
+  wrapperTemplate?: string | null;
   /** Whether to pretty-print the HTML output (debug only — production usually false). */
   pretty?: boolean;
 }
 
 export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Promise<string> {
-  const { context, format, pretty } = args;
+  const { context, format, pretty, wrapperTemplate } = args;
 
   // Reconstruct a NewsletterEdition. EditionEmail walks edition.blocks
   // by sort_order; the adapter has already applied any block exclusions
@@ -96,7 +103,7 @@ export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Pr
   }
 
   return render(
-    <EditionEmail edition={edition} format={format} blockMeta={blockMeta} />,
+    <EditionEmail edition={edition} format={format} blockMeta={blockMeta} wrapperTemplate={wrapperTemplate} />,
     { pretty: pretty ?? false },
   );
 }

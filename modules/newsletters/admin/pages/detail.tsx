@@ -381,10 +381,11 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
   };
 
   // Single "Update" action: re-apply the template (re-clones HEAD, upserts
-  // block/wrapper defs), keep this newsletter's block defs react-email so the
-  // editor surfaces them all, then sync the header/footer link config
-  // (wrapper.json → collection.config.wrapper). Replaces the separate
-  // Check / Apply / Sync-template-config buttons.
+  // block/brick/wrapper defs in one pass via the templates module's apply),
+  // then keep this newsletter's block defs render_kind='react-email' so the
+  // editor surfaces them all. Header/footer chrome flows through the same
+  // apply now — the wrapper template lives at `wrappers/default.html` in the
+  // repo and lands in `templates_wrappers`; no separate sync step needed.
   const handleUpdate = async () => {
     setBusy('apply');
     try {
@@ -417,18 +418,6 @@ function SourceRow({ source: s, onChanged }: { source: TemplatesSourceRow; onCha
           .update({ render_kind: 'react-email' })
           .eq('library_id', s.library_id)
           .neq('render_kind', 'react-email');
-
-        // Pull wrapper.json → collection.config.wrapper (fixed header/footer
-        // links). 404 = no wrapper.json on the template; that's fine.
-        const apiUrl = import.meta.env.VITE_API_URL ?? '';
-        const cfgRes = await fetch(
-          `${apiUrl}/api/admin/newsletters/collections/${s.library_id}/sync-template-config`,
-          { method: 'POST', headers: { Authorization: auth } },
-        );
-        if (!cfgRes.ok && cfgRes.status !== 404) {
-          // eslint-disable-next-line no-console
-          console.warn('[update] wrapper config sync failed', await cfgRes.json().catch(() => null));
-        }
 
         // Pull declarative (html-ish) blocks + bricks from the repo.
         const declRes = await fetch(

@@ -160,9 +160,13 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   GenericBlock as unknown as EmailBlockEntry,
   MemeOfWeekBlock as unknown as EmailBlockEntry,
   // NewsletterHeaderBlock / NewsletterFooterBlock are intentionally NOT
-  // registered as editable blocks: they're fixed page chrome applied by
-  // EditionEmail from the template's wrapper config (collection.config.wrapper),
-  // not blocks an operator adds to an edition.
+  // registered as editable blocks: header/footer chrome is now defined by a
+  // declarative wrapper template in each newsletter's repo (`wrappers/
+  // default.html`, ingested into `templates_wrappers`). `EditionEmail` reads
+  // that row and renders the body inside the wrapper's `<slot name="body"/>`.
+  // These two TSX files are retained as a fallback so editions previously
+  // built with them keep rendering; new newsletters should use the declarative
+  // wrapper path.
   // Community — slot container + its bricks
   MlopsCommunityBlock as unknown as EmailBlockEntry,
   PodcastBlock as unknown as EmailBlockEntry,
