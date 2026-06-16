@@ -51,7 +51,6 @@ import type {
 import { editionToPuckData, puckDataToEdition } from './edition-puck-adapter.js';
 import { buildEmailRegistry } from './email-blocks/declarative/registry.js';
 import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
-import type { EditionWrapperConfig } from './email-blocks/EditionEmail.js';
 import { BlockSearchComponents } from './block-search.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
 import { CanvasShell } from '../../../../sites/admin/components/canvas/puck/CanvasShell.js';
@@ -98,11 +97,12 @@ interface NewsletterPuckCanvasProps {
    */
   collectionId?: string;
   /**
-   * Fixed header/footer chrome from the newsletter's template repo
-   * (collection.config.wrapper). Threaded into every exportEditionHtml call so
-   * preview, send, and publish all render inside the same header + footer.
+   * Declarative wrapper template HTML from the newsletter's repo
+   * (templates_wrappers row, key='default'). Threaded into every
+   * exportEditionHtml call so preview, send, and publish all render inside
+   * the same wrapper.
    */
-  wrapperConfig?: EditionWrapperConfig | null;
+  wrapperTemplate?: string | null;
 }
 
 export const NewsletterPuckCanvas: FC<NewsletterPuckCanvasProps> = (props) => {
@@ -128,28 +128,31 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   enabledRegistryComponentIds,
   collectionMetadata,
   collectionId,
-  wrapperConfig,
+  wrapperTemplate,
 }) => {
   // Default false so the Publish button renders enabled when the
   // parent doesn't thread the saving state through.
   const isSavingNow = isSaving ?? false;
 
-  // Header/footer chrome config. Prefer the prop; if the parent hasn't
-  // threaded it yet (load-order), fetch collection.config.wrapper directly by
-  // collectionId so the chrome doesn't silently miss.
-  const [resolvedWrapper, setResolvedWrapper] = useState<EditionWrapperConfig | null>(wrapperConfig ?? null);
+  // Wrapper template HTML. Prefer the prop; if the parent hasn't threaded it
+  // yet (load-order), fetch the latest templates_wrappers row for this
+  // collection's library so the canvas preview / export / send all render
+  // inside the same chrome.
+  const [resolvedWrapper, setResolvedWrapper] = useState<string | null>(wrapperTemplate ?? null);
   useEffect(() => {
-    if (wrapperConfig) { setResolvedWrapper(wrapperConfig); return; }
+    if (wrapperTemplate !== undefined) { setResolvedWrapper(wrapperTemplate); return; }
     if (!collectionId) { setResolvedWrapper(null); return; }
     let cancelled = false;
     void supabase
-      .from('newsletters_template_collections')
-      .select('config')
-      .eq('id', collectionId)
-      .single()
+      .from('templates_wrappers')
+      .select('html, is_current')
+      .eq('library_id', collectionId)
+      .eq('key', 'default')
+      .eq('is_current', true)
+      .maybeSingle()
       .then(({ data }) => {
         if (cancelled) return;
-        setResolvedWrapper((data?.config as { wrapper?: EditionWrapperConfig } | null)?.wrapper ?? null);
+        setResolvedWrapper((data?.html as string | undefined) ?? null);
       });
     return () => { cancelled = true; };
   }, [wrapperConfig, collectionId]);
@@ -376,7 +379,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         edition,
         format: 'email',
         blockMeta: publishMeta,
-        wrapper: resolvedWrapper, registry,
+        wrapperTemplate: resolvedWrapper, registry,
         // The published page is the online version — drop the redundant
         // "View Online" self-link from its header.
         hideViewOnline: true,
@@ -526,7 +529,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             edition,
             format: 'email',
             blockMeta,
-            wrapper: resolvedWrapper, registry,
+            wrapperTemplate: resolvedWrapper, registry,
             pretty: false,
           });
           if (cancelled) return;
@@ -562,7 +565,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setExportBusy(format);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format, blockMeta, wrapper: resolvedWrapper, registry, pretty: true });
+      const html = await exportEditionHtml({ edition, format, blockMeta, wrapperTemplate: resolvedWrapper, registry, pretty: true });
 
       if (format === 'email') {
         // Email HTML → download a .html file (recipient-safe full doc).
@@ -605,7 +608,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setTestSendBusy(true);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: resolvedWrapper, registry, pretty: false });
+      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapperTemplate: resolvedWrapper, registry, pretty: false });
       // Mirror DeleteNewsletterCard's URL form — admin nginx has no /api
       // proxy, so we hit api.<brand>.live directly.
       const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
@@ -713,7 +716,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                   edition,
                   format: 'email',
                   blockMeta: buildBlockMeta(),
-                  wrapper: resolvedWrapper, registry,
+                  wrapperTemplate: resolvedWrapper, registry,
                   pretty: true,
                 });
                 setHtmlSource(html);
@@ -1015,7 +1018,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           // Surface the fixed header/footer chrome + edition date to the canvas
           // root so it can render a non-editable preview of them around the
           // editable blocks (they're page chrome, not blocks).
-          extraMetadata={{ wrapper: resolvedWrapper, editionDate: edition.edition_date }}
+          extraMetadata={{ wrapperTemplate: resolvedWrapper, editionDate: edition.edition_date }}
           // Newsletters lock to the email column width. The Desktop frame is
           // 682, not 650: the authored email column is 650px and the canvas
           // body adds 16px of horizontal padding each side (see
@@ -1193,7 +1196,7 @@ interface RootProps {
   puck?: {
     metadata?: {
       previewMode?: 'light' | 'dark';
-      wrapper?: EditionWrapperConfig | null;
+      wrapperTemplate?: string | null;
       editionDate?: string;
     };
   };
@@ -1301,86 +1304,20 @@ function NewsletterCanvasRoot(props: RootProps) {
     return () => obs.disconnect();
   }, []);
 
-  // Fixed header/footer chrome from the template (collection.config.wrapper),
-  // shown as a non-editable preview around the editable blocks so the operator
-  // sees the full edition. Rendered as plain HTML (not the react-email
-  // components) so it always paints in the live canvas; the actual email render
-  // still uses the react-email components. Links/date come from the template +
-  // the edition date and aren't editable here.
-  const chrome = renderCanvasChrome(
-    props.puck?.metadata?.wrapper,
-    props.puck?.metadata?.editionDate ?? '',
-  );
-
+  // Wrapper chrome (header/footer) is rendered by EditionEmail at export /
+  // send / publish time using the declarative template from the newsletter's
+  // repo (templates_wrappers row). The live canvas shows only the editable
+  // body blocks — clicking "Preview" surfaces the full wrapped render.
   return (
     <>
       <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
       <FieldsAutoSwitcher />
       <UserBlockSyntheticExpander />
       <div ref={wrapperRef} className="gw-email-card">
-        {chrome.header}
         {props.children}
-        {chrome.footer}
       </div>
     </>
   );
-}
-
-/**
- * Plain-HTML preview of the fixed header/footer chrome for the live canvas.
- * Mirrors the NewsletterHeader/Footer react-email components (which render the
- * real email) but as ordinary divs, so it always paints inside the Puck iframe.
- * Non-interactive (pointer-events:none).
- */
-function renderCanvasChrome(
-  wrapper: EditionWrapperConfig | null | undefined,
-  editionDate: string,
-): { header: ReactNode; footer: ReactNode } {
-  if (!wrapper) return { header: null, footer: null };
-  const link: CSSProperties = { color: '#4086c6', textDecoration: 'underline' };
-  const center: CSSProperties = { margin: 0, textAlign: 'center', color: '#4086c6' };
-  const wrap: CSSProperties = { pointerEvents: 'none', userSelect: 'none', padding: '15px 10px' };
-  const h = wrapper.header ?? {};
-  const f = wrapper.footer ?? {};
-  const dateLabel = (() => {
-    const s = String(editionDate ?? '').slice(0, 10);
-    const d = new Date(`${s}T00:00:00Z`);
-    return Number.isNaN(d.getTime())
-      ? s
-      : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
-  })();
-
-  return {
-    header: (
-      <div className="gw-wrapper-chrome" style={wrap}>
-        <p style={{ ...center, fontSize: 16 }}>
-          <a href={h.shop_link || '#'} style={link}>Shop</a>
-          {' // '}
-          <a href="#" style={link}>View Online</a>
-        </p>
-        {dateLabel ? <p style={{ ...center, fontSize: 14, marginTop: 8 }}>{dateLabel}</p> : null}
-        <p style={{ ...center, fontSize: 12, marginTop: 8 }}>
-          Forwarded this email? <a href={h.subscribe_link || '#'} style={link}>Subscribe here</a>
-        </p>
-      </div>
-    ),
-    footer: (
-      <div className="gw-wrapper-chrome" style={{ ...wrap, color: '#555' }}>
-        {f.partner_email ? (
-          <p style={{ margin: '0 0 12px', textAlign: 'center', fontSize: 14, color: '#555' }}>
-            Interested in partnering with us? Get in touch: {f.partner_email}
-          </p>
-        ) : null}
-        <p style={{ margin: 0, textAlign: 'center', fontSize: 14, color: '#555', lineHeight: 1.4 }}>
-          Thanks for reading. See you in <a href={f.slack_link || '#'} style={link}>Slack</a>,{' '}
-          <a href={f.youtube_link || '#'} style={link}>YouTube</a>, and{' '}
-          <a href={f.podcast_link || '#'} style={link}>podcast</a> land. Oh yeah, and we are also on{' '}
-          <a href={f.x_link || '#'} style={link}>X</a> and{' '}
-          <a href={f.linkedin_link || '#'} style={link}>LinkedIn</a>.
-        </p>
-      </div>
-    ),
-  };
 }
 
 const BASE_CANVAS_CSS = `

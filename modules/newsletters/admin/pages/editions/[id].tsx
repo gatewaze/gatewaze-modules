@@ -26,7 +26,6 @@ import {
 } from '../../utils';
 import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
 import { buildEmailRegistry } from '../../components/puck/email-blocks/declarative/registry';
-import type { EditionWrapperConfig } from '../../components/puck/email-blocks/EditionEmail';
 import { emailBlockRegistry } from '../../components/puck/email-blocks';
 import type { BlockRenderMeta } from '../../components/puck/email-blocks/EditionEmail';
 
@@ -91,7 +90,9 @@ interface CollectionInfo {
   subscriber_count?: number;
   view_online_target?: string | null;
   view_online_external_base_url?: string | null;
-  config?: { wrapper?: EditionWrapperConfig | null } | null;
+  /** Declarative wrapper template (latest is_current row in templates_wrappers
+   *  for the collection's library, key='default'). Resolved at fetch time. */
+  wrapperTemplate?: string | null;
 }
 
 type EditionTab = 'details' | 'editor' | 'sending';
@@ -211,6 +212,23 @@ export default function EditionEditorPage() {
         } catch (err) {
           console.warn('[newsletter] Lists module may not be installed:', err);
         }
+      }
+
+      // Resolve the declarative wrapper template (templates_wrappers row,
+      // key='default', is_current=true) for this newsletter's library. Single
+      // source of truth for header/footer chrome across editor preview, email
+      // send, and git publish.
+      try {
+        const { data: wr } = await supabase
+          .from('templates_wrappers')
+          .select('html')
+          .eq('library_id', cId)
+          .eq('key', 'default')
+          .eq('is_current', true)
+          .maybeSingle();
+        collInfo.wrapperTemplate = (wr?.html as string | undefined) ?? null;
+      } catch {
+        collInfo.wrapperTemplate = null;
       }
 
       setCollection(collInfo);
@@ -702,7 +720,7 @@ export default function EditionEditorPage() {
             blockTemplates={blockTemplates}
             brickTemplates={brickTemplates}
             collectionMetadata={collectionMetadata}
-            wrapperConfig={collection?.config?.wrapper ?? null}
+            wrapperTemplate={collection?.wrapperTemplate ?? null}
             {...(collectionId ? { collectionId } : {})}
             // Per spec-builder-evaluation §3.6 (extended). When the bound
             // library has explicit `render_kind='react-email'` rows, surface
@@ -822,7 +840,7 @@ export default function EditionEditorPage() {
                       });
                     }
                   }
-                  return exportEditionHtml({ edition, format: 'email', blockMeta, wrapper: collection?.config?.wrapper ?? null, registry: buildEmailRegistry(blockTemplates, brickTemplates), pretty: false });
+                  return exportEditionHtml({ edition, format: 'email', blockMeta, wrapperTemplate: collection?.wrapperTemplate ?? null, registry: buildEmailRegistry(blockTemplates, brickTemplates), pretty: false });
                 }
               : undefined}
           />

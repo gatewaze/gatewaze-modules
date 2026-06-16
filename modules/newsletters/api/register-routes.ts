@@ -123,94 +123,13 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   router.get('/newsletters/collections/:collectionId/manifest', wrap(manifestHandler));
   router.delete('/newsletters/collections/:collectionId', wrap(deleteCollectionHandler));
 
-  // POST /api/admin/newsletters/collections/:collectionId/sync-template-config
-  //
-  // Pull wrapper.json (the fixed header/footer link set) from the template
-  // git repo's branch into collection.config.wrapper, using the templates git
-  // source's stored PAT. The render path (EditionEmail) reads this to draw the
-  // fixed header/footer chrome around every edition.
-  router.post(
-    '/newsletters/collections/:collectionId/sync-template-config',
-    wrap(async (req: Request, res: Response) => {
-      const collectionId = req.params['collectionId'];
-      if (!collectionId) {
-        res.status(400).json({ error: { code: 'validation_failed', message: 'collectionId required' } });
-        return;
-      }
-
-      const { data: coll } = await supabase
-        .from('newsletters_template_collections')
-        .select('id, git_url, config')
-        .eq('id', collectionId)
-        .maybeSingle();
-      if (!coll?.git_url) {
-        res.status(400).json({ error: { code: 'no_git_repo', message: 'Newsletter has no connected git repo' } });
-        return;
-      }
-
-      const { data: src } = await supabase
-        .from('templates_sources')
-        .select('token_secret_ref, branch')
-        .eq('library_id', collectionId)
-        .eq('kind', 'git')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const rawToken = (src as { token_secret_ref: string | null } | null)?.token_secret_ref ?? null;
-      const token = rawToken && rawToken !== '<redacted>' ? rawToken : null;
-      const branch = (src as { branch: string | null } | null)?.branch || 'main';
-
-      const m = /github\.com[/:]([^/]+)\/([^/.]+)/.exec(coll.git_url);
-      if (!m) {
-        res.status(400).json({ error: { code: 'unsupported_repo', message: 'Only github.com repos support config sync' } });
-        return;
-      }
-      const [, owner, repo] = m;
-
-      const ghRes = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/contents/wrapper.json?ref=${encodeURIComponent(branch)}`,
-        {
-          headers: {
-            Accept: 'application/vnd.github.raw+json',
-            'User-Agent': 'gatewaze-newsletters',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        },
-      );
-      if (ghRes.status === 404) {
-        res.status(404).json({ error: { code: 'no_wrapper_json', message: 'wrapper.json not found on the template repo' } });
-        return;
-      }
-      if (!ghRes.ok) {
-        res.status(502).json({ error: { code: 'github_error', message: `GitHub returned ${ghRes.status}` } });
-        return;
-      }
-
-      let wrapper: unknown;
-      try {
-        wrapper = JSON.parse(await ghRes.text());
-      } catch {
-        res.status(422).json({ error: { code: 'invalid_json', message: 'wrapper.json is not valid JSON' } });
-        return;
-      }
-      if (!wrapper || typeof wrapper !== 'object') {
-        res.status(422).json({ error: { code: 'invalid_shape', message: 'wrapper.json must be a JSON object' } });
-        return;
-      }
-
-      const config = { ...(((coll.config as Record<string, unknown>) ?? {})), wrapper };
-      const { error: upErr } = await supabase
-        .from('newsletters_template_collections')
-        .update({ config })
-        .eq('id', collectionId);
-      if (upErr) {
-        res.status(500).json({ error: { code: 'update_failed', message: upErr.message } });
-        return;
-      }
-
-      res.status(200).json({ ok: true, wrapper });
-    }),
-  );
+  // (Removed: POST /newsletters/collections/:collectionId/sync-template-config.
+  // The wrapper.json → collection.config.wrapper sync step is gone — header /
+  // footer chrome is now defined by a declarative wrapper template in the
+  // newsletter's repo (`wrappers/default.html`), ingested via the templates
+  // module's apply path into `templates_wrappers`. `EditionEmail` reads that
+  // row directly. See modules/newsletters/admin/components/puck/email-blocks/
+  // EditionEmail.tsx.)
 
   // POST /api/admin/newsletters/collections/:collectionId/sync-declarative-blocks
   //

@@ -31,6 +31,10 @@ interface HtmlPreviewProps {
   redirectsReady?: boolean;
   generatedLinks?: GeneratedLink[];
   collectionMetadata?: Record<string, unknown>;
+  /** Declarative wrapper template HTML from the newsletter's repo
+   *  (templates_wrappers row, key='default'). Threaded into the production-
+   *  HTML render so the copied output matches what the email sends. */
+  wrapperTemplate?: string | null;
 }
 
 const FORMAT_OPTIONS: { id: OutputFormat; label: string; description: string }[] = [
@@ -81,7 +85,7 @@ function replaceUrlsInHtml(
   return result;
 }
 
-export function HtmlPreview({ edition, redirectsReady = false, generatedLinks = [], collectionMetadata = {} }: HtmlPreviewProps) {
+export function HtmlPreview({ edition, redirectsReady = false, generatedLinks = [], collectionMetadata = {}, wrapperTemplate = null }: HtmlPreviewProps) {
   const hasSubstack = useHasModule('newsletters-output-substack');
   const hasBeehiiv = useHasModule('newsletters-output-beehiiv');
   const availableFormats = useMemo(
@@ -264,6 +268,7 @@ export function HtmlPreview({ edition, redirectsReady = false, generatedLinks = 
             blocks: outputBlocks,
             links: linksMap,
             metadata: collectionMetadata,
+            wrapperTemplate,
           });
         } catch (err) {
           console.warn('Production HTML generation failed, using preview HTML:', err);

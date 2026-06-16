@@ -22,7 +22,7 @@
 
 import { render } from '@react-email/render';
 import type { NewsletterEdition } from '../../../utils/types.js';
-import { EditionEmail, type BlockRenderMeta, type EditionWrapperConfig } from './EditionEmail.js';
+import { EditionEmail, type BlockRenderMeta } from './EditionEmail.js';
 import type { EmailBlockRegistry } from './registry-types.js';
 import type { FormatId } from './registry-types.js';
 
@@ -40,11 +40,11 @@ export interface ExportArgs {
    */
   blockMeta: ReadonlyMap<string, BlockRenderMeta>;
   /**
-   * Fixed header/footer chrome from the newsletter's template repo
-   * (collection.config.wrapper). When present, the edition renders inside the
-   * fixed header + footer.
+   * Declarative wrapper template HTML from the newsletter's repo
+   * (`templates_wrappers.html`, key='default'). When present, the body blocks
+   * render inside the wrapper's `<slot name="body" />`.
    */
-  wrapper?: EditionWrapperConfig | null;
+  wrapperTemplate?: string | null;
   /** Resolved "View Online" URL for the header link (default `{{web_version}}`). */
   viewOnlineUrl?: string;
   /** Suppress the header "View Online" link (set when rendering for the
@@ -65,7 +65,7 @@ export async function exportEditionHtml(args: ExportArgs): Promise<string> {
       edition={args.edition}
       format={args.format}
       blockMeta={args.blockMeta}
-      wrapper={args.wrapper}
+      wrapperTemplate={args.wrapperTemplate}
       viewOnlineUrl={args.viewOnlineUrl}
       hideViewOnline={args.hideViewOnline}
       registry={args.registry}

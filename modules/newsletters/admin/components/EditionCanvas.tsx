@@ -38,6 +38,10 @@ interface EditionCanvasProps {
   blockTemplates: (PaletteBlockTemplate & BlockTemplate)[];
   brickTemplates: BrickTemplate[];
   collectionMetadata?: Record<string, unknown>;
+  /** Declarative wrapper template HTML for this newsletter's library. Threaded
+   *  into HtmlPreview's production-HTML render so "Copy Production HTML"
+   *  output matches the email send. */
+  wrapperTemplate?: string | null;
   onChange: (edition: NewsletterEdition) => void;
   onSave: (options?: { silent?: boolean }) => Promise<void> | void;
   onStatusChange?: (status: string) => void;
@@ -70,6 +74,7 @@ export function EditionCanvas({
   blockTemplates,
   brickTemplates,
   collectionMetadata = {},
+  wrapperTemplate = null,
   onChange,
   onSave,
   onStatusChange,
@@ -507,6 +512,7 @@ export function EditionCanvas({
                     redirectsReady={!collectionMetadata.redirect_provider || (!redirectsNeedUpdate && trackableLinkCount > 0)}
                     generatedLinks={generatedLinks}
                     collectionMetadata={collectionMetadata}
+                    wrapperTemplate={wrapperTemplate}
                   />
                 </div>
               </>

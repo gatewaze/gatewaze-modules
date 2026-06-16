@@ -289,7 +289,7 @@ export const HtmlOutputAdapter: INewsletterOutputAdapter = {
     // When all blocks are pure Mustache the legacy path runs untouched —
     // bit-for-bit identical output for existing libraries.
     if (hasReactEmailBlocks(context)) {
-      const html = await renderViaEditionEmail({ context, format: 'email' });
+      const html = await renderViaEditionEmail({ context, format: 'email', wrapperTemplate: context.wrapperTemplate });
       return processEmailHtml(html);
     }
 
