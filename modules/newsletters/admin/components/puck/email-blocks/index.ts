@@ -159,14 +159,12 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   AgentInfrastructureBlock as unknown as EmailBlockEntry,
   GenericBlock as unknown as EmailBlockEntry,
   MemeOfWeekBlock as unknown as EmailBlockEntry,
-  // NewsletterHeaderBlock / NewsletterFooterBlock are intentionally NOT
-  // registered as editable blocks: header/footer chrome is now defined by a
-  // declarative wrapper template in each newsletter's repo (`wrappers/
-  // default.html`, ingested into `templates_wrappers`). `EditionEmail` reads
-  // that row and renders the body inside the wrapper's `<slot name="body"/>`.
-  // These two TSX files are retained as a fallback so editions previously
-  // built with them keep rendering; new newsletters should use the declarative
-  // wrapper path.
+  // Header/footer chrome is defined by a declarative wrapper template in each
+  // newsletter's repo (`wrappers/default.html`, ingested into
+  // `templates_wrappers`). `EditionEmail` reads that row and renders the body
+  // inside the wrapper's `<slot name="body" />`. The legacy TSX-based
+  // NewsletterHeader / NewsletterFooter components were deleted alongside the
+  // wrapper.json / collection.config.wrapper / sync-template-config trio.
   // Community — slot container + its bricks
   MlopsCommunityBlock as unknown as EmailBlockEntry,
   PodcastBlock as unknown as EmailBlockEntry,
