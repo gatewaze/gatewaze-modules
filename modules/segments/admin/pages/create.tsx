@@ -1,11 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router';
-import {
-  ArrowLeftIcon,
-  CheckIcon,
-} from '@heroicons/react/24/outline';
+import { CheckIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
-import { Card, Button } from '@/components/ui';
+import { Card, Button, WorkspaceLayout } from '@/components/ui';
 import { Input, Textarea } from '@/components/ui/Form';
 import { Spinner } from '@/components/ui/Spinner';
 import { Page } from '@/components/shared/Page';
@@ -59,47 +56,40 @@ export default function CreateSegmentPage() {
 
   return (
     <Page title="Create Segment">
-      <div className="p-6 space-y-6 max-w-5xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Button
-              variant="flat"
-              isIcon
-              onClick={() => navigate('/segments')}
-              className="size-10"
-            >
-              <ArrowLeftIcon className="size-5" />
+      <WorkspaceLayout
+        title="Segments"
+        breadcrumbs={[
+          { label: 'Segments', to: '/segments' },
+          { label: 'Create' },
+        ]}
+        onBreadcrumbNavigate={(to) => navigate(to)}
+        actions={
+          <div className="flex gap-3 items-center">
+            <Button variant="outlined" onClick={() => navigate('/segments')}>
+              Cancel
             </Button>
-            <div>
-              <h1 className="text-2xl font-semibold text-[var(--gray-12)]">
-                Create Segment
-              </h1>
-              <p className="text-neutral-600 dark:text-neutral-400 mt-1">
-                Define conditions to create a new customer segment
-              </p>
-            </div>
+            <Button
+              color="primary"
+              onClick={handleSave}
+              disabled={!canSave || saving}
+              className="gap-2"
+            >
+              {saving ? (
+                <>
+                  <Spinner className="size-4" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <CheckIcon className="size-4" />
+                  Create Segment
+                </>
+              )}
+            </Button>
           </div>
-          <Button
-            color="primary"
-            onClick={handleSave}
-            disabled={!canSave || saving}
-            className="gap-2"
-          >
-            {saving ? (
-              <>
-                <Spinner className="size-4" />
-                Creating...
-              </>
-            ) : (
-              <>
-                <CheckIcon className="size-4" />
-                Create Segment
-              </>
-            )}
-          </Button>
-        </div>
-
+        }
+      >
+        <div className="space-y-6 max-w-5xl">
         {/* Basic Info */}
         <Card variant="surface" className="p-6 space-y-4">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
@@ -181,7 +171,8 @@ export default function CreateSegmentPage() {
             )}
           </Button>
         </div>
-      </div>
+        </div>
+      </WorkspaceLayout>
     </Page>
   );
 }

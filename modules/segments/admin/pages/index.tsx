@@ -34,6 +34,7 @@ import {
   PaginationNext,
   PaginationPrevious,
   PaginationItems,
+  WorkspaceLayout,
 } from '@/components/ui';
 import { Input } from '@/components/ui/Form';
 import { Page } from '@/components/shared/Page';
@@ -330,17 +331,9 @@ export default function SegmentsPage() {
 
   return (
     <Page title="Segments">
-      <div className="p-6 space-y-6">
-        {/* Header */}
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-2xl font-semibold text-[var(--gray-12)]">
-              Customer Segments
-            </h1>
-            <p className="text-[var(--gray-11)] mt-1">
-              Create and manage audience segments for targeting and analytics
-            </p>
-          </div>
+      <WorkspaceLayout
+        title="Segments"
+        actions={
           <Button
             color="primary"
             onClick={() => navigate('/segments/create')}
@@ -349,8 +342,9 @@ export default function SegmentsPage() {
             <PlusIcon className="size-4" />
             Create Segment
           </Button>
-        </div>
-
+        }
+      >
+        <div className="space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card variant="surface" className="p-4">
@@ -461,7 +455,8 @@ export default function SegmentsPage() {
           confirmText="Delete"
           confirmColor="red"
         />
-      </div>
+        </div>
+      </WorkspaceLayout>
     </Page>
   );
 }

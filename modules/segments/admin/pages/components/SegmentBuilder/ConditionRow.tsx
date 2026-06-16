@@ -21,8 +21,8 @@ interface ConditionRowProps {
 }
 
 const conditionTypes = [
-  { value: 'attribute', label: 'Customer Attribute' },
-  { value: 'event', label: 'Customer Event' },
+  { value: 'attribute', label: 'Person Attribute' },
+  { value: 'event', label: 'Person Event' },
 ];
 
 export function ConditionRow({
