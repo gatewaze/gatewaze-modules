@@ -47,6 +47,18 @@ function addDeclarative(merged: Map<string, EmailBlockEntry>, items: ReadonlyArr
  * @param blockTemplates per-newsletter block defs (declarative ones are added)
  * @param brickTemplates per-newsletter brick defs (declarative ones are added,
  *        so slot containers can resolve their bricks)
+ *
+ * Behaviour:
+ *   - Newsletter has a connected git source (any declarative block_def present
+ *     in `blockTemplates`/`brickTemplates`): the editor's block library is
+ *     fully controlled by the git repo. We return ONLY the declarative
+ *     entries — the static hand-coded React-Email blocks (Hero, CTACard,
+ *     IntroParagraph, …) are intentionally suppressed so they don't shadow,
+ *     compete with, or duplicate git-authored ones.
+ *   - Newsletter has no git source yet: fall back to the static built-in
+ *     registry so the editor still has something to render. Once the
+ *     boilerplate-git-repo feature lands every newsletter will pull its
+ *     blocks from a repo and this fallback can be removed.
  */
 export function buildEmailRegistry(
   blockTemplates: ReadonlyArray<DeclarativeSource>,
@@ -57,7 +69,7 @@ export function buildEmailRegistry(
     brickTemplates.some((t) => t.render_kind === 'declarative' && t.content?.html_template);
   if (!hasDeclarative) return emailBlockRegistry;
 
-  const merged = new Map<string, EmailBlockEntry>(emailBlockRegistry);
+  const merged = new Map<string, EmailBlockEntry>();
   addDeclarative(merged, blockTemplates);
   addDeclarative(merged, brickTemplates);
   return merged;
