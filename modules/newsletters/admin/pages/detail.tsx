@@ -222,9 +222,16 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
     const [blocksRes, sourcesRes] = await Promise.all([
       // templates_block_defs uses `key`; alias it back so the click navigation
       // can keep referencing block.block_type.
+      //
+      // is_current=true is required: templates_apply_source soft-deletes
+      // pruned rows by flipping is_current to false (it keeps a history row
+      // for the audit trail). Without this filter every template-repo update
+      // that drops a block would leave a stale row showing as a phantom on
+      // this tab.
       supabase.from('templates_block_defs')
         .select('id, key, name, block_type:key')
         .eq('library_id', newsletterId)
+        .eq('is_current', true)
         .order('key'),
       supabase.from('templates_sources')
         // The interface (TemplatesSourceRow) tracks the real columns
@@ -242,6 +249,13 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
     setSources(sourcesRes.data || []);
     setLoading(false);
   }, [newsletterId]);
+
+  // True when this newsletter has an active git templates_source. The
+  // templates_apply_source RPC owns the block rows in that case, so the
+  // tab must treat them as read-only: no per-row edit navigation, no
+  // one-off HTML upload (would race with the next apply), no boilerplate
+  // seed (the git source is already the source of truth).
+  const gitManaged = sources.some((s) => s.kind === 'git' && s.status === 'active');
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -284,9 +298,11 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => navigate(`/newsletters/templates/${newsletterSlug}/upload`)}>
-              Upload HTML
-            </Button>
+            {!gitManaged && (
+              <Button variant="outline" onClick={() => navigate(`/newsletters/templates/${newsletterSlug}/upload`)}>
+                Upload HTML
+              </Button>
+            )}
           </div>
         </div>
 
@@ -303,21 +319,38 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
 
       {/* Block Templates list (existing) */}
       <section>
-        <h2 className="text-lg font-semibold text-[var(--gray-12)] mb-3">Block Templates</h2>
+        <h2 className="text-lg font-semibold text-[var(--gray-12)] mb-3 flex items-center gap-2">
+          Block Templates
+          {gitManaged && <Badge color="gray">Managed by git</Badge>}
+        </h2>
         {blocks.length === 0 ? (
           <div className="text-center py-12 text-[var(--gray-9)]">
             <RectangleGroupIcon className="h-12 w-12 mx-auto mb-3 text-[var(--gray-8)]" />
             <p className="mb-2">No templates yet</p>
-            <p className="text-sm mb-4">Connect a git repo above, upload an HTML template, or start from the Gatewaze boilerplate.</p>
-            <SeedFromBoilerplateButton libraryId={newsletterId} onSeeded={reload} />
+            {gitManaged ? (
+              <p className="text-sm mb-4">Push a block file to the connected git repo, then run Update on the source above.</p>
+            ) : (
+              <>
+                <p className="text-sm mb-4">Connect a git repo above, upload an HTML template, or start from the Gatewaze boilerplate.</p>
+                <SeedFromBoilerplateButton libraryId={newsletterId} onSeeded={reload} />
+              </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             {blocks.map(block => (
               <div
                 key={block.id}
-                className="p-4 border border-[var(--gray-a5)] rounded-lg hover:bg-[var(--gray-a2)] cursor-pointer transition-colors"
-                onClick={() => navigate(`/newsletters/templates/${newsletterSlug}/blocks/${block.block_type}`)}
+                className={
+                  gitManaged
+                    ? 'p-4 border border-[var(--gray-a5)] rounded-lg'
+                    : 'p-4 border border-[var(--gray-a5)] rounded-lg hover:bg-[var(--gray-a2)] cursor-pointer transition-colors'
+                }
+                onClick={
+                  gitManaged
+                    ? undefined
+                    : () => navigate(`/newsletters/templates/${newsletterSlug}/blocks/${block.block_type}`)
+                }
               >
                 <p className="text-sm font-medium text-[var(--gray-12)]">{block.name}</p>
                 <p className="text-xs text-[var(--gray-9)] mt-0.5">{block.block_type}</p>
