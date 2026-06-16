@@ -13,9 +13,12 @@
  *
  *   `portal`    →  `<portal-host>/newsletters/<collection-slug>/<edition-folder-slug>`
  *   (default)    (the brand's portal — derived from the current admin
- *                 hostname by swapping the `admin.` (or `-admin.`) sub-domain
- *                 for `app.` so dev / prod / preview environments all resolve
- *                 to the matching portal)
+ *                 hostname. The Helm-deployed brands serve the portal at
+ *                 the apex, so `admin.` at the start of the hostname is
+ *                 stripped (admin.aaif.live → aaif.live). Fly.io / preview
+ *                 deployments using a `<brand>-admin.<host>` infix swap
+ *                 to `<brand>-app.<host>` instead — see derivePortalOrigin
+ *                 below for the full rules.)
  *
  * Returns `null` when the inputs aren't sufficient to produce a stable URL
  * yet (e.g. an edition without a date) — callers should fall back to the
@@ -38,13 +41,25 @@ export interface ViewOnlineEdition {
   title?: string | null;
 }
 
-/** Derive the brand's portal host from the current admin host
- *  (admin.aaif.live → app.aaif.live, admin.aaif.localhost → app.aaif.localhost,
- *  brand-admin.fly.dev → brand-app.fly.dev). Returns null when called in a
- *  non-browser context. */
+/** Derive the brand's portal host from the current admin host.
+ *
+ *  The Helm-deployed brands (AAIF, AutoDB, …) serve the portal at the apex
+ *  domain — there is no `app.<brand>.<tld>` ingress: the ingress is
+ *  `admin.<brand>.<tld>` for admin and `<brand>.<tld>` for portal. So an
+ *  `admin.` prefix at the START of the hostname is stripped:
+ *    admin.aaif.live      → aaif.live
+ *    admin.autodb.io      → autodb.io
+ *    admin.aaif.localhost → aaif.localhost
+ *
+ *  Preview / dev hostnames that DON'T put admin at the front but use the
+ *  `-admin` infix instead (Fly.io / Vercel preview convention,
+ *  brand-admin.fly.dev) still swap to `-app.` — those deployments do have a
+ *  separate `<brand>-app.<host>` portal.
+ *
+ *  Returns null when called in a non-browser context. */
 function derivePortalOrigin(): string | null {
   if (typeof window === 'undefined') return null;
-  const host = window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, 'app.');
+  const host = window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, '');
   return `${window.location.protocol}//${host}`;
 }
 
