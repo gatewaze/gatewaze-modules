@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Input } from '@/components/ui/Form';
+import { supabase } from '@/lib/supabase';
 import {
   EventCondition,
   SegmentCondition,
-  EVENT_TYPES,
   EVENT_OPERATORS,
   TIME_UNITS,
   TimeWindow,
+  createSegmentService,
 } from '@/lib/segments';
 
 interface EventConditionFieldsProps {
@@ -14,10 +15,43 @@ interface EventConditionFieldsProps {
   onChange: (condition: SegmentCondition) => void;
 }
 
+// Distinct people_events names, fetched once and shared across condition rows.
+let cachedEventNames: string[] | null = null;
+let eventNamesInFlight: Promise<string[]> | null = null;
+
+function loadEventNames(): Promise<string[]> {
+  if (cachedEventNames) return Promise.resolve(cachedEventNames);
+  if (!eventNamesInFlight) {
+    eventNamesInFlight = (async () => {
+      if (!supabase) return [];
+      try {
+        const names = await createSegmentService(supabase).listEventNames();
+        cachedEventNames = names;
+        return names;
+      } catch {
+        return [];
+      }
+    })();
+  }
+  return eventNamesInFlight;
+}
+
 export function EventConditionFields({
   condition,
   onChange,
 }: EventConditionFieldsProps) {
+  const [eventNames, setEventNames] = useState<string[]>(cachedEventNames || []);
+
+  useEffect(() => {
+    let active = true;
+    loadEventNames().then((names) => {
+      if (active) setEventNames(names);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const selectedOperator = EVENT_OPERATORS.find(
     (op) => op.value === condition.operator
   );
@@ -87,23 +121,23 @@ export function EventConditionFields({
           </select>
         </div>
 
-        {/* Event Type */}
+        {/* Event Name (from people_events) */}
         <div className="flex-1 min-w-[200px]">
           <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
             Event
           </label>
-          <select
+          <input
+            list="segment-event-names"
             value={condition.event_type}
             onChange={(e) => handleEventTypeChange(e.target.value)}
+            placeholder="e.g. event_registered"
             className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
-          >
-            <option value="">Select event...</option>
-            {EVENT_TYPES.map((event) => (
-              <option key={event.value} value={event.value}>
-                {event.label}
-              </option>
+          />
+          <datalist id="segment-event-names">
+            {eventNames.map((name) => (
+              <option key={name} value={name} />
             ))}
-          </select>
+          </datalist>
         </div>
 
         {/* Count Value (for at_least, at_most, count operators) */}
@@ -175,10 +209,10 @@ export function EventConditionFields({
         </div>
       )}
 
-      {/* Event Description */}
-      {condition.event_type && (
+      {/* Hint */}
+      {!condition.event_type && (
         <div className="text-xs text-gray-500 dark:text-gray-400 pl-1">
-          {EVENT_TYPES.find((e) => e.value === condition.event_type)?.description}
+          Pick a tracked event, or type a custom event name.
         </div>
       )}
     </div>

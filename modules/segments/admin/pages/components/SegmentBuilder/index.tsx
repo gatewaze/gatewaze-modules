@@ -49,7 +49,7 @@ export function SegmentBuilder({
       <Card skin="bordered" className="p-4 bg-gray-50/50 dark:bg-gray-800/50">
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Include customers where
+            Include people where
           </span>
           <select
             value={value.match}

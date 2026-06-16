@@ -16,6 +16,7 @@ const segmentsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_segments_tables.sql',
+    'migrations/002_segments_functions.sql',
   ],
 
   adminRoutes: [

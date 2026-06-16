@@ -12,6 +12,15 @@ interface SegmentPreviewProps {
   debounceMs?: number;
 }
 
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object') {
+    const e = err as { message?: string; details?: string; hint?: string };
+    return e.message || e.details || e.hint || JSON.stringify(err);
+  }
+  return String(err);
+}
+
 export function SegmentPreview({ definition, debounceMs = 800 }: SegmentPreviewProps) {
   const [loading, setLoading] = useState(false);
   const [count, setCount] = useState<number | null>(null);
@@ -49,8 +58,9 @@ export function SegmentPreview({ definition, debounceMs = 800 }: SegmentPreviewP
         setIsEstimate(result.isEstimate || false);
       } catch (err) {
         console.error('Preview error:', err);
-        // Handle timeout specifically
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        // Supabase/PostgREST errors are plain objects, not Error instances —
+        // surface their message/details instead of "[object Object]".
+        const errorMessage = extractErrorMessage(err);
         if (errorMessage.includes('timeout') || errorMessage.includes('57014')) {
           setError('Preview timed out. The segment will still work when saved.');
         } else {
@@ -106,7 +116,7 @@ export function SegmentPreview({ definition, debounceMs = 800 }: SegmentPreviewP
         <div className="text-red-600 dark:text-red-400 text-sm">{error}</div>
       ) : !isValid ? (
         <div className="text-gray-500 dark:text-gray-400 text-sm">
-          Complete your segment conditions to see a preview of matching customers.
+          Complete your segment conditions to see a preview of matching people.
         </div>
       ) : count !== null ? (
         <div className="space-y-4">
@@ -116,7 +126,7 @@ export function SegmentPreview({ definition, debounceMs = 800 }: SegmentPreviewP
               {isEstimate ? `${count.toLocaleString()}+` : count.toLocaleString()}
             </span>
             <span className="text-sm text-blue-600 dark:text-blue-400">
-              {count === 1 ? 'customer matches' : 'customers match'} this segment
+              {count === 1 ? 'person matches' : 'people match'} this segment
               {isEstimate && ' (estimate)'}
             </span>
           </div>
@@ -175,7 +185,7 @@ export function SegmentPreview({ definition, debounceMs = 800 }: SegmentPreviewP
           {/* Empty State */}
           {count === 0 && (
             <div className="text-sm text-gray-500 dark:text-gray-400 bg-white/50 dark:bg-gray-800/50 rounded-lg p-3">
-              No customers match these conditions. Try adjusting your criteria.
+              No people match these conditions. Try adjusting your criteria.
             </div>
           )}
         </div>

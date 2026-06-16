@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import {
   FunnelIcon,
-  ArrowLeftIcon,
   UserGroupIcon,
   PencilIcon,
   ArrowPathIcon,
@@ -24,7 +23,7 @@ import {
   Badge,
   Avatar,
   ConfirmModal,
-  Tabs,
+  WorkspaceLayout,
   Table,
   THead,
   TBody,
@@ -303,40 +302,14 @@ export default function SegmentDetailPage() {
 
   return (
     <Page title={segment.name}>
-      <div className="p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-start justify-between">
-          <div className="flex items-start gap-4">
-            <Button
-              variant="flat"
-              isIcon
-              onClick={() => navigate('/segments')}
-              className="size-10 mt-1"
-            >
-              <ArrowLeftIcon className="size-5" />
-            </Button>
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-semibold text-[var(--gray-12)]">
-                  {segment.name}
-                </h1>
-                <Badge
-                  variant="soft"
-                  color={segment.status === 'active' ? 'success' : 'warning'}
-                >
-                  {segment.status}
-                </Badge>
-                <Badge variant="outlined" color="info">
-                  {segment.type}
-                </Badge>
-              </div>
-              {segment.description && (
-                <p className="text-[var(--gray-11)] mt-1">
-                  {segment.description}
-                </p>
-              )}
-            </div>
-          </div>
+      <WorkspaceLayout
+        title={`Segments: ${segment.name}`}
+        breadcrumbs={[
+          { label: 'Segments', to: '/segments' },
+          { label: segment.name },
+        ]}
+        onBreadcrumbNavigate={(to) => navigate(to)}
+        actions={
           <div className="flex items-center gap-2">
             <Button
               variant="outlined"
@@ -365,6 +338,29 @@ export default function SegmentDetailPage() {
               <TrashIcon className="size-4" />
             </Button>
           </div>
+        }
+        subTabs={[
+          { id: 'people', label: 'People', count: totalMembers },
+          { id: 'history', label: 'Calculation History' },
+        ]}
+        activeSubTabId={activeTab}
+        onSubTabChange={(tab) => setActiveTab(tab as 'people' | 'history')}
+      >
+        <div className="space-y-6">
+        {/* Status / type + description */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <Badge
+            variant="soft"
+            color={segment.status === 'active' ? 'success' : 'warning'}
+          >
+            {segment.status}
+          </Badge>
+          <Badge variant="outlined" color="info">
+            {segment.type}
+          </Badge>
+          {segment.description && (
+            <span className="text-[var(--gray-11)]">{segment.description}</span>
+          )}
         </div>
 
         {/* Stats */}
@@ -411,16 +407,6 @@ export default function SegmentDetailPage() {
             </div>
           </Card>
         </div>
-
-        {/* Tabs */}
-        <Tabs
-          value={activeTab}
-          onChange={(tab) => setActiveTab(tab as 'people' | 'history')}
-          tabs={[
-            { id: 'people', label: 'People', count: totalMembers },
-            { id: 'history', label: 'Calculation History' },
-          ]}
-        />
 
         {/* Tab Content */}
         {activeTab === 'people' ? (
@@ -551,7 +537,8 @@ export default function SegmentDetailPage() {
           confirmText="Delete"
           confirmColor="red"
         />
-      </div>
+        </div>
+      </WorkspaceLayout>
     </Page>
   );
 }
