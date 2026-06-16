@@ -243,14 +243,20 @@ export default function EditionEditorPage() {
       // Aliases: templates_block_defs.key → block_type so the consumer-facing
       // shape stays stable. sort_order isn't on templates_block_defs (no
       // library-wide ordering); we fall back to ordering by `key`.
+      // is_current=true is required: templates_apply_source soft-deletes
+      // pruned rows by flipping is_current to false (it keeps history for the
+      // audit trail). Without this filter, every template-repo update that
+      // drops a block would leave a stale row in the palette as a phantom.
       let blocksQuery = supabase
         .from('templates_block_defs')
         .select('id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key')
+        .eq('is_current', true)
         .order('key');
       // Bricks: filter by parent block_def's library via inner-embed join.
       let bricksQuery = supabase
         .from('templates_brick_defs')
         .select('id, block_def_id, key, name, schema, html, rich_text_template, sort_order, brick_type:key, render_kind, component_id, templates_block_defs!inner(library_id)')
+        .eq('is_current', true)
         .order('sort_order');
       if (filterCollectionId) {
         blocksQuery = blocksQuery.eq('library_id', filterCollectionId);

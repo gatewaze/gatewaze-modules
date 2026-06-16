@@ -66,6 +66,11 @@ export default function TemplateDetailPage() {
   const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [editName, setEditName] = useState('');
+  // True when this newsletter has an active git templates_source. The
+  // templates_apply_source RPC owns the block/brick rows in that case, so the
+  // admin UI must treat them as read-only: no per-row edit navigation, no
+  // delete, no one-off HTML upload (which would race with the next apply).
+  const [gitManaged, setGitManaged] = useState(false);
 
   const redirectProvider = (collection?.metadata?.redirect_provider as string) || '';
 
@@ -91,7 +96,7 @@ export default function TemplateDetailPage() {
       setCollection(collectionData);
       setEditName(collectionData.name);
 
-      const [blocksRes, bricksRes] = await Promise.all([
+      const [blocksRes, bricksRes, sourcesRes] = await Promise.all([
         supabase
           .from('templates_block_defs')
           .select('id, key, name, description, schema, html, rich_text_template, has_bricks, library_id, block_type:key')
@@ -104,13 +109,22 @@ export default function TemplateDetailPage() {
           .eq('templates_block_defs.library_id', collectionData.id)
           .eq('is_current', true)
           .order('sort_order'),
+        supabase
+          .from('templates_sources')
+          .select('id')
+          .eq('library_id', collectionData.id)
+          .eq('kind', 'git')
+          .eq('status', 'active')
+          .limit(1),
       ]);
 
       if (blocksRes.error) throw blocksRes.error;
       if (bricksRes.error) throw bricksRes.error;
+      if (sourcesRes.error) throw sourcesRes.error;
 
       setBlocks(blocksRes.data || []);
       setBricks(bricksRes.data || []);
+      setGitManaged((sourcesRes.data ?? []).length > 0);
     } catch (error) {
       console.error('Error loading template:', error);
       toast.error('Failed to load template');
@@ -228,16 +242,18 @@ export default function TemplateDetailPage() {
                   Download
                 </button>
               )}
-              <button
-                onClick={() => {
-                  if (blocks.length > 0 && !confirm('This will replace all block and brick templates. Existing editions are not affected. Continue?')) return;
-                  navigate(`/newsletters/templates/${collectionSlug}/upload`);
-                }}
-                className="px-3 py-1.5 text-sm font-medium rounded-md bg-white/90 backdrop-blur-md border border-white/40 text-gray-900 shadow-sm hover:bg-white transition-colors"
-              >
-                <ArrowUpTrayIcon className="w-4 h-4 inline mr-1" />
-                {blocks.length > 0 ? 'Re-upload' : 'Upload'}
-              </button>
+              {!gitManaged && (
+                <button
+                  onClick={() => {
+                    if (blocks.length > 0 && !confirm('This will replace all block and brick templates. Existing editions are not affected. Continue?')) return;
+                    navigate(`/newsletters/templates/${collectionSlug}/upload`);
+                  }}
+                  className="px-3 py-1.5 text-sm font-medium rounded-md bg-white/90 backdrop-blur-md border border-white/40 text-gray-900 shadow-sm hover:bg-white transition-colors"
+                >
+                  <ArrowUpTrayIcon className="w-4 h-4 inline mr-1" />
+                  {blocks.length > 0 ? 'Re-upload' : 'Upload'}
+                </button>
+              )}
             </>
           }
         >
@@ -293,6 +309,7 @@ export default function TemplateDetailPage() {
             <h2 className="text-lg font-medium text-[var(--gray-12)] flex items-center gap-2">
               <CubeIcon className="w-5 h-5 text-[var(--accent-9)]" />
               Block Templates
+              {gitManaged && <Badge color="gray">Managed by git</Badge>}
             </h2>
           </div>
 
@@ -300,8 +317,16 @@ export default function TemplateDetailPage() {
             {blocks.map((block) => (
               <Card
                 key={block.id}
-                className="p-3 flex items-center justify-between hover:border-[var(--accent-8)] transition-colors cursor-pointer"
-                onClick={() => navigate(`/newsletters/templates/${collectionSlug}/blocks/${block.block_type}`)}
+                className={
+                  gitManaged
+                    ? 'p-3 flex items-center justify-between'
+                    : 'p-3 flex items-center justify-between hover:border-[var(--accent-8)] transition-colors cursor-pointer'
+                }
+                onClick={
+                  gitManaged
+                    ? undefined
+                    : () => navigate(`/newsletters/templates/${collectionSlug}/blocks/${block.block_type}`)
+                }
               >
                 <div className="flex items-center gap-3">
                   <CubeIcon className="w-4 h-4 text-[var(--gray-10)]" />
@@ -320,20 +345,24 @@ export default function TemplateDetailPage() {
                     <Badge color="gray">+ rich text</Badge>
                   )}
                 </div>
-                <Button
-                  variant="ghost"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteBlock(block.id, block.name);
-                  }}
-                >
-                  <TrashIcon className="w-4 h-4 text-[var(--red-9)]" />
-                </Button>
+                {!gitManaged && (
+                  <Button
+                    variant="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteBlock(block.id, block.name);
+                    }}
+                  >
+                    <TrashIcon className="w-4 h-4 text-[var(--red-9)]" />
+                  </Button>
+                )}
               </Card>
             ))}
             {blocks.length === 0 && (
               <p className="text-sm text-[var(--gray-10)] text-center py-4">
-                No block templates yet — upload an HTML file to get started
+                {gitManaged
+                  ? 'No block templates yet — push a block file to the connected git repo to get started'
+                  : 'No block templates yet — upload an HTML file to get started'}
               </p>
             )}
           </div>
@@ -345,6 +374,7 @@ export default function TemplateDetailPage() {
             <h2 className="text-lg font-medium text-[var(--gray-12)] flex items-center gap-2">
               <PuzzlePieceIcon className="w-5 h-5 text-[var(--accent-9)]" />
               Brick Templates
+              {gitManaged && <Badge color="gray">Managed by git</Badge>}
             </h2>
           </div>
 
@@ -352,8 +382,16 @@ export default function TemplateDetailPage() {
             {bricks.map((brick) => (
               <Card
                 key={brick.id}
-                className="p-3 flex items-center justify-between hover:border-[var(--accent-8)] transition-colors cursor-pointer"
-                onClick={() => navigate(`/newsletters/templates/${collectionSlug}/bricks/${brick.brick_type}`)}
+                className={
+                  gitManaged
+                    ? 'p-3 flex items-center justify-between'
+                    : 'p-3 flex items-center justify-between hover:border-[var(--accent-8)] transition-colors cursor-pointer'
+                }
+                onClick={
+                  gitManaged
+                    ? undefined
+                    : () => navigate(`/newsletters/templates/${collectionSlug}/bricks/${brick.brick_type}`)
+                }
               >
                 <div className="flex items-center gap-3">
                   <PuzzlePieceIcon className="w-4 h-4 text-[var(--gray-10)]" />
@@ -369,15 +407,17 @@ export default function TemplateDetailPage() {
                     <Badge color="gray">+ rich text</Badge>
                   )}
                 </div>
-                <Button
-                  variant="ghost"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteBrick(brick.id, brick.name);
-                  }}
-                >
-                  <TrashIcon className="w-4 h-4 text-[var(--red-9)]" />
-                </Button>
+                {!gitManaged && (
+                  <Button
+                    variant="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteBrick(brick.id, brick.name);
+                    }}
+                  >
+                    <TrashIcon className="w-4 h-4 text-[var(--red-9)]" />
+                  </Button>
+                )}
               </Card>
             ))}
             {bricks.length === 0 && (
