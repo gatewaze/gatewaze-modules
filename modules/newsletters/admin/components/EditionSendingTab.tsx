@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { Card, Button, Badge } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { getSupabaseConfig } from '@/config/brands';
-import { editionFolderSlug } from '../../lib/edition-slug';
+import { getViewOnlineUrl } from '../utils/view-online-url';
 
 interface SendRecord {
   id: string;
@@ -238,19 +238,18 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
       // The "View Online" link target is per-newsletter: 'external' points at
       // the static site built from the publish branch (slugged by edition
       // date, matching publish-to-git); anything else defaults to the portal
-      // web-version URL.
-      const externalBase = collection?.view_online_external_base_url?.trim().replace(/\/+$/, '');
-      let webVersionUrl: string;
-      if (collection?.view_online_target === 'external' && externalBase && editionDate) {
-        // Matches the publish-branch folder layout: <base>/<date-subject>/
-        webVersionUrl = `${externalBase}/${editionFolderSlug(editionDate, subject)}/`;
-      } else {
-        const portalDomain = window.location.hostname.replace('-admin.', '-app.').replace('admin.', 'app.');
-        const portalProtocol = window.location.protocol;
-        webVersionUrl = newsletterSlug && editionDate
-          ? `${portalProtocol}//${portalDomain}/newsletters/${newsletterSlug}/${editionFolderSlug(editionDate, subject)}`
-          : `${portalProtocol}//${portalDomain}/newsletters`;
-      }
+      // web-version URL. getViewOnlineUrl is the single source of truth — same
+      // helper the editor preview / canvas threads through to EditionEmail so
+      // the rendered link in the send matches what the operator saw.
+      const portalProtocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
+      const portalHost = typeof window !== 'undefined'
+        ? window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, 'app.')
+        : 'localhost';
+      const webVersionUrl =
+        getViewOnlineUrl(
+          { slug: newsletterSlug, view_online_target: collection?.view_online_target, view_online_external_base_url: collection?.view_online_external_base_url },
+          { edition_date: editionDate, subject },
+        ) ?? `${portalProtocol}//${portalHost}/newsletters`;
 
       // Render the edition's HTML on demand via the parent-supplied
       // async renderer. Doing it here (instead of eagerly on every

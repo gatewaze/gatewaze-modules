@@ -33,6 +33,11 @@ interface NewsletterCanvasEditorProps {
    *  every exportEditionHtml call wrap the body in the same chrome. The legacy
    *  EditionCanvas engine forwards it to HtmlPreview's production-HTML render. */
   wrapperTemplate?: string | null;
+  /** Resolved "View Online" URL for this edition. Threaded through to
+   *  EditionEmail so the wrapper's `{{edition.view_online_link}}` renders the
+   *  actual portal/external URL in the editor preview AND every send. See
+   *  utils/view-online-url.ts. */
+  viewOnlineUrl?: string | null;
   onChange: (edition: NewsletterEdition) => void;
   onSave: (options?: { silent?: boolean }) => Promise<void> | void;
   onStatusChange?: (status: string) => void;
@@ -68,6 +73,7 @@ export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) =
         {...(props.collectionMetadata ? { collectionMetadata: props.collectionMetadata } : {})}
         {...(props.collectionId ? { collectionId: props.collectionId } : {})}
         {...(props.wrapperTemplate !== undefined ? { wrapperTemplate: props.wrapperTemplate } : {})}
+        {...(props.viewOnlineUrl !== undefined ? { viewOnlineUrl: props.viewOnlineUrl } : {})}
       />
     );
   }
