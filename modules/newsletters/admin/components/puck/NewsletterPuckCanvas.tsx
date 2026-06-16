@@ -155,7 +155,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         setResolvedWrapper((data?.html as string | undefined) ?? null);
       });
     return () => { cancelled = true; };
-  }, [wrapperConfig, collectionId]);
+  }, [wrapperTemplate, collectionId]);
 
   // Per-edition registry: the static code blocks + this newsletter's
   // declarative (git-authored) blocks. Superset of the static registry, so
