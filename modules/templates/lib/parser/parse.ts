@@ -128,17 +128,25 @@ function extractWrappers(
     const bodyStart = open.location.offset + open.rawMatch.length;
     const body = html.substring(bodyStart, close.closeStart);
 
-    if (!body.includes('{{content}}')) {
+    // Wrappers may use either the legacy Mustache body slot (`{{content}}`,
+    // for string-substitution renderers) or the declarative `<slot name="body"
+    // />` element (for renderers that compile the wrapper into a react-email
+    // tree — see modules/newsletters/admin/components/puck/email-blocks/
+    // EditionEmail.tsx). Either form must appear exactly once.
+    const slotMatches = (body.match(/<slot\s+[^>]*name\s*=\s*["']body["'][^>]*>/gi) ?? []).length;
+    const contentMatches = countOccurrences(body, '{{content}}');
+    const totalSlots = slotMatches + contentMatches;
+    if (totalSlots === 0) {
       errors.push({
         code: 'templates.parse.wrapper_missing_content_slot',
-        message: `WRAPPER:${open.key} must contain {{content}} exactly once.`,
+        message: `WRAPPER:${open.key} must contain a body slot (either {{content}} or <slot name="body" />) exactly once.`,
         path: sourcePath,
         line: open.location.line,
       });
-    } else if (countOccurrences(body, '{{content}}') > 1) {
+    } else if (totalSlots > 1) {
       errors.push({
         code: 'templates.parse.wrapper_duplicate_content_slot',
-        message: `WRAPPER:${open.key} contains {{content}} more than once.`,
+        message: `WRAPPER:${open.key} contains more than one body slot (count: ${totalSlots}).`,
         path: sourcePath,
         line: open.location.line,
       });
