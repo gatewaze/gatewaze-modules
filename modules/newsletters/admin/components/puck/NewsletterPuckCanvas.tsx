@@ -105,6 +105,14 @@ interface NewsletterPuckCanvasProps {
    * the same wrapper.
    */
   wrapperTemplate?: string | null;
+  /**
+   * Resolved "View Online" URL for this edition. When set, EditionEmail
+   * substitutes the wrapper's `{{edition.view_online_link}}` field with this
+   * URL instead of the `{{web_version}}` placeholder. Passed by the parent
+   * so the editor preview, "Copy production HTML" export, test send, and
+   * real send all use the same URL. See utils/view-online-url.ts.
+   */
+  viewOnlineUrl?: string | null;
 }
 
 export const NewsletterPuckCanvas: FC<NewsletterPuckCanvasProps> = (props) => {
@@ -131,6 +139,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   collectionMetadata,
   collectionId,
   wrapperTemplate,
+  viewOnlineUrl,
 }) => {
   // Default false so the Publish button renders enabled when the
   // parent doesn't thread the saving state through.
@@ -381,7 +390,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         edition,
         format: 'email',
         blockMeta: publishMeta,
-        wrapperTemplate: resolvedWrapper, registry,
+        wrapperTemplate: resolvedWrapper, viewOnlineUrl: viewOnlineUrl ?? undefined, registry,
         // The published page is the online version — drop the redundant
         // "View Online" self-link from its header.
         hideViewOnline: true,
@@ -531,7 +540,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             edition,
             format: 'email',
             blockMeta,
-            wrapperTemplate: resolvedWrapper, registry,
+            wrapperTemplate: resolvedWrapper, viewOnlineUrl: viewOnlineUrl ?? undefined, registry,
             pretty: false,
           });
           if (cancelled) return;
@@ -567,7 +576,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setExportBusy(format);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format, blockMeta, wrapperTemplate: resolvedWrapper, registry, pretty: true });
+      const html = await exportEditionHtml({ edition, format, blockMeta, wrapperTemplate: resolvedWrapper, viewOnlineUrl: viewOnlineUrl ?? undefined, registry, pretty: true });
 
       if (format === 'email') {
         // Email HTML → download a .html file (recipient-safe full doc).
@@ -610,7 +619,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setTestSendBusy(true);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapperTemplate: resolvedWrapper, registry, pretty: false });
+      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapperTemplate: resolvedWrapper, viewOnlineUrl: viewOnlineUrl ?? undefined, registry, pretty: false });
       // Mirror DeleteNewsletterCard's URL form — admin nginx has no /api
       // proxy, so we hit api.<brand>.live directly.
       const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
@@ -718,7 +727,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
                   edition,
                   format: 'email',
                   blockMeta: buildBlockMeta(),
-                  wrapperTemplate: resolvedWrapper, registry,
+                  wrapperTemplate: resolvedWrapper, viewOnlineUrl: viewOnlineUrl ?? undefined, registry,
                   pretty: true,
                 });
                 setHtmlSource(html);
@@ -1020,7 +1029,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           // Surface the fixed header/footer chrome + edition date to the canvas
           // root so it can render a non-editable preview of them around the
           // editable blocks (they're page chrome, not blocks).
-          extraMetadata={{ wrapperTemplate: resolvedWrapper, editionDate: edition.edition_date }}
+          extraMetadata={{ wrapperTemplate: resolvedWrapper, editionDate: edition.edition_date, viewOnlineUrl: viewOnlineUrl ?? '' }}
           // Newsletters lock to the email column width. The Desktop frame is
           // 682, not 650: the authored email column is 650px and the canvas
           // body adds 16px of horizontal padding each side (see
@@ -1200,6 +1209,7 @@ interface RootProps {
       previewMode?: 'light' | 'dark';
       wrapperTemplate?: string | null;
       editionDate?: string;
+      viewOnlineUrl?: string;
     };
   };
 }
@@ -1335,7 +1345,7 @@ function NewsletterCanvasRoot(props: RootProps) {
               date: editionDateFmt,
               title: '',
               preheader: '',
-              view_online_link: '',
+              view_online_link: props.puck?.metadata?.viewOnlineUrl ?? '',
             },
             body: <>{props.children}</>,
           };

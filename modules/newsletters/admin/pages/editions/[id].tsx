@@ -25,6 +25,7 @@ import {
   type BrickTemplate,
 } from '../../utils';
 import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
+import { getViewOnlineUrl } from '../../utils/view-online-url';
 import { buildEmailRegistry } from '../../components/puck/email-blocks/declarative/registry';
 import { emailBlockRegistry } from '../../components/puck/email-blocks';
 import type { BlockRenderMeta } from '../../components/puck/email-blocks/EditionEmail';
@@ -721,6 +722,10 @@ export default function EditionEditorPage() {
             brickTemplates={brickTemplates}
             collectionMetadata={collectionMetadata}
             wrapperTemplate={collection?.wrapperTemplate ?? null}
+            viewOnlineUrl={getViewOnlineUrl(
+              collection,
+              { edition_date: edition.edition_date, subject: edition.subject, title: edition.title },
+            )}
             {...(collectionId ? { collectionId } : {})}
             // Per spec-builder-evaluation §3.6 (extended). When the bound
             // library has explicit `render_kind='react-email'` rows, surface
@@ -840,7 +845,18 @@ export default function EditionEditorPage() {
                       });
                     }
                   }
-                  return exportEditionHtml({ edition, format: 'email', blockMeta, wrapperTemplate: collection?.wrapperTemplate ?? null, registry: buildEmailRegistry(blockTemplates, brickTemplates), pretty: false });
+                  return exportEditionHtml({
+                    edition,
+                    format: 'email',
+                    blockMeta,
+                    wrapperTemplate: collection?.wrapperTemplate ?? null,
+                    viewOnlineUrl: getViewOnlineUrl(
+                      collection,
+                      { edition_date: edition.edition_date, subject: edition.subject, title: edition.title },
+                    ) ?? undefined,
+                    registry: buildEmailRegistry(blockTemplates, brickTemplates),
+                    pretty: false,
+                  });
                 }
               : undefined}
           />

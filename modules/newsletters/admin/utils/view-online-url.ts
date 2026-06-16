@@ -1,0 +1,71 @@
+/**
+ * Compute the "View Online" URL for an edition — used by:
+ *   - the editor preview / canvas render of the wrapper's
+ *     `{{edition.view_online_link}}` field
+ *   - the "Copy production HTML" export
+ *   - the test-send and the real send flows
+ *
+ * The URL is taken from the newsletter's `view_online_target` setting:
+ *
+ *   `external`  →  `<view_online_external_base_url>/<edition-folder-slug>/`
+ *                  (for newsletters published to a separate static host —
+ *                   GitHub Pages, Netlify, etc.)
+ *
+ *   `portal`    →  `<portal-host>/newsletters/<collection-slug>/<edition-folder-slug>`
+ *   (default)    (the brand's portal — derived from the current admin
+ *                 hostname by swapping the `admin.` (or `-admin.`) sub-domain
+ *                 for `app.` so dev / prod / preview environments all resolve
+ *                 to the matching portal)
+ *
+ * Returns `null` when the inputs aren't sufficient to produce a stable URL
+ * yet (e.g. an edition without a date) — callers should fall back to the
+ * `{{web_version}}` template token in that case so the send pipeline can
+ * still substitute server-side.
+ */
+import { editionFolderSlug } from '../../lib/edition-slug.js';
+
+export interface ViewOnlineCollection {
+  slug?: string | null;
+  view_online_target?: string | null;
+  view_online_external_base_url?: string | null;
+}
+
+export interface ViewOnlineEdition {
+  edition_date?: string | null;
+  /** Either `subject` (newsletter send) or `title` (editor draft); the
+   *  folder slug uses the first non-empty one. */
+  subject?: string | null;
+  title?: string | null;
+}
+
+/** Derive the brand's portal host from the current admin host
+ *  (admin.aaif.live → app.aaif.live, admin.aaif.localhost → app.aaif.localhost,
+ *  brand-admin.fly.dev → brand-app.fly.dev). Returns null when called in a
+ *  non-browser context. */
+function derivePortalOrigin(): string | null {
+  if (typeof window === 'undefined') return null;
+  const host = window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, 'app.');
+  return `${window.location.protocol}//${host}`;
+}
+
+export function getViewOnlineUrl(
+  collection: ViewOnlineCollection | null | undefined,
+  edition: ViewOnlineEdition | null | undefined,
+): string | null {
+  const date = edition?.edition_date?.slice(0, 10);
+  if (!date) return null;
+  const subject = (edition?.subject ?? edition?.title ?? '').trim();
+  const folder = editionFolderSlug(date, subject);
+
+  if (collection?.view_online_target === 'external') {
+    const base = collection.view_online_external_base_url?.trim().replace(/\/+$/, '');
+    if (!base) return null;
+    return `${base}/${folder}/`;
+  }
+
+  const slug = collection?.slug?.trim();
+  if (!slug) return null;
+  const origin = derivePortalOrigin();
+  if (!origin) return null;
+  return `${origin}/newsletters/${slug}/${folder}`;
+}
