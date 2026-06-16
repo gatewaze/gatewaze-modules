@@ -242,8 +242,12 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
       // helper the editor preview / canvas threads through to EditionEmail so
       // the rendered link in the send matches what the operator saw.
       const portalProtocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
+      // Match the host-derivation rule getViewOnlineUrl uses: strip the
+      // leading `admin.` to the apex (admin.aaif.live → aaif.live; Helm-
+      // deployed brands serve the portal at the apex). Swap `-admin.` to
+      // `-app.` only for the Fly.io / preview infix convention.
       const portalHost = typeof window !== 'undefined'
-        ? window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, 'app.')
+        ? window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, '')
         : 'localhost';
       const webVersionUrl =
         getViewOnlineUrl(
@@ -273,9 +277,16 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
           list_ids: collection?.list_id ? [collection.list_id] : [],
           schedule_type: scheduleType,
           scheduled_at: scheduleType === 'scheduled' ? scheduledAt : null,
-          delivery_strategy: deliveryStrategy,
-          target_local: deliveryStrategy === 'global' ? null : targetLocal,
-          default_timezone: deliveryStrategy === 'global' ? null : (defaultTimezone || null),
+          // Per-recipient delivery strategies only apply to a scheduled
+          // send: the immediate path fires newsletter-send straight away
+          // and dispatches every recipient at once, so a "Recipient local
+          // time" / "Personalised send-time" choice would be silently
+          // ignored. Coerce to 'global' on save so the recorded row
+          // matches what actually happens. The UI also hides the
+          // dropdown for Immediately to stop the operator picking it.
+          delivery_strategy: scheduleType === 'immediate' ? 'global' : deliveryStrategy,
+          target_local: scheduleType === 'immediate' || deliveryStrategy === 'global' ? null : targetLocal,
+          default_timezone: scheduleType === 'immediate' || deliveryStrategy === 'global' ? null : (defaultTimezone || null),
           adapter_id: 'html',
           rendered_html: finalHtml,
           metadata: { web_version_url: webVersionUrl },
@@ -387,44 +398,52 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
               )}
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-[var(--gray-9)] mb-2">Delivery timing</label>
-              <select
-                value={deliveryStrategy}
-                onChange={(e) => setDeliveryStrategy(e.target.value as 'global' | 'tz_local' | 'personalised')}
-                className="w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
-              >
-                <option value="global">Everyone at once</option>
-                <option value="tz_local">Recipient local time</option>
-                <option value="personalised">Personalised send-time</option>
-              </select>
-              {deliveryStrategy !== 'global' && (
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <label className="text-xs text-[var(--gray-9)]">
-                    Local time
-                    <input
-                      type="time"
-                      value={targetLocal}
-                      onChange={(e) => setTargetLocal(e.target.value)}
-                      className="mt-1 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
-                    />
-                  </label>
-                  <label className="text-xs text-[var(--gray-9)]">
-                    Default timezone
-                    <input
-                      type="text"
-                      placeholder="e.g. Europe/London"
-                      value={defaultTimezone}
-                      onChange={(e) => setDefaultTimezone(e.target.value)}
-                      className="mt-1 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
-                    />
-                  </label>
-                </div>
-              )}
-              {deliveryStrategy === 'personalised' && (
-                <p className="mt-1 text-xs text-[var(--gray-8)]">Uses each recipient&apos;s modelled open time where known, otherwise falls back to their local time.</p>
-              )}
-            </div>
+            {/* Delivery timing only makes sense for a scheduled send. The
+                immediate path fires the send straight away and dispatches
+                every recipient at once, so per-recipient timing here would
+                be silently ignored. Showing it next to "Immediately" read
+                as contradictory — operators set it expecting it to apply.
+                Hide for Immediately; show for Later. */}
+            {scheduleType === 'scheduled' && (
+              <div>
+                <label className="block text-xs font-medium text-[var(--gray-9)] mb-2">Delivery timing</label>
+                <select
+                  value={deliveryStrategy}
+                  onChange={(e) => setDeliveryStrategy(e.target.value as 'global' | 'tz_local' | 'personalised')}
+                  className="w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
+                >
+                  <option value="global">Everyone at once</option>
+                  <option value="tz_local">Recipient local time</option>
+                  <option value="personalised">Personalised send-time</option>
+                </select>
+                {deliveryStrategy !== 'global' && (
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <label className="text-xs text-[var(--gray-9)]">
+                      Local time
+                      <input
+                        type="time"
+                        value={targetLocal}
+                        onChange={(e) => setTargetLocal(e.target.value)}
+                        className="mt-1 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
+                      />
+                    </label>
+                    <label className="text-xs text-[var(--gray-9)]">
+                      Default timezone
+                      <input
+                        type="text"
+                        placeholder="e.g. Europe/London"
+                        value={defaultTimezone}
+                        onChange={(e) => setDefaultTimezone(e.target.value)}
+                        className="mt-1 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
+                      />
+                    </label>
+                  </div>
+                )}
+                {deliveryStrategy === 'personalised' && (
+                  <p className="mt-1 text-xs text-[var(--gray-8)]">Uses each recipient&apos;s modelled open time where known, otherwise falls back to their local time.</p>
+                )}
+              </div>
+            )}
 
             <Button variant="solid" onClick={handleSend} disabled={sending || editionId === 'new' || isActive}>
               <PaperAirplaneIcon className="w-4 h-4 mr-1" />
