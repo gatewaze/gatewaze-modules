@@ -19,7 +19,18 @@ interface DeclarativeSource {
   brick_type?: string;
   name?: string;
   render_kind?: string;
-  content?: { html_template?: string };
+  content?: {
+    html_template?: string;
+    /**
+     * The block's field schema, already extracted from the source file's
+     * `<!-- SCHEMA: ... -->` comment by the server-side
+     * `templates_apply_source` RPC. The HTML stored in `html_template` has
+     * the comment stripped, so without this column the editor's parse step
+     * can't recover the schema. The newsletter editor's loadTemplates
+     * populates this from the `templates_block_defs.schema` JSONB column.
+     */
+    schema?: Record<string, unknown>;
+  };
 }
 
 function addDeclarative(merged: Map<string, EmailBlockEntry>, items: ReadonlyArray<DeclarativeSource>): void {
@@ -32,6 +43,14 @@ function addDeclarative(merged: Map<string, EmailBlockEntry>, items: ReadonlyArr
         label: t.name ?? id,
         category: 'Template',
         source: t.content.html_template,
+        // Pass the DB schema explicitly. parseTemplate() will only see a
+        // SCHEMA comment if it's still present in the html source — which
+        // it isn't, because templates_apply_source extracts it server-side
+        // before storing the html column. Without this override every
+        // declarative block lands in the editor with zero fields.
+        ...(t.content.schema && Object.keys(t.content.schema).length > 0
+          ? { schema: t.content.schema }
+          : {}),
       });
       merged.set(entry.componentId, entry);
     } catch (err) {
