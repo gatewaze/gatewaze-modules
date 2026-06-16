@@ -57,6 +57,21 @@ export function parseTemplate(source: string): ParsedTemplate {
   // auto-closes them and ignores the redundant close tag.)
   body = body.replace(/<([A-Za-z][\w-]*)\b([^>]*?)\/>/g, '<$1$2></$1>');
 
+  // JSX-style custom tag names that collide with HTML5 void elements after
+  // lowercasing (the html parser is case-insensitive). Most notably <Link>
+  // collapses to <link> — a void element — so `<Link href="x">text</Link>`
+  // becomes `<link href="x">` + the text as a sibling + a stray `</link>`,
+  // losing the anchor's children entirely. Same pattern applies to <Track>
+  // and <Source>. Rewrite to safe custom-element names (any tag containing a
+  // dash is treated as a generic non-void element by the html parser) and
+  // rely on the renderer's TAG_COMPONENTS map to alias back. <Hr>/<Img>/<Br>
+  // are not handled here — those ARE used as void in templates and the
+  // existing self-closing expansion already covers them correctly.
+  const VOID_COLLISIONS = ['Link', 'Track', 'Source'] as const;
+  for (const Tag of VOID_COLLISIONS) {
+    body = body.replace(new RegExp(`<(/?)${Tag}\\b`, 'g'), `<$1gw-${Tag.toLowerCase()}`);
+  }
+
   // Wrap in a sentinel root so top-level siblings are preserved and we avoid
   // the html/head/body auto-wrapping. Custom tags (Section/Row/…) parse as
   // generic elements — no HTML table auto-correction interferes.

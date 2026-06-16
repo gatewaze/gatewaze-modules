@@ -31,6 +31,9 @@ export const TAG_COMPONENTS: Record<string, ComponentType<any>> = {
   button: Button,
   link: Link,
   hr: Hr,
+  // Aliases for case-sensitive JSX tags that collide with HTML5 void elements
+  // (parse-template rewrites them so DOMParser doesn't strip their children).
+  'gw-link': Link,
 };
 
 /** Tags the renderer handles specially (not a plain component pass-through). */

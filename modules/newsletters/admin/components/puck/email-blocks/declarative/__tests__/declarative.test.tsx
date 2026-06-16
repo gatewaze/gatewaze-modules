@@ -163,4 +163,19 @@ describe('declarative block format', () => {
     expect(html).not.toContain('onclick');
     expect(html).toContain('hi');
   });
+
+  it('preserves children of <Link> even though <link> is HTML5-void', async () => {
+    // Regression: DOMParser lowercases <Link> to <link>, treats it as void,
+    // and drops the inner content. The parser must rewrite the collision
+    // before parsing so the anchor's children survive end-to-end.
+    const html = await renderEntry(
+      `<!-- SCHEMA: { "url": {"type":"text"} } --><Section><Link href="{{url}}">Click here</Link></Section>`,
+      { url: 'https://example.com/' },
+    );
+    expect(html).toContain('href="https://example.com/"');
+    expect(html).toContain('Click here');
+    // The crucial assertion: the link text must be INSIDE an anchor, not
+    // floating as a sibling text node after an empty <a>.
+    expect(html).toMatch(/<a[^>]*href="https:\/\/example\.com\/"[^>]*>[^<]*Click here[^<]*<\/a>/);
+  });
 });
