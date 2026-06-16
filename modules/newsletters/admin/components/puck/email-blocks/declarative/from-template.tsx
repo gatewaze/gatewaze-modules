@@ -75,11 +75,21 @@ export interface DeclarativeBlockOptions {
   category?: string;
   /** The html-ish block source (SCHEMA comment + element tree). */
   source: string;
+  /**
+   * Field schema, used when the SCHEMA comment was already stripped from
+   * the source before it reached the editor — e.g. the server-side
+   * `templates_apply_source` RPC extracts the comment into the
+   * `templates_block_defs.schema` JSONB column and stores only the body
+   * HTML in `html`. Wins over any schema parseTemplate manages to
+   * recover from the source. When omitted the parsed source is the
+   * authority (legacy + test usage).
+   */
+  schema?: Record<string, unknown>;
 }
 
 export function declarativeBlockEntry(opts: DeclarativeBlockOptions): EmailBlockEntry {
-  const { schema, nodes } = parseTemplate(opts.source);
-  const schemaMap = (schema ?? {}) as Record<string, DeclField>;
+  const { schema: parsedSchema, nodes } = parseTemplate(opts.source);
+  const schemaMap = (opts.schema ?? parsedSchema ?? {}) as Record<string, DeclField>;
 
   const fields: Record<string, Field> = {};
   const defaultProps: Content = {};
