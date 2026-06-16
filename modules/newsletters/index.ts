@@ -137,6 +137,11 @@ const newslettersModule: GatewazeModule = {
     // click-corroboration RPCs (spec §6, Part C). 038 uses 035a.
     'migrations/037_detection_comparison_rpc.sql',
     'migrations/038_corroborated_engagement_rpc.sql',
+    // 039 fixes a publish-blocker: the 001 FK on edition_links.block_id was
+    // ON DELETE SET NULL while 032 made block_id NOT NULL — any delete-then-
+    // reinsert save path bombed with 23502. Switches the FK to ON DELETE
+    // CASCADE so tracking rows die with their block.
+    'migrations/039_edition_links_fk_cascade.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
