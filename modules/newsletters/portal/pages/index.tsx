@@ -5,6 +5,9 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slug'
+import { NewsletterSignup } from '../components/NewsletterSignup'
+
+const RECENT_LIMIT = 6
 
 interface Newsletter {
   id: string
@@ -25,11 +28,11 @@ interface Edition {
 }
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
+  return new Date(dateStr).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+function humanizeCategory(value: string): string {
+  return value.replace(/[-_]+/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase())
 }
 
 export default function NewsletterListingPage() {
@@ -40,10 +43,7 @@ export default function NewsletterListingPage() {
     async function load() {
       try {
         const supabase = getSupabaseClient()
-
-        // Query as the current user (authenticated or anon).
-        // RLS policies handle visibility — anon sees only public newsletters,
-        // authenticated users see all including require_login ones.
+        // RLS handles visibility — anon sees only public newsletters.
         const { data: newsletters } = await supabase
           .from('newsletters_template_collections')
           .select('id, name, slug, description, accent_color, content_category, require_login')
@@ -62,20 +62,17 @@ export default function NewsletterListingPage() {
           .eq('status', 'published')
           .order('edition_date', { ascending: false })
 
-        const editionsByCollection = new Map<string, Edition[]>()
+        const byCollection = new Map<string, Edition[]>()
         for (const ed of editions || []) {
-          const list = editionsByCollection.get(ed.collection_id) || []
+          const list = byCollection.get(ed.collection_id) || []
           list.push(ed)
-          editionsByCollection.set(ed.collection_id, list)
+          byCollection.set(ed.collection_id, list)
         }
 
         setData(
           newsletters
-            .filter(nl => editionsByCollection.has(nl.id))
-            .map(nl => ({
-              newsletter: nl,
-              editions: editionsByCollection.get(nl.id) || [],
-            }))
+            .filter((nl) => byCollection.has(nl.id))
+            .map((nl) => ({ newsletter: nl, editions: byCollection.get(nl.id) || [] })),
         )
       } catch (err) {
         console.error('Error loading newsletters:', err)
@@ -86,7 +83,6 @@ export default function NewsletterListingPage() {
     load()
   }, [])
 
-  // White-label: workspace-shell pub-* design system; renders inside the shell content area.
   if (loading) {
     return (
       <div className="pub-wrap">
@@ -109,43 +105,73 @@ export default function NewsletterListingPage() {
     <div className="pub-wrap pub-fade">
       <div className="pub-h">
         <h1>Newsletters</h1>
-        <p>Subscribe to our editions and read the latest issues.</p>
+        <p>Subscribe to a newsletter and catch up on recent editions.</p>
       </div>
 
-      {data.map(({ newsletter, editions }) => (
-        <section key={newsletter.id} className="pub-sec">
-          <div className="pub-nl-head">
-            <span className="pub-nl-bar" style={{ background: newsletter.accent_color || 'var(--accent)' }} />
-            <div className="grow">
-              <h2 className="pub-nl-name">{newsletter.name}</h2>
-              {newsletter.description && <p className="pub-nl-desc">{newsletter.description}</p>}
-            </div>
-            {newsletter.require_login && <span className="pub-cat">Subscribers only</span>}
-            {newsletter.content_category && (
-              <span className="pub-cat" style={newsletter.accent_color ? { color: newsletter.accent_color } : undefined}>
-                {newsletter.content_category}
-              </span>
-            )}
-          </div>
-
-          <div className="pub-grid">
-            {editions.map((edition) => (
-              <Link
-                key={edition.id}
-                href={`/newsletters/${newsletter.slug}/${editionFolderSlug(edition.edition_date, edition.title)}`}
-                className="pub-card"
-                style={{ borderTop: `3px solid ${newsletter.accent_color || 'var(--accent)'}` }}
-              >
-                <div className="pub-card-body" style={{ padding: '4px 6px' }}>
-                  <div className="pub-meta" style={{ marginTop: 0 }}>{formatDate(edition.edition_date)}</div>
-                  <h3>{edition.title || 'Untitled Edition'}</h3>
-                  {edition.preheader && <p>{edition.preheader}</p>}
+      {data.map(({ newsletter, editions }) => {
+        const editionHref = (ed: Edition) =>
+          `/newsletters/${newsletter.slug}/${editionFolderSlug(ed.edition_date, ed.title)}`
+        const latest = editions[0]
+        const recent = editions.slice(1, RECENT_LIMIT)
+        const cardStyle = newsletter.accent_color ? ({ ['--nl-accent']: newsletter.accent_color } as React.CSSProperties) : undefined
+        return (
+          <section key={newsletter.id} className="pub-nl">
+            <div className="pub-nl-card" style={cardStyle}>
+              <div className="pub-nl-top">
+                <div className="pub-nl-id">
+                  <div className="pub-nl-titlerow">
+                    <h2 className="pub-nl-name">
+                      <Link href={`/newsletters/${newsletter.slug}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                        {newsletter.name}
+                      </Link>
+                    </h2>
+                    {newsletter.content_category && (
+                      <span className="pub-nl-badge">{humanizeCategory(newsletter.content_category)}</span>
+                    )}
+                  </div>
+                  {newsletter.description && <p className="pub-nl-desc">{newsletter.description}</p>}
+                  {newsletter.require_login ? (
+                    <p className="pub-nl-note">Subscribers only — sign in to read.</p>
+                  ) : (
+                    <NewsletterSignup collectionSlug={newsletter.slug} />
+                  )}
                 </div>
-              </Link>
-            ))}
-          </div>
-        </section>
-      ))}
+              </div>
+
+              <div className="pub-nl-editions">
+                {latest && (
+                  <Link href={editionHref(latest)} className="pub-nl-feature">
+                    <div style={{ minWidth: 0 }}>
+                      <div className="eyebrow">Latest edition</div>
+                      <div className="date">{formatDate(latest.edition_date)}</div>
+                      <h3>{latest.title || 'Untitled edition'}</h3>
+                      {latest.preheader && <p>{latest.preheader}</p>}
+                    </div>
+                    <span className="arrow" aria-hidden>→</span>
+                  </Link>
+                )}
+                {recent.length > 0 && (
+                  <ul className="pub-nl-rows">
+                    {recent.map((edition) => (
+                      <li key={edition.id}>
+                        <Link href={editionHref(edition)} className="pub-nl-row">
+                          <span className="pub-nl-row-date">{formatDate(edition.edition_date)}</span>
+                          <span className="pub-nl-row-title">{edition.title || 'Untitled edition'}</span>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {editions.length > RECENT_LIMIT && (
+                  <Link href={`/newsletters/${newsletter.slug}`} className="pub-nl-viewall">
+                    View all {editions.length} editions →
+                  </Link>
+                )}
+              </div>
+            </div>
+          </section>
+        )
+      })}
     </div>
   )
 }
