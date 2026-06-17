@@ -26,8 +26,8 @@ export const BlogPostBlock: EmailBlockEntry<BlogPostProps> = {
     link_text: { type: 'text', label: 'Link text' },
   },
   defaultProps: { title: '', description: '', blog_link: '', link_text: 'Read the blog' },
-  Component: ({ title, description, blog_link, link_text }) => (
-    <Section style={{ padding: '0 15px' }}>
+  Component: ({ title, description, blog_link, link_text, _last }) => (
+    <Section style={{ padding: 0 }}>
       {title ? (
         <Heading as="h3" style={BRICK_TITLE}>
           {title}
@@ -43,7 +43,7 @@ export const BlogPostBlock: EmailBlockEntry<BlogPostProps> = {
           </strong>
         </Text>
       ) : null}
-      <Hr style={DIVIDER} />
+      {_last ? null : <Hr style={DIVIDER} />}
     </Section>
   ),
 };

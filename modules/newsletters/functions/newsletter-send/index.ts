@@ -398,6 +398,10 @@ interface SendContext {
   collectionReplyTo: string | null
   hmacSecret: string | undefined
   supabaseUrl: string
+  // Portal origin (e.g. https://aaif.live) for the visible footer "manage your
+  // subscriptions" link → the Subscription Centre. From the send metadata
+  // (set by the admin at send-creation); null falls back to the edge-fn page.
+  portalBaseUrl: string | null
   usesWeather: boolean
   weatherUnits: 'celsius' | 'fahrenheit'
   usesMergeFields: boolean
@@ -457,6 +461,7 @@ async function buildSendContext(supabase: any, send: any, provider: EmailProvide
     collectionReplyTo,
     hmacSecret: Deno.env.get('UNSUBSCRIBE_HMAC_SECRET'),
     supabaseUrl: Deno.env.get('SUPABASE_URL')!,
+    portalBaseUrl: ((send.metadata as { portal_base_url?: string } | null)?.portal_base_url) || Deno.env.get('SITE_URL') || null,
     usesWeather,
     weatherUnits: usesWeather ? extractWeatherUnits(html) : 'celsius',
     // Merge fields work in ANY email text — body HTML and the subject line.
@@ -508,25 +513,51 @@ async function resolveWeatherFor(email: string, ctx: SendContext): Promise<Weath
  */
 async function sendToRecipient(supabase: any, provider: EmailProviderModule, ctx: SendContext, sendId: string, email: string): Promise<boolean> {
   try {
-    let unsubscribeUrl = ''
+    // Two unsubscribe URLs from the same signed token:
+    //  • oneClickUrl → the edge fn, used for the RFC 8058 List-Unsubscribe
+    //    header (must be a single-POST, no landing page).
+    //  • prefsUrl → the portal Subscription Centre, the VISIBLE footer link,
+    //    where the recipient sees every list and unsubscribes per-list. Falls
+    //    back to the one-click edge-fn page when no portal base is known.
+    // Three URLs from one signed token:
+    //  • oneClickUrl → edge fn, for the RFC 8058 List-Unsubscribe header.
+    //  • unsubUrl    → Subscription Centre that ALSO unsubscribes this list on
+    //                  arrival (the visible "Unsubscribe" link / {{unsubscribe_url}}).
+    //  • manageUrl   → full Subscription Centre, no auto-unsubscribe
+    //                  ("Manage preferences" / {{manage_subscriptions_url}}).
+    // unsub/manage fall back to the one-click edge-fn page when no portal base.
+    let oneClickUrl = ''
+    let unsubUrl = ''
+    let manageUrl = ''
     let emailHeaders: Record<string, string> = {}
     if (ctx.hmacSecret) {
       const token = await generateUnsubscribeToken(email, ctx.listId, ctx.hmacSecret)
-      unsubscribeUrl = `${ctx.supabaseUrl}/functions/v1/newsletter-unsubscribe?token=${encodeURIComponent(token)}`
+      const tok = encodeURIComponent(token)
+      oneClickUrl = `${ctx.supabaseUrl}/functions/v1/newsletter-unsubscribe?token=${tok}`
+      const base = ctx.portalBaseUrl ? ctx.portalBaseUrl.replace(/\/$/, '') : null
+      manageUrl = base ? `${base}/subscriptions?token=${tok}` : oneClickUrl
+      unsubUrl = base ? `${base}/subscriptions?token=${tok}&unsub=1` : oneClickUrl
       emailHeaders = {
-        'List-Unsubscribe': `<${unsubscribeUrl}>`,
+        'List-Unsubscribe': `<${oneClickUrl}>`,
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
       }
     }
 
     let personalizedHtml = ctx.html
-    if (unsubscribeUrl && !ctx.html.includes('{{unsubscribe_url}}')) {
-      personalizedHtml = ctx.html.replace(
-        '</body>',
-        `<div style="text-align:center;padding:20px;font-size:12px;color:#999;"><a href="${unsubscribeUrl}" style="color:#999;">Unsubscribe</a></div></body>`,
-      )
-    } else if (unsubscribeUrl) {
-      personalizedHtml = ctx.html.replace(/\{\{unsubscribe_url\}\}/g, unsubscribeUrl)
+    if (unsubUrl) {
+      const hadPlaceholder = /\{\{unsubscribe_url\}\}/.test(ctx.html)
+      personalizedHtml = personalizedHtml
+        .replace(/\{\{unsubscribe_url\}\}/g, unsubUrl)
+        .replace(/\{\{manage_subscriptions_url\}\}/g, manageUrl)
+      if (!hadPlaceholder) {
+        personalizedHtml = personalizedHtml.replace(
+          '</body>',
+          `<div style="text-align:center;padding:20px;font-size:12px;color:#999;">` +
+            `<a href="${unsubUrl}" style="color:#999;">Unsubscribe</a> &middot; ` +
+            `<a href="${manageUrl}" style="color:#999;">Manage your email preferences</a>` +
+            `</div></body>`,
+        )
+      }
     }
 
     if (ctx.usesWeather) {
@@ -562,6 +593,9 @@ async function sendToRecipient(supabase: any, provider: EmailProviderModule, ctx
       subject,
       html: personalizedHtml,
       headers: emailHeaders,
+      // We own the unsubscribe footer (→ Subscription Centre) + the
+      // List-Unsubscribe header, so suppress the provider's auto-appended one.
+      disableSubscriptionTracking: true,
     })
 
     if (result.success) {

@@ -78,6 +78,11 @@ const provider: EmailProviderModule = {
     if (params.tags) {
       body.categories = Object.values(params.tags);
     }
+    if (params.disableSubscriptionTracking) {
+      // Suppress SendGrid's account-level Subscription Tracking footer so it
+      // doesn't append its own unsubscribe link — the caller provides one.
+      body.tracking_settings = { subscription_tracking: { enable: false } };
+    }
 
     try {
       const response = await fetch(SENDGRID_API_URL, {

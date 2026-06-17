@@ -831,6 +831,7 @@ export default function EditionEditorPage() {
             subject={edition.subject || ''}
             collection={collection}
             newsletterSlug={newsletterSlug}
+            editionStatus={(edition as { status?: string }).status}
             getRenderedHtml={edition
               ? async () => {
                   // Build per-block render metadata: react-email blocks

@@ -19,6 +19,13 @@ export interface SendEmailParams {
   headers?: Record<string, string>;
   /** Provider-specific tags/categories for analytics */
   tags?: Record<string, string>;
+  /**
+   * When true, ask the provider NOT to append its own unsubscribe footer/link
+   * (e.g. SendGrid Subscription Tracking). Use when the caller supplies its own
+   * unsubscribe link + List-Unsubscribe header. Default (undefined) leaves the
+   * provider's account-level behaviour unchanged.
+   */
+  disableSubscriptionTracking?: boolean;
 }
 
 export interface SendEmailResult {
