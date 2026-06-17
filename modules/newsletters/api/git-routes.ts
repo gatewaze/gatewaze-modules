@@ -85,10 +85,12 @@ export function createInitRepoRoute(deps: GitRoutesDeps) {
       res.status(200).json({ kind: 'skipped', reason: 'gitServer dependency not wired' });
       return;
     }
-    if (!deps.boilerplateUrl) {
-      res.status(200).json({ kind: 'skipped', reason: 'GATEWAZE_NEWSLETTER_BOILERPLATE_URL not set' });
-      return;
-    }
+    // The bare repo always needs to exist — publish-to-git clones from it,
+    // and a missing repo bubbles up as "fatal: repository … does not exist"
+    // mid-publish. The boilerplate URL is only used to seed an initial
+    // commit; when it isn't configured, fall through and still ask the
+    // git server to create an empty bare repo. publish-to-git can commit
+    // into an empty repo just fine.
 
     try {
       // Look up the collection to get its slug (used in the bare repo
