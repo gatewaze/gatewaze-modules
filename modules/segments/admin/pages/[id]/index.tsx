@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams, useLocation } from 'react-router';
 import {
   FunnelIcon,
   UserGroupIcon,
-  PencilIcon,
+  CheckIcon,
   ArrowPathIcon,
   ArrowDownTrayIcon,
   TrashIcon,
@@ -37,13 +37,21 @@ import {
   PaginationPrevious,
   PaginationItems,
 } from '@/components/ui';
-import { Input } from '@/components/ui/Form';
+import { Input, Textarea } from '@/components/ui/Form';
 import { Spinner } from '@/components/ui/Spinner';
 import { Page } from '@/components/shared/Page';
 import { DataTable } from '@/components/shared/table/DataTable';
 import { supabase } from '@/lib/supabase';
-import { createSegmentService } from '@/lib/segments';
-import type { Segment, SegmentMember, SegmentCalculationHistory } from '@/lib/segments';
+import { createSegmentService, isValidSegmentDefinition } from '@/lib/segments';
+import type {
+  Segment,
+  SegmentMember,
+  SegmentCalculationHistory,
+  SegmentDefinition,
+  SegmentType,
+  SegmentStatus,
+} from '@/lib/segments';
+import { SegmentBuilder } from '../components/SegmentBuilder';
 
 const PAGE_SIZE = 25;
 
@@ -66,7 +74,19 @@ function formatDuration(ms: number | undefined): string {
 
 export default function SegmentDetailPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams<{ id: string }>();
+
+  // The editor is a sub-tab; the URL is the single source of truth so deep
+  // links (/segments/:id/edit) and browser back/forward stay in sync.
+  const isEditRoute = location.pathname.endsWith('/edit');
+  const tabParam = new URLSearchParams(location.search).get('tab');
+  const activeTab: 'people' | 'history' | 'edit' = isEditRoute
+    ? 'edit'
+    : tabParam === 'history'
+      ? 'history'
+      : 'people';
+
   const [segment, setSegment] = useState<Segment | null>(null);
   const [members, setMembers] = useState<SegmentMember[]>([]);
   const [totalMembers, setTotalMembers] = useState(0);
@@ -76,7 +96,17 @@ export default function SegmentDetailPage() {
   const [recalculating, setRecalculating] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'people' | 'history'>('people');
+
+  // Edit-tab form state
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editType, setEditType] = useState<SegmentType>('dynamic');
+  const [editStatus, setEditStatus] = useState<SegmentStatus>('active');
+  const [editDefinition, setEditDefinition] = useState<SegmentDefinition>({
+    match: 'all',
+    conditions: [],
+  });
+  const [saving, setSaving] = useState(false);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -106,6 +136,11 @@ export default function SegmentDetailPage() {
         return;
       }
       setSegment(data);
+      setEditName(data.name);
+      setEditDescription(data.description || '');
+      setEditType(data.type);
+      setEditStatus(data.status);
+      setEditDefinition(data.definition);
 
       // Load history
       const historyData = await segmentService.getCalculationHistory(id);
@@ -213,6 +248,36 @@ export default function SegmentDetailPage() {
     });
   };
 
+  const goToTab = (tab: 'people' | 'history' | 'edit') => {
+    if (tab === 'edit') navigate(`/segments/${id}/edit`);
+    else if (tab === 'history') navigate(`/segments/${id}?tab=history`);
+    else navigate(`/segments/${id}`);
+  };
+
+  const canSaveEdit = Boolean(editName.trim()) && isValidSegmentDefinition(editDefinition);
+
+  const handleSaveEdit = async () => {
+    if (!segmentService || !id || !canSaveEdit) return;
+
+    setSaving(true);
+    try {
+      const updated = await segmentService.updateSegment(id, {
+        name: editName.trim(),
+        description: editDescription.trim() || undefined,
+        definition: editDefinition,
+        status: editStatus,
+      });
+      toast.success(`Segment "${updated.name}" updated successfully`);
+      await loadSegment();
+      navigate(`/segments/${id}`);
+    } catch (error) {
+      console.error('Error updating segment:', error);
+      toast.error('Failed to update segment');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const memberColumns = useMemo(
     () => [
       memberColumnHelper.accessor('email', {
@@ -310,43 +375,64 @@ export default function SegmentDetailPage() {
         ]}
         onBreadcrumbNavigate={(to) => navigate(to)}
         actions={
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outlined"
-              onClick={handleRecalculate}
-              disabled={recalculating}
-              className="gap-2"
-            >
-              <ArrowPathIcon
-                className={`size-4 ${recalculating ? 'animate-spin' : ''}`}
-              />
-              Recalculate
-            </Button>
-            <Button variant="outlined" onClick={handleExport} className="gap-2">
-              <ArrowDownTrayIcon className="size-4" />
-              Export CSV
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={() => navigate(`/segments/${id}/edit`)}
-              className="gap-2"
-            >
-              <PencilIcon className="size-4" />
-              Edit
-            </Button>
-            <Button variant="outlined" color="error" onClick={handleDelete}>
-              <TrashIcon className="size-4" />
-            </Button>
-          </div>
+          activeTab === 'edit' ? (
+            <div className="flex gap-3 items-center">
+              <Button variant="outlined" onClick={() => navigate(`/segments/${id}`)}>
+                Cancel
+              </Button>
+              <Button
+                color="primary"
+                onClick={handleSaveEdit}
+                disabled={!canSaveEdit || saving}
+                className="gap-2"
+              >
+                {saving ? (
+                  <>
+                    <Spinner className="size-4" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <CheckIcon className="size-4" />
+                    Save Changes
+                  </>
+                )}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outlined"
+                onClick={handleRecalculate}
+                disabled={recalculating}
+                className="gap-2"
+              >
+                <ArrowPathIcon
+                  className={`size-4 ${recalculating ? 'animate-spin' : ''}`}
+                />
+                Recalculate
+              </Button>
+              <Button variant="outlined" onClick={handleExport} className="gap-2">
+                <ArrowDownTrayIcon className="size-4" />
+                Export CSV
+              </Button>
+              <Button variant="outlined" color="error" onClick={handleDelete}>
+                <TrashIcon className="size-4" />
+              </Button>
+            </div>
+          )
         }
         subTabs={[
           { id: 'people', label: 'People', count: totalMembers },
           { id: 'history', label: 'Calculation History' },
+          { id: 'edit', label: 'Edit' },
         ]}
         activeSubTabId={activeTab}
-        onSubTabChange={(tab) => setActiveTab(tab as 'people' | 'history')}
+        onSubTabChange={(tab) => goToTab(tab as 'people' | 'history' | 'edit')}
       >
         <div className="space-y-6">
+        {activeTab !== 'edit' && (
+          <>
         {/* Status / type + description */}
         <div className="flex items-center gap-3 flex-wrap">
           <Badge
@@ -408,8 +494,84 @@ export default function SegmentDetailPage() {
           </Card>
         </div>
 
+          </>
+        )}
+
         {/* Tab Content */}
-        {activeTab === 'people' ? (
+        {activeTab === 'edit' ? (
+          <div className="space-y-6 max-w-5xl">
+            {/* Basic Info */}
+            <Card variant="surface" className="p-6 space-y-4">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Basic Information
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Input
+                  label="Segment Name"
+                  placeholder="e.g., Active KubeCon Attendees"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  required
+                />
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Type
+                  </label>
+                  <select
+                    value={editType}
+                    onChange={(e) => setEditType(e.target.value as SegmentType)}
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  >
+                    <option value="dynamic">Dynamic</option>
+                    <option value="static">Static</option>
+                    <option value="manual">Manual</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Status
+                  </label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value as SegmentStatus)}
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  >
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </div>
+              </div>
+              <Textarea
+                label="Description (optional)"
+                placeholder="Describe who this segment targets and how it will be used..."
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                rows={2}
+              />
+            </Card>
+
+            {/* Segment Builder */}
+            <Card variant="surface" className="p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Segment Conditions
+                </h2>
+                {editDefinition.conditions.length > 0 && (
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                    {editDefinition.conditions.length} condition
+                    {editDefinition.conditions.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+              <SegmentBuilder
+                value={editDefinition}
+                onChange={setEditDefinition}
+                showPreview={true}
+              />
+            </Card>
+          </div>
+        ) : activeTab === 'people' ? (
           <div className="space-y-4">
             {/* Search */}
             <Input
