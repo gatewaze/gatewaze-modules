@@ -333,13 +333,309 @@ async function handler(req: Request) {
 // Send processing
 // ---------------------------------------------------------------------------
 
+// Per drip-tick claim size. Bounds how many staggered recipients are
+// dispatched each 60s dispatcher tick (drained over subsequent ticks).
+const DRIP_LIMIT = 200
+
+interface SendContext {
+  html: string
+  subject: string
+  listId: string
+  fromEmail: string
+  fromName: string
+  collectionReplyTo: string | null
+  hmacSecret: string | undefined
+  supabaseUrl: string
+  usesWeather: boolean
+  weatherUnits: 'celsius' | 'fahrenheit'
+  locationByEmail: Map<string, { city: string; country: string }>
+  weatherCache: Map<string, WeatherResolved | null>
+}
+
+/**
+ * Build everything needed to send an edition to one or more recipients:
+ * collection Reply-To, link-tagged HTML, subject, list id, from, unsubscribe +
+ * weather config. Shared by the all-at-once path (processSend) and the
+ * per-recipient drip (runRecipientDrip) so both render identically. Throws on
+ * missing HTML or list id (caller marks the send failed). Link tagging is
+ * idempotent, so it's safe to rebuild per drip tick.
+ */
+async function buildSendContext(supabase: any, send: any, provider: EmailProviderModule): Promise<SendContext> {
+  const collectionId: string | null = (send.edition as { collection_id?: string | null } | null)?.collection_id ?? null
+  let collectionReplyTo: string | null = null
+  if (collectionId) {
+    const { data: coll } = await supabase
+      .from('newsletters_template_collections')
+      .select('reply_to')
+      .eq('id', collectionId)
+      .maybeSingle()
+    collectionReplyTo = coll?.reply_to || null
+  }
+
+  let html = send.rendered_html as string
+  if (!html) throw new Error('No rendered HTML found. Render the edition first.')
+
+  try {
+    const editionId = (send.edition as { id?: string } | null)?.id
+    const trackingEnabled = collectionId == null ? true : await isLinkTrackingEnabled(supabase, collectionId)
+    if (editionId && trackingEnabled) {
+      const orderedRows = await syncEditionLinkRegistry(supabase, editionId)
+      if (orderedRows.length > 0) html = tagHtmlLinks(html, orderedRows)
+    }
+  } catch (err) {
+    console.warn('[newsletter-send] link tracking skipped:', err instanceof Error ? err.message : err)
+  }
+
+  const listId = (send.list_ids || [])[0]
+  if (!listId) throw new Error('No subscription list configured for this send.')
+
+  const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html)
+  return {
+    html,
+    subject: send.subject || send.edition?.subject || 'Newsletter',
+    listId,
+    fromEmail: send.from_address || Deno.env.get('EMAIL_FROM') || 'noreply@localhost',
+    fromName: send.from_name || Deno.env.get('EMAIL_FROM_NAME') || 'Gatewaze',
+    collectionReplyTo,
+    hmacSecret: Deno.env.get('UNSUBSCRIBE_HMAC_SECRET'),
+    supabaseUrl: Deno.env.get('SUPABASE_URL')!,
+    usesWeather,
+    weatherUnits: usesWeather ? extractWeatherUnits(html) : 'celsius',
+    locationByEmail: new Map(),
+    weatherCache: new Map(),
+  }
+}
+
+/** Bulk-load city/country for the given recipient emails into ctx (only when
+ *  the edition uses the Weather block). */
+async function loadWeatherLocations(supabase: any, emails: string[], ctx: SendContext): Promise<void> {
+  if (!ctx.usesWeather) return
+  const CHUNK = 500
+  for (let i = 0; i < emails.length; i += CHUNK) {
+    const chunk = emails.slice(i, i + CHUNK)
+    const { data: peopleRows, error } = await supabase.from('people').select('email, attributes').in('email', chunk)
+    if (error) { console.warn('[weather] people lookup failed:', error.message); break }
+    for (const row of peopleRows ?? []) {
+      const attrs = (row as { attributes?: Record<string, unknown> }).attributes ?? {}
+      const city = typeof attrs.city === 'string' ? attrs.city : ''
+      const country = typeof attrs.country === 'string' ? attrs.country : ''
+      if (city) ctx.locationByEmail.set((row as { email: string }).email, { city, country })
+    }
+  }
+}
+
+async function resolveWeatherFor(email: string, ctx: SendContext): Promise<WeatherResolved> {
+  if (!ctx.usesWeather) return UNAVAILABLE_WEATHER
+  const loc = ctx.locationByEmail.get(email)
+  if (!loc) return UNAVAILABLE_WEATHER
+  const key = `${loc.city.toLowerCase()}|${loc.country.toLowerCase()}|${ctx.weatherUnits}`
+  if (ctx.weatherCache.has(key)) return ctx.weatherCache.get(key) ?? UNAVAILABLE_WEATHER
+  const w = await resolveWeather(loc.city, loc.country, ctx.weatherUnits)
+  ctx.weatherCache.set(key, w)
+  return w ?? UNAVAILABLE_WEATHER
+}
+
+/**
+ * Send the edition to a single recipient: unsubscribe header, weather
+ * substitution, email_send_log row, provider call, log update. Returns true on
+ * success (never throws) so both the batch path and the drip can tally simply.
+ */
+async function sendToRecipient(supabase: any, provider: EmailProviderModule, ctx: SendContext, sendId: string, email: string): Promise<boolean> {
+  try {
+    let unsubscribeUrl = ''
+    let emailHeaders: Record<string, string> = {}
+    if (ctx.hmacSecret) {
+      const token = await generateUnsubscribeToken(email, ctx.listId, ctx.hmacSecret)
+      unsubscribeUrl = `${ctx.supabaseUrl}/functions/v1/newsletter-unsubscribe?token=${encodeURIComponent(token)}`
+      emailHeaders = {
+        'List-Unsubscribe': `<${unsubscribeUrl}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      }
+    }
+
+    let personalizedHtml = ctx.html
+    if (unsubscribeUrl && !ctx.html.includes('{{unsubscribe_url}}')) {
+      personalizedHtml = ctx.html.replace(
+        '</body>',
+        `<div style="text-align:center;padding:20px;font-size:12px;color:#999;"><a href="${unsubscribeUrl}" style="color:#999;">Unsubscribe</a></div></body>`,
+      )
+    } else if (unsubscribeUrl) {
+      personalizedHtml = ctx.html.replace(/\{\{unsubscribe_url\}\}/g, unsubscribeUrl)
+    }
+
+    if (ctx.usesWeather) {
+      personalizedHtml = substituteWeather(personalizedHtml, await resolveWeatherFor(email, ctx))
+    }
+
+    const { data: logEntry } = await supabase.from('email_send_log').insert({
+      recipient_email: email,
+      from_address: ctx.fromEmail,
+      reply_to: ctx.collectionReplyTo,
+      subject: ctx.subject,
+      content_html: personalizedHtml,
+      provider: provider.name,
+      newsletter_send_id: sendId,
+      status: 'queued',
+      queued_at: new Date().toISOString(),
+    }).select('id').single()
+
+    const result = await provider.send({
+      to: email,
+      from: ctx.fromEmail,
+      fromName: ctx.fromName,
+      ...(ctx.collectionReplyTo ? { replyTo: ctx.collectionReplyTo } : {}),
+      subject: ctx.subject,
+      html: personalizedHtml,
+      headers: emailHeaders,
+    })
+
+    if (result.success) {
+      await supabase.from('email_send_log').update({
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        provider_message_id: result.messageId || null,
+        send_attempts: 1,
+      }).eq('id', logEntry?.id)
+      return true
+    }
+    await supabase.from('email_send_log').update({
+      status: result.retryable ? 'send_failed' : 'permanently_failed',
+      failure_error: result.error,
+      send_attempts: 1,
+    }).eq('id', logEntry?.id)
+    return false
+  } catch (err) {
+    console.error('[newsletter-send] recipient failed:', email, err instanceof Error ? err.message : err)
+    return false
+  }
+}
+
+/**
+ * Fan out a staggered (tz_local / personalised) send into the per-recipient
+ * timing queue (each recipient's send_at = target_local in their own timezone)
+ * and flip the send to 'sending'. The drip then dispatches due rows over time.
+ */
+async function fanOutAndStart(supabase: any, sendId: string): Promise<{ success: boolean; error?: string }> {
+  const { error } = await supabase.rpc('fanout_newsletter_send_recipients', { p_send_id: sendId })
+  if (error) {
+    await supabase.from('newsletter_sends').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', sendId)
+    return { success: false, error: error.message }
+  }
+  await supabase.from('newsletter_sends').update({
+    status: 'sending',
+    started_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('id', sendId)
+  return { success: true }
+}
+
+/** Recompute a staggered send's counters from its recipient queue and finalise
+ *  when nothing is left to dispatch. forceCancel finalises it as 'cancelled'. */
+async function recomputeAndMaybeFinalize(supabase: any, sendId: string, forceCancel = false): Promise<void> {
+  const headCount = async (statuses: string[]): Promise<number> => {
+    const { count } = await supabase
+      .from('newsletter_send_recipients')
+      .select('id', { count: 'exact', head: true })
+      .eq('send_id', sendId)
+      .in('status', statuses)
+    return count ?? 0
+  }
+  const [remaining, sent, failed] = await Promise.all([
+    headCount(['pending', 'sending']),
+    headCount(['sent']),
+    headCount(['failed']),
+  ])
+  const patch: Record<string, unknown> = { sent_count: sent, failed_count: failed, updated_at: new Date().toISOString() }
+  if (remaining === 0) {
+    patch.status = forceCancel ? 'cancelled' : (sent === 0 && failed > 0 ? 'failed' : 'sent')
+    patch.completed_at = new Date().toISOString()
+  }
+  await supabase.from('newsletter_sends').update(patch).eq('id', sendId)
+}
+
+/**
+ * One drip pass: claim due recipients across all staggered sends, dispatch
+ * them, mark each row, then refresh counters / finalise. A send the operator
+ * has stopped ('cancelling') has its claimed rows skipped instead of sent.
+ */
+async function runRecipientDrip(supabase: any, provider: EmailProviderModule): Promise<void> {
+  const { data: claimed, error } = await supabase.rpc('claim_due_newsletter_recipients', { p_limit: DRIP_LIMIT })
+  if (error) console.error('[drip] claim failed:', error.message)
+
+  const bySend = new Map<string, Array<{ id: string; email: string }>>()
+  for (const r of claimed ?? []) {
+    if (!bySend.has(r.send_id)) bySend.set(r.send_id, [])
+    bySend.get(r.send_id)!.push({ id: r.id, email: r.email })
+  }
+
+  for (const [sendId, recips] of bySend) {
+    const { data: send } = await supabase
+      .from('newsletter_sends')
+      .select('*, edition:newsletters_editions(*)')
+      .eq('id', sendId)
+      .single()
+    if (!send) continue
+    if (send.status === 'cancelling' || send.status === 'cancelled') {
+      await supabase.from('newsletter_send_recipients')
+        .update({ status: 'skipped', updated_at: new Date().toISOString() })
+        .in('id', recips.map((r) => r.id))
+      continue
+    }
+    let ctx: SendContext
+    try {
+      ctx = await buildSendContext(supabase, send, provider)
+    } catch (err) {
+      // Couldn't build context (e.g. no rendered HTML) — release the rows back
+      // to pending so a later tick can retry rather than dropping recipients.
+      await supabase.from('newsletter_send_recipients')
+        .update({ status: 'pending', last_error: err instanceof Error ? err.message : 'context build failed', updated_at: new Date().toISOString() })
+        .in('id', recips.map((r) => r.id))
+      continue
+    }
+    await loadWeatherLocations(supabase, recips.map((r) => r.email), ctx)
+    for (let i = 0; i < recips.length; i += BATCH_SIZE) {
+      const slice = recips.slice(i, i + BATCH_SIZE)
+      const results = await Promise.allSettled(
+        slice.map((r) => sendToRecipient(supabase, provider, ctx, sendId, r.email).then((ok) => ({ id: r.id, ok }))),
+      )
+      for (const res of results) {
+        if (res.status === 'fulfilled') {
+          await supabase.from('newsletter_send_recipients')
+            .update({ status: res.value.ok ? 'sent' : 'failed', updated_at: new Date().toISOString() })
+            .eq('id', res.value.id)
+        }
+      }
+      if (i + BATCH_SIZE < recips.length) await new Promise((r) => setTimeout(r, BATCH_DELAY_MS))
+    }
+  }
+
+  // Refresh counters + finalise every in-flight staggered send — covers ticks
+  // where the last recipients just sent, and propagates operator stops.
+  const { data: active } = await supabase
+    .from('newsletter_sends')
+    .select('id, status')
+    .in('status', ['sending', 'cancelling'])
+    .neq('delivery_strategy', 'global')
+  for (const s of active ?? []) {
+    if (s.status === 'cancelling') {
+      await supabase.from('newsletter_send_recipients')
+        .update({ status: 'skipped', updated_at: new Date().toISOString() })
+        .eq('send_id', s.id)
+        .in('status', ['pending', 'sending'])
+      await recomputeAndMaybeFinalize(supabase, s.id, true)
+    } else {
+      await recomputeAndMaybeFinalize(supabase, s.id)
+    }
+  }
+}
+
 async function processScheduledSends(
   supabase: any,
   provider: EmailProviderModule
 ): Promise<{ success: boolean; processed: number; errors: string[] }> {
   const { data: sends, error } = await supabase
     .from('newsletter_sends')
-    .select('id')
+    .select('id, delivery_strategy')
     .eq('status', 'scheduled')
     .lte('scheduled_at', new Date().toISOString())
     .order('scheduled_at')
@@ -353,13 +649,25 @@ async function processScheduledSends(
   let processed = 0
 
   for (const send of sends || []) {
-    const result = await processSend(supabase, send.id, provider)
-    if (result.success) {
-      processed++
+    const strategy = send.delivery_strategy || 'global'
+    if (strategy === 'global') {
+      // All-at-once: send everyone now.
+      const result = await processSend(supabase, send.id, provider)
+      if (result.success) processed++
+      else errors.push(`Send ${send.id}: ${result.error}`)
     } else {
-      errors.push(`Send ${send.id}: ${result.error}`)
+      // tz_local / personalised: fan out into the per-recipient timing queue
+      // and flip to 'sending'; the drip below dispatches each as it comes due.
+      const r = await fanOutAndStart(supabase, send.id)
+      if (r.success) processed++
+      else errors.push(`Send ${send.id}: ${r.error}`)
     }
   }
+
+  // Drive the per-recipient drip every tick — independent of newly-due sends,
+  // so an in-progress staggered send keeps dispatching as each timezone hits
+  // its local send time.
+  await runRecipientDrip(supabase, provider)
 
   return { success: true, processed, errors }
 }
@@ -379,25 +687,6 @@ async function processSend(
     return { success: false, delivered: 0, failed: 0, error: 'Send not found' }
   }
 
-  // Collection-level Reply-To: when the operator wants outbound mail to
-  // appear from one address but replies to land at another (common when
-  // sending from a branded sub-domain — e.g. demetrios@news.mlops.community
-  // — but routing replies to a unified inbox like demetrios@aaif.live).
-  // newsletter_sends doesn't carry reply_to of its own; pull it off the
-  // collection and forward to the provider via the existing replyTo
-  // hook. Persist on email_send_log too so email-retry-send (which reads
-  // log.reply_to) keeps the header on retries.
-  let collectionReplyTo: string | null = null
-  const collectionId: string | null = (send.edition as { collection_id?: string | null } | null)?.collection_id ?? null
-  if (collectionId) {
-    const { data: coll } = await supabase
-      .from('newsletters_template_collections')
-      .select('reply_to')
-      .eq('id', collectionId)
-      .maybeSingle()
-    collectionReplyTo = coll?.reply_to || null
-  }
-
   if (!['scheduled', 'draft', 'sending'].includes(send.status)) {
     return { success: false, delivered: 0, failed: 0, error: `Send is in ${send.status} state` }
   }
@@ -408,40 +697,12 @@ async function processSend(
     .eq('id', sendId)
 
   try {
-    let html = send.rendered_html as string
-    if (!html) {
-      throw new Error('No rendered HTML found. Render the edition first.')
-    }
-
-    // ── Block-level click tracking ──────────────────────────────────────────
-    // Sync the per-occurrence link registry for this edition and rewrite the
-    // base HTML so each tracked link carries ?nlb=<tracking_key>. Done once
-    // (keys are per-link, not per-recipient) before personalisation. Wrapped so
-    // any failure falls back to an untagged send (deliverability over tracking).
-    // See spec-newsletter-link-tracking.md §4.3.
-    try {
-      const editionId = (send.edition as { id?: string } | null)?.id
-      const trackingEnabled =
-        collectionId == null ? true : await isLinkTrackingEnabled(supabase, collectionId)
-      if (editionId && trackingEnabled) {
-        const orderedRows = await syncEditionLinkRegistry(supabase, editionId)
-        if (orderedRows.length > 0) html = tagHtmlLinks(html, orderedRows)
-      }
-    } catch (err) {
-      console.warn('[newsletter-send] link tracking skipped:', err instanceof Error ? err.message : err)
-    }
-
-    const subject = send.subject || send.edition?.subject || 'Newsletter'
-    const listIds: string[] = send.list_ids || []
-    const listId = listIds[0]
-    if (!listId) {
-      throw new Error('No subscription list configured for this send.')
-    }
+    const ctx = await buildSendContext(supabase, send, provider)
 
     const { data: subscribers, error: subError } = await supabase
       .from('list_subscriptions')
       .select('email')
-      .eq('list_id', listId)
+      .eq('list_id', ctx.listId)
       .eq('subscribed', true)
 
     if (subError) throw new Error(`Failed to fetch subscribers: ${subError.message}`)
@@ -467,146 +728,43 @@ async function processSend(
       return { success: true, delivered: 0, failed: 0 }
     }
 
-    const hmacSecret = Deno.env.get('UNSUBSCRIBE_HMAC_SECRET')
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+    await loadWeatherLocations(supabase, recipientEmails, ctx)
     let delivered = 0
     let failed = 0
 
-    // Detect the Weather block before paying for the per-recipient
-    // city/country lookup — most editions won't use it.
-    const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html)
-    const weatherUnits = usesWeather ? extractWeatherUnits(html) : 'celsius'
-
-    // Bulk-load recipient location attributes. people.email is unique
-    // and indexed (00003_people.sql); city/country live under
-    // attributes->>'city' / attributes->>'country' (jsonb).
-    const locationByEmail = new Map<string, { city: string; country: string }>()
-    if (usesWeather) {
-      // Supabase JS caps a single .in() payload at a few thousand rows;
-      // chunk to be safe across very large lists.
-      const CHUNK = 500
-      for (let i = 0; i < recipientEmails.length; i += CHUNK) {
-        const chunk = recipientEmails.slice(i, i + CHUNK)
-        const { data: peopleRows, error: pErr } = await supabase
-          .from('people')
-          .select('email, attributes')
-          .in('email', chunk)
-        if (pErr) {
-          console.warn('[weather] people lookup failed; falling back to unavailable', pErr.message)
-          break
-        }
-        for (const row of peopleRows ?? []) {
-          const attrs = (row as { attributes?: Record<string, unknown> }).attributes ?? {}
-          const city = typeof attrs.city === 'string' ? attrs.city : ''
-          const country = typeof attrs.country === 'string' ? attrs.country : ''
-          if (city) {
-            locationByEmail.set((row as { email: string }).email, { city, country })
-          }
-        }
-      }
-    }
-
     for (let i = 0; i < recipientEmails.length; i += BATCH_SIZE) {
-      const batch = recipientEmails.slice(i, i + BATCH_SIZE)
-
-      const fromEmail = send.from_address || Deno.env.get('EMAIL_FROM') || 'noreply@localhost'
-      const fromName = send.from_name || Deno.env.get('EMAIL_FROM_NAME') || 'Gatewaze'
-
-      // Per-batch open-meteo cache — duplicate locations within a batch
-      // share a single resolution. Cached `null` means we already tried
-      // and failed (don't retry within the batch).
-      const weatherCache = new Map<string, WeatherResolved | null>()
-      async function getWeatherForEmail(email: string): Promise<WeatherResolved> {
-        if (!usesWeather) return UNAVAILABLE_WEATHER
-        const loc = locationByEmail.get(email)
-        if (!loc) return UNAVAILABLE_WEATHER
-        const key = `${loc.city.toLowerCase()}|${loc.country.toLowerCase()}|${weatherUnits}`
-        if (weatherCache.has(key)) {
-          return weatherCache.get(key) ?? UNAVAILABLE_WEATHER
-        }
-        const w = await resolveWeather(loc.city, loc.country, weatherUnits)
-        weatherCache.set(key, w)
-        return w ?? UNAVAILABLE_WEATHER
+      // Cooperative cancellation: the operator can request a stop mid-send
+      // (the UI sets status='cancelling'). Re-read the row before each batch
+      // and bail cleanly, recording what was already delivered. Cheap — one
+      // indexed lookup per BATCH_SIZE recipients.
+      const { data: cur } = await supabase
+        .from('newsletter_sends')
+        .select('status')
+        .eq('id', sendId)
+        .single()
+      if (cur && (cur.status === 'cancelling' || cur.status === 'cancelled')) {
+        await supabase
+          .from('newsletter_sends')
+          .update({
+            status: 'cancelled',
+            completed_at: new Date().toISOString(),
+            sent_count: delivered,
+            failed_count: failed,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', sendId)
+        console.log(`[newsletter-send] send ${sendId} cancelled mid-flight after ${delivered} delivered`)
+        return { success: true, delivered, failed }
       }
 
+      const batch = recipientEmails.slice(i, i + BATCH_SIZE)
       const results = await Promise.allSettled(
-        batch.map(async (email: string) => {
-          let unsubscribeUrl = ''
-          let emailHeaders: Record<string, string> = {}
-
-          if (hmacSecret) {
-            const token = await generateUnsubscribeToken(email, listId, hmacSecret)
-            unsubscribeUrl = `${supabaseUrl}/functions/v1/newsletter-unsubscribe?token=${encodeURIComponent(token)}`
-            emailHeaders = {
-              'List-Unsubscribe': `<${unsubscribeUrl}>`,
-              'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-            }
-          }
-
-          let personalizedHtml = html
-          if (unsubscribeUrl && !html.includes('{{unsubscribe_url}}')) {
-            personalizedHtml = html.replace(
-              '</body>',
-              `<div style="text-align:center;padding:20px;font-size:12px;color:#999;"><a href="${unsubscribeUrl}" style="color:#999;">Unsubscribe</a></div></body>`
-            )
-          } else if (unsubscribeUrl) {
-            personalizedHtml = html.replace(/\{\{unsubscribe_url\}\}/g, unsubscribeUrl)
-          }
-
-          if (usesWeather) {
-            const weather = await getWeatherForEmail(email)
-            personalizedHtml = substituteWeather(personalizedHtml, weather)
-          }
-
-          // Create email_send_log entry
-          const { data: logEntry } = await supabase.from('email_send_log').insert({
-            recipient_email: email,
-            from_address: fromEmail,
-            reply_to: collectionReplyTo,
-            subject,
-            content_html: personalizedHtml,
-            provider: provider.name,
-            newsletter_send_id: sendId,
-            status: 'queued',
-            queued_at: new Date().toISOString(),
-          }).select('id').single()
-
-          // Send via provider
-          const result = await provider.send({
-            to: email,
-            from: fromEmail,
-            fromName,
-            ...(collectionReplyTo ? { replyTo: collectionReplyTo } : {}),
-            subject,
-            html: personalizedHtml,
-            headers: emailHeaders,
-          })
-
-          if (result.success) {
-            await supabase.from('email_send_log').update({
-              status: 'sent',
-              sent_at: new Date().toISOString(),
-              provider_message_id: result.messageId || null,
-              send_attempts: 1,
-            }).eq('id', logEntry?.id)
-          } else {
-            await supabase.from('email_send_log').update({
-              status: result.retryable ? 'send_failed' : 'permanently_failed',
-              failure_error: result.error,
-              send_attempts: 1,
-            }).eq('id', logEntry?.id)
-            throw new Error(result.error || 'Send failed')
-          }
-        })
+        batch.map((email: string) => sendToRecipient(supabase, provider, ctx, sendId, email)),
       )
 
       for (const result of results) {
-        if (result.status === 'fulfilled') {
-          delivered++
-        } else {
-          failed++
-          console.error('Email send failed:', result.reason)
-        }
+        if (result.status === 'fulfilled' && result.value) delivered++
+        else failed++
       }
 
       await supabase

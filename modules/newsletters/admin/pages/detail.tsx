@@ -48,6 +48,9 @@ export default function NewsletterDetailPage() {
 
   const [newsletter, setNewsletter] = useState<Newsletter | null>(null);
   const [loading, setLoading] = useState(true);
+  // Active sends across all editions of this collection — drives the hero
+  // "Sending" / "scheduled" notification. Empty unless something is in flight.
+  const [activeSends, setActiveSends] = useState<Array<{ status: string; scheduled_at: string | null }>>([]);
 
   const validTabs: NewsletterTab[] = ['details', 'template', 'editions', ...(hasBulkEmailing ? ['replies' as NewsletterTab, 'stats' as NewsletterTab] : [])];
   const defaultTab: NewsletterTab = 'editions';
@@ -101,6 +104,36 @@ export default function NewsletterDetailPage() {
 
   useEffect(() => { loadNewsletter(); }, [loadNewsletter]);
 
+  // Poll-free active-send watcher: load any scheduled/sending sends for this
+  // collection's editions, and refetch whenever a newsletter_sends row changes
+  // (status flips through scheduled → sending → sent/cancelled).
+  const collectionId = newsletter?.id;
+  useEffect(() => {
+    if (!collectionId) return;
+    let cancelled = false;
+    const fetchActive = async () => {
+      const { data: eds } = await supabase
+        .from('newsletters_editions')
+        .select('id')
+        .eq('collection_id', collectionId);
+      const ids = (eds ?? []).map((e: { id: string }) => e.id);
+      if (ids.length === 0) { if (!cancelled) setActiveSends([]); return; }
+      const { data } = await supabase
+        .from('newsletter_sends')
+        .select('status, scheduled_at')
+        .in('edition_id', ids)
+        .in('status', ['scheduled', 'sending', 'cancelling'])
+        .order('scheduled_at', { ascending: true, nullsFirst: false });
+      if (!cancelled) setActiveSends(data ?? []);
+    };
+    fetchActive();
+    const channel = supabase
+      .channel(`nl-active-sends-${collectionId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'newsletter_sends' }, fetchActive)
+      .subscribe();
+    return () => { cancelled = true; supabase.removeChannel(channel); };
+  }, [collectionId]);
+
   if (loading) {
     return <Page title="Loading..."><div className="flex items-center justify-center h-64"><LoadingSpinner /></div></Page>;
   }
@@ -130,6 +163,26 @@ export default function NewsletterDetailPage() {
         onTabChange={handleTabChange}
         actions={
           <div className="flex items-center gap-2 flex-wrap">
+            {(() => {
+              const sending = activeSends.some((s) => s.status === 'sending' || s.status === 'cancelling');
+              const scheduled = activeSends.filter((s) => s.status === 'scheduled').length;
+              if (sending) {
+                return (
+                  <Badge variant="solid" color="blue" size="1">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-white mr-1.5 animate-pulse" />
+                    Sending now
+                  </Badge>
+                );
+              }
+              if (scheduled > 0) {
+                return (
+                  <Badge variant="soft" color="amber" size="1">
+                    {scheduled === 1 ? 'Send scheduled' : `${scheduled} sends scheduled`}
+                  </Badge>
+                );
+              }
+              return null;
+            })()}
             {newsletter.content_category && (
               <Badge variant="soft" color="blue" size="1">{newsletter.content_category}</Badge>
             )}

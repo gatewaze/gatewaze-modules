@@ -51,6 +51,10 @@ interface Edition {
   subject: string | null; // mapped from title for display
   edition_date: string;
   status: 'draft' | 'published' | 'archived';
+  // Live send state overlaid from newsletter_sends: 'sending' when a send is
+  // in flight, 'scheduled' when one is queued. Takes visual priority over the
+  // edition's own draft/published status in the table.
+  sendStatus?: 'sending' | 'scheduled' | null;
   publish_state?: string | null;
   collection_id: string | null;
   collection_name?: string | null;
@@ -401,6 +405,27 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
       // statement timeout, so chunk it (each small batch is fast) and merge as
       // each returns. Newest editions first so the visible page fills in first.
       const editionIds = editionsWithCount.map((e: any) => e.id);
+
+      // Overlay live send state onto the rows: an edition with an in-flight
+      // send shows "Sending", one with a queued send shows "Scheduled".
+      // Sending (incl. cancelling) wins over scheduled when both exist.
+      if (editionIds.length > 0) {
+        supabase
+          .from('newsletter_sends')
+          .select('edition_id, status')
+          .in('edition_id', editionIds)
+          .in('status', ['sending', 'cancelling', 'scheduled'])
+          .then(({ data: activeSends }: { data: Array<{ edition_id: string; status: string }> | null }) => {
+            if (!activeSends || activeSends.length === 0) return;
+            const byEdition = new Map<string, 'sending' | 'scheduled'>();
+            for (const s of activeSends) {
+              if (byEdition.get(s.edition_id) === 'sending') continue;
+              byEdition.set(s.edition_id, s.status === 'scheduled' ? 'scheduled' : 'sending');
+            }
+            setEditions((prev) => prev.map((e) => (byEdition.has(e.id) ? { ...e, sendStatus: byEdition.get(e.id)! } : e)));
+          });
+      }
+
       const CHUNK = 10;
       for (let i = 0; i < editionIds.length; i += CHUNK) {
         const chunk = editionIds.slice(i, i + CHUNK);
@@ -736,11 +761,17 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
       columnHelper.accessor('status', {
         header: 'Status',
         size: 110,
-        cell: (info) => (
-          <Badge color={statusColors[info.getValue()]}>
-            {info.getValue().charAt(0).toUpperCase() + info.getValue().slice(1)}
-          </Badge>
-        ),
+        cell: (info) => {
+          const sendStatus = info.row.original.sendStatus;
+          if (sendStatus === 'sending') return <Badge color="blue">Sending</Badge>;
+          if (sendStatus === 'scheduled') return <Badge color="amber">Scheduled</Badge>;
+          const v = info.getValue();
+          return (
+            <Badge color={statusColors[v]}>
+              {v.charAt(0).toUpperCase() + v.slice(1)}
+            </Badge>
+          );
+        },
       }),
       columnHelper.accessor((row) => row.engagement?.sent ?? -1, {
         id: 'sent',
