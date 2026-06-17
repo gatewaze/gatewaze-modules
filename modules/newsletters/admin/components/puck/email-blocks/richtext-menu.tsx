@@ -11,9 +11,9 @@
  * in merge-into-config; without it `setImage` is a no-op.
  */
 
-import { useRef, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
-import { LinkIcon, PhotoIcon } from '@heroicons/react/24/outline';
+import { LinkIcon, PhotoIcon, UserIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { uploadHostMedia } from '@gatewaze-modules/host-media/admin';
 import { useNewsletterEditing } from '../NewsletterEditingContext.js';
@@ -23,6 +23,17 @@ interface MenuProps {
   editor: Editor | null;
   readOnly: boolean;
 }
+
+// Per-recipient merge fields the send path substitutes (newsletter-send edge
+// fn). Inserted as `{{token}}`; an optional fallback can be typed in by hand
+// as `{{first_name|there}}`. Missing values render as empty when no fallback.
+const MERGE_FIELDS: Array<{ token: string; label: string }> = [
+  { token: 'first_name', label: 'First name' },
+  { token: 'last_name', label: 'Last name' },
+  { token: 'name', label: 'Full name' },
+  { token: 'company', label: 'Company' },
+  { token: 'job_title', label: 'Job title' },
+];
 
 const BTN_STYLE: React.CSSProperties = {
   display: 'inline-flex',
@@ -41,8 +52,14 @@ const BTN_STYLE: React.CSSProperties = {
 export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNode {
   const fileRef = useRef<HTMLInputElement>(null);
   const { collectionId } = useNewsletterEditing();
+  const [fieldsOpen, setFieldsOpen] = useState(false);
 
   if (!editor || readOnly) return children;
+
+  const insertField = (token: string) => {
+    editor.chain().focus().insertContent(`{{${token}}}`).run();
+    setFieldsOpen(false);
+  };
 
   const applyLink = () => {
     const current = (editor.getAttributes('link').href as string | undefined) ?? 'https://';
@@ -171,6 +188,47 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
         style={{ display: 'none' }}
         onChange={onPickImage}
       />
+      <span style={{ position: 'relative', display: 'inline-flex' }}>
+        <button
+          type="button"
+          onClick={() => setFieldsOpen((o) => !o)}
+          title="Insert personalisation field"
+          aria-label="Insert personalisation field"
+          style={{ ...BTN_STYLE, background: fieldsOpen ? 'rgba(64,134,198,0.18)' : 'transparent' }}
+        >
+          <UserIcon style={{ width: 16, height: 16 }} />
+        </button>
+        {fieldsOpen && (
+          <div
+            style={{
+              position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 50,
+              minWidth: 190, background: '#ffffff', color: '#1f2937',
+              border: '1px solid #e5e7eb', borderRadius: 6,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.12)', padding: 4,
+            }}
+          >
+            {MERGE_FIELDS.map((f) => (
+              <button
+                key={f.token}
+                type="button"
+                onClick={() => insertField(f.token)}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left', border: 'none',
+                  background: 'transparent', cursor: 'pointer', borderRadius: 4,
+                  padding: '6px 8px', fontSize: 13, color: 'inherit',
+                }}
+              >
+                {f.label} <span style={{ color: '#9ca3af', fontSize: 11 }}>{`{{${f.token}}}`}</span>
+              </button>
+            ))}
+            <div style={{ borderTop: '1px solid #f0f0f0', margin: '4px 0' }} />
+            <div style={{ padding: '4px 8px', fontSize: 11, color: '#9ca3af', lineHeight: 1.4 }}>
+              Optional fallback if blank:<br />
+              <code>{'{{first_name|"there"}}'}</code>
+            </div>
+          </div>
+        )}
+      </span>
     </div>
   );
 }

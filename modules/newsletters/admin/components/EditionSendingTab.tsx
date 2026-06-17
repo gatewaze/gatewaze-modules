@@ -5,6 +5,9 @@ import {
   CheckCircleIcon,
   XCircleIcon,
   EnvelopeIcon,
+  PauseIcon,
+  PlayIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Card, Button, Badge } from '@/components/ui';
@@ -24,6 +27,7 @@ interface SendRecord {
   started_at: string | null;
   completed_at: string | null;
   scheduled_at: string | null;
+  delivery_strategy: string | null;
   created_at: string;
 }
 
@@ -175,6 +179,9 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
   const [deliveryStrategy, setDeliveryStrategy] = useState<'global' | 'tz_local' | 'personalised'>('global');
   const [targetLocal, setTargetLocal] = useState('09:00');
   const [defaultTimezone, setDefaultTimezone] = useState<string>(() => browserTimezone());
+  // Prior sends whose successfully-sent recipients should be excluded from this
+  // new send (re-send corrected content without double-sending).
+  const [excludeSentSendIds, setExcludeSentSendIds] = useState<string[]>([]);
   // Ticking clock for the send countdown; only runs while there's a
   // future scheduled time to count down to (form preview or a queued send).
   const [now, setNow] = useState(() => Date.now());
@@ -326,6 +333,29 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
     return () => { supabase.removeChannel(channel); };
   }, [selectedSendId]);
 
+  // Render the edition to final email HTML with the web-version link
+  // substituted. Shared by the initial send and the "Update content" action,
+  // so both produce identical output. getViewOnlineUrl is the single source of
+  // truth for the View Online target (same helper the editor preview uses).
+  const buildFinalHtml = useCallback(async (): Promise<{ html: string | null; webVersionUrl: string }> => {
+    const portalProtocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
+    const portalHost = typeof window !== 'undefined'
+      ? window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, '')
+      : 'localhost';
+    const webVersionUrl =
+      getViewOnlineUrl(
+        { slug: newsletterSlug, view_online_target: collection?.view_online_target, view_online_external_base_url: collection?.view_online_external_base_url },
+        { edition_date: editionDate, subject },
+      ) ?? `${portalProtocol}//${portalHost}/newsletters`;
+    let html = getRenderedHtml ? await getRenderedHtml() : null;
+    if (html) {
+      html = html
+        .replace(/\{\{web_version\}\}/g, webVersionUrl)
+        .replace(/\{%\s*view_in_browser_url\s*%\}/g, webVersionUrl);
+    }
+    return { html, webVersionUrl };
+  }, [newsletterSlug, collection?.view_online_target, collection?.view_online_external_base_url, editionDate, subject, getRenderedHtml]);
+
   const handleSend = async () => {
     if (editionId === 'new') {
       toast.error('Save the edition first');
@@ -334,36 +364,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
 
     setSending(true);
     try {
-      // The "View Online" link target is per-newsletter: 'external' points at
-      // the static site built from the publish branch (slugged by edition
-      // date, matching publish-to-git); anything else defaults to the portal
-      // web-version URL. getViewOnlineUrl is the single source of truth — same
-      // helper the editor preview / canvas threads through to EditionEmail so
-      // the rendered link in the send matches what the operator saw.
-      const portalProtocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
-      // Match the host-derivation rule getViewOnlineUrl uses: strip the
-      // leading `admin.` to the apex (admin.aaif.live → aaif.live; Helm-
-      // deployed brands serve the portal at the apex). Swap `-admin.` to
-      // `-app.` only for the Fly.io / preview infix convention.
-      const portalHost = typeof window !== 'undefined'
-        ? window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, '')
-        : 'localhost';
-      const webVersionUrl =
-        getViewOnlineUrl(
-          { slug: newsletterSlug, view_online_target: collection?.view_online_target, view_online_external_base_url: collection?.view_online_external_base_url },
-          { edition_date: editionDate, subject },
-        ) ?? `${portalProtocol}//${portalHost}/newsletters`;
-
-      // Render the edition's HTML on demand via the parent-supplied
-      // async renderer. Doing it here (instead of eagerly on every
-      // edition-page render) keeps `@react-email/render` off the
-      // hot path and means the send always uses the freshest content.
-      let finalHtml = getRenderedHtml ? await getRenderedHtml() : null;
-      if (finalHtml) {
-        finalHtml = finalHtml
-          .replace(/\{\{web_version\}\}/g, webVersionUrl)
-          .replace(/\{%\s*view_in_browser_url\s*%\}/g, webVersionUrl);
-      }
+      const { html: finalHtml, webVersionUrl } = await buildFinalHtml();
 
       const { data, error } = await supabase
         .from('newsletter_sends')
@@ -393,6 +394,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
           default_timezone: scheduleType === 'immediate' || deliveryStrategy === 'global' ? null : (defaultTimezone || null),
           adapter_id: 'html',
           rendered_html: finalHtml,
+          exclude_sent_send_ids: excludeSentSendIds.length > 0 ? excludeSentSendIds : null,
           metadata: { web_version_url: webVersionUrl },
         })
         .select()
@@ -427,6 +429,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
       }
 
       toast.success(scheduleType === 'scheduled' ? 'Send scheduled' : 'Sending started');
+      setExcludeSentSendIds([]);
       await loadSends();
     } catch (err: any) {
       toast.error(err.message || 'Failed to create send');
@@ -441,22 +444,72 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
   // goes to 'cancelling' — the newsletter-send edge fn re-checks status before
   // each batch and stops cleanly, recording what was already delivered.
   const handleCancel = async (send: SendRecord) => {
-    const isSending = send.status === 'sending';
+    // A send that's already dispatching (or paused mid-drip) goes to
+    // 'cancelling' so the dispatcher drains pending recipients to 'skipped'
+    // and finalises it 'cancelled'. A not-yet-started scheduled send goes
+    // straight to 'cancelled'.
+    const isActive = send.status === 'sending' || send.status === 'paused';
     const ok = window.confirm(
-      isSending
+      isActive
         ? 'Stop this send now? Recipients already processed will still receive it; the rest will be skipped.'
         : 'Cancel this scheduled send? It will not go out.',
     );
     if (!ok) return;
     const { error } = await supabase
       .from('newsletter_sends')
-      .update({ status: isSending ? 'cancelling' : 'cancelled', updated_at: new Date().toISOString() })
+      .update({ status: isActive ? 'cancelling' : 'cancelled', updated_at: new Date().toISOString() })
       .eq('id', send.id);
     if (error) {
       toast.error(error.message || 'Failed to cancel send');
       return;
     }
-    toast.success(isSending ? 'Stopping send…' : 'Scheduled send cancelled');
+    toast.success(isActive ? 'Stopping send…' : 'Scheduled send cancelled');
+    await loadSends();
+  };
+
+  // Re-render the edition and overwrite the send's stored HTML so recipients
+  // not yet dispatched get the corrected content (already-sent ones keep what
+  // they received). The staggered drip re-reads rendered_html each tick, and a
+  // scheduled send re-reads it at dispatch — so this is offered for those, not
+  // for a global all-at-once send (which captures HTML once at dispatch).
+  const handleApplyLatestContent = async (send: SendRecord) => {
+    if (!window.confirm('Update this send to the latest edition content? Only recipients who have not been sent yet will get the new version.')) return;
+    try {
+      const { html } = await buildFinalHtml();
+      if (!html) { toast.error('Nothing to render yet'); return; }
+      const { error } = await supabase
+        .from('newsletter_sends')
+        .update({ rendered_html: html, subject: subject || null, updated_at: new Date().toISOString() })
+        .eq('id', send.id);
+      if (error) throw error;
+      toast.success('Content updated for remaining recipients');
+      await loadSends();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update content');
+    }
+  };
+
+  // Pause / resume an in-flight staggered send. Pausing flips it to 'paused' so
+  // the dispatcher stops claiming its recipients (the claim RPC only takes
+  // 'sending' sends); resuming flips it back and the drip continues from where
+  // it left off — useful while you fix and re-apply the content.
+  const handlePause = async (send: SendRecord) => {
+    const { error } = await supabase
+      .from('newsletter_sends')
+      .update({ status: 'paused', updated_at: new Date().toISOString() })
+      .eq('id', send.id);
+    if (error) { toast.error(error.message || 'Failed to pause'); return; }
+    toast.success('Send paused');
+    await loadSends();
+  };
+
+  const handleResume = async (send: SendRecord) => {
+    const { error } = await supabase
+      .from('newsletter_sends')
+      .update({ status: 'sending', updated_at: new Date().toISOString() })
+      .eq('id', send.id);
+    if (error) { toast.error(error.message || 'Failed to resume'); return; }
+    toast.success('Send resumed');
     await loadSends();
   };
 
@@ -586,6 +639,31 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
               </div>
             )}
 
+            {(() => {
+              const priorSent = sends.filter((s) => (s.sent_count || 0) > 0);
+              if (priorSent.length === 0) return null;
+              return (
+                <div>
+                  <label className="block text-xs font-medium text-[var(--gray-9)] mb-1">Exclude already-sent recipients</label>
+                  <p className="text-xs text-[var(--gray-8)] mb-2">Skip anyone successfully sent in a previous send — re-send corrected content to the rest without double-sending.</p>
+                  <div className="space-y-1.5">
+                    {priorSent.map((s) => (
+                      <label key={s.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={excludeSentSendIds.includes(s.id)}
+                          onChange={(e) => setExcludeSentSendIds((prev) => e.target.checked ? [...prev, s.id] : prev.filter((id) => id !== s.id))}
+                        />
+                        <span className="text-[var(--gray-11)]">
+                          {s.sent_count} sent · {formatTime(s.completed_at || s.created_at)}{s.status !== 'sent' ? ` · ${s.status}` : ''}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             <Button variant="solid" onClick={handleSend} disabled={sending || editionId === 'new' || isActive}>
               <PaperAirplaneIcon className="w-4 h-4 mr-1" />
               {sending ? 'Sending...' : isActive ? 'Send in progress...' : scheduleType === 'scheduled' ? 'Schedule Send' : 'Send Now'}
@@ -609,13 +687,23 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
                     ? { color: 'red', icon: XCircleIcon }
                     : send.status === 'cancelled' || send.status === 'cancelling'
                       ? { color: 'gray', icon: XCircleIcon }
-                      : send.status === 'sending'
-                        ? { color: 'blue', icon: ClockIcon }
-                        : { color: 'gray', icon: ClockIcon };
+                      : send.status === 'paused'
+                        ? { color: 'amber', icon: PauseIcon }
+                        : send.status === 'sending'
+                          ? { color: 'blue', icon: ClockIcon }
+                          : { color: 'gray', icon: ClockIcon };
                 const Icon = statusCfg.icon;
                 const isSelected = send.id === selectedSendId;
 
-                const isSendingRow = send.status === 'sending' || send.status === 'cancelling';
+                const strategy = send.delivery_strategy || 'global';
+                const isStaggered = strategy !== 'global';
+                const isSendingRow = send.status === 'sending' || send.status === 'cancelling' || send.status === 'paused';
+                // "Update content" only has an effect where HTML is re-read
+                // after creation: a scheduled send (read at dispatch) or an
+                // in-flight staggered send (the drip re-reads each tick). A
+                // global all-at-once send captures HTML once, so it's omitted.
+                const canUpdateContent = send.status === 'scheduled'
+                  || (isStaggered && (send.status === 'sending' || send.status === 'paused' || send.status === 'cancelling'));
                 const pct = (send.total_recipients || 0) > 0
                   ? Math.round(((send.sent_count || 0) / (send.total_recipients || 1)) * 100)
                   : 0;
@@ -657,18 +745,36 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
                           <span>{send.total_recipients || 0} recipients</span>
                         </div>
                       </div>
-                      {send.status === 'scheduled' && (
-                        <Button variant="soft" color="red" size="1" onClick={(e) => { e.stopPropagation(); handleCancel(send); }}>
-                          <XCircleIcon className="w-4 h-4 mr-1" />
-                          Cancel
-                        </Button>
-                      )}
-                      {send.status === 'sending' && (
-                        <Button variant="soft" color="red" size="1" onClick={(e) => { e.stopPropagation(); handleCancel(send); }}>
-                          <XCircleIcon className="w-4 h-4 mr-1" />
-                          Stop
-                        </Button>
-                      )}
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {canUpdateContent && (
+                          <Button variant="soft" color="gray" size="1" title="Update to latest edition content" onClick={(e) => { e.stopPropagation(); handleApplyLatestContent(send); }}>
+                            <ArrowPathIcon className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {isStaggered && send.status === 'sending' && (
+                          <Button variant="soft" color="gray" size="1" title="Pause" onClick={(e) => { e.stopPropagation(); handlePause(send); }}>
+                            <PauseIcon className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {send.status === 'paused' && (
+                          <Button variant="soft" color="green" size="1" onClick={(e) => { e.stopPropagation(); handleResume(send); }}>
+                            <PlayIcon className="w-4 h-4 mr-1" />
+                            Resume
+                          </Button>
+                        )}
+                        {send.status === 'scheduled' && (
+                          <Button variant="soft" color="red" size="1" onClick={(e) => { e.stopPropagation(); handleCancel(send); }}>
+                            <XCircleIcon className="w-4 h-4 mr-1" />
+                            Cancel
+                          </Button>
+                        )}
+                        {(send.status === 'sending' || send.status === 'paused') && (
+                          <Button variant="soft" color="red" size="1" onClick={(e) => { e.stopPropagation(); handleCancel(send); }}>
+                            <XCircleIcon className="w-4 h-4 mr-1" />
+                            Stop
+                          </Button>
+                        )}
+                      </div>
                     </div>
 
                     {send.status === 'scheduled' && send.scheduled_at && (
@@ -681,7 +787,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
                     {isSendingRow && (send.total_recipients || 0) > 0 && (
                       <div className="mt-2 ml-7">
                         <div className="flex justify-between text-xs text-[var(--gray-11)] mb-1">
-                          <span>{send.status === 'cancelling' ? 'Stopping…' : 'Progress'}</span>
+                          <span>{send.status === 'cancelling' ? 'Stopping…' : send.status === 'paused' ? 'Paused' : 'Progress'}</span>
                           <span>{send.sent_count || 0} / {send.total_recipients} · {pct}%</span>
                         </div>
                         <div className="w-full bg-[var(--gray-a4)] rounded-full h-1.5">

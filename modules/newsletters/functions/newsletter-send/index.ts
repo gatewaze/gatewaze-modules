@@ -337,6 +337,58 @@ async function handler(req: Request) {
 // dispatched each 60s dispatcher tick (drained over subsequent ticks).
 const DRIP_LIMIT = 200
 
+// Recipient merge fields usable in rich-text content as {{field}} or
+// {{field|fallback text}}. `name` is derived from first + last. Values come
+// from people.attributes and are HTML-escaped before substitution.
+const MERGE_FIELDS = ['first_name', 'last_name', 'name', 'company', 'job_title'] as const
+const MERGE_FIELD_GROUP = MERGE_FIELDS.join('|')
+
+function htmlUsesMergeFields(html: string): boolean {
+  return new RegExp(`\\{\\{\\s*(?:${MERGE_FIELD_GROUP})\\b`).test(html)
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/** A fallback may be quoted to include punctuation/sentences and to preserve
+ *  surrounding spaces, e.g. {{first_name|"Dan the man!"}}. Strip one layer of
+ *  matching single/double quotes; otherwise trim. */
+function unquoteFallback(fb: string): string {
+  const t = fb.trim()
+  if (t.length >= 2 && ((t[0] === '"' && t.endsWith('"')) || (t[0] === "'" && t.endsWith("'")))) {
+    return t.slice(1, -1)
+  }
+  return t
+}
+
+/**
+ * Substitute {{first_name}} / {{first_name|"fallback"}} merge tags from a
+ * recipient's people.attributes, anywhere in the given text (body HTML, subject,
+ * preheader, …). Missing/blank values use the inline fallback or empty string.
+ * `escape` HTML-escapes values for HTML contexts; pass false for plain-text
+ * contexts like the subject line (where &amp; etc. would show literally).
+ */
+function substituteMergeFields(text: string, attrs: Record<string, unknown>, escape = true): string {
+  const re = new RegExp(`\\{\\{\\s*(${MERGE_FIELD_GROUP})\\s*(?:\\|([^}]*))?\\}\\}`, 'g')
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+  return text.replace(re, (_m, field: string, fallback?: string) => {
+    let val: string
+    if (field === 'name') {
+      val = [str(attrs.first_name), str(attrs.last_name)].filter(Boolean).join(' ')
+    } else {
+      val = str(attrs[field])
+    }
+    if (!val) val = unquoteFallback(fallback ?? '')
+    return escape ? escapeHtml(val) : val
+  })
+}
+
 interface SendContext {
   html: string
   subject: string
@@ -348,6 +400,11 @@ interface SendContext {
   supabaseUrl: string
   usesWeather: boolean
   weatherUnits: 'celsius' | 'fahrenheit'
+  usesMergeFields: boolean
+  // Full people.attributes per recipient email, loaded once when the content
+  // uses weather or merge fields. Feeds both the weather city/country lookup
+  // and merge-field substitution from a single query.
+  attrsByEmail: Map<string, Record<string, unknown>>
   locationByEmail: Map<string, { city: string; country: string }>
   weatherCache: Map<string, WeatherResolved | null>
 }
@@ -390,9 +447,10 @@ async function buildSendContext(supabase: any, send: any, provider: EmailProvide
   if (!listId) throw new Error('No subscription list configured for this send.')
 
   const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html)
+  const subject = send.subject || send.edition?.subject || 'Newsletter'
   return {
     html,
-    subject: send.subject || send.edition?.subject || 'Newsletter',
+    subject,
     listId,
     fromEmail: send.from_address || Deno.env.get('EMAIL_FROM') || 'noreply@localhost',
     fromName: send.from_name || Deno.env.get('EMAIL_FROM_NAME') || 'Gatewaze',
@@ -401,25 +459,33 @@ async function buildSendContext(supabase: any, send: any, provider: EmailProvide
     supabaseUrl: Deno.env.get('SUPABASE_URL')!,
     usesWeather,
     weatherUnits: usesWeather ? extractWeatherUnits(html) : 'celsius',
+    // Merge fields work in ANY email text — body HTML and the subject line.
+    usesMergeFields: htmlUsesMergeFields(html) || htmlUsesMergeFields(subject),
+    attrsByEmail: new Map(),
     locationByEmail: new Map(),
     weatherCache: new Map(),
   }
 }
 
-/** Bulk-load city/country for the given recipient emails into ctx (only when
- *  the edition uses the Weather block). */
-async function loadWeatherLocations(supabase: any, emails: string[], ctx: SendContext): Promise<void> {
-  if (!ctx.usesWeather) return
+/** Bulk-load people.attributes for the given recipient emails into ctx — once,
+ *  feeding both the weather city/country lookup and merge-field substitution.
+ *  No-op unless the content actually uses weather or merge fields. */
+async function loadRecipientAttributes(supabase: any, emails: string[], ctx: SendContext): Promise<void> {
+  if (!ctx.usesWeather && !ctx.usesMergeFields) return
   const CHUNK = 500
   for (let i = 0; i < emails.length; i += CHUNK) {
     const chunk = emails.slice(i, i + CHUNK)
     const { data: peopleRows, error } = await supabase.from('people').select('email, attributes').in('email', chunk)
-    if (error) { console.warn('[weather] people lookup failed:', error.message); break }
+    if (error) { console.warn('[newsletter-send] people lookup failed:', error.message); break }
     for (const row of peopleRows ?? []) {
       const attrs = (row as { attributes?: Record<string, unknown> }).attributes ?? {}
-      const city = typeof attrs.city === 'string' ? attrs.city : ''
-      const country = typeof attrs.country === 'string' ? attrs.country : ''
-      if (city) ctx.locationByEmail.set((row as { email: string }).email, { city, country })
+      const rowEmail = (row as { email: string }).email
+      ctx.attrsByEmail.set(rowEmail, attrs)
+      if (ctx.usesWeather) {
+        const city = typeof attrs.city === 'string' ? attrs.city : ''
+        const country = typeof attrs.country === 'string' ? attrs.country : ''
+        if (city) ctx.locationByEmail.set(rowEmail, { city, country })
+      }
     }
   }
 }
@@ -467,11 +533,20 @@ async function sendToRecipient(supabase: any, provider: EmailProviderModule, ctx
       personalizedHtml = substituteWeather(personalizedHtml, await resolveWeatherFor(email, ctx))
     }
 
+    // Merge fields apply to any text in the email: the body HTML (escaped) and
+    // the subject line (plain text, not escaped).
+    let subject = ctx.subject
+    if (ctx.usesMergeFields) {
+      const attrs = ctx.attrsByEmail.get(email) ?? {}
+      personalizedHtml = substituteMergeFields(personalizedHtml, attrs, true)
+      subject = substituteMergeFields(ctx.subject, attrs, false)
+    }
+
     const { data: logEntry } = await supabase.from('email_send_log').insert({
       recipient_email: email,
       from_address: ctx.fromEmail,
       reply_to: ctx.collectionReplyTo,
-      subject: ctx.subject,
+      subject,
       content_html: personalizedHtml,
       provider: provider.name,
       newsletter_send_id: sendId,
@@ -484,7 +559,7 @@ async function sendToRecipient(supabase: any, provider: EmailProviderModule, ctx
       from: ctx.fromEmail,
       fromName: ctx.fromName,
       ...(ctx.collectionReplyTo ? { replyTo: ctx.collectionReplyTo } : {}),
-      subject: ctx.subject,
+      subject,
       html: personalizedHtml,
       headers: emailHeaders,
     })
@@ -592,7 +667,7 @@ async function runRecipientDrip(supabase: any, provider: EmailProviderModule): P
         .in('id', recips.map((r) => r.id))
       continue
     }
-    await loadWeatherLocations(supabase, recips.map((r) => r.email), ctx)
+    await loadRecipientAttributes(supabase, recips.map((r) => r.email), ctx)
     for (let i = 0; i < recips.length; i += BATCH_SIZE) {
       const slice = recips.slice(i, i + BATCH_SIZE)
       const results = await Promise.allSettled(
@@ -707,7 +782,24 @@ async function processSend(
 
     if (subError) throw new Error(`Failed to fetch subscribers: ${subError.message}`)
 
-    const recipientEmails: string[] = (subscribers || []).map((s: any) => s.email)
+    let recipientEmails: string[] = (subscribers || []).map((s: any) => s.email)
+
+    // Exclude recipients already successfully sent in one or more prior sends
+    // (re-send corrected content without double-sending). Matched on the
+    // email_send_log 'sent' rows those sends wrote. Staggered sends apply the
+    // same exclusion in SQL at fan-out time (migration 044).
+    const excludeIds = (send.exclude_sent_send_ids as string[] | null) ?? null
+    if (excludeIds && excludeIds.length > 0) {
+      const { data: sentRows } = await supabase
+        .from('email_send_log')
+        .select('recipient_email')
+        .in('newsletter_send_id', excludeIds)
+        .eq('status', 'sent')
+      const alreadySent = new Set((sentRows ?? []).map((r: any) => String(r.recipient_email).toLowerCase()))
+      if (alreadySent.size > 0) {
+        recipientEmails = recipientEmails.filter((e) => !alreadySent.has(e.toLowerCase()))
+      }
+    }
 
     await supabase
       .from('newsletter_sends')
@@ -728,7 +820,7 @@ async function processSend(
       return { success: true, delivered: 0, failed: 0 }
     }
 
-    await loadWeatherLocations(supabase, recipientEmails, ctx)
+    await loadRecipientAttributes(supabase, recipientEmails, ctx)
     let delivered = 0
     let failed = 0
 

@@ -159,6 +159,9 @@ const newslettersModule: GatewazeModule = {
     'migrations/039_edition_links_fk_cascade.sql',
     'migrations/040_fanout_newsletter_send_recipients.sql',
     'migrations/041_send_recipient_timezone_breakdown.sql',
+    'migrations/042_signup_forms_integration.sql',
+    'migrations/043_send_status_cancelling.sql',
+    'migrations/044_pause_and_exclude_sent.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
@@ -257,8 +260,8 @@ const newslettersModule: GatewazeModule = {
     { path: '/newsletters', component: () => import('./portal/pages/index') },
     // Canonical edition URL: /newsletters/<collection>/<date-subject-slug>
     { path: '/newsletters/:collection/:edition', component: () => import('./portal/pages/[collection]/[edition]') },
-    // Legacy /newsletters/<slug>--<date> → redirects to the canonical URL.
-    { path: '/newsletters/:date', component: () => import('./portal/pages/_date') },
+    // Per-newsletter page; also absorbs the legacy /newsletters/<slug>--<date> redirect.
+    { path: '/newsletters/:collection', component: () => import('./portal/pages/[collection]/index') },
   ],
 
   publicApiScopes: [
