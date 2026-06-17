@@ -15,6 +15,9 @@ interface GenericSectionProps extends Record<string, unknown> {
   description: string;
   link: string;
   link_text: string;
+  /** Set by renderTree for the last brick in the slot — suppresses the
+   *  trailing divider so the line only appears BETWEEN bricks. */
+  _last?: boolean;
 }
 
 export const GenericSectionBlock: EmailBlockEntry<GenericSectionProps> = {
@@ -29,8 +32,11 @@ export const GenericSectionBlock: EmailBlockEntry<GenericSectionProps> = {
     link_text: { type: 'text', label: 'Link text' },
   },
   defaultProps: { section_title: '', title: '', description: '', link: '', link_text: '' },
-  Component: ({ section_title, title, description, link, link_text }) => (
-    <Section style={{ padding: '0 15px' }}>
+  Component: ({ section_title, title, description, link, link_text, _last }) => (
+    // No horizontal padding: the MLOps Community Card already insets content
+    // 15px, so the brick adding its own 15px double-indented it and pushed the
+    // title out of line with the block's eyebrow. Let the Card own the inset.
+    <Section style={{ padding: 0 }}>
       {section_title ? <Text style={{ ...EYEBROW, textTransform: 'uppercase' }}>{section_title}</Text> : null}
       {title ? (
         <Heading as="h3" style={BRICK_TITLE}>
@@ -47,7 +53,7 @@ export const GenericSectionBlock: EmailBlockEntry<GenericSectionProps> = {
           </strong>
         </Text>
       ) : null}
-      <Hr style={DIVIDER} />
+      {_last ? null : <Hr style={DIVIDER} />}
     </Section>
   ),
 };

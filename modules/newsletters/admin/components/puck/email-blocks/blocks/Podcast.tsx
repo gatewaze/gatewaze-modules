@@ -28,8 +28,8 @@ export const PodcastBlock: EmailBlockEntry<PodcastProps> = {
     apple_link: { type: 'text', label: 'Apple link' },
   },
   defaultProps: { title: '', description: '', video_link: '', spotify_link: '', apple_link: '' },
-  Component: ({ title, description, video_link, spotify_link, apple_link }) => (
-    <Section style={{ padding: '0 15px' }}>
+  Component: ({ title, description, video_link, spotify_link, apple_link, _last }) => (
+    <Section style={{ padding: 0 }}>
       {title ? (
         <Heading as="h3" style={{ margin: '0 0 8px', fontSize: '24px', fontWeight: 'bold', color: '#000', lineHeight: 1.2 }}>
           {title}
@@ -61,7 +61,7 @@ export const PodcastBlock: EmailBlockEntry<PodcastProps> = {
           ) : null}
         </strong>
       </Text>
-      <Hr style={DIVIDER} />
+      {_last ? null : <Hr style={DIVIDER} />}
     </Section>
   ),
 };

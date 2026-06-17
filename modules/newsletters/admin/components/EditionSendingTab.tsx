@@ -71,6 +71,12 @@ interface EditionSendingTabProps {
   collection: CollectionInfo | null;
   newsletterSlug?: string;
   /**
+   * Edition publish status. Sending is gated on `'published'` — a draft edition
+   * has no public View Online page yet, so its emails' "View Online" link would
+   * 404. Operators must publish before they can send/schedule.
+   */
+  editionStatus?: string;
+  /**
    * Async renderer that produces the final email-safe HTML for the
    * edition. Called at send time (not eagerly) so the heavy
    * `@react-email/render` pass only runs when the operator commits to
@@ -160,7 +166,9 @@ function tzRowStatus(r: TimezoneBreakdownRow, nowMs: number): { label: string; c
 
 const SEND_LOG_PAGE_SIZE = 50;
 
-export function EditionSendingTab({ editionId, editionDate, subject, collection, newsletterSlug, getRenderedHtml }: EditionSendingTabProps) {
+export function EditionSendingTab({ editionId, editionDate, subject, collection, newsletterSlug, editionStatus, getRenderedHtml }: EditionSendingTabProps) {
+  // Only a published edition can be sent — its View Online page must exist.
+  const canSend = editionStatus === 'published';
   const [sends, setSends] = useState<SendRecord[]>([]);
   const [sendLog, setSendLog] = useState<SendLogEntry[]>([]);
   const [sendLogPage, setSendLogPage] = useState(0);
@@ -337,23 +345,26 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
   // substituted. Shared by the initial send and the "Update content" action,
   // so both produce identical output. getViewOnlineUrl is the single source of
   // truth for the View Online target (same helper the editor preview uses).
-  const buildFinalHtml = useCallback(async (): Promise<{ html: string | null; webVersionUrl: string }> => {
+  const buildFinalHtml = useCallback(async (): Promise<{ html: string | null; webVersionUrl: string; portalBaseUrl: string }> => {
     const portalProtocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
     const portalHost = typeof window !== 'undefined'
       ? window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, '')
       : 'localhost';
+    // Portal origin (admin.aaif.live → aaif.live) — used for the Subscription
+    // Centre link in the email footer (edge fn appends /subscriptions?token=).
+    const portalBaseUrl = `${portalProtocol}//${portalHost}`;
     const webVersionUrl =
       getViewOnlineUrl(
         { slug: newsletterSlug, view_online_target: collection?.view_online_target, view_online_external_base_url: collection?.view_online_external_base_url },
         { edition_date: editionDate, subject },
-      ) ?? `${portalProtocol}//${portalHost}/newsletters`;
+      ) ?? `${portalBaseUrl}/newsletters`;
     let html = getRenderedHtml ? await getRenderedHtml() : null;
     if (html) {
       html = html
         .replace(/\{\{web_version\}\}/g, webVersionUrl)
         .replace(/\{%\s*view_in_browser_url\s*%\}/g, webVersionUrl);
     }
-    return { html, webVersionUrl };
+    return { html, webVersionUrl, portalBaseUrl };
   }, [newsletterSlug, collection?.view_online_target, collection?.view_online_external_base_url, editionDate, subject, getRenderedHtml]);
 
   const handleSend = async () => {
@@ -361,10 +372,14 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
       toast.error('Save the edition first');
       return;
     }
+    if (!canSend) {
+      toast.error('Publish this edition before sending — the "View Online" link needs a live page.');
+      return;
+    }
 
     setSending(true);
     try {
-      const { html: finalHtml, webVersionUrl } = await buildFinalHtml();
+      const { html: finalHtml, webVersionUrl, portalBaseUrl } = await buildFinalHtml();
 
       const { data, error } = await supabase
         .from('newsletter_sends')
@@ -395,7 +410,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
           adapter_id: 'html',
           rendered_html: finalHtml,
           exclude_sent_send_ids: excludeSentSendIds.length > 0 ? excludeSentSendIds : null,
-          metadata: { web_version_url: webVersionUrl },
+          metadata: { web_version_url: webVersionUrl, portal_base_url: portalBaseUrl },
         })
         .select()
         .single();
@@ -664,9 +679,15 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
               );
             })()}
 
-            <Button variant="solid" onClick={handleSend} disabled={sending || editionId === 'new' || isActive}>
+            {!canSend && editionId !== 'new' && (
+              <div className="rounded-md border border-[var(--amber-a6)] bg-[var(--amber-a2)] px-3 py-2 text-xs text-[var(--amber-11)]">
+                This edition is a draft. <span className="font-medium">Publish it</span> before sending — the email&apos;s &ldquo;View Online&rdquo; link points at the published page.
+              </div>
+            )}
+
+            <Button variant="solid" onClick={handleSend} disabled={sending || editionId === 'new' || isActive || !canSend}>
               <PaperAirplaneIcon className="w-4 h-4 mr-1" />
-              {sending ? 'Sending...' : isActive ? 'Send in progress...' : scheduleType === 'scheduled' ? 'Schedule Send' : 'Send Now'}
+              {sending ? 'Sending...' : isActive ? 'Send in progress...' : !canSend ? 'Publish to send' : scheduleType === 'scheduled' ? 'Schedule Send' : 'Send Now'}
             </Button>
           </div>
         </Card>

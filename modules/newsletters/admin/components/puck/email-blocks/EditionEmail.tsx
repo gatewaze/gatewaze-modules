@@ -63,7 +63,8 @@ export interface EditionEmailProps {
    * newsletter's repo controls its visual identity.
    *
    * Wrapper-template mustache namespace: `{{edition.date}}`, `{{edition.title}}`,
-   * `{{edition.preheader}}`, `{{edition.view_online_link}}`. Per-brand values
+   * `{{edition.preheader}}`, `{{edition.view_online_link}}`,
+   * `{{edition.unsubscribe_url}}`, `{{edition.manage_subscriptions_url}}`. Per-brand values
    * (shop links, partner email, social links, etc.) are baked into the
    * template HTML directly — no separate config layer.
    *
@@ -126,12 +127,22 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
   const composed: ReactNode = wrapperTemplate
     ? (() => {
         const parsed = parseTemplate(wrapperTemplate);
+        // `viewOnlineUrl == null` is the per-recipient SEND render: leave the
+        // {{...}} tokens for the send pipeline to substitute. A real URL means a
+        // publish/web render, where unsubscribe doesn't apply → blank.
+        const isSendRender = viewOnlineUrl == null;
         const content: Record<string, unknown> = {
           edition: {
             date: formatEditionDate(edition.edition_date),
             title: edition.subject ?? '',
             preheader: edition.preheader ?? '',
             view_online_link: hideViewOnline ? '' : (viewOnlineUrl ?? '{{web_version}}'),
+            // Subscription Centre links — the wrapper footer references these as
+            // {{edition.unsubscribe_url}} / {{edition.manage_subscriptions_url}};
+            // their VALUES are the send-time tokens the edge fn fills per
+            // recipient (empty on a publish/web render).
+            unsubscribe_url: isSendRender ? '{{unsubscribe_url}}' : '',
+            manage_subscriptions_url: isSendRender ? '{{manage_subscriptions_url}}' : '',
           },
           body: <>{blockEls}</>,
         };
@@ -302,6 +313,10 @@ export function renderTree(
     const Comp = pickFormatComponent(entry.Component, entry.formats, format);
     const propsRaw = e.props && typeof e.props === 'object' ? (e.props as Record<string, unknown>) : {};
     const props = { ...propsRaw };
+    // Mark the last sibling so slot bricks (e.g. MLOps Community sections) can
+    // drop their trailing separator — a divider belongs BETWEEN bricks, not
+    // after the final one. Ignored by components that don't read it.
+    props._last = idx === entries.length - 1;
     const id = typeof props.id === 'string' ? props.id : `tree-${idx}`;
     delete props.id;
     const { padding, margin } = extractSpacing(props);
