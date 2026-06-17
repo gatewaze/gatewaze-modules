@@ -131,6 +131,14 @@ BEGIN
     RETURN 'true';
   END IF;
 
+  -- The behavioural event stream (core migration 00038_people_events) may not
+  -- exist yet in every environment. Degrade gracefully instead of emitting SQL
+  -- that references a missing relation: "has not performed" is vacuously true,
+  -- every other operator matches nobody.
+  IF to_regclass('public.people_events') IS NULL THEN
+    RETURN CASE WHEN v_op = 'not_performed' THEN 'true' ELSE 'false' END;
+  END IF;
+
   v_where := format('e.person_id = p.id AND e.event_name = %L', v_name);
 
   IF v_tw IS NOT NULL AND COALESCE(v_tw->>'type', 'relative') = 'relative' THEN
@@ -432,10 +440,15 @@ BEGIN
     RAISE EXCEPTION 'forbidden';
   END IF;
 
-  SELECT COALESCE(array_agg(DISTINCT event_name ORDER BY event_name), '{}')
-    INTO v_names
-  FROM public.people_events
-  WHERE event_name IS NOT NULL AND event_name <> '';
+  IF to_regclass('public.people_events') IS NULL THEN
+    RETURN '{}';
+  END IF;
+
+  EXECUTE $q$
+    SELECT COALESCE(array_agg(DISTINCT event_name ORDER BY event_name), '{}')
+    FROM public.people_events
+    WHERE event_name IS NOT NULL AND event_name <> ''
+  $q$ INTO v_names;
 
   RETURN v_names;
 END;

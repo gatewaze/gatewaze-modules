@@ -23,7 +23,7 @@ const segmentsModule: GatewazeModule = {
     { path: 'segments', component: () => import('./admin/pages/index'), requiredFeature: 'segments', guard: 'none' },
     { path: 'segments/create', component: () => import('./admin/pages/create'), requiredFeature: 'segments', guard: 'none' },
     { path: 'segments/:id', component: () => import('./admin/pages/[id]/index'), requiredFeature: 'segments', guard: 'none' },
-    { path: 'segments/:id/edit', component: () => import('./admin/pages/[id]/edit'), requiredFeature: 'segments', guard: 'none' },
+    { path: 'segments/:id/edit', component: () => import('./admin/pages/[id]/index'), requiredFeature: 'segments', guard: 'none' },
   ],
 
   adminNavItems: [
