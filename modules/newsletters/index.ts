@@ -38,6 +38,14 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletter:link-reconcile',
       handler: './workers/link-reconciler.ts',
     },
+    {
+      // Heartbeat that dispatches due scheduled sends (status='scheduled',
+      // scheduled_at <= now). Triggers the newsletter-send edge function's
+      // process_scheduled path — the BullMQ-driven stand-in for pg_cron so
+      // scheduled sends fire on every deploy target without that extension.
+      name: 'newsletter:dispatch-scheduled',
+      handler: './workers/dispatch-scheduled.ts',
+    },
   ],
 
   crons: [
@@ -64,6 +72,13 @@ const newslettersModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 6 * 60 * 60_000 },
       data: { kind: 'newsletter:link-reconcile' },
+    },
+    {
+      // Fire due scheduled sends every minute (see workers/dispatch-scheduled.ts).
+      name: 'newsletter-dispatch-scheduled',
+      queue: 'jobs',
+      schedule: { every: 60_000 },
+      data: { kind: 'newsletter:dispatch-scheduled' },
     },
   ],
 
@@ -142,6 +157,8 @@ const newslettersModule: GatewazeModule = {
     // reinsert save path bombed with 23502. Switches the FK to ON DELETE
     // CASCADE so tracking rows die with their block.
     'migrations/039_edition_links_fk_cascade.sql',
+    'migrations/040_fanout_newsletter_send_recipients.sql',
+    'migrations/041_send_recipient_timezone_breakdown.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

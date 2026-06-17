@@ -23,6 +23,7 @@ interface SendRecord {
   failed_count: number | null;
   started_at: string | null;
   completed_at: string | null;
+  scheduled_at: string | null;
   created_at: string;
 }
 
@@ -37,6 +38,16 @@ interface SendLogEntry {
   bounced_at: string | null;
   failure_error: string | null;
   created_at: string;
+}
+
+interface TimezoneBreakdownRow {
+  timezone: string;
+  recipients: number;
+  sent: number;
+  failed: number;
+  pending: number;
+  skipped: number;
+  send_at: string;
 }
 
 interface CollectionInfo {
@@ -88,6 +99,61 @@ function formatTime(dateStr: string | null): string {
   });
 }
 
+// IANA zone list for the timezone picker. Intl.supportedValuesOf is
+// available in current Chromium/Firefox/Safari; fall back to a small
+// curated list on older runtimes so the dropdown is never empty.
+const TIMEZONES: string[] = (() => {
+  try {
+    const sv = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf;
+    if (typeof sv === 'function') return sv('timeZone');
+  } catch { /* fall through to fallback */ }
+  return [
+    'UTC', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Madrid',
+    'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+    'America/Sao_Paulo', 'Asia/Kolkata', 'Asia/Singapore', 'Asia/Tokyo',
+    'Australia/Sydney',
+  ];
+})();
+
+function browserTimezone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+}
+
+/**
+ * Human "time from now" countdown, Customer.io-style: "in 2d 3h",
+ * "in 5m 12s", or "due now" once the target has passed. Seconds are
+ * only shown when under an hour out, to avoid a noisy long-range ticker.
+ */
+function formatCountdown(targetMs: number, nowMs: number): string {
+  const diff = targetMs - nowMs;
+  if (diff <= 0) return 'due now';
+  const total = Math.floor(diff / 1000);
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (days > 0) return `in ${days}d ${hours}h`;
+  if (hours > 0) return `in ${hours}h ${mins}m`;
+  if (mins > 0) return `in ${mins}m ${secs}s`;
+  return `in ${secs}s`;
+}
+
+/** Status badge label/color for one timezone row in the dispatch breakdown. */
+function tzRowStatus(r: TimezoneBreakdownRow, nowMs: number): { label: string; color: string } {
+  if (r.pending === 0) {
+    if (r.sent > 0) return { label: 'Sent', color: 'green' };
+    if (r.skipped > 0) return { label: 'Cancelled', color: 'gray' };
+    if (r.failed > 0) return { label: 'Failed', color: 'red' };
+    return { label: '—', color: 'gray' };
+  }
+  if (r.sent > 0) return { label: 'Sending', color: 'blue' };
+  const ts = new Date(r.send_at).getTime();
+  // Due but not yet claimed — the 60s drip will pick it up imminently.
+  if (nowMs >= ts) return { label: 'Sending', color: 'blue' };
+  // Not due yet — count down to this zone's dispatch (e.g. "Sends in 2h 5m").
+  return { label: `Sends ${formatCountdown(ts, nowMs)}`, color: 'amber' };
+}
+
 const SEND_LOG_PAGE_SIZE = 50;
 
 export function EditionSendingTab({ editionId, editionDate, subject, collection, newsletterSlug, getRenderedHtml }: EditionSendingTabProps) {
@@ -97,6 +163,10 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
   const [sendLogTotal, setSendLogTotal] = useState(0);
   const [openedCount, setOpenedCount] = useState(0);
   const [selectedSendId, setSelectedSendId] = useState<string | null>(null);
+  // Per-timezone dispatch breakdown for staggered sends, keyed by send id.
+  // Persists with the recipient queue, so it stays meaningful after a send
+  // completes. Empty for global (all-at-once) sends.
+  const [tzBreakdown, setTzBreakdown] = useState<Record<string, TimezoneBreakdownRow[]>>({});
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [scheduleType, setScheduleType] = useState<'immediate' | 'scheduled'>('immediate');
@@ -104,7 +174,21 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
   // Per-recipient delivery timing (spec-newsletter-personalised-delivery Part A).
   const [deliveryStrategy, setDeliveryStrategy] = useState<'global' | 'tz_local' | 'personalised'>('global');
   const [targetLocal, setTargetLocal] = useState('09:00');
-  const [defaultTimezone, setDefaultTimezone] = useState('');
+  const [defaultTimezone, setDefaultTimezone] = useState<string>(() => browserTimezone());
+  // Ticking clock for the send countdown; only runs while there's a
+  // future scheduled time to count down to (form preview or a queued send).
+  const [now, setNow] = useState(() => Date.now());
+
+  // Form preview target (what the operator is currently picking) and any
+  // already-queued scheduled send drive the live countdown.
+  const formTargetMs = scheduleType === 'scheduled' && scheduledAt ? new Date(scheduledAt).getTime() : NaN;
+  const hasActiveRow = sends.some((s) => s.status === 'scheduled' || s.status === 'sending' || s.status === 'cancelling');
+  const needCountdown = (Number.isFinite(formTargetMs) && formTargetMs > now) || hasActiveRow;
+  useEffect(() => {
+    if (!needCountdown) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [needCountdown]);
 
   const loadSends = useCallback(async () => {
     if (editionId === 'new') { setLoading(false); return; }
@@ -151,14 +235,29 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
     setOpenedCount(count || 0);
   }, [selectedSendId]);
 
+  // Per-timezone dispatch breakdown (staggered sends). Returns [] for global
+  // sends (no recipient queue). Stored by send id so each row/table is its own.
+  const loadBreakdown = useCallback(async (sendId: string) => {
+    const { data } = await supabase.rpc('newsletter_send_timezone_breakdown', { p_send_id: sendId });
+    setTzBreakdown((prev) => ({ ...prev, [sendId]: (data as TimezoneBreakdownRow[] | null) ?? [] }));
+  }, []);
+
   useEffect(() => { loadSendLog(); }, [loadSendLog]);
   useEffect(() => { loadOpenedCount(); }, [loadOpenedCount]);
+  useEffect(() => { if (selectedSendId) loadBreakdown(selectedSendId); }, [selectedSendId, loadBreakdown]);
+  // Load the breakdown for any in-flight send too, so its history-row summary
+  // ("N pending across timezones, next at …") has data even when not selected.
+  useEffect(() => {
+    for (const s of sends) {
+      if ((s.status === 'sending' || s.status === 'cancelling') && !tzBreakdown[s.id]) loadBreakdown(s.id);
+    }
+  }, [sends, tzBreakdown, loadBreakdown]);
   // Reset to the first page when the selected send changes.
   useEffect(() => { setSendLogPage(0); }, [selectedSendId]);
 
   // Debounced refresh for realtime ticks (live sends fire many row updates).
   const refreshRef = useRef<() => void>(() => {});
-  refreshRef.current = () => { loadSendLog(); loadOpenedCount(); };
+  refreshRef.current = () => { loadSendLog(); loadOpenedCount(); if (selectedSendId) loadBreakdown(selectedSendId); };
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleRefresh = useCallback(() => {
     if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -276,7 +375,12 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
           from_name: collection?.from_name || null,
           list_ids: collection?.list_id ? [collection.list_id] : [],
           schedule_type: scheduleType,
-          scheduled_at: scheduleType === 'scheduled' ? scheduledAt : null,
+          // The datetime-local input yields a zoneless wall-clock string
+          // (e.g. "2026-06-17T08:50"). Persisting it raw into the timestamptz
+          // column makes Postgres read it as UTC, so a BST operator's 08:50
+          // was stored as 09:50 local. new Date(...) interprets it in the
+          // browser's zone and toISOString() gives the correct UTC instant.
+          scheduled_at: scheduleType === 'scheduled' && scheduledAt ? new Date(scheduledAt).toISOString() : null,
           // Per-recipient delivery strategies only apply to a scheduled
           // send: the immediate path fires newsletter-send straight away
           // and dispatches every recipient at once, so a "Recipient local
@@ -331,8 +435,33 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
     }
   };
 
+  // Cancel a scheduled send (never dispatched) or request a stop on one that
+  // is already sending. A scheduled row goes straight to 'cancelled' so the
+  // dispatcher (which only claims status='scheduled') skips it. A sending row
+  // goes to 'cancelling' — the newsletter-send edge fn re-checks status before
+  // each batch and stops cleanly, recording what was already delivered.
+  const handleCancel = async (send: SendRecord) => {
+    const isSending = send.status === 'sending';
+    const ok = window.confirm(
+      isSending
+        ? 'Stop this send now? Recipients already processed will still receive it; the rest will be skipped.'
+        : 'Cancel this scheduled send? It will not go out.',
+    );
+    if (!ok) return;
+    const { error } = await supabase
+      .from('newsletter_sends')
+      .update({ status: isSending ? 'cancelling' : 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', send.id);
+    if (error) {
+      toast.error(error.message || 'Failed to cancel send');
+      return;
+    }
+    toast.success(isSending ? 'Stopping send…' : 'Scheduled send cancelled');
+    await loadSends();
+  };
+
   const latestSend = sends[0];
-  const isActive = latestSend?.status === 'sending' || latestSend?.status === 'scheduled';
+  const isActive = latestSend?.status === 'sending' || latestSend?.status === 'scheduled' || latestSend?.status === 'cancelling';
   const isComplete = latestSend?.status === 'sent';
   const isFailed = latestSend?.status === 'failed';
 
@@ -389,12 +518,22 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
                 </label>
               </div>
               {scheduleType === 'scheduled' && (
-                <input
-                  type="datetime-local"
-                  value={scheduledAt}
-                  onChange={(e) => setScheduledAt(e.target.value)}
-                  className="mt-2 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
-                />
+                <>
+                  <input
+                    type="datetime-local"
+                    value={scheduledAt}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                    className="mt-2 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
+                  />
+                  {Number.isFinite(formTargetMs) && (
+                    <p className="mt-1.5 flex items-center gap-1 text-xs text-[var(--gray-11)]">
+                      <ClockIcon className="w-3.5 h-3.5 text-[var(--accent-9)]" />
+                      <span>
+                        Sends <span className="font-semibold text-[var(--gray-12)]">{formatCountdown(formTargetMs, now)}</span>
+                      </span>
+                    </p>
+                  )}
+                </>
               )}
             </div>
 
@@ -429,13 +568,15 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
                     </label>
                     <label className="text-xs text-[var(--gray-9)]">
                       Default timezone
-                      <input
-                        type="text"
-                        placeholder="e.g. Europe/London"
+                      <select
                         value={defaultTimezone}
                         onChange={(e) => setDefaultTimezone(e.target.value)}
                         className="mt-1 w-full px-3 py-1.5 text-sm border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)]"
-                      />
+                      >
+                        {TIMEZONES.map((tz) => (
+                          <option key={tz} value={tz}>{tz}</option>
+                        ))}
+                      </select>
                     </label>
                   </div>
                 )}
@@ -452,31 +593,9 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
           </div>
         </Card>
 
-        {/* Send progress (when active) */}
-        {isActive && latestSend && (
-          <Card variant="surface" className="p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <ClockIcon className="w-4 h-4 text-[var(--accent-9)] animate-pulse" />
-              <h2 className="text-sm font-semibold text-[var(--gray-12)]">
-                {latestSend.status === 'scheduled' ? 'Scheduled' : 'Sending...'}
-              </h2>
-            </div>
-            {latestSend.total_recipients != null && latestSend.total_recipients > 0 && (
-              <div>
-                <div className="flex justify-between text-xs text-[var(--gray-11)] mb-1">
-                  <span>Progress</span>
-                  <span>{latestSend.sent_count || 0} / {latestSend.total_recipients}</span>
-                </div>
-                <div className="w-full bg-[var(--gray-a4)] rounded-full h-1.5">
-                  <div
-                    className="bg-[var(--accent-9)] h-1.5 rounded-full transition-all duration-500"
-                    style={{ width: `${((latestSend.sent_count || 0) / latestSend.total_recipients) * 100}%` }}
-                  />
-                </div>
-              </div>
-            )}
-          </Card>
-        )}
+        {/* Per-send progress / countdown / stop now live inline in Send
+            History below, so they always refer to the send you're looking at
+            (not just the latest one). */}
 
         {/* Send history */}
         {sends.length > 0 && (
@@ -488,46 +607,104 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
                   ? { color: 'green', icon: CheckCircleIcon }
                   : send.status === 'failed'
                     ? { color: 'red', icon: XCircleIcon }
-                    : send.status === 'sending'
-                      ? { color: 'blue', icon: ClockIcon }
-                      : { color: 'gray', icon: ClockIcon };
+                    : send.status === 'cancelled' || send.status === 'cancelling'
+                      ? { color: 'gray', icon: XCircleIcon }
+                      : send.status === 'sending'
+                        ? { color: 'blue', icon: ClockIcon }
+                        : { color: 'gray', icon: ClockIcon };
                 const Icon = statusCfg.icon;
                 const isSelected = send.id === selectedSendId;
 
+                const isSendingRow = send.status === 'sending' || send.status === 'cancelling';
+                const pct = (send.total_recipients || 0) > 0
+                  ? Math.round(((send.sent_count || 0) / (send.total_recipients || 1)) * 100)
+                  : 0;
+
                 return (
-                  <button
+                  <div
                     key={send.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedSendId(send.id)}
-                    className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors ${
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedSendId(send.id); } }}
+                    className={`w-full text-left px-3 py-2.5 rounded-md transition-colors cursor-pointer ${
                       isSelected
                         ? 'bg-[var(--accent-a3)] border border-[var(--accent-a6)]'
                         : 'hover:bg-[var(--gray-a3)] border border-transparent'
                     }`}
                   >
-                    <Icon className={`w-4 h-4 flex-shrink-0 ${
-                      send.status === 'sent' ? 'text-green-600' :
-                      send.status === 'failed' ? 'text-red-600' :
-                      send.status === 'sending' ? 'text-[var(--accent-9)] animate-pulse' :
-                      'text-[var(--gray-9)]'
-                    }`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <Badge variant="soft" color={statusCfg.color as any} size="1">
-                          {send.status}
-                        </Badge>
-                        <span className="text-xs text-[var(--gray-9)]">
-                          {formatTime(send.created_at)}
-                        </span>
+                    <div className="flex items-center gap-3">
+                      <Icon className={`w-4 h-4 flex-shrink-0 ${
+                        send.status === 'sent' ? 'text-green-600' :
+                        send.status === 'failed' ? 'text-red-600' :
+                        send.status === 'sending' ? 'text-[var(--accent-9)] animate-pulse' :
+                        'text-[var(--gray-9)]'
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <Badge variant="soft" color={statusCfg.color as any} size="1">
+                            {send.status === 'cancelling' ? 'stopping' : send.status}
+                          </Badge>
+                          <span className="text-xs text-[var(--gray-9)]">
+                            {formatTime(send.created_at)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 mt-1 text-xs text-[var(--gray-11)]">
+                          <span>{send.sent_count || 0} sent</span>
+                          {(send.failed_count || 0) > 0 && (
+                            <span className="text-red-600">{send.failed_count} failed</span>
+                          )}
+                          <span>{send.total_recipients || 0} recipients</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-[var(--gray-11)]">
-                        <span>{send.sent_count || 0} sent</span>
-                        {(send.failed_count || 0) > 0 && (
-                          <span className="text-red-600">{send.failed_count} failed</span>
-                        )}
-                        <span>{send.total_recipients || 0} recipients</span>
-                      </div>
+                      {send.status === 'scheduled' && (
+                        <Button variant="soft" color="red" size="1" onClick={(e) => { e.stopPropagation(); handleCancel(send); }}>
+                          <XCircleIcon className="w-4 h-4 mr-1" />
+                          Cancel
+                        </Button>
+                      )}
+                      {send.status === 'sending' && (
+                        <Button variant="soft" color="red" size="1" onClick={(e) => { e.stopPropagation(); handleCancel(send); }}>
+                          <XCircleIcon className="w-4 h-4 mr-1" />
+                          Stop
+                        </Button>
+                      )}
                     </div>
-                  </button>
+
+                    {send.status === 'scheduled' && send.scheduled_at && (
+                      <p className="mt-2 ml-7 text-xs text-[var(--gray-11)]">
+                        Sends <span className="font-semibold text-[var(--gray-12)]">{formatCountdown(new Date(send.scheduled_at).getTime(), now)}</span>
+                        <span className="text-[var(--gray-9)]"> · {formatTime(send.scheduled_at)}</span>
+                      </p>
+                    )}
+
+                    {isSendingRow && (send.total_recipients || 0) > 0 && (
+                      <div className="mt-2 ml-7">
+                        <div className="flex justify-between text-xs text-[var(--gray-11)] mb-1">
+                          <span>{send.status === 'cancelling' ? 'Stopping…' : 'Progress'}</span>
+                          <span>{send.sent_count || 0} / {send.total_recipients} · {pct}%</span>
+                        </div>
+                        <div className="w-full bg-[var(--gray-a4)] rounded-full h-1.5">
+                          <div
+                            className="bg-[var(--accent-9)] h-1.5 rounded-full transition-all duration-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        {(() => {
+                          const bd = tzBreakdown[send.id];
+                          const pendingCount = Math.max(0, (send.total_recipients || 0) - (send.sent_count || 0) - (send.failed_count || 0));
+                          if (pendingCount === 0) return null;
+                          const nextRow = bd?.find((r) => r.pending > 0);
+                          const nextAt = nextRow ? new Date(nextRow.send_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : null;
+                          return (
+                            <p className="mt-1.5 text-[11px] text-[var(--gray-9)]">
+                              {pendingCount} pending{bd && bd.length > 1 ? ` across ${bd.length} timezones` : ''}{nextAt ? ` · next at ${nextAt}` : ''}
+                            </p>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -537,6 +714,54 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
 
       {/* Right Column — Delivery log */}
       <div className="flex-1 min-w-0">
+        {/* Per-timezone dispatch breakdown (staggered sends). Persists after
+            completion since it reads the recipient queue. Hidden for global
+            sends, which have no per-recipient timing rows. */}
+        {selectedSendId && (tzBreakdown[selectedSendId]?.length ?? 0) > 0 && (
+          <Card variant="surface" className="p-5 mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-[var(--gray-12)] flex items-center gap-2">
+                <ClockIcon className="w-4 h-4" />
+                Delivery by timezone
+              </h2>
+              <span className="text-xs text-[var(--gray-9)]">{tzBreakdown[selectedSendId].length} zones</span>
+            </div>
+            <div className="border border-[var(--gray-a4)] rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-[var(--gray-a2)] border-b border-[var(--gray-a4)]">
+                    <th className="text-left px-3 py-2 text-xs font-medium text-[var(--gray-9)]">Timezone</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-[var(--gray-9)]">Recipients</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-[var(--gray-9)]">Local time</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-[var(--gray-9)]">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tzBreakdown[selectedSendId].map((r) => {
+                    const st = tzRowStatus(r, now);
+                    // The recipients' *current* local time (live clock), not
+                    // the dispatch time — the countdown in Status conveys when.
+                    let localTime = '—';
+                    try {
+                      localTime = new Date(now).toLocaleTimeString('en-GB', { timeZone: r.timezone, hour: '2-digit', minute: '2-digit' });
+                    } catch { /* invalid zone — leave as — */ }
+                    return (
+                      <tr key={r.timezone} className="border-b border-[var(--gray-a3)] last:border-0">
+                        <td className="px-3 py-2 text-[var(--gray-12)]">{r.timezone}</td>
+                        <td className="px-3 py-2 text-[var(--gray-11)] tabular-nums">{r.recipients}</td>
+                        <td className="px-3 py-2 text-[var(--gray-11)] tabular-nums">{localTime}</td>
+                        <td className="px-3 py-2">
+                          <Badge variant="soft" color={st.color as any} size="1">{st.label}</Badge>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
         <Card variant="surface" className="p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold text-[var(--gray-12)] flex items-center gap-2">
