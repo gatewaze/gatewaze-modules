@@ -47,6 +47,12 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletters:dispatch-scheduled',
       handler: './workers/dispatch-scheduled.ts',
     },
+    {
+      // Weekly list hygiene: suppress repeat-bouncers + inactive subscribers.
+      // Report-only unless LIST_HYGIENE_ENABLED=true (see workers/list-hygiene.ts).
+      name: 'newsletters:list-hygiene',
+      handler: './workers/list-hygiene.ts',
+    },
   ],
 
   crons: [
@@ -80,6 +86,13 @@ const newslettersModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 60_000 },
       data: { kind: 'newsletters:dispatch-scheduled' },
+    },
+    {
+      // Weekly list hygiene (report-only until LIST_HYGIENE_ENABLED=true).
+      name: 'newsletter-list-hygiene',
+      queue: 'jobs',
+      schedule: { every: 7 * 24 * 60 * 60_000 },
+      data: { kind: 'newsletters:list-hygiene' },
     },
   ],
 
@@ -163,6 +176,7 @@ const newslettersModule: GatewazeModule = {
     'migrations/042_signup_forms_integration.sql',
     'migrations/043_send_status_cancelling.sql',
     'migrations/044_pause_and_exclude_sent.sql',
+    'migrations/045_list_hygiene.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
