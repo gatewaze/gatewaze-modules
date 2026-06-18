@@ -1,9 +1,16 @@
+// IMPORTANT: this is `../email-provider.ts`, NOT `../_shared/email-provider.ts`.
+// The functionFiles deploy mechanism (index.ts: `['provider.ts:sendgrid.ts']`)
+// copies this file into supabase/functions/_shared/providers/sendgrid.ts — so
+// the import is resolved from inside `_shared/providers/`, where one level up
+// is already `_shared/`. Using `../_shared/email-provider.ts` would resolve to
+// `_shared/_shared/email-provider.ts` and the Edge Function fails to boot
+// (manifested as 30s timeouts on every webhook event).
 import type {
   EmailProviderModule,
   SendEmailParams,
   SendEmailResult,
   NormalizedEmailEvent,
-} from '../_shared/email-provider.ts';
+} from '../email-provider.ts';
 
 const SENDGRID_API_URL = 'https://api.sendgrid.com/v3/mail/send';
 
