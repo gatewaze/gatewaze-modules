@@ -57,6 +57,15 @@ export interface ExportArgs {
    * debugging; production usually wants `false` for smaller payloads.
    */
   pretty?: boolean;
+  /**
+   * Forwarded to EditionEmail. When true the wrapper footer's
+   * Subscription Centre fields land the per-recipient {{...}} tokens for the
+   * send pipeline to substitute. Caller MUST set this to true on the path
+   * that feeds newsletter-send (the editor's getRenderedHtml callback);
+   * publish / canvas-preview renders leave it false / omitted. See the
+   * `forSend` doc on EditionEmailProps for the full chain.
+   */
+  forSend?: boolean;
 }
 
 export async function exportEditionHtml(args: ExportArgs): Promise<string> {
@@ -69,6 +78,7 @@ export async function exportEditionHtml(args: ExportArgs): Promise<string> {
       viewOnlineUrl={args.viewOnlineUrl}
       hideViewOnline={args.hideViewOnline}
       registry={args.registry}
+      forSend={args.forSend}
     />,
     { pretty: args.pretty ?? false },
   );

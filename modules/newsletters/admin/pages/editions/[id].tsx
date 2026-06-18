@@ -863,6 +863,11 @@ export default function EditionEditorPage() {
                     ) ?? undefined,
                     registry: buildEmailRegistry(blockTemplates, brickTemplates),
                     pretty: false,
+                    // getRenderedHtml feeds the send pipeline (test send + real
+                    // send). Mark it so EditionEmail lands the {{unsubscribe_url}}
+                    // / {{manage_subscriptions_url}} tokens for newsletter-send to
+                    // substitute per recipient.
+                    forSend: true,
                   });
                 }
               : undefined}

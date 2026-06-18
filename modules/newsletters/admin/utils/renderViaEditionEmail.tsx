@@ -44,10 +44,17 @@ export interface RenderViaEditionEmailArgs {
   wrapperTemplate?: string | null;
   /** Whether to pretty-print the HTML output (debug only — production usually false). */
   pretty?: boolean;
+  /**
+   * Forwarded to EditionEmail. Set true on the path that feeds
+   * newsletter-send so the wrapper's Subscription Centre fields land the
+   * per-recipient {{...}} tokens for the send pipeline to substitute. See
+   * the `forSend` doc on EditionEmailProps for the substitution chain.
+   */
+  forSend?: boolean;
 }
 
 export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Promise<string> {
-  const { context, format, pretty, wrapperTemplate } = args;
+  const { context, format, pretty, wrapperTemplate, forSend } = args;
 
   // Reconstruct a NewsletterEdition. EditionEmail walks edition.blocks
   // by sort_order; the adapter has already applied any block exclusions
@@ -109,7 +116,7 @@ export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Pr
   }
 
   return render(
-    <EditionEmail edition={edition} format={format} blockMeta={blockMeta} wrapperTemplate={wrapperTemplate} />,
+    <EditionEmail edition={edition} format={format} blockMeta={blockMeta} wrapperTemplate={wrapperTemplate} forSend={forSend} />,
     { pretty: pretty ?? false },
   );
 }
