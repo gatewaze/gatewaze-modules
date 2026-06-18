@@ -30,6 +30,11 @@ export const TAG_COMPONENTS: Record<string, ComponentType<any>> = {
   img: Img,
   button: Button,
   link: Link,
+  // Raw HTML anchors (e.g. a header image wrapped in `<a href>` in a wrapper
+  // template) map to react-email's Link, same as raw `<img>` → Img. Without
+  // this `<a>` is an unknown tag → dropped, leaving its children (the image)
+  // rendered but unlinked. href/target/style ride through via PASSTHROUGH_ATTRS.
+  a: Link,
   hr: Hr,
   // Aliases for case-sensitive JSX tags that collide with HTML5 void elements
   // (parse-template rewrites them so DOMParser doesn't strip their children).
