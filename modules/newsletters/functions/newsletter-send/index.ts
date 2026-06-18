@@ -836,13 +836,23 @@ async function processSend(
     if (excludeIds && excludeIds.length > 0) {
       // Same Supabase default-1000 cap as the subscriber fetch — paginate
       // explicitly so the exclusion set actually covers a prior 50k-row send.
+      // Filter on sent_at IS NOT NULL, not status='sent'. The send pipeline
+      // writes status='sent' the instant SendGrid accepts the API call, but
+      // the webhook then promotes the row to 'delivered' / 'bounced' /
+      // 'opened' / 'clicked' as SendGrid reports back. By the time the
+      // operator clicks Re-send the prior batch's rows have all moved past
+      // 'sent', and the previous `.eq('status', 'sent')` filter matched zero
+      // rows — the exclusion silently de-fanged and the new send went to
+      // every recipient including the ones already reached.
+      // sent_at fires once at the API-accept moment and never gets cleared,
+      // so it's the correct "already attempted" discriminator.
       const alreadySent = new Set<string>()
       for (let offset = 0; ; offset += FETCH_PAGE) {
         const { data: sentPage } = await supabase
           .from('email_send_log')
           .select('recipient_email')
           .in('newsletter_send_id', excludeIds)
-          .eq('status', 'sent')
+          .not('sent_at', 'is', null)
           .order('recipient_email', { ascending: true })
           .range(offset, offset + FETCH_PAGE - 1)
         if (!sentPage || sentPage.length === 0) break
