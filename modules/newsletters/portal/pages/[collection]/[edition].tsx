@@ -15,6 +15,14 @@ import { DeclarativeBlock } from '@gatewaze-modules/newsletters/admin/components
 // Canonical edition slug (`<date>-<subject>`), shared with the git publish
 // pipeline and the send-time "View Online" link so URLs always agree.
 import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slug'
+// Resolve merge-field tokens (e.g. `{{first_name|"there"}}`) using empty
+// attrs so the fallback in each token always wins on the public View Online
+// page. The declarative renderer's `{{X}}` lookup can't parse the `|fallback`
+// suffix, so without this pre-pass the literal token leaks into the rendered
+// HTML and a reader sees `Hey {{first_name|"there"}}!`.
+import { substituteMergeFieldsInContent } from '@gatewaze-modules/newsletters/lib/merge-fields'
+
+const NO_RECIPIENT_ATTRS = {} as const
 
 interface EditionData {
   id: string
@@ -234,12 +242,17 @@ export default function NewsletterEditionPage({ params }: { params: { collection
                 const resolvedContent = brand.storageBucketUrl
                   ? resolveStoragePathsInJson(block.content, brand.storageBucketUrl)
                   : block.content
+                // Substitute merge tokens with their fallbacks (no recipient on
+                // the public View Online page; every {{first_name|"there"}}
+                // resolves to "there"). MUST happen before the declarative
+                // renderer sees the content map.
+                const personalisedContent = substituteMergeFieldsInContent(resolvedContent, NO_RECIPIENT_ATTRS)
                 let nodes: any[] = []
                 try { nodes = parseTemplate(source).nodes } catch { nodes = [] }
                 if (!nodes.length) return null
                 // Slot blocks: render their bricks as the slot's children.
                 const blockBricks = bricksByBlock[block.id] || []
-                let content: any = resolvedContent
+                let content: any = personalisedContent
                 if (blockBricks.length) {
                   const children = blockBricks.map((br: any, i: number) => {
                     let bNodes: any[] = []
@@ -248,9 +261,10 @@ export default function NewsletterEditionPage({ params }: { params: { collection
                     const bContent = brand.storageBucketUrl
                       ? resolveStoragePathsInJson(br.content, brand.storageBucketUrl)
                       : br.content
-                    return <DeclarativeBlock key={br.id || i} nodes={bNodes} content={bContent as any} />
+                    const bPersonalised = substituteMergeFieldsInContent(bContent, NO_RECIPIENT_ATTRS)
+                    return <DeclarativeBlock key={br.id || i} nodes={bNodes} content={bPersonalised as any} />
                   }).filter(Boolean)
-                  content = { ...(resolvedContent as any), children }
+                  content = { ...(personalisedContent as any), children }
                 }
                 return <DeclarativeBlock key={block.id} nodes={nodes} content={content} />
               })}
