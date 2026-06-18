@@ -186,6 +186,12 @@ const newslettersModule: GatewazeModule = {
     // probe instead of a seq scan, and bumps the function's statement_timeout
     // to 10min so a one-off slow fan-out doesn't lapse the default 25s.
     'migrations/046_fanout_large_list_perf.sql',
+    // 047 fixes the exclude-already-sent filter on both the JS-side
+    // exclusion (immediate global) and the SQL-side exclusion (fanout
+    // for tz_local / personalised): match sent_at IS NOT NULL, not
+    // status='sent' — the lifecycle moves past 'sent' to 'delivered'
+    // etc. and the exclude window slipped, double-sending everyone.
+    'migrations/047_fanout_exclude_uses_sent_at.sql',
     'migrations/045_list_hygiene.sql',
   ],
 
