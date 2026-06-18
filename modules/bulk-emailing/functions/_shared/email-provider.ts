@@ -45,6 +45,15 @@ export interface SendEmailResult {
  */
 export interface NormalizedEmailEvent {
   messageId: string;
+  /**
+   * Recipient email on the event, when the provider exposes one.
+   * Used by email-webhook to disambiguate batch-send rows where one
+   * messageId covers multiple recipients — without it, a duplicate
+   * provider_message_id row silently drops the event. SendGrid always
+   * includes `email`; providers that don't can omit this and the
+   * webhook falls back to messageId-only lookup.
+   */
+  recipientEmail?: string;
   eventType: 'delivered' | 'bounced' | 'dropped' | 'spam_reported' | 'open' | 'click';
   timestamp: Date;
   userAgent?: string;
