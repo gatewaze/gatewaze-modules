@@ -197,6 +197,9 @@ const newslettersModule: GatewazeModule = {
     // are hidden by default in the admin replies tab (toggle to show).
     'migrations/048_replies_auto_reply_flag.sql',
     'migrations/045_list_hygiene.sql',
+    'migrations/049_geo_engagement_config_and_indexes.sql',
+    'migrations/050_geo_engagement_rpcs.sql',
+    'migrations/051_geo_rollup_mv.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

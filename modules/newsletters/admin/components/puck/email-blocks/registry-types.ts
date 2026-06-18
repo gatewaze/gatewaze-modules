@@ -71,6 +71,15 @@ export interface EmailBlockEntry<P extends Record<string, unknown> = Record<stri
    * no per-block render dance.
    */
   formats?: Partial<Record<FormatId, ComponentType<P>>>;
+  /**
+   * Optional opt-in for geo/engagement reporting (spec
+   * spec-newsletter-geo-engagement-reporting §8.2). Maps a tracked link's
+   * 0-based `link_index` (its position among this block's tracked links) to a
+   * human label, so per-option reports show real option text (e.g. "Agree" /
+   * "Disagree") instead of a generic "Option 1/2". Pure + side-effect-free.
+   * Absence is non-fatal — reporting falls back to the block content / index.
+   */
+  getTrackedLinkLabels?: (props: P) => Record<number, string>;
 }
 
 /**
