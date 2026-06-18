@@ -17,12 +17,29 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-async function findLogByMessageId(messageId: string) {
+async function findLogByMessageId(messageId: string, recipientEmail?: string) {
+  // Prefer the (provider_message_id, recipient_email) composite when the
+  // provider gave us the recipient — that's the natural per-email key and
+  // disambiguates batch-send rows where one SendGrid message_id covers
+  // multiple recipients. `.maybeSingle()` returns null cleanly when nothing
+  // matches (vs `.single()` which errors), so we can fall back to the bare
+  // messageId path for providers / legacy events without `email`.
+  if (recipientEmail) {
+    const composite = await supabase
+      .from('email_send_log')
+      .select('id, recipient_email, delivered_at, first_opened_at, first_clicked_at')
+      .eq('provider_message_id', messageId)
+      .eq('recipient_email', recipientEmail)
+      .maybeSingle()
+    if (composite.data) return composite.data
+    // Fall through if not found — historical rows may have a different
+    // recipient_email casing than what the provider event carries.
+  }
   const { data } = await supabase
     .from('email_send_log')
     .select('id, recipient_email, delivered_at, first_opened_at, first_clicked_at')
     .eq('provider_message_id', messageId)
-    .single()
+    .maybeSingle()
   return data
 }
 
@@ -85,9 +102,9 @@ async function hasPersonalizationConsent(email: string): Promise<boolean> {
 }
 
 async function processNormalizedEvent(event: NormalizedEmailEvent) {
-  const log = await findLogByMessageId(event.messageId)
+  const log = await findLogByMessageId(event.messageId, event.recipientEmail)
   if (!log) {
-    console.warn(`[email-webhook] No log found for message ID: ${event.messageId}`)
+    console.warn(`[email-webhook] No log found for message ID: ${event.messageId}${event.recipientEmail ? ` (recipient ${event.recipientEmail})` : ''}`)
     return
   }
 

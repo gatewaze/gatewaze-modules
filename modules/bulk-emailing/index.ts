@@ -46,6 +46,12 @@ const bulkEmailingModule: GatewazeModule = {
     // email_events + the email_event_classifications table
     // (spec-newsletter-personalised-delivery.md Part C).
     'migrations/008_engagement_multisource.sql',
+    // 009 adds a partial UNIQUE index on (provider_message_id,
+    // recipient_email) of email_send_log to prevent webhook attribution
+    // cross-talk. Companion to the email-webhook lookup change that
+    // disambiguates by recipient email — SendGrid carries it on every
+    // event, and the newsletter send path already keys 1:1 anyway.
+    'migrations/009_unique_provider_message_per_recipient.sql',
   ],
 
   configSchema: {

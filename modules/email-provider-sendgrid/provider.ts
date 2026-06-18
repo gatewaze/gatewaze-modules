@@ -142,6 +142,12 @@ const provider: EmailProviderModule = {
 
       normalized.push({
         messageId,
+        // SendGrid puts the recipient on every event as `email`. Carrying
+        // it through lets email-webhook disambiguate batch-send rows
+        // (one messageId, multiple recipients) — otherwise that case
+        // silently drops the event. Lowercase + trim to match how the
+        // send path stores recipient_email.
+        recipientEmail: typeof e.email === 'string' ? e.email.trim().toLowerCase() : undefined,
         eventType,
         timestamp: new Date((e.timestamp as number) * 1000),
         userAgent: (e.useragent as string) || undefined,
