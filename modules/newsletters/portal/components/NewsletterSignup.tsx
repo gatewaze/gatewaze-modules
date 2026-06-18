@@ -2,23 +2,17 @@
 'use client'
 
 import { useState } from 'react'
+import { getClientBrandConfig } from '@/config/brand'
 
 /**
- * Neutral newsletter signup using the portal's standard form styling (no per-newsletter accent
- * colour). Submits through the **forms module** like the ambassador application: POST
- * /api/forms/<slug>/submit. Defaults to a single shared `newsletter-signup` form and passes the
- * `collection` slug in the responses; a DB trigger turns the submission into a `list_subscriptions`
- * row against the collection's `subscriber_list_id`. (Interim — to be replaced by the onboarding module.)
+ * Neutral newsletter signup using the portal's standard form styling.
+ *
+ * Submits via the Supabase functions URL (the way the portal makes every other client-side backend
+ * call — event registration, people-signup, etc.), NOT the separate API host, which the portal client
+ * can't reach. The `newsletter-signup` edge function creates the person + auth record and subscribes
+ * the email to the newsletter's manually-linked list. (Interim — to be replaced by the onboarding module.)
  */
-export function NewsletterSignup({
-  collectionSlug,
-  formSlug = 'newsletter-signup',
-  apiUrl,
-}: {
-  collectionSlug: string
-  formSlug?: string
-  apiUrl?: string
-}) {
+export function NewsletterSignup({ collectionSlug }: { collectionSlug: string }) {
   const [email, setEmail] = useState('')
   const [state, setState] = useState<'idle' | 'submitting' | 'done' | 'invalid' | 'error'>('idle')
 
@@ -28,11 +22,15 @@ export function NewsletterSignup({
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) { setState('invalid'); return }
     setState('submitting')
     try {
-      const base = apiUrl || process.env.NEXT_PUBLIC_API_URL || ''
-      const res = await fetch(`${base}/api/forms/${encodeURIComponent(formSlug)}/submit`, {
+      const config = getClientBrandConfig()
+      const res = await fetch(`${config.supabaseUrl}/functions/v1/newsletter-signup`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ responses: { email: value, collection: collectionSlug } }),
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${config.supabaseAnonKey}`,
+        },
+        body: JSON.stringify({ email: value, collection: collectionSlug }),
       })
       if (!res.ok) throw new Error()
       setState('done')

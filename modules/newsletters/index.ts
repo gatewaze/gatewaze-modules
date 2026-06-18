@@ -19,6 +19,7 @@ const newslettersModule: GatewazeModule = {
 
   edgeFunctions: [
     'newsletter-send',
+    'newsletter-signup',
     'newsletter-unsubscribe',
     'newsletter-gdoc-import',
     'email-inbound-parse',
