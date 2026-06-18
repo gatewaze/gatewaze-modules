@@ -192,6 +192,10 @@ const newslettersModule: GatewazeModule = {
     // status='sent' — the lifecycle moves past 'sent' to 'delivered'
     // etc. and the exclude window slipped, double-sending everyone.
     'migrations/047_fanout_exclude_uses_sent_at.sql',
+    // 048 adds is_auto_reply + auto_reply_reason to newsletter_replies so
+    // OOOs / vacation responders / bounces detected by email-inbound-parse
+    // are hidden by default in the admin replies tab (toggle to show).
+    'migrations/048_replies_auto_reply_flag.sql',
     'migrations/045_list_hygiene.sql',
   ],
 

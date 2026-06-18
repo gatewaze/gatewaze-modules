@@ -17,6 +17,76 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'content-type',
 };
 
+/**
+ * Classify an inbound message as auto-reply / OOO / bounce so the admin
+ * replies tab can hide them by default without dropping the data.
+ *
+ * Detection cascade — first match wins, returned reason explains why:
+ *   1. Auto-Submitted: <not 'no'>            (RFC 3834, canonical OOO signal)
+ *   2. X-Auto-Response-Suppress: present     (Exchange)
+ *   3. Precedence: bulk | auto_reply | junk  (older convention)
+ *   4. X-Autoreply / X-Autorespond           (Lotus / qmail / cPanel)
+ *   5. Return-Path: <>                       (DSN / bounce envelope)
+ *   6. Subject starts with OOO/vacation/auto-reply phrasing
+ *   7. From: mailer-daemon@ / postmaster@    (bounce from misconfigured systems)
+ *
+ * `headers` is the raw multi-line header blob SendGrid Inbound Parse forwards
+ * verbatim. We don't try to fully parse it — substring/regex on header lines
+ * is sufficient for these short discriminators and much cheaper than a full
+ * MIME parse for every reply.
+ */
+function classifyAutoReply(
+  headers: string,
+  subject: string,
+  fromEmail: string,
+): { isAuto: boolean; reason: string | null } {
+  // 1. Auto-Submitted — RFC 3834. Only 'no' means human; anything else is auto.
+  const m1 = headers.match(/^Auto-Submitted:\s*([^\r\n;]+)/im);
+  if (m1) {
+    const val = m1[1].trim().toLowerCase();
+    if (val && val !== 'no') return { isAuto: true, reason: `auto-submitted:${val}` };
+  }
+
+  // 2. Exchange's "don't auto-respond to me" header — its presence means the
+  // sender IS the auto-responder telling us not to loop.
+  if (/^X-Auto-Response-Suppress:/im.test(headers)) {
+    return { isAuto: true, reason: 'x-auto-response-suppress' };
+  }
+
+  // 3. Precedence: bulk/auto_reply/junk
+  const m3 = headers.match(/^Precedence:\s*([^\r\n]+)/im);
+  if (m3) {
+    const val = m3[1].trim().toLowerCase();
+    if (val === 'bulk' || val === 'auto_reply' || val === 'junk' || val === 'list') {
+      return { isAuto: true, reason: `precedence:${val}` };
+    }
+  }
+
+  // 4. Older Lotus / qmail / cPanel markers
+  if (/^X-Autoreply:\s*yes/im.test(headers)) return { isAuto: true, reason: 'x-autoreply' };
+  if (/^X-Autorespond:/im.test(headers))     return { isAuto: true, reason: 'x-autorespond' };
+
+  // 5. Empty Return-Path is the DSN/bounce envelope sender convention.
+  if (/^Return-Path:\s*<>\s*$/im.test(headers)) {
+    return { isAuto: true, reason: 'dsn' };
+  }
+
+  // 6. Subject-level fallback for mail clients that don't set headers.
+  // Matches the start of subject (after optional Re:/Fwd: prefixes the
+  // sender's client may add — rare on OOOs but cheap to allow).
+  const subjPattern = /^\s*(?:re|fwd?)?\s*:?\s*(out\s*of\s*(?:the\s*)?office|automatic\s*reply|auto[-\s]?reply|autoreply|autoresponse|vacation\s*reply|on\s*leave|on\s*vacation|away\s*from|i'?m\s*(?:currently\s*)?away|i\s*am\s*(?:currently\s*)?away)\b/i;
+  if (subjPattern.test(subject || '')) {
+    return { isAuto: true, reason: 'subject-pattern' };
+  }
+
+  // 7. Common bounce envelope addresses. fromEmail is already lowercased.
+  if (/^(mailer-daemon|postmaster|mail-daemon)@/.test(fromEmail)) {
+    return { isAuto: true, reason: 'bounce-sender' };
+  }
+
+  return { isAuto: false, reason: null };
+}
+
 async function handler(req: Request) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -117,7 +187,11 @@ async function handler(req: Request) {
       }
     } catch { /* ignore envelope parse errors */ }
 
-    console.log(`Inbound email from ${fromEmail} to ${toEmails.join(', ')}: ${subject}`);
+    const autoReplyVerdict = classifyAutoReply(headers, subject, fromEmail);
+    console.log(
+      `Inbound email from ${fromEmail} to ${toEmails.join(', ')}: ${subject}` +
+        (autoReplyVerdict.isAuto ? ` [auto:${autoReplyVerdict.reason}]` : ''),
+    );
 
     if (toEmails.length === 0) {
       return new Response(
@@ -203,6 +277,8 @@ async function handler(req: Request) {
           send_log_id: sendLogId,
           edition_id: editionId,
           forwarded_to: collection.forward_replies_to || null,
+          is_auto_reply: autoReplyVerdict.isAuto,
+          auto_reply_reason: autoReplyVerdict.reason,
         });
 
       if (insertError) {
@@ -211,8 +287,9 @@ async function handler(req: Request) {
       }
       stored++;
 
-      // Forward the reply if configured
-      if (collection.forward_replies_to && isEmailConfigured()) {
+      // Forward the reply if configured — never forward auto-replies (OOOs
+      // and bounces would just clutter the human inbox the forward points at).
+      if (collection.forward_replies_to && isEmailConfigured() && !autoReplyVerdict.isAuto) {
         try {
           // Send from the newsletter address with the replier's name,
           // and set reply-to to the original sender so replies go back to them

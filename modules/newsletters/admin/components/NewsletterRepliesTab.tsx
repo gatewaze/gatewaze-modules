@@ -21,6 +21,8 @@ interface Reply {
   forwarded_to: string | null;
   forwarded_at: string | null;
   created_at: string;
+  is_auto_reply: boolean;
+  auto_reply_reason: string | null;
   edition?: { title: string | null; edition_date: string } | null;
 }
 
@@ -66,6 +68,7 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
   const [editionTitles, setEditionTitles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showAutoReplies, setShowAutoReplies] = useState(false);
 
   const load = useCallback(async () => {
     const [repliesRes, editionsRes] = await Promise.all([
@@ -89,7 +92,7 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
     setLoading(false);
   }, [newsletterId]);
 
-  const visibleReplies = useMemo(() => {
+  const collectionReplies = useMemo(() => {
     if (editionTitles.length === 0) return replies;
     const needles = editionTitles.map(normaliseForMatch);
     return replies.filter((r) => {
@@ -100,6 +103,16 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
       return needles.some((n) => haystack.includes(n));
     });
   }, [replies, editionTitles]);
+
+  const autoReplyCount = useMemo(
+    () => collectionReplies.filter((r) => r.is_auto_reply).length,
+    [collectionReplies],
+  );
+
+  const visibleReplies = useMemo(
+    () => (showAutoReplies ? collectionReplies : collectionReplies.filter((r) => !r.is_auto_reply)),
+    [collectionReplies, showAutoReplies],
+  );
 
   useEffect(() => { load(); }, [load]);
 
@@ -123,7 +136,7 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
     }
   };
 
-  const hiddenCount = replies.length - visibleReplies.length;
+  const hiddenCount = replies.length - collectionReplies.length;
   const unreadCount = visibleReplies.filter(r => !r.is_read).length;
 
   if (loading) {
@@ -144,9 +157,23 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
             <Badge variant="solid" color="blue" size="1">{unreadCount} new</Badge>
           )}
         </div>
-        <span className="text-sm text-[var(--gray-9)]">
-          {visibleReplies.length} total{hiddenCount > 0 ? ` · ${hiddenCount} hidden (other newsletter)` : ''}
-        </span>
+        <div className="flex items-center gap-3">
+          {autoReplyCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAutoReplies((v) => !v)}
+              className="text-xs text-[var(--gray-11)] hover:text-[var(--gray-12)] underline-offset-2 hover:underline"
+              title={showAutoReplies ? 'Hide out-of-office and bounce replies' : 'Show out-of-office and bounce replies'}
+            >
+              {showAutoReplies ? `Hide ${autoReplyCount} auto-replies` : `Show ${autoReplyCount} auto-replies`}
+            </button>
+          )}
+          <span className="text-sm text-[var(--gray-9)]">
+            {visibleReplies.length} shown
+            {!showAutoReplies && autoReplyCount > 0 ? ` · ${autoReplyCount} auto-replies hidden` : ''}
+            {hiddenCount > 0 ? ` · ${hiddenCount} other newsletter` : ''}
+          </span>
+        </div>
       </div>
 
       {visibleReplies.length === 0 ? (
@@ -195,6 +222,11 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
                   </div>
 
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    {reply.is_auto_reply && (
+                      <Badge variant="soft" color="gray" size="1" className="hidden md:inline-flex" title={reply.auto_reply_reason || undefined}>
+                        Auto-reply
+                      </Badge>
+                    )}
                     {reply.edition && (
                       <Badge variant="soft" color="blue" size="1" className="hidden md:inline-flex">
                         {reply.edition.title || reply.edition.edition_date}
