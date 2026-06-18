@@ -17,6 +17,10 @@ const segmentsModule: GatewazeModule = {
   migrations: [
     'migrations/001_segments_tables.sql',
     'migrations/002_segments_functions.sql',
+    // 003 wires event_filters (predicates on people_events.event_data) into
+    // segments_event_to_sql so "attended an event in San Francisco" is
+    // expressible. See spec-campaigns-module.md Phase 3.
+    'migrations/003_event_filters.sql',
   ],
 
   adminRoutes: [
