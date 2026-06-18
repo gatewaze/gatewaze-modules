@@ -271,7 +271,7 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
   }
 }
 
-export default async function(req: Request) {
+async function handler(req: Request) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -318,3 +318,13 @@ export default async function(req: Request) {
     })
   }
 }
+
+// IMPORTANT: every Supabase Edge Function in this repo wires the handler via
+// BOTH `export default handler;` AND `Deno.serve(handler);`. The Deno.serve
+// call is what actually registers the request listener with the Edge Runtime.
+// Without it the function deploys cleanly but cold starts hang forever — every
+// inbound request times out at 30s with HTTP 000, which is exactly how the
+// email-webhook function manifested before this fix. See newsletter-send /
+// email-sendgrid-webhook for the same pattern.
+export default handler;
+Deno.serve(handler);
