@@ -47,6 +47,14 @@ export const SPECIAL_TAGS = new Set(['richtext', 'slot']);
  */
 export const INTRINSIC_TAGS = new Set([
   'div', 'span', 'p', 'strong', 'em', 'b', 'i', 'u', 'br', 'ul', 'ol', 'li', 'small',
+  // <style> is allowed so authors can target structural CSS that inline
+  // styles can't express (`:first-of-type`, `+ sibling`, `:hover` etc.).
+  // Without this the renderer dropped the <style> wrapper but kept its CSS
+  // text as a Fragment child, leaking the raw declaration block as visible
+  // text on the portal View Online page (and in email clients that don't
+  // hide text-only nodes outside the head). The content of <style> is the
+  // template author's own — no untrusted-content boundary crosses here.
+  'style',
 ]);
 
 /** `class` name → shared style object. Authors compose look via classes. */
