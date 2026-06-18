@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   EnvelopeIcon,
   EnvelopeOpenIcon,
@@ -42,20 +42,64 @@ function formatTime(dateStr: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// Reply-bleed across collections: when two collections share the same
+// Reply-To (e.g. demetrios@aaif.live used for both MLOps Community and
+// AAIF User Community), the email-inbound-parse Edge Function stores
+// ONE row per matching collection — so each Reply-To-routed reply
+// appears in BOTH tabs. Until that's deduped at insertion time, scope
+// what this tab shows to replies whose subject references an edition
+// of THIS collection. Subjects shorter than this won't be matched
+// against to avoid e.g. a one-word edition title hiding nothing.
+const MIN_TITLE_MATCH_LENGTH = 4;
+
+function normaliseForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps) {
   const [replies, setReplies] = useState<Reply[]>([]);
+  const [editionTitles, setEditionTitles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const { data } = await supabase
-      .from('newsletter_replies')
-      .select('*, edition:newsletters_editions(title, edition_date)')
-      .eq('collection_id', newsletterId)
-      .order('created_at', { ascending: false });
-    setReplies(data || []);
+    const [repliesRes, editionsRes] = await Promise.all([
+      supabase
+        .from('newsletter_replies')
+        .select('*, edition:newsletters_editions(title, edition_date)')
+        .eq('collection_id', newsletterId)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('newsletters_editions')
+        .select('title')
+        .eq('collection_id', newsletterId)
+        .not('title', 'is', null),
+    ]);
+    setReplies(repliesRes.data || []);
+    setEditionTitles(
+      ((editionsRes.data || []) as Array<{ title: string | null }>)
+        .map((e) => e.title || '')
+        .filter((t) => t.length >= MIN_TITLE_MATCH_LENGTH),
+    );
     setLoading(false);
   }, [newsletterId]);
+
+  const visibleReplies = useMemo(() => {
+    if (editionTitles.length === 0) return replies;
+    const needles = editionTitles.map(normaliseForMatch);
+    return replies.filter((r) => {
+      // Already linked to an edition by In-Reply-To header → trust the link.
+      if (r.edition_id) return true;
+      if (!r.subject) return false;
+      const haystack = normaliseForMatch(r.subject);
+      return needles.some((n) => haystack.includes(n));
+    });
+  }, [replies, editionTitles]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -79,7 +123,8 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
     }
   };
 
-  const unreadCount = replies.filter(r => !r.is_read).length;
+  const hiddenCount = replies.length - visibleReplies.length;
+  const unreadCount = visibleReplies.filter(r => !r.is_read).length;
 
   if (loading) {
     return (
@@ -99,10 +144,12 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
             <Badge variant="solid" color="blue" size="1">{unreadCount} new</Badge>
           )}
         </div>
-        <span className="text-sm text-[var(--gray-9)]">{replies.length} total</span>
+        <span className="text-sm text-[var(--gray-9)]">
+          {visibleReplies.length} total{hiddenCount > 0 ? ` · ${hiddenCount} hidden (other newsletter)` : ''}
+        </span>
       </div>
 
-      {replies.length === 0 ? (
+      {visibleReplies.length === 0 ? (
         <Card variant="surface" className="p-12 text-center">
           <EnvelopeIcon className="w-10 h-10 text-[var(--gray-8)] mx-auto mb-3" />
           <p className="text-[var(--gray-11)] mb-1">No replies yet</p>
@@ -112,7 +159,7 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
         </Card>
       ) : (
         <div className="space-y-2">
-          {replies.map(reply => {
+          {visibleReplies.map(reply => {
             const isExpanded = expandedId === reply.id;
             return (
               <Card
