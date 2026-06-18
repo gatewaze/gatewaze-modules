@@ -519,13 +519,27 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
 
   const handleDuplicate = async (edition: Edition) => {
     try {
-      // Create a copy of the edition
+      // Create a copy of the edition. The source row's title is the .title
+      // field on the Edition shape — there is no `subject` column on
+      // newsletters_editions (newsletter_sends.subject is a different field).
+      // The previous reference to edition.subject was always undefined so
+      // title fell to null, which the NOT NULL constraint rejected and the
+      // duplicate silently failed with a 23502 + toast "Failed to
+      // duplicate edition". collection_id MUST be carried over too — without
+      // it the new row is orphaned and never appears under any newsletter.
+      const sourceTitle = (edition.title || 'Untitled').trim();
       const { data: newEdition, error: createError } = await supabase
         .from('newsletters_editions')
         .insert({
-          title: edition.subject ? `${edition.subject} (Copy)` : null,
+          title: `${sourceTitle} (Copy)`,
           edition_date: new Date().toISOString().split('T')[0],
           status: 'draft',
+          collection_id: edition.collection_id,
+          // preheader / content_category / metadata carry over so the
+          // duplicate is a true copy, not a stripped-down shell.
+          preheader: (edition as { preheader?: string | null }).preheader ?? null,
+          content_category: (edition as { content_category?: string | null }).content_category ?? null,
+          metadata: (edition as { metadata?: Record<string, unknown> }).metadata ?? {},
         })
         .select()
         .single();
