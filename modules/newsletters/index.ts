@@ -176,6 +176,11 @@ const newslettersModule: GatewazeModule = {
     'migrations/042_signup_forms_integration.sql',
     'migrations/043_send_status_cancelling.sql',
     'migrations/044_pause_and_exclude_sent.sql',
+    // 045 floors human_opens at human_clicks in newsletter_edition_engagement.
+    // Every human click implies a human open, so the dashboard's open count
+    // must never fall below the click count — fixes the unscored estimate
+    // path returning 0 opens on small sends despite a measured human click.
+    'migrations/045_engagement_human_opens_floor.sql',
     'migrations/045_list_hygiene.sql',
   ],
 
