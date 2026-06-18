@@ -142,6 +142,17 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
       if (!log.first_clicked_at) {
         updates.first_clicked_at = event.timestamp.toISOString()
       }
+      // Recover opens from click signal: SendGrid's open tracking depends on
+      // a 1x1 pixel image fetch, which Apple Mail Privacy Protection /
+      // Gmail's image proxy / plain-text readers all suppress — so genuine
+      // human opens go silent for those recipients. A click can't happen
+      // without the recipient having rendered the email body, so the click
+      // timestamp is a strictly-conservative lower bound on the open time.
+      // Backfill first_opened_at to the click timestamp when no real open
+      // event has landed yet. Idempotent (only sets when null).
+      if (!log.first_opened_at) {
+        updates.first_opened_at = event.timestamp.toISOString()
+      }
       break
   }
 
