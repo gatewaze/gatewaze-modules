@@ -29,13 +29,13 @@ const newslettersModule: GatewazeModule = {
 
   workers: [
     {
-      name: 'newsletter:helix-output-sync',
+      name: 'newsletters:helix-output-sync',
       handler: './workers/helix-output-sync.ts',
     },
     {
       // Re-resolves click interactions stored with a NULL edition_link_id
       // (late-registered links / webhook redeliveries). Idempotent.
-      name: 'newsletter:link-reconcile',
+      name: 'newsletters:link-reconcile',
       handler: './workers/link-reconciler.ts',
     },
     {
@@ -43,7 +43,7 @@ const newslettersModule: GatewazeModule = {
       // scheduled_at <= now). Triggers the newsletter-send edge function's
       // process_scheduled path — the BullMQ-driven stand-in for pg_cron so
       // scheduled sends fire on every deploy target without that extension.
-      name: 'newsletter:dispatch-scheduled',
+      name: 'newsletters:dispatch-scheduled',
       handler: './workers/dispatch-scheduled.ts',
     },
   ],
@@ -53,7 +53,7 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletter-helix-output-sync',
       queue: 'jobs',
       schedule: { every: 60_000 },
-      data: { kind: 'newsletter:helix-output-sync' },
+      data: { kind: 'newsletters:helix-output-sync' },
     },
     {
       // Per spec-content-modules-git-architecture §15.4: snapshot editions
@@ -62,7 +62,7 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletter-edition-snapshot',
       queue: 'jobs',
       schedule: { every: 5 * 60_000 },
-      data: { kind: 'newsletter:edition-snapshot' },
+      data: { kind: 'newsletters:edition-snapshot' },
     },
     {
       // Back-fill block resolution for clicks that landed before their
@@ -71,14 +71,14 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletter-link-reconcile',
       queue: 'jobs',
       schedule: { every: 6 * 60 * 60_000 },
-      data: { kind: 'newsletter:link-reconcile' },
+      data: { kind: 'newsletters:link-reconcile' },
     },
     {
       // Fire due scheduled sends every minute (see workers/dispatch-scheduled.ts).
       name: 'newsletter-dispatch-scheduled',
       queue: 'jobs',
       schedule: { every: 60_000 },
-      data: { kind: 'newsletter:dispatch-scheduled' },
+      data: { kind: 'newsletters:dispatch-scheduled' },
     },
   ],
 
