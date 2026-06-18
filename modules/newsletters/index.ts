@@ -181,6 +181,11 @@ const newslettersModule: GatewazeModule = {
     // must never fall below the click count — fixes the unscored estimate
     // path returning 0 opens on small sends despite a measured human click.
     'migrations/045_engagement_human_opens_floor.sql',
+    // 046 makes fanout_newsletter_send_recipients survive a 56k+ list:
+    // adds idx_people_lower_email so the LATERAL person lookup is an index
+    // probe instead of a seq scan, and bumps the function's statement_timeout
+    // to 10min so a one-off slow fan-out doesn't lapse the default 25s.
+    'migrations/046_fanout_large_list_perf.sql',
     'migrations/045_list_hygiene.sql',
   ],
 
