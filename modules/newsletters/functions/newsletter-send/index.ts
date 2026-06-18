@@ -808,15 +808,25 @@ async function processSend(
   try {
     const ctx = await buildSendContext(supabase, send, provider)
 
-    const { data: subscribers, error: subError } = await supabase
-      .from('list_subscriptions')
-      .select('email')
-      .eq('list_id', ctx.listId)
-      .eq('subscribed', true)
-
-    if (subError) throw new Error(`Failed to fetch subscribers: ${subError.message}`)
-
-    let recipientEmails: string[] = (subscribers || []).map((s: any) => s.email)
+    // Paginate explicitly — Supabase REST defaults to 1000 rows per request.
+    // The previous unpaginated query silently truncated AAIF's 56k-subscriber
+    // MLOps Community list to the first 1000 every immediate global send.
+    const FETCH_PAGE = 1000
+    const allEmails: string[] = []
+    for (let offset = 0; ; offset += FETCH_PAGE) {
+      const { data: page, error: pageError } = await supabase
+        .from('list_subscriptions')
+        .select('email')
+        .eq('list_id', ctx.listId)
+        .eq('subscribed', true)
+        .order('email', { ascending: true })
+        .range(offset, offset + FETCH_PAGE - 1)
+      if (pageError) throw new Error(`Failed to fetch subscribers (page offset ${offset}): ${pageError.message}`)
+      if (!page || page.length === 0) break
+      for (const s of page as Array<{ email: string }>) allEmails.push(s.email)
+      if (page.length < FETCH_PAGE) break
+    }
+    let recipientEmails: string[] = allEmails
 
     // Exclude recipients already successfully sent in one or more prior sends
     // (re-send corrected content without double-sending). Matched on the
@@ -824,12 +834,21 @@ async function processSend(
     // same exclusion in SQL at fan-out time (migration 044).
     const excludeIds = (send.exclude_sent_send_ids as string[] | null) ?? null
     if (excludeIds && excludeIds.length > 0) {
-      const { data: sentRows } = await supabase
-        .from('email_send_log')
-        .select('recipient_email')
-        .in('newsletter_send_id', excludeIds)
-        .eq('status', 'sent')
-      const alreadySent = new Set((sentRows ?? []).map((r: any) => String(r.recipient_email).toLowerCase()))
+      // Same Supabase default-1000 cap as the subscriber fetch — paginate
+      // explicitly so the exclusion set actually covers a prior 50k-row send.
+      const alreadySent = new Set<string>()
+      for (let offset = 0; ; offset += FETCH_PAGE) {
+        const { data: sentPage } = await supabase
+          .from('email_send_log')
+          .select('recipient_email')
+          .in('newsletter_send_id', excludeIds)
+          .eq('status', 'sent')
+          .order('recipient_email', { ascending: true })
+          .range(offset, offset + FETCH_PAGE - 1)
+        if (!sentPage || sentPage.length === 0) break
+        for (const r of sentPage as Array<{ recipient_email: string }>) alreadySent.add(String(r.recipient_email).toLowerCase())
+        if (sentPage.length < FETCH_PAGE) break
+      }
       if (alreadySent.size > 0) {
         recipientEmails = recipientEmails.filter((e) => !alreadySent.has(e.toLowerCase()))
       }
