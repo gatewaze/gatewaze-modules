@@ -88,6 +88,28 @@ export interface EditionEmailProps {
    * in export/publish/send. Absent → global registry only.
    */
   registry?: EmailBlockRegistry;
+  /**
+   * Explicit "this render is going to the send pipeline" flag. When true,
+   * the wrapper's Subscription Centre fields (`edition.unsubscribe_url`,
+   * `edition.manage_subscriptions_url`) are populated with the literal
+   * placeholder strings `'{{unsubscribe_url}}'` / `'{{manage_subscriptions_url}}'`
+   * so the wrapper's `<Link href="{{edition.unsubscribe_url}}">` template
+   * lands `<Link href="{{unsubscribe_url}}">` in the HTML, which the
+   * newsletter-send edge function then substitutes per recipient with the
+   * real HMAC-signed unsubscribe URL.
+   *
+   * When false (publish / web render / editor canvas), the fields are
+   * empty strings — the wrapper's `<Text if="edition.unsubscribe_url">`
+   * guard strips the Subscription Centre footer entirely (no
+   * meaning-free placeholders on the static published page).
+   *
+   * Default: false. Earlier this flag was derived from `viewOnlineUrl == null`,
+   * but that proxy failed for test/real sends — the editor's
+   * `getRenderedHtml` callback computes a real viewOnlineUrl and threads it
+   * through, so the inferred isSendRender ended up false on every actual
+   * send and the unsub footer never made it into the HTML.
+   */
+  forSend?: boolean;
 }
 
 export interface BlockRenderMeta {
@@ -101,7 +123,7 @@ export interface BlockRenderMeta {
 }
 
 export function EditionEmail(props: EditionEmailProps): ReactElement {
-  const { edition, format, blockMeta, wrapperTemplate, viewOnlineUrl, hideViewOnline, registry } = props;
+  const { edition, format, blockMeta, wrapperTemplate, viewOnlineUrl, hideViewOnline, registry, forSend } = props;
 
   const sorted = [...edition.blocks].sort((a, z) => a.sort_order - z.sort_order);
 
@@ -127,10 +149,6 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
   const composed: ReactNode = wrapperTemplate
     ? (() => {
         const parsed = parseTemplate(wrapperTemplate);
-        // `viewOnlineUrl == null` is the per-recipient SEND render: leave the
-        // {{...}} tokens for the send pipeline to substitute. A real URL means a
-        // publish/web render, where unsubscribe doesn't apply → blank.
-        const isSendRender = viewOnlineUrl == null;
         const content: Record<string, unknown> = {
           edition: {
             date: formatEditionDate(edition.edition_date),
@@ -138,11 +156,15 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
             preheader: edition.preheader ?? '',
             view_online_link: hideViewOnline ? '' : (viewOnlineUrl ?? '{{web_version}}'),
             // Subscription Centre links — the wrapper footer references these as
-            // {{edition.unsubscribe_url}} / {{edition.manage_subscriptions_url}};
-            // their VALUES are the send-time tokens the edge fn fills per
-            // recipient (empty on a publish/web render).
-            unsubscribe_url: isSendRender ? '{{unsubscribe_url}}' : '',
-            manage_subscriptions_url: isSendRender ? '{{manage_subscriptions_url}}' : '',
+            // {{edition.unsubscribe_url}} / {{edition.manage_subscriptions_url}}.
+            // On a send render we land the per-recipient TOKENS that the
+            // newsletter-send edge fn substitutes. On a publish/web render
+            // (or editor canvas) the fields stay empty so the wrapper's
+            // if="edition.unsubscribe_url" guard strips the footer cleanly.
+            // See the `forSend` doc on EditionEmailProps for why this is an
+            // explicit prop now rather than the previous viewOnlineUrl proxy.
+            unsubscribe_url: forSend ? '{{unsubscribe_url}}' : '',
+            manage_subscriptions_url: forSend ? '{{manage_subscriptions_url}}' : '',
           },
           body: <>{blockEls}</>,
         };
