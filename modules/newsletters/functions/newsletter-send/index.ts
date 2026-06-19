@@ -776,7 +776,14 @@ async function processScheduledSends(
   // Drive the per-recipient drip every tick — independent of newly-due sends,
   // so an in-progress staggered send keeps dispatching as each timezone hits
   // its local send time.
-  await runRecipientDrip(supabase, provider)
+  //
+  // Central Sending Service canary: when SEND_ENGINE_USE_WORKER=true the Node
+  // worker owns the per-recipient drip (high-throughput sendBatch). This Edge
+  // path then only does the scheduled→sending fanout + global sends above and
+  // SKIPS its drip, so the two never double-send. Flag off = unchanged.
+  if (Deno.env.get('SEND_ENGINE_USE_WORKER') !== 'true') {
+    await runRecipientDrip(supabase, provider)
+  }
 
   return { success: true, processed, errors }
 }

@@ -52,5 +52,42 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
   if (result.processed) {
     console.log(`[newsletter:dispatch-scheduled] dispatched ${result.processed} due send(s)`);
   }
-  return { processed: result.processed ?? 0, errors: result.errors ?? [] };
+
+  // Central Sending Service canary: when SEND_ENGINE_USE_WORKER=true, the Edge
+  // call above did fanout + global sends but SKIPPED its per-recipient drip
+  // (see newsletter-send). The Node worker now owns that drip via the shared
+  // high-throughput engine. Flag off → this block is skipped and the Edge path
+  // dripped as before (behaviour unchanged).
+  let engine: { claimed: number; sent: number; failed: number } | null = null;
+  if (process.env.SEND_ENGINE_USE_WORKER === 'true') {
+    try {
+      const [{ createClient }, { runDripTick }, { newsletterBinding }] = await Promise.all([
+        import('@supabase/supabase-js'),
+        import('../../bulk-emailing/worker/send-engine/engine.js'),
+        import('./send-engine-binding.js'),
+      ]);
+      const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+      const logger = {
+        info: (...a: unknown[]) => console.log('[send-engine]', ...a),
+        warn: (...a: unknown[]) => console.warn('[send-engine]', ...a),
+        error: (...a: unknown[]) => console.error('[send-engine]', ...a),
+      };
+      engine = await runDripTick(
+        { supabase, logger, config: {
+          claimBatch: Number(process.env.SEND_ENGINE_CLAIM_BATCH ?? 1000),
+          batchSize: Number(process.env.SEND_ENGINE_BATCH_SIZE ?? 1000),
+          budgetMs: Number(process.env.SEND_ENGINE_BUDGET_MS ?? 45000),
+          dailyCap: Number(process.env.SEND_ENGINE_DAILY_CAP ?? Number.MAX_SAFE_INTEGER),
+          rampPercent: Number(process.env.SEND_ENGINE_RAMP_PERCENT ?? 100),
+          replica: process.env.HOSTNAME ?? 'worker',
+        } },
+        newsletterBinding as never,
+      );
+      if (engine.claimed) console.log(`[send-engine] newsletter drip: claimed ${engine.claimed}, sent ${engine.sent}, failed ${engine.failed}`);
+    } catch (err) {
+      console.error('[send-engine] newsletter worker drip failed:', err);
+    }
+  }
+
+  return { processed: result.processed ?? 0, errors: result.errors ?? [], engine };
 }
