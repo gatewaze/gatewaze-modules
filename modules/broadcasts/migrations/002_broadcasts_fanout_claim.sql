@@ -22,15 +22,15 @@ AS $$
   UPDATE public.broadcast_send_recipients r
   SET status = 'sending', attempts = r.attempts + 1, updated_at = now()
   FROM (
-    SELECT csr.id
-    FROM public.broadcast_send_recipients csr
-    JOIN public.broadcast_sends s ON s.id = csr.send_id
-    WHERE csr.status = 'pending'
-      AND csr.send_at <= now()
+    SELECT bsr.id
+    FROM public.broadcast_send_recipients bsr
+    JOIN public.broadcast_sends s ON s.id = bsr.send_id
+    WHERE bsr.status = 'pending'
+      AND bsr.send_at <= now()
       AND s.status = 'sending'
-    ORDER BY csr.send_at
+    ORDER BY bsr.send_at
     LIMIT p_limit
-    FOR UPDATE OF csr SKIP LOCKED
+    FOR UPDATE OF bsr SKIP LOCKED
   ) due
   WHERE r.id = due.id
   RETURNING r.*;
