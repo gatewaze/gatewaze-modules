@@ -182,7 +182,10 @@ const API_URL = (import.meta as unknown as { env: Record<string, string | undefi
 /** Calls the Node-side copilot route (which uses the AI module's runChat), not a
  *  Supabase edge function — the AI module is not Deno-compatible. Mirrors
  *  editor-ai-copilot's authedFetch pattern. */
-export async function buildSegmentFromPrompt(prompt: string, brand?: string): Promise<CopilotResult> {
+export async function buildSegmentFromPrompt(
+  prompt: string,
+  opts?: { brand?: string; currentDefinition?: SegmentDefinition | null },
+): Promise<CopilotResult> {
   try {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
@@ -191,7 +194,7 @@ export async function buildSegmentFromPrompt(prompt: string, brand?: string): Pr
     const res = await fetch(`${API_URL}/api/admin/modules/broadcasts/segments-ai-build`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ prompt, brand }),
+      body: JSON.stringify({ prompt, brand: opts?.brand, current_definition: opts?.currentDefinition ?? undefined }),
     });
     const body = (await res.json().catch(() => ({}))) as CopilotResult;
     if (!res.ok) return { success: false, error: body?.error || `Copilot failed (${res.status})` };

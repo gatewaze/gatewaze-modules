@@ -1,141 +1,132 @@
-import { useState } from 'react';
-import { SparklesIcon, CheckIcon } from '@heroicons/react/24/outline';
+import { useState, useRef, useEffect } from 'react';
+import { SparklesIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
-import { Card, Button } from '@/components/ui';
-import { supabase } from '@/lib/supabase';
-import { createSegmentService, type SegmentDefinition, type SegmentCondition } from '@/lib/segments';
-import { buildSegmentFromPrompt, type CopilotResult } from '../lib/broadcastService';
+import { Button } from '@/components/ui';
+import type { SegmentDefinition } from '@/lib/segments';
+import { buildSegmentFromPrompt } from '../lib/broadcastService';
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  warnings?: string[];
+  count?: number | null;
+}
 
 interface Props {
   brand?: string;
-  /** Called with the saved segment id + a human label once the admin accepts. */
-  onAttach: (segmentId: string, label: string, count: number | null) => void;
+  /** The running definition (held by the parent, also editable in the builder).
+   *  Passed back to the copilot each turn so follow-ups REFINE it. */
+  currentDefinition: SegmentDefinition | null;
+  /** Called whenever the copilot produces/updates a definition. */
+  onDefinition: (def: SegmentDefinition, meta: { suggestedName?: string }) => void;
 }
 
-/** Render a single condition as a readable chip label. */
-function describeCondition(c: SegmentCondition): string {
-  if (c.type === 'attribute') {
-    const field = c.field.replace(/^attributes\./, '');
-    return `${field} ${c.operator.replace(/_/g, ' ')} ${formatValue(c.value)}`.trim();
-  }
-  if (c.type === 'event') {
-    const filt = (c.event_filters ?? c.property_filters ?? [])
-      .map((f) => `${f.property} ${f.operator.replace(/_/g, ' ')} ${formatValue(f.value)}`)
-      .join(', ');
-    const win = c.time_window
-      ? c.time_window.type === 'relative'
-        ? ` in last ${c.time_window.relative_value} ${c.time_window.relative_unit}`
-        : ' (date range)'
-      : '';
-    return `${c.operator.replace(/_/g, ' ')} ${c.event_type}${filt ? ` [${filt}]` : ''}${win}`;
-  }
-  if (c.type === 'group') {
-    return `(${c.conditions.map(describeCondition).join(c.match === 'all' ? ' AND ' : ' OR ')})`;
-  }
-  return 'condition';
-}
+let msgSeq = 0;
+const nextId = () => `m${++msgSeq}`;
 
-function formatValue(v: unknown): string {
-  if (v == null) return '';
-  if (Array.isArray(v)) return v.join(', ');
-  return String(v);
-}
+const SUGGESTIONS = [
+  'Everyone who attended the last San Francisco Forum event',
+  'All people in New York and the surrounding area',
+  'Job title contains "machine learning engineer"',
+  'People at tech companies who registered for an event in the last 90 days',
+];
 
-export default function SegmentCopilot({ brand, onAttach }: Props) {
+/**
+ * Conversational segment copilot — mirrors the editor copilot chat UX. The
+ * admin describes the audience, the model emits a segment definition (shown +
+ * editable in the SegmentBuilder on the right), and follow-up messages REFINE
+ * the running definition (e.g. "change job title to 'machine learning eng'").
+ */
+export default function SegmentCopilot({ brand, currentDefinition, onDefinition }: Props) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<CopilotResult | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  async function run() {
-    if (!prompt.trim()) return;
-    setLoading(true);
-    setResult(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages]);
+
+  async function send(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || busy) return;
+    setPrompt('');
+    setMessages((m) => [...m, { id: nextId(), role: 'user', text: trimmed }]);
+    setBusy(true);
     try {
-      const r = await buildSegmentFromPrompt(prompt.trim(), brand);
-      setResult(r);
-      if (!r.success) toast.error(r.error || 'Could not build a segment — try rephrasing');
+      const r = await buildSegmentFromPrompt(trimmed, { brand, currentDefinition });
+      if (!r.success || !r.definition) {
+        setMessages((m) => [...m, { id: nextId(), role: 'assistant', text: r.error || 'I couldn’t build that — try rephrasing.' }]);
+        return;
+      }
+      onDefinition(r.definition, { suggestedName: r.suggested_name });
+      setMessages((m) => [...m, {
+        id: nextId(), role: 'assistant',
+        text: r.explanation || 'Updated the audience criteria on the right.',
+        warnings: r.warnings, count: r.count,
+      }]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Copilot failed');
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   }
-
-  async function accept() {
-    if (!result?.definition) return;
-    setSaving(true);
-    try {
-      const svc = createSegmentService(supabase);
-      const name = result.suggested_name?.trim() || prompt.trim().slice(0, 80) || 'AI segment';
-      const seg = await svc.createSegment({ name, definition: result.definition as SegmentDefinition });
-      onAttach(seg.id, name, result.count ?? null);
-      toast.success(`Segment "${name}" created and attached`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save segment');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const conditions = result?.definition?.conditions ?? [];
 
   return (
-    <Card className="p-4 space-y-3">
-      <div className="flex items-center gap-2 text-[var(--gray-12)] font-medium">
-        <SparklesIcon className="h-5 w-5 text-[var(--accent-9)]" /> Describe your audience
+    <div className="flex flex-col h-full min-h-[420px]">
+      <div ref={scrollRef} className="flex-1 overflow-auto space-y-3 pr-1">
+        {messages.length === 0 ? (
+          <div className="text-center py-8">
+            <SparklesIcon className="h-8 w-8 text-[var(--accent-9)] mx-auto mb-2" />
+            <p className="text-sm text-[var(--gray-12)] font-medium mb-1">Describe your audience</p>
+            <p className="text-xs text-[var(--gray-10)] mb-4">I’ll build the criteria — then you can refine by chatting or editing them directly.</p>
+            <div className="space-y-1.5">
+              {SUGGESTIONS.map((s) => (
+                <button key={s} onClick={() => send(s)} disabled={busy}
+                  className="block w-full text-left text-xs px-3 py-2 rounded-md border border-[var(--gray-6)] text-[var(--gray-11)] hover:bg-[var(--gray-3)]">
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          messages.map((m) => (
+            <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+              <div className={
+                m.role === 'user'
+                  ? 'max-w-[85%] rounded-2xl rounded-br-sm bg-[var(--accent-9)] text-white px-3 py-2 text-sm'
+                  : 'max-w-[90%] rounded-2xl rounded-bl-sm bg-[var(--gray-3)] text-[var(--gray-12)] px-3 py-2 text-sm'
+              }>
+                <div>{m.text}</div>
+                {typeof m.count === 'number' && (
+                  <div className="text-xs mt-1 opacity-80">≈ {m.count.toLocaleString()} people match</div>
+                )}
+                {m.warnings && m.warnings.length > 0 && (
+                  <ul className="text-xs mt-1 list-disc pl-4 text-[var(--amber-11)]">
+                    {m.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+        {busy && <div className="flex justify-start"><div className="rounded-2xl bg-[var(--gray-3)] px-3 py-2 text-sm text-[var(--gray-10)]">Thinking…</div></div>}
       </div>
-      <p className="text-sm text-[var(--gray-11)]">
-        e.g. “everyone who attended the last San Francisco Forum event” or “all people in New York and the surrounding area”.
-      </p>
-      <div className="flex gap-2">
+
+      <div className="mt-3 flex gap-2 items-end">
         <textarea
-          className="flex-1 rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+          className="flex-1 rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm resize-none"
           rows={2}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Describe who should receive this…"
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run(); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(prompt); } }}
+          placeholder={messages.length === 0 ? 'e.g. everyone in New York…' : 'Refine — e.g. “change job title to machine learning eng”'}
         />
-        <Button variant="solid" onClick={run} disabled={loading || !prompt.trim()}>
-          {loading ? 'Building…' : 'Build'}
+        <Button variant="solid" onClick={() => send(prompt)} disabled={busy || !prompt.trim()}>
+          <PaperAirplaneIcon className="h-4 w-4" />
         </Button>
       </div>
-
-      {result?.success && (
-        <div className="space-y-3 border-t border-[var(--gray-5)] pt-3">
-          {result.explanation && <p className="text-sm text-[var(--gray-12)]">{result.explanation}</p>}
-
-          <div className="flex flex-wrap gap-2">
-            <span className="text-xs uppercase tracking-wide text-[var(--gray-10)] self-center">
-              Match {result.definition?.match === 'all' ? 'ALL' : 'ANY'}:
-            </span>
-            {conditions.map((c, i) => (
-              <span key={i} className="inline-flex items-center rounded-full bg-[var(--accent-3)] text-[var(--accent-11)] px-3 py-1 text-xs">
-                {describeCondition(c)}
-              </span>
-            ))}
-          </div>
-
-          {result.warnings && result.warnings.length > 0 && (
-            <ul className="text-xs text-[var(--amber-11)] list-disc pl-5 space-y-1">
-              {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
-            </ul>
-          )}
-
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-[var(--gray-11)]">
-              {result.count == null ? 'Count unavailable' : <><strong className="text-[var(--gray-12)]">≈ {result.count.toLocaleString()}</strong> people</>}
-              {result.sample && result.sample.length > 0 && (
-                <span className="text-[var(--gray-10)]"> · e.g. {result.sample.slice(0, 3).map((s) => s.email).join(', ')}</span>
-              )}
-            </div>
-            <Button variant="solid" onClick={accept} disabled={saving}>
-              <CheckIcon className="h-4 w-4 mr-1" /> {saving ? 'Saving…' : 'Use this audience'}
-            </Button>
-          </div>
-        </div>
-      )}
-    </Card>
+    </div>
   );
 }

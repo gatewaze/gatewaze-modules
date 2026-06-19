@@ -184,6 +184,14 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
 
     const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
     if (!prompt) { res.status(400).json({ success: false, error: 'Missing prompt' }); return; }
+    // Conversational refine: the client passes the running definition so the
+    // model edits it rather than starting over (multi-turn chat). Optional.
+    const currentDefinition = req.body?.current_definition && typeof req.body.current_definition === 'object'
+      ? JSON.stringify(req.body.current_definition)
+      : null;
+    const refineContext = currentDefinition
+      ? `The current segment definition is:\n${currentDefinition}\nApply the user's requested change and re-emit the COMPLETE updated definition (not a diff).`
+      : '';
 
     // Admin gate (service-role check, mirrors editor-ai-copilot).
     try {
@@ -221,7 +229,7 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
         threadId: null,
         messageId: null,
         systemPrompt: buildSystemPrompt(eventNames),
-        messages: [{ role: 'user', content: extra ? `${prompt}\n\n${extra}` : prompt }],
+        messages: [{ role: 'user', content: [refineContext, prompt, extra].filter(Boolean).join('\n\n') }],
         structuredTool: {
           name: 'emit_segment_definition',
           description: 'Emit a segment definition matching the audience the user described.',
