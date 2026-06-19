@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Card, Button, Badge, WorkspaceLayout } from '@/components/ui';
@@ -82,6 +82,7 @@ function AudienceStep({ b, editable, onSaved }: { b: BroadcastSend; editable: bo
   const [loadedSeg, setLoadedSeg] = useState(false);
   const [saving, setSaving] = useState(false);
   const [suggestedName, setSuggestedName] = useState<string>('');
+  const [count, setCount] = useState<number | null>(null);
 
   // Load the existing backing segment's definition (if any) into the builder.
   useEffect(() => {
@@ -91,6 +92,43 @@ function AudienceStep({ b, editable, onSaved }: { b: BroadcastSend; editable: bo
       .catch(() => {})
       .finally(() => setLoadedSeg(true));
   }, [b.segment_id]);
+
+  // Compact live count (no sample list) — debounced. Replaces SegmentBuilder's
+  // own preview so the panel stays small.
+  useEffect(() => {
+    if (!isValidSegmentDefinition(definition)) { setCount(null); return; }
+    const t = setTimeout(() => {
+      createSegmentService(supabase).previewSegment(definition)
+        .then((r) => setCount(r.count))
+        .catch(() => setCount(null));
+    }, 700);
+    return () => clearTimeout(t);
+  }, [definition]);
+
+  // Pin the step to the viewport so the copilot stays visible and the criteria
+  // scroll on the right (mirrors the newsletter editor full-bleed pattern).
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [height, setHeight] = useState<number | null>(null);
+  useEffect(() => {
+    function measure() {
+      const el = wrapRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      const viewportH = window.visualViewport?.height ?? window.innerHeight;
+      const next = Math.max(360, Math.floor(viewportH - top - 24));
+      setHeight((cur) => (cur !== next ? next : cur));
+    }
+    measure();
+    window.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('resize', measure);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (ro && wrapRef.current) ro.observe(wrapRef.current);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('resize', measure);
+      ro?.disconnect();
+    };
+  }, [loadedSeg]);
 
   async function saveAndContinue() {
     if (!isValidSegmentDefinition(definition)) { toast.error('Add at least one valid condition'); return; }
@@ -119,23 +157,32 @@ function AudienceStep({ b, editable, onSaved }: { b: BroadcastSend; editable: bo
   if (!loadedSeg) return <div className="py-10 text-center text-sm text-[var(--gray-10)]">Loading audience…</div>;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <Card className="p-4">
+    <div ref={wrapRef} className="flex gap-4 overflow-hidden -mb-6" style={{ height: height != null ? `${height}px` : 'calc(100vh - 260px)' }}>
+      {/* Left: copilot — fixed, always visible (chat scrolls internally) */}
+      <Card className="p-4 w-[420px] shrink-0 h-full overflow-hidden flex flex-col">
         <SegmentCopilot
           brand={b.brand}
           currentDefinition={definition}
           onDefinition={(def, meta) => { setDefinition(def); if (meta.suggestedName) setSuggestedName(meta.suggestedName); }}
         />
       </Card>
-      <div className="space-y-3">
-        <Card className="p-4">
-          <div className="text-sm font-medium text-[var(--gray-12)] mb-2">Audience criteria</div>
-          <p className="text-xs text-[var(--gray-10)] mb-3">Built by the copilot — edit any condition directly, or ask the copilot to refine.</p>
-          {/* SegmentBuilder is a controlled component; it renders the live count + sample too. */}
-          <SegmentBuilder value={definition} onChange={setDefinition} showPreview />
-        </Card>
+
+      {/* Right: audience criteria — scrolls; compact count header; sticky save footer */}
+      <div className="flex-1 h-full flex flex-col overflow-hidden rounded-xl border border-[var(--gray-5)] bg-[var(--gray-2)]">
+        <div className="px-4 pt-3 pb-2 border-b border-[var(--gray-5)] flex items-center justify-between shrink-0">
+          <div>
+            <div className="text-sm font-medium text-[var(--gray-12)]">Audience criteria</div>
+            <p className="text-xs text-[var(--gray-10)]">Edit any condition, or ask the copilot to refine.</p>
+          </div>
+          <span className="shrink-0 inline-flex items-center rounded-full bg-[var(--accent-3)] text-[var(--accent-11)] px-3 py-1 text-xs font-medium">
+            {count == null ? 'No audience yet' : `≈ ${count.toLocaleString()} people`}
+          </span>
+        </div>
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          <SegmentBuilder value={definition} onChange={setDefinition} showPreview={false} />
+        </div>
         {editable && (
-          <div className="flex justify-end">
+          <div className="px-4 py-3 border-t border-[var(--gray-5)] flex justify-end shrink-0">
             <Button variant="solid" onClick={saveAndContinue} disabled={saving}>{saving ? 'Saving…' : 'Save audience & continue'}</Button>
           </div>
         )}
