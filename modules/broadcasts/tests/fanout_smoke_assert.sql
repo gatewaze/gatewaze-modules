@@ -14,35 +14,35 @@ INSERT INTO public.segments_memberships (segment_id, person_id) VALUES
   ('99999999-9999-9999-9999-999999999999','33333333-3333-3333-3333-333333333333'),
   ('99999999-9999-9999-9999-999999999999','44444444-4444-4444-4444-444444444444');
 
--- Dave unsubscribed from the 'campaigns' topic → must be excluded
-INSERT INTO public.campaign_suppressions (email, topic, source) VALUES ('dave@example.com','campaigns','manual');
+-- Dave unsubscribed from the 'broadcasts' topic → must be excluded
+INSERT INTO public.broadcast_suppressions (email, topic, source) VALUES ('dave@example.com','broadcasts','manual');
 
--- A tz_local campaign send at 09:00, default UTC
-INSERT INTO public.campaign_sends (id, name, brand, audience_type, segment_id, subject, rendered_html, suppression_topic, status, delivery_strategy, default_timezone, target_local, scheduled_at)
-VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','Test','aaif','segment','99999999-9999-9999-9999-999999999999','Hi','<html><body>Hello</body></html>','campaigns','scheduled','tz_local','UTC','09:00','2026-06-19 00:00:00+00');
+-- A tz_local broadcast send at 09:00, default UTC
+INSERT INTO public.broadcast_sends (id, name, brand, audience_type, segment_id, subject, rendered_html, suppression_topic, status, delivery_strategy, default_timezone, target_local, scheduled_at)
+VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','Test','aaif','segment','99999999-9999-9999-9999-999999999999','Hi','<html><body>Hello</body></html>','broadcasts','scheduled','tz_local','UTC','09:00','2026-06-19 00:00:00+00');
 
 -- FAN OUT
-SELECT public.fanout_campaign_send_recipients('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') AS fanned_out;
+SELECT public.fanout_broadcast_send_recipients('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') AS fanned_out;
 
 \echo '--- recipients (Dave excluded; per-tz send_at) ---'
-SELECT email, timezone, send_at FROM public.campaign_send_recipients ORDER BY email;
+SELECT email, timezone, send_at FROM public.broadcast_send_recipients ORDER BY email;
 
 \echo '--- total_recipients on send (expect 3) ---'
-SELECT total_recipients FROM public.campaign_sends WHERE id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+SELECT total_recipients FROM public.broadcast_sends WHERE id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
 \echo '--- claim due (none yet: send_at is 09:00 future, status scheduled not sending) ---'
-SELECT count(*) AS claimed_when_scheduled FROM public.claim_due_campaign_recipients(500);
+SELECT count(*) AS claimed_when_scheduled FROM public.claim_due_broadcast_recipients(500);
 
 \echo '--- flip to sending + backdate send_at, then claim ---'
-UPDATE public.campaign_sends SET status='sending' WHERE id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-UPDATE public.campaign_send_recipients SET send_at = now() - interval '1 minute';
-SELECT count(*) AS claimed_now FROM public.claim_due_campaign_recipients(500);
+UPDATE public.broadcast_sends SET status='sending' WHERE id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+UPDATE public.broadcast_send_recipients SET send_at = now() - interval '1 minute';
+SELECT count(*) AS claimed_now FROM public.claim_due_broadcast_recipients(500);
 
 \echo '--- timezone breakdown ---'
-SELECT timezone, recipients FROM public.campaign_send_timezone_breakdown('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') ORDER BY timezone;
+SELECT timezone, recipients FROM public.broadcast_send_timezone_breakdown('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') ORDER BY timezone;
 
 \echo '--- event_filters SQL generation: attended event in San Francisco ---'
 SELECT public.segments_event_to_sql('{"type":"event","event_type":"event_attended","operator":"performed","event_filters":[{"property":"event_city","operator":"equals","value":"San Francisco"}]}'::jsonb) AS sql;
 
 \echo '--- idempotent re-fanout (expect 0 new) ---'
-SELECT public.fanout_campaign_send_recipients('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') AS refanned;
+SELECT public.fanout_broadcast_send_recipients('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') AS refanned;

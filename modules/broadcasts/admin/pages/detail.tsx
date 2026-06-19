@@ -7,10 +7,10 @@ import { supabase } from '@/lib/supabase';
 import { createSegmentService, type Segment } from '@/lib/segments';
 import SegmentCopilot from '../components/SegmentCopilot';
 import {
-  getCampaign, updateCampaign, scheduleCampaign, sendNow, sendTest,
-  cancelCampaign, getTimezoneBreakdown,
-  type CampaignSend, type DeliveryStrategy, type TimezoneBreakdownRow,
-} from '../lib/campaignService';
+  getBroadcast, updateBroadcast, scheduleBroadcast, sendNow, sendTest,
+  cancelBroadcast, getTimezoneBreakdown,
+  type BroadcastSend, type DeliveryStrategy, type TimezoneBreakdownRow,
+} from '../lib/broadcastService';
 
 const TABS = [
   { id: 'compose', label: 'Compose' },
@@ -19,23 +19,23 @@ const TABS = [
   { id: 'review', label: 'Review & Send' },
 ];
 
-export default function CampaignDetailPage() {
+export default function BroadcastDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
   const navigate = useNavigate();
   const activeTab = tab && TABS.some((t) => t.id === tab) ? tab : 'compose';
 
-  const [c, setC] = useState<CampaignSend | null>(null);
+  const [c, setC] = useState<BroadcastSend | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const data = await getCampaign(id);
-      if (!data) { toast.error('Campaign not found'); navigate('/campaigns'); return; }
+      const data = await getBroadcast(id);
+      if (!data) { toast.error('Broadcast not found'); navigate('/broadcasts'); return; }
       setC(data);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to load campaign');
+      toast.error(err instanceof Error ? err.message : 'Failed to load broadcast');
     } finally {
       setLoading(false);
     }
@@ -43,13 +43,13 @@ export default function CampaignDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const patch = (p: Partial<CampaignSend>) => setC((prev) => (prev ? { ...prev, ...p } : prev));
+  const patch = (p: Partial<BroadcastSend>) => setC((prev) => (prev ? { ...prev, ...p } : prev));
 
-  async function save(extra?: Partial<CampaignSend>) {
+  async function save(extra?: Partial<BroadcastSend>) {
     if (!c) return;
     setSaving(true);
     try {
-      const updated = await updateCampaign(c.id, {
+      const updated = await updateBroadcast(c.id, {
         name: c.name, subject: c.subject, preheader: c.preheader,
         from_address: c.from_address, from_name: c.from_name, reply_to: c.reply_to,
         rendered_html: c.rendered_html, suppression_topic: c.suppression_topic,
@@ -66,8 +66,8 @@ export default function CampaignDetailPage() {
 
   if (loading || !c) {
     return (
-      <Page title="Campaign">
-        <WorkspaceLayout title="Campaigns">
+      <Page title="Broadcast">
+        <WorkspaceLayout title="Broadcasts">
           <div className="flex justify-center py-16"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" /></div>
         </WorkspaceLayout>
       </Page>
@@ -77,12 +77,12 @@ export default function CampaignDetailPage() {
   const editable = c.status === 'draft' || c.status === 'scheduled';
 
   return (
-    <Page title={`Campaign: ${c.name}`}>
+    <Page title={`Broadcast: ${c.name}`}>
       <WorkspaceLayout
-        title={`Campaigns: ${c.name}`}
+        title={`Broadcasts: ${c.name}`}
         tabs={TABS}
         activeTabId={activeTab}
-        onTabChange={(t) => navigate(`/campaigns/${c.id}/${t}`)}
+        onTabChange={(t) => navigate(`/broadcasts/${c.id}/${t}`)}
         actions={<Badge color={c.status === 'sent' ? 'green' : c.status === 'failed' ? 'red' : c.status === 'sending' ? 'amber' : 'gray'}>{c.status}</Badge>}
       >
         {activeTab === 'compose' && (
@@ -121,7 +121,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // --- Audience ---------------------------------------------------------------
-function AudienceTab({ c, editable, onAttach }: { c: CampaignSend; editable: boolean; onAttach: (segmentId: string) => void }) {
+function AudienceTab({ c, editable, onAttach }: { c: BroadcastSend; editable: boolean; onAttach: (segmentId: string) => void }) {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [current, setCurrent] = useState<Segment | null>(null);
 
@@ -167,7 +167,7 @@ function AudienceTab({ c, editable, onAttach }: { c: CampaignSend; editable: boo
 
 // --- Schedule ---------------------------------------------------------------
 function ScheduleTab({ c, editable, onPatch, onSave, saving }: {
-  c: CampaignSend; editable: boolean; onPatch: (p: Partial<CampaignSend>) => void; onSave: (extra?: Partial<CampaignSend>) => void; saving: boolean;
+  c: BroadcastSend; editable: boolean; onPatch: (p: Partial<BroadcastSend>) => void; onSave: (extra?: Partial<BroadcastSend>) => void; saving: boolean;
 }) {
   return (
     <Card className="p-6 max-w-2xl space-y-4">
@@ -208,7 +208,7 @@ function toLocalInput(iso: string): string {
 }
 
 // --- Review & Send ----------------------------------------------------------
-function ReviewTab({ c, reload }: { c: CampaignSend; reload: () => void }) {
+function ReviewTab({ c, reload }: { c: BroadcastSend; reload: () => void }) {
   const [testEmail, setTestEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [breakdown, setBreakdown] = useState<TimezoneBreakdownRow[]>([]);
@@ -236,17 +236,17 @@ function ReviewTab({ c, reload }: { c: CampaignSend; reload: () => void }) {
   async function doSchedule() {
     setBusy(true);
     try {
-      await scheduleCampaign(c.id, {
+      await scheduleBroadcast(c.id, {
         schedule_type: c.schedule_type, delivery_strategy: c.delivery_strategy,
         scheduled_at: c.scheduled_at, default_timezone: c.default_timezone, target_local: c.target_local,
       });
-      toast.success('Campaign scheduled'); reload();
+      toast.success('Broadcast scheduled'); reload();
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Schedule failed'); }
     finally { setBusy(false); }
   }
   async function doCancel() {
     if (!confirm('Stop this send?')) return;
-    await cancelCampaign(c.id); toast.success('Stopping…'); reload();
+    await cancelBroadcast(c.id); toast.success('Stopping…'); reload();
   }
 
   return (

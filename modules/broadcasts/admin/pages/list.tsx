@@ -4,24 +4,24 @@ import { PlusIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Card, Button, Badge, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
-import { listCampaigns, type CampaignSend, type CampaignStatus } from '../lib/campaignService';
+import { listBroadcasts, type BroadcastSend, type BroadcastStatus } from '../lib/broadcastService';
 
-const STATUS_TONE: Record<CampaignStatus, 'gray' | 'blue' | 'green' | 'amber' | 'red'> = {
+const STATUS_TONE: Record<BroadcastStatus, 'gray' | 'blue' | 'green' | 'amber' | 'red'> = {
   draft: 'gray', scheduled: 'blue', sending: 'amber', sent: 'green',
   cancelling: 'amber', cancelled: 'gray', failed: 'red', paused: 'amber',
 };
 
-export default function CampaignListPage() {
+export default function BroadcastListPage() {
   const navigate = useNavigate();
-  const [campaigns, setCampaigns] = useState<CampaignSend[]>([]);
+  const [broadcasts, setBroadcasts] = useState<BroadcastSend[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      setCampaigns(await listCampaigns());
+      setBroadcasts(await listBroadcasts());
     } catch (err) {
-      console.error('Error loading campaigns:', err);
-      toast.error('Failed to load campaigns');
+      console.error('Error loading broadcasts:', err);
+      toast.error('Failed to load broadcasts');
     } finally {
       setLoading(false);
     }
@@ -30,12 +30,12 @@ export default function CampaignListPage() {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <Page title="Campaigns">
+    <Page title="Broadcasts">
       <WorkspaceLayout
-        title="Campaigns"
+        title="Broadcasts"
         actions={
-          <Button variant="solid" onClick={() => navigate('/campaigns/new')}>
-            <PlusIcon className="h-4 w-4 mr-1" /> New Campaign
+          <Button variant="solid" onClick={() => navigate('/broadcasts/new')}>
+            <PlusIcon className="h-4 w-4 mr-1" /> New Broadcast
           </Button>
         }
       >
@@ -43,25 +43,25 @@ export default function CampaignListPage() {
           <div className="flex justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" />
           </div>
-        ) : campaigns.length === 0 ? (
+        ) : broadcasts.length === 0 ? (
           <div className="text-center py-16">
             <PaperAirplaneIcon className="h-16 w-16 text-[var(--gray-8)] mx-auto mb-4" />
-            <h2 className="text-xl font-semibold text-[var(--gray-12)] mb-2">No campaigns yet</h2>
+            <h2 className="text-xl font-semibold text-[var(--gray-12)] mb-2">No broadcasts yet</h2>
             <p className="text-[var(--gray-11)] mb-6 max-w-md mx-auto">
               Send a single email to a segment of your audience, scheduled and timezone-aware. Build
               the audience with plain language using the AI copilot.
             </p>
-            <Button variant="solid" onClick={() => navigate('/campaigns/new')}>
-              <PlusIcon className="h-4 w-4 mr-1" /> Create Your First Campaign
+            <Button variant="solid" onClick={() => navigate('/broadcasts/new')}>
+              <PlusIcon className="h-4 w-4 mr-1" /> Create Your First Broadcast
             </Button>
           </div>
         ) : (
           <div className="space-y-3">
-            {campaigns.map((c) => (
+            {broadcasts.map((c) => (
               <Card
                 key={c.id}
                 className="p-4 cursor-pointer hover:border-[var(--accent-7)] transition-colors"
-                onClick={() => navigate(`/campaigns/${c.id}`)}
+                onClick={() => navigate(`/broadcasts/${c.id}`)}
               >
                 <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0">

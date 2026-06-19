@@ -1,18 +1,18 @@
 -- ============================================================================
--- Campaigns fan-out / claim / event_filters smoke test (re-runnable).
+-- Broadcasts fan-out / claim / event_filters smoke test (re-runnable).
 --
 -- Validates the send-engine SQL against stub host tables in a THROWAWAY
 -- Postgres — never run against a real DB. This is the exact harness used to
 -- verify the migrations during the initial build.
 --
---   docker rm -f campaigns-scratch 2>/dev/null
---   docker run -d --name campaigns-scratch -e POSTGRES_PASSWORD=scratch \
+--   docker rm -f broadcasts-scratch 2>/dev/null
+--   docker run -d --name broadcasts-scratch -e POSTGRES_PASSWORD=scratch \
 --     supabase/postgres:15.8.1.085
 --   # wait for pg_isready, then:
---   docker exec -i campaigns-scratch psql -U postgres -v ON_ERROR_STOP=1 \
+--   docker exec -i broadcasts-scratch psql -U postgres -v ON_ERROR_STOP=1 \
 --     < <(cat tests/fanout_smoke.sql \
---           ../campaigns/migrations/001_campaigns_tables.sql \
---           ../campaigns/migrations/002_campaigns_fanout_claim.sql \
+--           ../broadcasts/migrations/001_broadcasts_tables.sql \
+--           ../broadcasts/migrations/002_broadcasts_fanout_claim.sql \
 --           ../segments/migrations/003_event_filters.sql \
 --           tests/fanout_smoke_assert.sql)
 --

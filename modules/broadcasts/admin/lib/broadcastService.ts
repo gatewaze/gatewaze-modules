@@ -2,15 +2,15 @@ import { supabase } from '@/lib/supabase';
 import type { SegmentDefinition } from '@/lib/segments';
 
 // ---------------------------------------------------------------------------
-// Campaign types (mirror public.campaign_sends)
+// Broadcast types (mirror public.broadcast_sends)
 // ---------------------------------------------------------------------------
 
-export type CampaignStatus =
+export type BroadcastStatus =
   | 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelling' | 'cancelled' | 'failed' | 'paused';
 export type AudienceType = 'segment' | 'list';
 export type DeliveryStrategy = 'global' | 'tz_local' | 'personalised';
 
-export interface CampaignSend {
+export interface BroadcastSend {
   id: string;
   name: string;
   brand: string;
@@ -27,7 +27,7 @@ export interface CampaignSend {
   body_text: string | null;
   content_json: Record<string, unknown>;
   suppression_topic: string;
-  status: CampaignStatus;
+  status: BroadcastStatus;
   schedule_type: 'immediate' | 'scheduled';
   delivery_strategy: DeliveryStrategy;
   default_timezone: string | null;
@@ -46,7 +46,7 @@ export interface CampaignSend {
   updated_at: string;
 }
 
-export interface CreateCampaignInput {
+export interface CreateBroadcastInput {
   name: string;
   brand?: string;
   audience_type?: AudienceType;
@@ -81,24 +81,24 @@ export interface CopilotResult {
 // CRUD
 // ---------------------------------------------------------------------------
 
-export async function listCampaigns(): Promise<CampaignSend[]> {
+export async function listBroadcasts(): Promise<BroadcastSend[]> {
   const { data, error } = await supabase
-    .from('campaign_sends')
+    .from('broadcast_sends')
     .select('*')
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []) as CampaignSend[];
+  return (data ?? []) as BroadcastSend[];
 }
 
-export async function getCampaign(id: string): Promise<CampaignSend | null> {
-  const { data, error } = await supabase.from('campaign_sends').select('*').eq('id', id).maybeSingle();
+export async function getBroadcast(id: string): Promise<BroadcastSend | null> {
+  const { data, error } = await supabase.from('broadcast_sends').select('*').eq('id', id).maybeSingle();
   if (error) throw error;
-  return (data as CampaignSend) ?? null;
+  return (data as BroadcastSend) ?? null;
 }
 
-export async function createCampaign(input: CreateCampaignInput): Promise<CampaignSend> {
+export async function createBroadcast(input: CreateBroadcastInput): Promise<BroadcastSend> {
   const { data, error } = await supabase
-    .from('campaign_sends')
+    .from('broadcast_sends')
     .insert({
       name: input.name,
       brand: input.brand ?? 'default',
@@ -106,69 +106,69 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
       segment_id: input.segment_id ?? null,
       list_ids: input.list_ids ?? [],
       subject: input.subject ?? null,
-      suppression_topic: input.suppression_topic ?? 'campaigns',
+      suppression_topic: input.suppression_topic ?? 'broadcasts',
       status: 'draft',
     })
     .select('*')
     .single();
   if (error) throw error;
-  return data as CampaignSend;
+  return data as BroadcastSend;
 }
 
-export async function updateCampaign(id: string, patch: Partial<CampaignSend>): Promise<CampaignSend> {
-  const { data, error } = await supabase.from('campaign_sends').update(patch).eq('id', id).select('*').single();
+export async function updateBroadcast(id: string, patch: Partial<BroadcastSend>): Promise<BroadcastSend> {
+  const { data, error } = await supabase.from('broadcast_sends').update(patch).eq('id', id).select('*').single();
   if (error) throw error;
-  return data as CampaignSend;
+  return data as BroadcastSend;
 }
 
-export async function deleteCampaign(id: string): Promise<void> {
-  const { error } = await supabase.from('campaign_sends').delete().eq('id', id);
+export async function deleteBroadcast(id: string): Promise<void> {
+  const { error } = await supabase.from('broadcast_sends').delete().eq('id', id);
   if (error) throw error;
 }
 
 // ---------------------------------------------------------------------------
-// Send lifecycle (via the campaign-send edge function)
+// Send lifecycle (via the broadcast-send edge function)
 // ---------------------------------------------------------------------------
 
-/** Schedule a campaign: set scheduling fields + flip to 'scheduled'. The
+/** Schedule a broadcast: set scheduling fields + flip to 'scheduled'. The
  *  dispatch cron fans it out + drips when due. For immediate sends, set
  *  scheduled_at = now so the next tick picks it up (or call sendNow). */
-export async function scheduleCampaign(id: string, opts: {
+export async function scheduleBroadcast(id: string, opts: {
   schedule_type: 'immediate' | 'scheduled';
   delivery_strategy: DeliveryStrategy;
   scheduled_at?: string | null;
   default_timezone?: string | null;
   target_local?: string | null;
-}): Promise<CampaignSend> {
-  return updateCampaign(id, {
+}): Promise<BroadcastSend> {
+  return updateBroadcast(id, {
     status: 'scheduled',
     schedule_type: opts.schedule_type,
     delivery_strategy: opts.delivery_strategy,
     scheduled_at: opts.scheduled_at ?? new Date().toISOString(),
     default_timezone: opts.default_timezone ?? null,
     target_local: opts.target_local ?? null,
-  } as Partial<CampaignSend>);
+  } as Partial<BroadcastSend>);
 }
 
-/** Fan out + start a campaign immediately (bypasses waiting for the cron). */
+/** Fan out + start a broadcast immediately (bypasses waiting for the cron). */
 export async function sendNow(id: string): Promise<{ success: boolean; error?: string }> {
-  const { data, error } = await supabase.functions.invoke('campaign-send', { body: { send_id: id } });
+  const { data, error } = await supabase.functions.invoke('broadcast-send', { body: { send_id: id } });
   if (error) return { success: false, error: error.message };
   return data as { success: boolean; error?: string };
 }
 
 export async function sendTest(id: string, email: string): Promise<{ success: boolean; error?: string }> {
-  const { data, error } = await supabase.functions.invoke('campaign-send', { body: { test_send: { send_id: id, email } } });
+  const { data, error } = await supabase.functions.invoke('broadcast-send', { body: { test_send: { send_id: id, email } } });
   if (error) return { success: false, error: error.message };
   return data as { success: boolean; error?: string };
 }
 
-export async function pauseCampaign(id: string): Promise<void> { await updateCampaign(id, { status: 'paused' } as Partial<CampaignSend>); }
-export async function resumeCampaign(id: string): Promise<void> { await updateCampaign(id, { status: 'sending' } as Partial<CampaignSend>); }
-export async function cancelCampaign(id: string): Promise<void> { await updateCampaign(id, { status: 'cancelling' } as Partial<CampaignSend>); }
+export async function pauseBroadcast(id: string): Promise<void> { await updateBroadcast(id, { status: 'paused' } as Partial<BroadcastSend>); }
+export async function resumeBroadcast(id: string): Promise<void> { await updateBroadcast(id, { status: 'sending' } as Partial<BroadcastSend>); }
+export async function cancelBroadcast(id: string): Promise<void> { await updateBroadcast(id, { status: 'cancelling' } as Partial<BroadcastSend>); }
 
 export async function getTimezoneBreakdown(id: string): Promise<TimezoneBreakdownRow[]> {
-  const { data, error } = await supabase.rpc('campaign_send_timezone_breakdown', { p_send_id: id });
+  const { data, error } = await supabase.rpc('broadcast_send_timezone_breakdown', { p_send_id: id });
   if (error) throw error;
   return (data ?? []) as TimezoneBreakdownRow[];
 }
@@ -188,7 +188,7 @@ export async function buildSegmentFromPrompt(prompt: string, brand?: string): Pr
     const token = data.session?.access_token;
     const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(`${API_URL}/api/admin/modules/campaigns/segments-ai-build`, {
+    const res = await fetch(`${API_URL}/api/admin/modules/broadcasts/segments-ai-build`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ prompt, brand }),
