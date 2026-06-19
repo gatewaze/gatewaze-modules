@@ -15,7 +15,6 @@
 
 import express, { type Express, type Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
-import WebSocketImpl from 'ws';
 import type { ModuleRuntimeContext } from '@gatewaze/shared';
 import { createSegmentsAiBuildRoute } from './segments-ai-build.js';
 
@@ -26,9 +25,11 @@ export async function registerCampaignsRoutes(app: Express, ctx: ModuleRuntimeCo
     // eslint-disable-next-line no-console
     console.warn('[campaigns] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — copilot endpoint will fail');
   }
+  // Mirror newsletters/host-media/sites: no realtime transport needed (these
+  // routes never use Realtime), which also avoids an extra `ws` npm dep the api
+  // container would have to bake in.
   const supabase = createClient(supabaseUrl, supabaseServiceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
-    realtime: { transport: WebSocketImpl as never },
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
