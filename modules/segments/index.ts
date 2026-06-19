@@ -21,6 +21,10 @@ const segmentsModule: GatewazeModule = {
     // segments_event_to_sql so "attended an event in San Francisco" is
     // expressible. See spec-campaigns-module.md Phase 3.
     'migrations/003_event_filters.sql',
+    // 004 adds a 'subscription' condition (membership in a newsletter/list via
+    // list_subscriptions); source=newsletter resolves the list live from the
+    // newsletter. First example of cross-module audience targeting.
+    'migrations/004_subscription_condition.sql',
   ],
 
   adminRoutes: [
