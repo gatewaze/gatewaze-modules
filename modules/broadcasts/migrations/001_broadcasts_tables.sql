@@ -84,11 +84,11 @@ CREATE TABLE IF NOT EXISTS public.broadcast_send_recipients (
   batch_id    uuid,                                            -- → future broadcast_send_batches (Tier 2)
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz,
-  CONSTRAINT uq_csr_send_email UNIQUE (send_id, email)
+  CONSTRAINT uq_bsr_send_email UNIQUE (send_id, email)
 );
 
-CREATE INDEX IF NOT EXISTS idx_csr_due ON public.broadcast_send_recipients(status, send_at);
-CREATE INDEX IF NOT EXISTS idx_csr_send ON public.broadcast_send_recipients(send_id);
+CREATE INDEX IF NOT EXISTS idx_bsr_due ON public.broadcast_send_recipients(status, send_at);
+CREATE INDEX IF NOT EXISTS idx_bsr_send ON public.broadcast_send_recipients(send_id);
 
 CREATE TRIGGER broadcast_sends_updated_at
   BEFORE UPDATE ON public.broadcast_sends
