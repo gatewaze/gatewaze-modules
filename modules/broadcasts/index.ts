@@ -71,7 +71,7 @@ const broadcastsModule: GatewazeModule = {
     { path: 'broadcasts/:id/:tab', component: () => import('./admin/pages/detail'), requiredFeature: 'broadcasts', guard: 'none' },
   ],
   adminNavItems: [
-    { path: '/broadcasts', label: 'Broadcasts', icon: 'PaperAirplane', requiredFeature: 'broadcasts', defaultSection: 'Communications', defaultLocation: 'sidebar', order: 20 },
+    { path: '/broadcasts', label: 'Broadcasts', icon: 'Mail', requiredFeature: 'broadcasts', defaultSection: 'Communications', defaultLocation: 'sidebar', order: 20 },
   ],
 
   configSchema: {
