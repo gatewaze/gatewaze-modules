@@ -61,11 +61,23 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
   let engine: { claimed: number; sent: number; failed: number } | null = null;
   if (process.env.SEND_ENGINE_USE_WORKER === 'true') {
     try {
-      const [{ createClient }, { runDripTick }, { newsletterBinding }] = await Promise.all([
+      const [sb, engMod, bindMod] = await Promise.all([
         import('@supabase/supabase-js'),
         import('../../bulk-emailing/worker/send-engine/engine.js'),
         import('./send-engine-binding.js'),
       ]);
+      // Interop-safe: these two modules have no package.json "type":"module",
+      // so under tsx/CJS transpilation `await import()` nests their exports
+      // under `.default` (named imports come back undefined). Resolve from
+      // either shape so this works under tsx (worker) and true ESM (prod build).
+      const { createClient } = sb;
+      const runDripTick = (engMod as { runDripTick?: typeof import('../../bulk-emailing/worker/send-engine/engine.js').runDripTick }).runDripTick
+        ?? (engMod as { default?: { runDripTick?: typeof import('../../bulk-emailing/worker/send-engine/engine.js').runDripTick } }).default?.runDripTick;
+      const newsletterBinding = (bindMod as { newsletterBinding?: unknown }).newsletterBinding
+        ?? (bindMod as { default?: { newsletterBinding?: unknown } }).default?.newsletterBinding;
+      if (typeof runDripTick !== 'function' || !newsletterBinding) {
+        throw new Error('send-engine modules did not expose runDripTick/newsletterBinding');
+      }
       const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
       const logger = {
         info: (...a: unknown[]) => console.log('[send-engine]', ...a),
