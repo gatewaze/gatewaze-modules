@@ -19,8 +19,5 @@
     "@gatewaze-modules/ai": "*",
     "@supabase/supabase-js": "*",
     "express": "*"
-  },
-  "dependencies": {
-    "ws": "^8.18.0"
   }
 }
