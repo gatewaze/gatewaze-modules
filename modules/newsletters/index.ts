@@ -200,6 +200,7 @@ const newslettersModule: GatewazeModule = {
     'migrations/049_geo_engagement_config_and_indexes.sql',
     'migrations/050_geo_engagement_rpcs.sql',
     'migrations/051_geo_rollup_mv.sql',
+    'migrations/052_block_effectiveness_rpc.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

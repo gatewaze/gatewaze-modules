@@ -111,6 +111,22 @@ BEGIN
   n := (j->'meta'->>'coverage_pct')::numeric;
   IF n < 0 OR n > 1 THEN RAISE EXCEPTION 'coverage_pct out of range: %', n; END IF;
 
+  -- ── block effectiveness (cross-edition) over the fixture edition ──────
+  j := public.newsletter_block_effectiveness(ARRAY[ed]);
+  d := j->'data';
+  -- three block types with clicks: hot_take, generic, podcast
+  IF (SELECT count(DISTINCT e->>'block_type') FROM jsonb_array_elements(d) e) <> 3 THEN
+    RAISE EXCEPTION 'block_effectiveness: expected 3 block types, got %',
+      (SELECT count(DISTINCT e->>'block_type') FROM jsonb_array_elements(d) e);
+  END IF;
+  -- every clicker clicked the hot_take → 92 distinct clickers
+  SELECT (e->>'clickers')::int INTO n FROM jsonb_array_elements(d) e WHERE e->>'block_type'='hot_take';
+  IF n <> 92 THEN RAISE EXCEPTION 'block_effectiveness hot_take clickers=% want 92', n; END IF;
+  -- anon denied
+  IF has_function_privilege('anon','public.newsletter_block_effectiveness(uuid[])','EXECUTE') THEN
+    RAISE EXCEPTION 'SECURITY: anon must not execute newsletter_block_effectiveness';
+  END IF;
+
   RAISE NOTICE 'ALL GEO RPC CHECKS PASSED';
 END;
 $checks$;
