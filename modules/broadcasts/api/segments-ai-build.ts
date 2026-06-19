@@ -105,6 +105,15 @@ const conditionSchema: Record<string, unknown> = {
       },
     },
     {
+      type: 'object', required: ['type', 'source', 'source_id', 'operator'], additionalProperties: false,
+      properties: {
+        type: { const: 'subscription' },
+        source: { type: 'string', enum: ['newsletter', 'list'] },
+        source_id: { type: 'string', description: 'The newsletter (collection) id or list id from the provided vocabulary.' },
+        operator: { type: 'string', enum: ['subscribed', 'not_subscribed'] },
+      },
+    },
+    {
       type: 'object', required: ['type', 'match', 'conditions'],
       properties: { type: { const: 'group' }, match: { type: 'string', enum: ['all', 'any'] }, conditions: { type: 'array' } },
     },
@@ -123,7 +132,12 @@ const TOOL_INPUT_SCHEMA: Record<string, unknown> = {
   },
 };
 
-function buildSystemPrompt(eventNames: string[]): string {
+interface SubOption { label: string; source: 'newsletter' | 'list'; source_id: string }
+
+function buildSystemPrompt(eventNames: string[], subOptions: SubOption[]): string {
+  const subLines = subOptions.length
+    ? subOptions.map((o) => `    • "${o.label}" → { source: "${o.source}", source_id: "${o.source_id}" }`).join('\n')
+    : '    (none available)';
   return [
     'You translate a natural-language audience description into a Gatewaze segment definition.',
     'You MUST call the emit_segment_definition tool. Never write prose outside the tool call.',
@@ -131,6 +145,9 @@ function buildSystemPrompt(eventNames: string[]): string {
     'Rules:',
     '- Use ONLY these attribute fields: ' + ATTRIBUTE_FIELDS.join(', ') + '.',
     '- Use ONLY these event types: ' + EVENT_TYPES.join(', ') + (eventNames.length ? ' (also custom: ' + eventNames.join(', ') + ')' : '') + '.',
+    '- For "subscribed to <newsletter or list>", use a subscription condition with the matching source/source_id from this vocabulary (prefer the NEWSLETTER entry when the user names a newsletter — the list is resolved from it live):',
+    subLines,
+    '  Set operator "subscribed" (or "not_subscribed"). If the named newsletter/list is not in the vocabulary, do not guess an id — add a warning instead.',
     '- For location targeting prefer attributes.city (city name, e.g. "New York") and attributes.country (ISO-2 code, e.g. "US"). Do NOT use attributes.region for cities or US states — in this dataset region holds only coarse continent codes ("eu", "na") and is sparsely populated, so it will match almost no one.',
     '- For "<city> and the surrounding area" you cannot do true radius targeting yet (no per-person lat/long), so target attributes.city = "<city>" and add a warning that surrounding-area/radius matching is not yet supported.',
     '- For "attended/registered for an event in <place>", use an event condition (event_attended/event_registered, operator performed) with event_filters like { property: "event_city", operator: "equals", value: "<place>" }.',
@@ -156,6 +173,12 @@ function validateDefinition(def: unknown): string | null {
     if (c.type === 'event') {
       if (typeof c.event_type !== 'string') return 'event_type required';
       if (typeof c.operator !== 'string' || !EVENT_OPERATORS.includes(c.operator)) return `invalid event operator: ${c.operator}`;
+      return null;
+    }
+    if (c.type === 'subscription') {
+      if (c.source !== 'newsletter' && c.source !== 'list') return 'subscription source must be newsletter|list';
+      if (typeof c.source_id !== 'string' || !c.source_id) return 'subscription source_id required';
+      if (c.operator !== 'subscribed' && c.operator !== 'not_subscribed') return 'subscription operator must be subscribed|not_subscribed';
       return null;
     }
     if (c.type === 'group') {
@@ -218,6 +241,26 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
       if (Array.isArray(data)) eventNames = (data as string[]).filter((n) => !EVENT_TYPES.includes(n)).slice(0, 40);
     } catch { /* non-fatal */ }
 
+    // Subscription vocabulary: newsletters (resolve list live from the newsletter)
+    // + standalone lists. Best-effort — modules may not be installed.
+    const subOptions: SubOption[] = [];
+    try {
+      const { data } = await deps.supabase
+        .from('newsletters_template_collections')
+        .select('id, name, list_id')
+        .not('list_id', 'is', null)
+        .limit(50);
+      for (const r of (data ?? []) as Array<{ id: string; name: string }>) {
+        subOptions.push({ label: `${r.name} (newsletter)`, source: 'newsletter', source_id: r.id });
+      }
+    } catch { /* non-fatal */ }
+    try {
+      const { data } = await deps.supabase.from('lists').select('id, name').limit(50);
+      for (const r of (data ?? []) as Array<{ id: string; name: string }>) {
+        subOptions.push({ label: `${r.name} (list)`, source: 'list', source_id: r.id });
+      }
+    } catch { /* non-fatal */ }
+
     let runChat: RunChat;
     try { runChat = await loadRunChat(); }
     catch (e) { deps.logger.error('[broadcasts] loadRunChat failed', e); res.status(503).json({ success: false, error: 'AI module unavailable' }); return; }
@@ -229,7 +272,7 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
         userId,
         threadId: null,
         messageId: null,
-        systemPrompt: buildSystemPrompt(eventNames),
+        systemPrompt: buildSystemPrompt(eventNames, subOptions),
         messages: [{ role: 'user', content: [refineContext, prompt, extra].filter(Boolean).join('\n\n') }],
         structuredTool: {
           name: 'emit_segment_definition',
