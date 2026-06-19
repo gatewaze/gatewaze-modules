@@ -58,9 +58,6 @@ const S = {
   sendButtonDisabled: { opacity: 0.4, cursor: 'not-allowed' } as CSSProperties,
 };
 
-function PlusIcon() {
-  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>;
-}
 function SendIcon() {
   return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>;
 }
@@ -127,9 +124,6 @@ export default function SegmentCopilot({ brand, currentDefinition, onDefinition 
         autoFocus={isInitial}
       />
       <div style={S.actionsRow}>
-        <button type="button" aria-label="Focus prompt" title="Describe your audience" onClick={() => textareaRef.current?.focus()} style={S.iconButton}>
-          <PlusIcon />
-        </button>
         <button type="button" aria-label="Send prompt" onClick={() => send()} disabled={!canSend || busy}
           style={{ ...S.sendButton, ...(!canSend || busy ? S.sendButtonDisabled : {}) }}>
           <SendIcon />
