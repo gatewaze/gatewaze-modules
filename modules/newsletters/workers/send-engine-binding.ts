@@ -16,6 +16,10 @@
  */
 import { createHmac } from 'node:crypto';
 import type { EngineDeps, SendContext, SendEngineBinding, Recipient } from '../../bulk-emailing/worker/send-engine/engine.js';
+// Pure helper (no Deno APIs) — safe to import into the Node worker. Mirrors the
+// Edge fn's link tagging so the worker path has parity (works once migration 032
+// — the tracking_key registry — is applied; skips gracefully otherwise).
+import { extractTrackableLinks, generateTrackingKey, tagHtmlLinks, type LinkSourceBlock, type TaggableLink } from '../functions/_shared/link-tracking.js';
 
 const MERGE_FIELDS = ['first_name', 'last_name', 'name', 'company', 'job_title'];
 const WEATHER_TOKENS = ['weather_emoji', 'weather_temp', 'weather_summary', 'weather_location'];
@@ -77,6 +81,33 @@ async function resolveWeather(city: string, country: string, units: 'celsius' | 
   } catch { return blank; }
 }
 
+// Port of newsletter-send's syncEditionLinkRegistry: extract trackable links
+// from the edition, upsert the per-occurrence tracking_key registry, return
+// ordered rows for tagging. Guarded by the caller; no-ops if the registry schema
+// (migration 032) isn't present.
+async function syncEditionLinkRegistry(deps: EngineDeps, editionId: string): Promise<TaggableLink[]> {
+  const { data: blocks, error } = await deps.supabase
+    .from('newsletters_edition_blocks')
+    .select('id, block_type, content, sort_order, tracking_slug, bricks:newsletters_edition_bricks(id, brick_type, content, sort_order)')
+    .eq('edition_id', editionId);
+  if (error || !blocks) return [];
+  const occ = extractTrackableLinks(blocks as unknown as LinkSourceBlock[]);
+  if (occ.length === 0) return [];
+  const { data: existing } = await deps.supabase
+    .from('newsletters_edition_links').select('block_id, field, link_index, tracking_key').eq('edition_id', editionId);
+  const key = (b: string, f: string, i: number) => `${b}|${f}|${i}`;
+  const existingKey = new Map<string, string>();
+  for (const r of (existing ?? []) as Array<{ block_id: string; field: string; link_index: number; tracking_key: string }>) existingKey.set(key(r.block_id, r.field, r.link_index), r.tracking_key);
+  const rows = occ.map((o) => ({
+    edition_id: editionId, block_id: o.block_id, brick_id: o.brick_id, block_type: o.block_type, tracking_slug: o.tracking_slug,
+    field: o.field, link_index: o.link_index, original_url: o.original_url,
+    tracking_key: existingKey.get(key(o.block_id, o.field, o.link_index)) ?? generateTrackingKey(),
+  }));
+  const { error: upErr } = await deps.supabase.from('newsletters_edition_links').upsert(rows, { onConflict: 'block_id,field,link_index' });
+  if (upErr) return [];
+  return rows.map((r) => ({ original_url: r.original_url, tracking_key: r.tracking_key }));
+}
+
 export const newsletterBinding: SendEngineBinding = {
   domain: 'newsletter',
   sendsTable: 'newsletter_sends',
@@ -91,11 +122,22 @@ export const newsletterBinding: SendEngineBinding = {
     const listId = (send.list_ids || [])[0];
     if (!listId) return null;
     let replyTo: string | null = null;
+    let linkTrackingEnabled = true;
     if (send.collection_id) {
-      const { data: coll } = await deps.supabase.from('newsletters_template_collections').select('reply_to').eq('id', send.collection_id).maybeSingle();
+      const { data: coll } = await deps.supabase.from('newsletters_template_collections').select('reply_to, metadata').eq('id', send.collection_id).maybeSingle();
       replyTo = coll?.reply_to || null;
+      const meta = (coll?.metadata ?? {}) as Record<string, unknown>;
+      linkTrackingEnabled = meta.link_tracking !== false && meta.link_tracking !== 'off';
     }
-    const html: string = send.rendered_html;
+    let html: string = send.rendered_html;
+    // Per-occurrence link tagging (parity with the Edge fn; guarded — skips if
+    // the tracking_key registry / migration 032 isn't present). Once per send.
+    if (linkTrackingEnabled && send.edition_id) {
+      try {
+        const rows = await syncEditionLinkRegistry(deps, send.edition_id);
+        if (rows.length > 0) html = tagHtmlLinks(html, rows);
+      } catch (e) { deps.logger.warn('[send-engine] link tagging skipped', e); }
+    }
     const subject: string = send.subject || 'Newsletter';
     const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html);
     const unitMarker = html.match(/<!--gw-weather-units:(celsius|fahrenheit)-->/);
