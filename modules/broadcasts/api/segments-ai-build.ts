@@ -68,76 +68,76 @@ const EVENT_TYPES = [
 ];
 const EVENT_OPERATORS = ['performed', 'not_performed', 'performed_count', 'performed_at_least', 'performed_at_most'];
 
-const conditionSchema: Record<string, unknown> = {
-  oneOf: [
-    {
-      type: 'object', required: ['type', 'field', 'operator'], additionalProperties: false,
-      properties: {
-        type: { const: 'attribute' },
-        field: { type: 'string', enum: ATTRIBUTE_FIELDS },
-        operator: { type: 'string', enum: ATTRIBUTE_OPERATORS },
-        value: {},
-      },
-    },
-    {
-      type: 'object', required: ['type', 'event_type', 'operator'], additionalProperties: false,
-      properties: {
-        type: { const: 'event' },
-        event_type: { type: 'string', enum: EVENT_TYPES },
-        operator: { type: 'string', enum: EVENT_OPERATORS },
-        value: { type: 'number' },
-        time_window: {
-          type: 'object',
-          properties: {
-            type: { type: 'string', enum: ['relative', 'absolute'] },
-            relative_value: { type: 'number' },
-            relative_unit: { type: 'string', enum: ['days', 'weeks', 'months', 'years'] },
-            start_date: { type: 'string' }, end_date: { type: 'string' },
-          },
-        },
-        event_filters: {
-          type: 'array',
-          items: {
-            type: 'object', required: ['property', 'operator', 'value'],
-            properties: { property: { type: 'string' }, operator: { type: 'string', enum: ATTRIBUTE_OPERATORS }, value: {} },
-          },
-        },
-      },
-    },
-    {
-      type: 'object', required: ['type', 'source', 'source_id', 'operator'], additionalProperties: false,
-      properties: {
-        type: { const: 'subscription' },
-        source: { type: 'string', enum: ['newsletter', 'list'] },
-        source_id: { type: 'string', description: 'The newsletter (collection) id or list id from the provided vocabulary.' },
-        operator: { type: 'string', enum: ['subscribed', 'not_subscribed'] },
-      },
-    },
-    {
-      type: 'object', required: ['type', 'match', 'conditions'],
-      properties: { type: { const: 'group' }, match: { type: 'string', enum: ['all', 'any'] }, conditions: { type: 'array' } },
-    },
-  ],
+// Core condition branches stay hard-coded (hot path). Module-contributed source
+// branches are appended at request time from the registry catalogue.
+const CORE_ATTR_BRANCH = {
+  type: 'object', required: ['type', 'field', 'operator'], additionalProperties: false,
+  properties: { type: { const: 'attribute' }, field: { type: 'string', enum: ATTRIBUTE_FIELDS }, operator: { type: 'string', enum: ATTRIBUTE_OPERATORS }, value: {} },
 };
-
-const TOOL_INPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  required: ['match', 'conditions', 'suggested_name', 'explanation'],
+const CORE_EVENT_BRANCH = {
+  type: 'object', required: ['type', 'event_type', 'operator'], additionalProperties: false,
   properties: {
-    match: { type: 'string', enum: ['all', 'any'] },
-    conditions: { type: 'array', items: conditionSchema },
-    suggested_name: { type: 'string' },
-    explanation: { type: 'string', description: 'Plain-language readback of what this targets.' },
-    warnings: { type: 'array', items: { type: 'string' } },
+    type: { const: 'event' }, event_type: { type: 'string', enum: EVENT_TYPES }, operator: { type: 'string', enum: EVENT_OPERATORS }, value: { type: 'number' },
+    time_window: { type: 'object', properties: { type: { type: 'string', enum: ['relative', 'absolute'] }, relative_value: { type: 'number' }, relative_unit: { type: 'string', enum: ['days', 'weeks', 'months', 'years'] }, start_date: { type: 'string' }, end_date: { type: 'string' } } },
+    event_filters: { type: 'array', items: { type: 'object', required: ['property', 'operator', 'value'], properties: { property: { type: 'string' }, operator: { type: 'string', enum: ATTRIBUTE_OPERATORS }, value: {} } } },
   },
 };
+const CORE_GROUP_BRANCH = {
+  type: 'object', required: ['type', 'match', 'conditions'],
+  properties: { type: { const: 'group' }, match: { type: 'string', enum: ['all', 'any'] }, conditions: { type: 'array' } },
+};
 
-interface SubOption { label: string; source: 'newsletter' | 'list'; source_id: string }
+// --- registry catalogue (from segments_sources_catalog) ---------------------
+interface CatalogEntity { id: string; label: string; extra?: Record<string, unknown> }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+interface CatalogSource { kind: string; label: string; params_schema?: { properties?: Record<string, any>; required?: string[] }; operators?: string[]; entities?: CatalogEntity[]; entities_truncated?: boolean }
+interface Catalog { sources: CatalogSource[] }
 
-function buildSystemPrompt(eventNames: string[], subOptions: SubOption[]): string {
-  const subLines = subOptions.length
-    ? subOptions.map((o) => `    • "${o.label}" → { source: "${o.source}", source_id: "${o.source_id}" }`).join('\n')
-    : '    (none available)';
+function entitySourceProp(src: CatalogSource): string | null {
+  for (const [k, d] of Object.entries(src.params_schema?.properties ?? {})) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (d && (d as any)['x-entity-source']) return k;
+  }
+  return null;
+}
+function buildSourceBranch(src: CatalogSource): Record<string, unknown> {
+  const props: Record<string, unknown> = { type: { const: src.kind } };
+  const required = ['type'];
+  if (src.operators?.length) { props.operator = { type: 'string', enum: src.operators }; required.push('operator'); }
+  for (const [k, def] of Object.entries(src.params_schema?.properties ?? {})) {
+    if (Array.isArray(def?.enum)) props[k] = { type: 'string', enum: def.enum };
+    else if (def?.type === 'array') props[k] = { type: 'array', items: { type: 'string' } };
+    else props[k] = { type: 'string' };
+  }
+  for (const r of (src.params_schema?.required ?? [])) if (!required.includes(r)) required.push(r);
+  return { type: 'object', required, properties: props };
+}
+function buildToolSchema(catalog: Catalog): Record<string, unknown> {
+  const conditionSchema = { oneOf: [CORE_ATTR_BRANCH, CORE_EVENT_BRANCH, ...catalog.sources.map(buildSourceBranch), CORE_GROUP_BRANCH] };
+  return {
+    type: 'object', required: ['match', 'conditions', 'suggested_name', 'explanation'],
+    properties: {
+      match: { type: 'string', enum: ['all', 'any'] },
+      conditions: { type: 'array', items: conditionSchema },
+      suggested_name: { type: 'string' },
+      explanation: { type: 'string', description: 'Plain-language readback of what this targets.' },
+      warnings: { type: 'array', items: { type: 'string' } },
+    },
+  };
+}
+
+function buildSystemPrompt(eventNames: string[], catalog: Catalog): string {
+  const sourceLines = catalog.sources.map((s) => {
+    const prop = entitySourceProp(s);
+    const ents = (s.entities ?? []).slice(0, 40).map((e) => {
+      const frag: Record<string, unknown> = {};
+      if (prop) frag[prop] = e.id;
+      Object.assign(frag, e.extra ?? {});
+      return `    • ${e.label} → ${JSON.stringify(frag)}`;
+    }).join('\n');
+    const ops = s.operators?.length ? ` operator one of [${s.operators.join(', ')}];` : '';
+    return `- ${s.label} (type "${s.kind}";${ops} merge in the params shown for the chosen entity):\n${ents || '    (no entities available)'}${s.entities_truncated ? '\n    (list truncated — if the one you want is missing, ask the user to name it exactly)' : ''}`;
+  }).join('\n');
   return [
     'You translate a natural-language audience description into a Gatewaze segment definition.',
     'You MUST call the emit_segment_definition tool. Never write prose outside the tool call.',
@@ -145,19 +145,20 @@ function buildSystemPrompt(eventNames: string[], subOptions: SubOption[]): strin
     'Rules:',
     '- Use ONLY these attribute fields: ' + ATTRIBUTE_FIELDS.join(', ') + '.',
     '- Use ONLY these event types: ' + EVENT_TYPES.join(', ') + (eventNames.length ? ' (also custom: ' + eventNames.join(', ') + ')' : '') + '.',
-    '- For "subscribed to <newsletter or list>", use a subscription condition with the matching source/source_id from this vocabulary (prefer the NEWSLETTER entry when the user names a newsletter — the list is resolved from it live):',
-    subLines,
-    '  Set operator "subscribed" (or "not_subscribed"). If the named newsletter/list is not in the vocabulary, do not guess an id — add a warning instead.',
     '- For location targeting prefer attributes.city (city name, e.g. "New York") and attributes.country (ISO-2 code, e.g. "US"). Do NOT use attributes.region for cities or US states — in this dataset region holds only coarse continent codes ("eu", "na") and is sparsely populated, so it will match almost no one.',
     '- For "<city> and the surrounding area" you cannot do true radius targeting yet (no per-person lat/long), so target attributes.city = "<city>" and add a warning that surrounding-area/radius matching is not yet supported.',
     '- For "attended/registered for an event in <place>", use an event condition (event_attended/event_registered, operator performed) with event_filters like { property: "event_city", operator: "equals", value: "<place>" }.',
+    ...(sourceLines ? [
+      '- For membership / subscription targeting, emit a condition of the given "type", set the operator, and merge in the params for the chosen entity from these module sources (prefer the NEWSLETTER entry when the user names a newsletter — its list resolves live). Do NOT guess an id that is not listed — add a warning instead:',
+      sourceLines,
+    ] : []),
     '- Use match="all" for AND, match="any" for OR. Nest with type:"group" when mixing.',
-    '- When a request cannot be fully expressed (e.g. "surrounding area"/radius targeting, which needs geo lat/long we do not have), still produce the closest approximation AND add a clear note to the warnings array.',
+    '- When a request cannot be fully expressed, still produce the closest approximation AND add a clear note to the warnings array.',
     '- explanation: a short plain-language readback of exactly who this targets.',
   ].join('\n');
 }
 
-function validateDefinition(def: unknown): string | null {
+function validateDefinition(def: unknown, catalog: Catalog): string | null {
   const d = def as { match?: unknown; conditions?: unknown };
   if (!d || typeof d !== 'object') return 'definition is not an object';
   if (d.match !== 'all' && d.match !== 'any') return 'match must be "all" or "any"';
@@ -175,16 +176,19 @@ function validateDefinition(def: unknown): string | null {
       if (typeof c.operator !== 'string' || !EVENT_OPERATORS.includes(c.operator)) return `invalid event operator: ${c.operator}`;
       return null;
     }
-    if (c.type === 'subscription') {
-      if (c.source !== 'newsletter' && c.source !== 'list') return 'subscription source must be newsletter|list';
-      if (typeof c.source_id !== 'string' || !c.source_id) return 'subscription source_id required';
-      if (c.operator !== 'subscribed' && c.operator !== 'not_subscribed') return 'subscription operator must be subscribed|not_subscribed';
-      return null;
-    }
     if (c.type === 'group') {
       if (c.match !== 'all' && c.match !== 'any') return 'group match must be all/any';
       if (!Array.isArray(c.conditions) || c.conditions.length === 0) return 'group needs conditions';
       for (const sub of c.conditions) { const e = checkCond(sub, depth + 1); if (e) return e; }
+      return null;
+    }
+    // Registry-driven module sources.
+    const src = catalog.sources.find((s) => s.kind === c.type);
+    if (src) {
+      if (src.operators?.length && (typeof c.operator !== 'string' || !src.operators.includes(c.operator))) return `invalid operator for ${c.type}`;
+      for (const r of (src.params_schema?.required ?? [])) {
+        if (c[r] === undefined || c[r] === null || c[r] === '') return `missing ${r} for ${c.type}`;
+      }
       return null;
     }
     return `unknown condition type: ${c.type}`;
@@ -241,24 +245,14 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
       if (Array.isArray(data)) eventNames = (data as string[]).filter((n) => !EVENT_TYPES.includes(n)).slice(0, 40);
     } catch { /* non-fatal */ }
 
-    // Subscription vocabulary: newsletters (resolve list live from the newsletter)
-    // + standalone lists. Best-effort — modules may not be installed.
-    const subOptions: SubOption[] = [];
+    // Registry catalogue: every module-contributed source + its vocabulary, in
+    // one call. Called with the caller's JWT so the is_admin()-gated RPC passes.
+    // Best-effort: if the registry isn't present yet, fall back to no sources
+    // (core attribute/event/group still work).
+    let catalog: Catalog = { sources: [] };
     try {
-      const { data } = await deps.supabase
-        .from('newsletters_template_collections')
-        .select('id, name, list_id')
-        .not('list_id', 'is', null)
-        .limit(50);
-      for (const r of (data ?? []) as Array<{ id: string; name: string }>) {
-        subOptions.push({ label: `${r.name} (newsletter)`, source: 'newsletter', source_id: r.id });
-      }
-    } catch { /* non-fatal */ }
-    try {
-      const { data } = await deps.supabase.from('lists').select('id, name').limit(50);
-      for (const r of (data ?? []) as Array<{ id: string; name: string }>) {
-        subOptions.push({ label: `${r.name} (list)`, source: 'list', source_id: r.id });
-      }
+      const { data } = await callerClient.rpc('segments_sources_catalog', { p_search: null, p_entity_limit: 200 });
+      if (data && Array.isArray((data as Catalog).sources)) catalog = data as Catalog;
     } catch { /* non-fatal */ }
 
     let runChat: RunChat;
@@ -272,12 +266,12 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
         userId,
         threadId: null,
         messageId: null,
-        systemPrompt: buildSystemPrompt(eventNames, subOptions),
+        systemPrompt: buildSystemPrompt(eventNames, catalog),
         messages: [{ role: 'user', content: [refineContext, prompt, extra].filter(Boolean).join('\n\n') }],
         structuredTool: {
           name: 'emit_segment_definition',
           description: 'Emit a segment definition matching the audience the user described.',
-          inputSchema: TOOL_INPUT_SCHEMA,
+          inputSchema: buildToolSchema(catalog),
         },
         maxOutputTokens: 1500,
         timeoutMs: 60_000,
@@ -288,10 +282,10 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
     let out: Record<string, unknown> | null;
     try {
       out = await callModel();
-      let err = out ? validateDefinition(out) : 'model returned no tool call';
+      let err = out ? validateDefinition(out, catalog) : 'model returned no tool call';
       if (err) {
         out = await callModel(`Your previous attempt was invalid: ${err}. Re-emit a corrected emit_segment_definition tool call.`);
-        err = out ? validateDefinition(out) : 'model returned no tool call';
+        err = out ? validateDefinition(out, catalog) : 'model returned no tool call';
         if (err) { res.status(422).json({ success: false, error: `Could not build a valid segment: ${err}`, raw: out ?? null }); return; }
       }
     } catch (e) {
