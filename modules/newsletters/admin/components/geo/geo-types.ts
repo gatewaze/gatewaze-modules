@@ -59,6 +59,18 @@ export interface OptionGeoRow {
   share: number | null;
 }
 
+/** newsletter_block_effectiveness row (cross-edition block performance). */
+export interface BlockEffectivenessRow {
+  edition_id: string;
+  edition_date: string | null;
+  edition_title: string;
+  block_type: string;
+  clickers: number;
+  events: number;
+  delivered: number;
+  ctr: number | null;
+}
+
 /** R5 newsletter_engagement_timeline row. */
 export interface TimelineRow {
   bucket_start: string;

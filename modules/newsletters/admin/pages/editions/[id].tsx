@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   Cog6ToothIcon,
@@ -8,7 +8,6 @@ import {
   DocumentTextIcon,
   ChatBubbleLeftRightIcon,
   ChartBarIcon,
-  GlobeAltIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
@@ -17,11 +16,6 @@ import type { Tab } from '@/components/ui/Tabs';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { NewsletterCanvasEditor } from '../../components/puck/NewsletterCanvasEditor';
 import { EditionSendingTab } from '../../components/EditionSendingTab';
-const EditionGeographyTab = lazy(() => import('../../components/geo/EditionGeographyTab'));
-/** Geo/timezone engagement reporting is feature-flagged off until verified on
- *  prod data (spec §15). Set VITE_NEWSLETTER_GEO_REPORTING=true to enable. */
-const GEO_REPORTING_ENABLED =
-  (import.meta as { env?: { VITE_NEWSLETTER_GEO_REPORTING?: string } }).env?.VITE_NEWSLETTER_GEO_REPORTING === 'true';
 import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
 import { stripStorageUrlsInJson, resolveStoragePathsInJson } from '@gatewaze/shared';
@@ -102,7 +96,7 @@ interface CollectionInfo {
   wrapperTemplate?: string | null;
 }
 
-type EditionTab = 'details' | 'editor' | 'sending' | 'geography';
+type EditionTab = 'details' | 'editor' | 'sending';
 
 export default function EditionEditorPage() {
   const { id, tab: tabFromUrl, slug: newsletterSlug } = useParams<{ id: string; tab?: string; slug?: string }>();
@@ -180,10 +174,7 @@ export default function EditionEditorPage() {
     };
   }, []);
 
-  const showGeo = hasBulkEmailing && GEO_REPORTING_ENABLED;
-  const validTabs: EditionTab[] = ['editor', 'details',
-    ...(hasBulkEmailing ? ['sending' as EditionTab] : []),
-    ...(showGeo ? ['geography' as EditionTab] : [])];
+  const validTabs: EditionTab[] = ['editor', 'details', ...(hasBulkEmailing ? ['sending' as EditionTab] : [])];
   const defaultTab: EditionTab = 'editor';
   const activeTab: EditionTab = validTabs.includes(tabFromUrl as EditionTab) ? (tabFromUrl as EditionTab) : defaultTab;
 
@@ -660,7 +651,6 @@ export default function EditionEditorPage() {
     { id: 'editor', label: 'Editor', icon: <PencilSquareIcon className={ic} /> },
     { id: 'details', label: 'Details', icon: <Cog6ToothIcon className={ic} /> },
     ...(hasBulkEmailing ? [{ id: 'sending', label: 'Sending', icon: <PaperAirplaneIcon className={ic} /> }] : []),
-    ...(showGeo ? [{ id: 'geography', label: 'Geography', icon: <GlobeAltIcon className={ic} /> }] : []),
   ];
 
   // Primary tab row = this newsletter's sections (mirrors the newsletter
@@ -882,14 +872,6 @@ export default function EditionEditorPage() {
                 }
               : undefined}
           />
-        </div>
-      )}
-
-      {activeTab === 'geography' && showGeo && edition.id !== 'new' && (
-        <div className="py-2">
-          <Suspense fallback={<LoadingSpinner />}>
-            <EditionGeographyTab editionId={edition.id} />
-          </Suspense>
         </div>
       )}
       </WorkspaceLayout>
