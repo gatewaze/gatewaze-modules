@@ -71,7 +71,9 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
   let claimedTotal = 0, sentTotal = 0, failedTotal = 0;
 
   // 1. Release rows stuck in 'sending' from a prior crashed tick.
-  await supabase.rpc('release_stuck_send_rows', { p_recipients_table: binding.recipientsTable, p_stale_after: '15 minutes' }).catch((e: unknown) => logger.warn('[send-engine] sweeper failed', e));
+  // (supabase.rpc returns a PostgREST thenable with no .catch — use {error}.)
+  const { error: sweepErr } = await supabase.rpc('release_stuck_send_rows', { p_recipients_table: binding.recipientsTable, p_stale_after: '15 minutes' });
+  if (sweepErr) logger.warn('[send-engine] sweeper failed', sweepErr);
   // 2. Crash recovery for 'posting' batches (202-but-commit-failed window).
   await recoverPostingBatches(deps, binding).catch((e: unknown) => logger.warn('[send-engine] recovery failed', e));
 
