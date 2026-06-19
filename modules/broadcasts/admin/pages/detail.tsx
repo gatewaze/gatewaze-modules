@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Card, Button, Badge, WorkspaceLayout } from '@/components/ui';
@@ -9,8 +9,6 @@ import {
   createSegmentService, createEmptySegmentDefinition, isValidSegmentDefinition,
   type SegmentDefinition,
 } from '@/lib/segments';
-// Cross-module reuse: the visual Segments Builder (controlled value/onChange).
-import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
 import BroadcastSendingPanel from '../components/BroadcastSendingPanel';
 import { getBroadcast, updateBroadcast, type BroadcastSend } from '../lib/broadcastService';
@@ -30,6 +28,9 @@ export default function BroadcastDetailPage() {
 
   const [b, setB] = useState<BroadcastSend | null>(null);
   const [loading, setLoading] = useState(true);
+  // Step-specific top-right action (e.g. "Save audience & continue"), registered
+  // by the active step — mirrors the newsletter editor's top-right Save/Publish.
+  const [headerActions, setHeaderActions] = useState<ReactNode>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -66,47 +67,52 @@ export default function BroadcastDetailPage() {
         tabs={STEPS}
         activeTabId={step}
         onTabChange={goTo}
-        actions={<Badge color={b.status === 'sent' ? 'green' : b.status === 'failed' ? 'red' : b.status === 'sending' ? 'amber' : 'gray'}>{b.status}</Badge>}
+        actions={
+          <div className="flex items-center gap-3">
+            {headerActions}
+            <Badge color={b.status === 'sent' ? 'green' : b.status === 'failed' ? 'red' : b.status === 'sending' ? 'amber' : 'gray'}>{b.status}</Badge>
+          </div>
+        }
       >
-        {step === 'audience' && <AudienceStep b={b} editable={editable} onSaved={(nb) => { setB(nb); goTo('content'); }} />}
-        {step === 'content' && <ContentStep b={b} editable={editable} onSaved={(nb) => { setB(nb); goTo('sending'); }} />}
+        {step === 'audience' && <AudienceStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('content'); }} />}
+        {step === 'content' && <ContentStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('sending'); }} />}
         {step === 'sending' && <BroadcastSendingPanel broadcast={b} reload={load} />}
       </WorkspaceLayout>
     </Page>
   );
 }
 
-// --- Step 1: Audience (chat copilot + editable builder) ---------------------
-function AudienceStep({ b, editable, onSaved }: { b: BroadcastSend; editable: boolean; onSaved: (b: BroadcastSend) => void }) {
+// --- Step 1: Audience (single-panel chat copilot, like the newsletter editor) -
+function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: BroadcastSend; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: BroadcastSend) => void }) {
   const [definition, setDefinition] = useState<SegmentDefinition>(createEmptySegmentDefinition());
+  const [hasDefinition, setHasDefinition] = useState(false);
   const [loadedSeg, setLoadedSeg] = useState(false);
   const [saving, setSaving] = useState(false);
   const [suggestedName, setSuggestedName] = useState<string>('');
   const [count, setCount] = useState<number | null>(null);
 
-  // Load the existing backing segment's definition (if any) into the builder.
+  // Load the existing backing segment's definition (if any).
   useEffect(() => {
     if (!b.segment_id) { setLoadedSeg(true); return; }
     createSegmentService(supabase).getSegment(b.segment_id)
-      .then((seg) => { if (seg?.definition) setDefinition(seg.definition); })
+      .then((seg) => { if (seg?.definition) { setDefinition(seg.definition); setHasDefinition(true); } })
       .catch(() => {})
       .finally(() => setLoadedSeg(true));
   }, [b.segment_id]);
 
-  // Compact live count (no sample list) — debounced. Replaces SegmentBuilder's
-  // own preview so the panel stays small.
+  // Debounced live count (shown in the header beside Save).
   useEffect(() => {
-    if (!isValidSegmentDefinition(definition)) { setCount(null); return; }
+    if (!hasDefinition || !isValidSegmentDefinition(definition)) { setCount(null); return; }
     const t = setTimeout(() => {
       createSegmentService(supabase).previewSegment(definition)
         .then((r) => setCount(r.count))
         .catch(() => setCount(null));
     }, 700);
     return () => clearTimeout(t);
-  }, [definition]);
+  }, [definition, hasDefinition]);
 
-  // Pin the step to the viewport so the copilot stays visible and the criteria
-  // scroll on the right (mirrors the newsletter editor full-bleed pattern).
+  // Pin the panel to the viewport so the copilot is always fully visible and
+  // its chat scrolls internally (mirrors the newsletter editor full-bleed).
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [height, setHeight] = useState<number | null>(null);
   useEffect(() => {
@@ -131,7 +137,7 @@ function AudienceStep({ b, editable, onSaved }: { b: BroadcastSend; editable: bo
   }, [loadedSeg]);
 
   async function saveAndContinue() {
-    if (!isValidSegmentDefinition(definition)) { toast.error('Add at least one valid condition'); return; }
+    if (!isValidSegmentDefinition(definition)) { toast.error('Describe an audience first'); return; }
     setSaving(true);
     try {
       const svc = createSegmentService(supabase);
@@ -154,45 +160,36 @@ function AudienceStep({ b, editable, onSaved }: { b: BroadcastSend; editable: bo
     }
   }
 
+  // Register the top-right header action (count + Save), like the editor.
+  useEffect(() => {
+    if (!editable) { setHeaderActions(null); return () => setHeaderActions(null); }
+    setHeaderActions(
+      <div className="flex items-center gap-3">
+        {count != null && <span className="text-sm text-[var(--gray-11)]">≈ {count.toLocaleString()} people</span>}
+        <Button variant="solid" onClick={saveAndContinue} disabled={saving || !hasDefinition}>{saving ? 'Saving…' : 'Save audience & continue'}</Button>
+      </div>,
+    );
+    return () => setHeaderActions(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editable, saving, count, hasDefinition, definition, suggestedName]);
+
   if (!loadedSeg) return <div className="py-10 text-center text-sm text-[var(--gray-10)]">Loading audience…</div>;
 
   return (
-    <div ref={wrapRef} className="flex gap-4 overflow-hidden -mb-6" style={{ height: height != null ? `${height}px` : 'calc(100vh - 260px)' }}>
-      {/* Left: copilot — fixed, always visible (chat scrolls internally) */}
-      <Card className="p-4 w-[420px] shrink-0 h-full overflow-hidden flex flex-col">
+    <div ref={wrapRef} className="-mb-6" style={{ height: height != null ? `${height}px` : 'calc(100vh - 260px)' }}>
+      <div className="h-full max-w-3xl mx-auto overflow-hidden rounded-xl border border-[var(--gray-5)] bg-[var(--color-surface)]">
         <SegmentCopilot
           brand={b.brand}
-          currentDefinition={definition}
-          onDefinition={(def, meta) => { setDefinition(def); if (meta.suggestedName) setSuggestedName(meta.suggestedName); }}
+          currentDefinition={hasDefinition ? definition : null}
+          onDefinition={(def, meta) => { setDefinition(def); setHasDefinition(true); if (meta.suggestedName) setSuggestedName(meta.suggestedName); }}
         />
-      </Card>
-
-      {/* Right: audience criteria — scrolls; compact count header; sticky save footer */}
-      <div className="flex-1 h-full flex flex-col overflow-hidden rounded-xl border border-[var(--gray-5)] bg-[var(--gray-2)]">
-        <div className="px-4 pt-3 pb-2 border-b border-[var(--gray-5)] flex items-center justify-between shrink-0">
-          <div>
-            <div className="text-sm font-medium text-[var(--gray-12)]">Audience criteria</div>
-            <p className="text-xs text-[var(--gray-10)]">Edit any condition, or ask the copilot to refine.</p>
-          </div>
-          <span className="shrink-0 inline-flex items-center rounded-full bg-[var(--accent-3)] text-[var(--accent-11)] px-3 py-1 text-xs font-medium">
-            {count == null ? 'No audience yet' : `≈ ${count.toLocaleString()} people`}
-          </span>
-        </div>
-        <div className="flex-1 overflow-y-auto px-4 py-3">
-          <SegmentBuilder value={definition} onChange={setDefinition} showPreview={false} />
-        </div>
-        {editable && (
-          <div className="px-4 py-3 border-t border-[var(--gray-5)] flex justify-end shrink-0">
-            <Button variant="solid" onClick={saveAndContinue} disabled={saving}>{saving ? 'Saving…' : 'Save audience & continue'}</Button>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
 // --- Step 2: Content (rich text) --------------------------------------------
-function ContentStep({ b, editable, onSaved }: { b: BroadcastSend; editable: boolean; onSaved: (b: BroadcastSend) => void }) {
+function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: BroadcastSend; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: BroadcastSend) => void }) {
   const [html, setHtml] = useState<string>(b.rendered_html ?? '');
   const [saving, setSaving] = useState(false);
 
@@ -211,6 +208,16 @@ function ContentStep({ b, editable, onSaved }: { b: BroadcastSend; editable: boo
     }
   }
 
+  // Save in the top-right header, like the audience step + newsletter editor.
+  useEffect(() => {
+    if (!editable) { setHeaderActions(null); return () => setHeaderActions(null); }
+    setHeaderActions(
+      <Button variant="solid" onClick={saveAndContinue} disabled={saving}>{saving ? 'Saving…' : 'Save content & continue'}</Button>,
+    );
+    return () => setHeaderActions(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editable, saving, html]);
+
   return (
     <div className="max-w-3xl space-y-3">
       <Card className="p-4">
@@ -218,11 +225,6 @@ function ContentStep({ b, editable, onSaved }: { b: BroadcastSend; editable: boo
         <p className="text-xs text-[var(--gray-10)] mb-3">Merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.</p>
         <RichTextEditor content={html} onChange={setHtml} />
       </Card>
-      {editable && (
-        <div className="flex justify-end">
-          <Button variant="solid" onClick={saveAndContinue} disabled={saving}>{saving ? 'Saving…' : 'Save content & continue'}</Button>
-        </div>
-      )}
     </div>
   );
 }

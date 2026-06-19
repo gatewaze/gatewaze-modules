@@ -1,9 +1,18 @@
-import { useState, useRef, useEffect } from 'react';
-import { SparklesIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
+import { useState, useRef, useEffect, type CSSProperties } from 'react';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui';
 import type { SegmentDefinition } from '@/lib/segments';
 import { buildSegmentFromPrompt } from '../lib/broadcastService';
+
+/**
+ * Audience copilot — visually mirrors the newsletter editor AI panel
+ * (editor-ai-copilot/admin/components/AiSidebarPane.tsx): a centered
+ * "What do you want to build?" composer in the empty state, chat bubbles +
+ * a pinned composer once the conversation starts. Single panel — the segment
+ * it builds is described in the chat and saved via the header action.
+ *
+ * Multi-turn: each follow-up passes the running definition back so the copilot
+ * REFINES it (e.g. "change job title to machine learning eng").
+ */
 
 interface ChatMessage {
   id: string;
@@ -15,10 +24,7 @@ interface ChatMessage {
 
 interface Props {
   brand?: string;
-  /** The running definition (held by the parent, also editable in the builder).
-   *  Passed back to the copilot each turn so follow-ups REFINE it. */
   currentDefinition: SegmentDefinition | null;
-  /** Called whenever the copilot produces/updates a definition. */
   onDefinition: (def: SegmentDefinition, meta: { suggestedName?: string }) => void;
 }
 
@@ -27,29 +33,58 @@ const nextId = () => `m${++msgSeq}`;
 
 const SUGGESTIONS = [
   'Everyone who attended the last San Francisco Forum event',
-  'All people in New York and the surrounding area',
-  'Job title contains "machine learning engineer"',
-  'People at tech companies who registered for an event in the last 90 days',
+  'All people in New York',
+  'Job titles containing "machine learning engineer"',
+  'People at companies in the US who registered for an event in the last 90 days',
 ];
 
-/**
- * Conversational segment copilot — mirrors the editor copilot chat UX. The
- * admin describes the audience, the model emits a segment definition (shown +
- * editable in the SegmentBuilder on the right), and follow-up messages REFINE
- * the running definition (e.g. "change job title to 'machine learning eng'").
- */
+// Styling ported from AiSidebarPane's `S` object so the panel looks identical.
+const S = {
+  rootInitial: { display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%', minHeight: 0, padding: 12, gap: 12, fontSize: 13, lineHeight: 1.4, color: 'var(--gray-12)', boxSizing: 'border-box' } as CSSProperties,
+  rootChat: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, padding: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--gray-12)', boxSizing: 'border-box' } as CSSProperties,
+  headerBar: { padding: '12px 14px 10px', fontSize: 14, fontWeight: 600, color: 'var(--gray-12)', borderBottom: '1px solid var(--gray-5)' } as CSSProperties,
+  messages: { flex: 1, overflowY: 'auto', padding: '14px 14px 8px', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 } as CSSProperties,
+  userBubble: { alignSelf: 'flex-end', maxWidth: '85%', padding: '8px 12px', fontSize: 13, lineHeight: 1.45, color: 'var(--gray-12)', background: 'var(--accent-4)', borderRadius: 14, borderTopRightRadius: 4, wordBreak: 'break-word' } as CSSProperties,
+  assistantLine: { alignSelf: 'flex-start', maxWidth: '95%', fontSize: 13, lineHeight: 1.5, color: 'var(--gray-11)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } as CSSProperties,
+  metaLine: { fontSize: 11, color: 'var(--gray-10)', marginTop: 4 } as CSSProperties,
+  footer: { padding: '8px 12px 12px', borderTop: '1px solid var(--gray-5)', display: 'flex', flexDirection: 'column', gap: 8 } as CSSProperties,
+  footerInitial: { padding: 0, borderTop: 'none', display: 'flex', flexDirection: 'column', gap: 10 } as CSSProperties,
+  composer: { display: 'flex', flexDirection: 'column', border: '1px solid var(--gray-7)', borderRadius: 14, background: 'var(--color-surface)', overflow: 'hidden', transition: 'border-color 120ms ease, box-shadow 120ms ease' } as CSSProperties,
+  composerFocused: { borderColor: 'var(--accent-8)', boxShadow: '0 0 0 1px var(--accent-8)' } as CSSProperties,
+  textarea: { width: '100%', minHeight: 56, maxHeight: 260, padding: '12px 14px', fontFamily: 'inherit', fontSize: 13, lineHeight: 1.45, color: 'inherit', background: 'transparent', border: 'none', outline: 'none', resize: 'none', boxSizing: 'border-box' } as CSSProperties,
+  actionsRow: { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px 8px 8px' } as CSSProperties,
+  iconButton: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, padding: 0, background: 'transparent', border: '1px solid transparent', borderRadius: 8, cursor: 'pointer', color: 'var(--gray-11)' } as CSSProperties,
+  sendButton: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, marginLeft: 'auto', padding: 0, color: '#fff', background: 'var(--accent-9)', border: '1px solid transparent', borderRadius: '50%', cursor: 'pointer' } as CSSProperties,
+  sendButtonDisabled: { opacity: 0.4, cursor: 'not-allowed' } as CSSProperties,
+};
+
+function PlusIcon() {
+  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>;
+}
+function SendIcon() {
+  return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>;
+}
+
 export default function SegmentCopilot({ brand, currentDefinition, onDefinition }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [focused, setFocused] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, busy]);
+
+  // Auto-grow the textarea (matches the editor composer).
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages]);
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 260)}px`;
+  }, [prompt]);
 
-  async function send(text: string) {
-    const trimmed = text.trim();
+  async function send(text?: string) {
+    const trimmed = (text ?? prompt).trim();
     if (!trimmed || busy) return;
     setPrompt('');
     setMessages((m) => [...m, { id: nextId(), role: 'user', text: trimmed }]);
@@ -61,11 +96,7 @@ export default function SegmentCopilot({ brand, currentDefinition, onDefinition 
         return;
       }
       onDefinition(r.definition, { suggestedName: r.suggested_name });
-      setMessages((m) => [...m, {
-        id: nextId(), role: 'assistant',
-        text: r.explanation || 'Updated the audience criteria on the right.',
-        warnings: r.warnings, count: r.count,
-      }]);
+      setMessages((m) => [...m, { id: nextId(), role: 'assistant', text: r.explanation || 'Updated the audience criteria.', warnings: r.warnings, count: r.count }]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Copilot failed');
     } finally {
@@ -73,60 +104,87 @@ export default function SegmentCopilot({ brand, currentDefinition, onDefinition 
     }
   }
 
-  return (
-    <div className="flex flex-col h-full min-h-[420px]">
-      <div ref={scrollRef} className="flex-1 overflow-auto space-y-3 pr-1">
-        {messages.length === 0 ? (
-          <div className="text-center py-8">
-            <SparklesIcon className="h-8 w-8 text-[var(--accent-9)] mx-auto mb-2" />
-            <p className="text-sm text-[var(--gray-12)] font-medium mb-1">Describe your audience</p>
-            <p className="text-xs text-[var(--gray-10)] mb-4">I’ll build the criteria — then you can refine by chatting or editing them directly.</p>
-            <div className="space-y-1.5">
-              {SUGGESTIONS.map((s) => (
-                <button key={s} onClick={() => send(s)} disabled={busy}
-                  className="block w-full text-left text-xs px-3 py-2 rounded-md border border-[var(--gray-6)] text-[var(--gray-11)] hover:bg-[var(--gray-3)]">
-                  {s}
-                </button>
-              ))}
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  }
+
+  const canSend = !!prompt.trim();
+  const isInitial = messages.length === 0 && !busy;
+
+  const composer = (
+    <div style={{ ...S.composer, ...(focused ? S.composerFocused : {}) }}>
+      <textarea
+        ref={textareaRef}
+        rows={2}
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        onKeyDown={onKeyDown}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder="Describe your audience…"
+        maxLength={2000}
+        style={S.textarea}
+        autoFocus={isInitial}
+      />
+      <div style={S.actionsRow}>
+        <button type="button" aria-label="Focus prompt" title="Describe your audience" onClick={() => textareaRef.current?.focus()} style={S.iconButton}>
+          <PlusIcon />
+        </button>
+        <button type="button" aria-label="Send prompt" onClick={() => send()} disabled={!canSend || busy}
+          style={{ ...S.sendButton, ...(!canSend || busy ? S.sendButtonDisabled : {}) }}>
+          <SendIcon />
+        </button>
+      </div>
+    </div>
+  );
+
+  if (isInitial) {
+    return (
+      <div style={S.rootInitial} role="region" aria-label="Audience copilot">
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 14, padding: '8px 4px' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--gray-12)' }}>Describe your audience</div>
+            <div style={{ fontSize: 13, color: 'var(--gray-10)', marginTop: 2 }}>
+              Tell the copilot who should receive this broadcast — it builds the criteria, and you can refine by chatting.
             </div>
           </div>
-        ) : (
-          messages.map((m) => (
-            <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-              <div className={
-                m.role === 'user'
-                  ? 'max-w-[85%] rounded-2xl rounded-br-sm bg-[var(--accent-9)] text-white px-3 py-2 text-sm'
-                  : 'max-w-[90%] rounded-2xl rounded-bl-sm bg-[var(--gray-3)] text-[var(--gray-12)] px-3 py-2 text-sm'
-              }>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {SUGGESTIONS.map((s) => (
+              <button key={s} type="button" onClick={() => send(s)}
+                style={{ textAlign: 'left', fontSize: 13, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--gray-6)', background: 'var(--color-surface)', color: 'var(--gray-11)', cursor: 'pointer' }}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={S.footerInitial}>{composer}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.rootChat} role="region" aria-label="Audience copilot">
+      <div style={S.headerBar}>Audience builder</div>
+      <div style={S.messages} aria-live="polite">
+        {messages.map((m) => (
+          m.role === 'user'
+            ? <div key={m.id} style={S.userBubble}>{m.text}</div>
+            : (
+              <div key={m.id} style={S.assistantLine}>
                 <div>{m.text}</div>
-                {typeof m.count === 'number' && (
-                  <div className="text-xs mt-1 opacity-80">≈ {m.count.toLocaleString()} people match</div>
-                )}
+                {typeof m.count === 'number' && <div style={S.metaLine}>≈ {m.count.toLocaleString()} people match</div>}
                 {m.warnings && m.warnings.length > 0 && (
-                  <ul className="text-xs mt-1 list-disc pl-4 text-[var(--amber-11)]">
+                  <ul style={{ ...S.metaLine, paddingLeft: 16, listStyle: 'disc', color: 'var(--amber-11)' }}>
                     {m.warnings.map((w, i) => <li key={i}>{w}</li>)}
                   </ul>
                 )}
               </div>
-            </div>
-          ))
-        )}
-        {busy && <div className="flex justify-start"><div className="rounded-2xl bg-[var(--gray-3)] px-3 py-2 text-sm text-[var(--gray-10)]">Thinking…</div></div>}
+            )
+        ))}
+        {busy && <div style={S.assistantLine}>Thinking…</div>}
+        <div ref={messagesEndRef} />
       </div>
-
-      <div className="mt-3 flex gap-2 items-end">
-        <textarea
-          className="flex-1 rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm resize-none"
-          rows={2}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(prompt); } }}
-          placeholder={messages.length === 0 ? 'e.g. everyone in New York…' : 'Refine — e.g. “change job title to machine learning eng”'}
-        />
-        <Button variant="solid" onClick={() => send(prompt)} disabled={busy || !prompt.trim()}>
-          <PaperAirplaneIcon className="h-4 w-4" />
-        </Button>
-      </div>
+      <div style={S.footer}>{composer}</div>
     </div>
   );
 }
