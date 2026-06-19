@@ -7,7 +7,7 @@ import { RichTextEditor } from '@/components/ui/RichTextEditor';
 import { supabase } from '@/lib/supabase';
 import {
   createSegmentService, createEmptySegmentDefinition, isValidSegmentDefinition,
-  type SegmentDefinition,
+  type SegmentDefinition, type SegmentMember,
 } from '@/lib/segments';
 // Cross-module reuse: the visual Segments Builder (controlled value/onChange).
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
@@ -92,6 +92,7 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
   const [saving, setSaving] = useState(false);
   const [suggestedName, setSuggestedName] = useState<string>('');
   const [count, setCount] = useState<number | null>(null);
+  const [sample, setSample] = useState<SegmentMember[]>([]);
 
   // Load the existing backing segment's definition (if any).
   useEffect(() => {
@@ -102,13 +103,13 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
       .finally(() => setLoadedSeg(true));
   }, [b.segment_id]);
 
-  // Debounced live count (shown in the header beside Save).
+  // Debounced live preview — count (status bar) + sample rows (preview table).
   useEffect(() => {
-    if (!hasDefinition || !isValidSegmentDefinition(definition)) { setCount(null); return; }
+    if (!hasDefinition || !isValidSegmentDefinition(definition)) { setCount(null); setSample([]); return; }
     const t = setTimeout(() => {
       createSegmentService(supabase).previewSegment(definition)
-        .then((r) => setCount(r.count))
-        .catch(() => setCount(null));
+        .then((r) => { setCount(r.count); setSample(r.sample ?? []); })
+        .catch(() => { setCount(null); setSample([]); });
     }, 700);
     return () => clearTimeout(t);
   }, [definition, hasDefinition]);
@@ -162,18 +163,15 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
     }
   }
 
-  // Register the top-right header action (count + Save), like the editor.
+  // Register the top-right header Save action (count lives in the panel status bar).
   useEffect(() => {
     if (!editable) { setHeaderActions(null); return () => setHeaderActions(null); }
     setHeaderActions(
-      <div className="flex items-center gap-3">
-        {count != null && <span className="text-sm text-[var(--gray-11)]">≈ {count.toLocaleString()} people</span>}
-        <Button variant="solid" onClick={saveAndContinue} disabled={saving || !hasDefinition}>{saving ? 'Saving…' : 'Save audience & continue'}</Button>
-      </div>,
+      <Button variant="solid" onClick={saveAndContinue} disabled={saving || !hasDefinition}>{saving ? 'Saving…' : 'Save audience & continue'}</Button>,
     );
     return () => setHeaderActions(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editable, saving, count, hasDefinition, definition, suggestedName]);
+  }, [editable, saving, hasDefinition, definition, suggestedName]);
 
   if (!loadedSeg) return <div className="py-10 text-center text-sm text-[var(--gray-10)]">Loading audience…</div>;
 
@@ -189,15 +187,89 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
       </div>
 
       {/* Right: the segment builder — where the newsletter canvas normally sits.
-          Light-grey backdrop with the criteria on a white sheet; scrolls. */}
-      <div className="flex-1 h-full overflow-y-auto rounded-xl border border-[var(--gray-5)] bg-[var(--gray-2)]">
-        <div className="p-4">
+          Builder scrolls; a status bar + data preview are fixed to the bottom. */}
+      <div className="flex-1 h-full flex flex-col overflow-hidden rounded-xl border border-[var(--gray-5)] bg-[var(--gray-2)]">
+        <div className="flex-1 overflow-y-auto p-4">
           <div className="text-sm font-medium text-[var(--gray-12)] mb-2">Audience criteria</div>
           <div className="rounded-lg border border-[var(--gray-5)] bg-[var(--color-surface)] p-4">
             <SegmentBuilder value={definition} onChange={(def) => { setDefinition(def); setHasDefinition(true); }} showPreview={false} />
           </div>
         </div>
+        {/* Fixed bottom: status bar (count) + data preview table */}
+        <div className="shrink-0 border-t border-[var(--gray-5)] bg-[var(--color-surface)]">
+          <div className="px-4 py-2 border-b border-[var(--gray-5)] text-xs font-medium text-[var(--gray-11)]">
+            {count == null ? 'No audience selected yet' : `${count.toLocaleString()} ${count === 1 ? 'person' : 'people'} in this filter`}
+          </div>
+          <AudiencePreviewTable definition={definition} sample={sample} />
+        </div>
       </div>
+    </div>
+  );
+}
+
+// Compact data preview: always shows name/company/job title, plus any
+// attribute fields the segment filters on (e.g. city). 5 rows, scrollable.
+const ALWAYS_FIELDS: { key: string; label: string }[] = [
+  { key: 'first_name', label: 'First name' },
+  { key: 'last_name', label: 'Last name' },
+  { key: 'company', label: 'Company' },
+  { key: 'job_title', label: 'Job title' },
+];
+const FIELD_LABELS: Record<string, string> = {
+  city: 'City', country: 'Country', region: 'Region', email: 'Email',
+  timezone: 'Timezone', linkedin_url: 'LinkedIn', twitter_handle: 'Twitter',
+};
+function labelFor(key: string): string {
+  return FIELD_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+}
+function collectFilteredKeys(def: SegmentDefinition): string[] {
+  const keys: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const walk = (conds: any[]) => {
+    for (const c of conds ?? []) {
+      if (c?.type === 'attribute' && typeof c.field === 'string') {
+        keys.push(c.field === 'email' ? 'email' : c.field.replace(/^attributes\./, ''));
+      } else if (c?.type === 'group') {
+        walk(c.conditions);
+      }
+    }
+  };
+  walk(def.conditions);
+  return Array.from(new Set(keys));
+}
+function memberValue(m: SegmentMember, key: string): string {
+  if (key === 'email') return m.email ?? '';
+  const v = (m.attributes as Record<string, unknown> | undefined)?.[key];
+  return v == null ? '' : String(v);
+}
+function AudiencePreviewTable({ definition, sample }: { definition: SegmentDefinition; sample: SegmentMember[] }) {
+  const extra = collectFilteredKeys(definition).filter((k) => !ALWAYS_FIELDS.some((f) => f.key === k));
+  const columns = [...ALWAYS_FIELDS, ...extra.map((k) => ({ key: k, label: labelFor(k) }))];
+  if (sample.length === 0) {
+    return <div className="px-4 py-4 text-xs text-[var(--gray-10)]">No matching people to preview yet.</div>;
+  }
+  return (
+    <div className="overflow-auto" style={{ maxHeight: 180 }}>
+      <table className="w-full text-xs border-collapse">
+        <thead className="sticky top-0 bg-[var(--gray-2)]">
+          <tr>
+            {columns.map((c) => (
+              <th key={c.key} className="text-left font-medium text-[var(--gray-10)] px-3 py-1.5 whitespace-nowrap">{c.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sample.map((m) => (
+            <tr key={m.id} className="border-t border-[var(--gray-4)]">
+              {columns.map((c) => (
+                <td key={c.key} className="px-3 py-1.5 text-[var(--gray-12)] whitespace-nowrap">
+                  {memberValue(m, c.key) || <span className="text-[var(--gray-8)]">—</span>}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
