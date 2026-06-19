@@ -9,6 +9,8 @@ import {
   createSegmentService, createEmptySegmentDefinition, isValidSegmentDefinition,
   type SegmentDefinition,
 } from '@/lib/segments';
+// Cross-module reuse: the visual Segments Builder (controlled value/onChange).
+import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
 import BroadcastSendingPanel from '../components/BroadcastSendingPanel';
 import { getBroadcast, updateBroadcast, type BroadcastSend } from '../lib/broadcastService';
@@ -176,13 +178,25 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
   if (!loadedSeg) return <div className="py-10 text-center text-sm text-[var(--gray-10)]">Loading audience…</div>;
 
   return (
-    <div ref={wrapRef} className="-mb-6" style={{ height: height != null ? `${height}px` : 'calc(100vh - 260px)' }}>
-      <div className="h-full max-w-3xl mx-auto overflow-hidden rounded-xl border border-[var(--gray-5)] bg-[var(--color-surface)]">
+    <div ref={wrapRef} className="-mb-6 flex gap-4 overflow-hidden" style={{ height: height != null ? `${height}px` : 'calc(100vh - 260px)' }}>
+      {/* Left: copilot — newsletter-editor look (light-grey panel, white composer). */}
+      <div className="w-[400px] shrink-0 h-full overflow-hidden rounded-xl border border-[var(--gray-5)] bg-[var(--gray-2)]">
         <SegmentCopilot
           brand={b.brand}
           currentDefinition={hasDefinition ? definition : null}
           onDefinition={(def, meta) => { setDefinition(def); setHasDefinition(true); if (meta.suggestedName) setSuggestedName(meta.suggestedName); }}
         />
+      </div>
+
+      {/* Right: the segment builder — where the newsletter canvas normally sits.
+          Light-grey backdrop with the criteria on a white sheet; scrolls. */}
+      <div className="flex-1 h-full overflow-y-auto rounded-xl border border-[var(--gray-5)] bg-[var(--gray-2)]">
+        <div className="p-4">
+          <div className="text-sm font-medium text-[var(--gray-12)] mb-2">Audience criteria</div>
+          <div className="rounded-lg border border-[var(--gray-5)] bg-[var(--color-surface)] p-4">
+            <SegmentBuilder value={definition} onChange={(def) => { setDefinition(def); setHasDefinition(true); }} showPreview={false} />
+          </div>
+        </div>
       </div>
     </div>
   );
