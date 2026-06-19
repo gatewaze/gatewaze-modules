@@ -1,4 +1,9 @@
 import type { Job } from 'bullmq';
+// Static (not dynamic) import: a bare-specifier `await import('@supabase/...')`
+// from this module-file location does not resolve in the worker runtime
+// (ERR_MODULE_NOT_FOUND), whereas a top-level import does — matching every
+// other module worker (ai/*, calendars, newsletters/list-hygiene).
+import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -61,8 +66,7 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
   let engine: { claimed: number; sent: number; failed: number } | null = null;
   if (process.env.SEND_ENGINE_USE_WORKER === 'true') {
     try {
-      const [sb, engMod, bindMod] = await Promise.all([
-        import('@supabase/supabase-js'),
+      const [engMod, bindMod] = await Promise.all([
         import('../../bulk-emailing/worker/send-engine/engine.js'),
         import('./send-engine-binding.js'),
       ]);
@@ -70,7 +74,6 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
       // so under tsx/CJS transpilation `await import()` nests their exports
       // under `.default` (named imports come back undefined). Resolve from
       // either shape so this works under tsx (worker) and true ESM (prod build).
-      const { createClient } = sb;
       const runDripTick = (engMod as { runDripTick?: typeof import('../../bulk-emailing/worker/send-engine/engine.js').runDripTick }).runDripTick
         ?? (engMod as { default?: { runDripTick?: typeof import('../../bulk-emailing/worker/send-engine/engine.js').runDripTick } }).default?.runDripTick;
       const newsletterBinding = (bindMod as { newsletterBinding?: unknown }).newsletterBinding
