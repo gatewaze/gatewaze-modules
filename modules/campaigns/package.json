@@ -7,13 +7,20 @@
   "description": "Send a single scheduled, timezone-aware email to a segment, with an AI segment copilot",
   "exports": {
     ".": "./index.ts",
-    "./migrations/*": "./migrations/*"
+    "./migrations/*": "./migrations/*",
+    "./api/*": "./api/*"
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@gatewaze/shared": "*"
+    "@gatewaze/shared": "*",
+    "@gatewaze-modules/ai": "*",
+    "@supabase/supabase-js": "*",
+    "express": "*"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
   }
 }
