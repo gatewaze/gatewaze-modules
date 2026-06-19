@@ -1,11 +1,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 
 /**
- * Campaign Unsubscribe Edge Function
+ * Broadcast Unsubscribe Edge Function
  *
  * Honours the RFC 8058 one-click `List-Unsubscribe` header and the visible
- * footer link emitted by campaign-send. The token encodes (email, topic); we
- * verify the HMAC and write a campaign_suppressions row for that (email, topic)
+ * footer link emitted by broadcast-send. The token encodes (email, topic); we
+ * verify the HMAC and write a broadcast_suppressions row for that (email, topic)
  * so all future fan-outs exclude this recipient (spec §1.5).
  *
  * POST (one-click) → suppress + 200.
@@ -42,7 +42,7 @@ async function verifyToken(token: string, hmacSecret: string): Promise<{ email: 
 }
 
 async function suppress(supabase: ReturnType<typeof createClient>, email: string, topic: string): Promise<void> {
-  await supabase.from('campaign_suppressions').upsert(
+  await supabase.from('broadcast_suppressions').upsert(
     { email, topic, source: 'one_click_unsubscribe', reason: 'recipient unsubscribed' },
     { onConflict: 'email,topic', ignoreDuplicates: true },
   )

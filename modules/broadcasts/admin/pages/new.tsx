@@ -3,32 +3,32 @@ import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Card, Button, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
-import { createCampaign } from '../lib/campaignService';
+import { createBroadcast } from '../lib/broadcastService';
 
-export default function NewCampaignPage() {
+export default function NewBroadcastPage() {
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [subject, setSubject] = useState('');
   const [creating, setCreating] = useState(false);
 
   async function create() {
-    if (!name.trim()) { toast.error('Give the campaign a name'); return; }
+    if (!name.trim()) { toast.error('Give the broadcast a name'); return; }
     setCreating(true);
     try {
-      const c = await createCampaign({ name: name.trim(), subject: subject.trim() || undefined });
-      navigate(`/campaigns/${c.id}`);
+      const c = await createBroadcast({ name: name.trim(), subject: subject.trim() || undefined });
+      navigate(`/broadcasts/${c.id}`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create campaign');
+      toast.error(err instanceof Error ? err.message : 'Failed to create broadcast');
       setCreating(false);
     }
   }
 
   return (
-    <Page title="New Campaign">
-      <WorkspaceLayout title="Campaigns: New">
+    <Page title="New Broadcast">
+      <WorkspaceLayout title="Broadcasts: New">
         <Card className="p-6 max-w-xl space-y-4">
           <div>
-            <label className="block text-sm font-medium text-[var(--gray-12)] mb-1">Campaign name</label>
+            <label className="block text-sm font-medium text-[var(--gray-12)] mb-1">Broadcast name</label>
             <input
               className="w-full rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm"
               value={name}
@@ -48,7 +48,7 @@ export default function NewCampaignPage() {
             />
           </div>
           <div className="flex gap-2 justify-end">
-            <Button variant="soft" onClick={() => navigate('/campaigns')}>Cancel</Button>
+            <Button variant="soft" onClick={() => navigate('/broadcasts')}>Cancel</Button>
             <Button variant="solid" onClick={create} disabled={creating}>{creating ? 'Creating…' : 'Create & continue'}</Button>
           </div>
         </Card>

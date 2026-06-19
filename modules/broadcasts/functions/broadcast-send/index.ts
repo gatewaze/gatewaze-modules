@@ -6,26 +6,26 @@ import type { EmailProviderModule } from '../_shared/email-provider.ts'
 type SB = ReturnType<typeof createClient<any, any, any>>
 
 /**
- * Campaign Send Edge Function
+ * Broadcast Send Edge Function
  *
- * Sends a single campaign (one message → a segment or contact list) with the
+ * Sends a single broadcast (one message → a segment or contact list) with the
  * same per-recipient-timezone drip the newsletters module uses. The audience
  * SOURCE is a segment (segments_memberships) rather than an edition + list, and
- * suppression/unsubscribe is topic-scoped (campaign_suppressions) rather than
+ * suppression/unsubscribe is topic-scoped (broadcast_suppressions) rather than
  * per-list. Everything else mirrors newsletter-send.
  *
  * Triggers:
  *  - POST { process_scheduled: true }  → cron heartbeat: fan out due scheduled
- *      campaigns + run one drip pass (the BullMQ stand-in for pg_cron).
- *  - POST { send_id }                  → fan out + start a campaign immediately.
+ *      broadcasts + run one drip pass (the BullMQ stand-in for pg_cron).
+ *  - POST { send_id }                  → fan out + start a broadcast immediately.
  *  - POST { test_send: { send_id, email } } → single-recipient test, same
  *      rendering path, bypassing fan-out + drip.
  *
  * NOTE (Phase 0 / Tier 2): this runs on the proven Edge-Function drip path
  * (per-recipient provider.send, batched). When the Tier 2 worker-side
- * `sendBatch` engine lands, campaigns migrate onto it via the shared binding;
+ * `sendBatch` engine lands, broadcasts migrate onto it via the shared binding;
  * the tables + RPCs here are deliberately newsletter-shaped to make that fold-in
- * mechanical. See spec-campaigns-module.md Phase 0.
+ * mechanical. See spec-broadcasts-module.md Phase 0.
  */
 
 const corsHeaders = {
@@ -82,7 +82,7 @@ function substituteMergeFields(text: string, attrs: Record<string, unknown>, esc
 
 // HMAC unsubscribe token encoding (email, suppression_topic). Mirrors the
 // newsletter token shape but the second segment is the TOPIC, not a list id —
-// a campaign unsubscribe suppresses a topic, not a list (spec §1.5).
+// a broadcast unsubscribe suppresses a topic, not a list (spec §1.5).
 async function generateUnsubscribeToken(email: string, topic: string, hmacSecret: string): Promise<string> {
   const timestamp = Date.now()
   const payload = `${email}:${topic}:${timestamp}`
@@ -110,12 +110,12 @@ interface SendContext {
 
 function buildSendContext(send: any): SendContext {
   const html = send.rendered_html as string
-  if (!html) throw new Error('No rendered HTML found. Compose the campaign first.')
+  if (!html) throw new Error('No rendered HTML found. Compose the broadcast first.')
   const subject = send.subject || 'Message'
   return {
     html,
     subject,
-    topic: send.suppression_topic || 'campaigns',
+    topic: send.suppression_topic || 'broadcasts',
     fromEmail: send.from_address || Deno.env.get('BULK_EMAIL_FROM_ADDRESS') || Deno.env.get('EMAIL_FROM') || 'noreply@localhost',
     fromName: send.from_name || Deno.env.get('BULK_EMAIL_FROM_NAME') || Deno.env.get('EMAIL_FROM_NAME') || 'Gatewaze',
     replyTo: send.reply_to || null,
@@ -133,7 +133,7 @@ async function loadRecipientAttributes(supabase: SB, emails: string[], ctx: Send
   for (let i = 0; i < emails.length; i += CHUNK) {
     const chunk = emails.slice(i, i + CHUNK)
     const { data: rows, error } = await supabase.from('people').select('email, attributes').in('email', chunk)
-    if (error) { console.warn('[campaign-send] people lookup failed:', error.message); break }
+    if (error) { console.warn('[broadcast-send] people lookup failed:', error.message); break }
     for (const row of rows ?? []) {
       ctx.attrsByEmail.set((row as { email: string }).email, (row as { attributes?: Record<string, unknown> }).attributes ?? {})
     }
@@ -141,7 +141,7 @@ async function loadRecipientAttributes(supabase: SB, emails: string[], ctx: Send
 }
 
 /** Send to one recipient: topic unsubscribe header + footer, merge fields,
- *  email_send_log row (attributed to campaign_send_id), provider call. Returns
+ *  email_send_log row (attributed to broadcast_send_id), provider call. Returns
  *  true on success; never throws. */
 async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx: SendContext, sendId: string, email: string): Promise<boolean> {
   try {
@@ -152,7 +152,7 @@ async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx:
     if (ctx.hmacSecret) {
       const token = await generateUnsubscribeToken(email, ctx.topic, ctx.hmacSecret)
       const tok = encodeURIComponent(token)
-      oneClickUrl = `${ctx.supabaseUrl}/functions/v1/campaign-unsubscribe?token=${tok}`
+      oneClickUrl = `${ctx.supabaseUrl}/functions/v1/broadcast-unsubscribe?token=${tok}`
       const base = ctx.portalBaseUrl ? ctx.portalBaseUrl.replace(/\/$/, '') : null
       manageUrl = base ? `${base}/subscriptions?token=${tok}` : oneClickUrl
       unsubUrl = base ? `${base}/subscriptions?token=${tok}&unsub=1` : oneClickUrl
@@ -193,7 +193,7 @@ async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx:
       subject,
       content_html: personalizedHtml,
       provider: provider.name,
-      campaign_send_id: sendId,
+      broadcast_send_id: sendId,
       status: 'queued',
       queued_at: new Date().toISOString(),
     }).select('id').single()
@@ -220,7 +220,7 @@ async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx:
     }).eq('id', logEntry?.id)
     return false
   } catch (err) {
-    console.error('[campaign-send] recipient failed:', email, err instanceof Error ? err.message : err)
+    console.error('[broadcast-send] recipient failed:', email, err instanceof Error ? err.message : err)
     return false
   }
 }
@@ -240,37 +240,37 @@ async function maybeRecalcSegment(supabase: SB, send: any): Promise<void> {
     const last = (seg as { last_calculated_at?: string } | null)?.last_calculated_at
     if (last && Date.now() - new Date(last).getTime() < SEGMENT_FRESHNESS_MS) return
     const { error } = await supabase.rpc('segments_calculate_members', { p_segment_id: send.segment_id })
-    if (error) console.warn('[campaign-send] segment recalc skipped:', error.message)
+    if (error) console.warn('[broadcast-send] segment recalc skipped:', error.message)
   } catch (err) {
-    console.warn('[campaign-send] segment recalc error:', err instanceof Error ? err.message : err)
+    console.warn('[broadcast-send] segment recalc error:', err instanceof Error ? err.message : err)
   }
 }
 
-/** Fan out a campaign into the per-recipient timing queue and flip to 'sending'. */
+/** Fan out a broadcast into the per-recipient timing queue and flip to 'sending'. */
 async function fanOutAndStart(supabase: SB, sendId: string): Promise<{ success: boolean; error?: string }> {
-  const { data: send } = await supabase.from('campaign_sends').select('*').eq('id', sendId).single()
-  if (!send) return { success: false, error: 'Campaign not found' }
+  const { data: send } = await supabase.from('broadcast_sends').select('*').eq('id', sendId).single()
+  if (!send) return { success: false, error: 'Broadcast not found' }
   if (!send.rendered_html) {
-    await supabase.from('campaign_sends').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', sendId)
+    await supabase.from('broadcast_sends').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', sendId)
     return { success: false, error: 'No rendered HTML' }
   }
   await maybeRecalcSegment(supabase, send)
-  const { error } = await supabase.rpc('fanout_campaign_send_recipients', { p_send_id: sendId })
+  const { error } = await supabase.rpc('fanout_broadcast_send_recipients', { p_send_id: sendId })
   if (error) {
-    await supabase.from('campaign_sends').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', sendId)
+    await supabase.from('broadcast_sends').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', sendId)
     return { success: false, error: error.message }
   }
   // Empty audience after suppression filtering → terminal failure with a clear reason.
-  const { count } = await supabase.from('campaign_send_recipients').select('id', { count: 'exact', head: true }).eq('send_id', sendId)
+  const { count } = await supabase.from('broadcast_send_recipients').select('id', { count: 'exact', head: true }).eq('send_id', sendId)
   if ((count ?? 0) === 0) {
-    await supabase.from('campaign_sends').update({
+    await supabase.from('broadcast_sends').update({
       status: 'failed', completed_at: new Date().toISOString(),
       metadata: { ...(send.metadata || {}), error: '0 deliverable recipients after suppression filtering' },
       updated_at: new Date().toISOString(),
     }).eq('id', sendId)
     return { success: false, error: '0 deliverable recipients' }
   }
-  await supabase.from('campaign_sends').update({
+  await supabase.from('broadcast_sends').update({
     status: 'sending', started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   }).eq('id', sendId)
   return { success: true }
@@ -278,7 +278,7 @@ async function fanOutAndStart(supabase: SB, sendId: string): Promise<{ success: 
 
 async function recomputeAndMaybeFinalize(supabase: SB, sendId: string, forceCancel = false): Promise<void> {
   const headCount = async (statuses: string[]): Promise<number> => {
-    const { count } = await supabase.from('campaign_send_recipients').select('id', { count: 'exact', head: true }).eq('send_id', sendId).in('status', statuses)
+    const { count } = await supabase.from('broadcast_send_recipients').select('id', { count: 'exact', head: true }).eq('send_id', sendId).in('status', statuses)
     return count ?? 0
   }
   const [remaining, sent, failed] = await Promise.all([
@@ -289,13 +289,13 @@ async function recomputeAndMaybeFinalize(supabase: SB, sendId: string, forceCanc
     patch.status = forceCancel ? 'cancelled' : (sent === 0 && failed > 0 ? 'failed' : 'sent')
     patch.completed_at = new Date().toISOString()
   }
-  await supabase.from('campaign_sends').update(patch).eq('id', sendId)
+  await supabase.from('broadcast_sends').update(patch).eq('id', sendId)
 }
 
-/** One drip pass across all 'sending' campaigns. */
+/** One drip pass across all 'sending' broadcasts. */
 async function runRecipientDrip(supabase: SB, provider: EmailProviderModule): Promise<void> {
-  const { data: claimed, error } = await supabase.rpc('claim_due_campaign_recipients', { p_limit: DRIP_LIMIT })
-  if (error) console.error('[campaign-drip] claim failed:', error.message)
+  const { data: claimed, error } = await supabase.rpc('claim_due_broadcast_recipients', { p_limit: DRIP_LIMIT })
+  if (error) console.error('[broadcast-drip] claim failed:', error.message)
 
   const bySend = new Map<string, Array<{ id: string; email: string }>>()
   for (const r of claimed ?? []) {
@@ -304,17 +304,17 @@ async function runRecipientDrip(supabase: SB, provider: EmailProviderModule): Pr
   }
 
   for (const [sendId, recips] of bySend) {
-    const { data: send } = await supabase.from('campaign_sends').select('*').eq('id', sendId).single()
+    const { data: send } = await supabase.from('broadcast_sends').select('*').eq('id', sendId).single()
     if (!send) continue
     if (send.status === 'cancelling' || send.status === 'cancelled') {
-      await supabase.from('campaign_send_recipients').update({ status: 'skipped', updated_at: new Date().toISOString() }).in('id', recips.map((r) => r.id))
+      await supabase.from('broadcast_send_recipients').update({ status: 'skipped', updated_at: new Date().toISOString() }).in('id', recips.map((r) => r.id))
       continue
     }
     let ctx: SendContext
     try {
       ctx = buildSendContext(send)
     } catch (err) {
-      await supabase.from('campaign_send_recipients')
+      await supabase.from('broadcast_send_recipients')
         .update({ status: 'pending', last_error: err instanceof Error ? err.message : 'context build failed', updated_at: new Date().toISOString() })
         .in('id', recips.map((r) => r.id))
       continue
@@ -327,18 +327,18 @@ async function runRecipientDrip(supabase: SB, provider: EmailProviderModule): Pr
       )
       for (const res of results) {
         if (res.status === 'fulfilled') {
-          await supabase.from('campaign_send_recipients').update({ status: res.value.ok ? 'sent' : 'failed', updated_at: new Date().toISOString() }).eq('id', res.value.id)
+          await supabase.from('broadcast_send_recipients').update({ status: res.value.ok ? 'sent' : 'failed', updated_at: new Date().toISOString() }).eq('id', res.value.id)
         }
       }
       if (i + BATCH_SIZE < recips.length) await new Promise((r) => setTimeout(r, BATCH_DELAY_MS))
     }
   }
 
-  // Refresh counters + finalise every in-flight campaign (propagates stops).
-  const { data: active } = await supabase.from('campaign_sends').select('id, status').in('status', ['sending', 'cancelling'])
+  // Refresh counters + finalise every in-flight broadcast (propagates stops).
+  const { data: active } = await supabase.from('broadcast_sends').select('id, status').in('status', ['sending', 'cancelling'])
   for (const s of active ?? []) {
     if (s.status === 'cancelling') {
-      await supabase.from('campaign_send_recipients').update({ status: 'skipped', updated_at: new Date().toISOString() }).eq('send_id', s.id).in('status', ['pending', 'sending'])
+      await supabase.from('broadcast_send_recipients').update({ status: 'skipped', updated_at: new Date().toISOString() }).eq('send_id', s.id).in('status', ['pending', 'sending'])
       await recomputeAndMaybeFinalize(supabase, s.id, true)
     } else {
       await recomputeAndMaybeFinalize(supabase, s.id)
@@ -348,7 +348,7 @@ async function runRecipientDrip(supabase: SB, provider: EmailProviderModule): Pr
 
 async function processScheduledSends(supabase: SB, provider: EmailProviderModule): Promise<{ success: boolean; processed: number; errors: string[] }> {
   const { data: sends, error } = await supabase
-    .from('campaign_sends')
+    .from('broadcast_sends')
     .select('id')
     .eq('status', 'scheduled')
     .lte('scheduled_at', new Date().toISOString())
@@ -361,7 +361,7 @@ async function processScheduledSends(supabase: SB, provider: EmailProviderModule
   for (const send of sends || []) {
     const r = await fanOutAndStart(supabase, send.id)
     if (r.success) processed++
-    else errors.push(`Campaign ${send.id}: ${r.error}`)
+    else errors.push(`Broadcast ${send.id}: ${r.error}`)
   }
   await runRecipientDrip(supabase, provider)
   return { success: true, processed, errors }
@@ -369,8 +369,8 @@ async function processScheduledSends(supabase: SB, provider: EmailProviderModule
 
 /** Single-recipient test send through the same rendering path (no fan-out/drip). */
 async function processTestSend(supabase: SB, provider: EmailProviderModule, sendId: string, email: string): Promise<{ success: boolean; error?: string }> {
-  const { data: send } = await supabase.from('campaign_sends').select('*').eq('id', sendId).single()
-  if (!send) return { success: false, error: 'Campaign not found' }
+  const { data: send } = await supabase.from('broadcast_sends').select('*').eq('id', sendId).single()
+  if (!send) return { success: false, error: 'Broadcast not found' }
   let ctx: SendContext
   try { ctx = buildSendContext(send) } catch (err) { return { success: false, error: err instanceof Error ? err.message : 'context build failed' } }
   ctx.subject = `[TEST] ${ctx.subject}`
@@ -411,7 +411,7 @@ async function handler(req: Request) {
     }
     return new Response(JSON.stringify({ success: false, error: 'Must provide send_id, process_scheduled, or test_send' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   } catch (error) {
-    console.error('Campaign send error:', error)
+    console.error('Broadcast send error:', error)
     return new Response(JSON.stringify({ success: false, error: error instanceof Error ? error.message : 'Internal error' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
   }
 }

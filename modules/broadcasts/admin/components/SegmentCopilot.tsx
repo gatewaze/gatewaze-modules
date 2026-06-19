@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { Card, Button } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { createSegmentService, type SegmentDefinition, type SegmentCondition } from '@/lib/segments';
-import { buildSegmentFromPrompt, type CopilotResult } from '../lib/campaignService';
+import { buildSegmentFromPrompt, type CopilotResult } from '../lib/broadcastService';
 
 interface Props {
   brand?: string;

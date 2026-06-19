@@ -8,7 +8,7 @@
  *
  * Mirrors editor-ai-copilot's dispatch.ts pattern. Runs Node/Express-side only
  * (the AI module is not Deno-compatible). Mounted at
- * /api/admin/modules/campaigns/segments-ai-build.
+ * /api/admin/modules/broadcasts/segments-ai-build.
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -28,7 +28,7 @@ type RunChat = (
 let cachedRunChat: RunChat | null | undefined;
 async function loadRunChat(): Promise<RunChat> {
   if (cachedRunChat) return cachedRunChat;
-  // From modules/campaigns/api/, the sibling ai module is two levels up. The
+  // From modules/broadcasts/api/, the sibling ai module is two levels up. The
   // @gatewaze-modules path covers the vite/admin build; the relative + source
   // variants cover the api-server clone tree (cf. editor-ai-copilot loadRunChat).
   const attempts = [
@@ -211,7 +211,7 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
 
     let runChat: RunChat;
     try { runChat = await loadRunChat(); }
-    catch (e) { deps.logger.error('[campaigns] loadRunChat failed', e); res.status(503).json({ success: false, error: 'AI module unavailable' }); return; }
+    catch (e) { deps.logger.error('[broadcasts] loadRunChat failed', e); res.status(503).json({ success: false, error: 'AI module unavailable' }); return; }
 
     const ctx = { supabase: deps.supabase as unknown };
     const callModel = async (extra?: string): Promise<Record<string, unknown> | null> => {
@@ -245,7 +245,7 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
     } catch (e) {
       const status = (e as { status?: number })?.status;
       if (status === 429) { res.status(429).json({ success: false, error: 'AI usage limit reached, try again shortly' }); return; }
-      deps.logger.error('[campaigns] copilot runChat error', e);
+      deps.logger.error('[broadcasts] copilot runChat error', e);
       res.status(502).json({ success: false, error: 'LLM error: ' + (e instanceof Error ? e.message : 'unknown') }); return;
     }
 
