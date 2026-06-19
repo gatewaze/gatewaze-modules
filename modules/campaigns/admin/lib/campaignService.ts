@@ -177,8 +177,26 @@ export async function getTimezoneBreakdown(id: string): Promise<TimezoneBreakdow
 // AI segment copilot
 // ---------------------------------------------------------------------------
 
+const API_URL = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
+
+/** Calls the Node-side copilot route (which uses the AI module's runChat), not a
+ *  Supabase edge function — the AI module is not Deno-compatible. Mirrors
+ *  editor-ai-copilot's authedFetch pattern. */
 export async function buildSegmentFromPrompt(prompt: string, brand?: string): Promise<CopilotResult> {
-  const { data, error } = await supabase.functions.invoke('segments-ai-build', { body: { prompt, context: brand ? { brand } : undefined } });
-  if (error) return { success: false, error: error.message };
-  return data as CopilotResult;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API_URL}/api/admin/modules/campaigns/segments-ai-build`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prompt, brand }),
+    });
+    const body = (await res.json().catch(() => ({}))) as CopilotResult;
+    if (!res.ok) return { success: false, error: body?.error || `Copilot failed (${res.status})` };
+    return body;
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Copilot request failed' };
+  }
 }

@@ -38,8 +38,16 @@ Pause/resume/cancel = status flips on `campaign_sends` (the claim is gated on
 
 - `campaign-send` — fan-out + drip + scheduled processor + test-send.
 - `campaign-unsubscribe` — RFC 8058 one-click; writes a topic suppression.
-- `segments-ai-build` — the AI copilot (forced tool use → validated segment
-  definition → live `segments_preview`). Needs `ANTHROPIC_API_KEY`.
+
+## API routes (Node-side)
+
+- `POST /api/admin/modules/campaigns/segments-ai-build` — the AI copilot. Uses
+  the **AI module's `runChat`** (forced `emit_segment_definition` tool) → validated
+  segment definition → live `segments_preview`. Runs Node-side (the AI module is
+  not Deno-compatible), mounted via the `apiRoutes` hook like editor-ai-copilot.
+  No API key on the module — `runChat` resolves credentials/model/cost from the
+  `segments-copilot` `ai_use_cases` row (migration 003). Admin-gated via
+  `admin_profiles` + the `segments_preview` is_admin() RPC.
 
 ## Admin
 
@@ -49,8 +57,9 @@ picker.
 
 ## Dependencies
 
-`bulk-emailing` (email provider abstraction, `email_send_log`, shared quota when
-Tier 2 lands) and `segments` (audience + copilot). Phase 3 of the spec extends
+`ai` (the copilot's `runChat` + `segments-copilot` use case), `bulk-emailing`
+(email provider abstraction, `email_send_log`, shared quota when Tier 2 lands),
+and `segments` (audience + copilot). Phase 3 of the spec extends
 the segments engine with `event_filters` (migration `segments/003`) so
 "attended an event in San Francisco" is expressible — requires the
 `event_attended` pipeline to write `event_city`/`event_id` into

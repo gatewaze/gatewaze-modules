@@ -14,20 +14,29 @@ const campaignsModule: GatewazeModule = {
     'campaigns.copilot',
   ],
 
-  // Segments power audience selection + the copilot; bulk-emailing owns the
-  // email provider abstraction, email_send_log, and (per Tier 2) the shared
-  // quota the campaign drip will claim from.
-  dependencies: ['bulk-emailing', 'segments'],
+  // ai powers the segment copilot (runChat: credentials, model, cost). segments
+  // powers audience selection. bulk-emailing owns the email provider abstraction,
+  // email_send_log, and (per Tier 2) the shared quota the drip will claim from.
+  dependencies: ['ai', 'bulk-emailing', 'segments'],
 
   edgeFunctions: [
     'campaign-send',
     'campaign-unsubscribe',
-    // The AI segment copilot. Builds a segment definition from natural language;
-    // used by the campaign Audience step. Lives here (rather than segments) so
-    // all new campaign work is cohesive; it only reads/validates the segments
-    // schema + calls segments_preview.
-    'segments-ai-build',
   ],
+
+  // The AI segment copilot runs Node-side (the @gatewaze-modules/ai runChat is
+  // not Deno-compatible), mounted at /api/admin/modules/campaigns/segments-ai-build
+  // — exactly like editor-ai-copilot. See api/register-routes.ts.
+  apiRoutes: async (app, ctx) => {
+    try {
+      const { registerCampaignsRoutes } = await import('./api/register-routes.js');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await registerCampaignsRoutes(app as any, ctx as any);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[campaigns] API route registration failed:', err);
+    }
+  },
 
   workers: [
     {
@@ -50,6 +59,9 @@ const campaignsModule: GatewazeModule = {
   migrations: [
     'migrations/001_campaigns_tables.sql',
     'migrations/002_campaigns_fanout_claim.sql',
+    // 003 registers the 'segments-copilot' ai_use_cases row so the AI module's
+    // runChat can resolve credentials/model/cost for the copilot.
+    'migrations/003_segments_copilot_use_case.sql',
   ],
 
   adminRoutes: [
@@ -75,18 +87,9 @@ const campaignsModule: GatewazeModule = {
       required: false,
       description: 'Default From display name for campaign sends.',
     },
-    ANTHROPIC_API_KEY: {
-      key: 'ANTHROPIC_API_KEY',
-      type: 'secret',
-      required: false,
-      description: 'Claude API key for the AI segment copilot (segments-ai-build). Read via Deno.env.get() at edge-function runtime.',
-    },
-    SEGMENTS_COPILOT_MODEL: {
-      key: 'SEGMENTS_COPILOT_MODEL',
-      type: 'string',
-      required: false,
-      description: 'Override the copilot model id (default claude-sonnet-4-20250514, the house pin).',
-    },
+    // The AI segment copilot uses the AI module (runChat), which owns credential
+    // resolution + model selection via the 'segments-copilot' use case — no
+    // copilot API key is configured here.
   },
 
   onInstall: async () => {
