@@ -10,6 +10,8 @@ import type {
   SendEmailParams,
   SendEmailResult,
   NormalizedEmailEvent,
+  BatchedMessage,
+  BatchedResult,
 } from '../email-provider.ts';
 
 const SENDGRID_API_URL = 'https://api.sendgrid.com/v3/mail/send';
@@ -123,6 +125,79 @@ const provider: EmailProviderModule = {
         error: `SendGrid network error: ${(err as Error).message}`,
         retryable: true,
       };
+    }
+  },
+
+  // Batched send (Central Sending Service / Tier 2): one POST /v3/mail/send with
+  // up to 1000 personalizations. Body is the shared template; per-recipient
+  // variation rides in substitutions + per-recipient headers + custom_args.
+  async sendBatch(message: BatchedMessage): Promise<BatchedResult> {
+    const apiKey = Deno.env.get('SENDGRID_API_KEY');
+    if (!apiKey) return { success: false, error: 'SENDGRID_API_KEY not configured', retryable: false };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: Record<string, any> = {
+      from: { email: message.from, ...(message.fromName ? { name: message.fromName } : {}) },
+      subject: message.subject,
+      content: [
+        ...(message.text ? [{ type: 'text/plain', value: message.text }] : []),
+        ...(message.html ? [{ type: 'text/html', value: message.html }] : []),
+      ],
+      personalizations: message.personalizations.map((p) => ({
+        to: [{ email: p.to }],
+        ...(p.subject ? { subject: p.subject } : {}),
+        ...(p.headers ? { headers: p.headers } : {}),
+        ...(p.substitutions ? { substitutions: p.substitutions } : {}),
+        ...(p.customArgs ? { custom_args: p.customArgs } : {}),
+      })),
+    };
+    if (message.replyTo) body.reply_to = { email: message.replyTo };
+    if (message.headers) body.headers = message.headers;
+    if (message.disableSubscriptionTracking) body.tracking_settings = { subscription_tracking: { enable: false } };
+
+    try {
+      const response = await fetch(SENDGRID_API_URL, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const statusCode = response.status;
+        const errorText = await response.text();
+        // SendGrid batch failures are almost always whole-batch (auth, rate
+        // limit, content) — per-recipient diagnostics are rare; default to a
+        // batch-wide failure with no rejectedIndices.
+        return { success: false, error: `SendGrid ${statusCode}: ${errorText}`, statusCode, retryable: statusCode === 429 || statusCode >= 500 };
+      }
+      return { success: true, batchMessageId: response.headers.get('x-message-id') || undefined };
+    } catch (err) {
+      return { success: false, error: `SendGrid network error: ${(err as Error).message}`, retryable: true };
+    }
+  },
+
+  // Crash recovery: did SendGrid accept a batch? Uses the v3 Messages (Email
+  // Activity) API filtered by the batch's sg_message_id prefix. That API needs
+  // the Email Activity add-on; when unavailable or on any error we return
+  // {accepted:false, notSeen:false} (UNKNOWN) so the recovery logic LEAVES the
+  // batch for a later tick rather than risk a double-send by releasing it.
+  async queryBatchEvents(providerBatchId: string, _postedAt: Date): Promise<{ accepted: boolean; notSeen: boolean; lastEventAt?: Date }> {
+    const apiKey = Deno.env.get('SENDGRID_API_KEY');
+    if (!apiKey || !providerBatchId) return { accepted: false, notSeen: false };
+    // The batch envelope id is the prefix of every per-recipient sg_message_id.
+    const prefix = providerBatchId.split('.')[0];
+    const url = `https://api.sendgrid.com/v3/messages?query=${encodeURIComponent(`msg_id LIKE "${prefix}%"`)}&limit=1`;
+    try {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+      if (!res.ok) return { accepted: false, notSeen: false }; // unknown — leave it
+      const json = (await res.json()) as { messages?: Array<{ last_event_time?: string }> };
+      const n = json.messages?.length ?? 0;
+      if (n > 0) {
+        const t = json.messages?.[0]?.last_event_time;
+        return { accepted: true, notSeen: false, ...(t ? { lastEventAt: new Date(t) } : {}) };
+      }
+      return { accepted: false, notSeen: true }; // SendGrid has no record → safe to release
+    } catch {
+      return { accepted: false, notSeen: false }; // unknown — leave it
     }
   },
 

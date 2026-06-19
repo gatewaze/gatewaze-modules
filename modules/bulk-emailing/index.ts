@@ -52,6 +52,9 @@ const bulkEmailingModule: GatewazeModule = {
     // disambiguates by recipient email — SendGrid carries it on every
     // event, and the newsletter send path already keys 1:1 anyway.
     'migrations/009_unique_provider_message_per_recipient.sql',
+    // 010 Central Sending Service foundation: sender_daily_quota + claim/release
+    // quota + generic stuck-row sweeper (spec-central-sending-service.md).
+    'migrations/010_send_engine_quota.sql',
   ],
 
   configSchema: {
