@@ -62,6 +62,9 @@ const broadcastsModule: GatewazeModule = {
     // 003 registers the 'segments-copilot' ai_use_cases row so the AI module's
     // runChat can resolve credentials/model/cost for the copilot.
     'migrations/003_segments_copilot_use_case.sql',
+    // 004 adds broadcast_send_batches + watchdog index for the Central Sending
+    // Service worker drip (Phase 2). Inert until SEND_ENGINE_USE_WORKER=true.
+    'migrations/004_send_engine_batches.sql',
   ],
 
   adminRoutes: [

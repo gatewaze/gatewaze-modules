@@ -363,7 +363,13 @@ async function processScheduledSends(supabase: SB, provider: EmailProviderModule
     if (r.success) processed++
     else errors.push(`Broadcast ${send.id}: ${r.error}`)
   }
-  await runRecipientDrip(supabase, provider)
+  // Central Sending Service canary: when SEND_ENGINE_USE_WORKER=true the Node
+  // worker owns the per-recipient drip (high-throughput sendBatch). The Edge
+  // only fans out + flips to 'sending' here and SKIPS its drip so the two never
+  // double-send. Flag off = unchanged.
+  if (Deno.env.get('SEND_ENGINE_USE_WORKER') !== 'true') {
+    await runRecipientDrip(supabase, provider)
+  }
   return { success: true, processed, errors }
 }
 
@@ -402,7 +408,8 @@ async function handler(req: Request) {
     }
     if (body.send_id) {
       const result = await fanOutAndStart(supabase, body.send_id)
-      if (result.success) await runRecipientDrip(supabase, provider)
+      // Worker owns the drip under the canary flag (no double-send).
+      if (result.success && Deno.env.get('SEND_ENGINE_USE_WORKER') !== 'true') await runRecipientDrip(supabase, provider)
       return new Response(JSON.stringify(result), { status: result.success ? 200 : 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
     if (body.process_scheduled) {
