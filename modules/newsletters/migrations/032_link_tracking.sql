@@ -38,15 +38,19 @@ BEGIN
   END LOOP;
 END $$;
 
+-- Expand/contract (spec §5.9): this is the COEXIST release. The legacy
+-- short-link columns are obsolete under SendGrid click tracking, but rather
+-- than DROP COLUMN here (destructive, breaks single-release rollback, and
+-- rejected by the migration linter) we only relax their NOT NULL so the new
+-- registry rows — which never set them — can insert. The columns are left in
+-- place, inert; a later N+1 migration drops them once nothing reads them.
+-- (The table is truncated above, so the legacy values are already gone.)
+-- shortio_id / redirect_id / status / error_message are already nullable.
 ALTER TABLE public.newsletters_edition_links
-  DROP COLUMN IF EXISTS short_path,
-  DROP COLUMN IF EXISTS short_url,
-  DROP COLUMN IF EXISTS distribution_channel,
-  DROP COLUMN IF EXISTS shortio_id,
-  DROP COLUMN IF EXISTS redirect_id,
-  DROP COLUMN IF EXISTS status,
-  DROP COLUMN IF EXISTS error_message,
-  DROP COLUMN IF EXISTS link_type;
+  ALTER COLUMN link_type            DROP NOT NULL,
+  ALTER COLUMN short_path           DROP NOT NULL,
+  ALTER COLUMN short_url            DROP NOT NULL,
+  ALTER COLUMN distribution_channel DROP NOT NULL;
 
 -- New registry columns.
 ALTER TABLE public.newsletters_edition_links
