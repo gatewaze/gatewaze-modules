@@ -55,6 +55,28 @@ const bulkEmailingModule: GatewazeModule = {
     // 010 Central Sending Service foundation: sender_daily_quota + claim/release
     // quota + generic stuck-row sweeper (spec-central-sending-service.md).
     'migrations/010_send_engine_quota.sql',
+    // 011 Central Sending Service BULK domain (Phase 3): bulk_send_recipients
+    // queue + bulk_send_batches + bulk_send_id + brand/channel on email_batch_jobs
+    // + fanout/claim. Additive + inert until SEND_ENGINE_USE_WORKER + fanout.
+    'migrations/011_send_engine_bulk.sql',
+  ],
+
+  workers: [
+    {
+      // 60s heartbeat driving the shared worker drip engine over due bulk
+      // recipients (Phase 3). No-op unless SEND_ENGINE_USE_WORKER=true.
+      name: 'bulk-emailing:dispatch-drip',
+      handler: './workers/dispatch-bulk-drip.ts',
+    },
+  ],
+
+  crons: [
+    {
+      name: 'bulk-emailing-dispatch-drip',
+      queue: 'jobs',
+      schedule: { every: 60_000 },
+      data: { kind: 'bulk-emailing:dispatch-drip' },
+    },
   ],
 
   configSchema: {
