@@ -1,0 +1,23 @@
+{
+  "name": "@gatewaze-modules/broadcasts",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Send a single scheduled, timezone-aware email to a segment, with an AI segment copilot",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*",
+    "./api/*": "./api/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@gatewaze-modules/ai": "*",
+    "@supabase/supabase-js": "*",
+    "express": "*"
+  }
+}

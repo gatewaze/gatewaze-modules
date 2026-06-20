@@ -1,13 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   PaperAirplaneIcon,
   EnvelopeOpenIcon,
   CursorArrowRaysIcon,
   ExclamationTriangleIcon,
-  XCircleIcon,
 } from '@heroicons/react/24/outline';
 import { Card, Badge } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
+import { BlocksOverTime } from './geo/BlocksOverTime';
+import { EditionGeographyTab } from './geo/EditionGeographyTab';
 
 interface SendRecord {
   id: string;
@@ -24,47 +25,52 @@ interface SendRecord {
   edition_date?: string;
 }
 
+interface EditionRef {
+  id: string;
+  title: string | null;
+  edition_date: string | null;
+}
+
 interface Props {
   newsletterId: string;
 }
 
+type SubView = 'overview' | 'blocks' | 'geography';
+
 export function NewsletterStatsTab({ newsletterId }: Props) {
   const [sends, setSends] = useState<SendRecord[]>([]);
+  const [editions, setEditions] = useState<EditionRef[]>([]);
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<SubView>('overview');
+  const [geoEditionId, setGeoEditionId] = useState<string>('');
 
   const load = useCallback(async () => {
     try {
-      // Get all editions for this newsletter
-      const { data: editions } = await supabase
+      const { data: eds } = await supabase
         .from('newsletters_editions')
         .select('id, title, edition_date')
         .eq('collection_id', newsletterId);
 
-      if (!editions || editions.length === 0) {
-        setLoading(false);
-        return;
-      }
+      const editionList: EditionRef[] = (eds ?? []).slice().sort(
+        (a, b) => (b.edition_date ?? '').localeCompare(a.edition_date ?? ''),
+      );
+      setEditions(editionList);
+      if (editionList.length) setGeoEditionId((prev) => prev || editionList[0].id);
 
-      const editionIds = editions.map(e => e.id);
-      const editionMap = new Map(editions.map(e => [e.id, e]));
+      if (!eds || eds.length === 0) { setLoading(false); return; }
 
-      // Get all sends for these editions
+      const editionIds = eds.map((e) => e.id);
+      const editionMap = new Map(eds.map((e) => [e.id, e]));
       const { data: sendsData } = await supabase
         .from('newsletter_sends')
         .select('*')
         .in('edition_id', editionIds)
         .order('created_at', { ascending: false });
 
-      const enrichedSends = (sendsData || []).map(s => {
+      setSends((sendsData ?? []).map((s) => {
         const ed = editionMap.get(s.edition_id);
-        return {
-          ...s,
-          edition_title: ed?.title || 'Untitled',
-          edition_date: ed?.edition_date,
-        };
-      });
-
-      setSends(enrichedSends);
+        return { ...s, edition_title: ed?.title || 'Untitled', edition_date: ed?.edition_date };
+      }));
     } catch (err) {
       console.error('Error loading stats:', err);
     } finally {
@@ -74,28 +80,94 @@ export function NewsletterStatsTab({ newsletterId }: Props) {
 
   useEffect(() => { load(); }, [load]);
 
+  const editionIds = useMemo(() => editions.map((e) => e.id), [editions]);
+
   if (loading) {
     return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" /></div>;
   }
 
-  const completedSends = sends.filter(s => s.status === 'sent');
-  const totalSent = completedSends.reduce((sum, s) => sum + (s.sent_count || 0), 0);
-  const totalRecipients = completedSends.reduce((sum, s) => sum + (s.total_recipients || 0), 0);
-  const totalFailed = completedSends.reduce((sum, s) => sum + (s.failed_count || 0), 0);
-
-  if (sends.length === 0) {
+  if (editions.length === 0) {
     return (
       <div className="text-center py-16">
         <ChartIcon className="h-16 w-16 text-[var(--gray-8)] mx-auto mb-4" />
-        <h2 className="text-xl font-semibold text-[var(--gray-12)] mb-2">No sends yet</h2>
-        <p className="text-[var(--gray-11)]">Stats will appear here after you send your first edition.</p>
+        <h2 className="text-xl font-semibold text-[var(--gray-12)] mb-2">No editions yet</h2>
+        <p className="text-[var(--gray-11)]">Stats will appear here after you create and send editions.</p>
       </div>
     );
   }
 
+  const subTabs: Array<{ id: SubView; label: string }> = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'blocks', label: 'Blocks' },
+    { id: 'geography', label: 'Geography' },
+  ];
+
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
+      {/* sub-navigation */}
+      <div className="flex gap-1 border-b border-[var(--gray-a4)]">
+        {subTabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setView(t.id)}
+            aria-current={view === t.id ? 'page' : undefined}
+            className={
+              'px-4 py-2 text-sm font-medium border-b-2 -mb-px ' +
+              (view === t.id
+                ? 'border-[var(--accent-9)] text-[var(--gray-12)]'
+                : 'border-transparent text-[var(--gray-10)] hover:text-[var(--gray-12)]')
+            }
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'overview' && <OverviewView sends={sends} />}
+
+      {view === 'blocks' && <BlocksOverTime editionIds={editionIds} />}
+
+      {view === 'geography' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <label htmlFor="geo-edition" className="text-sm text-[var(--gray-11)]">Edition</label>
+            <select
+              id="geo-edition"
+              className="rounded-md border border-[var(--gray-a5)] bg-[var(--color-surface)] px-2 py-1 text-sm"
+              value={geoEditionId}
+              onChange={(e) => setGeoEditionId(e.target.value)}
+            >
+              {editions.map((ed) => (
+                <option key={ed.id} value={ed.id}>
+                  {(ed.edition_date ? new Date(ed.edition_date).toLocaleDateString() + ' — ' : '') + (ed.title || 'Untitled')}
+                </option>
+              ))}
+            </select>
+          </div>
+          {geoEditionId && <EditionGeographyTab editionId={geoEditionId} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OverviewView({ sends }: { sends: SendRecord[] }) {
+  if (sends.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <ChartIcon className="h-12 w-12 text-[var(--gray-8)] mx-auto mb-3" />
+        <p className="text-[var(--gray-11)]">No sends yet. Summary will appear after your first send.</p>
+      </div>
+    );
+  }
+  const completedSends = sends.filter((s) => s.status === 'sent');
+  const totalSent = completedSends.reduce((sum, s) => sum + (s.sent_count || 0), 0);
+  const totalRecipients = completedSends.reduce((sum, s) => sum + (s.total_recipients || 0), 0);
+  const totalFailed = completedSends.reduce((sum, s) => sum + (s.failed_count || 0), 0);
+
+  return (
+    <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard icon={PaperAirplaneIcon} label="Total Sends" value={completedSends.length} />
         <StatCard icon={EnvelopeOpenIcon} label="Emails Sent" value={totalSent} />
@@ -103,11 +175,10 @@ export function NewsletterStatsTab({ newsletterId }: Props) {
         <StatCard icon={CursorArrowRaysIcon} label="Recipients" value={totalRecipients} />
       </div>
 
-      {/* Send History */}
       <Card variant="surface" className="p-6">
         <h2 className="text-lg font-semibold text-[var(--gray-12)] mb-4">Send History</h2>
         <div className="space-y-3">
-          {sends.map(send => (
+          {sends.map((send) => (
             <div key={send.id} className="flex items-center justify-between py-3 border-b border-[var(--gray-a4)] last:border-0">
               <div className="flex-1">
                 <div className="flex items-center gap-2">

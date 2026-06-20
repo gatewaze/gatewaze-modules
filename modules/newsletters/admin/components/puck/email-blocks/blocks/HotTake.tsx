@@ -49,6 +49,15 @@ export const HotTakeBlock: EmailBlockEntry<HotTakeProps> = {
     poll_option_2_label: '',
     poll_option_2_link: '',
   },
+  // Geo/engagement reporting opt-in (spec §8.2): the two poll links are tracked
+  // in field order, so link_index 0 → option 1, 1 → option 2. Surfaces the real
+  // option text in the per-option regional split report.
+  getTrackedLinkLabels: ({ poll_option_1_label, poll_option_2_label }) => {
+    const labels: Record<number, string> = {};
+    if (poll_option_1_label) labels[0] = poll_option_1_label;
+    if (poll_option_2_label) labels[1] = poll_option_2_label;
+    return labels;
+  },
   Component: ({
     title,
     body,

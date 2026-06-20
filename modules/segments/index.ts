@@ -17,6 +17,20 @@ const segmentsModule: GatewazeModule = {
   migrations: [
     'migrations/001_segments_tables.sql',
     'migrations/002_segments_functions.sql',
+    // 003 wires event_filters (predicates on people_events.event_data) into
+    // segments_event_to_sql so "attended an event in San Francisco" is
+    // expressible. See spec-campaigns-module.md Phase 3.
+    'migrations/003_event_filters.sql',
+    // 004 adds a 'subscription' condition (membership in a newsletter/list via
+    // list_subscriptions); source=newsletter resolves the list live from the
+    // newsletter. First example of cross-module audience targeting.
+    'migrations/004_subscription_condition.sql',
+    // 005 generalises into a condition-provider registry (segments_condition_sources
+    // + segments_sources_catalog + dynamic dispatch); migrates subscription onto it.
+    // 006 adds Phase A membership providers: event_registration, calendar_member,
+    // ambassador_application. See spec-segments-cross-module-targeting.md.
+    'migrations/005_condition_source_registry.sql',
+    'migrations/006_membership_providers.sql',
   ],
 
   adminRoutes: [

@@ -64,6 +64,43 @@ export interface NormalizedEmailEvent {
 }
 
 /**
+ * Batched send (Central Sending Service / Tier 2). One HTTP call delivers up to
+ * 1000 per-recipient personalizations. The body (`html`/`text`) is the shared
+ * template; per-recipient variation is via `personalizations[].substitutions`
+ * (SendGrid `-token-` form) + per-recipient `headers` (e.g. List-Unsubscribe).
+ * `customArgs` ride onto webhook events for attribution (opaque ids only).
+ */
+export interface BatchedMessage {
+  from: string;
+  fromName?: string;
+  replyTo?: string;
+  subject: string;            // may contain substitution tokens
+  html?: string;              // email body (token form)
+  text?: string;
+  headers?: Record<string, string>;            // message-level (shared) headers
+  disableSubscriptionTracking?: boolean;
+  personalizations: Array<{
+    to: string;
+    subject?: string;
+    headers?: Record<string, string>;          // per-recipient (e.g. List-Unsubscribe)
+    substitutions: Record<string, string>;     // '-merge:firstName-' -> 'Dan'
+    customArgs?: Record<string, string>;       // { <domain>_send_id, recipient_log_id }
+  }>;
+}
+
+export interface BatchedResult {
+  success: boolean;
+  /** Provider batch envelope id (SendGrid X-Message-Id). */
+  batchMessageId?: string;
+  error?: string;
+  statusCode?: number;
+  /** true for transient failures (429/5xx) — release recipients to pending. */
+  retryable?: boolean;
+  /** 0-based indices into personalizations[] the provider explicitly rejected. */
+  rejectedIndices?: number[];
+}
+
+/**
  * The contract that email provider sub-modules must implement.
  * Each provider is a separate Gatewaze module (e.g., email-provider-sendgrid).
  */
@@ -73,6 +110,19 @@ export interface EmailProviderModule {
 
   /** Send a single email */
   send(params: SendEmailParams): Promise<SendEmailResult>;
+
+  /**
+   * Batched send (optional — providers that support it power the high-throughput
+   * worker drip; those that don't fall back to looping `send`). The email
+   * channel-provider for the Central Sending Service.
+   */
+  sendBatch?(message: BatchedMessage): Promise<BatchedResult>;
+
+  /**
+   * Crash recovery (optional): did the provider accept a batch posted at
+   * `postedAt`? Used to resolve the 202-but-local-commit-failed window.
+   */
+  queryBatchEvents?(providerBatchId: string, postedAt: Date): Promise<{ accepted: boolean; notSeen: boolean; lastEventAt?: Date }>;
 
   /**
    * Parse a raw webhook payload into normalized events.
