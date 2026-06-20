@@ -59,6 +59,10 @@ const bulkEmailingModule: GatewazeModule = {
     // queue + bulk_send_batches + bulk_send_id + brand/channel on email_batch_jobs
     // + fanout/claim. Additive + inert until SEND_ENGINE_USE_WORKER + fanout.
     'migrations/011_send_engine_bulk.sql',
+    // 012 Channel abstraction (Phase 4): per-(person, channel, topic) consent/
+    // opt-out, generalising email "topic" unsubscribe to "(channel, topic)".
+    // Additive + inert; consumed by the channel-aware fanout (follow-on).
+    'migrations/012_channel_consent.sql',
   ],
 
   workers: [
