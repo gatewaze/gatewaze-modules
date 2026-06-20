@@ -16,15 +16,16 @@
  * domain's dispatch cron to runDripTick.
  */
 import { randomUUID } from 'node:crypto';
-import { sendBatchViaSendgrid, queryBatchAccepted } from './sendgrid.js';
+import { resolveChannelProvider } from './channels/registry.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SB = any; // @supabase/supabase-js client (service role), injected by the worker
 
-export interface Recipient { id: string; send_id: string; person_id: string | null; email: string | null; timezone: string | null; }
+export interface Recipient { id: string; send_id: string; person_id: string | null; email: string | null; phone?: string | null; timezone: string | null; }
 export interface SendContext {
   sendId: string; brand: string; channel: string;
   subject: string; html: string;
+  bodyText?: string;                 // sms/whatsapp body (email uses html)
   fromEmail: string; fromName: string; replyTo: string | null;
   // Returns the per-recipient SendGrid substitution map (token -> value), e.g.
   // '{{first_name}}' -> 'Dan', '{{unsubscribe_url}}' -> '...'. The binding owns
@@ -129,6 +130,11 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
 
 async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: SendContext, send: any, recips: Recipient[]): Promise<{ sent: number; failed: number }> {
   const { supabase, logger, config } = deps;
+  // The channel (email | sms | whatsapp) is the send's channel; the provider
+  // owns address resolution + the batched dispatch. Email is byte-identical to
+  // the pre-seam path (emailChannelProvider wraps the SendGrid call).
+  const provider = resolveChannelProvider(ctx.channel);
+
   // Pre-generate email_send_log ids so custom_args carries recipient_log_id
   // (the webhook maps events back to the right log row).
   const logIds = new Map<string, string>(recips.map((r) => [r.id, randomUUID()]));
@@ -139,21 +145,28 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
   }).select('id').single();
   const batchId = batchRow?.id as string | undefined;
 
-  // Build personalizations.
+  // Non-email channels need the recipient's phone; the recipients queue carries
+  // email, so enrich from people.phone for sms/whatsapp (email path untouched).
+  if (provider.channel !== 'email') await enrichPhones(deps, recips);
+
+  // Build personalizations, addressed via the channel provider.
   if (binding.prepareBatch) await binding.prepareBatch(deps, ctx, recips);
   const personalizations = [];
+  const addressed: Recipient[] = [];
   for (const r of recips) {
-    if (!r.email) continue;
+    const to = provider.resolveAddress(r);
+    if (!to) continue;
     const headers: Record<string, string> = {};
     if (binding.recipientHeaders) Object.assign(headers, await binding.recipientHeaders(ctx, r));
     const substitutions = await binding.buildSubstitutions(ctx, r, headers);
-    personalizations.push({ to: r.email, headers: Object.keys(headers).length ? headers : undefined, substitutions,
+    personalizations.push({ to, headers: Object.keys(headers).length ? headers : undefined, substitutions,
       customArgs: { [binding.logSendIdColumn]: ctx.sendId, recipient_log_id: logIds.get(r.id)! } });
+    addressed.push(r);
   }
 
-  const result = await sendBatchViaSendgrid({
+  const result = await provider.sendBatch({
     from: ctx.fromEmail, fromName: ctx.fromName, replyTo: ctx.replyTo ?? undefined,
-    subject: ctx.subject, html: ctx.html, disableSubscriptionTracking: ctx.disableSubscriptionTracking,
+    subject: ctx.subject, html: ctx.html, bodyText: ctx.bodyText, disableSubscriptionTracking: ctx.disableSubscriptionTracking,
     personalizations,
   });
 
@@ -162,9 +175,9 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
     // email_send_log rows, finalise batch row. Recovery covers a crash here.
     const ids = recips.map((r) => r.id);
     await supabase.from(binding.recipientsTable).update({ status: 'sent', batch_id: batchId, updated_at: new Date().toISOString() }).in('id', ids);
-    const logRows = recips.filter((r) => r.email).map((r) => ({
+    const logRows = addressed.map((r) => ({
       id: logIds.get(r.id), recipient_email: r.email, from_address: ctx.fromEmail, reply_to: ctx.replyTo,
-      subject: ctx.subject, provider: 'sendgrid', [binding.logSendIdColumn]: ctx.sendId,
+      subject: ctx.subject, provider: provider.providerName, [binding.logSendIdColumn]: ctx.sendId,
       status: 'sent', sent_at: new Date().toISOString(), provider_message_id: result.batchMessageId ?? null,
     }));
     await supabase.from('email_send_log').upsert(logRows, { onConflict: 'id', ignoreDuplicates: true });
@@ -180,13 +193,39 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
   return { sent: 0, failed: result.retryable ? 0 : recips.length };
 }
 
+// Non-email channels address by phone; the recipients queue only carries email,
+// so load people.phone for the batch (by person_id, then email fallback).
+async function enrichPhones(deps: EngineDeps, recips: Recipient[]): Promise<void> {
+  const ids = recips.map((r) => r.person_id).filter(Boolean) as string[];
+  const byId = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const { data } = await deps.supabase.from('people').select('id, phone').in('id', ids.slice(i, i + 500));
+    for (const row of data ?? []) if (row.phone) byId.set(row.id, row.phone);
+  }
+  const missing = recips.filter((r) => !r.person_id || !byId.has(r.person_id)).map((r) => r.email).filter(Boolean) as string[];
+  const byEmail = new Map<string, string>();
+  for (let i = 0; i < missing.length; i += 500) {
+    const { data } = await deps.supabase.from('people').select('email, phone').in('email', missing.slice(i, i + 500));
+    for (const row of data ?? []) if (row.phone) byEmail.set(row.email, row.phone);
+  }
+  for (const r of recips) {
+    r.phone = (r.person_id && byId.get(r.person_id)) || (r.email && byEmail.get(r.email)) || r.phone || null;
+  }
+}
+
 async function recoverPostingBatches(deps: EngineDeps, binding: SendEngineBinding): Promise<void> {
   const { supabase } = deps;
   const cutoff = new Date(Date.now() - 60_000).toISOString();
   const { data: stuck } = await supabase.from(binding.batchesTable).select('id, send_id, provider_batch_id, posted_at, recipient_count').eq('status', 'posting').lt('posted_at', cutoff).limit(50);
   for (const b of stuck ?? []) {
-    if (!b.provider_batch_id) { await releaseBatchRecipients(deps, binding, b.id); continue; } // never reached SG
-    const r = await queryBatchAccepted(b.provider_batch_id, new Date(b.posted_at)).catch(() => ({ accepted: false, notSeen: false }));
+    if (!b.provider_batch_id) { await releaseBatchRecipients(deps, binding, b.id); continue; } // never reached the provider
+    // Resolve the channel provider from the send's channel; only email supports
+    // an authoritative "was it accepted?" query — others leave it for the TTL.
+    const { data: snd } = await supabase.from(binding.sendsTable).select('channel').eq('id', b.send_id).maybeSingle();
+    const provider = resolveChannelProvider(snd?.channel);
+    const r = provider.queryBatchAccepted
+      ? await provider.queryBatchAccepted(b.provider_batch_id, new Date(b.posted_at)).catch(() => ({ accepted: false, notSeen: false }))
+      : { accepted: false, notSeen: true };
     if (r.accepted) {
       await supabase.from(binding.recipientsTable).update({ status: 'sent', updated_at: new Date().toISOString() }).eq('batch_id', b.id).eq('status', 'sending');
       await supabase.from(binding.batchesTable).update({ status: 'accepted', completed_at: new Date().toISOString() }).eq('id', b.id);
