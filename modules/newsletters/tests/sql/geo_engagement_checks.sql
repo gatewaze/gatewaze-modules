@@ -127,6 +127,29 @@ BEGIN
     RAISE EXCEPTION 'SECURITY: anon must not execute newsletter_block_effectiveness';
   END IF;
 
+  -- ── send-log fallback (imported edition a51a…0002, no interactions) ────
+  DECLARE ed2 uuid := 'a51a0000-0000-0000-0000-000000000002';
+  BEGIN
+    j := public.newsletter_geo_engagement(ed2, 'open', 'country');
+    d := j->'data'; m := j->'meta';
+    -- engagement comes from email_send_log.first_opened_at (no email_interactions)
+    IF (m->>'total_events')::int <> 45 THEN  -- 30 US + 12 GB + 3 NZ (pre-suppression)
+      RAISE EXCEPTION 'send-log R1 total_events=% want 45', m->>'total_events';
+    END IF;
+    SELECT e INTO d FROM jsonb_array_elements(j->'data') e WHERE e->>'region_code'='US';
+    IF d IS NULL OR (d->>'engaged_profile')::int <> 30 OR (d->>'delivered_profile')::int <> 40 THEN
+      RAISE EXCEPTION 'send-log R1 US engaged/delivered wrong: %', d;
+    END IF;
+    -- NZ (6 delivered < K) suppressed
+    IF EXISTS (SELECT 1 FROM jsonb_array_elements(j->'data') e WHERE e->>'region_code'='NZ') THEN
+      RAISE EXCEPTION 'send-log R1: NZ should be suppressed';
+    END IF;
+    -- R2 also derives from send-log timestamps
+    IF (public.newsletter_local_time_engagement(ed2,'open')->'meta'->>'total_events')::int = 0 THEN
+      RAISE EXCEPTION 'send-log R2: expected local-time buckets from send-log';
+    END IF;
+  END;
+
   RAISE NOTICE 'ALL GEO RPC CHECKS PASSED';
 END;
 $checks$;

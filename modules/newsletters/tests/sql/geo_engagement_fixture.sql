@@ -66,12 +66,12 @@ BEGIN
     (v_b3, v_edition, 'podcast',  v_bdef, jsonb_build_object('title','Podcast'), 3, 3);
 
   INSERT INTO public.newsletters_edition_links
-    (id, edition_id, block_id, link_type, link_index, original_url, short_path, short_url, distribution_channel)
+    (id, edition_id, block_id, link_type, link_index, original_url, short_path, short_url, distribution_channel, tracking_key, field, block_type)
   VALUES
-    (v_l1, v_edition, v_b1, 'poll_option_1', 0, 'https://go.example.com/agree',    'agr', '', 'email'),
-    (v_l2, v_edition, v_b1, 'poll_option_2', 1, 'https://go.example.com/disagree', 'dis', '', 'email'),
-    (v_l3, v_edition, v_b2, 'generic',       0, 'https://example.com/article',     'art', '', 'email'),
-    (v_l4, v_edition, v_b3, 'podcast',       0, 'https://example.com/podcast',     'pod', '', 'email');
+    (v_l1, v_edition, v_b1, 'poll_option_1', 0, 'https://go.example.com/agree',    'agr', '', 'email', 'geofixagr01', 'poll_option_1_link', 'hot_take'),
+    (v_l2, v_edition, v_b1, 'poll_option_2', 1, 'https://go.example.com/disagree', 'dis', '', 'email', 'geofixdis01', 'poll_option_2_link', 'hot_take'),
+    (v_l3, v_edition, v_b2, 'generic',       0, 'https://example.com/article',     'art', '', 'email', 'geofixart01', 'link',              'generic'),
+    (v_l4, v_edition, v_b3, 'podcast',       0, 'https://example.com/podcast',     'pod', '', 'email', 'geofixpod01', 'link',              'podcast');
 
   -- ── per-country cohorts ────────────────────────────────────────────────
   -- delivered/clickers/openers per country; opt1_pct = % of clickers choosing
@@ -174,6 +174,46 @@ BEGIN
   VALUES (md5('geoconsent')::uuid, md5('geobotesl')::uuid, 'click', v_base, 'https://go.example.com/x', 'US', 1.0,
           v_l1, v_b1, 'hot_take', v_edition, true);
 
-  RAISE NOTICE 'geo fixture seeded for edition %', v_edition;
+  -- ── send-log-only edition (imported/historical engagement) ────────────
+  -- Mirrors the production case: aggregate first_opened_at/first_clicked_at on
+  -- email_send_log, NO email_interactions. The geo RPCs must fall back to the
+  -- send-log timestamps + profile geo. Edition a51a…0002.
+  DECLARE
+    v_ed2  uuid := 'a51a0000-0000-0000-0000-000000000002';
+    v_snd2 uuid := 'a51a0000-0000-0000-0000-000000000052';
+    e2 RECORD; gg int; pe text;
+  BEGIN
+    DELETE FROM public.email_send_log WHERE newsletter_send_id = v_snd2;
+    DELETE FROM public.people WHERE email LIKE 'geofix2+%@example.test';
+    DELETE FROM public.newsletter_sends WHERE id = v_snd2;
+    DELETE FROM public.newsletters_editions WHERE id = v_ed2;
+
+    INSERT INTO public.newsletters_editions (id, title, edition_date)
+    VALUES (v_ed2, 'Geo Fixture (imported)', '2026-06-11');
+    INSERT INTO public.newsletter_sends (id, edition_id, subject, from_address, status)
+    VALUES (v_snd2, v_ed2, 'Imported', 'news@example.test', 'sent');
+
+    FOR e2 IN
+      SELECT * FROM (VALUES
+        ('US','America/New_York', 40, 30),
+        ('GB','Europe/London',    25, 12),
+        ('NZ','Pacific/Auckland',  6,  3)   -- sub-K, suppressed
+      ) AS t(cc, tz, delivered, openers)
+    LOOP
+      FOR gg IN 1..e2.delivered LOOP
+        pe := 'geofix2+'||e2.cc||'-'||gg||'@example.test';
+        INSERT INTO public.people (id, email, attributes)
+        VALUES (md5('geofix2P'||e2.cc||gg)::uuid, pe,
+          jsonb_build_object('country', e2.cc, 'timezone', e2.tz, 'email', pe));
+        -- delivered; openers also carry first_opened_at (no interaction rows)
+        INSERT INTO public.email_send_log
+          (id, recipient_email, newsletter_send_id, status, delivered_at, sent_at, first_opened_at)
+        VALUES (md5('geofix2E'||e2.cc||gg)::uuid, pe, v_snd2, 'delivered', v_base, v_base,
+          CASE WHEN gg <= e2.openers THEN v_base + make_interval(mins => (gg*53) % (24*60)) END);
+      END LOOP;
+    END LOOP;
+  END;
+
+  RAISE NOTICE 'geo fixture seeded for editions % and a51a…0002', v_edition;
 END;
 $seed$;

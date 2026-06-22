@@ -34,6 +34,7 @@ AS $fn$
 DECLARE
   v_k        integer;
   v_conf     numeric;
+  v_has_int  boolean;
   v_result   jsonb;
 BEGIN
   IF p_metric NOT IN ('open','click') THEN
@@ -49,6 +50,16 @@ BEGIN
     INTO v_k, v_conf
   FROM public.newsletter_geo_config WHERE id LIMIT 1;
   v_k := COALESCE(v_k, 15); v_conf := COALESCE(v_conf, 0.5);
+
+  -- Editions sent via the live webhook have per-event email_interactions (rich:
+  -- IP geo, block, bot signals). Historical / imported editions only carry
+  -- aggregate engagement on email_send_log (first_opened_at/first_clicked_at).
+  -- Use interactions when present, else fall back to the send-log timestamps so
+  -- imported editions still produce a profile-region map (no IP/block detail).
+  SELECT EXISTS(
+    SELECT 1 FROM public.email_interactions
+    WHERE edition_id = p_edition_id AND is_bot IS NOT TRUE
+  ) INTO v_has_int;
 
   WITH sends AS (
     SELECT id FROM public.newsletter_sends WHERE edition_id = p_edition_id
@@ -72,16 +83,26 @@ BEGIN
       JOIN delivered d ON d.email = lower(p.email)
     ) s GROUP BY email
   ),
-  -- human events of p_metric, one row per (recipient) — for engaged set
+  -- engaged recipients of p_metric: from interactions when present, else from
+  -- email_send_log aggregate timestamps (imported editions). UNION dedupes by
+  -- email so a recipient counts once regardless of source.
   ev AS (
     SELECT DISTINCT lower(esl.recipient_email) AS email
     FROM public.email_interactions ei
     JOIN public.email_send_log esl ON esl.id = ei.email_send_log_id
-    WHERE ei.edition_id = p_edition_id
+    WHERE v_has_int
+      AND ei.edition_id = p_edition_id
       AND ei.is_bot IS NOT TRUE
       AND COALESCE(ei.consent_suppressed, false) = false
       AND ei.event_type = p_metric
       AND (p_metric = 'click' OR ei.human_confidence >= v_conf)
+    UNION
+    SELECT DISTINCT lower(esl.recipient_email) AS email
+    FROM public.email_send_log esl
+    WHERE NOT v_has_int
+      AND esl.newsletter_send_id IN (SELECT id FROM sends)
+      AND ((p_metric = 'open'  AND esl.first_opened_at  IS NOT NULL)
+        OR (p_metric = 'click' AND esl.first_clicked_at IS NOT NULL))
   ),
   -- raw human events grouped by IP country (country level only)
   ipc AS (
@@ -167,6 +188,7 @@ SET statement_timeout = '25s'
 AS $fn$
 DECLARE
   v_conf     numeric;
+  v_has_int  boolean;
   v_result   jsonb;
 BEGIN
   IF p_metric NOT IN ('open','click') THEN
@@ -175,6 +197,12 @@ BEGIN
   END IF;
   SELECT open_human_confidence_min INTO v_conf FROM public.newsletter_geo_config WHERE id LIMIT 1;
   v_conf := COALESCE(v_conf, 0.5);
+
+  -- per-event interactions when present, else email_send_log timestamps (§ imported editions)
+  SELECT EXISTS(
+    SELECT 1 FROM public.email_interactions
+    WHERE edition_id = p_edition_id AND is_bot IS NOT TRUE
+  ) INTO v_has_int;
 
   WITH sends AS (
     SELECT id FROM public.newsletter_sends WHERE edition_id = p_edition_id
@@ -214,7 +242,8 @@ BEGIN
   tz_pop AS (
     SELECT tz, count(*) AS pop FROM rtz_resolved GROUP BY tz
   ),
-  -- human events of p_metric, with recipient + resolved tz
+  -- events of p_metric with recipient + resolved tz: from interactions when
+  -- present, else from email_send_log first_opened_at/first_clicked_at.
   ev AS (
     SELECT lower(esl.recipient_email) AS email,
            r.tz,
@@ -223,11 +252,25 @@ BEGIN
     FROM public.email_interactions ei
     JOIN public.email_send_log esl ON esl.id = ei.email_send_log_id
     JOIN rtz_resolved r ON r.email = lower(esl.recipient_email)
-    WHERE ei.edition_id = p_edition_id
+    WHERE v_has_int
+      AND ei.edition_id = p_edition_id
       AND ei.is_bot IS NOT TRUE
       AND COALESCE(ei.consent_suppressed, false) = false
       AND ei.event_type = p_metric
       AND (p_metric = 'click' OR ei.human_confidence >= v_conf)
+    UNION ALL
+    SELECT lower(esl.recipient_email) AS email,
+           r.tz,
+           extract(dow  FROM (t.ts AT TIME ZONE r.tz))::int AS dow,
+           extract(hour FROM (t.ts AT TIME ZONE r.tz))::int AS hour
+    FROM public.email_send_log esl
+    JOIN rtz_resolved r ON r.email = lower(esl.recipient_email)
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN p_metric = 'open' THEN esl.first_opened_at ELSE esl.first_clicked_at END AS ts
+    ) t
+    WHERE NOT v_has_int
+      AND esl.newsletter_send_id IN (SELECT id FROM sends)
+      AND t.ts IS NOT NULL
   ),
   -- distinct (recipient,bucket) per (tz,dow,hour)
   ev_distinct AS (
