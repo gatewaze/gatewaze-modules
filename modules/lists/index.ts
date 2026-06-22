@@ -25,6 +25,8 @@ const listsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_lists_tables.sql',
+    // 002 seeds the global 'Event Updates' list used by the events Comms tab.
+    'migrations/002_event_updates_list.sql',
   ],
 
   adminRoutes: [
