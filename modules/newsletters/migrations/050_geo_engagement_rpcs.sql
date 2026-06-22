@@ -526,6 +526,7 @@ SET statement_timeout = '25s'
 AS $fn$
 DECLARE
   v_conf     numeric;
+  v_has_int  boolean;
   v_result   jsonb;
 BEGIN
   IF p_bucket_minutes IS NULL OR p_bucket_minutes < 1 OR p_bucket_minutes > 60 THEN
@@ -535,17 +536,44 @@ BEGIN
   SELECT open_human_confidence_min INTO v_conf FROM public.newsletter_geo_config WHERE id LIMIT 1;
   v_conf := COALESCE(v_conf, 0.5);
 
-  WITH ev AS (
+  -- interactions (IP region) when present, else email_send_log timestamps with
+  -- profile region (imported editions). region_code differs (IP ISO vs profile
+  -- name) but the UI resolves both to a country.
+  SELECT EXISTS(
+    SELECT 1 FROM public.email_interactions
+    WHERE edition_id = p_edition_id AND is_bot IS NOT TRUE
+  ) INTO v_has_int;
+
+  WITH sends AS (
+    SELECT id FROM public.newsletter_sends WHERE edition_id = p_edition_id
+  ),
+  ppl AS (
+    SELECT lower(p.email) AS email, min(nullif(p.attributes->>'country','')) AS country
+    FROM public.people p GROUP BY lower(p.email)
+  ),
+  ev AS (
     SELECT
       date_bin(make_interval(mins => p_bucket_minutes), ei.event_timestamp, timestamptz 'epoch') AS bucket_start,
       ei.ip_geo_country AS region_code,
       ei.event_type
     FROM public.email_interactions ei
-    WHERE ei.edition_id = p_edition_id
+    WHERE v_has_int
+      AND ei.edition_id = p_edition_id
       AND ei.is_bot IS NOT TRUE
       AND COALESCE(ei.consent_suppressed, false) = false
       AND nullif(ei.ip_geo_country,'') IS NOT NULL
       AND (ei.event_type = 'click' OR (ei.event_type = 'open' AND ei.human_confidence >= v_conf))
+    UNION ALL
+    SELECT
+      date_bin(make_interval(mins => p_bucket_minutes), t.ts, timestamptz 'epoch') AS bucket_start,
+      pr.country AS region_code,
+      t.kind AS event_type
+    FROM public.email_send_log esl
+    JOIN ppl pr ON pr.email = lower(esl.recipient_email) AND pr.country IS NOT NULL
+    CROSS JOIN LATERAL (VALUES ('open', esl.first_opened_at), ('click', esl.first_clicked_at)) AS t(kind, ts)
+    WHERE NOT v_has_int
+      AND esl.newsletter_send_id IN (SELECT id FROM sends)
+      AND t.ts IS NOT NULL
   ),
   buckets AS (
     SELECT bucket_start, region_code,

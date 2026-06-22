@@ -1,20 +1,23 @@
 /**
  * R5 — "follow the sun" replay (spec §5, phase-2 showpiece). A time scrubber
- * over the bubble map: engagement blooms across regions as the send rolls
- * through timezones. Loads after the static reports (it’s the heaviest) and is
- * read-only over the timeline RPC.
+ * over the choropleth: countries bloom with cumulative engagement as the send
+ * rolls through timezones. Powered by the timeline RPC (per-event IP regions, or
+ * email_send_log timestamps + profile region for imported editions).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGeoRpc } from './useGeoRpc.js';
 import type { TimelineRow } from './geo-types.js';
-import { project, centroid, countryName } from './world-geo.js';
+import { countryName, resolveA3, featurePath } from './world-geo.js';
+import { WORLD_FEATURES } from './world-atlas.js';
 import { heatColor } from './geo-format.js';
 import { ReportFrame, Toggle } from './_shared.js';
 
-const W = 720;
-const H = 360;
+const W = 760;
+const H = 380;
+const NO_DATA = '#e7ecf3';
 const BUCKET_MINUTES = 30;
+const WORLD_PATHS = WORLD_FEATURES.map((f) => ({ a3: f.a3, name: f.name, d: featurePath(f.rings, W, H) }));
 
 type Metric = 'clicks' | 'opens';
 
@@ -76,18 +79,18 @@ export function FollowTheSun({ editionId }: { editionId: string }) {
   }, [playing, buckets.length]);
 
   const frame = cumulative[idx] ?? new Map<string, number>();
-  const bubbles = useMemo(
-    () =>
-      [...frame.entries()]
-        .map(([code, v]) => {
-          const c = centroid(code);
-          if (!c) return null;
-          const p = project(c.lng, c.lat, W, H);
-          return { code, v, x: p.x, y: p.y, t: maxCum ? v / maxCum : 0 };
-        })
-        .filter((b): b is NonNullable<typeof b> => b !== null),
-    [frame, maxCum],
-  );
+  // resolve cumulative region values to atlas A3 (summing regions that map to
+  // the same country, e.g. "United States" + "US")
+  const byA3 = useMemo(() => {
+    const m = new Map<string, { v: number; label: string }>();
+    for (const [code, v] of frame.entries()) {
+      const a3 = resolveA3(code);
+      if (!a3) continue;
+      const prev = m.get(a3);
+      m.set(a3, { v: (prev?.v ?? 0) + v, label: countryName(code) });
+    }
+    return m;
+  }, [frame]);
 
   const stamp = buckets[idx] ? new Date(buckets[idx]).toUTCString().replace(' GMT', ' UTC') : '';
 
@@ -110,19 +113,17 @@ export function FollowTheSun({ editionId }: { editionId: string }) {
         <span className="ml-auto font-mono text-xs text-gray-500">{stamp}</span>
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded-md border border-gray-100 bg-[#f0f5fb]" role="img"
-           aria-label="Animated world map of cumulative engagement">
-        {[...Array(11)].map((_, i) => (
-          <line key={`v${i}`} x1={(i / 11) * W} y1={0} x2={(i / 11) * W} y2={H} stroke="#dbe6f3" strokeWidth={1} />
-        ))}
-        {[...Array(6)].map((_, i) => (
-          <line key={`h${i}`} x1={0} y1={(i / 6) * H} x2={W} y2={(i / 6) * H} stroke="#dbe6f3" strokeWidth={1} />
-        ))}
-        {bubbles.map((b) => (
-          <circle key={b.code} cx={b.x} cy={b.y} r={6 + b.t * 22} fill={heatColor(b.t)} fillOpacity={0.75} stroke="#fff" strokeWidth={1}>
-            <title>{countryName(b.code)}: {b.v} {metric}</title>
-          </circle>
-        ))}
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded-md border border-gray-100 bg-[#eef4fb]" role="img"
+           aria-label="Animated world choropleth of cumulative engagement">
+        {WORLD_PATHS.map((f) => {
+          const hit = byA3.get(f.a3);
+          const fill = hit && maxCum ? heatColor(hit.v / maxCum) : NO_DATA;
+          return (
+            <path key={f.a3} d={f.d} fill={fill} fillRule="evenodd" stroke="#ffffff" strokeWidth={0.4}>
+              <title>{hit ? `${hit.label}: ${hit.v} ${metric}` : f.name}</title>
+            </path>
+          );
+        })}
       </svg>
 
       <input type="range" min={0} max={Math.max(0, buckets.length - 1)} value={idx}

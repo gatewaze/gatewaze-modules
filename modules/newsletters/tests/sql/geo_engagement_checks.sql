@@ -148,6 +148,11 @@ BEGIN
     IF (public.newsletter_local_time_engagement(ed2,'open')->'meta'->>'total_events')::int = 0 THEN
       RAISE EXCEPTION 'send-log R2: expected local-time buckets from send-log';
     END IF;
+    -- R5 timeline also derives from send-log first_opened_at (45 opens)
+    IF (public.newsletter_engagement_timeline(ed2,30)->'meta'->>'total_events')::int <> 45 THEN
+      RAISE EXCEPTION 'send-log R5 total_events=% want 45',
+        public.newsletter_engagement_timeline(ed2,30)->'meta'->>'total_events';
+    END IF;
   END;
 
   RAISE NOTICE 'ALL GEO RPC CHECKS PASSED';
