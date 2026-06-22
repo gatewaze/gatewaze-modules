@@ -1,14 +1,19 @@
-/** R1 — geographic engagement: SVG bubble world map + sortable data table. */
+/** R1 — geographic engagement: SVG choropleth world map + sortable data table. */
 
 import { useMemo, useState } from 'react';
 import { useGeoRpc } from './useGeoRpc.js';
 import type { GeoEngagementRow, GeoMetric } from './geo-types.js';
-import { project, centroid, countryName } from './world-geo.js';
+import { countryName, resolveA3, featurePath } from './world-geo.js';
+import { WORLD_FEATURES } from './world-atlas.js';
 import { heatColor, maxOf, pct } from './geo-format.js';
 import { ReportFrame, Toggle } from './_shared.js';
 
-const W = 720;
-const H = 360;
+const W = 760;
+const H = 380;
+const NO_DATA = '#e7ecf3';
+
+// Country outlines are data-independent — project once.
+const WORLD_PATHS = WORLD_FEATURES.map((f) => ({ a3: f.a3, name: f.name, d: featurePath(f.rings, W, H) }));
 
 export function GeoEngagementMap({ editionId }: { editionId: string }) {
   const [metric, setMetric] = useState<GeoMetric>('click');
@@ -20,20 +25,15 @@ export function GeoEngagementMap({ editionId }: { editionId: string }) {
   const rows = env?.data ?? [];
 
   const maxRate = useMemo(() => maxOf(rows, (r) => r.rate_profile ?? 0), [rows]);
-  const bubbles = useMemo(
-    () =>
-      rows
-        .map((r) => {
-          const c = centroid(r.region_code);
-          if (!c) return null;
-          const p = project(c.lng, c.lat, W, H);
-          const rate = r.rate_profile ?? 0;
-          return { row: r, x: p.x, y: p.y, t: maxRate ? rate / maxRate : 0 };
-        })
-        .filter((b): b is NonNullable<typeof b> => b !== null)
-        .sort((a, b) => a.t - b.t),
-    [rows, maxRate],
-  );
+  // map atlas A3 → the engagement row that resolves to it
+  const byA3 = useMemo(() => {
+    const m = new Map<string, GeoEngagementRow>();
+    for (const r of rows) {
+      const a3 = resolveA3(r.region_code);
+      if (a3) m.set(a3, r);
+    }
+    return m;
+  }, [rows]);
 
   const metricLabel = metric === 'click' ? 'CTR' : 'Open rate';
 
@@ -58,29 +58,30 @@ export function GeoEngagementMap({ editionId }: { editionId: string }) {
         />
       </div>
 
-      {/* SVG bubble map (enhancement) */}
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded-md border border-gray-100 bg-[#f0f5fb]" role="img"
-           aria-label={`World map of ${metricLabel} by region`}>
-        {/* faint graticule */}
-        {[...Array(11)].map((_, i) => (
-          <line key={`v${i}`} x1={(i / 11) * W} y1={0} x2={(i / 11) * W} y2={H} stroke="#dbe6f3" strokeWidth={1} />
-        ))}
-        {[...Array(6)].map((_, i) => (
-          <line key={`h${i}`} x1={0} y1={(i / 6) * H} x2={W} y2={(i / 6) * H} stroke="#dbe6f3" strokeWidth={1} />
-        ))}
-        {bubbles.map((b) => {
-          const radius = 6 + b.t * 22;
+      {/* SVG choropleth (enhancement; the table below is the source of truth) */}
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded-md border border-gray-100 bg-[#eef4fb]" role="img"
+           aria-label={`World choropleth of ${metricLabel} by region`}>
+        {WORLD_PATHS.map((f) => {
+          const row = byA3.get(f.a3);
+          const rate = row?.rate_profile ?? null;
+          const fill = rate != null && maxRate ? heatColor(rate / maxRate) : NO_DATA;
           return (
-            <g key={b.row.region_code}>
-              <circle cx={b.x} cy={b.y} r={radius} fill={heatColor(b.t)} fillOpacity={0.75} stroke="#fff" strokeWidth={1}>
-                <title>
-                  {countryName(b.row.region_code)} — {metricLabel} {pct(b.row.rate_profile)} ({b.row.engaged_profile}/{b.row.delivered_profile}); {b.row.count_ip} {metric}s by location
-                </title>
-              </circle>
-            </g>
+            <path key={f.a3} d={f.d} fill={fill} fillRule="evenodd" stroke="#ffffff" strokeWidth={0.4}>
+              <title>
+                {row
+                  ? `${countryName(row.region_code)} — ${metricLabel} ${pct(row.rate_profile)} (${row.engaged_profile}/${row.delivered_profile} recipients)`
+                  : f.name}
+              </title>
+            </path>
           );
         })}
       </svg>
+      <div className="mt-1 flex items-center gap-2 text-xs text-gray-400">
+        <span>Low</span>
+        <span className="h-2 w-24 rounded" style={{ background: `linear-gradient(90deg, ${heatColor(0)}, ${heatColor(0.5)}, ${heatColor(1)})` }} />
+        <span>High {metricLabel}</span>
+        <span className="ml-2 inline-flex items-center gap-1"><span className="inline-block h-2 w-3 rounded" style={{ backgroundColor: NO_DATA }} /> no data</span>
+      </div>
 
       {/* Sortable data table — the accessible source of truth (spec §9) */}
       <GeoTable rows={rows} metric={metric} />

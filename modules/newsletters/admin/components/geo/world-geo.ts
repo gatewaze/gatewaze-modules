@@ -12,6 +12,8 @@
  * plot a bubble (the table still lists them).
  */
 
+import { WORLD_FEATURES } from './world-atlas.js';
+
 export interface LngLat {
   lng: number;
   lat: number;
@@ -84,4 +86,65 @@ export function countryName(code: string | null | undefined): string {
 export function centroid(code: string): LngLat | null {
   const c = COUNTRY_CENTROIDS[code];
   return c ? { lng: c[0], lat: c[1] } : null;
+}
+
+// ── choropleth matching ─────────────────────────────────────────────────────
+// The RPC's region_code is whatever profile data holds — usually a full English
+// country name ("United States"), sometimes a 2-letter ISO code ("AU"), and the
+// atlas keys on ISO A3 + an English name that occasionally differs. We resolve a
+// region to an atlas A3 code via: normalise → alias table → name index, with a
+// 2-letter ISO bridged through COUNTRY_NAMES.
+
+function normName(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const NAME_TO_A3: Map<string, string> = (() => {
+  const m = new Map<string, string>();
+  for (const f of WORLD_FEATURES) m.set(normName(f.name), f.a3);
+  return m;
+})();
+
+/** RPC names whose normalised form differs from the atlas's English name. */
+const ALIAS_TO_A3: Map<string, string> = new Map([
+  ['united states', 'USA'],
+  ['czechia', 'CZE'],
+  ['korea republic of', 'KOR'],
+  ['russian federation', 'RUS'],
+  ['serbia', 'SRB'],
+  ['turkiye', 'TUR'],
+  ['viet nam', 'VNM'],
+]);
+
+/** Resolve a region_code (name or ISO-2) to an atlas A3 code, or null. */
+export function resolveA3(regionCode: string | null | undefined): string | null {
+  if (!regionCode || regionCode === '__other__') return null;
+  let n = normName(regionCode);
+  if (regionCode.length === 2) {
+    const nm = COUNTRY_NAMES[regionCode.toUpperCase()];
+    if (nm) n = normName(nm);
+  }
+  const direct = ALIAS_TO_A3.get(n) ?? NAME_TO_A3.get(n);
+  if (direct) return direct;
+  // ISO 3166 long forms ("Bolivia, Plurinational State of") → try the head.
+  if (regionCode.includes(',')) {
+    const head = normName(regionCode.split(',')[0]);
+    return ALIAS_TO_A3.get(head) ?? NAME_TO_A3.get(head) ?? null;
+  }
+  return null;
+}
+
+/** Build an SVG path `d` for a feature's rings under the equirectangular projection. */
+export function featurePath(rings: number[][], w: number, h: number): string {
+  let d = '';
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length; i += 2) {
+      const x = ((ring[i] + 180) / 360) * w;
+      const y = ((90 - ring[i + 1]) / 180) * h;
+      d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+    }
+    d += 'Z ';
+  }
+  return d;
 }
