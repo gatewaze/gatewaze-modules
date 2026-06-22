@@ -300,6 +300,20 @@ async function handler(req: Request) {
     const body = await req.json()
 
     if (body.send_id) {
+      // Central Sending Service: when the worker engine owns sending, an
+      // immediate send fans out into the recipients queue (send_at=now for the
+      // 'global' strategy — migration 054) and the worker drips it via the
+      // high-throughput sendBatch path. Returns as soon as fanout completes
+      // (no edge-side per-recipient loop → no edge timeout on large lists); the
+      // UI shows progress from realtime. Flag off → legacy edge processSend
+      // (byte-identical, instant rollback).
+      if (Deno.env.get('SEND_ENGINE_USE_WORKER') === 'true') {
+        const r = await fanOutAndStart(supabase, body.send_id)
+        return new Response(
+          JSON.stringify(r),
+          { status: r.success ? 200 : 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
       const result = await processSend(supabase, body.send_id, provider)
       return new Response(
         JSON.stringify(result),
@@ -757,16 +771,20 @@ async function processScheduledSends(
   const errors: string[] = []
   let processed = 0
 
+  const useWorker = Deno.env.get('SEND_ENGINE_USE_WORKER') === 'true'
   for (const send of sends || []) {
     const strategy = send.delivery_strategy || 'global'
-    if (strategy === 'global') {
-      // All-at-once: send everyone now.
+    if (strategy === 'global' && !useWorker) {
+      // Tier-1 legacy (flag off): edge sends everyone all-at-once.
       const result = await processSend(supabase, send.id, provider)
       if (result.success) processed++
       else errors.push(`Send ${send.id}: ${result.error}`)
     } else {
-      // tz_local / personalised: fan out into the per-recipient timing queue
-      // and flip to 'sending'; the drip below dispatches each as it comes due.
+      // tz_local / personalised always, and 'global' under the worker flag:
+      // fan out into the per-recipient timing queue and flip to 'sending'.
+      // global → send_at=now() (migration 054) so the worker drips immediately;
+      // tz_local → each recipient's local target time. The drip (edge when flag
+      // off, worker when on) dispatches each as it comes due.
       const r = await fanOutAndStart(supabase, send.id)
       if (r.success) processed++
       else errors.push(`Send ${send.id}: ${r.error}`)

@@ -443,7 +443,10 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         }
       }
 
-      toast.success(scheduleType === 'scheduled' ? 'Send scheduled' : 'Sending started');
+      // Immediate sends are async now (fanout → worker drip); the Send button's
+      // spinner + the realtime progress below convey "in progress", so no
+      // fire-and-forget "started" toast. Scheduled sends still confirm.
+      if (scheduleType === 'scheduled') toast.success('Send scheduled');
       setExcludeSentSendIds([]);
       await loadSends();
     } catch (err: any) {
@@ -530,6 +533,11 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
 
   const latestSend = sends[0];
   const isActive = latestSend?.status === 'sending' || latestSend?.status === 'scheduled' || latestSend?.status === 'cancelling';
+  // Spinner while actually dispatching: the fetch is in flight, or the worker
+  // engine is dripping (status 'sending'), or a stop is propagating. Scheduled
+  // (future) sends don't spin. Drives the Send button's progress affordance now
+  // that immediate sends are async (fanout returns fast; the worker drips).
+  const sendSpinning = sending || latestSend?.status === 'sending' || latestSend?.status === 'cancelling';
   const isComplete = latestSend?.status === 'sent';
   const isFailed = latestSend?.status === 'failed';
 
@@ -686,7 +694,14 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
             )}
 
             <Button variant="solid" onClick={handleSend} disabled={sending || editionId === 'new' || isActive || !canSend}>
-              <PaperAirplaneIcon className="w-4 h-4 mr-1" />
+              {sendSpinning ? (
+                <svg className="w-4 h-4 mr-1 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <PaperAirplaneIcon className="w-4 h-4 mr-1" />
+              )}
               {sending ? 'Sending...' : isActive ? 'Send in progress...' : !canSend ? 'Publish to send' : scheduleType === 'scheduled' ? 'Schedule Send' : 'Send Now'}
             </Button>
           </div>
