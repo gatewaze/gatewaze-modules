@@ -22,7 +22,7 @@ const MERGE_FIELDS = ['first_name', 'last_name', 'name', 'company', 'job_title']
 const MERGE_GROUP = MERGE_FIELDS.join('|');
 
 type BcCtx = SendContext & {
-  topic: string;
+  listId: string | null;            // category list this broadcast is sent as part of (unsubscribe target)
   hmacSecret?: string;
   portalBaseUrl: string | null;
   supabaseUrl: string;
@@ -47,10 +47,12 @@ function scanTokens(html: string, subject: string): string[] {
 function htmlUsesMergeFields(s: string): boolean {
   return new RegExp(`\\{\\{\\s*(?:${MERGE_GROUP})\\b`).test(s);
 }
-// Topic-based unsubscribe token — mirrors the Edge generateUnsubscribeToken
-// (email:topic:timestamp), base64url payload + HMAC-SHA256 base64url signature.
-function genUnsubToken(email: string, topic: string, secret: string): string {
-  const payload = `${email}:${topic}:${Date.now()}`;
+// List-based unsubscribe token — same shape as newsletters (email:list_id:
+// timestamp), so broadcasts reuse the shared generic list-unsubscribe
+// (newsletter-unsubscribe edge fn + portal Subscription Centre). base64url
+// payload + HMAC-SHA256 base64url signature.
+function genUnsubToken(email: string, listId: string, secret: string): string {
+  const payload = `${email}:${listId}:${Date.now()}`;
   const sig = createHmac('sha256', secret).update(payload).digest('base64url');
   return `${Buffer.from(payload).toString('base64url')}.${sig}`;
 }
@@ -91,7 +93,9 @@ export const broadcastBinding: SendEngineBinding = {
       fromName: send.from_name || process.env.BULK_EMAIL_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Gatewaze',
       replyTo: send.reply_to || null,
       disableSubscriptionTracking: true,
-      topic: send.suppression_topic || 'broadcasts',
+      // The category list this broadcast is sent as part of = the unsubscribe
+      // target. Falls back to the audience list when the audience IS a list.
+      listId: send.category_list_id || (send.list_ids || [])[0] || null,
       hmacSecret: process.env.UNSUBSCRIBE_HMAC_SECRET,
       portalBaseUrl: metadata.portal_base_url || process.env.SITE_URL || null,
       supabaseUrl: process.env.SUPABASE_URL || '',
@@ -118,11 +122,12 @@ export const broadcastBinding: SendEngineBinding = {
     const str = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
     const nameVal = () => [str(attrs.first_name), str(attrs.last_name)].filter(Boolean).join(' ');
 
-    // Topic-based unsubscribe URLs + List-Unsubscribe header.
+    // List-based unsubscribe URLs + List-Unsubscribe header — shared with
+    // newsletters (generic list-unsubscribe + Subscription Centre).
     let unsubUrl = '', manageUrl = '';
-    if (c.hmacSecret && r.email) {
-      const tok = encodeURIComponent(genUnsubToken(r.email, c.topic, c.hmacSecret));
-      const oneClick = `${c.supabaseUrl}/functions/v1/broadcast-unsubscribe?token=${tok}`;
+    if (c.hmacSecret && r.email && c.listId) {
+      const tok = encodeURIComponent(genUnsubToken(r.email, c.listId, c.hmacSecret));
+      const oneClick = `${c.supabaseUrl}/functions/v1/newsletter-unsubscribe?token=${tok}`;
       const base = c.portalBaseUrl ? c.portalBaseUrl.replace(/\/$/, '') : null;
       unsubUrl = base ? `${base}/subscriptions?token=${tok}&unsub=1` : oneClick;
       manageUrl = base ? `${base}/subscriptions?token=${tok}` : oneClick;

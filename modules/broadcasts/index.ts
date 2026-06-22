@@ -65,6 +65,8 @@ const broadcastsModule: GatewazeModule = {
     // 004 adds broadcast_send_batches + watchdog index for the Central Sending
     // Service worker drip (Phase 2). Inert until SEND_ENGINE_USE_WORKER=true.
     'migrations/004_send_engine_batches.sql',
+    // 005 ties broadcasts to a category list for unsubscribe (list-tied model).
+    'migrations/005_broadcasts_category_list.sql',
   ],
 
   adminRoutes: [
