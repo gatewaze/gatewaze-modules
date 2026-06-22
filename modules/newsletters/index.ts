@@ -204,6 +204,10 @@ const newslettersModule: GatewazeModule = {
     // 053 Central Sending Service foundation (newsletter domain): send batches +
     // batch_id + watchdog index + brand/channel (spec-central-sending-service.md).
     'migrations/053_send_engine_batches.sql',
+    // 054 fanout produces send_at=now() for the 'global' strategy, so immediate
+    // "send to everyone now" rides the worker drip engine instead of the Tier-1
+    // edge processSend loop (flag-gated in newsletter-send).
+    'migrations/054_fanout_global_send_now.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
