@@ -138,7 +138,22 @@ export const newsletterBinding: SendEngineBinding = {
         if (rows.length > 0) html = tagHtmlLinks(html, rows);
       } catch (e) { deps.logger.warn('[send-engine] link tagging skipped', e); }
     }
-    const subject: string = send.subject || 'Newsletter';
+    // Unsubscribe footer parity with the Edge: if the rendered HTML has no
+    // {{unsubscribe_url}} placeholder, inject one once (token form, substituted
+    // per recipient) before </body>, so every send carries an unsubscribe link.
+    if (process.env.UNSUBSCRIBE_HMAC_SECRET && !/\{\{unsubscribe_url\}\}/.test(html)) {
+      const footer = `<div style="text-align:center;padding:20px;font-size:12px;color:#999;">` +
+        `<a href="{{unsubscribe_url}}" style="color:#999;">Unsubscribe</a> &middot; ` +
+        `<a href="{{manage_subscriptions_url}}" style="color:#999;">Manage your email preferences</a></div>`;
+      html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${footer}</body>`) : html + footer;
+    }
+    // Subject: fall back to the edition's subject, then a default (Edge parity).
+    let subject: string = send.subject || '';
+    if (!subject && send.edition_id) {
+      const { data: ed } = await deps.supabase.from('newsletters_editions').select('subject').eq('id', send.edition_id).maybeSingle();
+      subject = (ed?.subject as string) || '';
+    }
+    subject = subject || 'Newsletter';
     const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html);
     const unitMarker = html.match(/<!--gw-weather-units:(celsius|fahrenheit)-->/);
     const ctx: NlCtx = {
