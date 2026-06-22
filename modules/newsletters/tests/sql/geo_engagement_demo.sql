@@ -44,10 +44,10 @@ BEGIN
   VALUES (v_hot, v_edition, 'hot_take', v_bdef,
     jsonb_build_object('title','Hot take of the week','poll_option_1_label','Agree','poll_option_2_label','Disagree'), 99, 99);
   INSERT INTO public.newsletters_edition_links
-    (id, edition_id, block_id, link_type, link_index, original_url, short_path, short_url, distribution_channel)
+    (id, edition_id, block_id, link_type, link_index, original_url, short_path, short_url, distribution_channel, tracking_key, field, block_type)
   VALUES
-    (v_l1, v_edition, v_hot, 'poll_option_1', 0, 'https://go.mlops.community/agree',    'agr', '', 'email'),
-    (v_l2, v_edition, v_hot, 'poll_option_2', 1, 'https://go.mlops.community/disagree', 'dis', '', 'email');
+    (v_l1, v_edition, v_hot, 'poll_option_1', 0, 'https://go.mlops.community/agree',    'agr', '', 'email', 'geodemoagr', 'poll_option_1_link', 'hot_take'),
+    (v_l2, v_edition, v_hot, 'poll_option_2', 1, 'https://go.mlops.community/disagree', 'dis', '', 'email', 'geodemodis', 'poll_option_2_link', 'hot_take');
 
   FOR r IN
     SELECT * FROM (VALUES
