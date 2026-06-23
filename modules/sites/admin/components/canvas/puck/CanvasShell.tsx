@@ -402,10 +402,13 @@ const SHELL_CSS = `
   overscroll-behavior: contain;
 }
 
-/* Drop the "Page >" breadcrumb trail in the fields panel header — the block's
-   own name renders as the section title beside it, so the trail is just noise.
-   (Selecting a block shows "Sponsored Ad" instead of "Page > Sponsored Ad".) */
-.gw-canvas-shell [class*="SidebarSection-breadcrumbs"] {
+/* Fields header: the breadcrumb row renders the parent crumbs ("Page" + a
+   chevron) inside _Breadcrumbs-breadcrumb_ elements, followed by the current
+   block's name as a trailing text node. Hide just the crumbs so the header
+   shows only the block name ("Sponsored Ad" instead of "Page > Sponsored Ad").
+   The trailing underscore in the selector avoids also matching
+   _Breadcrumbs-breadcrumbLabel_. */
+.gw-canvas-shell [class*="Breadcrumbs-breadcrumb_"] {
   display: none !important;
 }
 
