@@ -74,6 +74,13 @@ const bulkEmailingModule: GatewazeModule = {
     // suppressed does not exist" from the geo materialised view. Additive +
     // backwards-compatible (default false = no suppression).
     'migrations/014_email_interactions_consent_suppressed.sql',
+    // 015 captures SendGrid 'deferred' lifecycle events that the email-webhook
+    // was silently dropping. Adds 'deferred' to the status enum + deferred_at
+    // column + by-domain RPC for the admin dashboard. Reconcile work-list
+    // widens to include deferred rows so they advance to delivered/bounced as
+    // SG retries resolve. Found while investigating ~9k Yahoo deferrals on a
+    // 56k mlopscommunity send (2026-06-23).
+    'migrations/015_deferred_status.sql',
   ],
 
   workers: [

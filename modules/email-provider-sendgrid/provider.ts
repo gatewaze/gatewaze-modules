@@ -33,6 +33,7 @@ function mapSendGridEvent(
     case 'spamreport': return 'spam_reported';
     case 'open': return 'open';
     case 'click': return 'click';
+    case 'deferred': return 'deferred';
     default: return null;
   }
 }
