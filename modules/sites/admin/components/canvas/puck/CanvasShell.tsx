@@ -402,6 +402,18 @@ const SHELL_CSS = `
   overscroll-behavior: contain;
 }
 
+/* Fields lives in the RIGHT sidebar (fieldsPlugin desktopSideBar:'right'), but
+   Puck shares one active-tab state, so selecting a block also flips the LEFT
+   sidebar to its (mobile-only) Fields tab — showing the form on both sides.
+   Hide the Fields panel *inside the left sidebar only* so block-select doesn't
+   duplicate it there. The right Fields panel (_Sidebar--right_) is untouched,
+   and the left's other tabs (AI/Blocks/Outline) still work when clicked. Pure
+   CSS — no state changes — so it can't trigger the re-render loop a JS
+   interceptor did. */
+.gw-canvas-shell [class*="Sidebar--left"] [class*="PuckPluginTab"]:has([class*="FieldsPlugin"]) {
+  display: none !important;
+}
+
 /* Fields header: the breadcrumb row renders the parent crumbs ("Page" + a
    chevron) inside _Breadcrumbs-breadcrumb_ elements, followed by the current
    block's name as a trailing text node. Hide just the crumbs so the header
