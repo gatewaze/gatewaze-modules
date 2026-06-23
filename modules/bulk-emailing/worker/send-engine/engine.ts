@@ -174,7 +174,7 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
     // Sequential accept (idempotent): mark recipients sent + batch_id, insert
     // email_send_log rows, finalise batch row. Recovery covers a crash here.
     const ids = recips.map((r) => r.id);
-    await supabase.from(binding.recipientsTable).update({ status: 'sent', batch_id: batchId, updated_at: new Date().toISOString() }).in('id', ids);
+    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'sent', batch_id: batchId, updated_at: new Date().toISOString() });
     const logRows = addressed.map((r) => ({
       id: logIds.get(r.id), recipient_email: r.email, from_address: ctx.fromEmail, reply_to: ctx.replyTo,
       subject: ctx.subject, provider: provider.providerName, [binding.logSendIdColumn]: ctx.sendId,
@@ -198,14 +198,14 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
 async function enrichPhones(deps: EngineDeps, recips: Recipient[]): Promise<void> {
   const ids = recips.map((r) => r.person_id).filter(Boolean) as string[];
   const byId = new Map<string, string>();
-  for (let i = 0; i < ids.length; i += 500) {
-    const { data } = await deps.supabase.from('people').select('id, phone').in('id', ids.slice(i, i + 500));
+  for (let i = 0; i < ids.length; i += ID_CHUNK) {
+    const { data } = await deps.supabase.from('people').select('id, phone').in('id', ids.slice(i, i + ID_CHUNK));
     for (const row of data ?? []) if (row.phone) byId.set(row.id, row.phone);
   }
   const missing = recips.filter((r) => !r.person_id || !byId.has(r.person_id)).map((r) => r.email).filter(Boolean) as string[];
   const byEmail = new Map<string, string>();
-  for (let i = 0; i < missing.length; i += 500) {
-    const { data } = await deps.supabase.from('people').select('email, phone').in('email', missing.slice(i, i + 500));
+  for (let i = 0; i < missing.length; i += ID_CHUNK) {
+    const { data } = await deps.supabase.from('people').select('email, phone').in('email', missing.slice(i, i + ID_CHUNK));
     for (const row of data ?? []) if (row.phone) byEmail.set(row.email, row.phone);
   }
   for (const r of recips) {
@@ -250,11 +250,25 @@ async function shouldAbortForReputation(deps: EngineDeps, binding: SendEngineBin
   return bounced > BOUNCE_RATE_TRIP || spam > SPAM_RATE_TRIP;
 }
 
+// PostgREST encodes `.in('id', ids)` into the request URL, so a 1000-id batch
+// produced a ~37KB URL that overflowed the PostgREST/Kong length cap — the
+// status UPDATE then failed *silently*, stranding recipients in 'sending' (the
+// emails had already gone out). Chunk every id-filtered write to a safe size and
+// surface errors instead of swallowing them.
+const ID_CHUNK = 100;
+async function updateRowsByIds(deps: EngineDeps, table: string, ids: string[], patch: Record<string, unknown>): Promise<void> {
+  for (let i = 0; i < ids.length; i += ID_CHUNK) {
+    const chunk = ids.slice(i, i + ID_CHUNK);
+    const { error } = await deps.supabase.from(table).update(patch).in('id', chunk);
+    if (error) deps.logger.error('[send-engine] row update failed', { table, count: chunk.length, error: (error as { message?: string }).message ?? error });
+  }
+}
+
 async function releaseRows(deps: EngineDeps, binding: SendEngineBinding, ids: string[]): Promise<void> {
-  if (ids.length) await deps.supabase.from(binding.recipientsTable).update({ status: 'pending', updated_at: new Date().toISOString() }).in('id', ids);
+  await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', updated_at: new Date().toISOString() });
 }
 async function markRows(deps: EngineDeps, binding: SendEngineBinding, ids: string[], status: string): Promise<void> {
-  if (ids.length) await deps.supabase.from(binding.recipientsTable).update({ status, updated_at: new Date().toISOString() }).in('id', ids);
+  await updateRowsByIds(deps, binding.recipientsTable, ids, { status, updated_at: new Date().toISOString() });
 }
 
 async function finalizeSend(deps: EngineDeps, binding: SendEngineBinding, sendId: string): Promise<void> {
