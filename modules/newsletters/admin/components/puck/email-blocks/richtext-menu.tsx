@@ -55,6 +55,18 @@ const DIVIDER_STYLE: React.CSSProperties = {
   width: 1, alignSelf: 'stretch', background: 'currentColor', opacity: 0.18, margin: '2px 4px',
 };
 
+/** Strikethrough glyph — an "S" with a line through it. */
+function StrikeIcon(): ReactNode {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth="1.5" strokeLinecap="round">
+      <path d="M11.2 5.2C10.7 4 9.4 3.2 8 3.2 6.3 3.2 5.2 4.1 5.2 5.3c0 1 .7 1.6 2.3 2.1" />
+      <path d="M5 10.7c.5 1.2 1.8 2.1 3.3 2.1 1.8 0 2.9-1 2.9-2.3" />
+      <line x1="2.8" y1="8" x2="13.2" y2="8" />
+    </svg>
+  );
+}
+
 /** Tiny align glyph: a framed image box positioned left / centre / right. */
 function AlignIcon({ dir }: { dir: 'left' | 'center' | 'right' }): ReactNode {
   const x = dir === 'left' ? 1.5 : dir === 'right' ? 7.5 : 4.5;
@@ -200,6 +212,16 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
         aria-hidden
         style={{ width: 1, alignSelf: 'stretch', background: 'currentColor', opacity: 0.18, margin: '2px 4px' }}
       />
+      <button
+        type="button"
+        onClick={() => editor.chain().focus().toggleStrike().run()}
+        title="Strikethrough"
+        aria-label="Strikethrough"
+        aria-pressed={editor.isActive('strike')}
+        style={{ ...BTN_STYLE, background: editor.isActive('strike') ? ACTIVE_BG : 'transparent' }}
+      >
+        <StrikeIcon />
+      </button>
       <button
         type="button"
         onClick={applyLink}
