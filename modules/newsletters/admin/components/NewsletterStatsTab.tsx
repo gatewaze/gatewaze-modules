@@ -8,6 +8,7 @@ import {
 import { Card, Badge } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { BlocksOverTime } from './geo/BlocksOverTime';
+import { PollResults } from './geo/PollResults';
 import { EditionGeographyTab } from './geo/EditionGeographyTab';
 
 interface SendRecord {
@@ -126,7 +127,12 @@ export function NewsletterStatsTab({ newsletterId }: Props) {
 
       {view === 'overview' && <OverviewView sends={sends} />}
 
-      {view === 'blocks' && <BlocksOverTime editionIds={editionIds} />}
+      {view === 'blocks' && (
+        <div className="space-y-6">
+          <BlocksOverTime editionIds={editionIds} />
+          <PollResults editionIds={editionIds} />
+        </div>
+      )}
 
       {view === 'geography' && (
         <div className="space-y-4">

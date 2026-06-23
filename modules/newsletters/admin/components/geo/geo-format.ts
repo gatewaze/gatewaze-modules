@@ -1,6 +1,6 @@
 /** Pure formatting / derivation helpers for the geo-engagement UI (testable). */
 
-import type { LocalTimeRow, OptionGeoRow } from './geo-types.js';
+import type { LocalTimeRow } from './geo-types.js';
 
 export const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -72,65 +72,3 @@ export function hourLabel(hour: number): string {
   return h < 12 ? `${h}am` : `${h - 12}pm`;
 }
 
-/**
- * Resolve a poll option's display label. The RPC already derives this from the
- * block content, but if it falls back to a generic "Option N" the caller may
- * supply a block-level label map (spec §8.2 getTrackedLinkLabels) keyed by the
- * option's position. `rowLabel` wins unless it is empty/generic.
- */
-export function resolveOptionLabel(
-  rowLabel: string | null | undefined,
-  linkIndex: number | null | undefined,
-  blockLabels?: Record<number, string>,
-): string {
-  const generic = !rowLabel || /^option\s+\d+$/i.test(rowLabel);
-  if (!generic) return rowLabel as string;
-  if (blockLabels && linkIndex != null && blockLabels[linkIndex]) return blockLabels[linkIndex];
-  return rowLabel || `Option ${(linkIndex ?? 0) + 1}`;
-}
-
-/**
- * Pivot R4 option rows into per-region option shares for the diverging bars,
- * and rank regions by how far their split diverges from the global split
- * ("where opinion splits hardest", spec §5/R4).
- */
-export interface RegionSplit {
-  region_code: string;
-  region_name: string;
-  total: number;
-  options: Array<{ label: string; clicks: number; share: number }>;
-  divergence: number; // L1 distance from the global option distribution
-}
-
-export function buildRegionSplits(rows: OptionGeoRow[]): RegionSplit[] {
-  if (!rows.length) return [];
-  // global distribution by option label
-  const globalByOpt = new Map<string, number>();
-  let globalTotal = 0;
-  for (const r of rows) {
-    globalByOpt.set(r.option_label, (globalByOpt.get(r.option_label) ?? 0) + r.clicks);
-    globalTotal += r.clicks;
-  }
-  const globalShare = new Map<string, number>();
-  for (const [k, v] of globalByOpt) globalShare.set(k, globalTotal ? v / globalTotal : 0);
-
-  const byRegion = new Map<string, OptionGeoRow[]>();
-  for (const r of rows) {
-    const arr = byRegion.get(r.region_code) ?? [];
-    arr.push(r);
-    byRegion.set(r.region_code, arr);
-  }
-
-  const out: RegionSplit[] = [];
-  for (const [code, rs] of byRegion) {
-    const total = rs.reduce((a, b) => a + b.clicks, 0);
-    const options = rs
-      .map((r) => ({ label: r.option_label, clicks: r.clicks, share: total ? r.clicks / total : 0 }))
-      .sort((a, b) => b.clicks - a.clicks);
-    let divergence = 0;
-    for (const o of options) divergence += Math.abs(o.share - (globalShare.get(o.label) ?? 0));
-    out.push({ region_code: code, region_name: rs[0].region_name, total, options, divergence });
-  }
-  // most-divergent regions first
-  return out.sort((a, b) => b.divergence - a.divergence);
-}

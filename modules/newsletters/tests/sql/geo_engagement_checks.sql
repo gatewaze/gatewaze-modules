@@ -155,6 +155,25 @@ BEGIN
     END IF;
   END;
 
+  -- ── overall poll results (Blocks tab) ─────────────────────────────────
+  j := public.newsletter_poll_results(ARRAY[ed]);
+  d := j->'data';
+  -- exactly the 2 real poll options (generic/podcast links excluded; no section link)
+  IF jsonb_array_length(d) <> 2 THEN
+    RAISE EXCEPTION 'poll_results: expected 2 options, got %', jsonb_array_length(d);
+  END IF;
+  IF (j->'meta'->>'total_events')::int <> 92 THEN
+    RAISE EXCEPTION 'poll_results total_events=% want 92', j->'meta'->>'total_events';
+  END IF;
+  SELECT (e->>'clicks')::int INTO n FROM jsonb_array_elements(d) e WHERE e->>'option_label'='Agree';
+  IF n <> 52 THEN RAISE EXCEPTION 'poll_results Agree=% want 52', n; END IF;
+  IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(d) e WHERE e->>'option_label'='Disagree') THEN
+    RAISE EXCEPTION 'poll_results: Disagree option missing';
+  END IF;
+  IF has_function_privilege('anon','public.newsletter_poll_results(uuid[])','EXECUTE') THEN
+    RAISE EXCEPTION 'SECURITY: anon must not execute newsletter_poll_results';
+  END IF;
+
   RAISE NOTICE 'ALL GEO RPC CHECKS PASSED';
 END;
 $checks$;

@@ -1,23 +1,15 @@
 /**
  * Geography & timezone engagement tab for an edition (spec §9). Composes the
- * five reports. Feature-gating is done by the host page; this component assumes
- * it should render. Lazy-loaded from the edition detail page.
+ * single-edition geo reports. Poll/vote results live on the Blocks tab (overall,
+ * not per-region), so they're not shown here.
  */
 
-import { useMemo } from 'react';
-import { useGeoRpc } from './useGeoRpc.js';
-import type { BlockGeoRow } from './geo-types.js';
 import { GeoEngagementMap } from './GeoEngagementMap.js';
 import { LocalTimeHeatmap } from './LocalTimeHeatmap.js';
 import { BlockRegionMatrix } from './BlockRegionMatrix.js';
-import { OptionRegionalSplit, pollBlocksFrom } from './OptionRegionalSplit.js';
 import { FollowTheSun } from './FollowTheSun.js';
 
 export function EditionGeographyTab({ editionId }: { editionId: string }) {
-  // One block_geo fetch drives poll-block detection for R4 (R3 fetches its own).
-  const { env } = useGeoRpc<BlockGeoRow>('newsletter_block_geo', { p_edition_id: editionId, p_level: 'country' }, [editionId]);
-  const pollBlocks = useMemo(() => pollBlocksFrom(env?.data ?? []), [env]);
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -30,7 +22,6 @@ export function EditionGeographyTab({ editionId }: { editionId: string }) {
       <GeoEngagementMap editionId={editionId} />
       <LocalTimeHeatmap editionId={editionId} />
       <BlockRegionMatrix editionId={editionId} />
-      {pollBlocks.length > 0 && <OptionRegionalSplit editionId={editionId} pollBlockIds={pollBlocks} />}
       <FollowTheSun editionId={editionId} />
     </div>
   );
