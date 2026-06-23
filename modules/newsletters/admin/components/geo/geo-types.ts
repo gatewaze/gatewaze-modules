@@ -71,6 +71,18 @@ export interface BlockEffectivenessRow {
   ctr: number | null;
 }
 
+/** newsletter_poll_results row (overall vote tally per poll option). */
+export interface PollResultRow {
+  edition_id: string;
+  edition_date: string | null;
+  edition_title: string;
+  block_id: string;
+  block_type: string;
+  option_index: number;
+  option_label: string;
+  clicks: number;
+}
+
 /** R5 newsletter_engagement_timeline row. */
 export interface TimelineRow {
   bucket_start: string;

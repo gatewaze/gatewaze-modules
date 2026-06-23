@@ -201,6 +201,7 @@ const newslettersModule: GatewazeModule = {
     'migrations/050_geo_engagement_rpcs.sql',
     'migrations/051_geo_rollup_mv.sql',
     'migrations/052_block_effectiveness_rpc.sql',
+    'migrations/053_poll_results_rpc.sql',
     // 053 Central Sending Service foundation (newsletter domain): send batches +
     // batch_id + watchdog index + brand/channel (spec-central-sending-service.md).
     'migrations/053_send_engine_batches.sql',
