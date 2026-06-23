@@ -144,7 +144,10 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
     ...getCanvasPuckPlugins(),
     blocksPlugin(),
     outlinePlugin(),
-    fieldsPlugin({ desktopSideBar: 'left' }),
+    // Fields live in the RIGHT sidebar so selecting a block opens its fields
+    // *alongside* whatever left tab is active (Blocks / AI / Outline) instead of
+    // hijacking the left panel and yanking the operator out of the block picker.
+    fieldsPlugin({ desktopSideBar: 'right' }),
   ], [extraPlugins]);
 
   // Merged overrides — shared defaults first, host overrides win.
