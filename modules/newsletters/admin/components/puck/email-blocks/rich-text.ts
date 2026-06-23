@@ -50,7 +50,18 @@ export function normalizeRichText(html: unknown): string {
     .replace(/<img\b([^>]*?)\/?>/gi, (_m, rawAttrs: string) => {
       const align = (rawAttrs.match(/\sdata-align=(["'])(left|center|right)\1/i)?.[2] ?? '').toLowerCase();
       const widthPct = rawAttrs.match(/\sdata-width=(["'])(\d{1,3})\1/i)?.[2] ?? '';
-      const attrs = rawAttrs.replace(/\sstyle=(["'])[\s\S]*?\1/i, ''); // drop editor-only style
+      // No alignment/width set → preserve existing styling, just guarantee the
+      // column cap (the long-standing behaviour for pasted/plain images).
+      if (!align && !widthPct) {
+        return /\sstyle=/i.test(rawAttrs)
+          ? `<img${rawAttrs.replace(/(\sstyle=(["']))/i, '$1max-width:100%;height:auto;')}>`
+          : `<img${rawAttrs} style="max-width:100%;height:auto">`;
+      }
+      // Alignment/width set → rebuild the style (dropping the editor's auto-margin
+      // version) so it's email-robust: a % width that's fluid on mobile, and
+      // alignment via a text-aligned wrapper with an inline-block image (centres
+      // reliably incl. Outlook, where auto margins on images are ignored).
+      const attrs = rawAttrs.replace(/\sstyle=(["'])[\s\S]*?\1/i, '');
       const style: string[] = [];
       if (widthPct) style.push(`width:${widthPct}%`);
       style.push('max-width:100%', 'height:auto');
