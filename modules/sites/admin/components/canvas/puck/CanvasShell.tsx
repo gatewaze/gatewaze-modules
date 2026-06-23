@@ -51,6 +51,7 @@ import {
 import { SunIcon, MoonIcon } from '@heroicons/react/24/outline';
 import { getCanvasPuckPlugins } from './canvas-puck-plugin-registry.js';
 import { DraggableOutline } from './DraggableOutline.js';
+import { SidebarTabPin } from './SidebarTabPin.js';
 import { CanvasPluginHostContext, type CanvasPluginHostKind } from './canvas-plugin-host-context.js';
 
 export type CanvasPreviewMode = 'light' | 'dark';
@@ -157,6 +158,14 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
     headerActions: () => null,
     // Replace the click-only outline with a drag-to-reorder one.
     outline: () => <DraggableOutline />,
+    // Always-mounted watcher that keeps the left tab on the operator's choice
+    // when selecting a block (which otherwise flips the left rail to Fields).
+    puck: ({ children }: { children: ReactNode }) => (
+      <>
+        {children}
+        <SidebarTabPin />
+      </>
+    ),
     ...(overrides ?? {}),
   }), [overrides]);
 
