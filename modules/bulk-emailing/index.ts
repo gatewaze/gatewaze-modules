@@ -67,6 +67,13 @@ const bulkEmailingModule: GatewazeModule = {
     // to delivered/opened/clicked/bounced from the Email Activity API. Backstops
     // the Event Webhook; on localhost (webhook unreachable) it's the only path.
     'migrations/013_reconcile_email_status.sql',
+    // 014 adds the consent_suppressed boolean to email_interactions that the
+    // newsletter geo engagement RPCs (newsletters 050-053) reference but no
+    // prior migration created. Localhost had it hand-applied during iteration;
+    // gap surfaced on AAIF prod rollout 2026-06-23 with "column ei.consent_
+    // suppressed does not exist" from the geo materialised view. Additive +
+    // backwards-compatible (default false = no suppression).
+    'migrations/014_email_interactions_consent_suppressed.sql',
   ],
 
   workers: [
