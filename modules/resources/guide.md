@@ -15,9 +15,9 @@ The Structured Resources module provides a system for organizing content into co
 
 ## Features
 
-- `structured-resources` -- Core resource management and portal display
-- `structured-resources.collections` -- Create and manage resource collections
-- `structured-resources.import` -- Bulk import resources into collections
+- `resources` -- Core resource management and portal display
+- `resources.collections` -- Create and manage resource collections
+- `resources.import` -- Bulk import resources into collections
 
 ## Dependencies
 

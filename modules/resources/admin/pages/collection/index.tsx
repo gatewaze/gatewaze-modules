@@ -39,7 +39,7 @@ export default function CollectionDetailPage() {
   const activeTab: TabType = (tab && validTabs.includes(tab as TabType)) ? tab as TabType : 'categories';
 
   const navigateToTab = (newTab: TabType) => {
-    navigate(`/structured-resources/collections/${id}/${newTab}`);
+    navigate(`/resources/collections/${id}/${newTab}`);
   };
 
   // Data
@@ -94,7 +94,7 @@ export default function CollectionDetailPage() {
       <Page title="Not Found">
         <Card className="p-12 text-center">
           <p className="text-[var(--gray-11)] mb-4">Collection not found</p>
-          <Button onClick={() => navigate('/structured-resources/collections')}>Back to Collections</Button>
+          <Button onClick={() => navigate('/resources/collections')}>Back to Collections</Button>
         </Card>
       </Page>
     );
@@ -115,7 +115,7 @@ export default function CollectionDetailPage() {
 
         <div className="absolute top-6 z-10" style={{ left: 'calc(var(--margin-x) + 1.5rem)' }}>
           <button
-            onClick={() => navigate('/structured-resources/collections')}
+            onClick={() => navigate('/resources/collections')}
             className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md bg-white/90 backdrop-blur-md border border-white/40 text-gray-900 shadow-sm hover:bg-white transition-colors"
           >
             <ArrowLeftIcon className="size-4" />

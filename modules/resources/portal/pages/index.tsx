@@ -50,7 +50,7 @@ async function getCollections(isAuthenticated: boolean): Promise<Collection[]> {
       .order('sort_order', { ascending: true })
 
     if (error) {
-      console.error('[structured-resources] Failed to fetch collections:', error)
+      console.error('[resources] Failed to fetch collections:', error)
       return []
     }
     return data || []
@@ -67,7 +67,7 @@ async function getCollections(isAuthenticated: boolean): Promise<Collection[]> {
       .order('sort_order', { ascending: true })
 
     if (error) {
-      console.error('[structured-resources] Failed to fetch collections:', error)
+      console.error('[resources] Failed to fetch collections:', error)
       return []
     }
     return data || []
