@@ -63,6 +63,10 @@ const bulkEmailingModule: GatewazeModule = {
     // opt-out, generalising email "topic" unsubscribe to "(channel, topic)".
     // Additive + inert; consumed by the channel-aware fanout (follow-on).
     'migrations/012_channel_consent.sql',
+    // 013 SendGrid delivery-status reconcile RPCs (pull): advance email_send_log
+    // to delivered/opened/clicked/bounced from the Email Activity API. Backstops
+    // the Event Webhook; on localhost (webhook unreachable) it's the only path.
+    'migrations/013_reconcile_email_status.sql',
   ],
 
   workers: [
@@ -72,6 +76,13 @@ const bulkEmailingModule: GatewazeModule = {
       name: 'bulk-emailing:dispatch-drip',
       handler: './workers/dispatch-bulk-drip.ts',
     },
+    {
+      // Pulls real delivery status from the SendGrid Email Activity API into
+      // email_send_log so the sending UI reflects delivered/opened/clicked/
+      // bounced. Backstop for the Event Webhook (and the only path on localhost).
+      name: 'bulk-emailing:reconcile-sendgrid',
+      handler: './workers/reconcile-sendgrid-status.ts',
+    },
   ],
 
   crons: [
@@ -80,6 +91,12 @@ const bulkEmailingModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 60_000 },
       data: { kind: 'bulk-emailing:dispatch-drip' },
+    },
+    {
+      name: 'bulk-emailing-reconcile-sendgrid',
+      queue: 'jobs',
+      schedule: { every: 180_000 },
+      data: { kind: 'bulk-emailing:reconcile-sendgrid' },
     },
   ],
 
