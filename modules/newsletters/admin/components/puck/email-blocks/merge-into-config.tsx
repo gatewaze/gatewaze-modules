@@ -95,16 +95,34 @@ function resolveCustomRenders(
  * inner padding is reused — it handles single-axis and CSS-shorthand
  * values (e.g. `"16px 24px"`).
  */
+/**
+ * Wrap the shared slider with a visible label — Puck doesn't render its own
+ * FieldLabel for `type: 'custom'` fields, so without this the padding and margin
+ * sliders are indistinguishable (both just show "Advanced (CSS shorthand)").
+ */
+function labelledSpacing(label: string) {
+  return function SpacingField(props: { value: unknown; onChange: (v: unknown) => void }): ReactNode {
+    return (
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-11, #6b7280)', marginBottom: 6 }}>
+          {label}
+        </div>
+        <NewsletterPaddingSliderField {...props} />
+      </div>
+    );
+  };
+}
+
 const SPACING_FIELDS: Record<string, Field> = {
   _spacing_padding: {
     type: 'custom',
     label: 'Padding (outer)',
-    render: NewsletterPaddingSliderField as never,
+    render: labelledSpacing('Padding (outer)') as never,
   },
   _spacing_margin: {
     type: 'custom',
     label: 'Margin',
-    render: NewsletterPaddingSliderField as never,
+    render: labelledSpacing('Margin') as never,
   },
 };
 
@@ -356,8 +374,11 @@ function puckEntryFromRegistry(
   const mergedFields = applyRichtextDefaults(
     resolveCustomRenders(
       enableInlineEditing({
-        ...SPACING_FIELDS,
+        // Spacing sliders go LAST so they sit at the bottom of the field list,
+        // under the block's own content fields. (No block declares _spacing_*,
+        // so the order flip doesn't change collision behaviour.)
         ...(entry.fields as Record<string, Field>),
+        ...SPACING_FIELDS,
       }),
       { renderHost },
     ),
