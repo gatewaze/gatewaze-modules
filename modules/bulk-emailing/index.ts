@@ -81,14 +81,14 @@ const bulkEmailingModule: GatewazeModule = {
       // 60s heartbeat driving the shared worker drip engine over due bulk
       // recipients (Phase 3). No-op unless SEND_ENGINE_USE_WORKER=true.
       name: 'bulk-emailing:dispatch-drip',
-      handler: './workers/dispatch-bulk-drip.ts',
+      handler: './workers/dispatch-drip.ts',
     },
     {
       // Pulls real delivery status from the SendGrid Email Activity API into
       // email_send_log so the sending UI reflects delivered/opened/clicked/
       // bounced. Backstop for the Event Webhook (and the only path on localhost).
       name: 'bulk-emailing:reconcile-sendgrid',
-      handler: './workers/reconcile-sendgrid-status.ts',
+      handler: './workers/reconcile-sendgrid.ts',
     },
   ],
 
