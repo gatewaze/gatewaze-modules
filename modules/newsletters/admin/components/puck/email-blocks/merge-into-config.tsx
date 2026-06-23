@@ -22,20 +22,17 @@
 import type { ReactNode } from 'react';
 import type { Config, Field } from '@puckeditor/core';
 import type { Editor } from '@tiptap/react';
-import Image from '@tiptap/extension-image';
 import type { EmailBlockEntry, EmailBlockRegistry } from './registry-types.js';
 import { NewsletterPaddingSliderField } from './number-slider-field-adapter.js';
+import { RichtextImage } from './richtext-image.js';
 import { RichtextMenu } from './richtext-menu.js';
 import { wrapWithSpacing } from './spacing-wrapper.js';
 import { resolveCustomField } from '../../../../../sites/admin/components/canvas/puck/fields/index.js';
 import type { CustomFormat } from '../../../../../sites/admin/components/canvas/puck/json-schema-to-puck-fields.js';
 import type { PuckRenderHost } from '../../../../../sites/admin/components/canvas/puck/types.js';
 
-/** Email-safe Image extension for the richtext fields — full-width, block. */
-const RICHTEXT_IMAGE = Image.configure({
-  inline: false,
-  HTMLAttributes: { style: 'max-width:100%;height:auto;display:block;' },
-});
+/** Email-safe Image extension for the richtext fields (block, with align/width). */
+const RICHTEXT_IMAGE = RichtextImage;
 
 type MenuRenderProps = {
   children: ReactNode;

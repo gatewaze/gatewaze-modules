@@ -49,6 +49,23 @@ const BTN_STYLE: React.CSSProperties = {
   padding: 0,
 };
 
+const ACTIVE_BG = 'rgba(64,134,198,0.18)';
+const DIVIDER_STYLE: React.CSSProperties = {
+  width: 1, alignSelf: 'stretch', background: 'currentColor', opacity: 0.18, margin: '2px 4px',
+};
+
+/** Tiny align glyph: a framed image box positioned left / centre / right. */
+function AlignIcon({ dir }: { dir: 'left' | 'center' | 'right' }): ReactNode {
+  const x = dir === 'left' ? 1.5 : dir === 'right' ? 7.5 : 4.5;
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
+      <line x1="1" y1="2" x2="15" y2="2" />
+      <rect x={x} y="4.5" width="7" height="7" rx="1" fill="currentColor" stroke="none" />
+      <line x1="1" y1="14" x2="15" y2="14" />
+    </svg>
+  );
+}
+
 export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNode {
   const fileRef = useRef<HTMLInputElement>(null);
   const { collectionId } = useNewsletterEditing();
@@ -229,6 +246,65 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
           </div>
         )}
       </span>
+      {editor.isActive('image') && (
+        <ImageControls editor={editor} />
+      )}
     </div>
+  );
+}
+
+/**
+ * Alignment + width controls shown only while an image node is selected.
+ * Buttons (not a <select>) because the toolbar's onMouseDownCapture
+ * preventDefault — needed to keep the text selection — would stop a native
+ * select from opening. Sets data-align / data-width on the image node; the
+ * email-safe styling is derived from them in normalizeRichText at render time.
+ */
+function ImageControls({ editor }: { editor: Editor }): ReactNode {
+  const attrs = editor.getAttributes('image');
+  const align = (attrs.dataAlign as string | null) ?? null;
+  const width = (attrs.dataWidth as string | null) ?? null;
+  const set = (next: Record<string, unknown>) =>
+    editor.chain().focus().updateAttributes('image', next).run();
+
+  return (
+    <>
+      <span aria-hidden style={DIVIDER_STYLE} />
+      {(['left', 'center', 'right'] as const).map((d) => (
+        <button
+          key={d}
+          type="button"
+          title={`Align image ${d}`}
+          aria-label={`Align image ${d}`}
+          aria-pressed={align === d}
+          onClick={() => set({ dataAlign: align === d ? null : d })}
+          style={{ ...BTN_STYLE, background: align === d ? ACTIVE_BG : 'transparent' }}
+        >
+          <AlignIcon dir={d} />
+        </button>
+      ))}
+      <span aria-hidden style={DIVIDER_STYLE} />
+      {(['25', '50', '75', '100'] as const).map((w) => (
+        <button
+          key={w}
+          type="button"
+          title={`Image width ${w}%`}
+          aria-label={`Image width ${w} percent`}
+          aria-pressed={width === w}
+          onClick={() => set({ dataWidth: width === w ? null : w })}
+          style={{
+            ...BTN_STYLE,
+            width: 'auto',
+            minWidth: 28,
+            padding: '0 4px',
+            fontSize: 11,
+            fontWeight: 600,
+            background: width === w ? ACTIVE_BG : 'transparent',
+          }}
+        >
+          {w}%
+        </button>
+      ))}
+    </>
   );
 }
