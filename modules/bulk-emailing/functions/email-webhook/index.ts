@@ -129,6 +129,22 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
       updates.status = 'dropped'
       if (event.bounceReason) updates.bounce_reason = event.bounceReason
       break
+    case 'deferred':
+      // Deferred = recipient mail server gave a 4xx temporary reject
+      // (greylisting, Yahoo throttling, per-domain rate-limits). SendGrid
+      // retries internally for ~72h; this row may still resolve to
+      // delivered OR bounced. Record the first-defer time and flip status
+      // ONLY if not already terminal — webhook events can arrive out of
+      // order, so a later-arriving defer must never demote a confirmed
+      // delivery/bounce/drop/spam_report.
+      if (!log.deferred_at) {
+        updates.deferred_at = event.timestamp.toISOString()
+      }
+      if (!['delivered', 'bounced', 'dropped', 'spam_reported'].includes(log.status)) {
+        updates.status = 'deferred'
+      }
+      if (event.bounceReason) updates.bounce_reason = event.bounceReason
+      break
     case 'spam_reported':
       updates.spam_reported_at = event.timestamp.toISOString()
       updates.status = 'spam_reported'
