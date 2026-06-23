@@ -331,6 +331,11 @@ const S = {
 // implementation in NewsletterPuckCanvas.
 const SHELL_CSS = `
 .gw-canvas-shell {
+  /* Narrower left rail — the AI / Blocks / Outline panels don't need the
+     default width. (Puck reads the *-user-* var for the resizable width.) */
+  --puck-left-side-bar-width: 232px;
+  --puck-user-left-side-bar-width: 232px;
+
   --puck-color-azure-01: var(--accent-12);
   --puck-color-azure-02: var(--accent-11);
   --puck-color-azure-03: var(--accent-10);
@@ -395,6 +400,13 @@ const SHELL_CSS = `
 .gw-canvas-shell [class*="_Nav_"],
 .gw-canvas-shell [class*="_PuckPluginTab_"] {
   overscroll-behavior: contain;
+}
+
+/* Drop the "Page >" breadcrumb trail in the fields panel header — the block's
+   own name renders as the section title beside it, so the trail is just noise.
+   (Selecting a block shows "Sponsored Ad" instead of "Page > Sponsored Ad".) */
+.gw-canvas-shell [class*="SidebarSection-breadcrumbs"] {
+  display: none !important;
 }
 
 /* Selection-outline offset so contentEditable text has breathing room
