@@ -1,5 +1,23 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import type { BotDetectorModule } from './bot-detector.ts';
+// Static import of every detector this registry knows about. Dynamic-template
+// imports (`import(\`./detectors/${name}.ts\`)`) silently fail to resolve
+// inside the Supabase Edge eszip even when the file is bundled — the
+// runtime returns a rejected promise that the registry's catch swallowed,
+// leaving every send unscored on AAIF prod 2026-06-23 (27,985 email_
+// interactions, 0 scored). Static imports unambiguously land in the bundle
+// and are evaluated at module load. To add a new detector module:
+//   1. Add `functionFiles: ['detector.ts:detectors/<name>.ts']` to its
+//      index.ts (so `pnpm modules:deploy-functions` copies it into the
+//      bundle).
+//   2. Add a `import signalsDetector from './detectors/<name>.ts';` line here.
+//   3. Wire it into the `byName` map below.
+// Three lines per detector is cheaper than chasing silent runtime failures.
+import signalsDetector from './detectors/signals.ts';
+
+const byName: Record<string, BotDetectorModule> = {
+  signals: signalsDetector as BotDetectorModule,
+};
 
 let cachedDetector: BotDetectorModule | null | undefined = undefined;
 
@@ -27,24 +45,17 @@ export async function getBotDetector(
     .maybeSingle();
 
   if (!mod) {
+    console.warn(`[bulk-emailing] Bot detector "email-bot-detector-${detectorName}" not installed/enabled in installed_modules — skipping scoring`);
     cachedDetector = null;
     return null;
   }
 
-  try {
-    // The deploy step copies `detector.ts` from the module into
-    // `_shared/detectors/<name>.ts` per the module's `functionFiles`
-    // entry (see provider-registry.ts for the same convention).
-    // NOTE (2026-05-10): email-bot-detector-signals does not yet
-    // declare a `functionFiles` mapping, so this import will fail
-    // until that module is updated — caught below, detector
-    // returns null, and we fall back to no detection.
-    const detector = await import(`./detectors/${detectorName}.ts`);
-    cachedDetector = detector.default as BotDetectorModule;
-    return cachedDetector;
-  } catch {
-    console.warn(`[bulk-emailing] Bot detector "${detectorName}" failed to load, falling back to no detection`);
+  const detector = byName[detectorName];
+  if (!detector) {
+    console.warn(`[bulk-emailing] Bot detector "${detectorName}" enabled in installed_modules but no static import in bot-detector-registry — add it. Skipping scoring.`);
     cachedDetector = null;
     return null;
   }
+  cachedDetector = detector;
+  return cachedDetector;
 }

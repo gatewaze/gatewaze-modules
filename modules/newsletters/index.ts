@@ -211,6 +211,13 @@ const newslettersModule: GatewazeModule = {
     'migrations/054_fanout_global_send_now.sql',
     // 055 recipient-count preview RPC for the sending UI indicator.
     'migrations/055_recipient_preview_count.sql',
+    // 056 makes signals-v1 (or any active bot detector) show up in the
+    // admin UI's "Detection sources" card by widening edition_detection_
+    // comparison to UNION from email_interactions (where the SendGrid
+    // webhook writes scored per-event records). Prior RPC only saw the
+    // email_events stream (CIO import + pixel/redirect), so webhook-
+    // scored signals were invisible. Found on AAIF prod 2026-06-23.
+    'migrations/056_detection_comparison_with_interactions.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
