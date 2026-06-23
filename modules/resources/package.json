@@ -1,5 +1,5 @@
 {
-  "name": "@gatewaze-modules/structured-resources",
+  "name": "@gatewaze-modules/resources",
   "version": "1.0.0",
   "license": "Apache-2.0",
   "main": "index.ts",

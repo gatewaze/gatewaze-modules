@@ -340,7 +340,7 @@ const ImportPage: React.FC = () => {
             <Button variant="ghost" onClick={() => { setStep('input'); setMarkdown(''); setParsed(null); setResult(null); }}>
               Import Another
             </Button>
-            <Button onClick={() => window.location.href = '/structured-resources/collections'}>
+            <Button onClick={() => window.location.href = '/resources/collections'}>
               View Collections
             </Button>
           </div>

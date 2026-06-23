@@ -1,7 +1,7 @@
 import type { GatewazeModule } from '@gatewaze/shared';
 
 const structuredResourcesModule: GatewazeModule = {
-  id: 'structured-resources',
+  id: 'resources',
   group: 'content',
   type: 'feature',
   visibility: 'premium',
@@ -9,9 +9,9 @@ const structuredResourcesModule: GatewazeModule = {
   description: 'Create and manage hierarchical resource guides with configurable section templates and access control',
   version: '1.0.0',
   features: [
-    'structured-resources',
-    'structured-resources.collections',
-    'structured-resources.import',
+    'resources',
+    'resources.collections',
+    'resources.import',
   ],
 
   dependencies: ['content-platform'],
@@ -25,37 +25,37 @@ const structuredResourcesModule: GatewazeModule = {
 
   adminRoutes: [
     {
-      path: 'structured-resources/collections',
+      path: 'resources/collections',
       component: () => import('./admin/pages/collections/index'),
-      requiredFeature: 'structured-resources',
+      requiredFeature: 'resources',
       guard: 'none',
     },
     {
-      path: 'structured-resources/collections/:id',
+      path: 'resources/collections/:id',
       component: () => import('./admin/pages/collection/index'),
-      requiredFeature: 'structured-resources',
+      requiredFeature: 'resources',
       guard: 'none',
     },
     {
-      path: 'structured-resources/collections/:id/:tab',
+      path: 'resources/collections/:id/:tab',
       component: () => import('./admin/pages/collection/index'),
-      requiredFeature: 'structured-resources',
+      requiredFeature: 'resources',
       guard: 'none',
     },
     {
-      path: 'structured-resources/import',
+      path: 'resources/import',
       component: () => import('./admin/pages/import/index'),
-      requiredFeature: 'structured-resources.import',
+      requiredFeature: 'resources.import',
       guard: 'admin',
     },
   ],
 
   adminNavItems: [
     {
-      path: '/structured-resources/collections',
+      path: '/resources/collections',
       label: 'Resources',
       icon: 'BookOpen',
-      requiredFeature: 'structured-resources',
+      requiredFeature: 'resources',
       order: 18,
     },
   ],
@@ -69,8 +69,8 @@ const structuredResourcesModule: GatewazeModule = {
 
   portalRoutes: [
     { path: '/resources', component: () => import('./portal/pages/index') },
-    { path: '/resources/:collectionSlug', component: () => import('./portal/pages/_collectionSlug/index') },
-    { path: '/resources/:collectionSlug/:itemSlug', component: () => import('./portal/pages/_collectionSlug/_itemSlug') },
+    { path: '/resources/:collectionSlug', component: () => import('./portal/pages/[collectionSlug]/index') },
+    { path: '/resources/:collectionSlug/:itemSlug', component: () => import('./portal/pages/[collectionSlug]/[itemSlug]') },
   ],
 
   configSchema: {
@@ -90,15 +90,15 @@ const structuredResourcesModule: GatewazeModule = {
   },
 
   onInstall: async () => {
-    console.log('[structured-resources] Module installed');
+    console.log('[resources] Module installed');
   },
 
   onEnable: async () => {
-    console.log('[structured-resources] Module enabled');
+    console.log('[resources] Module enabled');
   },
 
   onDisable: async () => {
-    console.log('[structured-resources] Module disabled');
+    console.log('[resources] Module disabled');
   },
 };
 

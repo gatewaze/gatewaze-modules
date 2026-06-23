@@ -157,7 +157,7 @@ const CollectionsPage: React.FC = () => {
             <Card
               key={collection.id}
               className="cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => navigate(`/structured-resources/collections/${collection.id}`)}
+              onClick={() => navigate(`/resources/collections/${collection.id}`)}
             >
               {collection.cover_image_url && (
                 <div className="aspect-[16/9] overflow-hidden rounded-t-lg -mx-4 -mt-4 mb-4">
