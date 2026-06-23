@@ -124,6 +124,17 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
     }
   }
 
+  // Drive cancellation independent of the claim. A 'cancelling' send's recipients
+  // sit in 'pending'/'sending', but claim_due_* only returns 'pending' rows under
+  // a 'sending' parent — so a cancel would otherwise never finalise. Sweep each
+  // cancelling send's outstanding rows to 'skipped' (bulk by send_id+status — no
+  // id-list URL), then finaliseSend flips it to 'cancelled'.
+  const { data: cancelling } = await supabase.from(binding.sendsTable).select('id').eq('status', 'cancelling').limit(50);
+  for (const c of (cancelling ?? []) as Array<{ id: string }>) {
+    await supabase.from(binding.recipientsTable).update({ status: 'skipped', updated_at: new Date().toISOString() }).eq('send_id', c.id).in('status', ['pending', 'sending']);
+    touched.add(c.id);
+  }
+
   for (const sendId of touched) await finalizeSend(deps, binding, sendId).catch((e) => logger.warn('[send-engine] finalize failed', e));
   return { claimed: claimedTotal, sent: sentTotal, failed: failedTotal };
 }
