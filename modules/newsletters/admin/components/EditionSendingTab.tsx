@@ -135,16 +135,20 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         if (error) throw error;
       },
       async sendTest(email: string) {
+        // Mirrors the editor's working test-send: the route expects
+        // recipient_email + the rendered html + subject (not { to }).
+        const { html } = await buildFinalHtml();
         const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
         const { data: { session } } = await supabase.auth.getSession();
         const res = await fetch(`${apiUrl}/api/admin/newsletters/editions/${editionId}/test-send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: `Bearer ${session.access_token}` } : {}) },
-          body: JSON.stringify({ to: email }),
+          body: JSON.stringify({ recipient_email: email, html, subject: subject || 'Newsletter' }),
         });
         if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || `Test send failed (${res.status})`);
+          const body = (await res.json().catch(() => null)) as { error?: { message?: string } | string } | null;
+          const msg = typeof body?.error === 'string' ? body.error : body?.error?.message;
+          throw new Error(msg || `Test send failed (${res.status})`);
         }
       },
     };
