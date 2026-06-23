@@ -299,7 +299,12 @@ function DetectionSourceComparison({ editionId, eng }: { editionId: string; eng:
           </tr>
         </thead>
         <tbody>
-          {(rows || []).filter((r) => r.detection_source === 'bot-detector-signals').map((r) => {
+          {/* Filter on the scorer's actual id ('signals-v1'). Earlier draft
+              checked 'bot-detector-signals' (the MODULE id), which never
+              matched the RPC's detection_source — left the signals-v1 row
+              invisible in the admin UI even when rows were being returned.
+              Found 2026-06-23. */}
+          {(rows || []).filter((r) => r.detection_source === 'signals-v1').map((r) => {
             const o = r.human_openers + r.machine_openers;
             return (
               <tr key={r.detection_source} className="border-b border-[var(--gray-a3)] last:border-0">
