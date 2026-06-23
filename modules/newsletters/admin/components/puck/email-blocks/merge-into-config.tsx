@@ -65,7 +65,16 @@ function resolveCustomRenders(
     if (field.type === 'custom' && field.customFormat && typeof field.render !== 'function') {
       out[k] = { ...f, render: resolveCustomField(field.customFormat as CustomFormat, ctx) } as Field;
     } else if (field.type === 'array' && field.arrayFields) {
-      out[k] = { ...f, arrayFields: resolveCustomRenders(field.arrayFields, ctx) } as Field;
+      // 1-based item labels in the array editor (Puck defaults to 0-based);
+      // keep any getItemSummary the block already declares.
+      const existingSummary = (field as { getItemSummary?: unknown }).getItemSummary;
+      out[k] = {
+        ...f,
+        arrayFields: resolveCustomRenders(field.arrayFields, ctx),
+        ...(typeof existingSummary === 'function'
+          ? {}
+          : { getItemSummary: (_item: unknown, index?: number) => `Item ${(index ?? 0) + 1}` }),
+      } as Field;
     } else if (field.type === 'object' && field.objectFields) {
       out[k] = { ...f, objectFields: resolveCustomRenders(field.objectFields, ctx) } as Field;
     } else {

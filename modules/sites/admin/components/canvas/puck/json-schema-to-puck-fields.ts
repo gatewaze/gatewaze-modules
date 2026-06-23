@@ -38,7 +38,7 @@ export type PuckField =
   | (PuckFieldBase & { type: 'number' })
   | (PuckFieldBase & { type: 'select'; options: ReadonlyArray<{ label: string; value: string | number | boolean }> })
   | (PuckFieldBase & { type: 'radio'; options: ReadonlyArray<{ label: string; value: string | number | boolean }> })
-  | (PuckFieldBase & { type: 'array'; arrayFields: Record<string, PuckField>; defaultItemProps?: Record<string, unknown> })
+  | (PuckFieldBase & { type: 'array'; arrayFields: Record<string, PuckField>; defaultItemProps?: Record<string, unknown>; getItemSummary?: (item: Record<string, unknown>, index?: number) => string })
   | (PuckFieldBase & { type: 'object'; objectFields: Record<string, PuckField> })
   | (PuckFieldBase & { type: 'custom'; customFormat: CustomFormat; render?: (props: { value: unknown; onChange: (v: unknown) => void }) => ReactNode });
 
@@ -132,7 +132,8 @@ function mapProperty(
         for (const [k, p] of Object.entries(items.properties)) {
           arrayFields[k] = mapProperty(`${path}[].${k}`, p, warnings);
         }
-        return { type: 'array', ...base, arrayFields };
+        // 1-based item labels in the array editor (Puck defaults to 0-based).
+        return { type: 'array', ...base, arrayFields, getItemSummary: (_item, index) => `Item ${(index ?? 0) + 1}` };
       }
       // Array of scalars (or untyped): fall back to text — Puck v0.20
       // arrays only support arrayFields (object items).
