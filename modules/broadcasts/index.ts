@@ -67,6 +67,9 @@ const broadcastsModule: GatewazeModule = {
     'migrations/004_send_engine_batches.sql',
     // 005 ties broadcasts to a category list for unsubscribe (list-tied model).
     'migrations/005_broadcasts_category_list.sql',
+    // 006 splits broadcasts into a parent (definition) + send instances, so a
+    // broadcast can have many sends (uniform parent→sends model, shared UI).
+    'migrations/006_broadcasts_parent.sql',
   ],
 
   adminRoutes: [
