@@ -33,22 +33,12 @@ export async function getBotDetector(
 
   const detectorName = Deno.env.get('EMAIL_BOT_DETECTOR') || 'signals';
 
-  // Check if the detector sub-module is installed and enabled. The
-  // host's registry table is `installed_modules` (id, status, features,
-  // portal_nav). See note in provider-registry.ts — `module_status` /
-  // `'active'` were never correct.
-  const { data: mod } = await supabase
-    .from('installed_modules')
-    .select('id, status')
-    .eq('id', `email-bot-detector-${detectorName}`)
-    .eq('status', 'enabled')
-    .maybeSingle();
-
-  if (!mod) {
-    console.warn(`[bulk-emailing] Bot detector "email-bot-detector-${detectorName}" not installed/enabled in installed_modules — skipping scoring`);
-    cachedDetector = null;
-    return null;
-  }
+  // 2026-06-23 isolation: bypass the installed_modules gate. The detector is
+  // statically imported below so always available; the gate adds zero security
+  // (service-role bypasses RLS) and was the suspected silent-fail point on
+  // AAIF prod (0/27,985 scored). Re-add the gate later if we need brand-level
+  // multi-tenancy on detection.
+  console.log(`[bulk-emailing] getBotDetector resolving "${detectorName}"`);
 
   const detector = byName[detectorName];
   if (!detector) {
