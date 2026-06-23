@@ -51,6 +51,7 @@ import {
 import { SunIcon, MoonIcon } from '@heroicons/react/24/outline';
 import { getCanvasPuckPlugins } from './canvas-puck-plugin-registry.js';
 import { DraggableOutline } from './DraggableOutline.js';
+import { SidebarTabPin } from './SidebarTabPin.js';
 import { CanvasPluginHostContext, type CanvasPluginHostKind } from './canvas-plugin-host-context.js';
 
 export type CanvasPreviewMode = 'light' | 'dark';
@@ -153,8 +154,11 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
   // Merged overrides — shared defaults first, host overrides win.
   const mergedOverrides = useMemo<Partial<Overrides>>(() => ({
     // Hide Puck's native header (operators want a clean look matching
-    // puckeditor.com; the toolbar above the panel takes its place).
-    headerActions: () => null,
+    // puckeditor.com; the toolbar above the panel takes its place). We also use
+    // this always-mounted, leaf slot to host SidebarTabPin (keeps the left tab
+    // on the operator's choice when a block is selected — see that file for why
+    // it must NOT mount via overrides.puck).
+    headerActions: () => <SidebarTabPin />,
     // Replace the click-only outline with a drag-to-reorder one.
     outline: () => <DraggableOutline />,
     ...(overrides ?? {}),
