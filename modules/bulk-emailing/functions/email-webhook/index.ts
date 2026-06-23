@@ -234,24 +234,43 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
       .eq('email_send_log_id', log.id)
       .eq('is_bot', false)
 
-    // Also check other emails to this recipient
-    const { count: humanOpenCount } = await supabase
-      .from('email_interactions')
-      .select('*', { count: 'exact', head: true })
-      .eq('event_type', 'open')
-      .eq('is_bot', false)
-      .in('email_send_log_id',
-        supabase.from('email_send_log').select('id').eq('recipient_email', log.recipient_email)
-      )
+    // Cross-edition engagement signal for this recipient: how many other
+    // emails to the same address have a confirmed human open/click? The
+    // earlier shape used `.in(col, supabase.from(...).select(...))` —
+    // supabase-js v2's `.in()` ONLY accepts arrays, so that variant threw
+    // (caught silently in the outer try/catch) and was the actual root
+    // cause of 0/27,985 events scoring on AAIF prod 2026-06-23. Materialise
+    // the send_log ids first; cap the prior-history fan-out at 200 so this
+    // stays bounded for very chatty recipients.
+    const { data: priorLogs } = await supabase
+      .from('email_send_log')
+      .select('id')
+      .eq('recipient_email', log.recipient_email)
+      .neq('id', log.id)
+      .order('sent_at', { ascending: false, nullsFirst: false })
+      .limit(200)
 
-    const { count: humanClickCount } = await supabase
-      .from('email_interactions')
-      .select('*', { count: 'exact', head: true })
-      .eq('event_type', 'click')
-      .eq('is_bot', false)
-      .in('email_send_log_id',
-        supabase.from('email_send_log').select('id').eq('recipient_email', log.recipient_email)
-      )
+    const priorLogIds = (priorLogs ?? []).map((r: { id: string }) => r.id)
+
+    let humanOpenCount = 0
+    let humanClickCount = 0
+    if (priorLogIds.length > 0) {
+      const { count: openCount } = await supabase
+        .from('email_interactions')
+        .select('*', { count: 'exact', head: true })
+        .eq('event_type', 'open')
+        .eq('is_bot', false)
+        .in('email_send_log_id', priorLogIds)
+      humanOpenCount = openCount ?? 0
+
+      const { count: clickCount } = await supabase
+        .from('email_interactions')
+        .select('*', { count: 'exact', head: true })
+        .eq('event_type', 'click')
+        .eq('is_bot', false)
+        .in('email_send_log_id', priorLogIds)
+      humanClickCount = clickCount ?? 0
+    }
 
     const context: InteractionContext = {
       eventType: event.eventType as 'open' | 'click',
