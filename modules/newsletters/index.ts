@@ -208,6 +208,8 @@ const newslettersModule: GatewazeModule = {
     // "send to everyone now" rides the worker drip engine instead of the Tier-1
     // edge processSend loop (flag-gated in newsletter-send).
     'migrations/054_fanout_global_send_now.sql',
+    // 055 recipient-count preview RPC for the sending UI indicator.
+    'migrations/055_recipient_preview_count.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

@@ -94,6 +94,16 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         editHref: settingsHref,
         editLabel: 'Edit',
       },
+      recipientCount: collection?.subscriber_count ?? null,
+      async countRecipients(excludeSentSendIds: string[]) {
+        if (!collection?.list_id) return collection?.subscriber_count ?? 0;
+        const { data, error } = await supabase.rpc('newsletter_recipient_preview_count', {
+          p_list_id: collection.list_id,
+          p_exclude_send_ids: excludeSentSendIds.length > 0 ? excludeSentSendIds : null,
+        });
+        if (error) throw error;
+        return (data as number) ?? 0;
+      },
       async createSend(config: SendComposerConfig) {
         const { html, webVersionUrl, portalBaseUrl } = await buildFinalHtml();
         const { data, error } = await supabase.from('newsletter_sends').insert({
