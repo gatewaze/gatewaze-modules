@@ -12,8 +12,9 @@
  */
 
 import { useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { Editor } from '@tiptap/react';
-import { LinkIcon, PhotoIcon, UserIcon } from '@heroicons/react/24/outline';
+import { CodeBracketIcon, LinkIcon, PhotoIcon, UserIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { uploadHostMedia } from '@gatewaze-modules/host-media/admin';
 import { useNewsletterEditing } from '../NewsletterEditingContext.js';
@@ -70,8 +71,29 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
   const fileRef = useRef<HTMLInputElement>(null);
   const { collectionId } = useNewsletterEditing();
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  const [htmlValue, setHtmlValue] = useState<string | null>(null); // non-null = source view open
 
   if (!editor || readOnly) return children;
+
+  const openHtml = () => setHtmlValue(editor.getHTML());
+  const applyHtml = () => {
+    if (htmlValue === null) return;
+    const next = htmlValue;
+    setHtmlValue(null);
+    // Re-parse the edited HTML into the doc. Same Puck focus/onUpdate gotcha as
+    // image insert: the field's onUpdate bails when not focused, so focus first
+    // then defer a tick. emitUpdate:true so Puck persists the change. Note:
+    // tiptap re-parses through its schema, so tags/attrs it doesn't model are
+    // normalised away on save.
+    editor.commands.focus();
+    const run = () =>
+      (editor.chain().focus() as unknown as {
+        setContent: (c: string, o: { emitUpdate: boolean }) => { run: () => void };
+      })
+        .setContent(next, { emitUpdate: true })
+        .run();
+    requestAnimationFrame(() => requestAnimationFrame(run));
+  };
 
   const insertField = (token: string) => {
     editor.chain().focus().insertContent(`{{${token}}}`).run();
@@ -144,6 +166,7 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
   // (passed in as `children`) stack vertically and overlap the content.
   // Re-establish a single wrapping toolbar row here.
   return (
+    <>
     <div
       // Keep focus (and the text selection) in the editor when a toolbar
       // button is pressed. Without this, mousedown moves focus out of the
@@ -198,6 +221,15 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
       >
         <PhotoIcon style={{ width: 16, height: 16 }} />
       </button>
+      <button
+        type="button"
+        onClick={openHtml}
+        title="View / edit HTML"
+        aria-label="View or edit HTML source"
+        style={{ ...BTN_STYLE, background: htmlValue !== null ? ACTIVE_BG : 'transparent' }}
+      >
+        <CodeBracketIcon style={{ width: 16, height: 16 }} />
+      </button>
       <input
         ref={fileRef}
         type="file"
@@ -249,6 +281,85 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
       {editor.isActive('image') && (
         <ImageControls editor={editor} />
       )}
+    </div>
+    {htmlValue !== null &&
+      createPortal(
+        <HtmlSourceModal
+          value={htmlValue}
+          onChange={setHtmlValue}
+          onCancel={() => setHtmlValue(null)}
+          onSave={applyHtml}
+        />,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/**
+ * Full-screen modal to view / edit the field's raw HTML. Rendered via a portal
+ * to document.body so it sits outside the toolbar's onMouseDownCapture
+ * preventDefault (which would otherwise stop the textarea from receiving focus).
+ */
+function HtmlSourceModal({
+  value, onChange, onCancel, onSave,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}): ReactNode {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Edit HTML source"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000, display: 'flex',
+        alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(17,24,39,0.55)', padding: 24,
+      }}
+    >
+      <div
+        style={{
+          width: 'min(900px, 100%)', maxHeight: '85vh', display: 'flex', flexDirection: 'column',
+          background: '#ffffff', color: '#1f2937', borderRadius: 8,
+          boxShadow: '0 12px 40px rgba(0,0,0,0.25)', overflow: 'hidden',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
+          <strong style={{ fontSize: 14 }}>Edit HTML</strong>
+          <span style={{ fontSize: 11, color: '#9ca3af' }}>Saving re-parses the markup; unsupported tags are normalised.</span>
+        </div>
+        <textarea
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          spellCheck={false}
+          style={{
+            flex: 1, minHeight: 360, resize: 'vertical', border: 'none', outline: 'none',
+            padding: '12px 16px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            fontSize: 13, lineHeight: 1.5, color: '#1f2937', background: '#fbfbfd',
+          }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 16px', borderTop: '1px solid #e5e7eb' }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#374151', fontSize: 13, cursor: 'pointer' }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#4086c6', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+          >
+            Save
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
