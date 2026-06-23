@@ -50,6 +50,7 @@ import {
 } from '@puckeditor/core';
 import { SunIcon, MoonIcon } from '@heroicons/react/24/outline';
 import { getCanvasPuckPlugins } from './canvas-puck-plugin-registry.js';
+import { DraggableOutline } from './DraggableOutline.js';
 import { CanvasPluginHostContext, type CanvasPluginHostKind } from './canvas-plugin-host-context.js';
 
 export type CanvasPreviewMode = 'light' | 'dark';
@@ -151,6 +152,8 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
     // Hide Puck's native header (operators want a clean look matching
     // puckeditor.com; the toolbar above the panel takes its place).
     headerActions: () => null,
+    // Replace the click-only outline with a drag-to-reorder one.
+    outline: () => <DraggableOutline />,
     ...(overrides ?? {}),
   }), [overrides]);
 
