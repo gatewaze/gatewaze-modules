@@ -38,14 +38,24 @@ export function normalizeRichText(html: unknown): string {
     )
     // Bare paragraphs (TipTap emits `text-align: left;` with no margin).
     .replace(/<p style="text-align:\s*left;?">/gi, '<p style="margin:0 0 12px 0;text-align:left">')
-    // Constrain inline images to the email column. A wide image (e.g. a chart
-    // pasted into the body) otherwise renders at its natural width and
-    // stretches its card past the others. `max-width:100%` caps it to the
-    // container even if the image carries a larger fixed width/attribute;
-    // `height:auto` keeps the aspect ratio.
-    .replace(/<img\b([^>]*?)\/?>/gi, (_m, attrs: string) =>
-      /\sstyle=/i.test(attrs)
-        ? `<img${attrs.replace(/(\sstyle=(["']))/i, '$1max-width:100%;height:auto;')}>`
-        : `<img${attrs} style="max-width:100%;height:auto">`,
-    );
+    // Images: constrain to the email column and apply the toolbar's optional
+    // alignment (data-align) + width (data-width, % of column). `max-width:100%`
+    // caps a wide image to the container even if it carries a larger fixed
+    // width; `height:auto` keeps the aspect ratio; a % width is fluid on mobile.
+    // We rebuild the style from scratch (dropping the editor-only inline style)
+    // so the editor's static `display:block` can't override an aligned image's
+    // `inline-block`. Alignment wraps the image in a text-aligned block, which
+    // centres/aligns reliably across clients (incl. Outlook, where auto margins
+    // on images are ignored).
+    .replace(/<img\b([^>]*?)\/?>/gi, (_m, rawAttrs: string) => {
+      const align = (rawAttrs.match(/\sdata-align=(["'])(left|center|right)\1/i)?.[2] ?? '').toLowerCase();
+      const widthPct = rawAttrs.match(/\sdata-width=(["'])(\d{1,3})\1/i)?.[2] ?? '';
+      const attrs = rawAttrs.replace(/\sstyle=(["'])[\s\S]*?\1/i, ''); // drop editor-only style
+      const style: string[] = [];
+      if (widthPct) style.push(`width:${widthPct}%`);
+      style.push('max-width:100%', 'height:auto');
+      style.push(align ? 'display:inline-block' : 'display:block');
+      const img = `<img${attrs} style="${style.join(';')}">`;
+      return align ? `<div style="text-align:${align};margin:0 0 12px 0">${img}</div>` : img;
+    });
 }
