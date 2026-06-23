@@ -81,6 +81,12 @@ const bulkEmailingModule: GatewazeModule = {
     // SG retries resolve. Found while investigating ~9k Yahoo deferrals on a
     // 56k mlopscommunity send (2026-06-23).
     'migrations/015_deferred_status.sql',
+    // 016 adds the bulk_update_email_interaction_scores RPC used by the
+    // email-bot-detector-signals backfill script (and any future script
+    // that needs to write many email_interactions score rows in one
+    // round-trip). Created ad-hoc on AAIF prod 2026-06-23 to support the
+    // initial ~30k scoring backfill; this codifies it for future installs.
+    'migrations/016_bulk_update_interaction_scores_rpc.sql',
   ],
 
   workers: [
