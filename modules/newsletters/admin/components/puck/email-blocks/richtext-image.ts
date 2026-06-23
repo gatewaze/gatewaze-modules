@@ -17,7 +17,6 @@
  */
 
 import Image from '@tiptap/extension-image';
-import { mergeAttributes } from '@tiptap/core';
 
 function imageStyle(attrs: Record<string, unknown>): string {
   const parts: string[] = [];
@@ -52,11 +51,17 @@ export const RichtextImage = Image.extend({
     };
   },
   renderHTML({ HTMLAttributes, node }) {
+    // Merge with a plain spread rather than @tiptap/core's mergeAttributes —
+    // the admin Vite build stubs @tiptap/core (the module is only meant to
+    // import @tiptap/extension-image). HTMLAttributes already carries src/alt +
+    // the rendered data-* attributes; we only need to set the computed style.
     return [
       'img',
-      mergeAttributes(this.options.HTMLAttributes ?? {}, HTMLAttributes, {
+      {
+        ...(this.options.HTMLAttributes ?? {}),
+        ...HTMLAttributes,
         style: imageStyle(node.attrs as Record<string, unknown>),
-      }),
+      },
     ];
   },
 }).configure({ inline: false });
