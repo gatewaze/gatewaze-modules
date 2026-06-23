@@ -37,9 +37,9 @@ describe('normalizeRichText — image alignment + width (v1)', () => {
 
   it('ignores invalid align/width values (falls back to plain)', () => {
     const out = normalizeRichText('<img src="x" data-align="diagonal" data-width="abc">');
-    expect(out).not.toContain('text-align');
+    expect(out).not.toContain('text-align'); // no wrapper
     expect(out).not.toMatch(/(?<!-)width:\d+%/); // no standalone width: (max-width:100% is fine)
-    expect(out).toContain('display:block');
+    expect(out).toContain('max-width:100%'); // preserve branch still caps to the column
   });
 
   it('still normalises lists alongside images', () => {
