@@ -128,6 +128,10 @@ export class BaseScraper {
           'THREE.WebGLRenderer',
           'WebGL context',
           'Failed to load resource: the server responded with a status of 403',
+          // Browser sub-resource load failures (ERR_INVALID_ARGUMENT, ERR_FAILED,
+          // ERR_BLOCKED_BY_CLIENT, etc.) — page-level console noise from beacons /
+          // malformed data: URIs, not scraper errors. Floods logs on Luma pages.
+          'Failed to load resource: net::ERR_',
           'SwiftShader',
           'ANGLE'
         ];
