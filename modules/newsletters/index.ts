@@ -227,6 +227,7 @@ const newslettersModule: GatewazeModule = {
     // partial index so the per-edition lookup stays under the 25s
     // statement_timeout. Found on AAIF prod 2026-06-24.
     'migrations/057_engagement_unsubscribed_from_list_subscriptions.sql',
+    'migrations/058_engagement_read_webhook_stream.sql',
     // 058 seeds the email_only_intro block-def in every email library —
     // a clone of intro_paragraph that the portal /View Online/ page
     // filters out (blocks whose block_type starts with `email_only_`).

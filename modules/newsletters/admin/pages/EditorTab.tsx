@@ -79,8 +79,9 @@ interface EditionEngagement {
   machine_opens: number | null;
   machine_clicks: number | null;
   human_source: 'signals-v1' | 'customer.io' | 'estimate' | null;
-  bounced: number;        // system suppression (bounce/drop)
-  unsubscribed: number;   // genuine opt-out (global or topic)
+  bounced: number;        // this send's bounces — a DELIVERY stat, not a removal
+  unsubscribed: number;   // genuine opt-out (list_subscriptions, this send)
+  suppressed: number;     // actual list removals: list-hygiene bounce/inactive suppression
   cio_human_opens: number;   // Customer.io reference (0 for pre-2025 editions)
   cio_machine_opens: number;
   cio_human_clicks: number;
@@ -243,9 +244,12 @@ function EngagementDetail({ edition }: { edition: Edition }) {
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <Stat label="Unsubscribed" value={fmtNum(e.unsubscribed)} sub={pct(e.unsubscribed, e.sent) + ' · opt-out'} />
-              <Stat label="Bounced / suppressed" value={fmtNum(e.bounced)} sub={pct(e.bounced, e.sent) + ' · delivery failure'} />
-              <Stat label="Total removed" value={fmtNum(e.unsubscribed + e.bounced)} sub={pct(e.unsubscribed + e.bounced, e.sent) + ' of sent'} />
+              <Stat label="Suppressed (bounces)" value={fmtNum(e.suppressed)} sub="removed after repeated bounces" />
+              <Stat label="Total removed" value={fmtNum(e.unsubscribed + e.suppressed)} sub={pct(e.unsubscribed + e.suppressed, e.sent) + ' of sent'} />
             </div>
+            <p className="mt-3 text-xs text-[var(--gray-a8)]">
+              This send bounced {fmtNum(e.bounced)} ({pct(e.bounced, e.sent)}) — a delivery stat, not churn. Bounces are retried; a recipient is only removed after bouncing on several consecutive sends.
+            </p>
           </div>
         </div>
         <div className="lg:col-span-2">
