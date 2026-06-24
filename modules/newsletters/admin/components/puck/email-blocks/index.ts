@@ -117,6 +117,7 @@ import { JobOfWeekBlock } from './blocks/JobOfWeek.js';
 import { LastWeeksTakeBlock } from './blocks/LastWeeksTake.js';
 import { MlConfessionsBlock } from './blocks/MlConfessions.js';
 import { IntroParagraphBlock } from './blocks/IntroParagraph.js';
+import { EmailOnlyIntroBlock } from './blocks/EmailOnlyIntro.js';
 import { HowWeHelpBlock } from './blocks/HowWeHelp.js';
 import { HotTakeBlock } from './blocks/HotTake.js';
 import { AgentInfrastructureBlock } from './blocks/AgentInfrastructure.js';
@@ -149,6 +150,7 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   // Content — newsletter (native ports of legacy mustache blocks)
   JobOfWeekBlock as unknown as EmailBlockEntry,
   IntroParagraphBlock as unknown as EmailBlockEntry,
+  EmailOnlyIntroBlock as unknown as EmailBlockEntry,
   HotTakeBlock as unknown as EmailBlockEntry,
   LastWeeksTakeBlock as unknown as EmailBlockEntry,
   MlConfessionsBlock as unknown as EmailBlockEntry,

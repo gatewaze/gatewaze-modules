@@ -227,6 +227,13 @@ const newslettersModule: GatewazeModule = {
     // partial index so the per-edition lookup stays under the 25s
     // statement_timeout. Found on AAIF prod 2026-06-24.
     'migrations/057_engagement_unsubscribed_from_list_subscriptions.sql',
+    // 058 seeds the email_only_intro block-def in every email library —
+    // a clone of intro_paragraph that the portal /View Online/ page
+    // filters out (blocks whose block_type starts with `email_only_`).
+    // Use case: apology / correction headers on a re-send that should
+    // not appear in the public archive. Paired with EmailOnlyIntro.tsx
+    // (admin component) + the portal filter in [edition].tsx.
+    'migrations/058_email_only_intro_block_def.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

@@ -235,6 +235,17 @@ export default function NewsletterEditionPage({ params }: { params: { collection
 
           <div className="nl-edition-render" style={{ background: '#fff', borderRadius: 14, overflow: 'hidden', padding: '12px 16px', marginTop: 20 }}>
             {edition.blocks
+              // Email-only blocks (block_type starting with `email_only_`)
+              // render in the sent email but are filtered out of the public
+              // View Online archive. Use case: apology / correction headers
+              // on a re-send (added 2026-06-24 after the mlopscommunity
+              // 56k send shipped without its body block). The filter is on
+              // the PREFIX so any future email-only variant (e.g.
+              // email_only_signoff) is excluded automatically. See
+              // templates_block_defs for email_only_intro (migration 058)
+              // and modules/newsletters/admin/components/puck/email-blocks/
+              // blocks/EmailOnlyIntro.tsx for the React component.
+              .filter((b) => !(b.block_type ?? '').startsWith('email_only_'))
               .sort((a, b) => a.sort_order - b.sort_order)
               .map((block) => {
                 const tpl = block.block_template
