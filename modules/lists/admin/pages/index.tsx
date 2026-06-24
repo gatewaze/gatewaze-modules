@@ -37,6 +37,7 @@ export default function ListsPage() {
     description: '',
     is_active: true,
     is_public: true,
+    is_internal: false,
     default_subscribed: false,
     webhook_url: '',
     webhook_secret: '',
@@ -57,7 +58,7 @@ export default function ListsPage() {
     setEditingList(null);
     setFormData({
       name: '', slug: '', description: '', is_active: true,
-      is_public: true, default_subscribed: false,
+      is_public: true, is_internal: false, default_subscribed: false,
       webhook_url: '', webhook_secret: '', webhook_events: [],
     });
     setShowModal(true);
@@ -71,6 +72,7 @@ export default function ListsPage() {
       description: list.description || '',
       is_active: list.is_active,
       is_public: list.is_public,
+      is_internal: list.is_internal,
       default_subscribed: list.default_subscribed,
       webhook_url: list.webhook_url || '',
       webhook_secret: list.webhook_secret || '',
@@ -174,6 +176,9 @@ export default function ListsPage() {
                       ) : (
                         <LockClosedIcon className="h-4 w-4 text-[var(--gray-9)]" title="Private" />
                       )}
+                      {list.is_internal && (
+                        <Badge variant="soft" color="amber" title="Internal — hidden from the portal Subscription Centre">Internal</Badge>
+                      )}
                       {list.webhook_url && (
                         <Badge variant="soft" color="blue">Webhook</Badge>
                       )}
@@ -263,8 +268,8 @@ export default function ListsPage() {
                 <input type="checkbox" checked={formData.is_active} onChange={(e) => setFormData(prev => ({ ...prev, is_active: e.target.checked }))} className="rounded" />
                 Active
               </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={formData.is_public} onChange={(e) => setFormData(prev => ({ ...prev, is_public: e.target.checked }))} className="rounded" />
+              <label className={`flex items-center gap-2 text-sm ${formData.is_internal ? 'opacity-50' : ''}`}>
+                <input type="checkbox" disabled={formData.is_internal} checked={formData.is_public && !formData.is_internal} onChange={(e) => setFormData(prev => ({ ...prev, is_public: e.target.checked }))} className="rounded" />
                 Public (visible on portal)
               </label>
               <label className="flex items-center gap-2 text-sm">
@@ -272,6 +277,27 @@ export default function ListsPage() {
                 Subscribe by default
               </label>
             </div>
+
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={formData.is_internal}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  is_internal: e.target.checked,
+                  // Internal lists are hidden from the portal regardless of is_public;
+                  // force public off so the two flags stay coherent.
+                  is_public: e.target.checked ? false : prev.is_public,
+                }))}
+                className="rounded mt-0.5"
+              />
+              <span>
+                Internal (staff-only)
+                <span className="block text-xs text-[var(--gray-9)]">
+                  Hidden from the portal Subscription Centre and profile preferences. Users can&apos;t see or subscribe to it.
+                </span>
+              </span>
+            </label>
 
             <hr className="border-[var(--gray-a5)]" />
 
