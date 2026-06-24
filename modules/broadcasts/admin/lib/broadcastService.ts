@@ -2,7 +2,9 @@ import { supabase } from '@/lib/supabase';
 import type { SegmentDefinition } from '@/lib/segments';
 
 // ---------------------------------------------------------------------------
-// Broadcast types (mirror public.broadcast_sends)
+// Types — uniform "parent content entity → many sends" model.
+//   `broadcasts`        = the parent (definition + draft content + audience)
+//   `broadcast_sends`   = send INSTANCES of a broadcast (status, schedule, counts)
 // ---------------------------------------------------------------------------
 
 export type BroadcastStatus =
@@ -10,7 +12,22 @@ export type BroadcastStatus =
 export type AudienceType = 'segment' | 'list';
 export type DeliveryStrategy = 'global' | 'tz_local' | 'personalised';
 
-export interface BroadcastSend {
+/** A send instance of a broadcast (a row in broadcast_sends). */
+export interface BroadcastSendInstance {
+  id: string;
+  broadcast_id: string;
+  status: BroadcastStatus;
+  schedule_type: 'immediate' | 'scheduled';
+  delivery_strategy: DeliveryStrategy;
+  scheduled_at: string | null;
+  total_recipients: number;
+  sent_count: number;
+  failed_count: number;
+  created_at: string;
+}
+
+/** The broadcast parent — its definition, audience, and draft content. */
+export interface Broadcast {
   id: string;
   name: string;
   brand: string;
@@ -18,6 +35,7 @@ export interface BroadcastSend {
   audience_type: AudienceType;
   segment_id: string | null;
   list_ids: string[];
+  category_list_id: string | null;
   subject: string | null;
   preheader: string | null;
   from_address: string | null;
@@ -26,24 +44,11 @@ export interface BroadcastSend {
   rendered_html: string | null;
   body_text: string | null;
   content_json: Record<string, unknown>;
-  suppression_topic: string;
-  status: BroadcastStatus;
-  schedule_type: 'immediate' | 'scheduled';
-  delivery_strategy: DeliveryStrategy;
-  default_timezone: string | null;
-  target_local: string | null;
-  lead_minutes: number;
-  scheduled_at: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  exclude_sent_send_ids: string[] | null;
-  total_recipients: number;
-  sent_count: number;
-  failed_count: number;
-  metadata: Record<string, unknown>;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  /** Embedded send instances (when listed) — used to derive a summary status. */
+  sends?: BroadcastSendInstance[];
 }
 
 export interface CreateBroadcastInput {
@@ -53,17 +58,19 @@ export interface CreateBroadcastInput {
   segment_id?: string | null;
   list_ids?: string[];
   subject?: string;
-  suppression_topic?: string;
+}
+
+export interface SendComposerConfig {
+  scheduleType: 'immediate' | 'scheduled';
+  scheduledAt: string | null;
+  deliveryStrategy: DeliveryStrategy;
+  targetLocal: string | null;
+  defaultTimezone: string | null;
+  excludeSentSendIds: string[];
 }
 
 export interface TimezoneBreakdownRow {
-  timezone: string;
-  recipients: number;
-  sent: number;
-  failed: number;
-  pending: number;
-  skipped: number;
-  send_at: string;
+  timezone: string; recipients: number; sent: number; failed: number; pending: number; skipped: number; send_at: string;
 }
 
 export interface CopilotResult {
@@ -77,28 +84,36 @@ export interface CopilotResult {
   error?: string;
 }
 
+/** Derive a single summary status/counts for a broadcast from its send instances. */
+export function broadcastSummary(b: Broadcast): { status: BroadcastStatus; latest: BroadcastSendInstance | null } {
+  const sends = (b.sends ?? []).slice().sort((a, c) => (a.created_at < c.created_at ? 1 : -1));
+  const active = sends.find((s) => s.status === 'sending' || s.status === 'scheduled' || s.status === 'cancelling' || s.status === 'paused');
+  const latest = active ?? sends[0] ?? null;
+  return { status: latest?.status ?? 'draft', latest };
+}
+
 // ---------------------------------------------------------------------------
-// CRUD
+// Parent CRUD
 // ---------------------------------------------------------------------------
 
-export async function listBroadcasts(): Promise<BroadcastSend[]> {
+export async function listBroadcasts(): Promise<Broadcast[]> {
   const { data, error } = await supabase
-    .from('broadcast_sends')
-    .select('*')
+    .from('broadcasts')
+    .select('*, sends:broadcast_sends(id, broadcast_id, status, schedule_type, delivery_strategy, scheduled_at, total_recipients, sent_count, failed_count, created_at)')
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []) as BroadcastSend[];
+  return (data ?? []) as Broadcast[];
 }
 
-export async function getBroadcast(id: string): Promise<BroadcastSend | null> {
-  const { data, error } = await supabase.from('broadcast_sends').select('*').eq('id', id).maybeSingle();
+export async function getBroadcast(id: string): Promise<Broadcast | null> {
+  const { data, error } = await supabase.from('broadcasts').select('*').eq('id', id).maybeSingle();
   if (error) throw error;
-  return (data as BroadcastSend) ?? null;
+  return (data as Broadcast) ?? null;
 }
 
-export async function createBroadcast(input: CreateBroadcastInput): Promise<BroadcastSend> {
+export async function createBroadcast(input: CreateBroadcastInput): Promise<Broadcast> {
   const { data, error } = await supabase
-    .from('broadcast_sends')
+    .from('broadcasts')
     .insert({
       name: input.name,
       brand: input.brand ?? 'default',
@@ -106,66 +121,71 @@ export async function createBroadcast(input: CreateBroadcastInput): Promise<Broa
       segment_id: input.segment_id ?? null,
       list_ids: input.list_ids ?? [],
       subject: input.subject ?? null,
-      suppression_topic: input.suppression_topic ?? 'broadcasts',
-      status: 'draft',
     })
     .select('*')
     .single();
   if (error) throw error;
-  return data as BroadcastSend;
+  return data as Broadcast;
 }
 
-export async function updateBroadcast(id: string, patch: Partial<BroadcastSend>): Promise<BroadcastSend> {
-  const { data, error } = await supabase.from('broadcast_sends').update(patch).eq('id', id).select('*').single();
+export async function updateBroadcast(id: string, patch: Partial<Broadcast>): Promise<Broadcast> {
+  const { data, error } = await supabase.from('broadcasts').update(patch).eq('id', id).select('*').single();
   if (error) throw error;
-  return data as BroadcastSend;
+  return data as Broadcast;
 }
 
 export async function deleteBroadcast(id: string): Promise<void> {
-  const { error } = await supabase.from('broadcast_sends').delete().eq('id', id);
+  const { error } = await supabase.from('broadcasts').delete().eq('id', id);
   if (error) throw error;
 }
 
 // ---------------------------------------------------------------------------
-// Send lifecycle (via the broadcast-send edge function)
+// Send instances
 // ---------------------------------------------------------------------------
 
-/** Schedule a broadcast: set scheduling fields + flip to 'scheduled'. The
- *  dispatch cron fans it out + drips when due. For immediate sends, set
- *  scheduled_at = now so the next tick picks it up (or call sendNow). */
-export async function scheduleBroadcast(id: string, opts: {
-  schedule_type: 'immediate' | 'scheduled';
-  delivery_strategy: DeliveryStrategy;
-  scheduled_at?: string | null;
-  default_timezone?: string | null;
-  target_local?: string | null;
-}): Promise<BroadcastSend> {
-  return updateBroadcast(id, {
-    status: 'scheduled',
-    schedule_type: opts.schedule_type,
-    delivery_strategy: opts.delivery_strategy,
-    scheduled_at: opts.scheduled_at ?? new Date().toISOString(),
-    default_timezone: opts.default_timezone ?? null,
-    target_local: opts.target_local ?? null,
-  } as Partial<BroadcastSend>);
+/** Create a send instance from the broadcast parent + composer config. The
+ *  instance snapshots the parent's content/audience so the worker binding (which
+ *  reads broadcast_sends) is unchanged. The SendingPanel then triggers the
+ *  immediate send (broadcast-send edge fn) or leaves it scheduled for the cron. */
+export async function createBroadcastSend(parentId: string, config: SendComposerConfig): Promise<{ id: string }> {
+  const parent = await getBroadcast(parentId);
+  if (!parent) throw new Error('Broadcast not found');
+  if (!parent.rendered_html) throw new Error('Add content before sending');
+  const { data, error } = await supabase
+    .from('broadcast_sends')
+    .insert({
+      broadcast_id: parentId,
+      name: parent.name,
+      brand: parent.brand,
+      channel: parent.channel,
+      audience_type: parent.audience_type,
+      segment_id: parent.segment_id,
+      list_ids: parent.list_ids,
+      category_list_id: parent.category_list_id,
+      subject: parent.subject,
+      preheader: parent.preheader,
+      from_address: parent.from_address,
+      from_name: parent.from_name,
+      reply_to: parent.reply_to,
+      rendered_html: parent.rendered_html,
+      body_text: parent.body_text,
+      content_json: parent.content_json,
+      suppression_topic: 'broadcasts',
+      status: config.scheduleType === 'scheduled' ? 'scheduled' : 'sending',
+      schedule_type: config.scheduleType,
+      scheduled_at: config.scheduledAt,
+      delivery_strategy: config.deliveryStrategy,
+      target_local: config.targetLocal,
+      default_timezone: config.defaultTimezone,
+      exclude_sent_send_ids: config.excludeSentSendIds.length > 0 ? config.excludeSentSendIds : null,
+      total_recipients: 0, sent_count: 0, failed_count: 0,
+      metadata: {},
+    })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return { id: data.id as string };
 }
-
-/** Fan out + start a broadcast immediately (bypasses waiting for the cron). */
-export async function sendNow(id: string): Promise<{ success: boolean; error?: string }> {
-  const { data, error } = await supabase.functions.invoke('broadcast-send', { body: { send_id: id } });
-  if (error) return { success: false, error: error.message };
-  return data as { success: boolean; error?: string };
-}
-
-export async function sendTest(id: string, email: string): Promise<{ success: boolean; error?: string }> {
-  const { data, error } = await supabase.functions.invoke('broadcast-send', { body: { test_send: { send_id: id, email } } });
-  if (error) return { success: false, error: error.message };
-  return data as { success: boolean; error?: string };
-}
-
-export async function pauseBroadcast(id: string): Promise<void> { await updateBroadcast(id, { status: 'paused' } as Partial<BroadcastSend>); }
-export async function resumeBroadcast(id: string): Promise<void> { await updateBroadcast(id, { status: 'sending' } as Partial<BroadcastSend>); }
-export async function cancelBroadcast(id: string): Promise<void> { await updateBroadcast(id, { status: 'cancelling' } as Partial<BroadcastSend>); }
 
 export async function getTimezoneBreakdown(id: string): Promise<TimezoneBreakdownRow[]> {
   const { data, error } = await supabase.rpc('broadcast_send_timezone_breakdown', { p_send_id: id });
@@ -174,14 +194,11 @@ export async function getTimezoneBreakdown(id: string): Promise<TimezoneBreakdow
 }
 
 // ---------------------------------------------------------------------------
-// AI segment copilot
+// AI segment copilot (unchanged — Node-side route via the AI module's runChat)
 // ---------------------------------------------------------------------------
 
 const API_URL = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
 
-/** Calls the Node-side copilot route (which uses the AI module's runChat), not a
- *  Supabase edge function — the AI module is not Deno-compatible. Mirrors
- *  editor-ai-copilot's authedFetch pattern. */
 export async function buildSegmentFromPrompt(
   prompt: string,
   opts?: { brand?: string; currentDefinition?: SegmentDefinition | null },
