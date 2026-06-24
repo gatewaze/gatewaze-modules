@@ -21,6 +21,7 @@ import { createMediaRoutes, mountMediaRoutes, type MediaUploadInput, type MediaA
 import { createAlbumsRoutes, mountAlbumsRoutes } from './albums-routes.js';
 import { createChunkedRoutes, mountChunkedRoutes } from './chunked-routes.js';
 import { requireJwt } from '../lib/require-jwt.js';
+import { sanitiseFilename } from '../lib/storage-paths.js';
 
 // Canonical bucket per spec-relative-storage-paths.md: a single `media`
 // bucket per Gatewaze instance. HOST_MEDIA_BUCKET remains an override for
@@ -92,7 +93,12 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
   // Default media adapter (Supabase Storage).
   const mediaAdapter: MediaAdapter = {
     async upload(args) {
-      const path = `${args.hostKind}/${args.hostId}/${args.mediaId}/${args.filename}`;
+      // Slugify the filename at the upload boundary so the storage path
+      // (and the cdn_url derived from it) is URL-safe. Mail clients won't
+      // auto-encode an `<img src>` containing literal spaces/non-ASCII
+      // bytes the way browsers do — Gmail just refuses to load it.
+      const safeName = sanitiseFilename(args.filename);
+      const path = `${args.hostKind}/${args.hostId}/${args.mediaId}/${safeName}`;
       const { error } = await supabase.storage.from(STORAGE_BUCKET).upload(path, args.buffer, {
         contentType: args.mimeType,
         upsert: false,

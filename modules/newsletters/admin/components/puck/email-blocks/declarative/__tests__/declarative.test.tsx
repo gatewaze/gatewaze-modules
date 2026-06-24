@@ -164,6 +164,52 @@ describe('declarative block format', () => {
     expect(html).toContain('hi');
   });
 
+  describe('html attribute (inline-html in text fields)', () => {
+    it('renders sanitised inline tags from a bound text field', async () => {
+      const html = await renderEntry(
+        `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading if="title" html>{{title}}</Heading></Section>`,
+        { title: 'New <s>old</s> price' },
+      );
+      expect(html).toContain('<s>old</s>');
+      expect(html).toContain('New ');
+      expect(html).toContain('price');
+    });
+
+    it('strips non-allowlisted tags but keeps text', async () => {
+      const html = await renderEntry(
+        `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading if="title" html>{{title}}</Heading></Section>`,
+        { title: 'safe <script>alert(1)</script> and <img onerror="x"> text' },
+      );
+      expect(html).not.toContain('<script');
+      expect(html).not.toContain('alert(1)');
+      expect(html).not.toContain('<img');
+      expect(html).not.toContain('onerror');
+      // The text outside the stripped tags survives.
+      expect(html).toContain('safe ');
+      expect(html).toContain(' text');
+    });
+
+    it('strips attributes from allowlisted tags (no onclick smuggling)', async () => {
+      const html = await renderEntry(
+        `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading if="title" html>{{title}}</Heading></Section>`,
+        { title: '<em class="x" onclick="alert(1)">x</em>' },
+      );
+      expect(html).toContain('<em>x</em>');
+      expect(html).not.toContain('onclick');
+      expect(html).not.toContain('class=');
+    });
+
+    it('without the html attribute the same source renders tags as literal text', async () => {
+      const html = await renderEntry(
+        `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading if="title">{{title}}</Heading></Section>`,
+        { title: 'New <s>old</s> price' },
+      );
+      // Bound through resolveBindings → text children → React escapes <s>.
+      expect(html).toContain('&lt;s&gt;');
+      expect(html).not.toContain('<s>');
+    });
+  });
+
   it('preserves children of <Link> even though <link> is HTML5-void', async () => {
     // Regression: DOMParser lowercases <Link> to <link>, treats it as void,
     // and drops the inner content. The parser must rewrite the collision
@@ -177,5 +223,38 @@ describe('declarative block format', () => {
     // The crucial assertion: the link text must be INSIDE an anchor, not
     // floating as a sibling text node after an empty <a>.
     expect(html).toMatch(/<a[^>]*href="https:\/\/example\.com\/"[^>]*>[^<]*Click here[^<]*<\/a>/);
+  });
+
+  describe('safe URL encoding on src/href (Gmail-safe)', () => {
+    // Defence-in-depth for the upload-time slugifier: even if a legacy
+    // upload, manual DB edit, or AI-generated content puts a literal-space
+    // URL into a field, the renderer must emit a properly-encoded URL so
+    // mail clients (Gmail) will load the image / follow the link.
+    it('encodes spaces in {{url}} bindings on src and href', async () => {
+      const SRC_HREF = `
+<!-- SCHEMA: { "img_url": {"type":"text"}, "link_url": {"type":"text"} } -->
+<Section>
+  <Img src="{{img_url}}" alt="" />
+  <Link href="{{link_url}}">Click</Link>
+</Section>`;
+      const html = await renderEntry(SRC_HREF, {
+        img_url: 'https://cdn.example.com/path/The RePPIT framework.png',
+        link_url: 'https://example.com/some page?ok=1',
+      });
+      expect(html).toContain('src="https://cdn.example.com/path/The%20RePPIT%20framework.png"');
+      expect(html).toContain('href="https://example.com/some%20page?ok=1"');
+      // No literal spaces inside src/href values.
+      expect(html).not.toMatch(/src="[^"]* [^"]*"/);
+      expect(html).not.toMatch(/href="[^"]* [^"]*"/);
+    });
+
+    it('leaves already-encoded URLs alone (no double-encoding)', async () => {
+      const SRC = `<!-- SCHEMA: { "url": {"type":"text"} } --><Section><Img src="{{url}}" alt="" /></Section>`;
+      const html = await renderEntry(SRC, {
+        url: 'https://cdn.example.com/path/the%20file.png',
+      });
+      expect(html).toContain('src="https://cdn.example.com/path/the%20file.png"');
+      expect(html).not.toContain('the%2520file.png');
+    });
   });
 });

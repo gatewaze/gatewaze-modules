@@ -74,6 +74,60 @@ function resolveBindings(text: string, content: Content): string {
   });
 }
 
+/**
+ * Defence-in-depth URL encoder for `src` and `href` attribute values.
+ *
+ * Upload-time sanitisation (host-media's sanitiseFilename) is the primary
+ * guard, but legacy uploads, manual DB edits, and AI-generated content can
+ * still produce URLs containing literal spaces / non-ASCII bytes. Browsers
+ * auto-encode these in a URL; mail clients (Gmail) refuse to load them.
+ *
+ * We use `encodeURI` semantics so URL structure (`/`, `:`, `?`, `&`, `#`)
+ * is preserved while spaces and other unsafe path bytes get %-encoded.
+ * If the value already contains `%XX` sequences we leave it alone to avoid
+ * double-encoding (the `%` would otherwise become `%25`).
+ */
+function safeUrlEncode(s: string): string {
+  if (!s) return s;
+  if (/%[0-9A-Fa-f]{2}/.test(s)) return s;
+  try { return encodeURI(s); } catch { return s; }
+}
+
+const URL_ATTRS = new Set(['src', 'href']);
+
+/**
+ * Small allowlist of inline-formatting tags the `html` attribute permits inside
+ * single-line text fields. Lets admins use `<s>strike</s>`, `<em>`, `<strong>`
+ * etc. in a title without enabling block elements or anything scriptable.
+ *
+ * Voids (no closing tag): br. All other tags expect a matching close.
+ */
+const INLINE_HTML_TAGS = new Set([
+  's', 'em', 'strong', 'u', 'b', 'i', 'span', 'mark', 'sub', 'sup', 'code', 'small', 'br',
+]);
+
+/**
+ * Strip every tag NOT in INLINE_HTML_TAGS, and strip ALL attributes from the
+ * tags that are kept. Entity-encoded sequences (`&lt;`, `&#60;`) pass through
+ * untouched — innerHTML will decode them as literal text, NOT as live HTML, so
+ * `&lt;script&gt;` is safe even though `<script>` would not be.
+ *
+ * This is deliberately ham-fisted: admins are trusted, but a bad paste from
+ * a richtext editor shouldn't be able to slip a `<script>` or `<img onerror>`
+ * into the sent email. The richtext field type still owns the multi-line
+ * formatting path; this is only for inline accents in single-line strings.
+ */
+function sanitiseInlineHtml(html: string): string {
+  if (!html) return html;
+  return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)(?:\s[^>]*)?>/g, (_match, rawTag) => {
+    const tag = String(rawTag).toLowerCase();
+    if (!INLINE_HTML_TAGS.has(tag)) return '';
+    if (tag === 'br') return '<br/>';
+    const isClosing = _match.startsWith('</');
+    return isClosing ? `</${tag}>` : `<${tag}>`;
+  });
+}
+
 function mergeItem(content: Content, item: unknown): Content {
   if (item && typeof item === 'object') return { ...content, ...(item as Content), $item: item };
   return { ...content, $item: item };
@@ -157,7 +211,33 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const props: Record<string, any> = { style: nodeStyle(node), key };
   for (const a of PASSTHROUGH_ATTRS) {
-    if (attrs[a] !== undefined) props[a] = resolveBindings(attrs[a], ctx.content);
+    if (attrs[a] !== undefined) {
+      const resolved = resolveBindings(attrs[a], ctx.content);
+      props[a] = URL_ATTRS.has(a) ? safeUrlEncode(resolved) : resolved;
+    }
+  }
+
+  // `html` attribute — render the bound text as sanitised HTML so admins can
+  // use inline accents (`<s>`, `<em>`, `<strong>`, `<u>`, …) inside single-line
+  // text fields without us promoting them to richtext. The field type stays
+  // `text` (single-line input in the editor); only the renderer switches from
+  // text children to dangerouslySetInnerHTML when the directive opts in.
+  //
+  //   <Heading if="title" html>{{title}}</Heading>
+  //
+  // The bound value is run through sanitiseInlineHtml — a tag allowlist that
+  // drops everything outside INLINE_HTML_TAGS and ALL attributes. So a paste
+  // of `<img onerror=...>` or `<script>...</script>` lands as empty text, not
+  // executable HTML. Use only on text fields; richtext fields already have
+  // their own (multi-line) path via <richtext field="...">.
+  if (attrs['html'] !== undefined && attrs['html'] !== 'false') {
+    const field = bindingKeyFromChildren(children);
+    const value = field ? getPath(ctx.content, field) : undefined;
+    const html = sanitiseInlineHtml(value == null ? '' : String(value));
+    props.dangerouslySetInnerHTML = { __html: html };
+    return isIntrinsic
+      ? createElement(tag, props)
+      : createElement(Comp, props);
   }
 
   const kids = children.map((c, i) => renderNode(c, ctx, `${key}-${i}`));

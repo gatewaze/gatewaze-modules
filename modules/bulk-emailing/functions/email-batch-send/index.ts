@@ -1,19 +1,16 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { getEmailProvider } from '../_shared/provider-registry.ts'
-import { calculateNextRetry, jobIdToLockKey } from '../_shared/retry.ts'
+import { jobIdToLockKey } from '../_shared/retry.ts'
 
 // Configuration
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || ''
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
 
+// Recipient page size for the enqueue loop.
 const BATCH_LIMIT = 50
-const PROGRESS_UPDATE_INTERVAL = 10
-const CANCEL_CHECK_INTERVAL = 50
 
-// Tier 2: when enabled, this fn ENQUEUES resolved recipients (with each one's
-// substitution context) into email_batch_job_recipients and the shared worker
-// drip engine sends them. When disabled, it sends inline (legacy Tier 1).
-const USE_WORKER = Deno.env.get('SEND_ENGINE_USE_WORKER') === 'true'
+// Central Sending Service: this fn ENQUEUES resolved recipients (with each
+// one's substitution context) into email_batch_job_recipients; the shared
+// worker drip engine sends them.
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -25,7 +22,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// --- Template Variable Replacement ---
+// --- Template Variable Substitution Context ---
+//
+// The Tier-2 worker engine renders `{{scope.field|default:"..."}}` tokens at
+// dispatch time against each recipient's stored template_variables (see the
+// bulk send-engine binding). This Edge function only builds the per-recipient
+// context and enqueues it.
 
 function encodeEmail(email: string): string {
   if (!email) return ''
@@ -43,29 +45,6 @@ function encodeEmail(email: string): string {
 
 interface TemplateContext {
   [scope: string]: Record<string, string | undefined> | undefined
-}
-
-function replaceVariables(template: string, context: TemplateContext): string {
-  return template.replace(/\{\{([^}]+)\}\}/g, (match, inner: string) => {
-    const trimmed = inner.trim()
-    const segments = trimmed.split('|').map((s: string) => s.trim())
-    const fieldRef = segments[0]
-    const fieldMatch = fieldRef.match(/^([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)(?::([a-zA-Z0-9_-]+))?$/)
-    if (!fieldMatch) return match
-
-    const [, scope, field] = fieldMatch
-    const scopeData = context[scope]
-    const value = scopeData?.[field]
-
-    let defaultValue: string | undefined
-    for (let i = 1; i < segments.length; i++) {
-      const filterMatch = segments[i].match(/^default:"([^"]*)"$/)
-      if (filterMatch) defaultValue = filterMatch[1]
-    }
-
-    if (value !== undefined && value !== null && value !== '') return value
-    return defaultValue ?? ''
-  })
 }
 
 function formatDate(dateStr: string | null | undefined): string {
@@ -454,9 +433,6 @@ export default async function(req: Request) {
       })
     }
 
-    // Get email provider
-    const provider = await getEmailProvider(supabase)
-
     // Set to processing + count recipients on first run
     if (job.status === 'pending') {
       const totalRecipients = await countRecipients(job)
@@ -486,247 +462,42 @@ export default async function(req: Request) {
       }).eq('id', jobId)
     }
 
-    // Fetch event details
+    // Fetch event details — used by buildRecipientContext to populate
+    // {{event.*}} substitution variables on the enqueued recipient rows.
     const { data: event } = await supabase
       .from('events')
       .select('event_id, event_title, event_city, event_country_code, event_start, event_end, event_link, event_location')
       .eq('event_id', job.event_id)
       .single()
 
-    // Parse from address
-    let fromEmail = job.from_address
-    let fromName: string | undefined
-    const fromMatch = job.from_address?.match(/^(.+?)\s*-\s*(.+@.+)$/)
-    if (fromMatch) {
-      fromName = fromMatch[1].trim()
-      fromEmail = fromMatch[2].trim()
-    }
-
     const config = job.config || {}
 
-    // Tier 2: enqueue all recipients (with substitution context) for the shared
-    // worker drip engine, then return — the worker sends them. No inline send.
-    if (USE_WORKER) {
-      const enqueued = await enqueueAllRecipients(job, event, config)
-      const now = new Date().toISOString()
-      await supabase.from('email_batch_jobs').update({
-        status: enqueued > 0 ? 'sending' : 'completed',
-        total_recipients: enqueued,
-        last_processed_offset: 0,
-        last_heartbeat_at: now,
-        updated_at: now,
-        ...(enqueued > 0 ? {} : { completed_at: now }),
-      }).eq('id', jobId)
-      console.log(`Job ${jobId}: enqueued ${enqueued} recipients for Tier-2 worker drip`)
-      return new Response(JSON.stringify({
-        jobId, status: enqueued > 0 ? 'sending' : 'completed', enqueued,
-        message: enqueued > 0 ? 'Enqueued for worker drip' : 'No recipients found',
-      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-    }
-
-    // --- Tier 1 (legacy inline send) ---
-    // Fetch batch of recipients
-    const offset = job.last_processed_offset || 0
-    let recipients: Recipient[]
-
-    if (job.email_type === 'calendar_blast') {
-      recipients = await fetchCalendarBlastRecipients(job, offset, BATCH_LIMIT)
-    } else if (job.email_type === 'adhoc_email') {
-      recipients = await fetchAdhocRecipients(config.member_profile_ids || [], offset, BATCH_LIMIT)
-    } else if (job.email_type === 'registration' || job.email_type === 'reminder') {
-      recipients = await fetchRegistrationRecipients(job.event_id, offset, BATCH_LIMIT, config.registered_after)
-    } else if (job.email_type === 'registrant_email') {
-      recipients = await fetchRegistrationRecipients(job.event_id, offset, BATCH_LIMIT, undefined, config.registration_ids)
-    } else if (job.email_type === 'post_event_attendee') {
-      recipients = await fetchAttendeeRecipients(job.event_id, offset, BATCH_LIMIT)
-    } else if (job.email_type === 'post_event_non_attendee') {
-      recipients = await fetchNonAttendeeRecipients(job.event_id, offset, BATCH_LIMIT)
-    } else if (job.email_type === 'competition_non_winner') {
-      recipients = await fetchCompetitionNonWinnerRecipients(job.event_id, offset, BATCH_LIMIT)
-    } else {
-      recipients = await fetchSpeakerRecipients(config.event_uuid, config.speaker_status, config.include_directly_added || false, offset, BATCH_LIMIT)
-    }
-
-    console.log(`Job ${jobId}: Processing ${recipients.length} recipients (offset ${offset}, total ${job.total_recipients})`)
-
-    let processed = job.processed_count || 0
-    let successful = job.success_count || 0
-    let failed = job.fail_count || 0
-    const errors: any[] = Array.isArray(job.errors) ? [...job.errors] : []
-
-    for (let i = 0; i < recipients.length; i++) {
-      // Check for cancellation
-      if (i > 0 && i % CANCEL_CHECK_INTERVAL === 0) {
-        const { data: currentJob } = await supabase
-          .from('email_batch_jobs').select('status').eq('id', jobId).single()
-        if (currentJob?.status === 'cancelled') {
-          console.log(`Job ${jobId} was cancelled, stopping`)
-          break
-        }
-      }
-
-      const recipient = recipients[i]
-      if (!recipient.email) { processed++; continue }
-
-      try {
-        // Build template context (shared with the Tier-2 enqueue path)
-        const context = buildRecipientContext(job, event, config, recipient)
-
-        const processedSubject = replaceVariables(job.subject_template, context)
-        const processedHtml = replaceVariables(job.content_template, context)
-
-        // Create email_send_log entry with status=queued
-        const { data: logEntry } = await supabase.from('email_send_log').insert({
-          recipient_email: recipient.email,
-          recipient_customer_id: recipient.personId || null,
-          from_address: fromEmail,
-          reply_to: job.reply_to || null,
-          subject: processedSubject,
-          template_id: job.template_id || null,
-          template_variables: context,
-          content_html: job.template_id ? null : processedHtml,
-          provider: provider.name,
-          batch_job_id: jobId,
-          status: 'queued',
-          queued_at: new Date().toISOString(),
-          sent_by_admin_user_id: job.created_by,
-        }).select('id').single()
-
-        // Send via provider
-        const result = await provider.send({
-          to: recipient.email,
-          from: fromEmail,
-          fromName,
-          subject: processedSubject,
-          html: processedHtml,
-          replyTo: job.reply_to || undefined,
-          cc: job.cc || undefined,
-        })
-
-        if (result.success) {
-          // Update log: sent
-          await supabase.from('email_send_log').update({
-            status: 'sent',
-            sent_at: new Date().toISOString(),
-            provider_message_id: result.messageId || null,
-            send_attempts: 1,
-          }).eq('id', logEntry?.id)
-          successful++
-        } else {
-          // Determine if retryable
-          const isRetryable = result.retryable
-          const nextRetry = isRetryable ? calculateNextRetry(1) : null
-          const status = isRetryable ? 'send_failed' : 'permanently_failed'
-
-          await supabase.from('email_send_log').update({
-            status,
-            failure_error: result.error || 'Unknown error',
-            send_attempts: 1,
-            next_retry_at: nextRetry,
-          }).eq('id', logEntry?.id)
-
-          failed++
-          errors.push({ email: recipient.email, error: result.error })
-          if (errors.length > 50) errors.shift()
-        }
-      } catch (err: any) {
-        failed++
-        errors.push({ email: recipient.email, error: err.message })
-        if (errors.length > 50) errors.shift()
-        console.error(`Error sending to ${recipient.email}:`, err.message)
-      }
-
-      processed++
-
-      // Update progress + heartbeat periodically
-      if (i > 0 && (i % PROGRESS_UPDATE_INTERVAL === 0 || i === recipients.length - 1)) {
-        await supabase.from('email_batch_jobs').update({
-          processed_count: processed,
-          success_count: successful,
-          fail_count: failed,
-          errors,
-          last_processed_offset: offset + i + 1,
-          last_heartbeat_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }).eq('id', jobId)
-      }
-    }
-
-    // Final progress update
-    const newOffset = offset + recipients.length
+    // Enqueue all recipients (with substitution context) for the shared worker
+    // drip engine, then return — the worker sends them.
+    //
+    // NOTE: calendar_blast finalisation (calendars_blasts.status flip) used to
+    // live in the deleted legacy inline-send branch. The Tier-2 worker engine
+    // owns lifecycle now, so that cross-table side effect needs to be wired
+    // into the worker's per-domain finalize hook (or the calendars
+    // dispatch-scheduled-blasts worker can reconcile from email_batch_jobs.
+    // status). See spec-calendars-microsites §8.4. Tracked separately —
+    // production has been running on the worker path so this is a pre-existing
+    // gap, not a regression introduced by deleting the Tier-1 path.
+    const enqueued = await enqueueAllRecipients(job, event, config)
+    const now = new Date().toISOString()
     await supabase.from('email_batch_jobs').update({
-      processed_count: processed,
-      success_count: successful,
-      fail_count: failed,
-      errors,
-      last_processed_offset: newOffset,
-      last_heartbeat_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      status: enqueued > 0 ? 'sending' : 'completed',
+      total_recipients: enqueued,
+      last_processed_offset: 0,
+      last_heartbeat_at: now,
+      updated_at: now,
+      ...(enqueued > 0 ? {} : { completed_at: now }),
     }).eq('id', jobId)
-
-    // Check if cancelled
-    const { data: latestJob } = await supabase.from('email_batch_jobs').select('status').eq('id', jobId).single()
-    if (latestJob?.status === 'cancelled') {
-      console.log(`Job ${jobId}: Cancelled. Processed ${processed}, success ${successful}, failed ${failed}`)
-      return new Response(JSON.stringify({ message: 'Job cancelled', processed, successful, failed }), {
-        status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
-
-    // Chain next batch if more recipients
-    if (recipients.length === BATCH_LIMIT && newOffset < job.total_recipients) {
-      console.log(`Job ${jobId}: ${job.total_recipients - newOffset} remaining, chaining next batch`)
-
-      // Self-invoke for next batch (fire-and-forget — watchdog recovers if this fails)
-      fetch(`${SUPABASE_URL}/functions/v1/email-batch-send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-        body: JSON.stringify({ jobId }),
-      }).catch((err) => console.error('Failed to chain next batch:', err))
-
-      return new Response(JSON.stringify({
-        jobId, status: 'processing',
-        processed_count: processed, success_count: successful, fail_count: failed,
-        remaining: job.total_recipients - newOffset,
-        message: 'Batch processed, chaining next',
-      }), {
-        status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
-
-    // All done
-    await supabase.from('email_batch_jobs').update({
-      status: 'completed',
-      processed_count: processed, success_count: successful, fail_count: failed,
-      errors,
-      completed_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', jobId)
-
-    // Per spec-calendars-microsites §8.4 — for calendar_blast jobs, also
-    // flip the parent calendars_blasts row's status. The dispatcher set it
-    // to 'sending' on hand-off; we now know whether the underlying sends
-    // succeeded. Partial success counts as 'sent'; only mark 'failed' when
-    // every recipient failed (mirrors the SMS/WhatsApp dispatcher policy).
-    if (job.email_type === 'calendar_blast' && job.config?.blast_id) {
-      const blastStatus = successful > 0 || processed === 0 ? 'sent' : 'failed'
-      await supabase.from('calendars_blasts').update({
-        status: blastStatus,
-      }).eq('id', job.config.blast_id)
-    }
-
-    console.log(`Job ${jobId}: Completed. Sent ${successful}, failed ${failed}, total ${processed}`)
-
+    console.log(`Job ${jobId}: enqueued ${enqueued} recipients for worker drip`)
     return new Response(JSON.stringify({
-      jobId, status: 'completed',
-      processed_count: processed, success_count: successful, fail_count: failed,
-      message: 'Job completed',
-    }), {
-      status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+      jobId, status: enqueued > 0 ? 'sending' : 'completed', enqueued,
+      message: enqueued > 0 ? 'Enqueued for worker drip' : 'No recipients found',
+    }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 
   } catch (error: any) {
     console.error('email-batch-send error:', error)

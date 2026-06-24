@@ -12,15 +12,19 @@ Broadcasts mirror the proven **newsletter send pipeline** — only the audience
 *topic-scoped* (not per-list). It rides the same per-recipient timezone drip:
 
 ```
-broadcasts:dispatch-scheduled (60s BullMQ cron)
-   └─ POST broadcast-send { process_scheduled: true }
-        ├─ fanout_broadcast_send_recipients(send)   -- materialise per-recipient
-        │     • source = segments_memberships (or list_subscriptions)
-        │     • send_at = target_local in each recipient's timezone (global = now())
-        │     • EXCLUDES broadcast_suppressions (topic or 'all')  ← compliance
-        │     • EXCLUDES exclude_sent_send_ids (prior sends, via sent_at)
-        │     • recalc segment first (best-effort, freshness-windowed)
-        └─ claim_due_broadcast_recipients(200) → batched provider.send → email_send_log
+broadcasts:dispatch-scheduled (60s BullMQ cron, in-worker — no Edge round-trip)
+   ├─ select status='scheduled' AND scheduled_at <= now() (LIMIT 10)
+   ├─ per due send:
+   │    ├─ recalc segment first (best-effort, freshness-windowed)
+   │    ├─ fanout_broadcast_send_recipients(send)   -- materialise per-recipient
+   │    │     • source = segments_memberships (or list_subscriptions)
+   │    │     • send_at = target_local in each recipient's timezone (global = now())
+   │    │     • EXCLUDES broadcast_suppressions (topic or 'all')  ← compliance
+   │    │     • EXCLUDES exclude_sent_send_ids (prior sends, via sent_at)
+   │    └─ flip broadcast_sends.status → 'sending' (or 'failed' on RPC error /
+   │       0-deliverable-recipients)
+   └─ drip tick (shared send engine): claim_due_broadcast_recipients(200) →
+       batched provider.send → email_send_log
 ```
 
 `global` sends fan out with `send_at = now()`; `tz_local` staggers per timezone.
@@ -36,7 +40,12 @@ Pause/resume/cancel = status flips on `broadcast_sends` (the claim is gated on
 
 ## Edge functions
 
-- `broadcast-send` — fan-out + drip + scheduled processor + test-send.
+- `broadcast-send` — single-recipient operator test sends only (`test_send` payload).
+  The scheduled-dispatch path has moved into the Node worker
+  (broadcasts:dispatch-scheduled) so there's no Edge round-trip for the cron;
+  the `send_id` immediate-fanout branch is kept for backwards compatibility but
+  the shared SendingPanel currently routes immediate sends through scheduled_at=now()
+  via the same worker cron.
 - `broadcast-unsubscribe` — RFC 8058 one-click; writes a topic suppression.
 
 ## API routes (Node-side)

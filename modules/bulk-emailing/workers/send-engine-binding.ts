@@ -12,9 +12,10 @@
  * replaceVariables() — tokens with no match are left literal (SendGrid leaves an
  * unsubstituted {{token}} as-is).
  *
- * INERT until SEND_ENGINE_USE_WORKER routes the bulk drip through the worker AND
- * a job is fanned out into bulk_send_recipients. The legacy synchronous
- * email-batch-send loop stays the default for live event-comms.
+ * Active path: a job is fanned out into bulk_send_recipients by the producer
+ * (e.g. email-batch-send Edge fn's enqueueAllRecipients), and this binding
+ * resolves each row's substitutions against its template_variables. The
+ * legacy synchronous email-batch-send inline loop has been removed.
  */
 import type { EngineDeps, SendContext, SendEngineBinding, Recipient } from '../worker/send-engine/engine.js';
 

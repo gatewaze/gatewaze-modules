@@ -18,7 +18,11 @@ const newslettersModule: GatewazeModule = {
   ],
 
   edgeFunctions: [
-    'newsletter-send',
+    // newsletter-send was deleted — the worker's dispatch-scheduled cron now
+    // calls fanout_newsletter_send_recipients directly and the shared
+    // SendingPanel routes immediate sends through the same scheduled path
+    // (status='scheduled', scheduled_at=now), so there is no remaining
+    // Deno-side responsibility for the newsletter send pipeline.
     'newsletter-signup',
     'newsletter-unsubscribe',
     'newsletter-gdoc-import',
@@ -41,9 +45,10 @@ const newslettersModule: GatewazeModule = {
     },
     {
       // Heartbeat that dispatches due scheduled sends (status='scheduled',
-      // scheduled_at <= now). Triggers the newsletter-send edge function's
-      // process_scheduled path — the BullMQ-driven stand-in for pg_cron so
-      // scheduled sends fire on every deploy target without that extension.
+      // scheduled_at <= now): fans out into newsletter_send_recipients and
+      // flips the send to 'sending', then runs a drip tick. BullMQ-driven
+      // stand-in for pg_cron so scheduled sends fire on every deploy target
+      // without that extension.
       name: 'newsletters:dispatch-scheduled',
       handler: './workers/dispatch-scheduled.ts',
     },
@@ -206,8 +211,8 @@ const newslettersModule: GatewazeModule = {
     // batch_id + watchdog index + brand/channel (spec-central-sending-service.md).
     'migrations/053_send_engine_batches.sql',
     // 054 fanout produces send_at=now() for the 'global' strategy, so immediate
-    // "send to everyone now" rides the worker drip engine instead of the Tier-1
-    // edge processSend loop (flag-gated in newsletter-send).
+    // "send to everyone now" rides the worker drip engine (the legacy edge
+    // processSend loop has been removed).
     'migrations/054_fanout_global_send_now.sql',
     // 055 recipient-count preview RPC for the sending UI indicator.
     'migrations/055_recipient_preview_count.sql',
