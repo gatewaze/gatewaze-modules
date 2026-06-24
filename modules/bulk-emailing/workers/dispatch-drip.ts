@@ -22,7 +22,11 @@ interface DispatchJobData { kind: string }
 export default async function handleBulkDrip(_job: Job<DispatchJobData>) {
   if (process.env.SEND_ENGINE_USE_WORKER !== 'true') return { skipped: true };
   try {
-    const [engMod, bindMod] = await Promise.all([
+    // Destructure all three imports — previously this dropped the third
+    // result and the later `evtBindMod` reference threw ReferenceError on
+    // every drip tick, leaving Phase-3 sends stranded at whatever the first
+    // pre-engine batch had already shipped (1750 of 55546 on 2026-06-24).
+    const [engMod, bindMod, evtBindMod] = await Promise.all([
       import('../worker/send-engine/engine.js'),
       import('./send-engine-binding.js'),
       import('./send-engine-binding-events.js'),
