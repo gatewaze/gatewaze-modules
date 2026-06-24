@@ -5,6 +5,7 @@ export interface List {
   description: string | null;
   is_active: boolean;
   is_public: boolean;
+  is_internal: boolean;
   default_subscribed: boolean;
   webhook_url: string | null;
   webhook_secret: string | null;
