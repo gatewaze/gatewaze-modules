@@ -20,7 +20,7 @@
 --    `context` jsonb = the TemplateContext used for {{scope.field}} substitution).
 CREATE TABLE IF NOT EXISTS public.email_batch_job_recipients (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id      uuid NOT NULL REFERENCES public.email_batch_jobs(id) ON DELETE CASCADE,
+  send_id      uuid NOT NULL REFERENCES public.email_batch_jobs(id) ON DELETE CASCADE,
   email       text NOT NULL,
   person_id   text,                                            -- recipient_customer_id / profile id (loose: audiences vary)
   context     jsonb NOT NULL DEFAULT '{}'::jsonb,              -- per-recipient substitution context (customer/event/speaker/calendar)
@@ -36,11 +36,11 @@ CREATE TABLE IF NOT EXISTS public.email_batch_job_recipients (
   batch_id    uuid,                                            -- → provider batch (sendBatch)
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz,
-  CONSTRAINT uq_ebjr_job_email UNIQUE (job_id, email)
+  CONSTRAINT uq_ebjr_job_email UNIQUE (send_id, email)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ebjr_due ON public.email_batch_job_recipients (send_at) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS idx_ebjr_job ON public.email_batch_job_recipients (job_id);
+CREATE INDEX IF NOT EXISTS idx_ebjr_job ON public.email_batch_job_recipients (send_id);
 
 ALTER TABLE public.email_batch_job_recipients ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS auth_all_email_batch_job_recipients ON public.email_batch_job_recipients;
@@ -64,7 +64,7 @@ AS $$
   FROM (
     SELECT er.id
     FROM public.email_batch_job_recipients er
-    JOIN public.email_batch_jobs j ON j.id = er.job_id
+    JOIN public.email_batch_jobs j ON j.id = er.send_id
     WHERE er.status = 'pending'
       AND er.send_at <= now()
       AND j.status IN ('sending', 'processing')
@@ -95,7 +95,7 @@ AS $$
     count(*) FILTER (WHERE r.status = 'skipped') AS skipped,
     min(r.send_at) AS send_at
   FROM public.email_batch_job_recipients r
-  WHERE r.job_id = p_send_id
+  WHERE r.send_id = p_send_id
   GROUP BY COALESCE(r.timezone, 'UTC')
   ORDER BY min(r.send_at);
 $$;
