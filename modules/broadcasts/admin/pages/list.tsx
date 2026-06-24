@@ -4,7 +4,7 @@ import { PlusIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Card, Button, Badge, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
-import { listBroadcasts, type BroadcastSend, type BroadcastStatus } from '../lib/broadcastService';
+import { listBroadcasts, broadcastSummary, type Broadcast, type BroadcastStatus } from '../lib/broadcastService';
 
 const STATUS_TONE: Record<BroadcastStatus, 'gray' | 'blue' | 'green' | 'amber' | 'red'> = {
   draft: 'gray', scheduled: 'blue', sending: 'amber', sent: 'green',
@@ -13,7 +13,7 @@ const STATUS_TONE: Record<BroadcastStatus, 'gray' | 'blue' | 'green' | 'amber' |
 
 export default function BroadcastListPage() {
   const navigate = useNavigate();
-  const [broadcasts, setBroadcasts] = useState<BroadcastSend[]>([]);
+  const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -57,32 +57,39 @@ export default function BroadcastListPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {broadcasts.map((c) => (
-              <Card
-                key={c.id}
-                className="p-4 cursor-pointer hover:border-[var(--accent-7)] transition-colors"
-                onClick={() => navigate(`/broadcasts/${c.id}`)}
-              >
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-[var(--gray-12)] truncate">{c.name}</span>
-                      <Badge color={STATUS_TONE[c.status]}>{c.status}</Badge>
+            {broadcasts.map((c) => {
+              // The parent has no status/counts — derive a summary from its send
+              // instances (latest active send, else most recent, else "draft").
+              const { status, latest } = broadcastSummary(c);
+              const sendCount = c.sends?.length ?? 0;
+              return (
+                <Card
+                  key={c.id}
+                  className="p-4 cursor-pointer hover:border-[var(--accent-7)] transition-colors"
+                  onClick={() => navigate(`/broadcasts/${c.id}`)}
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-[var(--gray-12)] truncate">{c.name}</span>
+                        <Badge color={STATUS_TONE[status]}>{status}</Badge>
+                        {sendCount > 0 && <span className="text-xs text-[var(--gray-10)]">{sendCount} send{sendCount === 1 ? '' : 's'}</span>}
+                      </div>
+                      <div className="text-sm text-[var(--gray-11)] truncate">
+                        {c.subject || <span className="italic">No subject yet</span>}
+                      </div>
                     </div>
-                    <div className="text-sm text-[var(--gray-11)] truncate">
-                      {c.subject || <span className="italic">No subject yet</span>}
+                    <div className="text-right text-sm text-[var(--gray-11)] shrink-0">
+                      {latest && (latest.total_recipients ?? 0) > 0 && <div>{latest.total_recipients.toLocaleString()} recipients</div>}
+                      {status === 'sent' && latest && <div>{latest.sent_count.toLocaleString()} sent · {latest.failed_count} failed</div>}
+                      {latest?.scheduled_at && status === 'scheduled' && (
+                        <div>scheduled {new Date(latest.scheduled_at).toLocaleString()}</div>
+                      )}
                     </div>
                   </div>
-                  <div className="text-right text-sm text-[var(--gray-11)] shrink-0">
-                    <div>{c.total_recipients.toLocaleString()} recipients</div>
-                    {c.status === 'sent' && <div>{c.sent_count.toLocaleString()} sent · {c.failed_count} failed</div>}
-                    {c.scheduled_at && c.status === 'scheduled' && (
-                      <div>scheduled {new Date(c.scheduled_at).toLocaleString()}</div>
-                    )}
-                  </div>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
         )}
       </WorkspaceLayout>

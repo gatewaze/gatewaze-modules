@@ -47,18 +47,17 @@ export default async function CalendarChatPage({ params }: Props) {
   }
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <CalendarHeader calendar={calendar} visibility={visibility} active="" />
+    <div className="pub-wrap">
+      <CalendarHeader calendar={calendar} visibility={visibility} active="" />
 
-        {!CalendarChatContent ? (
-          <div className="text-center py-16">
-            <h2 className="text-white text-2xl font-bold">Chat not available</h2>
-            <p className="text-white/60 mt-2">
-              The conversations module is not installed on this brand.
-            </p>
-          </div>
-        ) : !viewerPersonId ? (
+      {!CalendarChatContent ? (
+        <div className="pub-empty" style={{ marginTop: 0 }}>
+          <h2 style={{ font: '600 20px var(--font-display)', color: 'var(--ink)', margin: 0 }}>Chat not available</h2>
+          <p style={{ color: 'var(--ink-3)', marginTop: 8 }}>
+            The conversations module is not installed on this brand.
+          </p>
+        </div>
+      ) : !viewerPersonId ? (
           <ChatGate
             title="Sign in to join the conversation"
             body={`The ${calendar.name} chat is for members. Sign in or create an account, then join this calendar to start posting.`}
@@ -71,15 +70,14 @@ export default async function CalendarChatPage({ params }: Props) {
             body={`You're signed in, but you're not yet a member of ${calendar.name}. Join to read and post in the chat.`}
             primary={{ href: `/calendars/${canonicalSlug}/join`, label: 'Join this calendar' }}
           />
-        ) : (
-          <CalendarChatContent
-            calendar={calendar}
-            viewerPersonId={viewerPersonId}
-            isMember={isMember}
-          />
-        )}
-      </div>
-    </main>
+      ) : (
+        <CalendarChatContent
+          calendar={calendar}
+          viewerPersonId={viewerPersonId}
+          isMember={isMember}
+        />
+      )}
+    </div>
   )
 }
 
@@ -95,21 +93,25 @@ function ChatGate({
   secondary?: { href: string; label: string }
 }) {
   return (
-    <div className="max-w-xl mx-auto bg-white/5 border border-white/15 rounded-2xl p-8 text-center">
-      <h2 className="text-white text-2xl font-bold">{title}</h2>
-      <p className="text-white/70 mt-3">{body}</p>
-      <div className="flex flex-wrap items-center justify-center gap-3 mt-6">
-        <Link
-          href={primary.href}
-          className="px-5 py-2.5 rounded-lg bg-white text-black font-semibold text-sm hover:bg-white/90"
-        >
+    <div
+      style={{
+        maxWidth: '36rem',
+        margin: '0 auto',
+        background: 'var(--paper)',
+        border: '1px solid var(--line)',
+        borderRadius: 18,
+        padding: 32,
+        textAlign: 'center',
+      }}
+    >
+      <h2 style={{ font: '600 22px var(--font-display)', color: 'var(--ink)', margin: 0 }}>{title}</h2>
+      <p style={{ color: 'var(--ink-3)', marginTop: 12, lineHeight: 1.55 }}>{body}</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 24 }}>
+        <Link href={primary.href} className="btn btn-primary">
           {primary.label}
         </Link>
         {secondary && (
-          <Link
-            href={secondary.href}
-            className="px-5 py-2.5 rounded-lg bg-white/10 text-white font-medium text-sm hover:bg-white/20"
-          >
+          <Link href={secondary.href} className="btn btn-secondary">
             {secondary.label}
           </Link>
         )}

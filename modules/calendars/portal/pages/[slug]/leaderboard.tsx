@@ -34,21 +34,19 @@ export default async function CalendarLeaderboardPage({ params }: Props) {
   }
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <CalendarHeader calendar={calendar} visibility={visibility} active="" />
+    <div className="pub-wrap">
+      <CalendarHeader calendar={calendar} visibility={visibility} active="" />
 
-        {LeaderboardContent ? (
-          <LeaderboardContent calendar={calendar} />
-        ) : (
-          <div className="text-center py-16">
-            <h2 className="text-white text-2xl font-bold">Leaderboard not available</h2>
-            <p className="text-white/60 mt-2">
-              The engagement module is not installed on this brand.
-            </p>
-          </div>
-        )}
-      </div>
-    </main>
+      {LeaderboardContent ? (
+        <LeaderboardContent calendar={calendar} />
+      ) : (
+        <div className="pub-empty" style={{ marginTop: 0 }}>
+          <h2 style={{ font: '600 20px var(--font-display)', color: 'var(--ink)', margin: 0 }}>Leaderboard not available</h2>
+          <p style={{ color: 'var(--ink-3)', marginTop: 8 }}>
+            The engagement module is not installed on this brand.
+          </p>
+        </div>
+      )}
+    </div>
   )
 }

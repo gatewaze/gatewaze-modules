@@ -38,24 +38,22 @@ export default async function CalendarEventsPage({ params }: Props) {
   const canonicalSlug = calendar.slug || calendar.calendar_id
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <CalendarHero calendar={calendar} storageBucketUrl={brandConfig.storageBucketUrl} />
-        <CalendarHeader
-          calendar={calendar}
-          visibility={visibility}
-          active="events"
-          primaryColor={brandConfig.primaryColor}
-        />
+    <div className="pub-wrap">
+      <CalendarHero calendar={calendar} storageBucketUrl={brandConfig.storageBucketUrl} />
+      <CalendarHeader
+        calendar={calendar}
+        visibility={visibility}
+        active="events"
+        primaryColor={brandConfig.primaryColor}
+      />
 
-        <CalendarEventTimeline
-          calendar={calendar}
-          upcoming={timeline.upcoming}
-          past={timeline.past}
-          feedPath={`/api/calendars/${canonicalSlug}/feed.ics`}
-          primaryColor={brandConfig.primaryColor}
-        />
-      </div>
-    </main>
+      <CalendarEventTimeline
+        calendar={calendar}
+        upcoming={timeline.upcoming}
+        past={timeline.past}
+        feedPath={`/api/calendars/${canonicalSlug}/feed.ics`}
+        primaryColor={brandConfig.primaryColor}
+      />
+    </div>
   )
 }

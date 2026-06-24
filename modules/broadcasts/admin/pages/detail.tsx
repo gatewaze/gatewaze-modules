@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { toast } from 'sonner';
-import { Card, Button, Badge, WorkspaceLayout } from '@/components/ui';
+import { Card, Button, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { RichTextEditor } from '@/components/ui/RichTextEditor';
 import { supabase } from '@/lib/supabase';
+import { SendingPanel } from '@/components/sending';
+import type { SendingAdapter, EmailDetails, SendComposerConfig } from '@/components/sending';
 import {
   createSegmentService, createEmptySegmentDefinition, isValidSegmentDefinition,
   type SegmentDefinition, type SegmentMember,
@@ -12,8 +14,7 @@ import {
 // Cross-module reuse: the visual Segments Builder (controlled value/onChange).
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
-import BroadcastSendingPanel from '../components/BroadcastSendingPanel';
-import { getBroadcast, updateBroadcast, type BroadcastSend } from '../lib/broadcastService';
+import { getBroadcast, updateBroadcast, createBroadcastSend, type Broadcast } from '../lib/broadcastService';
 
 const STEPS = [
   { id: 'audience', label: '1. Audience' },
@@ -28,8 +29,10 @@ export default function BroadcastDetailPage() {
   const navigate = useNavigate();
   const step = tab && STEPS.some((s) => s.id === tab) ? tab : 'audience';
 
-  const [b, setB] = useState<BroadcastSend | null>(null);
+  const [b, setB] = useState<Broadcast | null>(null);
   const [loading, setLoading] = useState(true);
+  // Audience size for the Send indicator (the segment's cached member count).
+  const [audienceCount, setAudienceCount] = useState<number | null>(null);
   // Step-specific top-right action (e.g. "Save audience & continue"), registered
   // by the active step — mirrors the newsletter editor's top-right Save/Publish.
   const [headerActions, setHeaderActions] = useState<ReactNode>(null);
@@ -49,6 +52,103 @@ export default function BroadcastDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Load the audience size (segment member count) for the Send indicator.
+  useEffect(() => {
+    if (!b?.segment_id) { setAudienceCount(null); return; }
+    let cancelled = false;
+    createSegmentService(supabase).getSegment(b.segment_id)
+      .then((seg) => { if (!cancelled) setAudienceCount(seg?.cached_count ?? null); })
+      .catch(() => { if (!cancelled) setAudienceCount(null); });
+    return () => { cancelled = true; };
+  }, [b?.segment_id]);
+
+  // Shared sending adapter — broadcasts edit their email-details inline (unlike
+  // newsletters) and snapshot the parent's content/audience into each send.
+  const broadcastAdapter: SendingAdapter | null = useMemo(() => {
+    if (!b) return null;
+    const hasAudience = b.audience_type === 'segment' ? !!b.segment_id : (b.list_ids?.length ?? 0) > 0;
+    return {
+      domainKey: 'broadcast',
+      title: 'Send Broadcast',
+      parentId: b.id,
+      sendsTable: 'broadcast_sends',
+      parentFkColumn: 'broadcast_id',
+      logSendIdColumn: 'broadcast_send_id',
+      tzBreakdownRpc: 'broadcast_send_timezone_breakdown',
+      sendEndpoint: 'broadcast-send',
+      canSend: !!b.rendered_html && hasAudience,
+      canSendReason: !b.rendered_html ? 'Add content before sending' : !hasAudience ? 'Set an audience first' : undefined,
+      features: { deliveryStrategy: true, excludeSent: true },
+      emailDetails: {
+        editable: true,
+        values: {
+          subject: b.subject || '',
+          preheader: b.preheader || '',
+          fromAddress: b.from_address || '',
+          fromName: b.from_name || '',
+          replyTo: b.reply_to || '',
+        },
+        async save(values: EmailDetails) {
+          const nb = await updateBroadcast(b.id, {
+            subject: values.subject || null,
+            preheader: values.preheader || null,
+            from_address: values.fromAddress || null,
+            from_name: values.fromName || null,
+            reply_to: values.replyTo || null,
+          });
+          setB(nb);
+        },
+      },
+      recipients: {
+        display: b.audience_type === 'segment'
+          ? `Segment audience${audienceCount != null ? ` (${audienceCount.toLocaleString()})` : ''}`
+          : `${b.list_ids?.length ?? 0} list${(b.list_ids?.length ?? 0) === 1 ? '' : 's'}`,
+        editable: true,
+        editHref: `/broadcasts/${b.id}/audience`,
+        editLabel: 'Edit',
+      },
+      recipientCount: audienceCount,
+      async countRecipients(excludeSentSendIds: string[]) {
+        const { data, error } = await supabase.rpc('broadcast_recipient_preview_count', {
+          p_audience_type: b.audience_type,
+          p_segment_id: b.audience_type === 'segment' ? b.segment_id : null,
+          p_list_ids: b.audience_type === 'list' ? (b.list_ids ?? []) : null,
+          p_suppression_topic: 'broadcasts',
+          p_exclude_send_ids: excludeSentSendIds.length > 0 ? excludeSentSendIds : null,
+        });
+        if (error) throw error;
+        return (data as number) ?? 0;
+      },
+      async createSend(config: SendComposerConfig) {
+        return createBroadcastSend(b.id, config);
+      },
+      async rerenderContent(sendId: string) {
+        // Re-snapshot the parent's current content onto a not-yet-sent send,
+        // so edits to the broadcast reach recipients still pending.
+        const { error } = await supabase.from('broadcast_sends').update({
+          subject: b.subject,
+          preheader: b.preheader,
+          from_address: b.from_address,
+          from_name: b.from_name,
+          reply_to: b.reply_to,
+          rendered_html: b.rendered_html,
+          content_json: b.content_json,
+          updated_at: new Date().toISOString(),
+        }).eq('id', sendId);
+        if (error) throw error;
+      },
+      async sendTest(email: string) {
+        // Test from the parent (no send instance needed) via broadcast-send.
+        const { data, error } = await supabase.functions.invoke('broadcast-send', {
+          body: { test_send: { broadcast_id: b.id, email } },
+        });
+        if (error) throw error;
+        const res = data as { success?: boolean; error?: string } | null;
+        if (!res?.success) throw new Error(res?.error || 'Test send failed');
+      },
+    };
+  }, [b, audienceCount]);
+
   if (loading || !b) {
     return (
       <Page title="Broadcast">
@@ -59,7 +159,9 @@ export default function BroadcastDetailPage() {
     );
   }
 
-  const editable = b.status === 'draft' || b.status === 'scheduled';
+  // The parent broadcast (definition + content + audience) is always editable;
+  // each send snapshots it, so editing it never mutates a send already in flight.
+  const editable = true;
   const goTo = (s: string) => navigate(`/broadcasts/${b.id}/${s}`);
 
   return (
@@ -69,23 +171,18 @@ export default function BroadcastDetailPage() {
         tabs={STEPS}
         activeTabId={step}
         onTabChange={goTo}
-        actions={
-          <div className="flex items-center gap-3">
-            {headerActions}
-            <Badge color={b.status === 'sent' ? 'green' : b.status === 'failed' ? 'red' : b.status === 'sending' ? 'amber' : 'gray'}>{b.status}</Badge>
-          </div>
-        }
+        actions={<div className="flex items-center gap-3">{headerActions}</div>}
       >
         {step === 'audience' && <AudienceStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('content'); }} />}
         {step === 'content' && <ContentStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('sending'); }} />}
-        {step === 'sending' && <BroadcastSendingPanel broadcast={b} reload={load} />}
+        {step === 'sending' && broadcastAdapter && <SendingPanel adapter={broadcastAdapter} />}
       </WorkspaceLayout>
     </Page>
   );
 }
 
 // --- Step 1: Audience (single-panel chat copilot, like the newsletter editor) -
-function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: BroadcastSend; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: BroadcastSend) => void }) {
+function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: Broadcast) => void }) {
   const [definition, setDefinition] = useState<SegmentDefinition>(createEmptySegmentDefinition());
   const [hasDefinition, setHasDefinition] = useState(false);
   const [loadedSeg, setLoadedSeg] = useState(false);
@@ -153,7 +250,7 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
         const seg = await svc.createSegment({ name, definition });
         segmentId = seg.id;
       }
-      const nb = await updateBroadcast(b.id, { audience_type: 'segment', segment_id: segmentId } as Partial<BroadcastSend>);
+      const nb = await updateBroadcast(b.id, { audience_type: 'segment', segment_id: segmentId } as Partial<Broadcast>);
       toast.success('Audience saved');
       onSaved(nb);
     } catch (err) {
@@ -275,7 +372,7 @@ function AudiencePreviewTable({ definition, sample }: { definition: SegmentDefin
 }
 
 // --- Step 2: Content (rich text) --------------------------------------------
-function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: BroadcastSend; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: BroadcastSend) => void }) {
+function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: Broadcast) => void }) {
   const [html, setHtml] = useState<string>(b.rendered_html ?? '');
   const [saving, setSaving] = useState(false);
 
@@ -284,7 +381,7 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: BroadcastS
     setSaving(true);
     try {
       // rendered_html is the body; the send path injects the unsubscribe footer.
-      const nb = await updateBroadcast(b.id, { rendered_html: html, content_json: { html } } as Partial<BroadcastSend>);
+      const nb = await updateBroadcast(b.id, { rendered_html: html, content_json: { html } } as Partial<Broadcast>);
       toast.success('Content saved');
       onSaved(nb);
     } catch (err) {

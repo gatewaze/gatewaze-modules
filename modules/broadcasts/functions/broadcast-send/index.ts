@@ -20,6 +20,8 @@ type SB = ReturnType<typeof createClient<any, any, any>>
  *  - POST { send_id }                  → fan out + start a broadcast immediately.
  *  - POST { test_send: { send_id, email } } → single-recipient test, same
  *      rendering path, bypassing fan-out + drip.
+ *  - POST { test_send: { broadcast_id, email } } → test from the broadcast PARENT
+ *      before any send instance exists (shared SendingPanel test button).
  *
  * NOTE (Phase 0 / Tier 2): this runs on the proven Edge-Function drip path
  * (per-recipient provider.send, batched). When the Tier 2 worker-side
@@ -143,7 +145,7 @@ async function loadRecipientAttributes(supabase: SB, emails: string[], ctx: Send
 /** Send to one recipient: topic unsubscribe header + footer, merge fields,
  *  email_send_log row (attributed to broadcast_send_id), provider call. Returns
  *  true on success; never throws. */
-async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx: SendContext, sendId: string, email: string): Promise<boolean> {
+async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx: SendContext, sendId: string | null, email: string): Promise<boolean> {
   try {
     let oneClickUrl = ''
     let unsubUrl = ''
@@ -385,6 +387,21 @@ async function processTestSend(supabase: SB, provider: EmailProviderModule, send
   return ok ? { success: true } : { success: false, error: 'Provider send failed' }
 }
 
+// Test from the broadcast PARENT (no send instance yet) — the shared SendingPanel
+// offers a test before any send is created. buildSendContext reads the same
+// content columns the parent carries; the email_send_log row is unattributed
+// (broadcast_send_id is null) since there's no send instance.
+async function processTestSendFromParent(supabase: SB, provider: EmailProviderModule, broadcastId: string, email: string): Promise<{ success: boolean; error?: string }> {
+  const { data: parent } = await supabase.from('broadcasts').select('*').eq('id', broadcastId).single()
+  if (!parent) return { success: false, error: 'Broadcast not found' }
+  let ctx: SendContext
+  try { ctx = buildSendContext(parent) } catch (err) { return { success: false, error: err instanceof Error ? err.message : 'context build failed' } }
+  ctx.subject = `[TEST] ${ctx.subject}`
+  await loadRecipientAttributes(supabase, [email], ctx)
+  const ok = await sendToRecipient(supabase, provider, ctx, null, email)
+  return ok ? { success: true } : { success: false, error: 'Provider send failed' }
+}
+
 async function handler(req: Request) {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (req.method !== 'POST') {
@@ -404,6 +421,10 @@ async function handler(req: Request) {
     const body = await req.json()
     if (body.test_send?.send_id && body.test_send?.email) {
       const result = await processTestSend(supabase, provider, body.test_send.send_id, body.test_send.email)
+      return new Response(JSON.stringify(result), { status: result.success ? 200 : 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+    if (body.test_send?.broadcast_id && body.test_send?.email) {
+      const result = await processTestSendFromParent(supabase, provider, body.test_send.broadcast_id, body.test_send.email)
       return new Response(JSON.stringify(result), { status: result.success ? 200 : 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
     if (body.send_id) {
