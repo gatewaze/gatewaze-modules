@@ -220,11 +220,17 @@ async function handler(req: Request) {
       // Read the body as text once and branch on content-type to keep all three paths working.
       const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
       let body: Record<string, unknown> = {}
-      if (contentType.includes('application/json')) {
-        body = await req.json()
-      } else if (contentType.includes('application/x-www-form-urlencoded')) {
-        const params = new URLSearchParams(await req.text())
-        body = Object.fromEntries(params.entries())
+      try {
+        if (contentType.includes('application/json')) {
+          // req.json() throws on empty or malformed payloads — return a clean
+          // 400 instead of letting the outer catch turn it into a 500.
+          body = await req.json()
+        } else if (contentType.includes('application/x-www-form-urlencoded')) {
+          const params = new URLSearchParams(await req.text())
+          body = Object.fromEntries(params.entries())
+        }
+      } catch {
+        body = {}
       }
 
       // RFC 8058 / confirmation-form: token may live in the URL rather than the body.
