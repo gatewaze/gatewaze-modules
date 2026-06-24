@@ -14,7 +14,7 @@ import {
 // Cross-module reuse: the visual Segments Builder (controlled value/onChange).
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
-import { getBroadcast, updateBroadcast, createBroadcastSend, type Broadcast } from '../lib/broadcastService';
+import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, EVENT_VARIABLES, type Broadcast, type EventOption } from '../lib/broadcastService';
 
 const STEPS = [
   { id: 'audience', label: '1. Audience' },
@@ -375,6 +375,20 @@ function AudiencePreviewTable({ definition, sample }: { definition: SegmentDefin
 function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: Broadcast) => void }) {
   const [html, setHtml] = useState<string>(b.rendered_html ?? '');
   const [saving, setSaving] = useState(false);
+  // Optional linked event (CFP / event promotion) — supplies {{event_*}} vars.
+  const [events, setEvents] = useState<EventOption[]>([]);
+  const [eventId, setEventId] = useState<string>(b.event_id ?? '');
+
+  useEffect(() => { listEventsForLink().then(setEvents).catch(() => setEvents([])); }, []);
+
+  async function linkEvent(value: string) {
+    setEventId(value);
+    try {
+      await updateBroadcast(b.id, { event_id: value || null } as Partial<Broadcast>);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to link event');
+    }
+  }
 
   async function saveAndContinue() {
     if (!html.trim()) { toast.error('Add some content'); return; }
@@ -404,8 +418,25 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
   return (
     <div className="max-w-3xl space-y-3">
       <Card className="p-4">
+        {/* Optional event link — for Call-for-Speakers / event promotion to a
+            segment of the whole database. Adds {{event_*}} merge variables. */}
+        <div className="mb-3">
+          <label className="block text-sm font-medium text-[var(--gray-12)] mb-1">Linked event <span className="font-normal text-[var(--gray-10)]">(optional — for CFP / event promotion)</span></label>
+          <select className={inputCls} value={eventId} onChange={(e) => linkEvent(e.target.value)} disabled={!editable}>
+            <option value="">No linked event</option>
+            {events.map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <div className="text-sm font-medium text-[var(--gray-12)] mb-2">Message body</div>
-        <p className="text-xs text-[var(--gray-10)] mb-3">Merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.</p>
+        <p className="text-xs text-[var(--gray-10)] mb-1">Recipient merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.</p>
+        {eventId && (
+          <p className="text-xs text-[var(--gray-10)] mb-3">Event variables: {EVENT_VARIABLES.map((v) => v.token).join(' ')} <span className="text-[var(--gray-9)]">(filled from the linked event when sent)</span></p>
+        )}
         <RichTextEditor content={html} onChange={setHtml} />
       </Card>
     </div>
