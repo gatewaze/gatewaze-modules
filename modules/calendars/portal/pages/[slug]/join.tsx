@@ -60,68 +60,63 @@ export default async function CalendarJoinPage({ params }: Props) {
   }))
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <CalendarHero
+    <div className="pub-wrap">
+      <CalendarHero
+        calendar={calendar}
+        memberCount={stats.totalMembers}
+        storageBucketUrl={brandConfig.storageBucketUrl}
+      />
+      <CalendarHeader
+        calendar={calendar}
+        visibility={visibility}
+        active="join"
+        primaryColor={brandConfig.primaryColor}
+      />
+
+      <div>
+        <h2 style={{ font: '600 30px var(--font-display)', color: 'var(--ink)', letterSpacing: '-0.02em', margin: '0 0 12px' }}>Join</h2>
+        <p style={{ color: 'var(--ink-3)', margin: '0 0 32px', maxWidth: '42rem', fontSize: 15, lineHeight: 1.6 }}>
+          Become a member to get notified about upcoming events and stay in touch with the chapter.
+        </p>
+
+        <CalendarJoinForm
           calendar={calendar}
           memberCount={stats.totalMembers}
-          storageBucketUrl={brandConfig.storageBucketUrl}
-        />
-        <CalendarHeader
-          calendar={calendar}
-          visibility={visibility}
-          active="join"
+          topicChips={topicChips}
+          nextEvents={nextEvents}
           primaryColor={brandConfig.primaryColor}
         />
 
-        <div>
-          <h2 className="text-white text-3xl font-bold mb-3">Join</h2>
-          <p className="text-white/70 mb-8 max-w-2xl">
-            Become a member to get notified about upcoming events and stay in touch with the chapter.
-          </p>
-
-          <CalendarJoinForm
-            calendar={calendar}
-            memberCount={stats.totalMembers}
-            topicChips={topicChips}
-            nextEvents={nextEvents}
-            primaryColor={brandConfig.primaryColor}
-          />
-
-          <div
-            className="mt-8 p-6"
-            style={{
-              borderRadius: 'var(--radius-control, 12px)',
-              backgroundColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-opacity, 0.05))`,
-              backdropFilter: `blur(var(--glass-blur, 4px))`,
-              WebkitBackdropFilter: `blur(var(--glass-blur, 4px))`,
-              borderWidth: 1,
-              borderStyle: 'solid',
-              borderColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-border-opacity, 0.1))`,
-            }}
-          >
-            <h3 className="text-white font-semibold mb-3">How this works</h3>
-            <ul className="space-y-2 text-white/70 text-sm">
-              <li className="flex gap-3">
-                <span className="text-white/40">1.</span>
-                <span>Submit the form with your name and email.</span>
-              </li>
-              <li className="flex gap-3">
-                <span className="text-white/40">2.</span>
-                <span>We send you a confirmation email — click the link to confirm.</span>
-              </li>
-              <li className="flex gap-3">
-                <span className="text-white/40">3.</span>
-                <span>You'll get notified about upcoming events from {calendar.name}.</span>
-              </li>
-              <li className="flex gap-3">
-                <span className="text-white/40">4.</span>
-                <span>Unsubscribe any time — every email has a one-click unsubscribe link.</span>
-              </li>
-            </ul>
-          </div>
+        <div
+          style={{
+            marginTop: 32,
+            padding: 24,
+            borderRadius: 18,
+            background: 'var(--paper)',
+            border: '1px solid var(--line)',
+          }}
+        >
+          <h3 style={{ font: '600 16px var(--font-display)', color: 'var(--ink)', margin: '0 0 12px' }}>How this works</h3>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8, color: 'var(--ink-3)', fontSize: 14 }}>
+            <li style={{ display: 'flex', gap: 12 }}>
+              <span style={{ color: 'var(--ink-4)' }}>1.</span>
+              <span>Submit the form with your name and email.</span>
+            </li>
+            <li style={{ display: 'flex', gap: 12 }}>
+              <span style={{ color: 'var(--ink-4)' }}>2.</span>
+              <span>We send you a confirmation email — click the link to confirm.</span>
+            </li>
+            <li style={{ display: 'flex', gap: 12 }}>
+              <span style={{ color: 'var(--ink-4)' }}>3.</span>
+              <span>You'll get notified about upcoming events from {calendar.name}.</span>
+            </li>
+            <li style={{ display: 'flex', gap: 12 }}>
+              <span style={{ color: 'var(--ink-4)' }}>4.</span>
+              <span>Unsubscribe any time — every email has a one-click unsubscribe link.</span>
+            </li>
+          </ul>
         </div>
       </div>
-    </main>
+    </div>
   )
 }

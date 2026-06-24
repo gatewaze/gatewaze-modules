@@ -11,28 +11,23 @@ export function CalendarJoinCta({ calendar }: Props) {
 
   return (
     <div
-      className="px-6 sm:px-10 py-10 sm:py-14 text-center overflow-hidden"
       style={{
-        borderRadius: 'var(--radius-control, 12px)',
-        backgroundColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-opacity, 0.05))`,
-        backdropFilter: `blur(var(--glass-blur, 4px))`,
-        WebkitBackdropFilter: `blur(var(--glass-blur, 4px))`,
-        borderWidth: 1,
-        borderStyle: 'solid',
-        borderColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-border-opacity, 0.1))`,
+        textAlign: 'center',
+        overflow: 'hidden',
+        padding: '56px 24px',
+        borderRadius: 18,
+        background: 'var(--paper)',
+        border: '1px solid var(--line)',
       }}
     >
-      <h2 className="text-white text-2xl sm:text-3xl font-bold">
+      <h2 style={{ font: '600 clamp(24px,3vw,30px) var(--font-display)', color: 'var(--ink)', letterSpacing: '-0.015em', margin: 0 }}>
         Join the {calendar.name} community
       </h2>
-      <p className="text-white/70 mt-3 max-w-xl mx-auto">
+      <p style={{ color: 'var(--ink-3)', marginTop: 12, maxWidth: '36rem', marginLeft: 'auto', marginRight: 'auto', fontSize: 15, lineHeight: 1.55 }}>
         Get invited to upcoming events, hear about new talks, and stay in touch with what the chapter is doing.
       </p>
-      <div className="mt-6">
-        <Link
-          href={`/calendars/${slug}/join`}
-          className="inline-flex items-center gap-2 px-6 py-3 bg-black text-white font-semibold rounded-lg hover:bg-black/80 transition-colors"
-        >
+      <div style={{ marginTop: 24 }}>
+        <Link href={`/calendars/${slug}/join`} className="btn btn-primary" style={{ height: 44, padding: '0 22px' }}>
           Join this calendar
         </Link>
       </div>

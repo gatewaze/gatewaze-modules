@@ -45,16 +45,8 @@ export function CalendarEventTimeline({ calendar, upcoming, past, feedPath, prim
 
   return (
     <div>
-      <div
-        className="flex w-full sm:inline-flex sm:w-auto p-1 gap-1 mb-6"
-        style={{
-          borderRadius: 'var(--radius-control-outer)',
-          backgroundColor: `rgba(var(--panel-tint,0,0,0),var(--glass-opacity,0.05))`,
-          backdropFilter: `blur(var(--glass-blur,4px))`,
-          WebkitBackdropFilter: `blur(var(--glass-blur,4px))`,
-          border: `1px solid rgba(var(--panel-tint,0,0,0),var(--glass-border-opacity,0.1))`,
-        }}
-      >
+      <CalTimelineStyles />
+      <div className="pub-seg cal-tl-seg" style={{ marginBottom: 24, flexWrap: 'wrap' }}>
         {TAB_LABELS.map((t) => {
           const active = t.value === view
           const count = t.value === 'upcoming' ? upcoming.length : t.value === 'past' ? past.length : null
@@ -63,20 +55,14 @@ export function CalendarEventTimeline({ calendar, upcoming, past, feedPath, prim
               key={t.value}
               type="button"
               onClick={() => setView(t.value)}
-              className={`
-                cursor-pointer flex items-center justify-center gap-1 flex-1 sm:flex-initial px-4 py-2 text-base font-medium transition-all duration-200 ease-out
-                ${active ? 'shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}
-              `}
-              style={{
-                borderRadius: 'var(--radius-control)',
-                ...(active ? { backgroundColor: primaryColor, color: lightPrimary ? '#000000' : '#ffffff' } : {}),
-              }}
+              className={`pub-seg-btn${active ? ' on' : ''}`}
+              style={active ? { backgroundColor: primaryColor, color: lightPrimary ? '#000000' : '#ffffff' } : undefined}
             >
               <span>{t.label}</span>
               {typeof count === 'number' && count > 0 && (
                 <span
-                  className={`ml-1.5 px-1.5 py-0.5 rounded-full text-xs font-medium transition-colors duration-200
-                    ${active ? (lightPrimary ? 'bg-black/10' : 'bg-white/20') : 'bg-white/10'}`}
+                  className="cnt"
+                  style={active ? { background: lightPrimary ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.22)', color: lightPrimary ? '#000' : '#fff' } : undefined}
                 >
                   {count}
                 </span>
@@ -191,22 +177,10 @@ function HeroEventCard({
 }) {
   const start = event.event_start ? new Date(event.event_start) : null
   return (
-    <Link
-      href={`/events/${event.event_slug || event.event_id}`}
-      className="group block overflow-hidden transition-all duration-200 hover:brightness-110"
-      style={{
-        borderRadius: 'var(--radius-control, 12px)',
-        backgroundColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-opacity, 0.05))`,
-        backdropFilter: `blur(var(--glass-blur, 4px))`,
-        WebkitBackdropFilter: `blur(var(--glass-blur, 4px))`,
-        borderWidth: 1,
-        borderStyle: 'solid',
-        borderColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-border-opacity, 0.1))`,
-      }}
-    >
-      <div className="grid grid-cols-1 md:grid-cols-2">
+    <Link href={`/events/${event.event_slug || event.event_id}`} className="cal-tl-hero">
+      <div className="cal-tl-hero-grid">
         <div
-          className="relative aspect-[16/10] md:aspect-auto bg-cover bg-center"
+          className="cal-tl-hero-img"
           style={
             event.event_logo || event.screenshot_url
               ? { backgroundImage: `url(${event.event_logo || event.screenshot_url})` }
@@ -218,41 +192,39 @@ function HeroEventCard({
           }
         >
           {event.is_featured && (
-            <div className="absolute top-4 left-4 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 backdrop-blur text-white text-xs font-medium">
-              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+            <div className="cal-tl-feat">
+              <svg width="12" height="12" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
               Featured
             </div>
           )}
         </div>
-        <div className="p-6 md:p-10 flex flex-col justify-center">
+        <div className="cal-tl-hero-body">
           {start && (
-            <div className="flex items-center gap-3 mb-4">
-              <div className="text-center">
-                <div className="text-[11px] uppercase tracking-wider text-white/50">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ font: '600 11px var(--font-mono)', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--ink-4)' }}>
                   {start.toLocaleDateString(undefined, { month: 'short' })}
                 </div>
-                <div className="text-3xl font-bold text-white leading-none">
+                <div style={{ font: '600 30px var(--font-display)', color: 'var(--ink)', lineHeight: 1 }}>
                   {start.getDate()}
                 </div>
               </div>
-              <div className="text-sm text-white/60">
+              <div style={{ fontSize: 14, color: 'var(--ink-3)' }}>
                 <div>{start.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric' })}</div>
                 <div>{start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}{event.event_timezone ? ` · ${event.event_timezone}` : ''}</div>
               </div>
             </div>
           )}
-          <h3 className="text-white text-2xl md:text-3xl font-bold mb-3 group-hover:underline underline-offset-4 decoration-2">
-            {event.event_title}
-          </h3>
+          <h3 className="cal-tl-hero-title">{event.event_title}</h3>
           {formatLocationLabel(event) && (
-            <p className="text-white/70 text-sm mb-5">
+            <p style={{ color: 'var(--ink-3)', fontSize: 14, margin: '0 0 20px' }}>
               📍 {formatLocationLabel(event)}
             </p>
           )}
 
           <StatPills event={event} mode="upcoming" />
 
-          <span className="mt-6 inline-flex w-fit items-center gap-2 px-4 py-2 rounded-lg bg-black text-white text-sm font-semibold">
+          <span className="btn btn-primary" style={{ marginTop: 24, width: 'fit-content' }}>
             View event
             <span aria-hidden>→</span>
           </span>
@@ -285,16 +257,16 @@ function MonthGroupedTimeline({
   return (
     <div>
       {groups.map((g, i) => (
-        <section key={g.key} className={i === 0 ? '' : 'mt-12'}>
-          <div className="mb-5 pb-3 border-b border-white/10">
-            <h3 className="text-white text-lg font-semibold flex items-center gap-3">
+        <section key={g.key} style={i === 0 ? undefined : { marginTop: 48 }}>
+          <div style={{ marginBottom: 20, paddingBottom: 12, borderBottom: '1px solid var(--line)' }}>
+            <h3 style={{ font: '600 18px var(--font-display)', color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: 12, margin: 0 }}>
               {g.label}
-              <span className="text-white/40 text-sm font-normal">
+              <span style={{ color: 'var(--ink-4)', fontSize: 14, fontWeight: 400 }}>
                 {g.events.length} {g.events.length === 1 ? 'event' : 'events'}
               </span>
             </h3>
           </div>
-          <ol className="relative space-y-4 pl-6 border-l border-white/10">
+          <ol className="cal-tl-list">
             {g.events.map((ev) => (
               <TimelineRow key={ev.event_id} event={ev} accent={accent} mode={mode} />
             ))}
@@ -318,39 +290,21 @@ function TimelineRow({
   const dimmed = mode === 'past'
 
   return (
-    <li className="relative">
+    <li style={{ position: 'relative' }}>
       <span
-        className="absolute -left-[31px] top-6 w-3 h-3 rounded-full ring-4 ring-black"
+        className="cal-tl-node"
         style={{ backgroundColor: accent }}
       />
       <Link
         href={`/events/${event.event_slug || event.event_id}`}
-        className={[
-          'group block overflow-hidden transition-all duration-200 hover:brightness-110',
-          dimmed ? 'opacity-90' : '',
-        ].join(' ')}
-        style={{
-          borderRadius: 'var(--radius-control, 12px)',
-          backgroundColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-opacity, 0.05))`,
-          backdropFilter: `blur(var(--glass-blur, 4px))`,
-          WebkitBackdropFilter: `blur(var(--glass-blur, 4px))`,
-          borderWidth: 1,
-          borderStyle: 'solid',
-          borderColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-border-opacity, 0.1))`,
-        }}
+        className="cal-tl-card"
+        style={dimmed ? { opacity: 0.9 } : undefined}
       >
-        <div className="grid grid-cols-[7rem_1fr] sm:grid-cols-[10rem_1fr]">
+        <div className="cal-tl-card-grid">
           <div
-            className={[
-              'relative bg-cover bg-center',
-              dimmed ? 'opacity-80 grayscale-[20%]' : '',
-            ].join(' ')}
+            className="cal-tl-card-img"
             style={{
-              // Inline minHeight: the portal's Tailwind v4 content scan
-              // doesn't reach cloned module repos under /tmp/module-repos,
-              // so arbitrary-value classes (min-h-[7rem]) end up unbuilt
-              // and the image column collapses on short cards.
-              minHeight: '8rem',
+              ...(dimmed ? { filter: 'grayscale(20%)', opacity: 0.85 } : {}),
               ...(event.event_logo || event.screenshot_url
                 ? { backgroundImage: `url(${event.event_logo || event.screenshot_url})` }
                 : {
@@ -361,14 +315,12 @@ function TimelineRow({
             }}
           >
             {event.is_featured && (
-              <span className="absolute top-2 left-2 inline-block px-2 py-0.5 rounded-full bg-black/60 text-white text-[10px] font-medium">
-                Featured
-              </span>
+              <span className="cal-tl-feat-sm">Featured</span>
             )}
           </div>
-          <div className="p-4 sm:p-5">
+          <div style={{ padding: '16px 18px' }}>
             {start && (
-              <div className="text-white/60 text-xs mb-1">
+              <div style={{ color: 'var(--ink-4)', fontSize: 12, marginBottom: 4 }}>
                 {start.toLocaleDateString(undefined, {
                   weekday: 'short',
                   month: 'short',
@@ -378,15 +330,15 @@ function TimelineRow({
                 {start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
               </div>
             )}
-            <h4 className="text-white text-base sm:text-lg font-semibold leading-snug group-hover:underline underline-offset-2 decoration-1 line-clamp-2">
+            <h4 className="cal-tl-card-title">
               {event.event_title}
             </h4>
             {formatLocationLabel(event) && (
-              <p className="text-white/50 text-xs mt-1 line-clamp-1">
+              <p className="cal-tl-card-loc">
                 {formatLocationLabel(event)}
               </p>
             )}
-            <div className="mt-3">
+            <div style={{ marginTop: 12 }}>
               <StatPills event={event} mode={mode} compact />
             </div>
           </div>
@@ -436,13 +388,15 @@ function StatPills({
     })
   }
   if (pills.length === 0) return null
-  const padding = compact ? 'px-2 py-0.5 text-[11px]' : 'px-3 py-1 text-xs'
+  const padStyle: React.CSSProperties = compact
+    ? { padding: '2px 8px', fontSize: 11 }
+    : { padding: '4px 12px', fontSize: 12 }
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
       {pills.map((p) => (
         <span
           key={p.label}
-          className={`inline-flex items-center gap-1 rounded-full bg-white/5 text-white/80 ${padding}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, borderRadius: 999, background: 'rgba(var(--ui-text), 0.06)', color: 'var(--ink-2)', ...padStyle }}
         >
           <span aria-hidden>{p.icon}</span>
           {p.label}
@@ -469,39 +423,67 @@ function EmptyState({
 }) {
   return (
     <div
-      className="text-center overflow-hidden"
       style={{
-        // Padding declared inline so it survives the Tailwind purge for
-        // module files that aren't always in the JIT content scan.
+        textAlign: 'center',
+        overflow: 'hidden',
         padding: '4rem 2.5rem',
-        borderRadius: 'var(--radius-control, 12px)',
-        backgroundColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-opacity, 0.05))`,
-        backdropFilter: `blur(var(--glass-blur, 4px))`,
-        WebkitBackdropFilter: `blur(var(--glass-blur, 4px))`,
-        borderWidth: 1,
-        borderStyle: 'solid',
-        borderColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-border-opacity, 0.1))`,
+        borderRadius: 18,
+        background: 'var(--paper)',
+        border: '1px solid var(--line)',
       }}
     >
-      <h3 className="text-white text-xl font-bold">{title}</h3>
-      <p className="text-white/60 text-sm mt-2 max-w-md mx-auto">{body}</p>
-      <div className="flex items-center justify-center gap-3 mt-6">
-        <Link
-          href={primary.href}
-          className="px-5 py-2 rounded-lg bg-black text-white text-sm font-semibold hover:bg-black/80"
-        >
+      <h3 style={{ font: '600 20px var(--font-display)', color: 'var(--ink)', margin: 0 }}>{title}</h3>
+      <p style={{ color: 'var(--ink-3)', fontSize: 14, marginTop: 8, maxWidth: '28rem', marginLeft: 'auto', marginRight: 'auto', lineHeight: 1.55 }}>{body}</p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 24 }}>
+        <Link href={primary.href} className="btn btn-primary">
           {primary.label}
         </Link>
         {secondary && (
-          <Link
-            href={secondary.href}
-            className="px-5 py-2 rounded-lg bg-white/10 text-white text-sm font-medium hover:bg-white/20"
-          >
+          <Link href={secondary.href} className="btn btn-secondary">
             {secondary.label}
           </Link>
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * Scoped styles for the event timeline (tab seg, hero card, month-grouped
+ * spine + cards). Rendered once at the top of <CalendarEventTimeline>.
+ */
+function CalTimelineStyles() {
+  return (
+    <style>{`
+      .cal-tl-seg { display: inline-flex; }
+      @media (max-width: 640px) { .cal-tl-seg { display: flex; width: 100%; } .cal-tl-seg .pub-seg-btn { flex: 1; } }
+      .cal-tl-hero { display: block; overflow: hidden; text-decoration: none; border-radius: 18px; background: var(--paper); border: 1px solid var(--line);
+        transition: border-color .2s ease, transform .2s ease; }
+      .cal-tl-hero:hover { border-color: var(--line-2); transform: translateY(-2px); }
+      .cal-tl-hero-grid { display: grid; grid-template-columns: 1fr; }
+      @media (min-width: 768px) { .cal-tl-hero-grid { grid-template-columns: 1fr 1fr; } }
+      .cal-tl-hero-img { position: relative; aspect-ratio: 16/10; background-size: cover; background-position: center; }
+      @media (min-width: 768px) { .cal-tl-hero-img { aspect-ratio: auto; min-height: 100%; } }
+      .cal-tl-hero-body { padding: 24px; display: flex; flex-direction: column; justify-content: center; }
+      @media (min-width: 768px) { .cal-tl-hero-body { padding: 40px; } }
+      .cal-tl-hero-title { font: 600 clamp(22px,3vw,30px) var(--font-display); color: var(--ink); letter-spacing: -0.015em; margin: 0 0 12px; }
+      .cal-tl-hero:hover .cal-tl-hero-title { text-decoration: underline; text-underline-offset: 4px; }
+      .cal-tl-feat { position: absolute; top: 16px; left: 16px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px;
+        background: rgba(0,0,0,0.6); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); color: #fff; font-size: 12px; font-weight: 500; }
+      .cal-tl-list { list-style: none; margin: 0; padding: 0 0 0 24px; display: flex; flex-direction: column; gap: 16px; position: relative; border-left: 1px solid var(--line); }
+      .cal-tl-node { position: absolute; left: -31px; top: 24px; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 4px var(--paper); }
+      .cal-tl-card { display: block; overflow: hidden; text-decoration: none; border-radius: 14px; background: var(--paper); border: 1px solid rgba(var(--ui-text), 0.10);
+        transition: border-color .2s ease, transform .2s ease; }
+      .cal-tl-card:hover { border-color: rgba(var(--ui-text), 0.28); transform: translateY(-2px); }
+      .cal-tl-card-grid { display: grid; grid-template-columns: 7rem 1fr; }
+      @media (min-width: 640px) { .cal-tl-card-grid { grid-template-columns: 10rem 1fr; } }
+      .cal-tl-card-img { position: relative; background-size: cover; background-position: center; min-height: 8rem; background-color: rgba(var(--ui-text), 0.05); }
+      .cal-tl-feat-sm { position: absolute; top: 8px; left: 8px; display: inline-block; padding: 2px 8px; border-radius: 999px; background: rgba(0,0,0,0.6); color: #fff; font-size: 10px; font-weight: 500; }
+      .cal-tl-card-title { font: 600 17px var(--font-display); color: var(--ink); line-height: 1.3; margin: 0;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .cal-tl-card:hover .cal-tl-card-title { text-decoration: underline; text-underline-offset: 2px; }
+      .cal-tl-card-loc { color: var(--ink-3); font-size: 12px; margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    `}</style>
   )
 }
 

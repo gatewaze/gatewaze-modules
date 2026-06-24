@@ -16,35 +16,39 @@ export function CalendarPastHighlights({ events, calendarSlug }: Props) {
   if (events.length === 0) return null
 
   return (
-    <div className="mb-8">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-white text-xl font-semibold">Looking back</h2>
-        <Link
-          href={`/calendars/${calendarSlug}/events`}
-          className="text-white/60 hover:text-white text-sm"
-        >
+    <section className="cal-past" style={{ marginBottom: 32 }}>
+      <style>{`
+        .cal-past-row { display: flex; align-items: center; gap: 16px; text-decoration: none;
+          background: var(--paper); border: 1px solid rgba(var(--ui-text), 0.10); border-radius: 12px; padding: 12px 16px;
+          transition: border-color .2s ease, transform .2s ease; }
+        .cal-past-row:hover { border-color: rgba(var(--ui-text), 0.28); transform: translateY(-2px); }
+        .cal-past-date { color: var(--ink-4); font-size: 12px; width: 80px; flex-shrink: 0; }
+        .cal-past-title { color: var(--ink); font-weight: 500; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cal-past-city { color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      `}</style>
+      <div className="pub-sechead" style={{ marginBottom: 14 }}>
+        <h2 style={{ font: '600 22px var(--font-display)', color: 'var(--ink)', letterSpacing: '-0.01em', margin: 0 }}>
+          Looking back
+        </h2>
+        <Link href={`/calendars/${calendarSlug}/events`} className="pub-viewall">
           See all past events →
         </Link>
       </div>
-      <div className="space-y-2">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {events.slice(0, 6).map((event) => (
           <Link
             key={event.event_id}
             href={`/events/${event.event_slug || event.event_id}`}
-            className="flex items-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-4 py-3 transition-colors"
+            className="cal-past-row"
           >
-            <div className="text-white/40 text-xs w-20 flex-shrink-0">
-              {formatDate(event.event_start)}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-white font-medium truncate">{event.event_title}</div>
-              {event.event_city && (
-                <div className="text-white/50 text-xs truncate">{event.event_city}</div>
-              )}
+            <div className="cal-past-date">{formatDate(event.event_start)}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="cal-past-title">{event.event_title}</div>
+              {event.event_city && <div className="cal-past-city">{event.event_city}</div>}
             </div>
           </Link>
         ))}
       </div>
-    </div>
+    </section>
   )
 }
