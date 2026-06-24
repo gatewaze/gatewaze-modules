@@ -92,6 +92,9 @@ const bulkEmailingModule: GatewazeModule = {
     // SendingPanel vocabulary. Foundation for moving event comms onto the
     // shared worker drip engine + SendingPanel.
     'migrations/017_event_batch_recipients.sql',
+    // 018 adds sent_count/failed_count to email_batch_jobs (engine + panel) and
+    // the email_batch_job_batches provider-batch table for the worker engine.
+    'migrations/018_event_batch_engine_columns.sql',
   ],
 
   workers: [

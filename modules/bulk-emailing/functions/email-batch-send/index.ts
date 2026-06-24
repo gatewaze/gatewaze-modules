@@ -10,6 +10,11 @@ const BATCH_LIMIT = 50
 const PROGRESS_UPDATE_INTERVAL = 10
 const CANCEL_CHECK_INTERVAL = 50
 
+// Tier 2: when enabled, this fn ENQUEUES resolved recipients (with each one's
+// substitution context) into email_batch_job_recipients and the shared worker
+// drip engine sends them. When disabled, it sends inline (legacy Tier 1).
+const USE_WORKER = Deno.env.get('SEND_ENGINE_USE_WORKER') === 'true'
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 })
@@ -302,6 +307,100 @@ async function countRecipients(job: any): Promise<number> {
   }
 }
 
+// Build the per-recipient substitution context (customer / event / calendar /
+// speaker scopes). Shared by the inline Tier-1 send and the Tier-2 enqueue so
+// both produce identical {{scope.field}} values.
+function buildRecipientContext(job: any, event: any, config: any, recipient: Recipient): TemplateContext {
+  const context: TemplateContext = {
+    customer: {
+      first_name: recipient.firstName, last_name: recipient.lastName,
+      full_name: recipient.fullName, email: recipient.email,
+    },
+    event: {
+      name: event?.event_title || '', id: event?.event_id || '',
+      city: event?.event_city || '', country: event?.event_country_code || '',
+      start_date: formatDate(event?.event_start), end_date: formatDate(event?.event_end),
+      link: event?.event_link || '', location: event?.event_location || '',
+    },
+  }
+
+  if (job.email_type === 'registration' || job.email_type === 'reminder') {
+    const encodedEmail = encodeEmail(recipient.email)
+    const calendarBase = `${SUPABASE_URL}/functions/v1/calendar/${job.event_id}`
+    context.calendar = {
+      google: `${calendarBase}/google/${encodedEmail}`,
+      outlook: `${calendarBase}/outlook/${encodedEmail}`,
+      apple: `${calendarBase}/apple/${encodedEmail}`,
+      ics: `${calendarBase}/ics/${encodedEmail}`,
+    }
+  }
+
+  const nonSpeakerTypes = ['registration', 'reminder', 'post_event_attendee', 'post_event_non_attendee', 'competition_non_winner', 'registrant_email']
+  const isAdhocSpeaker = job.email_type === 'adhoc_email' && config.audience_type === 'speakers'
+  if (!nonSpeakerTypes.includes(job.email_type) || isAdhocSpeaker) {
+    const confirmationLink = recipient.confirmationToken
+      ? `${SUPABASE_URL}/functions/v1/speaker-confirm?token=${recipient.confirmationToken}` : ''
+    const editLink = recipient.editToken ? `/events/${job.event_id}/talks/success/${recipient.editToken}` : ''
+    context.speaker = {
+      first_name: recipient.firstName, last_name: recipient.lastName,
+      full_name: recipient.fullName, email: recipient.email,
+      talk_title: recipient.talkTitle, talk_synopsis: recipient.talkSynopsis,
+      company: recipient.company, job_title: recipient.jobTitle,
+      confirmation_link: confirmationLink, edit_link: editLink,
+    }
+  }
+  return context
+}
+
+// Dispatch to the right per-audience fetcher for a page of recipients. Shared by
+// the inline send and the Tier-2 enqueue (same resolution for both).
+async function fetchRecipientsPage(job: any, config: any, offset: number, limit: number): Promise<Recipient[]> {
+  if (job.email_type === 'calendar_blast') return fetchCalendarBlastRecipients(job, offset, limit)
+  if (job.email_type === 'adhoc_email') return fetchAdhocRecipients(config.member_profile_ids || [], offset, limit)
+  if (job.email_type === 'registration' || job.email_type === 'reminder') return fetchRegistrationRecipients(job.event_id, offset, limit, config.registered_after)
+  if (job.email_type === 'registrant_email') return fetchRegistrationRecipients(job.event_id, offset, limit, undefined, config.registration_ids)
+  if (job.email_type === 'post_event_attendee') return fetchAttendeeRecipients(job.event_id, offset, limit)
+  if (job.email_type === 'post_event_non_attendee') return fetchNonAttendeeRecipients(job.event_id, offset, limit)
+  if (job.email_type === 'competition_non_winner') return fetchCompetitionNonWinnerRecipients(job.event_id, offset, limit)
+  return fetchSpeakerRecipients(config.event_uuid, config.speaker_status, config.include_directly_added || false, offset, limit)
+}
+
+// Tier 2: page through ALL recipients and enqueue them (with each one's
+// substitution context as jsonb) into the drip queue. The shared worker engine
+// then claims due rows and sends them. Idempotent via the (job_id, email)
+// unique key — re-running an enqueue won't duplicate recipients.
+async function enqueueAllRecipients(job: any, event: any, config: any): Promise<number> {
+  const jobId = job.id
+  const sendAt = new Date().toISOString()
+  let offset = 0
+  let total = 0
+  while (true) {
+    const page = await fetchRecipientsPage(job, config, offset, BATCH_LIMIT)
+    if (page.length === 0) break
+    const rows = page
+      .filter((r) => !!r.email)
+      .map((r) => ({
+        send_id: jobId,
+        email: r.email,
+        person_id: r.personId != null ? String(r.personId) : null,
+        context: buildRecipientContext(job, event, config, r),
+        send_at: sendAt,
+        status: 'pending',
+        strategy: 'global',
+      }))
+    if (rows.length > 0) {
+      const { error } = await supabase
+        .from('email_batch_job_recipients')
+        .upsert(rows, { onConflict: 'send_id,email', ignoreDuplicates: true })
+      if (error) throw new Error(`Enqueue failed: ${error.message}`)
+      total += rows.length
+    }
+    offset += page.length
+    if (page.length < BATCH_LIMIT) break
+  }
+  return total
+}
+
 // --- Main Handler ---
 
 export default async function(req: Request) {
@@ -403,8 +502,30 @@ export default async function(req: Request) {
       fromEmail = fromMatch[2].trim()
     }
 
-    // Fetch batch of recipients
     const config = job.config || {}
+
+    // Tier 2: enqueue all recipients (with substitution context) for the shared
+    // worker drip engine, then return — the worker sends them. No inline send.
+    if (USE_WORKER) {
+      const enqueued = await enqueueAllRecipients(job, event, config)
+      const now = new Date().toISOString()
+      await supabase.from('email_batch_jobs').update({
+        status: enqueued > 0 ? 'sending' : 'completed',
+        total_recipients: enqueued,
+        last_processed_offset: 0,
+        last_heartbeat_at: now,
+        updated_at: now,
+        ...(enqueued > 0 ? {} : { completed_at: now }),
+      }).eq('id', jobId)
+      console.log(`Job ${jobId}: enqueued ${enqueued} recipients for Tier-2 worker drip`)
+      return new Response(JSON.stringify({
+        jobId, status: enqueued > 0 ? 'sending' : 'completed', enqueued,
+        message: enqueued > 0 ? 'Enqueued for worker drip' : 'No recipients found',
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    // --- Tier 1 (legacy inline send) ---
+    // Fetch batch of recipients
     const offset = job.last_processed_offset || 0
     let recipients: Recipient[]
 
@@ -448,45 +569,8 @@ export default async function(req: Request) {
       if (!recipient.email) { processed++; continue }
 
       try {
-        // Build template context
-        const context: TemplateContext = {
-          customer: {
-            first_name: recipient.firstName, last_name: recipient.lastName,
-            full_name: recipient.fullName, email: recipient.email,
-          },
-          event: {
-            name: event?.event_title || '', id: event?.event_id || '',
-            city: event?.event_city || '', country: event?.event_country_code || '',
-            start_date: formatDate(event?.event_start), end_date: formatDate(event?.event_end),
-            link: event?.event_link || '', location: event?.event_location || '',
-          },
-        }
-
-        if (job.email_type === 'registration' || job.email_type === 'reminder') {
-          const encodedEmail = encodeEmail(recipient.email)
-          const calendarBase = `${SUPABASE_URL}/functions/v1/calendar/${job.event_id}`
-          context.calendar = {
-            google: `${calendarBase}/google/${encodedEmail}`,
-            outlook: `${calendarBase}/outlook/${encodedEmail}`,
-            apple: `${calendarBase}/apple/${encodedEmail}`,
-            ics: `${calendarBase}/ics/${encodedEmail}`,
-          }
-        }
-
-        const nonSpeakerTypes = ['registration', 'reminder', 'post_event_attendee', 'post_event_non_attendee', 'competition_non_winner', 'registrant_email']
-        const isAdhocSpeaker = job.email_type === 'adhoc_email' && config.audience_type === 'speakers'
-        if (!nonSpeakerTypes.includes(job.email_type) || isAdhocSpeaker) {
-          const confirmationLink = recipient.confirmationToken
-            ? `${SUPABASE_URL}/functions/v1/speaker-confirm?token=${recipient.confirmationToken}` : ''
-          const editLink = recipient.editToken ? `/events/${job.event_id}/talks/success/${recipient.editToken}` : ''
-          context.speaker = {
-            first_name: recipient.firstName, last_name: recipient.lastName,
-            full_name: recipient.fullName, email: recipient.email,
-            talk_title: recipient.talkTitle, talk_synopsis: recipient.talkSynopsis,
-            company: recipient.company, job_title: recipient.jobTitle,
-            confirmation_link: confirmationLink, edit_link: editLink,
-          }
-        }
+        // Build template context (shared with the Tier-2 enqueue path)
+        const context = buildRecipientContext(job, event, config, recipient)
 
         const processedSubject = replaceVariables(job.subject_template, context)
         const processedHtml = replaceVariables(job.content_template, context)

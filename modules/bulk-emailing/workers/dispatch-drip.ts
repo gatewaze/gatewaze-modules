@@ -25,6 +25,7 @@ export default async function handleBulkDrip(_job: Job<DispatchJobData>) {
     const [engMod, bindMod] = await Promise.all([
       import('../worker/send-engine/engine.js'),
       import('./send-engine-binding.js'),
+      import('./send-engine-binding-events.js'),
     ]);
     // Interop-safe: these modules have no package.json "type":"module", so under
     // tsx/CJS `await import()` nests exports under .default.
@@ -32,8 +33,10 @@ export default async function handleBulkDrip(_job: Job<DispatchJobData>) {
       ?? (engMod as { default?: { runDripTick?: typeof import('../worker/send-engine/engine.js').runDripTick } }).default?.runDripTick;
     const bulkBinding = (bindMod as { bulkBinding?: unknown }).bulkBinding
       ?? (bindMod as { default?: { bulkBinding?: unknown } }).default?.bulkBinding;
-    if (typeof runDripTick !== 'function' || !bulkBinding) {
-      throw new Error('send-engine modules did not expose runDripTick/bulkBinding');
+    const eventCommsBinding = (evtBindMod as { eventCommsBinding?: unknown }).eventCommsBinding
+      ?? (evtBindMod as { default?: { eventCommsBinding?: unknown } }).default?.eventCommsBinding;
+    if (typeof runDripTick !== 'function' || !bulkBinding || !eventCommsBinding) {
+      throw new Error('send-engine modules did not expose runDripTick/bulkBinding/eventCommsBinding');
     }
     const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
     const logger = {
@@ -41,19 +44,21 @@ export default async function handleBulkDrip(_job: Job<DispatchJobData>) {
       warn: (...a: unknown[]) => console.warn('[send-engine]', ...a),
       error: (...a: unknown[]) => console.error('[send-engine]', ...a),
     };
-    const engine = await runDripTick(
-      { supabase, logger, config: {
-        claimBatch: Number(process.env.SEND_ENGINE_CLAIM_BATCH ?? 1000),
-        batchSize: Number(process.env.SEND_ENGINE_BATCH_SIZE ?? 1000),
-        budgetMs: Number(process.env.SEND_ENGINE_BUDGET_MS ?? 45000),
-        dailyCap: Number(process.env.SEND_ENGINE_DAILY_CAP ?? Number.MAX_SAFE_INTEGER),
-        rampPercent: Number(process.env.SEND_ENGINE_RAMP_PERCENT ?? 100),
-        replica: process.env.HOSTNAME ?? 'worker',
-      } },
-      bulkBinding as never,
-    );
+    const deps = { supabase, logger, config: {
+      claimBatch: Number(process.env.SEND_ENGINE_CLAIM_BATCH ?? 1000),
+      batchSize: Number(process.env.SEND_ENGINE_BATCH_SIZE ?? 1000),
+      budgetMs: Number(process.env.SEND_ENGINE_BUDGET_MS ?? 45000),
+      dailyCap: Number(process.env.SEND_ENGINE_DAILY_CAP ?? Number.MAX_SAFE_INTEGER),
+      rampPercent: Number(process.env.SEND_ENGINE_RAMP_PERCENT ?? 100),
+      replica: process.env.HOSTNAME ?? 'worker',
+    } };
+    // One tick drives every queue-backed domain: bulk + event comms. Each binding
+    // claims only its own due recipients, so running them in sequence is safe.
+    const engine = await runDripTick(deps, bulkBinding as never);
     if (engine.claimed) console.log(`[send-engine] bulk drip: claimed ${engine.claimed}, sent ${engine.sent}, failed ${engine.failed}`);
-    return { engine };
+    const events = await runDripTick(deps, eventCommsBinding as never);
+    if (events.claimed) console.log(`[send-engine] event-comms drip: claimed ${events.claimed}, sent ${events.sent}, failed ${events.failed}`);
+    return { engine, events };
   } catch (err) {
     console.error('[send-engine] bulk worker drip failed:', err);
     return { error: (err as Error).message };
