@@ -70,6 +70,9 @@ const broadcastsModule: GatewazeModule = {
     // 006 splits broadcasts into a parent (definition) + send instances, so a
     // broadcast can have many sends (uniform parent→sends model, shared UI).
     'migrations/006_broadcasts_parent.sql',
+    // 007 adds broadcast_recipient_preview_count for the shared SendingPanel's
+    // deliverable-count indicator (mirrors fan-out audience resolution).
+    'migrations/007_broadcast_recipient_preview_count.sql',
   ],
 
   adminRoutes: [

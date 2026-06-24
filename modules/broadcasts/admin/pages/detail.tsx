@@ -108,8 +108,43 @@ export default function BroadcastDetailPage() {
         editLabel: 'Edit',
       },
       recipientCount: audienceCount,
+      async countRecipients(excludeSentSendIds: string[]) {
+        const { data, error } = await supabase.rpc('broadcast_recipient_preview_count', {
+          p_audience_type: b.audience_type,
+          p_segment_id: b.audience_type === 'segment' ? b.segment_id : null,
+          p_list_ids: b.audience_type === 'list' ? (b.list_ids ?? []) : null,
+          p_suppression_topic: 'broadcasts',
+          p_exclude_send_ids: excludeSentSendIds.length > 0 ? excludeSentSendIds : null,
+        });
+        if (error) throw error;
+        return (data as number) ?? 0;
+      },
       async createSend(config: SendComposerConfig) {
         return createBroadcastSend(b.id, config);
+      },
+      async rerenderContent(sendId: string) {
+        // Re-snapshot the parent's current content onto a not-yet-sent send,
+        // so edits to the broadcast reach recipients still pending.
+        const { error } = await supabase.from('broadcast_sends').update({
+          subject: b.subject,
+          preheader: b.preheader,
+          from_address: b.from_address,
+          from_name: b.from_name,
+          reply_to: b.reply_to,
+          rendered_html: b.rendered_html,
+          content_json: b.content_json,
+          updated_at: new Date().toISOString(),
+        }).eq('id', sendId);
+        if (error) throw error;
+      },
+      async sendTest(email: string) {
+        // Test from the parent (no send instance needed) via broadcast-send.
+        const { data, error } = await supabase.functions.invoke('broadcast-send', {
+          body: { test_send: { broadcast_id: b.id, email } },
+        });
+        if (error) throw error;
+        const res = data as { success?: boolean; error?: string } | null;
+        if (!res?.success) throw new Error(res?.error || 'Test send failed');
       },
     };
   }, [b, audienceCount]);
