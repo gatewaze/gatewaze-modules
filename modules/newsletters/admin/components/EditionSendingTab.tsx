@@ -5,6 +5,7 @@ import type { SendingAdapter, SendComposerConfig } from '@/components/sending';
 import { getViewOnlineUrl } from '../utils/view-online-url';
 
 interface CollectionInfo {
+  id?: string;
   from_email?: string | null;
   from_name?: string | null;
   reply_to?: string | null;
@@ -108,6 +109,14 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         const { html, webVersionUrl, portalBaseUrl } = await buildFinalHtml();
         const { data, error } = await supabase.from('newsletter_sends').insert({
           edition_id: editionId,
+          // Without collection_id the worker engine can't look up the
+          // collection's reply_to, so the outbound emails go without a
+          // Reply-To header and every reply lands on the from-address
+          // (demetrios@news.mlops.community) instead of the configured
+          // reply-to (demetrios@aaif.live, which has the Inbound Parse
+          // webhook). 06-24 mlopscommunity send shipped 50,493 emails
+          // with reply_to=NULL before this fix.
+          collection_id: collection?.id ?? null,
           status: config.scheduleType === 'scheduled' ? 'scheduled' : 'sending',
           subject: subject || null,
           from_address: collection?.from_email || null,
