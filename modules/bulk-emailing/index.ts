@@ -95,6 +95,8 @@ const bulkEmailingModule: GatewazeModule = {
     // 018 adds sent_count/failed_count to email_batch_jobs (engine + panel) and
     // the email_batch_job_batches provider-batch table for the worker engine.
     'migrations/018_event_batch_engine_columns.sql',
+    // 019 adds reminder_email_lead_hours for the date-driven reminder cron.
+    'migrations/019_event_reminder_lead_hours.sql',
   ],
 
   workers: [
@@ -111,6 +113,13 @@ const bulkEmailingModule: GatewazeModule = {
       name: 'bulk-emailing:reconcile-sendgrid',
       handler: './workers/reconcile-sendgrid.ts',
     },
+    {
+      // Lifecycle reminders: auto-send an event's reminder email when it enters
+      // its lead window (reminder_email_lead_hours before event_start). Creates a
+      // 'reminder' email_batch_job + invokes email-batch-send (Tier-2 under flag).
+      name: 'bulk-emailing:dispatch-event-reminders',
+      handler: './workers/dispatch-event-reminders.ts',
+    },
   ],
 
   crons: [
@@ -125,6 +134,13 @@ const bulkEmailingModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 180_000 },
       data: { kind: 'bulk-emailing:reconcile-sendgrid' },
+    },
+    {
+      // 10-minute heartbeat for date-driven event reminders.
+      name: 'bulk-emailing-event-reminders',
+      queue: 'jobs',
+      schedule: { every: 600_000 },
+      data: { kind: 'bulk-emailing:dispatch-event-reminders' },
     },
   ],
 
