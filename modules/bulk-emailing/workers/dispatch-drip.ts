@@ -12,15 +12,10 @@ interface DispatchJobData { kind: string }
  * Central Sending Service bulk drip (Phase 3). Unlike newsletters/broadcasts,
  * bulk has no scheduled→sending fanout owned by an Edge function — a bulk job is
  * fanned out into bulk_send_recipients by its producer — so this 60s heartbeat
- * just drives the shared worker engine over due bulk recipients.
- *
- * Flag-gated: does nothing unless SEND_ENGINE_USE_WORKER=true. The legacy
- * synchronous email-batch-send loop remains the default path for live
- * event-comms; this engine path only claims recipients that have been fanned
- * out into the queue.
+ * just drives the shared worker engine over due bulk recipients. Always active;
+ * only claims recipients that have been fanned out into the queue.
  */
 export default async function handleBulkDrip(_job: Job<DispatchJobData>) {
-  if (process.env.SEND_ENGINE_USE_WORKER !== 'true') return { skipped: true };
   try {
     // Destructure all three imports — previously this dropped the third
     // result and the later `evtBindMod` reference threw ReferenceError on

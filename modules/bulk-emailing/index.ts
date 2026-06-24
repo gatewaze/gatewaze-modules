@@ -57,7 +57,7 @@ const bulkEmailingModule: GatewazeModule = {
     'migrations/010_send_engine_quota.sql',
     // 011 Central Sending Service BULK domain (Phase 3): bulk_send_recipients
     // queue + bulk_send_batches + bulk_send_id + brand/channel on email_batch_jobs
-    // + fanout/claim. Additive + inert until SEND_ENGINE_USE_WORKER + fanout.
+    // + fanout/claim. Now the active path (worker drip is always on).
     'migrations/011_send_engine_bulk.sql',
     // 012 Channel abstraction (Phase 4): per-(person, channel, topic) consent/
     // opt-out, generalising email "topic" unsubscribe to "(channel, topic)".
@@ -102,7 +102,7 @@ const bulkEmailingModule: GatewazeModule = {
   workers: [
     {
       // 60s heartbeat driving the shared worker drip engine over due bulk
-      // recipients (Phase 3). No-op unless SEND_ENGINE_USE_WORKER=true.
+      // recipients (Phase 3 — always active).
       name: 'bulk-emailing:dispatch-drip',
       handler: './workers/dispatch-drip.ts',
     },

@@ -63,7 +63,7 @@ const broadcastsModule: GatewazeModule = {
     // runChat can resolve credentials/model/cost for the copilot.
     'migrations/003_segments_copilot_use_case.sql',
     // 004 adds broadcast_send_batches + watchdog index for the Central Sending
-    // Service worker drip (Phase 2). Inert until SEND_ENGINE_USE_WORKER=true.
+    // Service worker drip (Phase 2 — always active now).
     'migrations/004_send_engine_batches.sql',
     // 005 ties broadcasts to a category list for unsubscribe (list-tied model).
     'migrations/005_broadcasts_category_list.sql',

@@ -11,85 +11,183 @@ interface DispatchJobData {
   kind: string
 }
 
+interface DueSend {
+  id: string
+  metadata: Record<string, unknown> | null
+}
+
+// If the segment was recalculated within this window we skip the recalc before
+// fan-out (avoids a redundant full recompute on every send). Mirrors the prior
+// Edge-side fanOutAndStart logic (spec §1.2).
+const SEGMENT_FRESHNESS_MS = 60 * 60 * 1000
+
 /**
  * Heartbeat that fires due scheduled broadcast sends + drives the per-recipient
- * drip. Mirrors newsletters:dispatch-scheduled exactly — scheduling is
- * DB-as-source-of-truth (a broadcast_sends row with status='scheduled' and a
- * scheduled_at), and this 60s BullMQ cron is the pg_cron stand-in that works on
- * every deploy target without the pg_cron / pg_net extensions.
+ * drip. Mirrors newsletters:dispatch-scheduled exactly.
  *
- * The broadcast-send edge function owns the logic: it fans out due scheduled
- * broadcasts into the per-recipient timing queue, flips them to 'sending', and
- * drips due rows. Overlapping ticks are safe (status flip + FOR UPDATE SKIP
- * LOCKED claim), so this worker is a dumb trigger.
+ * Scheduling is DB-as-source-of-truth: a broadcast_sends row with
+ * `status='scheduled'` and a `scheduled_at`. This 60s BullMQ cron is the
+ * pg_cron stand-in that works on every deploy target (Docker, k8s, cloud +
+ * self-hosted Supabase) without relying on pg_cron / pg_net.
+ *
+ * Per-tick sequence (in order):
+ *   1. Select due `status='scheduled'` rows.
+ *   2. For each: best-effort segment recalc, call
+ *      `fanout_broadcast_send_recipients` to populate the per-recipient
+ *      timing queue, check for empty audience after suppression, flip to
+ *      'sending' (or 'failed' with reason).
+ *   3. Run a drip tick over the shared high-throughput send engine.
+ *
+ * Overlapping ticks are safe — the status flip plus the `FOR UPDATE SKIP
+ * LOCKED` recipient claim guard against double-sends.
+ *
+ * The broadcast-send Edge function still exists but only handles single-
+ * recipient test sends (processTestSend / processTestSendFromParent) — the
+ * scheduled-dispatch path no longer round-trips through it.
  */
 export default async function handleDispatchScheduled(_job: Job<DispatchJobData>) {
-  const res = await fetch(`${supabaseUrl}/functions/v1/broadcast-send`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${supabaseServiceKey}`,
-      apikey: supabaseServiceKey,
-    },
-    body: JSON.stringify({ process_scheduled: true }),
+  const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
   })
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '')
-    throw new Error(`broadcast-send process_scheduled failed (${res.status}): ${detail}`)
+  // 1. Find due scheduled broadcasts.
+  let processed = 0
+  const errors: string[] = []
+  const { data: due, error: selectErr } = await supabase
+    .from('broadcast_sends')
+    .select('id, metadata, audience_type, segment_id')
+    .eq('status', 'scheduled')
+    .lte('scheduled_at', new Date().toISOString())
+    .order('scheduled_at')
+    .limit(10)
+
+  if (selectErr) {
+    throw new Error(`[broadcast:dispatch-scheduled] select due sends failed: ${selectErr.message}`)
   }
 
-  const result = (await res.json().catch(() => ({}))) as { processed?: number; errors?: string[] }
-  if (result.errors && result.errors.length > 0) {
-    console.error('[broadcast:dispatch-scheduled] send errors:', result.errors)
-  }
-  if (result.processed) {
-    console.log(`[broadcast:dispatch-scheduled] dispatched ${result.processed} due broadcast(s)`)
-  }
-
-  // Central Sending Service canary: when SEND_ENGINE_USE_WORKER=true the Edge
-  // call above did fanout + scheduled processing but SKIPPED its per-recipient
-  // drip (see broadcast-send). The Node worker now owns that drip via the shared
-  // high-throughput engine. Flag off → this block is skipped and the Edge path
-  // dripped as before (behaviour unchanged).
-  let engine: { claimed: number; sent: number; failed: number } | null = null
-  if (process.env.SEND_ENGINE_USE_WORKER === 'true') {
+  // 2. Fan out each due broadcast + flip status.
+  for (const send of (due ?? []) as (DueSend & { audience_type?: string; segment_id?: string | null })[]) {
     try {
-      const [engMod, bindMod] = await Promise.all([
-        import('../../bulk-emailing/worker/send-engine/engine.js'),
-        import('./send-engine-binding.js'),
-      ])
-      // Interop-safe: these modules have no package.json "type":"module", so
-      // under tsx/CJS `await import()` nests exports under .default.
-      const runDripTick = (engMod as { runDripTick?: typeof import('../../bulk-emailing/worker/send-engine/engine.js').runDripTick }).runDripTick
-        ?? (engMod as { default?: { runDripTick?: typeof import('../../bulk-emailing/worker/send-engine/engine.js').runDripTick } }).default?.runDripTick
-      const broadcastBinding = (bindMod as { broadcastBinding?: unknown }).broadcastBinding
-        ?? (bindMod as { default?: { broadcastBinding?: unknown } }).default?.broadcastBinding
-      if (typeof runDripTick !== 'function' || !broadcastBinding) {
-        throw new Error('send-engine modules did not expose runDripTick/broadcastBinding')
+      // Best-effort segment recalc (matches prior maybeRecalcSegment).
+      if (send.audience_type === 'segment' && send.segment_id) {
+        try {
+          const { data: seg } = await supabase
+            .from('segments')
+            .select('last_calculated_at')
+            .eq('id', send.segment_id)
+            .maybeSingle()
+          const last = (seg as { last_calculated_at?: string } | null)?.last_calculated_at
+          if (!last || Date.now() - new Date(last).getTime() >= SEGMENT_FRESHNESS_MS) {
+            const { error: recalcErr } = await supabase.rpc('segments_calculate_members', { p_segment_id: send.segment_id })
+            if (recalcErr) console.warn('[broadcast:dispatch-scheduled] segment recalc skipped:', recalcErr.message)
+          }
+        } catch (err) {
+          console.warn('[broadcast:dispatch-scheduled] segment recalc error:', err instanceof Error ? err.message : err)
+        }
       }
-      const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } })
-      const logger = {
-        info: (...a: unknown[]) => console.log('[send-engine]', ...a),
-        warn: (...a: unknown[]) => console.warn('[send-engine]', ...a),
-        error: (...a: unknown[]) => console.error('[send-engine]', ...a),
-      }
-      engine = await runDripTick(
-        { supabase, logger, config: {
-          claimBatch: Number(process.env.SEND_ENGINE_CLAIM_BATCH ?? 1000),
-          batchSize: Number(process.env.SEND_ENGINE_BATCH_SIZE ?? 1000),
-          budgetMs: Number(process.env.SEND_ENGINE_BUDGET_MS ?? 45000),
-          dailyCap: Number(process.env.SEND_ENGINE_DAILY_CAP ?? Number.MAX_SAFE_INTEGER),
-          rampPercent: Number(process.env.SEND_ENGINE_RAMP_PERCENT ?? 100),
-          replica: process.env.HOSTNAME ?? 'worker',
-        } },
-        broadcastBinding as never,
+
+      const { error: fanoutErr } = await supabase.rpc(
+        'fanout_broadcast_send_recipients',
+        { p_send_id: send.id },
       )
-      if (engine.claimed) console.log(`[send-engine] broadcast drip: claimed ${engine.claimed}, sent ${engine.sent}, failed ${engine.failed}`)
+      if (fanoutErr) {
+        const msg = `Broadcast ${send.id}: ${fanoutErr.message}`
+        console.error('[broadcast:dispatch-scheduled] fanout failed:', msg)
+        errors.push(msg)
+        await supabase
+          .from('broadcast_sends')
+          .update({ status: 'failed', updated_at: new Date().toISOString() })
+          .eq('id', send.id)
+        continue
+      }
+
+      // Empty audience after suppression → terminal failure with a clear reason
+      // baked into metadata (matches prior fanOutAndStart behaviour).
+      const { count } = await supabase
+        .from('broadcast_send_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('send_id', send.id)
+      if ((count ?? 0) === 0) {
+        const msg = `Broadcast ${send.id}: 0 deliverable recipients after suppression filtering`
+        console.error('[broadcast:dispatch-scheduled]', msg)
+        errors.push(msg)
+        await supabase
+          .from('broadcast_sends')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            metadata: { ...(send.metadata || {}), error: '0 deliverable recipients after suppression filtering' },
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', send.id)
+        continue
+      }
+
+      const { error: flipErr } = await supabase
+        .from('broadcast_sends')
+        .update({
+          status: 'sending',
+          started_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', send.id)
+      if (flipErr) {
+        const msg = `Broadcast ${send.id} flip to sending: ${flipErr.message}`
+        console.error('[broadcast:dispatch-scheduled]', msg)
+        errors.push(msg)
+        continue
+      }
+      processed++
     } catch (err) {
-      console.error('[send-engine] broadcast worker drip failed:', err)
+      const msg = `Broadcast ${send.id}: ${err instanceof Error ? err.message : 'unknown error'}`
+      console.error('[broadcast:dispatch-scheduled] unexpected:', msg)
+      errors.push(msg)
     }
   }
 
-  return { processed: result.processed ?? 0, errors: result.errors ?? [], engine }
+  if (processed) {
+    console.log(`[broadcast:dispatch-scheduled] dispatched ${processed} due broadcast(s)`)
+  }
+  if (errors.length) {
+    console.error('[broadcast:dispatch-scheduled] send errors:', errors)
+  }
+
+  // 3. Per-recipient drip via the shared Central Sending Service engine.
+  let engine: { claimed: number; sent: number; failed: number } | null = null
+  try {
+    const [engMod, bindMod] = await Promise.all([
+      import('../../bulk-emailing/worker/send-engine/engine.js'),
+      import('./send-engine-binding.js'),
+    ])
+    // Interop-safe: these modules have no package.json "type":"module", so
+    // under tsx/CJS `await import()` nests exports under .default.
+    const runDripTick = (engMod as { runDripTick?: typeof import('../../bulk-emailing/worker/send-engine/engine.js').runDripTick }).runDripTick
+      ?? (engMod as { default?: { runDripTick?: typeof import('../../bulk-emailing/worker/send-engine/engine.js').runDripTick } }).default?.runDripTick
+    const broadcastBinding = (bindMod as { broadcastBinding?: unknown }).broadcastBinding
+      ?? (bindMod as { default?: { broadcastBinding?: unknown } }).default?.broadcastBinding
+    if (typeof runDripTick !== 'function' || !broadcastBinding) {
+      throw new Error('send-engine modules did not expose runDripTick/broadcastBinding')
+    }
+    const logger = {
+      info: (...a: unknown[]) => console.log('[send-engine]', ...a),
+      warn: (...a: unknown[]) => console.warn('[send-engine]', ...a),
+      error: (...a: unknown[]) => console.error('[send-engine]', ...a),
+    }
+    engine = await runDripTick(
+      { supabase, logger, config: {
+        claimBatch: Number(process.env.SEND_ENGINE_CLAIM_BATCH ?? 1000),
+        batchSize: Number(process.env.SEND_ENGINE_BATCH_SIZE ?? 1000),
+        budgetMs: Number(process.env.SEND_ENGINE_BUDGET_MS ?? 45000),
+        dailyCap: Number(process.env.SEND_ENGINE_DAILY_CAP ?? Number.MAX_SAFE_INTEGER),
+        rampPercent: Number(process.env.SEND_ENGINE_RAMP_PERCENT ?? 100),
+        replica: process.env.HOSTNAME ?? 'worker',
+      } },
+      broadcastBinding as never,
+    )
+    if (engine.claimed) console.log(`[send-engine] broadcast drip: claimed ${engine.claimed}, sent ${engine.sent}, failed ${engine.failed}`)
+  } catch (err) {
+    console.error('[send-engine] broadcast worker drip failed:', err)
+  }
+
+  return { processed, errors, engine }
 }

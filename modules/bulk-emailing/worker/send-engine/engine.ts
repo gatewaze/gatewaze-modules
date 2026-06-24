@@ -12,8 +12,8 @@
  * run in Node; see ./sendgrid.ts. Atomicity uses sequential writes + the
  * recovery layer (idempotent), not a cross-call transaction.
  *
- * Flag-gated: nothing here runs until SEND_ENGINE_USE_WORKER=true wires a
- * domain's dispatch cron to runDripTick.
+ * Wired in by each domain's dispatch cron (newsletters/broadcasts/bulk-emailing
+ * workers) — always active.
  */
 import { randomUUID } from 'node:crypto';
 import { resolveChannelProvider } from './channels/registry.js';

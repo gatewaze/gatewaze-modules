@@ -31,10 +31,10 @@ interface ReminderSetting {
  * Lifecycle reminder dispatcher (date-driven). Each tick finds events whose
  * reminder is enabled, not yet sent, and now within its configured lead window
  * (reminder_email_lead_hours before event_start), then creates a 'reminder'
- * email_batch_jobs row + invokes email-batch-send — which, under
- * SEND_ENGINE_USE_WORKER, enqueues the recipients for the Tier-2 worker drip
- * (same path as an admin-triggered reminder). reminder_email_sent_at is set
- * BEFORE invoking so an overlapping tick can't double-send.
+ * email_batch_jobs row + invokes email-batch-send — which enqueues the
+ * recipients for the worker drip engine (same path as an admin-triggered
+ * reminder). reminder_email_sent_at is set BEFORE invoking so an overlapping
+ * tick can't double-send.
  */
 export default async function handleEventReminders(_job: Job<DispatchJobData>) {
   const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { autoRefreshToken: false, persistSession: false } });
