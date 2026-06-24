@@ -254,6 +254,73 @@ export class LumaICalScraper extends BaseScraper {
   }
 
   /**
+   * Resolve a Luma calendar's iCal id from its public page over plain HTTP.
+   *
+   * Luma server-renders the calendar's own entity id into the page JSON as
+   * `"api_id":"cal-…"`. A calendar page carries exactly one such id (events
+   * are `evt-`, calendar-event rows `calev-`, organizers `usr-`), so we can
+   * read it without a browser. This is the scalable path for the thousands of
+   * auto-discovered iCal scrapers — and it replaces the legacy "Add iCal
+   * Subscription" modal extraction, which silently breaks whenever Luma
+   * changes that UI.
+   *
+   * @returns {Promise<string>} the `cal-…` calendar id
+   * @throws if the page can't be fetched or carries no calendar id (e.g. the
+   *   URL redirects to a `/user/` organizer profile rather than a calendar).
+   */
+  async resolveIcalIdFromPage(calendarUrl) {
+    if (!calendarUrl) throw new Error('no calendar URL provided');
+    const res = await withTimeout(
+      fetch(calendarUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+          Accept: 'text/html',
+        },
+        redirect: 'follow',
+      }),
+      20_000,
+      `fetch(${calendarUrl})`,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching calendar page`);
+    const finalUrl = res.url || calendarUrl;
+    const html = await res.text();
+
+    const match = html.match(/"api_id"\s*:\s*"(cal-[A-Za-z0-9]+)"/);
+    if (match) return match[1];
+
+    if (/\/user\//.test(finalUrl)) {
+      throw new Error(`page redirected to an organizer profile (${finalUrl}) — not a calendar`);
+    }
+    throw new Error('no calendar id ("cal-…") found in page JSON');
+  }
+
+  /**
+   * Persist a freshly-resolved calendar id back onto the scraper row's config
+   * so subsequent runs take the fast path instead of re-fetching the page.
+   * The handler passes the row id as config.id and a service-role client as
+   * globalConfig.supabase. Best-effort: a failure here must never break the
+   * scrape, and it merges into existing config rather than clobbering it.
+   */
+  async persistResolvedIcalId(icalId) {
+    const scraperId = this.config?.id;
+    const supabase = this.globalConfig?.supabase;
+    if (!scraperId || !supabase || !icalId) return;
+    try {
+      const { data: row, error: readErr } = await supabase
+        .from('scrapers').select('config').eq('id', scraperId).single();
+      if (readErr) throw readErr;
+      const nextConfig = { ...(row?.config || {}), ical_id: icalId };
+      const { error: updErr } = await supabase
+        .from('scrapers').update({ config: nextConfig }).eq('id', scraperId);
+      if (updErr) throw updErr;
+      console.log(`💾 Persisted ical_id ${icalId} to scraper ${scraperId} (future runs skip the page fetch)`);
+    } catch (e) {
+      console.log(`⚠️  Could not persist resolved ical_id (${e.message}); will re-resolve next run`);
+    }
+  }
+
+  /**
    * Convert Luma calendar URL to iCal feed URL
    * Input: https://lu.ma/example-calendar
    * Output: https://api2.luma.com/ics/get?entity=calendar&id=cal-uwop1v1UeYlgAqe
@@ -264,21 +331,32 @@ export class LumaICalScraper extends BaseScraper {
       return calendarUrl;
     }
 
-    // Extract calendar ID from URL
-    // Pattern 1: https://lu.ma/{calendar-name} - we'll need to look this up
-    // Pattern 2: Direct calendar ID provided in config
+    // Fast path: calendar id stored in config (set at discovery time by
+    // LumaSearchScraper, or filled in manually).
     const icalId = this.config.ical_id || this.config.config?.ical_id;
     if (icalId) {
       return `https://api2.luma.com/ics/get?entity=calendar&id=${icalId}`;
     }
 
-    // Try to extract iCal URL from the calendar page
-    console.log(`⚠️  No ical_id in config, attempting to extract from page...`);
+    // No stored id — resolve it straight from the page JSON over HTTP. This is
+    // the primary path for scrapers without a baked-in ical_id (older
+    // auto-discovered + manually-created ones).
     try {
-      const icalUrl = await this.extractICalUrlFromPage(calendarUrl);
-      return icalUrl;
+      const resolvedId = await this.resolveIcalIdFromPage(calendarUrl);
+      console.log(`🔑 Resolved calendar id from page: ${resolvedId}`);
+      await this.persistResolvedIcalId(resolvedId);
+      return `https://api2.luma.com/ics/get?entity=calendar&id=${resolvedId}`;
+    } catch (httpErr) {
+      console.log(`⚠️  HTTP id resolution failed (${httpErr.message}); falling back to browser extraction...`);
+    }
+
+    // Last-resort legacy fallback: drive the page with the browser.
+    try {
+      return await this.extractICalUrlFromPage(calendarUrl);
     } catch (error) {
-      throw new Error(`Failed to get iCal URL. Either provide "ical_id" in config or ensure the calendar page has an "Add iCal Subscription" button. Error: ${error.message}`);
+      throw new Error(
+        `Failed to get iCal URL for ${calendarUrl}. No ical_id in config, page id resolution found no calendar id, and browser extraction failed: ${error.message}`,
+      );
     }
   }
 
