@@ -218,6 +218,15 @@ const newslettersModule: GatewazeModule = {
     // email_events stream (CIO import + pixel/redirect), so webhook-
     // scored signals were invisible. Found on AAIF prod 2026-06-23.
     'migrations/056_detection_comparison_with_interactions.sql',
+    // 057 makes the "Unsubscribed" metric on the edition card actually
+    // count opt-outs. Prior version (in 045) read email_send_log.
+    // unsubscribed_at — but nothing writes to that column; the canonical
+    // opt-out path updates list_subscriptions. So the metric was always
+    // 0. Now sourced from list_subscriptions, scoped to the send's
+    // list_ids + started_at. Adds idx_list_subscriptions_lower_email
+    // partial index so the per-edition lookup stays under the 25s
+    // statement_timeout. Found on AAIF prod 2026-06-24.
+    'migrations/057_engagement_unsubscribed_from_list_subscriptions.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
