@@ -95,6 +95,72 @@ export function broadcastSummary(b: Broadcast): { status: BroadcastStatus; lates
 }
 
 // ---------------------------------------------------------------------------
+// Event link (CFP / event promotion)
+//
+// A broadcast can optionally link an event. Unlike the events Comms tab (whose
+// audiences are RELATIONAL to the event — registrants/attendees/speakers), a
+// linked broadcast still targets the broadcast's SEGMENT/lists; the event only
+// supplies constant {{event_*}} merge variables (incl. the submit-talk URL) that
+// are baked into the content at send-creation. We keep broadcasts' existing
+// UNSCOPED merge-field convention ({{first_name}} etc., substituted per recipient
+// at send time) and add distinct {{event_*}} tokens that don't collide with it.
+// ---------------------------------------------------------------------------
+
+/** Insertable event variables shown in the content editor when an event is linked. */
+export const EVENT_VARIABLES: { token: string; label: string }[] = [
+  { token: '{{event_name}}', label: 'Event name' },
+  { token: '{{event_date}}', label: 'Event date' },
+  { token: '{{event_city}}', label: 'Event city' },
+  { token: '{{event_url}}', label: 'Event page URL' },
+  { token: '{{event_cfp_url}}', label: 'Submit-a-talk (CFP) URL' },
+];
+
+export interface EventOption { id: string; event_title: string | null; event_start: string | null; }
+
+/** Events available to link to a broadcast (most recent first). */
+export async function listEventsForLink(): Promise<EventOption[]> {
+  const { data, error } = await supabase
+    .from('events')
+    .select('id, event_title, event_start')
+    .order('event_start', { ascending: false })
+    .limit(500);
+  if (error) throw error;
+  return (data ?? []) as EventOption[];
+}
+
+/** Resolve the {{event_*}} token values for a linked event. portalBase is the
+ *  public app origin (derived from the admin host in the browser). */
+function eventVarValues(ev: { event_title: string | null; event_slug: string | null; event_id: string | null; event_start: string | null; event_city: string | null }, portalBase: string): Record<string, string> {
+  const identifier = ev.event_slug || ev.event_id || '';
+  const url = identifier ? `${portalBase}/events/${identifier}` : portalBase;
+  const dateStr = ev.event_start
+    ? new Date(ev.event_start).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+    : '';
+  return {
+    event_name: ev.event_title || '',
+    event_date: dateStr,
+    event_city: ev.event_city || '',
+    event_url: url,
+    event_cfp_url: identifier ? `${url}/talks` : url,
+  };
+}
+
+/** Replace ONLY the {{event_*}} tokens, leaving per-recipient merge fields intact. */
+function substituteEventVars(text: string, values: Record<string, string>): string {
+  let out = text;
+  for (const [key, val] of Object.entries(values)) {
+    out = out.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), val);
+  }
+  return out;
+}
+
+function portalBaseFromAdmin(): string {
+  if (typeof window === 'undefined') return '';
+  const host = window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, '');
+  return `${window.location.protocol}//${host}`;
+}
+
+// ---------------------------------------------------------------------------
 // Parent CRUD
 // ---------------------------------------------------------------------------
 
@@ -153,10 +219,30 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
   const parent = await getBroadcast(parentId);
   if (!parent) throw new Error('Broadcast not found');
   if (!parent.rendered_html) throw new Error('Add content before sending');
+
+  // Bake the linked event's {{event_*}} variables into this send's snapshot.
+  // These are constant per send (event details don't vary per recipient), so
+  // they're substituted once here; per-recipient merge fields stay for send time.
+  let subject = parent.subject;
+  let renderedHtml = parent.rendered_html;
+  if (parent.event_id) {
+    const { data: ev } = await supabase
+      .from('events')
+      .select('event_title, event_slug, event_id, event_start, event_city')
+      .eq('id', parent.event_id)
+      .maybeSingle();
+    if (ev) {
+      const values = eventVarValues(ev as Parameters<typeof eventVarValues>[0], portalBaseFromAdmin());
+      if (subject) subject = substituteEventVars(subject, values);
+      if (renderedHtml) renderedHtml = substituteEventVars(renderedHtml, values);
+    }
+  }
+
   const { data, error } = await supabase
     .from('broadcast_sends')
     .insert({
       broadcast_id: parentId,
+      event_id: parent.event_id,
       name: parent.name,
       brand: parent.brand,
       channel: parent.channel,
@@ -164,12 +250,12 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
       segment_id: parent.segment_id,
       list_ids: parent.list_ids,
       category_list_id: parent.category_list_id,
-      subject: parent.subject,
+      subject,
       preheader: parent.preheader,
       from_address: parent.from_address,
       from_name: parent.from_name,
       reply_to: parent.reply_to,
-      rendered_html: parent.rendered_html,
+      rendered_html: renderedHtml,
       body_text: parent.body_text,
       content_json: parent.content_json,
       suppression_topic: 'broadcasts',
