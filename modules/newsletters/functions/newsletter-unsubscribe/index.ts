@@ -102,11 +102,17 @@ ${body}
 </body></html>`
 }
 
-function renderConfirmForm(actionUrl: string, recipientEmail: string): string {
+function renderConfirmForm(token: string, recipientEmail: string): string {
+  // `action=""` posts to the current URL — which keeps the `?token=...`
+  // query string. We also include a hidden `token` input so the POST is
+  // self-contained even if the URL is rewritten by a proxy in between.
+  // `Accept: text/html` is implicit from the form submit, so the POST
+  // handler will render an HTML success page rather than JSON.
   const body = `
 <p>You're about to unsubscribe <strong>${escapeHtml(recipientEmail)}</strong> from this mailing list.</p>
 <p style="color:#6b7280; font-size:13px;">This extra step protects you from accidental unsubscribes triggered by corporate email scanners that pre-fetch links.</p>
-<form method="POST" action="${escapeHtml(actionUrl)}" style="margin-top: 24px;">
+<form method="POST" action="" style="margin-top: 24px;">
+  <input type="hidden" name="token" value="${escapeHtml(token)}">
   <input type="hidden" name="confirm" value="1">
   <button type="submit" style="background:#dc2626; color:#fff; border:0; padding:12px 20px; border-radius:6px; font-size:15px; font-weight:500; cursor:pointer;">Confirm unsubscribe</button>
 </form>
@@ -209,7 +215,7 @@ async function handler(req: Request) {
       // mutates list_subscriptions. The escapeHtml call defends the email
       // display against XSS even though the token is HMAC-signed.
       return new Response(
-        renderConfirmForm(req.url, decoded.email),
+        renderConfirmForm(token, decoded.email),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
       )
     } else if (req.method === 'POST') {
