@@ -69,7 +69,8 @@ interface SubscriptionListView {
  */
 async function loadSubscriptionLists(supabase: any, email: string): Promise<SubscriptionListView[]> {
   const [listsRes, subsRes] = await Promise.all([
-    supabase.from('lists').select('id, name, description, is_public, default_subscribed').eq('is_active', true).order('name'),
+    // Internal/staff lists are never surfaced in the Subscription Centre.
+    supabase.from('lists').select('id, name, description, is_public, default_subscribed').eq('is_active', true).eq('is_internal', false).order('name'),
     supabase.from('list_subscriptions').select('list_id, subscribed').eq('email', email),
   ]);
   const subMap = new Map<string, boolean>();
