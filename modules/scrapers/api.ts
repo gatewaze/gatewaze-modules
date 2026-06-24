@@ -53,13 +53,14 @@ function isQueueAvailable(): boolean {
   return !!(process.env.REDIS_URL || process.env.REDIS_HOST);
 }
 
-// Enqueue onto the platform's main worker queue (name + prefix must match
-// packages/api queue registry: queue 'jobs', prefix `bull:${BRAND}`), so the
-// scraper:run handler registered via the module worker registry (index.ts)
-// actually consumes these jobs. Previously this used a standalone
-// `jobs-default` queue that no running worker drained.
-const QUEUE_NAME = 'jobs';
-const QUEUE_PREFIX = `bull:${process.env.BRAND || 'default'}`;
+// Defaults target the packages/api module-loader worker (registry queue
+// 'jobs', prefix `bull:${BRAND}`). Brands still on the legacy
+// scripts/workers/job-worker.js have no scraper:run handler on that queue —
+// it's registered on the legacy first worker (queue `jobs-${BRAND}`, default
+// `bull` prefix). Such brands override via SCRAPER_QUEUE_NAME /
+// SCRAPER_QUEUE_PREFIX until they migrate to the module-loader worker.
+const QUEUE_NAME = process.env.SCRAPER_QUEUE_NAME || 'jobs';
+const QUEUE_PREFIX = process.env.SCRAPER_QUEUE_PREFIX || `bull:${process.env.BRAND || 'default'}`;
 
 function getQueue(projectRoot: string) {
   if (_queue) return _queue;
