@@ -3,7 +3,6 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import DOMPurify from 'isomorphic-dompurify'
 
 interface ItemData {
   id: string
@@ -28,12 +27,25 @@ interface NavItem {
   slug: string
 }
 
+interface NavCategory {
+  id: string
+  name: string
+  slug: string
+}
+
+interface NavArticle {
+  id: string
+  title: string
+  slug: string
+  category_id: string
+}
+
 async function getSession() {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
   if (!url || !key) return null
 
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   const supabase = createServerClient(url, key, {
     cookies: { get(name: string) { return cookieStore.get(name)?.value } },
   })
@@ -46,7 +58,7 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
   if (!url || !key) return null
 
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   const supabase = createServerClient(url, key, {
     cookies: { get(name: string) { return cookieStore.get(name)?.value } },
   })
@@ -99,6 +111,20 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
     }
   }
 
+  // Sidebar nav: all categories + all published items in this collection
+  const { data: navCategories } = await supabase
+    .from('sr_categories')
+    .select('id, name, slug')
+    .eq('collection_id', collection.id)
+    .order('sort_order', { ascending: true })
+
+  const { data: navArticles } = await supabase
+    .from('sr_items')
+    .select('id, title, slug, category_id')
+    .eq('collection_id', collection.id)
+    .eq('status', 'published')
+    .order('sort_order', { ascending: true })
+
   return {
     collection: collection as CollectionData,
     item: {
@@ -108,6 +134,8 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
     } as ItemData,
     prevItem,
     nextItem,
+    categories: (navCategories || []) as NavCategory[],
+    articles: (navArticles || []) as NavArticle[],
   }
 }
 
@@ -124,165 +152,144 @@ export default async function ItemDetailPage({ params }: Props) {
   if (!data) {
     if (!isAuthenticated) {
       return (
-        <main className="relative z-10">
-          <div className="max-w-3xl mx-auto px-6 py-12 text-center">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/30 mx-auto mb-4">
-              <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            </svg>
-            <h1 className="text-2xl font-bold text-white mb-2">Sign in required</h1>
-            <p className="text-white/60 mb-6">You need to be signed in to view this resource.</p>
-            <Link href="/sign-in" className="inline-block px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-              Sign In
-            </Link>
+        <div className="pub-wrap pub-fade">
+          <div className="pub-empty">
+            <p style={{ marginBottom: 14 }}>You need to be signed in to view this resource.</p>
+            <Link href="/sign-in" className="pub-link" style={{ color: 'var(--accent)' }}>Sign in →</Link>
           </div>
-        </main>
+        </div>
       )
     }
     notFound()
   }
 
-  const { collection, item, prevItem, nextItem } = data
+  const { collection, item, prevItem, nextItem, categories, articles } = data
+
+  // Group articles under their category for the sidebar nav
+  const articlesByCategory = new Map<string, NavArticle[]>()
+  for (const a of articles) {
+    const list = articlesByCategory.get(a.category_id) || []
+    list.push(a)
+    articlesByCategory.set(a.category_id, list)
+  }
+
+  const slugify = (s: string) => s.toLowerCase().replace(/\s+/g, '-')
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-3xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-2 text-sm text-white/40 mb-6 flex-wrap">
-          <Link href="/resources" className="hover:text-white/60 transition-colors">Resources</Link>
-          <span>/</span>
-          <Link href={`/resources/${collection.slug}`} className="hover:text-white/60 transition-colors">{collection.name}</Link>
-          {item.category && (
-            <>
-              <span>/</span>
-              <Link
-                href={`/resources/${collection.slug}?category=${item.category.slug}`}
-                className="hover:text-white/60 transition-colors"
-              >
-                {item.category.name}
-              </Link>
-            </>
-          )}
-          <span>/</span>
-          <span className="text-white/70">{item.title}</span>
-        </div>
-
-        {/* Back link */}
-        <Link
-          href={`/resources/${collection.slug}`}
-          className="inline-flex items-center gap-1 text-white/60 hover:text-white text-sm mb-6 transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m15 18-6-6 6-6" />
-          </svg>
-          Back to {collection.name}
-        </Link>
-
-        {/* Featured image */}
-        {item.featured_image_url && (
-          <div className="aspect-[16/9] overflow-hidden rounded-xl mb-8">
-            <img
-              src={item.featured_image_url}
-              alt={item.title}
-              className="w-full h-full object-cover"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-            />
+    <div className="pub-article-wrap pub-fade">
+      <style>{`
+        .res-article-grid { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 44px; align-items: start; }
+        .res-nav-link { display: block; text-decoration: none; padding: 5px 9px; border-radius: 8px; font-size: 13.5px; color: var(--ink-3); transition: background .15s ease, color .15s ease; }
+        .res-nav-link:hover { background: rgba(var(--ui-text), 0.06); color: var(--ink); }
+        .res-nav-link[aria-current="page"] { background: rgba(var(--ui-text), 0.10); color: var(--ink); font-weight: 600; }
+        @media (max-width: 760px) { .res-article-grid { grid-template-columns: 1fr; gap: 24px; } }
+      `}</style>
+      <div className="res-article-grid">
+        {/* Left: browse the collection */}
+        <aside className="pub-article-side">
+          <div className="pub-side-card">
+            <Link href={`/resources/${collection.slug}`} className="pub-side-val" style={{ textDecoration: 'none', display: 'block' }}>← {collection.name}</Link>
           </div>
-        )}
+          {categories.map((cat) => {
+            const catArticles = articlesByCategory.get(cat.id) || []
+            if (catArticles.length === 0) return null
+            return (
+              <div className="pub-side-card" key={cat.id}>
+                <Link href={`/resources/${collection.slug}?category=${cat.slug}`} className="pub-side-h" style={{ display: 'block', textDecoration: 'none' }}>{cat.name}</Link>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {catArticles.map((a) => (
+                    <Link
+                      key={a.id}
+                      href={`/resources/${collection.slug}/${a.slug}`}
+                      aria-current={a.slug === item.slug ? 'page' : undefined}
+                      className="res-nav-link"
+                    >
+                      {a.title}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </aside>
 
-        {/* Header */}
-        <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">{item.title}</h1>
-        {item.subtitle && (
-          <p className="text-white/60 text-lg mb-4">{item.subtitle}</p>
-        )}
-        {item.external_url && (
-          <a
-            href={item.external_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 text-sm mb-6 transition-colors"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
-            </svg>
-            {item.external_url}
-          </a>
-        )}
+        {/* Right: the article */}
+        <article className="pub-article-main" style={{ minWidth: 0 }}>
+          {/* Breadcrumb */}
+          <div className="pub-byline" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
+            <Link href="/resources" style={{ color: 'var(--ink-4)', textDecoration: 'none' }}>Resources</Link>
+            <span>/</span>
+            <Link href={`/resources/${collection.slug}`} style={{ color: 'var(--ink-4)', textDecoration: 'none' }}>{collection.name}</Link>
+            {item.category && (
+              <>
+                <span>/</span>
+                <Link href={`/resources/${collection.slug}?category=${item.category.slug}`} style={{ color: 'var(--ink-4)', textDecoration: 'none' }}>{item.category.name}</Link>
+              </>
+            )}
+          </div>
 
-        {/* Table of contents */}
-        {item.sections.length > 1 && (
-          <nav className="bg-white/5 border border-white/10 rounded-xl p-4 mb-8">
-            <h2 className="text-sm font-medium text-white/70 mb-2">Contents</h2>
-            <ul className="space-y-1">
-              {item.sections.map((section) => (
-                <li key={section.id}>
-                  <a
-                    href={`#${section.heading.toLowerCase().replace(/\s+/g, '-')}`}
-                    className="text-sm text-white/50 hover:text-white transition-colors"
-                  >
-                    {section.heading}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </nav>
-        )}
-
-        {/* Sections */}
-        <div className="space-y-8">
-          {item.sections.map((section) => (
-            <div key={section.id} id={section.heading.toLowerCase().replace(/\s+/g, '-')}>
-              <h2 className="text-xl font-semibold text-white mb-4">{section.heading}</h2>
-              {section.content && (
-                <article
-                  className="prose prose-invert prose-lg max-w-none
-                             prose-headings:text-white prose-p:text-white/80
-                             prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
-                             prose-strong:text-white prose-code:text-white/90
-                             prose-li:text-white/80 prose-ul:text-white/80"
-                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(section.content) }}
-                />
-              )}
+          {item.featured_image_url && (
+            <div style={{ aspectRatio: '16 / 9', overflow: 'hidden', borderRadius: 14, marginBottom: 24 }}>
+              <img
+                src={item.featured_image_url}
+                alt={item.title}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
             </div>
-          ))}
-        </div>
+          )}
 
-        {/* Previous/Next navigation */}
-        {(prevItem || nextItem) && (
-          <div className="flex items-center justify-between mt-12 pt-8 border-t border-white/10">
-            {prevItem ? (
-              <Link
-                href={`/resources/${collection.slug}/${prevItem.slug}`}
-                className="group flex items-center gap-2 text-white/60 hover:text-white transition-colors"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="m15 18-6-6 6-6" />
-                </svg>
-                <div className="text-right">
-                  <div className="text-xs text-white/40">Previous</div>
-                  <div className="text-sm">{prevItem.title}</div>
-                </div>
-              </Link>
-            ) : <div />}
-            {nextItem ? (
-              <Link
-                href={`/resources/${collection.slug}/${nextItem.slug}`}
-                className="group flex items-center gap-2 text-white/60 hover:text-white transition-colors text-right"
-              >
-                <div>
-                  <div className="text-xs text-white/40">Next</div>
-                  <div className="text-sm">{nextItem.title}</div>
-                </div>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="m9 18 6-6-6-6" />
-                </svg>
-              </Link>
-            ) : <div />}
+          <h1>{item.title}</h1>
+          {item.subtitle && (
+            <p style={{ color: 'var(--ink-3)', fontSize: 16, lineHeight: 1.6, margin: '-4px 0 16px' }}>{item.subtitle}</p>
+          )}
+          {item.external_url && (
+            <a href={item.external_url} target="_blank" rel="noopener noreferrer" className="pub-link" style={{ color: 'var(--accent)', display: 'inline-block', marginBottom: 8 }}>
+              {item.external_url} ↗
+            </a>
+          )}
+
+          {/* Table of contents */}
+          {item.sections.length > 1 && (
+            <div className="pub-side-card" style={{ margin: '12px 0 28px' }}>
+              <div className="pub-side-h">On this page</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {item.sections.map((section) => (
+                  <a key={section.id} href={`#${slugify(section.heading)}`} className="res-nav-link">{section.heading}</a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Sections */}
+          <div className="pub-body">
+            {item.sections.map((section) => (
+              <section key={section.id} id={slugify(section.heading)} style={{ scrollMarginTop: 96 }}>
+                <h2>{section.heading}</h2>
+                {section.content && <div dangerouslySetInnerHTML={{ __html: section.content }} />}
+              </section>
+            ))}
           </div>
-        )}
+
+          {/* Previous/Next navigation */}
+          {(prevItem || nextItem) && (
+            <div className="pub-prevnext">
+              {prevItem ? (
+                <Link href={`/resources/${collection.slug}/${prevItem.slug}`} className="pub-pn-card">
+                  <div className="pub-side-sub">← Previous</div>
+                  <div className="pub-side-val">{prevItem.title}</div>
+                </Link>
+              ) : <div />}
+              {nextItem ? (
+                <Link href={`/resources/${collection.slug}/${nextItem.slug}`} className="pub-pn-card" style={{ textAlign: 'right' }}>
+                  <div className="pub-side-sub">Next →</div>
+                  <div className="pub-side-val">{nextItem.title}</div>
+                </Link>
+              ) : <div />}
+            </div>
+          )}
+        </article>
       </div>
-    </main>
+    </div>
   )
 }

@@ -2,14 +2,18 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  ArrowLeftIcon,
   PlusIcon,
   PencilIcon,
   TrashIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  TagIcon,
+  DocumentTextIcon,
+  RectangleGroupIcon,
+  Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
-import { Button, Card, Badge, Input, Select, Tabs, Modal, ConfirmModal } from '@/components/ui';
+import { Button, Card, Badge, Input, Select, WorkspaceLayout } from '@/components/ui';
+import type { Tab } from '@/components/ui/Tabs';
 import RichTextEditor from '@/components/ui/RichTextEditor';
 import { Page } from '@/components/shared/Page';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
@@ -72,30 +76,35 @@ export default function CollectionDetailPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const tabs = [
-    { id: 'categories' as TabType, label: `Categories (${categories.length})` },
-    { id: 'items' as TabType, label: `Items (${items.length})` },
-    { id: 'templates' as TabType, label: `Section Templates (${templates.length})` },
-    { id: 'settings' as TabType, label: 'Settings' },
+  const ic = 'h-4 w-4';
+  const tabs: Tab[] = [
+    { id: 'categories', label: 'Categories', count: categories.length, icon: <TagIcon className={ic} /> },
+    { id: 'items', label: 'Items', count: items.length, icon: <DocumentTextIcon className={ic} /> },
+    { id: 'templates', label: 'Section Templates', count: templates.length, icon: <RectangleGroupIcon className={ic} /> },
+    { id: 'settings', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
   ];
 
   if (loading) {
     return (
-      <Page title="Loading...">
-        <div className="flex justify-center items-center py-12">
-          <LoadingSpinner size="large" />
-        </div>
+      <Page title="Resources">
+        <WorkspaceLayout title="Resources">
+          <div className="flex justify-center items-center py-12">
+            <LoadingSpinner size="large" />
+          </div>
+        </WorkspaceLayout>
       </Page>
     );
   }
 
   if (!collection) {
     return (
-      <Page title="Not Found">
-        <Card className="p-12 text-center">
-          <p className="text-[var(--gray-11)] mb-4">Collection not found</p>
-          <Button onClick={() => navigate('/resources/collections')}>Back to Collections</Button>
-        </Card>
+      <Page title="Resources">
+        <WorkspaceLayout title="Resources">
+          <Card className="p-12 text-center">
+            <p className="text-[var(--gray-11)] mb-4">Collection not found</p>
+            <Button onClick={() => navigate('/resources/collections')}>Back to Collections</Button>
+          </Card>
+        </WorkspaceLayout>
       </Page>
     );
   }
@@ -103,55 +112,36 @@ export default function CollectionDetailPage() {
   const statusColor = (s: string) => s === 'published' ? 'success' : s === 'draft' ? 'warning' : 'neutral';
 
   return (
-    <Page>
-      {/* Hero */}
-      <div className="relative h-36 md:h-44 overflow-hidden bg-gray-900 -mx-(--margin-x) -mt-(--margin-x)">
-        {collection.cover_image_url ? (
-          <img src={collection.cover_image_url} alt="" className="absolute inset-0 w-full h-full object-cover blur-[10px] scale-105" />
-        ) : (
-          <div className="absolute inset-0 bg-gradient-to-br from-primary-600 to-primary-800 dark:from-primary-800 dark:to-primary-950" />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-black/20" />
-
-        <div className="absolute top-6 z-10" style={{ left: 'calc(var(--margin-x) + 1.5rem)' }}>
-          <button
-            onClick={() => navigate('/resources/collections')}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md bg-white/90 backdrop-blur-md border border-white/40 text-gray-900 shadow-sm hover:bg-white transition-colors"
-          >
-            <ArrowLeftIcon className="size-4" />
-            Back
-          </button>
-        </div>
-
-        <div className="absolute bottom-0 left-0 right-0" style={{ padding: '0 calc(var(--margin-x) + 1.5rem) 1.5rem' }}>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-2xl md:text-3xl font-bold text-white drop-shadow-lg">{collection.name}</h1>
-            <Badge color={statusColor(collection.status)} className="text-sm">{collection.status}</Badge>
+    <Page title={collection.name}>
+      <WorkspaceLayout
+        title={`Resources: ${collection.name}`}
+        tabs={tabs}
+        activeTabId={activeTab}
+        onTabChange={(t) => navigateToTab(t as TabType)}
+        actions={
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge color={statusColor(collection.status)}>{collection.status}</Badge>
+            {collection.description && (
+              <span className="text-sm text-[var(--gray-11)]">{collection.description}</span>
+            )}
           </div>
-          {collection.description && (
-            <p className="text-sm text-white/80">{collection.description}</p>
+        }
+      >
+        <div className="space-y-6">
+          {activeTab === 'categories' && (
+            <CategoriesTab collectionId={id!} categories={categories} onUpdate={loadData} />
+          )}
+          {activeTab === 'items' && (
+            <ItemsTab collectionId={id!} items={items} categories={categories} templates={templates} onUpdate={loadData} />
+          )}
+          {activeTab === 'templates' && (
+            <TemplatesTab collectionId={id!} templates={templates} onUpdate={loadData} />
+          )}
+          {activeTab === 'settings' && (
+            <SettingsTab collection={collection} onUpdate={loadData} />
           )}
         </div>
-      </div>
-
-      <div className="-mx-(--margin-x)">
-        <Tabs fullWidth value={activeTab} onChange={(t) => navigateToTab(t as TabType)} tabs={tabs} />
-      </div>
-
-      <div className="p-6 space-y-6">
-        {activeTab === 'categories' && (
-          <CategoriesTab collectionId={id!} categories={categories} onUpdate={loadData} />
-        )}
-        {activeTab === 'items' && (
-          <ItemsTab collectionId={id!} items={items} categories={categories} templates={templates} onUpdate={loadData} />
-        )}
-        {activeTab === 'templates' && (
-          <TemplatesTab collectionId={id!} templates={templates} onUpdate={loadData} />
-        )}
-        {activeTab === 'settings' && (
-          <SettingsTab collection={collection} onUpdate={loadData} />
-        )}
-      </div>
+      </WorkspaceLayout>
     </Page>
   );
 }

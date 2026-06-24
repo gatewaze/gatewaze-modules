@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { ArrowUpTrayIcon, DocumentTextIcon, CheckIcon } from '@heroicons/react/24/outline';
-import { Button, Card, Select } from '@/components/ui';
+import { Button, Card, Select, WorkspaceLayout } from '@/components/ui';
+import { Page } from '@/components/shared/Page';
 import {
   SrCollection,
   SrSectionTemplate,
@@ -170,13 +171,15 @@ const ImportPage: React.FC = () => {
     sum + c.items.reduce((s, i) => s + i.sections.length, 0), 0) || 0;
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Import Markdown</h1>
-        <p className="text-gray-500 mt-1">Import structured content from a markdown file</p>
-      </div>
+    <Page title="Import Markdown">
+      <WorkspaceLayout title="Resources">
+        <div className="space-y-6 max-w-4xl mx-auto">
+          <div>
+            <h2 className="text-lg font-semibold text-[var(--gray-12)]">Import Markdown</h2>
+            <p className="text-[var(--gray-11)] mt-1">Import structured content from a markdown file</p>
+          </div>
 
-      {/* Step indicator */}
+          {/* Step indicator */}
       <div className="flex items-center gap-2 text-sm">
         {['Input', 'Preview', 'Mapping', 'Complete'].map((label, i) => {
           const steps: ImportStep[] = ['input', 'preview', 'mapping', 'complete'];
@@ -346,7 +349,9 @@ const ImportPage: React.FC = () => {
           </div>
         </Card>
       )}
-    </div>
+        </div>
+      </WorkspaceLayout>
+    </Page>
   );
 };
 
