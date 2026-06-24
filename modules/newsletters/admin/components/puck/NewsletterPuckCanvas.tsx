@@ -561,11 +561,18 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   function buildBlockMeta() {
     const blockMeta = new Map<string, import('./email-blocks/EditionEmail.js').BlockRenderMeta>();
     for (const block of edition.blocks) {
-      const isRegistry = registry.has(block.block_template.block_type);
+      const tpl = block.block_template as typeof block.block_template & { render_kind?: string | null; component_id?: string | null };
+      const componentId = tpl.component_id || tpl.block_type;
+      // Route declarative + react-email blocks through the per-edition registry.
+      // Pre-fix this only checked `registry.has(...)` — if a declarative block
+      // wasn't in the canvas registry (e.g. not yet hot-loaded from the library),
+      // it fell through to mustache and emitted `<richtext field="x">` etc. as
+      // raw text. See [id].tsx for the same fix on the sending-tab path.
+      const isReactish = registry.has(tpl.block_type) || tpl.render_kind === 'react-email' || tpl.render_kind === 'declarative';
       blockMeta.set(
         block.id,
-        isRegistry
-          ? { render_kind: 'react-email', component_id: block.block_template.block_type }
+        isReactish
+          ? { render_kind: 'react-email', component_id: componentId }
           : { render_kind: 'mustache', mustache_html: block.block_template.content.html_template ?? '' },
       );
     }
@@ -619,7 +626,11 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
     setTestSendBusy(true);
     try {
       const blockMeta = buildBlockMeta();
-      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapperTemplate: resolvedWrapper, viewOnlineUrl: viewOnlineUrl ?? undefined, registry, pretty: false });
+      // forSend:true matches what the Sending tab + worker do, so the test
+      // email includes the unsubscribe footer + {{unsubscribe_url}} tokens.
+      // Without it the editor's test send falsely looked clean while the real
+      // send would have included the footer the recipient never saw in test.
+      const html = await exportEditionHtml({ edition, format: 'email', blockMeta, wrapperTemplate: resolvedWrapper, viewOnlineUrl: viewOnlineUrl ?? undefined, registry, pretty: false, forSend: true });
       // Mirror DeleteNewsletterCard's URL form — admin nginx has no /api
       // proxy, so we hit api.<brand>.live directly.
       const apiUrl = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ?? '';
