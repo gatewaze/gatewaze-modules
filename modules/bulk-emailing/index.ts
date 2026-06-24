@@ -87,6 +87,11 @@ const bulkEmailingModule: GatewazeModule = {
     // round-trip). Created ad-hoc on AAIF prod 2026-06-23 to support the
     // initial ~30k scoring backfill; this codifies it for future installs.
     'migrations/016_bulk_update_interaction_scores_rpc.sql',
+    // 017 adds the event-comms Tier-2 drip queue (email_batch_job_recipients)
+    // + claim/tz RPCs, and widens email_batch_jobs.status to the shared
+    // SendingPanel vocabulary. Foundation for moving event comms onto the
+    // shared worker drip engine + SendingPanel.
+    'migrations/017_event_batch_recipients.sql',
   ],
 
   workers: [
