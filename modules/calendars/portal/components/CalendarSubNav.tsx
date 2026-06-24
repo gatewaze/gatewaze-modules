@@ -33,20 +33,16 @@ interface Props {
 export function CalendarSubNav({ calendarSlug, active, visibility, primaryColor = '#ffffff' }: Props) {
   const visible = ENTRIES.filter(e => e.always || (e.visibilityKey && visibility[e.visibilityKey]))
 
-  // Mirrors `<TimelineTabs>` (packages/portal/components/timeline/TimelineTabs.tsx)
-  // exactly so the calendar microsite uses the same nav language as the
-  // brand's events page.
+  // Re-skinned to the pub-* design system. The active tab uses the brand
+  // primary colour as its fill (threaded down via `primaryColor`), matching
+  // the `.pub-seg-btn.on` aesthetic without the client-side sliding indicator
+  // (this is a server component, so each tab paints its own active state).
   return (
-    <div
-      className="flex w-full sm:inline-flex sm:w-auto p-1 gap-1 mb-8"
-      style={{
-        borderRadius: 'var(--radius-control-outer)',
-        backgroundColor: `rgba(var(--panel-tint,0,0,0),var(--glass-opacity,0.05))`,
-        backdropFilter: `blur(var(--glass-blur,4px))`,
-        WebkitBackdropFilter: `blur(var(--glass-blur,4px))`,
-        border: `1px solid rgba(var(--panel-tint,0,0,0),var(--glass-border-opacity,0.1))`,
-      }}
-    >
+    <div className="pub-seg cal-subnav" style={{ marginBottom: 28, flexWrap: 'wrap' }}>
+      <style>{`
+        .cal-subnav { display: inline-flex; }
+        @media (max-width: 640px) { .cal-subnav { display: flex; width: 100%; } .cal-subnav .pub-seg-btn { flex: 1; } }
+      `}</style>
       {visible.map((entry) => {
         const href = entry.slug
           ? `/calendars/${calendarSlug}/${entry.slug}`
@@ -82,14 +78,8 @@ function SubNavTab({
   return (
     <Link
       href={href}
-      className={`
-        cursor-pointer flex items-center justify-center gap-1 flex-1 sm:flex-initial px-4 py-2 text-base font-medium transition-all duration-200 ease-out
-        ${active ? 'shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}
-      `}
-      style={{
-        borderRadius: 'var(--radius-control)',
-        ...(active ? { backgroundColor: primaryColor, color: lightPrimary ? '#000000' : '#ffffff' } : {}),
-      }}
+      className={`pub-seg-btn${active ? ' on' : ''}`}
+      style={active ? { backgroundColor: primaryColor, color: lightPrimary ? '#000000' : '#ffffff' } : undefined}
     >
       {children}
     </Link>

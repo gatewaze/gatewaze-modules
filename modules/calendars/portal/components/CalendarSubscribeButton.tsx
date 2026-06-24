@@ -68,15 +68,34 @@ export function CalendarSubscribeButton({ feedPath, calendarName }: Props) {
   }
 
   return (
-    <div ref={containerRef} className="relative inline-block">
+    <div ref={containerRef} className="cal-sub" style={{ position: 'relative', display: 'inline-block' }}>
+      <style>{`
+        .cal-sub-pop { position: absolute; z-index: 20; margin-top: 8px; width: min(28rem, calc(100vw - 2rem)); right: 0; text-align: left;
+          background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-3); padding: 20px;
+          -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+        @media (min-width: 640px) { .cal-sub-pop { left: 0; right: auto; } }
+        .cal-sub-h { font: 600 15px var(--font-display); color: var(--ink); margin: 0 0 4px; }
+        .cal-sub-sub { color: var(--ink-3); font-size: 12px; margin: 0 0 16px; line-height: 1.5; }
+        .cal-sub-opt { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 10px; text-decoration: none;
+          background: rgba(var(--ui-text), 0.04); border: 1px solid var(--line); transition: background .15s ease, border-color .15s ease; }
+        .cal-sub-opt:hover { background: rgba(var(--ui-text), 0.07); border-color: var(--line-2); }
+        .cal-sub-opt-t { color: var(--ink); font-size: 14px; font-weight: 500; }
+        .cal-sub-opt-d { color: var(--ink-3); font-size: 12px; }
+        .cal-sub-label { display: block; color: var(--ink-3); font-size: 12px; margin-bottom: 4px; }
+        .cal-sub-url { flex: 1; min-width: 0; background: rgba(var(--ui-text), 0.06); border: 1px solid var(--line); border-radius: 10px;
+          padding: 8px 12px; color: var(--ink); font: 12px var(--font-mono); }
+        .cal-sub-copy { padding: 8px 12px; border-radius: 10px; border: 0; cursor: pointer; font: 600 12px var(--font-sans);
+          background: var(--ink); color: var(--paper); transition: opacity .15s ease; white-space: nowrap; }
+        .cal-sub-copy:hover { opacity: 0.9; }
+      `}</style>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-2 px-5 py-2.5 bg-white/15 backdrop-blur text-white text-sm font-semibold rounded-lg hover:bg-white/25 transition-colors"
+        className="btn btn-secondary"
         aria-haspopup="dialog"
         aria-expanded={open}
       >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+        <svg className="ic" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 00-7-7m7 14a7 7 0 01-7 7M5 5a14 14 0 0114 14"/>
           <circle cx="6" cy="18" r="1.5" fill="currentColor"/>
         </svg>
@@ -87,59 +106,45 @@ export function CalendarSubscribeButton({ feedPath, calendarName }: Props) {
         <div
           role="dialog"
           aria-label={`Subscribe to ${calendarName}`}
-          className="absolute z-20 mt-2 w-[min(28rem,calc(100vw-2rem))] right-0 sm:left-0 sm:right-auto bg-neutral-900 border border-white/15 rounded-xl shadow-2xl p-5 text-left"
+          className="cal-sub-pop"
         >
-          <h3 className="text-white font-semibold mb-1">
-            Subscribe to {calendarName}
-          </h3>
-          <p className="text-white/60 text-xs mb-4">
+          <h3 className="cal-sub-h">Subscribe to {calendarName}</h3>
+          <p className="cal-sub-sub">
             Add this calendar to your own calendar app. Events appear automatically and stay
             in sync as we add new ones.
           </p>
 
           {!urls ? (
-            <p className="text-white/50 text-sm">Loading…</p>
+            <p style={{ color: 'var(--ink-3)', fontSize: 14 }}>Loading…</p>
           ) : (
-            <div className="space-y-3">
-              <a
-                href={urls.webcal}
-                className="flex items-start gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10"
-              >
-                <span className="text-xl">📅</span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-white text-sm font-medium">Apple Calendar / Outlook</div>
-                  <div className="text-white/50 text-xs">Click to open in your default calendar app</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <a href={urls.webcal} className="cal-sub-opt">
+                <span style={{ fontSize: 20 }}>📅</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="cal-sub-opt-t">Apple Calendar / Outlook</div>
+                  <div className="cal-sub-opt-d">Click to open in your default calendar app</div>
                 </div>
               </a>
 
-              <a
-                href={urls.google}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-start gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10"
-              >
-                <span className="text-xl">🟦</span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-white text-sm font-medium">Google Calendar</div>
-                  <div className="text-white/50 text-xs">Opens Google Calendar with this feed pre-filled</div>
+              <a href={urls.google} target="_blank" rel="noopener noreferrer" className="cal-sub-opt">
+                <span style={{ fontSize: 20 }}>🟦</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="cal-sub-opt-t">Google Calendar</div>
+                  <div className="cal-sub-opt-d">Opens Google Calendar with this feed pre-filled</div>
                 </div>
               </a>
 
-              <div className="pt-2">
-                <label className="block text-white/60 text-xs mb-1">Or copy the feed URL</label>
-                <div className="flex items-stretch gap-2">
+              <div style={{ paddingTop: 8 }}>
+                <label className="cal-sub-label">Or copy the feed URL</label>
+                <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
                   <input
                     type="text"
                     readOnly
                     value={urls.https}
                     onFocus={(e) => e.currentTarget.select()}
-                    className="flex-1 min-w-0 bg-black/40 border border-white/15 rounded-lg px-3 py-2 text-white text-xs font-mono"
+                    className="cal-sub-url"
                   />
-                  <button
-                    type="button"
-                    onClick={() => copy(urls.https, 'https')}
-                    className="px-3 py-2 rounded-lg bg-white text-black text-xs font-semibold hover:bg-white/90"
-                  >
+                  <button type="button" onClick={() => copy(urls.https, 'https')} className="cal-sub-copy">
                     {copied === 'https' ? 'Copied' : 'Copy'}
                   </button>
                 </div>

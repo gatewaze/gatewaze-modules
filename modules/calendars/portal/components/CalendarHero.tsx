@@ -33,49 +33,50 @@ export function CalendarHero({ calendar, memberCount, storageBucketUrl }: Props)
     : calendar.logo_url
 
   const bgStyle = coverUrl
-    ? { backgroundImage: `url(${coverUrl})` }
+    ? { backgroundImage: `url(${coverUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' }
     : {
         background: calendar.color
           ? `linear-gradient(135deg, ${calendar.color}55, ${calendar.color}11)`
-          : 'linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02))',
+          : 'repeating-linear-gradient(45deg, rgba(var(--ui-text),0.04), rgba(var(--ui-text),0.04) 10px, rgba(var(--ui-text),0.07) 10px, rgba(var(--ui-text),0.07) 20px)',
       }
 
+  // The dark scrim + drop-shadowed white text are intentional and theme-agnostic:
+  // they sit over an arbitrary cover photo (which may be light or dark), so this
+  // overlay text stays white in both UI modes by design — same pattern the
+  // newsletters/events poster heroes use.
   return (
-    <div
-      className="relative overflow-hidden rounded-2xl bg-cover bg-center mb-8"
-      style={bgStyle}
-    >
-      <div className="bg-gradient-to-t from-black/80 via-black/40 to-transparent">
-        <div className="px-6 sm:px-10 py-12 sm:py-20 min-h-[320px] flex flex-col justify-end">
-          <div className="flex items-center gap-4 mb-4">
+    <div className="cal-hero" style={bgStyle}>
+      <style>{`
+        .cal-hero { position: relative; overflow: hidden; border-radius: 18px; margin-bottom: 32px; }
+        .cal-hero-scrim { background: linear-gradient(to top, rgba(0,0,0,0.82), rgba(0,0,0,0.40) 55%, transparent); }
+        .cal-hero-inner { padding: 48px 24px; min-height: 320px; display: flex; flex-direction: column; justify-content: flex-end; }
+        @media (min-width: 640px) { .cal-hero-inner { padding: 80px 40px; } }
+        .cal-hero-logo { width: 64px; height: 64px; border-radius: 11px; object-fit: cover; box-shadow: 0 0 0 2px rgba(255,255,255,0.2); flex-shrink: 0; }
+        .cal-hero-name { font: 600 clamp(30px,4vw,48px) var(--font-display); color: #fff; letter-spacing: -0.02em; margin: 0; text-shadow: 0 2px 12px rgba(0,0,0,0.5); }
+        .cal-hero-desc { color: rgba(255,255,255,0.85); margin: 8px 0 0; font-size: 15px; line-height: 1.5; max-width: 42rem;
+          display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; text-shadow: 0 1px 6px rgba(0,0,0,0.5); }
+        .cal-hero-members { color: rgba(255,255,255,0.75); font-size: 14px; }
+      `}</style>
+      <div className="cal-hero-scrim">
+        <div className="cal-hero-inner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
             {logoUrl && (
-              <img
-                src={logoUrl}
-                alt={calendar.name}
-                className="w-16 h-16 rounded-lg object-cover ring-2 ring-white/20"
-              />
+              <img src={logoUrl} alt={calendar.name} className="cal-hero-logo" />
             )}
-            <div className="min-w-0">
-              <h1 className="text-3xl sm:text-5xl font-bold text-white drop-shadow-lg">
-                {calendar.name}
-              </h1>
+            <div style={{ minWidth: 0 }}>
+              <h1 className="cal-hero-name">{calendar.name}</h1>
               {calendar.description && (
-                <p className="text-white/80 mt-2 text-sm sm:text-base max-w-2xl line-clamp-3 drop-shadow">
-                  {calendar.description}
-                </p>
+                <p className="cal-hero-desc">{calendar.description}</p>
               )}
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 mt-4">
-            <Link
-              href={`/calendars/${slug}/join`}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-black text-white text-sm font-semibold rounded-lg hover:bg-black/80 transition-colors"
-            >
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginTop: 16 }}>
+            <Link href={`/calendars/${slug}/join`} className="btn btn-primary">
               Join this calendar
             </Link>
             {typeof memberCount === 'number' && memberCount > 0 && (
-              <span className="text-white/70 text-sm">
+              <span className="cal-hero-members">
                 {memberCount.toLocaleString()} members
               </span>
             )}

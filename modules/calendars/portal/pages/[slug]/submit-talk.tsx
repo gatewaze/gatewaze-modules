@@ -32,35 +32,33 @@ export default async function CalendarSubmitTalkPage({ params }: Props) {
   }
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <CalendarHero calendar={calendar} storageBucketUrl={brandConfig.storageBucketUrl} />
-        <CalendarHeader
-          calendar={calendar}
-          visibility={visibility}
-          active="submit-talk"
-          primaryColor={brandConfig.primaryColor}
-        />
+    <div className="pub-wrap">
+      <CalendarHero calendar={calendar} storageBucketUrl={brandConfig.storageBucketUrl} />
+      <CalendarHeader
+        calendar={calendar}
+        visibility={visibility}
+        active="submit-talk"
+        primaryColor={brandConfig.primaryColor}
+      />
 
-        <div>
-          <h2 className="text-white text-3xl font-bold mb-3">Submit a talk</h2>
-          <p className="text-white/70 mb-8 max-w-2xl">
-            Tell us about you and the talk you'd like to give. Chapter organisers review
-            submissions and reach out when they can put on an event that fits.
-          </p>
+      <div>
+        <h2 style={{ font: '600 30px var(--font-display)', color: 'var(--ink)', letterSpacing: '-0.02em', margin: '0 0 12px' }}>Submit a talk</h2>
+        <p style={{ color: 'var(--ink-3)', margin: '0 0 32px', maxWidth: '42rem', fontSize: 15, lineHeight: 1.6 }}>
+          Tell us about you and the talk you'd like to give. Chapter organisers review
+          submissions and reach out when they can put on an event that fits.
+        </p>
 
-          {SubmitTalkForm ? (
-            <SubmitTalkForm calendar={calendar} primaryColor={brandConfig.primaryColor} />
-          ) : (
-            <div className="text-center py-16">
-              <h3 className="text-white text-xl font-bold">Submissions not available</h3>
-              <p className="text-white/60 mt-2">
-                The speakers module is not installed on this brand.
-              </p>
-            </div>
-          )}
-        </div>
+        {SubmitTalkForm ? (
+          <SubmitTalkForm calendar={calendar} primaryColor={brandConfig.primaryColor} />
+        ) : (
+          <div className="pub-empty" style={{ marginTop: 0 }}>
+            <h3 style={{ font: '600 18px var(--font-display)', color: 'var(--ink)', margin: 0 }}>Submissions not available</h3>
+            <p style={{ color: 'var(--ink-3)', marginTop: 8 }}>
+              The speakers module is not installed on this brand.
+            </p>
+          </div>
+        )}
       </div>
-    </main>
+    </div>
   )
 }
