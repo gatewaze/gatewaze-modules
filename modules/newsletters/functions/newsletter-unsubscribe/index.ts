@@ -6,14 +6,32 @@ const corsHeaders = {
 }
 
 /**
- * Newsletter One-Click Unsubscribe
+ * Newsletter Unsubscribe.
  *
- * Supports two modes:
- * 1. GET /newsletter-unsubscribe?token=HMAC_TOKEN — HMAC-signed one-click unsubscribe (RFC 8058)
- * 2. POST /newsletter-unsubscribe — JSON body with { token }
+ * Two HTTP entry points, each scoped to a different caller:
+ *
+ *  • GET /newsletter-unsubscribe?token=...
+ *    For users who click the visible footer link (fallback path when the
+ *    portal Subscription Centre isn't configured — i.e. portalBaseUrl is
+ *    unset). Renders an HTML confirmation page; the page's <form method=POST>
+ *    is what actually unsubscribes. GET NEVER mutates state, so corporate
+ *    email scanners (Mimecast TTP, Defender ATP, Proofpoint) that pre-fetch
+ *    URLs cannot unsubscribe recipients without their consent.
+ *
+ *  • POST /newsletter-unsubscribe
+ *    Three callers in practice:
+ *      - RFC 8058 `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+ *        invocations from Gmail/Yahoo/Outlook (no JSON body; just the form
+ *        field `List-Unsubscribe=One-Click`). One-click is REQUIRED by spec
+ *        for inbox-placement; mailbox providers don't read mail headers as
+ *        navigable URLs, so scanners can't reach this path.
+ *      - Portal Subscription Centre XHRs: JSON body `{ token, action }` where
+ *        action is 'preferences' or 'set'.
+ *      - Confirmation-page form submit from the GET fallback: form-encoded
+ *        `token=...&confirm=1`.
  *
  * HMAC token format: base64url(email:list_id:timestamp).signature
- * The HMAC secret is stored in UNSUBSCRIBE_HMAC_SECRET env var.
+ * Secret in UNSUBSCRIBE_HMAC_SECRET env var (k8s + Edge synced by deploy).
  */
 
 async function hmacSign(payload: string, secret: string): Promise<string> {
@@ -61,6 +79,51 @@ interface SubscriptionListView {
   subscribed: boolean;
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
+  ))
+}
+
+function renderShell(title: string, body: string): string {
+  return `<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; max-width: 520px; margin: 60px auto; padding: 0 24px; color: #1f2937; }
+  h1 { font-size: 24px; margin: 0 0 16px; color: #111827; }
+  p { font-size: 15px; line-height: 1.6; color: #4b5563; }
+</style>
+</head><body>
+<h1>${escapeHtml(title)}</h1>
+${body}
+</body></html>`
+}
+
+function renderConfirmForm(actionUrl: string, recipientEmail: string): string {
+  const body = `
+<p>You're about to unsubscribe <strong>${escapeHtml(recipientEmail)}</strong> from this mailing list.</p>
+<p style="color:#6b7280; font-size:13px;">This extra step protects you from accidental unsubscribes triggered by corporate email scanners that pre-fetch links.</p>
+<form method="POST" action="${escapeHtml(actionUrl)}" style="margin-top: 24px;">
+  <input type="hidden" name="confirm" value="1">
+  <button type="submit" style="background:#dc2626; color:#fff; border:0; padding:12px 20px; border-radius:6px; font-size:15px; font-weight:500; cursor:pointer;">Confirm unsubscribe</button>
+</form>
+<p style="margin-top:16px; font-size:13px; color:#9ca3af;">If you didn't mean to unsubscribe, just close this page.</p>
+`
+  return renderShell('Confirm unsubscribe', body)
+}
+
+function renderSuccess(recipientEmail: string): string {
+  return renderShell(
+    'Unsubscribed',
+    `<p>You have been unsubscribed from this mailing list.</p>
+     <p style="color:#6b7280; font-size:13px;">Address: ${escapeHtml(recipientEmail)}</p>
+     <p style="color:#6b7280; font-size:13px;">If this was a mistake, you can re-subscribe from your profile settings or any future email.</p>`,
+  )
+}
+
 /**
  * All subscription lists relevant to an email for the Subscription Centre:
  * every public list plus any non-public list the address already has a row for
@@ -105,12 +168,14 @@ async function handler(req: Request) {
     let listId: string
 
     if (req.method === 'GET') {
+      // GET renders a confirmation page — it never mutates state. This
+      // protects against corporate email scanners that pre-fetch URLs.
       const url = new URL(req.url)
       const token = url.searchParams.get('token')
 
       if (!token) {
         return new Response(
-          '<html><body><h1>Missing unsubscribe token</h1></body></html>',
+          renderShell('Missing unsubscribe token', 'No token was provided. Use the link in a recent email.'),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
         )
       }
@@ -118,7 +183,7 @@ async function handler(req: Request) {
       const decoded = decodeToken(token)
       if (!decoded) {
         return new Response(
-          '<html><body><h1>Invalid unsubscribe link</h1></body></html>',
+          renderShell('Invalid unsubscribe link', 'This link is malformed. Use the link in a recent email.'),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
         )
       }
@@ -126,24 +191,55 @@ async function handler(req: Request) {
       const valid = await hmacVerify(decoded.payloadStr, decoded.signature, hmacSecret)
       if (!valid) {
         return new Response(
-          '<html><body><h1>Invalid or expired unsubscribe link</h1></body></html>',
+          renderShell('Invalid or expired unsubscribe link', 'This link could not be verified. Use the link in a recent email.'),
           { status: 403, headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
         )
       }
 
-      // Token valid for 90 days
       const tokenAge = Date.now() - decoded.timestamp
       if (tokenAge > 90 * 24 * 60 * 60 * 1000) {
         return new Response(
-          '<html><body><h1>This unsubscribe link has expired</h1><p>Please use the link in a more recent email.</p></body></html>',
+          renderShell('This unsubscribe link has expired', 'Please use the link in a more recent email.'),
           { status: 410, headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
         )
       }
 
-      email = decoded.email
-      listId = decoded.listId
+      // Token is valid — render the confirmation form. The form POSTs back
+      // to this same URL with confirm=1, which is the only path that
+      // mutates list_subscriptions. The escapeHtml call defends the email
+      // display against XSS even though the token is HMAC-signed.
+      return new Response(
+        renderConfirmForm(req.url, decoded.email),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
+      )
     } else if (req.method === 'POST') {
-      const body = await req.json()
+      // POST carries one of three shapes:
+      //   1. JSON  { token, action: 'preferences'|'set', ... }  — Subscription Centre XHRs
+      //   2. form  token=...&confirm=1                          — confirmation-form submit
+      //   3. form  List-Unsubscribe=One-Click  (token in URL)   — RFC 8058 one-click
+      // Read the body as text once and branch on content-type to keep all three paths working.
+      const contentType = (req.headers.get('content-type') ?? '').toLowerCase()
+      let body: Record<string, unknown> = {}
+      if (contentType.includes('application/json')) {
+        body = await req.json()
+      } else if (contentType.includes('application/x-www-form-urlencoded')) {
+        const params = new URLSearchParams(await req.text())
+        body = Object.fromEntries(params.entries())
+      }
+
+      // RFC 8058 / confirmation-form: token may live in the URL rather than the body.
+      if (!body.token) {
+        const tokenFromUrl = new URL(req.url).searchParams.get('token')
+        if (tokenFromUrl) body.token = tokenFromUrl
+      }
+
+      // RFC 8058 mailbox-provider POST (Gmail/Yahoo): no JSON action, body is just
+      // `List-Unsubscribe=One-Click`. Treat as one-click unsubscribe of the token's list.
+      const isRfc8058 = !body.action && body['List-Unsubscribe'] === 'One-Click'
+      if (isRfc8058 && !body.confirm) {
+        // Mark confirm=true implicitly — the mailbox provider's POST IS the user's intent.
+        body.confirm = '1'
+      }
 
       if (!body.token) {
         return new Response(
@@ -152,7 +248,8 @@ async function handler(req: Request) {
         )
       }
 
-      const decoded = decodeToken(body.token)
+      const tokenStr = String(body.token)
+      const decoded = decodeToken(tokenStr)
       if (!decoded) {
         return new Response(
           JSON.stringify({ success: false, error: 'Invalid token' }),
@@ -176,9 +273,10 @@ async function handler(req: Request) {
           Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
         )
         if (body.action === 'preferences') {
-          // Optional one-click unsubscribe-from-this-list on arrival (the
-          // "Unsubscribe" footer link lands here with unsubscribe:true). Only
-          // ever touches the token's OWN list_id — never an arbitrary one.
+          // The Subscription Centre may opt to unsubscribe-from-this-list on
+          // arrival (its confirmation panel POSTs `unsubscribe:true` after
+          // the recipient clicks "Confirm unsubscribe"). Only ever touches
+          // the token's OWN list_id — never an arbitrary one.
           let unsubscribedListId: string | null = null
           if (body.unsubscribe === true) {
             const nowIso = new Date().toISOString()
@@ -232,6 +330,16 @@ async function handler(req: Request) {
         )
       }
 
+      // Fallthrough POST = confirmation-form submit OR RFC 8058 one-click.
+      // Both must set `confirm=1` (RFC 8058 path implicitly does this above).
+      // Anything else lacking confirm/action is rejected — prevents accidental
+      // mutation from a malformed XHR.
+      if (!body.confirm) {
+        return new Response(
+          JSON.stringify({ success: false, error: 'Missing action or confirm flag' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
       email = decoded.email
       listId = decoded.listId
     } else {
@@ -241,7 +349,9 @@ async function handler(req: Request) {
       )
     }
 
-    // Process unsubscribe
+    // Process unsubscribe (confirmation-form OR RFC 8058 paths only — GET
+    // never reaches here; preferences/set returned earlier with their own
+    // JSON response).
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -265,16 +375,14 @@ async function handler(req: Request) {
       throw new Error('Failed to process unsubscribe')
     }
 
-    if (req.method === 'GET') {
+    // Render an HTML success page when the POST came from our confirmation
+    // form (the browser submitted a form, so a 200 with HTML body is the
+    // natural response). RFC 8058 callers (Gmail/Yahoo) get JSON — they
+    // don't render the response anywhere; only the status code matters.
+    const acceptsHtml = (req.headers.get('accept') ?? '').includes('text/html')
+    if (acceptsHtml) {
       return new Response(
-        `<html>
-<head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-<body style="font-family: Arial, sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; text-align: center;">
-  <h1 style="color: #333;">Unsubscribed</h1>
-  <p style="color: #666; font-size: 16px;">You have been successfully unsubscribed from this mailing list.</p>
-  <p style="color: #999; font-size: 14px; margin-top: 24px;">If this was a mistake, you can re-subscribe from your profile settings.</p>
-</body>
-</html>`,
+        renderSuccess(email),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
       )
     }
@@ -287,9 +395,10 @@ async function handler(req: Request) {
   } catch (error) {
     console.error('Unsubscribe handler error:', error)
 
-    if (req.method === 'GET') {
+    const acceptsHtml = (req.headers.get('accept') ?? '').includes('text/html')
+    if (acceptsHtml) {
       return new Response(
-        '<html><body><h1>Something went wrong</h1><p>Please try again later or contact support.</p></body></html>',
+        renderShell('Something went wrong', '<p>Please try again later or contact support.</p>'),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
       )
     }
