@@ -27,6 +27,8 @@ const listsModule: GatewazeModule = {
     'migrations/001_lists_tables.sql',
     // 002 seeds the global 'Event Updates' list used by the events Comms tab.
     'migrations/002_event_updates_list.sql',
+    // 003 adds the is_internal flag and seeds the staff-only 'internal' list.
+    'migrations/003_internal_list.sql',
   ],
 
   adminRoutes: [
