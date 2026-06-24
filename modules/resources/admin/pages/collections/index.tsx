@@ -10,7 +10,8 @@ import {
   TrashIcon,
   FolderOpenIcon,
 } from '@heroicons/react/24/outline';
-import { Modal, Button, Input, Card, Badge, ConfirmModal, Select } from '@/components/ui';
+import { Modal, Button, Input, Card, Badge, ConfirmModal, Select, WorkspaceLayout } from '@/components/ui';
+import { Page } from '@/components/shared/Page';
 import {
   SrCollection,
   CollectionsService,
@@ -133,17 +134,15 @@ const CollectionsPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Structured Resources</h1>
-          <p className="text-gray-500 mt-1">Manage resource collections, categories, and items</p>
-        </div>
-        <Button onClick={openCreate} >
-          New Collection
-        </Button>
-      </div>
-
+    <Page title="Resources">
+      <WorkspaceLayout
+        title="Resources"
+        actions={
+          <Button onClick={openCreate}>
+            <PlusIcon className="h-4 w-4 mr-1" /> New Collection
+          </Button>
+        }
+      >
       {loading ? (
         <div className="text-center py-12 text-gray-500">Loading...</div>
       ) : collections.length === 0 ? (
@@ -199,6 +198,7 @@ const CollectionsPage: React.FC = () => {
           ))}
         </div>
       )}
+      </WorkspaceLayout>
 
       {/* Create/Edit Modal */}
       <Modal
@@ -271,7 +271,7 @@ const CollectionsPage: React.FC = () => {
         confirmText="Delete"
         confirmColor="red"
       />
-    </div>
+    </Page>
   );
 };
 

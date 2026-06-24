@@ -31,13 +31,13 @@ interface Item {
   category_id: string
 }
 
-function getSupabaseClient(authenticated: boolean) {
+async function getSupabaseClient(authenticated: boolean) {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
   if (!url || !key) return null
 
   if (authenticated) {
-    const cookieStore = cookies()
+    const cookieStore = await cookies()
     return createServerClient(url, key, {
       cookies: { get(name: string) { return cookieStore.get(name)?.value } },
     })
@@ -53,7 +53,7 @@ async function getSession() {
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
   if (!url || !key) return null
 
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   const supabase = createServerClient(url, key, {
     cookies: { get(name: string) { return cookieStore.get(name)?.value } },
   })
@@ -63,7 +63,7 @@ async function getSession() {
 
 async function getCollectionData(slug: string, isAuthenticated: boolean) {
   // Use anon client for collection metadata (visible to all per RLS)
-  const anonClient = getSupabaseClient(false)
+  const anonClient = await getSupabaseClient(false)
   if (!anonClient) return null
 
   const { data: collection, error: colError } = await anonClient
@@ -80,7 +80,7 @@ async function getCollectionData(slug: string, isAuthenticated: boolean) {
   if (effectiveAccess === 'authenticated' && !isAuthenticated) return null
 
   // Use authenticated client for content (handles inherit collections where anon RLS blocks)
-  const supabase = getSupabaseClient(isAuthenticated)
+  const supabase = await getSupabaseClient(isAuthenticated)
   if (!supabase) return null
 
   const { data: categories } = await supabase
@@ -115,22 +115,15 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
   const data = await getCollectionData(params.collectionSlug, isAuthenticated)
 
   if (!data) {
-    // If not authenticated, redirect to sign-in
+    // If not authenticated, prompt to sign in
     if (!isAuthenticated) {
       return (
-        <main className="relative z-10">
-          <div className="max-w-3xl mx-auto px-6 py-12 text-center">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/30 mx-auto mb-4">
-              <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            </svg>
-            <h1 className="text-2xl font-bold text-white mb-2">Sign in required</h1>
-            <p className="text-white/60 mb-6">You need to be signed in to view this resource.</p>
-            <Link href="/sign-in" className="inline-block px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-              Sign In
-            </Link>
+        <div className="pub-wrap pub-fade">
+          <div className="pub-empty">
+            <p style={{ marginBottom: 14 }}>You need to be signed in to view this resource.</p>
+            <Link href="/sign-in" className="pub-link" style={{ color: 'var(--accent)' }}>Sign in →</Link>
           </div>
-        </main>
+        </div>
       )
     }
     notFound()
@@ -164,110 +157,87 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
   }
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-2 text-sm text-white/40 mb-6">
-          <Link href="/resources" className="hover:text-white/60 transition-colors">Resources</Link>
+    <div className="pub-wrap pub-fade">
+      <style>{`
+        .res-grid { display: grid; grid-template-columns: 240px minmax(0,1fr); gap: 40px; align-items: start; margin-top: 24px; }
+        .res-nav-link { display: block; text-decoration: none; padding: 6px 10px; border-radius: 8px; font-size: 14px; color: var(--ink-3); transition: background .15s ease, color .15s ease; }
+        .res-nav-link:hover { background: rgba(var(--ui-text), 0.06); color: var(--ink); }
+        .res-nav-link[aria-current="page"] { background: rgba(var(--ui-text), 0.10); color: var(--ink); font-weight: 600; }
+        .res-search { width: 100%; height: 38px; padding: 0 12px; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); color: var(--ink); font-size: 14px; box-sizing: border-box; }
+        .res-search::placeholder { color: var(--ink-4); }
+        .res-cat-side { position: sticky; top: 96px; }
+        @media (max-width: 760px) { .res-grid { grid-template-columns: 1fr; gap: 24px; } .res-cat-side { position: static; } }
+      `}</style>
+
+      <div className="pub-h">
+        <div className="pub-byline" style={{ marginBottom: 10 }}>
+          <Link href="/resources" style={{ color: 'var(--ink-4)', textDecoration: 'none' }}>Resources</Link>
           <span>/</span>
-          <span className="text-white/70">{collection.name}</span>
+          <span style={{ color: 'var(--ink-3)' }}>{collection.name}</span>
         </div>
+        <h1 style={{ margin: 0 }}>{collection.name}</h1>
+        {collection.description && <p>{collection.description}</p>}
+      </div>
 
-        {/* Header */}
-        <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">{collection.name}</h1>
-        {collection.description && (
-          <p className="text-white/60 text-lg mb-8 max-w-3xl">{collection.description}</p>
-        )}
+      <div className="res-grid">
+        {/* Sidebar — search + category filter */}
+        <aside className="res-cat-side">
+          <form style={{ marginBottom: 16 }}>
+            <input type="text" name="q" defaultValue={searchQuery} placeholder="Search items…" className="res-search" />
+          </form>
+          <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Link href={`/resources/${collection.slug}`} aria-current={!activeCategory ? 'page' : undefined} className="res-nav-link">
+              All ({items.length})
+            </Link>
+            {categories.map((cat) => {
+              const count = items.filter(i => i.category_id === cat.id).length
+              return (
+                <Link
+                  key={cat.id}
+                  href={`/resources/${collection.slug}?category=${cat.slug}`}
+                  aria-current={activeCategory === cat.slug ? 'page' : undefined}
+                  className="res-nav-link"
+                >
+                  {cat.name} ({count})
+                </Link>
+              )
+            })}
+          </nav>
+        </aside>
 
-        <div className="flex flex-col lg:flex-row gap-8">
-          {/* Sidebar */}
-          <div className="lg:w-64 flex-shrink-0">
-            {/* Search */}
-            <form className="mb-6">
-              <input
-                type="text"
-                name="q"
-                defaultValue={searchQuery}
-                placeholder="Search items..."
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white text-sm placeholder:text-white/30 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-            </form>
-
-            {/* Category filter */}
-            <nav className="space-y-1">
-              <Link
-                href={`/resources/${collection.slug}`}
-                className={`block px-3 py-2 rounded-lg text-sm transition-colors ${!activeCategory ? 'bg-white/10 text-white' : 'text-white/60 hover:text-white hover:bg-white/5'}`}
-              >
-                All ({items.length})
-              </Link>
-              {categories.map(cat => {
-                const count = items.filter(i => i.category_id === cat.id).length
-                return (
-                  <Link
-                    key={cat.id}
-                    href={`/resources/${collection.slug}?category=${cat.slug}`}
-                    className={`block px-3 py-2 rounded-lg text-sm transition-colors ${activeCategory === cat.slug ? 'bg-white/10 text-white' : 'text-white/60 hover:text-white hover:bg-white/5'}`}
-                  >
-                    {cat.name} ({count})
-                  </Link>
-                )
-              })}
-            </nav>
-          </div>
-
-          {/* Content */}
-          <div className="flex-1 min-w-0">
-            {filteredItems.length === 0 ? (
-              <p className="text-white/60 text-center py-12">No items found.</p>
-            ) : (
-              <div className="space-y-8">
-                {categories
-                  .filter(cat => itemsByCategory.has(cat.id))
-                  .map(cat => (
-                    <div key={cat.id}>
-                      <h2 className="text-xl font-semibold text-white mb-4">{cat.name}</h2>
-                      {cat.description && <p className="text-white/50 text-sm mb-4">{cat.description}</p>}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {(itemsByCategory.get(cat.id) || []).map(item => (
-                          <Link
-                            key={item.id}
-                            href={`/resources/${collection.slug}/${item.slug}`}
-                            className="group block"
-                          >
-                            <div className="bg-white/5 rounded-xl border border-white/10 overflow-hidden hover:bg-white/10 hover:border-white/20 transition-all duration-200">
-                              {item.featured_image_url && (
-                                <div className="aspect-[16/9] overflow-hidden">
-                                  <img
-                                    src={item.featured_image_url}
-                                    alt={item.title}
-                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                                  />
-                                </div>
-                              )}
-                              <div className="p-4">
-                                <h3 className="text-white font-semibold group-hover:text-white/90 transition-colors">
-                                  {item.title}
-                                </h3>
-                                {item.subtitle && (
-                                  <p className="text-white/50 text-sm mt-1 line-clamp-2">{item.subtitle}</p>
-                                )}
-                                {item.external_url && (
-                                  <span className="text-blue-400 text-xs mt-2 inline-block">{new URL(item.external_url).hostname}</span>
-                                )}
-                              </div>
-                            </div>
-                          </Link>
-                        ))}
-                      </div>
+        {/* Content */}
+        <div style={{ minWidth: 0 }}>
+          {filteredItems.length === 0 ? (
+            <div className="pub-empty" style={{ marginTop: 0 }}>No items found.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 36 }}>
+              {categories
+                .filter(cat => itemsByCategory.has(cat.id))
+                .map((cat) => (
+                  <section key={cat.id}>
+                    <h2 style={{ font: '600 22px var(--font-display)', color: 'var(--ink)', letterSpacing: '-0.01em', margin: '0 0 4px' }}>{cat.name}</h2>
+                    {cat.description && <p style={{ color: 'var(--ink-3)', fontSize: 14, margin: '0 0 14px' }}>{cat.description}</p>}
+                    <div className="pub-grid" style={{ marginTop: cat.description ? 0 : 14, gridTemplateColumns: 'repeat(2, 1fr)' }}>
+                      {(itemsByCategory.get(cat.id) || []).map((item) => (
+                        <Link key={item.id} href={`/resources/${collection.slug}/${item.slug}`} className="pub-card">
+                          <div className="pub-cover">
+                            {item.featured_image_url && (
+                              <img src={item.featured_image_url} alt={item.title} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                            )}
+                          </div>
+                          <div className="pub-card-body">
+                            <h3>{item.title}</h3>
+                            {item.subtitle && <p>{item.subtitle}</p>}
+                          </div>
+                        </Link>
+                      ))}
                     </div>
-                  ))}
-              </div>
-            )}
-          </div>
+                  </section>
+                ))}
+            </div>
+          )}
         </div>
       </div>
-    </main>
+    </div>
   )
 }
