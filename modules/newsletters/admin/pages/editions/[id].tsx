@@ -42,6 +42,16 @@ interface DbBlockTemplate {
   rich_text_template: string | null;
   has_bricks: boolean;
   sort_order: number;
+  /** Routing hint for the send-time renderer. `declarative` blocks (body_section,
+   * intro_paragraph, email_only_intro etc.) are html-ish source files in the
+   * git template repos — they MUST go through the declarative renderer, not
+   * mustache substitution, or `<richtext field="x">`/`<Text if>` directives
+   * survive into the rendered HTML as raw unknown elements and silently drop
+   * their bound content. Was missing from this interface (and from the SELECT
+   * below) which is why 7772 chars of body_section description rendered as
+   * nothing on the 2026-06-23 send. */
+  render_kind?: 'mustache' | 'react-email' | 'declarative' | null;
+  component_id?: string | null;
 }
 
 interface DbBrickTemplate {
@@ -351,7 +361,7 @@ export default function EditionEditorPage() {
 
       const { data: blocksData, error: blocksError } = await supabase
         .from('newsletters_edition_blocks')
-        .select('*, block_template:templates_block_defs!templates_block_def_id(id, key, name, description, schema, html, rich_text_template, has_bricks, block_type:key)')
+        .select('*, block_template:templates_block_defs!templates_block_def_id(id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key)')
         .eq('edition_id', id)
         .order('sort_order');
       if (blocksError) throw blocksError;
@@ -842,8 +852,21 @@ export default function EditionEditorPage() {
                   // email-safe HTML document via @react-email/render.
                   const blockMeta = new Map<string, BlockRenderMeta>();
                   for (const block of edition.blocks) {
-                    const componentId = block.block_template.block_type;
-                    if (emailBlockRegistry.has(componentId)) {
+                    const componentId = block.block_template.component_id || block.block_template.block_type;
+                    // Three routes:
+                    //  1. react-email — typed component in the static registry
+                    //  2. declarative — html-ish git-authored source (body_section,
+                    //     intro_paragraph, email_only_intro …); routed through the
+                    //     declarative renderer via the per-edition registry, which
+                    //     EditionEmail treats as 'react-email' (see
+                    //     renderViaEditionEmail.tsx — same path, just authored as HTML).
+                    //  3. mustache — legacy {{token}} substitution against html_template.
+                    // Pre-fix this fell through to mustache for declarative blocks,
+                    // leaving `<richtext field="description">` etc. as raw unparsed
+                    // elements that browsers silently drop. Cost: 7k chars of body
+                    // text vanishing from the 2026-06-23 send.
+                    const dbRenderKind = block.block_template.render_kind;
+                    if (emailBlockRegistry.has(componentId) || dbRenderKind === 'react-email' || dbRenderKind === 'declarative') {
                       blockMeta.set(block.id, { render_kind: 'react-email', component_id: componentId });
                     } else {
                       blockMeta.set(block.id, {
