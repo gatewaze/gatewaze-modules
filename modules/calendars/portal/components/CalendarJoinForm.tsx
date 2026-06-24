@@ -101,25 +101,26 @@ export function CalendarJoinForm({
 
   if (status === 'success') {
     return (
-      <div className="space-y-6">
-        <div className="bg-white/5 border border-white/15 rounded-2xl p-8 text-center">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-green-500/20 flex items-center justify-center">
-            <svg className="w-8 h-8 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="cal-join" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+        <CalJoinStyles />
+        <div className="cal-join-panel" style={{ textAlign: 'center' }}>
+          <div style={{ width: 64, height: 64, margin: '0 auto 16px', borderRadius: '50%', background: 'rgba(34,197,94,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#22c55e">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h2 className="text-white text-2xl font-bold">
+          <h2 style={{ font: '600 24px var(--font-display)', color: 'var(--ink)', margin: 0 }}>
             {alreadyAuthed ? `You're in!` : `You're in — check your email`}
           </h2>
-          <p className="text-white/70 mt-3 max-w-md mx-auto">
+          <p style={{ color: 'var(--ink-3)', marginTop: 12, maxWidth: '28rem', marginLeft: 'auto', marginRight: 'auto', lineHeight: 1.55 }}>
             {alreadyAuthed
               ? `You're now a member of ${calendar.name}. You'll get updates about upcoming events.`
               : magicLinkSent
-                ? <>We've sent a magic link to <span className="text-white">{email}</span>. Click it to sign in and confirm your membership.</>
+                ? <>We've sent a magic link to <span style={{ color: 'var(--ink)' }}>{email}</span>. Click it to sign in and confirm your membership.</>
                 : <>You're now a member of {calendar.name}. You'll get updates about upcoming events.</>}
           </p>
           {!alreadyAuthed && magicLinkSent && (
-            <p className="text-white/40 text-xs mt-6">
+            <p style={{ color: 'var(--ink-4)', fontSize: 12, marginTop: 24 }}>
               Didn't get it? Check your spam folder, or{' '}
               <button
                 type="button"
@@ -129,7 +130,7 @@ export function CalendarJoinForm({
                   setName('')
                   setMagicLinkSent(false)
                 }}
-                className="text-white/70 hover:text-white underline"
+                style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--ink-3)', textDecoration: 'underline', font: 'inherit' }}
               >
                 try again
               </button>
@@ -139,37 +140,36 @@ export function CalendarJoinForm({
         </div>
 
         {nextEvents.length > 0 && (
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-            <h3 className="text-white font-semibold mb-4">
+          <div className="cal-join-panel">
+            <h3 style={{ font: '600 16px var(--font-display)', color: 'var(--ink)', margin: '0 0 16px' }}>
               Up next at {calendar.name}
             </h3>
-            <div className="space-y-3">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {nextEvents.map((ev) => (
                 <Link
                   key={ev.event_id}
                   href={`/events/${ev.event_slug || ev.event_id}`}
-                  className="flex items-center gap-4 p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-colors"
+                  className="cal-join-evrow"
                 >
                   {(ev.event_logo || ev.screenshot_url) ? (
                     <div
-                      className="w-14 h-14 rounded-lg flex-shrink-0 bg-cover bg-center"
-                      style={{ backgroundImage: `url(${ev.event_logo || ev.screenshot_url})` }}
+                      style={{ width: 56, height: 56, borderRadius: 11, flexShrink: 0, backgroundImage: `url(${ev.event_logo || ev.screenshot_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
                     />
                   ) : (
                     <div
-                      className="w-14 h-14 rounded-lg flex-shrink-0"
                       style={{
+                        width: 56, height: 56, borderRadius: 11, flexShrink: 0,
                         background: ev.gradient_color_1
                           ? `linear-gradient(135deg, ${ev.gradient_color_1}, ${ev.gradient_color_2 || ev.gradient_color_1})`
-                          : 'linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02))',
+                          : 'rgba(var(--ui-text), 0.06)',
                       }}
                     />
                   )}
-                  <div className="min-w-0 flex-1">
-                    <div className="text-white/60 text-xs">{formatShortDate(ev.event_start)}</div>
-                    <div className="text-white text-sm font-medium truncate">{ev.event_title}</div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ color: 'var(--ink-4)', fontSize: 12 }}>{formatShortDate(ev.event_start)}</div>
+                    <div style={{ color: 'var(--ink)', fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.event_title}</div>
                     {(ev.event_city || ev.event_country_code) && (
-                      <div className="text-white/50 text-xs truncate">
+                      <div style={{ color: 'var(--ink-3)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {[ev.event_city, ev.event_country_code].filter(Boolean).join(', ')}
                       </div>
                     )}
@@ -191,29 +191,21 @@ export function CalendarJoinForm({
       // mutations land before React diffs and produce a hydration error.
       // The warning is scoped to this subtree only.
       suppressHydrationWarning
-      className="p-6 sm:p-8"
-      style={{
-        borderRadius: 'var(--radius-control, 12px)',
-        backgroundColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-opacity, 0.05))`,
-        backdropFilter: `blur(var(--glass-blur, 4px))`,
-        WebkitBackdropFilter: `blur(var(--glass-blur, 4px))`,
-        borderWidth: 1,
-        borderStyle: 'solid',
-        borderColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-border-opacity, 0.1))`,
-      }}
+      className="cal-join-panel"
     >
+      <CalJoinStyles />
       {typeof memberCount === 'number' && memberCount > 0 && (
-        <div className="mb-6 flex items-center gap-2 text-white/70 text-sm">
-          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-white/10">
-            <svg className="w-3 h-3 text-white/70" fill="currentColor" viewBox="0 0 20 20"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/></svg>
+        <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--ink-3)', fontSize: 14 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: 'rgba(var(--ui-text), 0.1)' }}>
+            <svg width="13" height="13" fill="currentColor" viewBox="0 0 20 20" style={{ color: 'var(--ink-3)' }}><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/></svg>
           </span>
-          Join <span className="text-white font-semibold">{memberCount.toLocaleString()}</span> {memberCount === 1 ? 'member' : 'members'} already on the list.
+          Join <span style={{ color: 'var(--ink)', fontWeight: 600 }}>{memberCount.toLocaleString()}</span> {memberCount === 1 ? 'member' : 'members'} already on the list.
         </div>
       )}
 
-      <div className="space-y-5">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div>
-          <label htmlFor="name" className="block text-white/80 text-sm font-medium mb-2">
+          <label htmlFor="name" className="cal-join-label">
             Your name
           </label>
           <input
@@ -224,13 +216,13 @@ export function CalendarJoinForm({
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={status === 'submitting'}
-            className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2.5 text-white placeholder-white/40 focus:outline-none focus:border-white/50 disabled:opacity-50"
+            className="cal-join-input"
             placeholder="Jane Smith"
           />
         </div>
 
         <div>
-          <label htmlFor="email" className="block text-white/80 text-sm font-medium mb-2">
+          <label htmlFor="email" className="cal-join-label">
             Email address
           </label>
           <input
@@ -240,21 +232,21 @@ export function CalendarJoinForm({
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={status === 'submitting'}
-            className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2.5 text-white placeholder-white/40 focus:outline-none focus:border-white/50 disabled:opacity-50"
+            className="cal-join-input"
             placeholder="jane@example.com"
           />
         </div>
 
         {topicChips.length > 0 && (
           <div>
-            <label className="block text-white/80 text-sm font-medium mb-2">
+            <label className="cal-join-label">
               What are you most interested in?{' '}
-              <span className="text-white/50 font-normal">(optional)</span>
+              <span style={{ color: 'var(--ink-4)', fontWeight: 400 }}>(optional)</span>
             </label>
-            <p className="text-white/50 text-xs mb-3">
+            <p style={{ color: 'var(--ink-4)', fontSize: 12, margin: '0 0 12px' }}>
               We'll use this to highlight events you'll like.
             </p>
-            <div className="flex flex-wrap gap-2">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {topicChips.map((t) => {
                 const active = interests.includes(t)
                 return (
@@ -263,11 +255,7 @@ export function CalendarJoinForm({
                     type="button"
                     onClick={() => toggleInterest(t)}
                     disabled={status === 'submitting'}
-                    className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                      active
-                        ? 'bg-white text-black border-white'
-                        : 'bg-white/5 text-white/70 border-white/15 hover:border-white/30'
-                    }`}
+                    className={`cal-join-chip${active ? ' on' : ''}`}
                   >
                     {t}
                   </button>
@@ -277,23 +265,23 @@ export function CalendarJoinForm({
           </div>
         )}
 
-        <div className="space-y-2">
-          <label className="flex items-start gap-3 cursor-pointer">
+        <div>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer' }}>
             <input
               type="checkbox"
               checked={emailNotifications}
               onChange={(e) => setEmailNotifications(e.target.checked)}
               disabled={status === 'submitting'}
-              className="mt-1"
+              style={{ marginTop: 4 }}
             />
-            <span className="text-white/80 text-sm">
+            <span style={{ color: 'var(--ink-2)', fontSize: 14 }}>
               Email me about upcoming events from {calendar.name}
             </span>
           </label>
         </div>
 
         {status === 'error' && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-200 text-sm">
+          <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: '12px 16px', color: '#fca5a5', fontSize: 14 }}>
             {errorMessage}
           </div>
         )}
@@ -310,10 +298,36 @@ export function CalendarJoinForm({
           {status === 'submitting' ? 'Joining…' : 'Join this calendar'}
         </PortalButton>
 
-        <p className="text-white/40 text-xs text-center">
+        <p style={{ color: 'var(--ink-4)', fontSize: 12, textAlign: 'center', margin: 0 }}>
           By joining, you agree to receive a confirmation email. You can unsubscribe any time.
         </p>
       </div>
     </form>
+  )
+}
+
+/**
+ * Shared scoped styles for the join form's panels, inputs and chips. Rendered
+ * once inside whichever branch (success or form) is active.
+ */
+function CalJoinStyles() {
+  return (
+    <style>{`
+      .cal-join-panel { background: var(--paper); border: 1px solid var(--line); border-radius: 18px; padding: 24px; }
+      @media (min-width: 640px) { .cal-join-panel { padding: 32px; } }
+      .cal-join-label { display: block; color: var(--ink-2); font-size: 14px; font-weight: 500; margin-bottom: 8px; }
+      .cal-join-input { width: 100%; box-sizing: border-box; background: rgba(var(--ui-text), 0.08); border: 1px solid rgba(var(--ui-text), 0.18);
+        border-radius: 10px; padding: 10px 14px; color: var(--ink); font-size: 14px; }
+      .cal-join-input::placeholder { color: var(--ink-4); }
+      .cal-join-input:disabled { opacity: 0.5; }
+      .cal-join-chip { padding: 5px 12px; font-size: 12px; border-radius: 999px; cursor: pointer; transition: border-color .15s ease, background .15s ease;
+        background: rgba(var(--ui-text), 0.05); color: var(--ink-3); border: 1px solid var(--line); }
+      .cal-join-chip:hover { border-color: var(--line-2); }
+      .cal-join-chip.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+      .cal-join-chip:disabled { opacity: 0.5; cursor: default; }
+      .cal-join-evrow { display: flex; align-items: center; gap: 16px; padding: 12px; border-radius: 12px; text-decoration: none;
+        background: rgba(var(--ui-text), 0.04); border: 1px solid var(--line); transition: border-color .15s ease, background .15s ease; }
+      .cal-join-evrow:hover { border-color: var(--line-2); background: rgba(var(--ui-text), 0.06); }
+    `}</style>
   )
 }

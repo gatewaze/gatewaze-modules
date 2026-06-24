@@ -14,40 +14,32 @@ interface Props {
 export function CalendarSubmitTalkCta({ calendar, pendingCount }: Props) {
   const slug = calendar.slug || calendar.calendar_id
   return (
-    <section>
-      <div
-        className="overflow-hidden p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center gap-6"
-        style={{
-          borderRadius: 'var(--radius-control, 12px)',
-          backgroundColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-opacity, 0.05))`,
-          backdropFilter: `blur(var(--glass-blur, 4px))`,
-          WebkitBackdropFilter: `blur(var(--glass-blur, 4px))`,
-          borderWidth: 1,
-          borderStyle: 'solid',
-          borderColor: `rgba(var(--panel-tint, 0,0,0), var(--glass-border-opacity, 0.1))`,
-        }}
-      >
-        <div className="flex-1">
-          <h3 className="text-white text-xl font-semibold mb-2">
-            Got a talk to share?
-          </h3>
-          <p className="text-white/70 text-sm max-w-xl">
+    <section className="cal-talk-cta">
+      <style>{`
+        .cal-talk-card { display: flex; flex-direction: column; gap: 20px; overflow: hidden; padding: 24px;
+          border-radius: 18px; background: var(--paper); border: 1px solid var(--line); }
+        @media (min-width: 640px) { .cal-talk-card { flex-direction: row; align-items: center; padding: 28px; } }
+        .cal-talk-h { font: 600 20px var(--font-display); color: var(--ink); margin: 0 0 8px; }
+        .cal-talk-p { color: var(--ink-3); font-size: 14px; line-height: 1.55; max-width: 36rem; margin: 0; }
+        .cal-talk-strong { color: var(--ink); font-weight: 500; }
+      `}</style>
+      <div className="cal-talk-card">
+        <div style={{ flex: 1 }}>
+          <h3 className="cal-talk-h">Got a talk to share?</h3>
+          <p className="cal-talk-p">
             Pitch a talk to {calendar.name}. Organisers review submissions and reach out
             when they can put on an event that fits — you don't need a confirmed date.
             {typeof pendingCount === 'number' && pendingCount > 0 && (
               <>
                 {' '}
-                <span className="text-white/90 font-medium">
+                <span className="cal-talk-strong">
                   {pendingCount.toLocaleString()} {pendingCount === 1 ? 'talk' : 'talks'} already in the pool.
                 </span>
               </>
             )}
           </p>
         </div>
-        <Link
-          href={`/calendars/${slug}/submit-talk`}
-          className="inline-flex items-center justify-center px-5 py-2.5 rounded-lg bg-black text-white text-sm font-semibold hover:bg-black/80 whitespace-nowrap"
-        >
+        <Link href={`/calendars/${slug}/submit-talk`} className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>
           Submit a talk
         </Link>
       </div>

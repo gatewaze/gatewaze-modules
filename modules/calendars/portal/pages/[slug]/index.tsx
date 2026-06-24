@@ -42,37 +42,35 @@ export default async function CalendarLandingPage({ params }: Props) {
   const canonicalSlug = calendar.slug || calendar.calendar_id
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <CalendarHero
-          calendar={calendar}
-          memberCount={stats.totalMembers}
-          storageBucketUrl={brandConfig.storageBucketUrl}
-        />
+    <div className="pub-wrap">
+      <CalendarHero
+        calendar={calendar}
+        memberCount={stats.totalMembers}
+        storageBucketUrl={brandConfig.storageBucketUrl}
+      />
 
-        <CalendarHeader
-          calendar={calendar}
-          visibility={visibility}
-          active=""
-          primaryColor={brandConfig.primaryColor}
-        />
+      <CalendarHeader
+        calendar={calendar}
+        visibility={visibility}
+        active=""
+        primaryColor={brandConfig.primaryColor}
+      />
 
-        <CalendarUpcomingStrip events={upcoming} calendarSlug={canonicalSlug} />
+      <CalendarUpcomingStrip events={upcoming} calendarSlug={canonicalSlug} />
 
-        <CalendarStatsRollup stats={stats} />
+      <CalendarStatsRollup stats={stats} />
 
-        <CalendarMediaGallery items={media} calendarSlug={canonicalSlug} />
+      <CalendarMediaGallery items={media} calendarSlug={canonicalSlug} />
 
-        <CalendarPastHighlights events={past} calendarSlug={canonicalSlug} />
+      <CalendarPastHighlights events={past} calendarSlug={canonicalSlug} />
 
-        <div className="space-y-10 mt-12">
-          {visibility.submitTalk && (
-            <CalendarSubmitTalkCta calendar={calendar} pendingCount={pendingTalkCount} />
-          )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 40, marginTop: 48 }}>
+        {visibility.submitTalk && (
+          <CalendarSubmitTalkCta calendar={calendar} pendingCount={pendingTalkCount} />
+        )}
 
-          <CalendarJoinCta calendar={calendar} />
-        </div>
+        <CalendarJoinCta calendar={calendar} />
       </div>
-    </main>
+    </div>
   )
 }

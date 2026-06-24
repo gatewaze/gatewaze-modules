@@ -37,35 +37,35 @@ export default async function CalendarMediaPage({ params, searchParams }: Props)
   ]
 
   return (
-    <main className="relative z-10">
-      <div className="max-w-7xl mx-auto px-6 sm:px-6 lg:px-8 py-8 sm:py-12">
-        <CalendarHeader calendar={calendar} visibility={visibility} active="media" />
+    <div className="pub-wrap">
+      <style>{`
+        .cal-media-filter { padding: 6px 16px; font-size: 14px; border-radius: 999px; text-decoration: none; transition: background .15s ease, color .15s ease;
+          background: rgba(var(--ui-text), 0.05); color: var(--ink-3); border: 1px solid var(--line); }
+        .cal-media-filter:hover { background: rgba(var(--ui-text), 0.1); color: var(--ink); }
+        .cal-media-filter.on { background: var(--ink); color: var(--paper); font-weight: 600; border-color: var(--ink); }
+      `}</style>
+      <CalendarHeader calendar={calendar} visibility={visibility} active="media" />
 
-        <div className="mb-6 flex gap-2">
-          {filterPills.map((pill) => (
-            <a
-              key={pill.key}
-              href={`/calendars/${canonicalSlug}/media${pill.key === 'all' ? '' : `?type=${pill.key}`}`}
-              className={`px-4 py-2 text-sm rounded-full transition-colors ${
-                filterType === pill.key
-                  ? 'bg-white text-black font-semibold'
-                  : 'bg-white/5 text-white/70 hover:bg-white/10 hover:text-white border border-white/10'
-              }`}
-            >
-              {pill.label}
-            </a>
-          ))}
-        </div>
-
-        {items.length === 0 ? (
-          <div className="text-center py-16">
-            <h2 className="text-white/60 text-2xl font-semibold">No media yet</h2>
-            <p className="text-white/40 text-base mt-1">Photos and videos from past events will appear here.</p>
-          </div>
-        ) : (
-          <CalendarMediaGallery items={items} showTitle={false} />
-        )}
+      <div style={{ marginBottom: 24, display: 'flex', gap: 8 }}>
+        {filterPills.map((pill) => (
+          <a
+            key={pill.key}
+            href={`/calendars/${canonicalSlug}/media${pill.key === 'all' ? '' : `?type=${pill.key}`}`}
+            className={`cal-media-filter${filterType === pill.key ? ' on' : ''}`}
+          >
+            {pill.label}
+          </a>
+        ))}
       </div>
-    </main>
+
+      {items.length === 0 ? (
+        <div className="pub-empty" style={{ marginTop: 0 }}>
+          <h2 style={{ font: '600 20px var(--font-display)', color: 'var(--ink-3)', margin: 0 }}>No media yet</h2>
+          <p style={{ color: 'var(--ink-4)', marginTop: 4 }}>Photos and videos from past events will appear here.</p>
+        </div>
+      ) : (
+        <CalendarMediaGallery items={items} showTitle={false} />
+      )}
+    </div>
   )
 }

@@ -46,20 +46,45 @@ export function CalendarMonthGrid({ events, brandColor }: Props) {
   const todayKey = dayKey(new Date())
 
   const selectedEvents = selectedDayKey ? eventsByDay.get(selectedDayKey) || [] : []
-  const accent = brandColor || '#ffffff'
+  const accent = brandColor || 'var(--accent)'
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-white text-xl font-semibold">{monthLabel}</h3>
-        <div className="flex items-center gap-2">
+      <style>{`
+        .cal-mg-nav-btn { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px;
+          background: rgba(var(--ui-text), 0.05); color: var(--ink); border: 1px solid var(--line); cursor: pointer; transition: background .15s ease; }
+        .cal-mg-nav-btn:hover { background: rgba(var(--ui-text), 0.1); }
+        .cal-mg-today { width: auto; padding: 0 12px; font-size: 12px; }
+        .cal-mg-frame { border-radius: 18px; border: 1px solid var(--line); overflow: hidden; }
+        .cal-mg-dow { display: grid; grid-template-columns: repeat(7, 1fr); background: rgba(var(--ui-text), 0.03); border-bottom: 1px solid var(--line); }
+        .cal-mg-dow > div { padding: 8px 12px; font: 600 11px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-4); text-align: center; }
+        .cal-mg-grid { display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: minmax(7.5rem, 1fr); }
+        .cal-mg-cell { position: relative; text-align: left; padding: 8px; border-right: 1px solid rgba(var(--ui-text), 0.06); border-bottom: 1px solid rgba(var(--ui-text), 0.06);
+          background: transparent; transition: background .15s ease; }
+        .cal-mg-cell.out { background: rgba(var(--ui-text), 0.02); }
+        .cal-mg-cell.has:hover { background: rgba(var(--ui-text), 0.06); cursor: pointer; }
+        .cal-mg-cell:disabled { cursor: default; }
+        .cal-mg-cell.sel { background: rgba(var(--ui-text), 0.08); box-shadow: inset 0 0 0 1px var(--line-2); }
+        .cal-mg-daynum { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; font: 600 12px var(--font-sans); color: var(--ink); }
+        .cal-mg-daynum.out { color: var(--ink-4); }
+        .cal-mg-count { font-size: 10px; color: var(--ink-4); }
+        .cal-mg-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1.3; padding: 2px 8px; border-radius: 6px;
+          background: rgba(var(--ui-text), 0.1); color: var(--ink-2); }
+        .cal-mg-more { font-size: 10px; color: var(--ink-4); padding: 0 4px; }
+        .cal-mg-evrow { display: flex; align-items: center; gap: 16px; padding: 12px; border-radius: 12px; text-decoration: none;
+          background: var(--paper); border: 1px solid rgba(var(--ui-text), 0.10); transition: border-color .2s ease, transform .2s ease; }
+        .cal-mg-evrow:hover { border-color: rgba(var(--ui-text), 0.28); transform: translateY(-2px); }
+      `}</style>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <h3 style={{ font: '600 20px var(--font-display)', color: 'var(--ink)', margin: 0 }}>{monthLabel}</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button
             type="button"
             onClick={() => {
               setCursor(addMonths(cursor, -1))
               setSelectedDayKey(null)
             }}
-            className="w-9 h-9 inline-flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-white border border-white/10"
+            className="cal-mg-nav-btn"
             aria-label="Previous month"
           >
             ‹
@@ -70,7 +95,7 @@ export function CalendarMonthGrid({ events, brandColor }: Props) {
               setCursor(startOfMonth(new Date()))
               setSelectedDayKey(null)
             }}
-            className="px-3 h-9 inline-flex items-center rounded-lg bg-white/5 hover:bg-white/10 text-white text-xs border border-white/10"
+            className="cal-mg-nav-btn cal-mg-today"
           >
             Today
           </button>
@@ -80,7 +105,7 @@ export function CalendarMonthGrid({ events, brandColor }: Props) {
               setCursor(addMonths(cursor, 1))
               setSelectedDayKey(null)
             }}
-            className="w-9 h-9 inline-flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-white border border-white/10"
+            className="cal-mg-nav-btn"
             aria-label="Next month"
           >
             ›
@@ -88,13 +113,13 @@ export function CalendarMonthGrid({ events, brandColor }: Props) {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-white/10 overflow-hidden">
-        <div className="grid grid-cols-7 bg-white/[0.03] border-b border-white/10">
+      <div className="cal-mg-frame">
+        <div className="cal-mg-dow">
           {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d) => (
-            <div key={d} className="px-3 py-2 text-[11px] uppercase tracking-wider text-white/50 text-center">{d}</div>
+            <div key={d}>{d}</div>
           ))}
         </div>
-        <div className="grid grid-cols-7 auto-rows-[minmax(7.5rem,1fr)]">
+        <div className="cal-mg-grid">
           {grid.map((cell, i) => {
             const key = cell ? dayKey(cell) : `pad-${i}`
             const list = cell ? eventsByDay.get(key) || [] : []
@@ -108,42 +133,33 @@ export function CalendarMonthGrid({ events, brandColor }: Props) {
                 onClick={() => cell && list.length > 0 && setSelectedDayKey(isSelected ? null : key)}
                 disabled={!cell || list.length === 0}
                 className={[
-                  'relative text-left p-2 border-r border-b border-white/5 last:border-r-0 transition-colors',
-                  inMonth ? 'bg-transparent' : 'bg-white/[0.02] text-white/30',
-                  list.length > 0 ? 'hover:bg-white/[0.06] cursor-pointer' : 'cursor-default',
-                  isSelected ? 'bg-white/[0.08] ring-1 ring-inset ring-white/30' : '',
+                  'cal-mg-cell',
+                  inMonth ? '' : 'out',
+                  list.length > 0 ? 'has' : '',
+                  isSelected ? 'sel' : '',
                 ].join(' ')}
               >
                 {cell && (
                   <>
-                    <div className="flex items-center justify-between mb-1">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                       <span
-                        className={[
-                          'inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold',
-                          isToday ? 'text-black' : inMonth ? 'text-white' : 'text-white/30',
-                        ].join(' ')}
-                        style={isToday ? { backgroundColor: accent } : undefined}
+                        className={`cal-mg-daynum${inMonth ? '' : ' out'}`}
+                        style={isToday ? { backgroundColor: accent, color: '#000' } : undefined}
                       >
                         {cell.getDate()}
                       </span>
                       {list.length > 0 && (
-                        <span className="text-[10px] text-white/50">{list.length}</span>
+                        <span className="cal-mg-count">{list.length}</span>
                       )}
                     </div>
-                    <div className="space-y-1">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {list.slice(0, 2).map((ev) => (
-                        <div
-                          key={ev.event_id}
-                          className="truncate text-[11px] leading-tight px-2 py-1 rounded bg-white/10 text-white/90"
-                          title={ev.event_title}
-                        >
+                        <div key={ev.event_id} className="cal-mg-chip" title={ev.event_title}>
                           {ev.event_title}
                         </div>
                       ))}
                       {list.length > 2 && (
-                        <div className="text-[10px] text-white/50 px-1">
-                          +{list.length - 2} more
-                        </div>
+                        <div className="cal-mg-more">+{list.length - 2} more</div>
                       )}
                     </div>
                   </>
@@ -155,8 +171,8 @@ export function CalendarMonthGrid({ events, brandColor }: Props) {
       </div>
 
       {selectedEvents.length > 0 && (
-        <div className="mt-6 space-y-3">
-          <h4 className="text-white/70 text-sm">
+        <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <h4 style={{ color: 'var(--ink-3)', fontSize: 14, margin: 0 }}>
             {new Date(selectedDayKey + 'T00:00:00').toLocaleDateString(undefined, {
               weekday: 'long', month: 'long', day: 'numeric',
             })}
@@ -165,30 +181,29 @@ export function CalendarMonthGrid({ events, brandColor }: Props) {
             <Link
               key={ev.event_id}
               href={`/events/${ev.event_slug || ev.event_id}`}
-              className="flex items-center gap-4 p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20"
+              className="cal-mg-evrow"
             >
               {(ev.event_logo || ev.screenshot_url) ? (
                 <div
-                  className="w-14 h-14 rounded-lg flex-shrink-0 bg-cover bg-center"
-                  style={{ backgroundImage: `url(${ev.event_logo || ev.screenshot_url})` }}
+                  style={{ width: 56, height: 56, borderRadius: 11, flexShrink: 0, backgroundImage: `url(${ev.event_logo || ev.screenshot_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
                 />
               ) : (
                 <div
-                  className="w-14 h-14 rounded-lg flex-shrink-0"
                   style={{
+                    width: 56, height: 56, borderRadius: 11, flexShrink: 0,
                     background: ev.gradient_color_1
                       ? `linear-gradient(135deg, ${ev.gradient_color_1}, ${ev.gradient_color_2 || ev.gradient_color_1})`
-                      : 'linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02))',
+                      : 'rgba(var(--ui-text), 0.06)',
                   }}
                 />
               )}
-              <div className="min-w-0 flex-1">
-                <div className="text-white/60 text-xs">
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ color: 'var(--ink-4)', fontSize: 12 }}>
                   {ev.event_start ? new Date(ev.event_start).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : ''}
                 </div>
-                <div className="text-white text-sm font-medium truncate">{ev.event_title}</div>
+                <div style={{ color: 'var(--ink)', fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.event_title}</div>
                 {(ev.event_city || ev.event_country_code) && (
-                  <div className="text-white/50 text-xs truncate">
+                  <div style={{ color: 'var(--ink-3)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {[ev.event_city, ev.event_country_code].filter(Boolean).join(', ')}
                   </div>
                 )}
