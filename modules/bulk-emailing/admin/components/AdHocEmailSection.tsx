@@ -57,16 +57,29 @@ interface EmailBatchJob {
   event_id: string;
   email_type: string;
   subject_template: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'processing' | 'sending' | 'completed' | 'sent' | 'failed' | 'cancelled';
   total_recipients: number;
   processed_count: number;
   success_count: number;
   fail_count: number;
+  sent_count?: number;
+  failed_count?: number;
   errors: any[];
   created_at: string;
   updated_at: string;
   completed_at: string | null;
 }
+
+// Tier-1 (inline edge send) wrote processed_count/success_count/fail_count and
+// status processing→completed; Tier-2 (worker drip engine) writes
+// sent_count/failed_count and status sending→sent. These readers make the
+// progress UI agnostic to which tier delivered the job.
+const JOB_ACTIVE = ['pending', 'processing', 'sending'];
+const jobSent = (j: EmailBatchJob) => j.success_count || j.sent_count || 0;
+const jobFailed = (j: EmailBatchJob) => j.fail_count || j.failed_count || 0;
+const jobProcessed = (j: EmailBatchJob) => j.processed_count || (jobSent(j) + jobFailed(j));
+const jobDone = (s: string) => s === 'completed' || s === 'sent' || s === 'failed' || s === 'cancelled';
+const jobSucceeded = (s: string) => s === 'completed' || s === 'sent';
 
 interface EventDetails {
   event_title: string;
@@ -232,7 +245,7 @@ export function AdHocEmailSection({
         .select('*')
         .eq('event_id', eventId)
         .eq('email_type', 'adhoc_email')
-        .in('status', ['pending', 'processing'])
+        .in('status', JOB_ACTIVE)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -679,23 +692,23 @@ export function AdHocEmailSection({
       if (!job) return;
       setActiveJob(job);
 
-      if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+      if (jobDone(job.status)) {
         if (pollRef.current) clearInterval(pollRef.current);
         setSending(false);
 
-        if (job.status === 'completed') {
-          if (job.fail_count === 0) {
-            toast.success(`Email sent to ${job.success_count} recipient${job.success_count !== 1 ? 's' : ''}`);
+        if (jobSucceeded(job.status)) {
+          if (jobFailed(job) === 0) {
+            toast.success(`Email sent to ${jobSent(job)} recipient${jobSent(job) !== 1 ? 's' : ''}`);
           } else {
-            toast.warning(`Sent to ${job.success_count}, failed for ${job.fail_count}`);
+            toast.warning(`Sent to ${jobSent(job)}, failed for ${jobFailed(job)}`);
           }
         } else if (job.status === 'cancelled') {
-          toast.info(`Send cancelled. ${job.success_count} sent, ${job.total_recipients - job.processed_count} remaining.`);
+          toast.info(`Send cancelled. ${jobSent(job)} sent, ${job.total_recipients - jobProcessed(job)} remaining.`);
         } else {
           toast.error('Email send failed');
         }
 
-        if (job.success_count > 0 && templateId) {
+        if (jobSent(job) > 0 && templateId) {
           EmailTemplateService.incrementUsage(templateId).catch(console.error);
         }
       }
@@ -1109,25 +1122,25 @@ export function AdHocEmailSection({
 
             {/* Send Button / Progress */}
             <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50">
-              {activeJob && (activeJob.status === 'pending' || activeJob.status === 'processing') ? (
+              {activeJob && JOB_ACTIVE.includes(activeJob.status) ? (
                 <div className="space-y-3">
                   <div>
                     <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
-                      <span>Sending {activeJob.processed_count}/{activeJob.total_recipients}...</span>
-                      <span>{activeJob.total_recipients > 0 ? Math.round((activeJob.processed_count / activeJob.total_recipients) * 100) : 0}%</span>
+                      <span>Sending {jobProcessed(activeJob)}/{activeJob.total_recipients}...</span>
+                      <span>{activeJob.total_recipients > 0 ? Math.round((jobProcessed(activeJob) / activeJob.total_recipients) * 100) : 0}%</span>
                     </div>
                     <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
                       <div
                         className="bg-blue-600 h-2.5 rounded-full transition-all duration-500"
-                        style={{ width: `${activeJob.total_recipients > 0 ? (activeJob.processed_count / activeJob.total_recipients) * 100 : 0}%` }}
+                        style={{ width: `${activeJob.total_recipients > 0 ? (jobProcessed(activeJob) / activeJob.total_recipients) * 100 : 0}%` }}
                       />
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 text-xs">
-                      <span className="text-green-600 dark:text-green-400">{activeJob.success_count} sent</span>
-                      {activeJob.fail_count > 0 && (
-                        <span className="text-red-600 dark:text-red-400">{activeJob.fail_count} failed</span>
+                      <span className="text-green-600 dark:text-green-400">{jobSent(activeJob)} sent</span>
+                      {jobFailed(activeJob) > 0 && (
+                        <span className="text-red-600 dark:text-red-400">{jobFailed(activeJob)} failed</span>
                       )}
                     </div>
                     <Button
