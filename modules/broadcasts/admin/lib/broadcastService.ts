@@ -36,6 +36,8 @@ export interface Broadcast {
   segment_id: string | null;
   list_ids: string[];
   category_list_id: string | null;
+  /** Optional linked event (CFP / event promotion) — supplies {{event_*}} vars. */
+  event_id: string | null;
   subject: string | null;
   preheader: string | null;
   from_address: string | null;
