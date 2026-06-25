@@ -100,10 +100,14 @@ const URL_ATTRS = new Set(['src', 'href']);
  * single-line text fields. Lets admins use `<s>strike</s>`, `<em>`, `<strong>`
  * etc. in a title without enabling block elements or anything scriptable.
  *
+ * Strike variants (`strike`, `del`, `ins`) are aliased so admins can use the
+ * tag their muscle memory gives them — HTML4 `<strike>`, HTML5 `<del>`/`<ins>`,
+ * or the canonical `<s>`. The user-facing rendering is the same.
+ *
  * Voids (no closing tag): br. All other tags expect a matching close.
  */
 const INLINE_HTML_TAGS = new Set([
-  's', 'em', 'strong', 'u', 'b', 'i', 'span', 'mark', 'sub', 'sup', 'code', 'small', 'br',
+  's', 'strike', 'del', 'ins', 'em', 'strong', 'u', 'b', 'i', 'span', 'mark', 'sub', 'sup', 'code', 'small', 'br',
 ]);
 
 /**
@@ -230,9 +234,21 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   // of `<img onerror=...>` or `<script>...</script>` lands as empty text, not
   // executable HTML. Use only on text fields; richtext fields already have
   // their own (multi-line) path via <richtext field="...">.
+  //
+  // Editor escape hatch: in the Puck canvas the field value is the inline
+  // contentEditable React node, not a string. Stringifying that produces
+  // "[object Object]" in the heading. When we see a React node, fall back
+  // to rendering it as children (same as the text path does at line ~150) —
+  // the editor stays usable, and at publish time the value is a string and
+  // takes the dangerouslySetInnerHTML branch as intended.
   if (attrs['html'] !== undefined && attrs['html'] !== 'false') {
     const field = bindingKeyFromChildren(children);
     const value = field ? getPath(ctx.content, field) : undefined;
+    if (isValidElement(value)) {
+      return isIntrinsic
+        ? createElement(tag, props, value)
+        : createElement(Comp, props, value);
+    }
     const html = sanitiseInlineHtml(value == null ? '' : String(value));
     props.dangerouslySetInnerHTML = { __html: html };
     return isIntrinsic
