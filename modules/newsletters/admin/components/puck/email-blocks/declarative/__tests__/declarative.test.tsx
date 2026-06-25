@@ -213,24 +213,23 @@ describe('declarative block format', () => {
       expect(html).not.toContain('class=');
     });
 
-    it('extracts text from a Puck inline-editor React-node value (canvas preview)', async () => {
-      // In the canvas Puck swaps a text field's value for an inline
-      // contentEditable React node. The html-attribute path must unwrap
-      // that to get the underlying string so the canvas preview can show
-      // the sanitised formatted output (with strike applied), not the
-      // literal "<strike>...</strike>" tags. Trade-off: inline-edit on
-      // the canvas is disabled for html fields; sidebar edits still work.
+    it('renders Puck inline-editor React-node value as children (canvas keeps inline-edit)', async () => {
+      // The html-attribute path defers to the React node when present so
+      // Puck's contentEditable continues to host the inline editor in
+      // the canvas. Stringifying it would print "[object Object]" in the
+      // heading (2026-06-25 bug); an earlier attempt at text extraction
+      // produced empty `<h1></h1>` for plugin layouts whose .props.children
+      // didn't expose simple text — title disappeared entirely. The safe
+      // default keeps the editor visible; published render uses
+      // dangerouslySetInnerHTML via the string-value path below.
       const TEXT = `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading html>{{title}}</Heading></Section>`;
-      const editorNode = createElement('span', { 'data-inline-editor': 'on' }, 'before <strike>middle</strike> after');
+      const editorNode = createElement('span', { 'data-inline-editor': 'on' }, 'EDIT_ME');
       const entry = declarativeBlockEntry({ componentId: 'x', label: 'X', source: TEXT });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const html = await render(createElement(entry.Component as any, { title: editorNode }));
-      // Strike rendered, not literal angle brackets:
-      expect(html).toContain('<strike>middle</strike>');
-      expect(html).toContain('before ');
-      expect(html).toContain(' after');
+      expect(html).toContain('data-inline-editor');
+      expect(html).toContain('EDIT_ME');
       expect(html).not.toContain('[object Object]');
-      expect(html).not.toContain('&lt;strike');
     });
 
     it('without the html attribute the same source renders tags as literal text', async () => {

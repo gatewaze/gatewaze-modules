@@ -121,31 +121,6 @@ const INLINE_HTML_TAGS = new Set([
  * into the sent email. The richtext field type still owns the multi-line
  * formatting path; this is only for inline accents in single-line strings.
  */
-/**
- * Walk a value down to its text content — used by the `html` attribute path
- * to recover the underlying string when Puck has wrapped the field value in
- * an inline contentEditable React node. Without this the canvas preview
- * for an `html`-attribute field renders the literal `<strike>...</strike>`
- * characters (because Puck's contentEditable shows its raw children) instead
- * of the formatted strike output the operator expects.
- *
- * Recursion is shallow on purpose: Puck's contentEditable wrappers nest
- * once or twice, but extractTextFromNode walks the whole props.children
- * tree to be safe across plugin variants.
- */
-function extractTextFromNode(value: unknown): string {
-  if (value == null) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) return value.map(extractTextFromNode).join('');
-  if (isValidElement(value)) {
-    const props = (value as { props?: { children?: unknown } }).props;
-    if (props && 'children' in props) return extractTextFromNode(props.children);
-    return '';
-  }
-  return '';
-}
-
 function sanitiseInlineHtml(html: string): string {
   if (!html) return html;
   return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)(?:\s[^>]*)?>/g, (_match, rawTag) => {
@@ -301,17 +276,27 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   // their own (multi-line) path via <richtext field="...">.
   //
   // In the Puck canvas the field value is the inline contentEditable React
-  // node, not a string — extractTextFromNode walks down to the underlying
-  // text so we can still produce sanitised HTML for the canvas preview.
-  // The trade-off: inline-edit on the canvas is disabled for `html` fields
-  // (the sidebar input remains the edit surface). Without this the canvas
-  // showed the literal "<strike>...</strike>" tags as text instead of the
-  // formatted output the operator was expecting.
+  // node, not a string. We can't reliably extract text from every Puck
+  // editor shape (varies by Puck version + plugin layout), so for the
+  // editor we render the node as children — this keeps inline-edit alive
+  // and shows the operator the literal text they typed (which includes the
+  // `<strike>` tags as characters; the published email gets the formatted
+  // output via the dangerouslySetInnerHTML branch below).
+  //
+  // Trade-off: the canvas preview shows raw input not formatted output.
+  // An earlier attempt at extractTextFromNode produced empty `<h1></h1>`
+  // when Puck's contentEditable didn't expose a simple .props.children
+  // tree — the title disappeared from the canvas entirely. Showing the
+  // raw editor + working publish render is the safer default.
   if (attrs['html'] !== undefined && attrs['html'] !== 'false') {
     const field = bindingKeyFromChildren(children);
     const value = field ? getPath(ctx.content, field) : undefined;
-    const text = extractTextFromNode(value);
-    const html = sanitiseInlineHtml(text);
+    if (isValidElement(value)) {
+      return isIntrinsic
+        ? createElement(tag, props, value)
+        : createElement(Comp, props, value);
+    }
+    const html = sanitiseInlineHtml(value == null ? '' : String(value));
     props.dangerouslySetInnerHTML = { __html: html };
     return isIntrinsic
       ? createElement(tag, props)
