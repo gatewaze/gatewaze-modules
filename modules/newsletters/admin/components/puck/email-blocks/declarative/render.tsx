@@ -121,6 +121,31 @@ const INLINE_HTML_TAGS = new Set([
  * into the sent email. The richtext field type still owns the multi-line
  * formatting path; this is only for inline accents in single-line strings.
  */
+/**
+ * Walk a value down to its text content — used by the `html` attribute path
+ * to recover the underlying string when Puck has wrapped the field value in
+ * an inline contentEditable React node. Without this the canvas preview
+ * for an `html`-attribute field renders the literal `<strike>...</strike>`
+ * characters (because Puck's contentEditable shows its raw children) instead
+ * of the formatted strike output the operator expects.
+ *
+ * Recursion is shallow on purpose: Puck's contentEditable wrappers nest
+ * once or twice, but extractTextFromNode walks the whole props.children
+ * tree to be safe across plugin variants.
+ */
+function extractTextFromNode(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(extractTextFromNode).join('');
+  if (isValidElement(value)) {
+    const props = (value as { props?: { children?: unknown } }).props;
+    if (props && 'children' in props) return extractTextFromNode(props.children);
+    return '';
+  }
+  return '';
+}
+
 function sanitiseInlineHtml(html: string): string {
   if (!html) return html;
   return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)(?:\s[^>]*)?>/g, (_match, rawTag) => {
@@ -192,9 +217,49 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   // <slot name="x" /> — render the slot field's value (the bricks). Defaults
   // to the `children` field (the convention entryHasSlot looks for). Uses
   // renderSlot so it works for both the live Puck DropZone and the export tree.
+  //
+  // Optional `<separator>` child element renders BETWEEN slot items (not
+  // before the first, not after the last). Lets the parent template
+  // emit a divider/spacer between bricks without each brick having to
+  // know it isn't the first — the CSS `.brick + .brick` selector approach
+  // gets stripped by Gmail's email-cleanup, so an inline-rendered
+  // separator is the email-safe alternative.
+  //
+  //   <slot name="children">
+  //     <separator><Hr style="border-top:1px solid #bbb;margin:16px 0" /></separator>
+  //   </slot>
+  //
+  // Only takes effect when the slot resolves to an ARRAY of items (the
+  // common publish-time + tree-walker case). When Puck hands a live
+  // SlotComponent function (canvas), the separator is a no-op — Puck
+  // owns the DropZone rendering and we can't intersperse from outside.
+  // Acceptable: operators see the dividers in the published send and the
+  // test send (both array path); canvas preview shows none.
   if (tag === 'slot') {
     const name = attrs['name'] ?? 'children';
-    return <Fragment key={key}>{renderSlot(ctx.content[name])}</Fragment>;
+    const slotValue = ctx.content[name];
+    const separatorNode = children.find(
+      (c) => c.kind === 'element' && c.tag === 'separator',
+    ) as Extract<TemplateNode, { kind: 'element' }> | undefined;
+    if (separatorNode && Array.isArray(slotValue) && slotValue.length > 1) {
+      const renderedItems = renderSlot(slotValue);
+      if (Array.isArray(renderedItems)) {
+        const sep = (
+          <Fragment>
+            {separatorNode.children.map((c, i) =>
+              renderNode(c, ctx, `${key}-sep-${i}`),
+            )}
+          </Fragment>
+        );
+        const interleaved: ReactNode[] = [];
+        renderedItems.forEach((item, i) => {
+          if (i > 0) interleaved.push(<Fragment key={`${key}-sep-${i}`}>{sep}</Fragment>);
+          interleaved.push(<Fragment key={`${key}-item-${i}`}>{item as ReactNode}</Fragment>);
+        });
+        return <Fragment key={key}>{interleaved}</Fragment>;
+      }
+    }
+    return <Fragment key={key}>{renderSlot(slotValue)}</Fragment>;
   }
 
   // <richtext field="x" class="y" /> or <richtext>{{x}}</richtext>
@@ -235,21 +300,18 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   // executable HTML. Use only on text fields; richtext fields already have
   // their own (multi-line) path via <richtext field="...">.
   //
-  // Editor escape hatch: in the Puck canvas the field value is the inline
-  // contentEditable React node, not a string. Stringifying that produces
-  // "[object Object]" in the heading. When we see a React node, fall back
-  // to rendering it as children (same as the text path does at line ~150) —
-  // the editor stays usable, and at publish time the value is a string and
-  // takes the dangerouslySetInnerHTML branch as intended.
+  // In the Puck canvas the field value is the inline contentEditable React
+  // node, not a string — extractTextFromNode walks down to the underlying
+  // text so we can still produce sanitised HTML for the canvas preview.
+  // The trade-off: inline-edit on the canvas is disabled for `html` fields
+  // (the sidebar input remains the edit surface). Without this the canvas
+  // showed the literal "<strike>...</strike>" tags as text instead of the
+  // formatted output the operator was expecting.
   if (attrs['html'] !== undefined && attrs['html'] !== 'false') {
     const field = bindingKeyFromChildren(children);
     const value = field ? getPath(ctx.content, field) : undefined;
-    if (isValidElement(value)) {
-      return isIntrinsic
-        ? createElement(tag, props, value)
-        : createElement(Comp, props, value);
-    }
-    const html = sanitiseInlineHtml(value == null ? '' : String(value));
+    const text = extractTextFromNode(value);
+    const html = sanitiseInlineHtml(text);
     props.dangerouslySetInnerHTML = { __html: html };
     return isIntrinsic
       ? createElement(tag, props)

@@ -213,20 +213,24 @@ describe('declarative block format', () => {
       expect(html).not.toContain('class=');
     });
 
-    it('passes a React-node binding through (Puck inline editor — no [object Object])', async () => {
-      // In the canvas Puck swaps a contentEditable field's string for a live
-      // editor node. The html-attribute path must defer to that node like
-      // the text path does — String()-ing it produces "[object Object]"
-      // in the heading, which is the exact bug a user hit on 2026-06-25
-      // after switching a Generic title to `html`.
+    it('extracts text from a Puck inline-editor React-node value (canvas preview)', async () => {
+      // In the canvas Puck swaps a text field's value for an inline
+      // contentEditable React node. The html-attribute path must unwrap
+      // that to get the underlying string so the canvas preview can show
+      // the sanitised formatted output (with strike applied), not the
+      // literal "<strike>...</strike>" tags. Trade-off: inline-edit on
+      // the canvas is disabled for html fields; sidebar edits still work.
       const TEXT = `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading html>{{title}}</Heading></Section>`;
-      const editorNode = createElement('span', { 'data-inline-editor': 'on' }, 'EDIT_ME');
+      const editorNode = createElement('span', { 'data-inline-editor': 'on' }, 'before <strike>middle</strike> after');
       const entry = declarativeBlockEntry({ componentId: 'x', label: 'X', source: TEXT });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const html = await render(createElement(entry.Component as any, { title: editorNode }));
-      expect(html).toContain('data-inline-editor');
-      expect(html).toContain('EDIT_ME');
+      // Strike rendered, not literal angle brackets:
+      expect(html).toContain('<strike>middle</strike>');
+      expect(html).toContain('before ');
+      expect(html).toContain(' after');
       expect(html).not.toContain('[object Object]');
+      expect(html).not.toContain('&lt;strike');
     });
 
     it('without the html attribute the same source renders tags as literal text', async () => {
