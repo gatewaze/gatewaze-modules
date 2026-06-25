@@ -240,6 +240,12 @@ const newslettersModule: GatewazeModule = {
     // not appear in the public archive. Paired with EmailOnlyIntro.tsx
     // (admin component) + the portal filter in [edition].tsx.
     'migrations/058_email_only_intro_block_def.sql',
+    // 059 attaches statement_timeout=10min to the fanout fn via
+    // ALTER FUNCTION ... SET. The earlier `SET LOCAL` inside the body
+    // doesn't extend the timer for the outer PostgREST call, so 50k+
+    // lists trip the role-level timeout before the body completes.
+    // Surfaced on AAIF MLOps Community (55,437 subs) 2026-06-25.
+    'migrations/059_fanout_set_statement_timeout_proconfig.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
