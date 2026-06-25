@@ -26,6 +26,10 @@ import type { EmailBlockEntry, EmailBlockRegistry } from './registry-types.js';
 import { NewsletterPaddingSliderField } from './number-slider-field-adapter.js';
 import { RichtextImage } from './richtext-image.js';
 import { RichtextMenu } from './richtext-menu.js';
+// TextStyle is the host mark; Color extends it with a color attribute.
+// Required to wire the color picker button in RichtextMenu.
+import { TextStyle } from '@tiptap/extension-text-style';
+import { Color } from '@tiptap/extension-color';
 import { wrapWithSpacing } from './spacing-wrapper.js';
 import { resolveCustomField } from '../../../../../sites/admin/components/canvas/puck/fields/index.js';
 import type { CustomFormat } from '../../../../../sites/admin/components/canvas/puck/json-schema-to-puck-fields.js';
@@ -212,7 +216,7 @@ function applyRichtextDefaults(fields: Record<string, Field>): Record<string, Fi
         // editable tiptap editor inline, exactly like the single-line fields.
         contentEditable: true,
         options: { ...existing, link: { openOnClick: false, ...existingLink } },
-        tiptap: { ...tiptap, extensions: [RICHTEXT_IMAGE, ...(tiptap?.extensions ?? [])] },
+        tiptap: { ...tiptap, extensions: [RICHTEXT_IMAGE, TextStyle, Color, ...(tiptap?.extensions ?? [])] },
         renderMenu: (props: MenuRenderProps) => <RichtextMenu {...props} />,
         renderInlineMenu: (props: MenuRenderProps) => <RichtextMenu {...props} />,
       } as Field;

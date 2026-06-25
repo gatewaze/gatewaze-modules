@@ -14,7 +14,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Editor } from '@tiptap/react';
-import { CodeBracketIcon, LinkIcon, PhotoIcon, UserIcon } from '@heroicons/react/24/outline';
+import { CodeBracketIcon, LinkIcon, PaintBrushIcon, PhotoIcon, UserIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { uploadHostMedia } from '@gatewaze-modules/host-media/admin';
 import { useNewsletterEditing } from '../NewsletterEditingContext.js';
@@ -51,6 +51,21 @@ const BTN_STYLE: React.CSSProperties = {
 };
 
 const ACTIVE_BG = 'rgba(64,134,198,0.18)';
+
+// Colour palette offered by the text-colour picker. A small curated set keeps
+// the popover compact + on-brand; operators can also use the "Clear" entry to
+// remove an applied colour (returns to inherited text color). HEX values are
+// inline-friendly — every email client supports `color: #xxxxxx` on a <span>.
+const TEXT_COLORS: Array<{ value: string; label: string }> = [
+  { value: '#000000', label: 'Black' },
+  { value: '#555555', label: 'Grey' },
+  { value: '#4086c6', label: 'Brand blue' },
+  { value: '#16a34a', label: 'Green' },
+  { value: '#d97706', label: 'Amber' },
+  { value: '#dc2626', label: 'Red' },
+  { value: '#7c3aed', label: 'Purple' },
+  { value: '#0891b2', label: 'Teal' },
+];
 const DIVIDER_STYLE: React.CSSProperties = {
   width: 1, alignSelf: 'stretch', background: 'currentColor', opacity: 0.18, margin: '2px 4px',
 };
@@ -83,6 +98,7 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
   const fileRef = useRef<HTMLInputElement>(null);
   const { collectionId } = useNewsletterEditing();
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
   const [htmlValue, setHtmlValue] = useState<string | null>(null); // non-null = source view open
 
   if (!editor || readOnly) return children;
@@ -297,6 +313,57 @@ export function RichtextMenu({ children, editor, readOnly }: MenuProps): ReactNo
               Optional fallback if blank:<br />
               <code>{'{{first_name|"there"}}'}</code>
             </div>
+          </div>
+        )}
+      </span>
+      <span style={{ position: 'relative', display: 'inline-flex' }}>
+        <button
+          type="button"
+          onClick={() => setColorOpen((o) => !o)}
+          title="Text colour"
+          aria-label="Text colour"
+          style={{
+            ...BTN_STYLE,
+            background: editor.isActive('textStyle') ? 'rgba(64,134,198,0.18)' : (colorOpen ? 'rgba(64,134,198,0.18)' : 'transparent'),
+          }}
+        >
+          <PaintBrushIcon style={{ width: 16, height: 16 }} />
+        </button>
+        {colorOpen && (
+          <div
+            style={{
+              position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 50,
+              background: '#ffffff', color: '#1f2937',
+              border: '1px solid #e5e7eb', borderRadius: 6,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.12)', padding: 6,
+            }}
+          >
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 24px)', gap: 6 }}>
+              {TEXT_COLORS.map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  onClick={() => { editor.chain().focus().setColor(c.value).run(); setColorOpen(false); }}
+                  title={c.label}
+                  aria-label={`Apply ${c.label}`}
+                  style={{
+                    width: 24, height: 24, border: '1px solid rgba(0,0,0,0.1)',
+                    borderRadius: 4, background: c.value, cursor: 'pointer', padding: 0,
+                  }}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => { editor.chain().focus().unsetColor().run(); setColorOpen(false); }}
+              style={{
+                marginTop: 6, width: '100%', textAlign: 'left', border: 'none',
+                background: 'transparent', cursor: 'pointer', borderRadius: 4,
+                padding: '6px 8px', fontSize: 12, color: '#6b7280',
+              }}
+            >
+              Clear colour
+            </button>
           </div>
         )}
       </span>
