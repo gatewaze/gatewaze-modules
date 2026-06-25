@@ -89,6 +89,13 @@ function resolveBindings(text: string, content: Content): string {
  */
 function safeUrlEncode(s: string): string {
   if (!s) return s;
+  // Mustache tokens like `{{unsubscribe_url}}` are SendGrid per-recipient
+  // substitution placeholders. encodeURI mangles `{`/`}` to `%7B`/`%7D`,
+  // so SendGrid no longer matches the literal token, the link ships as
+  // `%7B%7Bunsubscribe_url%7D%7D` and points at a dead URL. Skip encoding
+  // for any href that carries a mustache token — author is responsible for
+  // the surrounding URL parts being safe.
+  if (/\{\{[^}]+\}\}/.test(s)) return s;
   if (/%[0-9A-Fa-f]{2}/.test(s)) return s;
   try { return encodeURI(s); } catch { return s; }
 }
