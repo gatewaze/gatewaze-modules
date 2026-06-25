@@ -246,6 +246,12 @@ const newslettersModule: GatewazeModule = {
     // lists trip the role-level timeout before the body completes.
     // Surfaced on AAIF MLOps Community (55,437 subs) 2026-06-25.
     'migrations/059_fanout_set_statement_timeout_proconfig.sql',
+    // 060 raises the engagement RPC's per-function statement_timeout
+    // from 25s to 5min. Surfaced on AAIF/MLOps when a 55k send landed
+    // and the multi-CTE aggregate cold-cache run tripped 25s. Cache /
+    // snapshot pattern is the longer-term answer; this just stops the
+    // stats tab from 500'ing.
+    'migrations/060_engagement_rpc_timeout_to_5min.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
