@@ -222,6 +222,28 @@ export default function NewsletterEditionPage({ params }: { params: { collection
         .nl-edition-render { max-width: 100%; }
         .nl-edition-render table { max-width: 100% !important; }
         .nl-edition-render img { max-width: 100% !important; height: auto !important; }
+
+        /* CSS isolation for the inlined email render.
+         *
+         * The portal's global stylesheet collapses paragraph margins, resets
+         * heading sizes, swaps the brand font in, and overrides line-height
+         * — none of which match the email the recipient actually got. The
+         * email itself ships email-safe inline styles inside a react-email
+         * table layout; \`all: revert\` on every descendant inside the inner
+         * container drops the portal cascade entirely so those inline styles
+         * (and the browser's UA defaults for p / h1-h6 / li / blockquote /
+         * etc.) take over. Result: the View Online page renders the same
+         * spacing, font sizes, and typography as the sent email — without
+         * iframes.
+         *
+         * The two .nl-edition-render-inner img/table rules are re-added
+         * AFTER the reset because they're responsive-fitting overrides that
+         * the email's inline styles don't include.
+         */
+        .nl-edition-render-inner,
+        .nl-edition-render-inner * { all: revert; }
+        .nl-edition-render-inner table { max-width: 100% !important; }
+        .nl-edition-render-inner img { max-width: 100% !important; height: auto !important; }
       `}</style>
       <div className="pub-article-grid">
         {/* Left: the real edition, rendered with the declarative renderer so it
@@ -234,6 +256,7 @@ export default function NewsletterEditionPage({ params }: { params: { collection
           {edition.preheader && <p className="pub-byline" style={{ marginTop: 0 }}>{edition.preheader}</p>}
 
           <div className="nl-edition-render" style={{ background: '#fff', borderRadius: 14, overflow: 'hidden', padding: '12px 16px', marginTop: 20 }}>
+            <div className="nl-edition-render-inner">
             {edition.blocks
               // Email-only blocks (block_type starting with `email_only_`)
               // render in the sent email but are filtered out of the public
@@ -279,6 +302,7 @@ export default function NewsletterEditionPage({ params }: { params: { collection
                 }
                 return <DeclarativeBlock key={block.id} nodes={nodes} content={content} />
               })}
+            </div>
           </div>
         </article>
 
