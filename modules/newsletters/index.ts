@@ -58,6 +58,14 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletters:list-hygiene',
       handler: './workers/list-hygiene.ts',
     },
+    {
+      // Caches expensive per-edition stats RPCs (engagement, block_effectiveness)
+      // for editions stable >NEWSLETTERS_SNAPSHOT_MIN_AGE_DAYS (default 30).
+      // The wrappers in migration 061 read snapshots transparently, so the
+      // stats page loads in O(N_snapshot_lookups) instead of O(N_send_logs).
+      name: 'newsletters:edition-snapshot',
+      handler: './workers/edition-snapshot.ts',
+    },
   ],
 
   crons: [
@@ -252,6 +260,12 @@ const newslettersModule: GatewazeModule = {
     // snapshot pattern is the longer-term answer; this just stops the
     // stats tab from 500'ing.
     'migrations/060_engagement_rpc_timeout_to_5min.sql',
+    // 061 stands up a per-edition snapshot cache for the heavy stats RPCs
+    // (engagement, block_effectiveness). Existing RPCs get renamed to *_live
+    // and re-wrapped with snapshot-aware versions that merge cached + live
+    // rows per edition. Worker `newsletters:edition-snapshot` populates
+    // snapshots for editions stable >30 days.
+    'migrations/061_edition_stats_snapshots.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
