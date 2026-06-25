@@ -55,7 +55,11 @@ function resolveEngine(override: NewsletterCanvasEngine | undefined): Newsletter
   const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
   const fromEnv = env.VITE_NEWSLETTERS_CANVAS_ENGINE_DEFAULT;
   if (fromEnv === 'legacy' || fromEnv === 'puck') return fromEnv;
-  return 'legacy';
+  // Default 'puck' so CI-prebuilt admin bundles (which lack the per-brand
+  // VITE_* env at build time) still ship the Puck editor. Legacy
+  // EditionCanvas is slated for removal; this default + the per-edition
+  // `engine` prop override are the only paths back.
+  return 'puck';
 }
 
 export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) => {
