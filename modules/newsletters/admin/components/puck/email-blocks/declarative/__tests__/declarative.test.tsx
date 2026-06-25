@@ -175,6 +175,20 @@ describe('declarative block format', () => {
       expect(html).toContain('price');
     });
 
+    it('aliases <strike>, <del>, <ins> alongside <s> (admin muscle-memory)', async () => {
+      // The user typed <strike>multiple</strike> agents — pre-alias the strike
+      // got dropped and the title rendered as plain text. Now all three keep
+      // their tag.
+      for (const tag of ['strike', 'del', 'ins'] as const) {
+        const html = await renderEntry(
+          `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading if="title" html>{{title}}</Heading></Section>`,
+          { title: `keep <${tag}>x</${tag}> end` },
+        );
+        expect(html).toContain(`<${tag}>x</${tag}>`);
+        expect(html).toContain('end');
+      }
+    });
+
     it('strips non-allowlisted tags but keeps text', async () => {
       const html = await renderEntry(
         `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading if="title" html>{{title}}</Heading></Section>`,
@@ -197,6 +211,22 @@ describe('declarative block format', () => {
       expect(html).toContain('<em>x</em>');
       expect(html).not.toContain('onclick');
       expect(html).not.toContain('class=');
+    });
+
+    it('passes a React-node binding through (Puck inline editor — no [object Object])', async () => {
+      // In the canvas Puck swaps a contentEditable field's string for a live
+      // editor node. The html-attribute path must defer to that node like
+      // the text path does — String()-ing it produces "[object Object]"
+      // in the heading, which is the exact bug a user hit on 2026-06-25
+      // after switching a Generic title to `html`.
+      const TEXT = `<!-- SCHEMA: { "title": {"type":"text"} } --><Section><Heading html>{{title}}</Heading></Section>`;
+      const editorNode = createElement('span', { 'data-inline-editor': 'on' }, 'EDIT_ME');
+      const entry = declarativeBlockEntry({ componentId: 'x', label: 'X', source: TEXT });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const html = await render(createElement(entry.Component as any, { title: editorNode }));
+      expect(html).toContain('data-inline-editor');
+      expect(html).toContain('EDIT_ME');
+      expect(html).not.toContain('[object Object]');
     });
 
     it('without the html attribute the same source renders tags as literal text', async () => {
