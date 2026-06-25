@@ -38,6 +38,15 @@ export function normalizeRichText(html: unknown): string {
     )
     // Bare paragraphs (TipTap emits `text-align: left;` with no margin).
     .replace(/<p style="text-align:\s*left;?">/gi, '<p style="margin:0 0 12px 0;text-align:left">')
+    // Inline links: anchor tags from the WYSIWYG editor have no inline
+    // colour, so they inherit text-colour and end up wherever the email
+    // client's default <a> rendering puts them (a brighter / different
+    // blue, sometimes bold-looking). Operators expect ALL links to match
+    // the brand-blue `class="link"` style used on the template's explicit
+    // <Link href> elements (e.g. "Read the blog"). Inject the same colour
+    // + underline if no inline style is present. Skip anchors that already
+    // declare a `style=` so operator-set overrides win.
+    .replace(/<a(?![^>]*\sstyle=)\b([^>]*)>/gi, '<a style="color:#4086c6;text-decoration:underline"$1>')
     // Images: constrain to the email column and apply the toolbar's optional
     // alignment (data-align) + width (data-width, % of column). `max-width:100%`
     // caps a wide image to the container even if it carries a larger fixed
