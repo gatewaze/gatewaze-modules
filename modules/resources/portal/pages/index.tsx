@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import Link from 'next/link'
+import { SafeImg } from '../components/SafeImg'
 
 interface Collection {
   id: string
@@ -113,11 +114,10 @@ export default async function ResourcesListingPage() {
             const cover = (
               <div className="pub-cover">
                 {collection.cover_image_url && (
-                  <img
+                  <SafeImg
                     src={collection.cover_image_url}
                     alt={collection.name}
                     style={isGated ? { filter: 'blur(4px)', opacity: 0.5 } : undefined}
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
                   />
                 )}
               </div>

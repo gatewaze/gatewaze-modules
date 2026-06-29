@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
+import { SafeImg } from '../../components/SafeImg'
 
 interface Collection {
   id: string
@@ -166,7 +167,10 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
         .res-search { width: 100%; height: 38px; padding: 0 12px; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); color: var(--ink); font-size: 14px; box-sizing: border-box; }
         .res-search::placeholder { color: var(--ink-4); }
         .res-cat-side { position: sticky; top: 96px; }
-        @media (max-width: 760px) { .res-grid { grid-template-columns: 1fr; gap: 24px; } .res-cat-side { position: static; } }
+        /* Items grid: 2-up on desktop, full-width on mobile (the inline 2-col
+           style used to override .pub-grid's mobile 1-col rule). */
+        .res-items { grid-template-columns: repeat(2, 1fr); }
+        @media (max-width: 760px) { .res-grid { grid-template-columns: 1fr; gap: 24px; } .res-cat-side { position: static; } .res-items { grid-template-columns: 1fr; } }
       `}</style>
 
       <div className="pub-h">
@@ -217,12 +221,12 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
                   <section key={cat.id}>
                     <h2 style={{ font: '600 22px var(--font-display)', color: 'var(--ink)', letterSpacing: '-0.01em', margin: '0 0 4px' }}>{cat.name}</h2>
                     {cat.description && <p style={{ color: 'var(--ink-3)', fontSize: 14, margin: '0 0 14px' }}>{cat.description}</p>}
-                    <div className="pub-grid" style={{ marginTop: cat.description ? 0 : 14, gridTemplateColumns: 'repeat(2, 1fr)' }}>
+                    <div className="pub-grid res-items" style={{ marginTop: cat.description ? 0 : 14 }}>
                       {(itemsByCategory.get(cat.id) || []).map((item) => (
                         <Link key={item.id} href={`/resources/${collection.slug}/${item.slug}`} className="pub-card">
                           <div className="pub-cover">
                             {item.featured_image_url && (
-                              <img src={item.featured_image_url} alt={item.title} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                              <SafeImg src={item.featured_image_url} alt={item.title} />
                             )}
                           </div>
                           <div className="pub-card-body">

@@ -3,6 +3,7 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
+import { SafeImg } from '../../components/SafeImg'
 
 interface ItemData {
   id: string
@@ -230,11 +231,10 @@ export default async function ItemDetailPage({ params }: Props) {
 
           {item.featured_image_url && (
             <div style={{ aspectRatio: '16 / 9', overflow: 'hidden', borderRadius: 14, marginBottom: 24 }}>
-              <img
+              <SafeImg
                 src={item.featured_image_url}
                 alt={item.title}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
               />
             </div>
           )}
