@@ -13,7 +13,7 @@ VALUES (
   'e7e70000-0000-0000-0000-000000000001',
   'event-updates',
   'Event Updates',
-  'Updates and announcements about events (e.g. reminders, schedule changes, follow-ups). Sent from the Comms tab of an event.',
+  'Updates and announcements about events (e.g. reminders, schedule changes, follow-ups).',
   true,
   true,
   false
