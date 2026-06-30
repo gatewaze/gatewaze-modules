@@ -22,7 +22,7 @@ const contentPlatformModule: GatewazeModule = {
   workers: [
     {
       name: 'content-platform:verdict-handler',
-      handler: './worker/verdict-handler.js',
+      handler: './workers/verdict-handler.js',
       concurrency: 1,
     },
   ],
