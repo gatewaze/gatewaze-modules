@@ -6,6 +6,37 @@ import Link from 'next/link'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slug'
 import { NewsletterSignup } from '../components/NewsletterSignup'
+// When the onboarding module is installed + enabled it registers the
+// 'newsletters:signup' slot (the email→chat morph). Importing ModuleSlot runs
+// the generated slot registrations as a side-effect.
+import { ModuleSlot, hasPortalSlot } from '@/lib/modules/ModuleSlot'
+
+// Render the onboarding morph when the slot is registered AND its required
+// feature is satisfied, otherwise the plain signup form. Using the same id +
+// feature sets in the decision and in <ModuleSlot> keeps them in agreement, so
+// ModuleSlot can never filter the component out and return null (which would
+// blank the field). The morph degrades to a plain subscribe via onFallbackSubscribe.
+const ONB_IDS = new Set(['onboarding'])
+function NewsletterSignupSurface({ collectionSlug }: { collectionSlug: string }) {
+  let useMorph = false
+  try { useMorph = hasPortalSlot('newsletters:signup', ONB_IDS, ONB_IDS) } catch { useMorph = false }
+  if (!useMorph) return <NewsletterSignup collectionSlug={collectionSlug} />
+  const fallbackSubscribe = async (email: string) => {
+    try {
+      const sb = getSupabaseClient()
+      await sb.functions.invoke('newsletter-signup', { body: { email, collection: collectionSlug } })
+    } catch { /* best-effort */ }
+  }
+  return (
+    <ModuleSlot
+      name="newsletters:signup"
+      enabledModuleIds={['onboarding']}
+      enabledFeatures={['onboarding']}
+      props={{ collectionSlug, onFallbackSubscribe: fallbackSubscribe }}
+      fallback={<NewsletterSignup collectionSlug={collectionSlug} />}
+    />
+  )
+}
 
 const RECENT_LIMIT = 6
 
@@ -133,7 +164,7 @@ export default function NewsletterListingPage() {
                   {newsletter.require_login ? (
                     <p className="pub-nl-note">Subscribers only — sign in to read.</p>
                   ) : (
-                    <NewsletterSignup collectionSlug={newsletter.slug} />
+                    <NewsletterSignupSurface collectionSlug={newsletter.slug} />
                   )}
                 </div>
               </div>
