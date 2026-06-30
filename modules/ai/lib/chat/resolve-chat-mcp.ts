@@ -37,6 +37,19 @@ export async function resolveChatMcpExtensions(
     warnings.push(...webBridge.warnings);
   }
 
+  // Wiki memory bridge: attach the gatewaze-wiki MCP so chat use cases get the
+  // same durable, searchable cross-turn memory as recipe runs (wiki_search/
+  // read/upsert/list). Same auto-attach machinery as run-recipe-goose.
+  // spec-ai-memory-wiki.md §5.1.
+  {
+    const { resolveWikiAttach } = await import('../wiki/runtime-attach.js');
+    const wikiBridge = await resolveWikiAttach(supabase as never, useCaseId);
+    flags.push(...wikiBridge.flags);
+    Object.assign(env, wikiBridge.env);
+    loadedNames.push(...wikiBridge.loadedNames);
+    warnings.push(...wikiBridge.warnings);
+  }
+
   // Load the full allowlist + joined server config in one query.
   const res = await supabase
     .from('ai_use_case_mcp_allowlist')
