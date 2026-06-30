@@ -271,6 +271,15 @@ const newslettersModule: GatewazeModule = {
     // tracking-rebuild schema and silently 500'd on the Stats > Blocks
     // panel for every install whose table no longer carried the column.
     'migrations/062_poll_results_drop_link_type_ref.sql',
+    // 063 extends the migration-061 snapshot cache to the geo RPCs
+    // (geo_engagement, local_time_engagement, block_geo,
+    // engagement_timeline) + poll_results. Each existing RPC gets
+    // renamed to *_live and replaced by a snapshot-aware wrapper that
+    // checks the snapshot table first and lazily populates a snapshot
+    // when called for a stable edition. newsletter_refresh_edition_snapshots
+    // is extended to pre-warm the common geo combos
+    // (country-level, open/click metrics).
+    'migrations/063_geo_rpcs_snapshot_wrappers.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
