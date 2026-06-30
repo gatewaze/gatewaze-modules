@@ -479,6 +479,16 @@ export async function createFullRegistration(
       registration_id: newRegistration.id,
     })
 
+    // Onboarding (spec-onboarding-module.md §3.2): email a profile-completion
+    // deep-link that opens the onboarding chat knowing who + which event. Gated
+    // by env so it stays inert unless the onboarding module is configured.
+    // Fire-and-forget; never blocks registration.
+    if (Deno.env.get('ONBOARDING_LUMA_INVITE_ENABLED') === 'true') {
+      supabase.functions.invoke('onboarding-luma-invite', {
+        body: { email, event_id: event.eventId, person_id: person.id },
+      }).catch(() => {})
+    }
+
     return {
       success: true,
       personId: person.id,
