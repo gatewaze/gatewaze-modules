@@ -1,8 +1,9 @@
 // @ts-nocheck — portal deps are resolved at build time via webpack alias
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
+import { convert } from 'html-to-text'
 import { SafeImg } from '../../components/SafeImg'
 
 interface ItemData {
@@ -81,7 +82,7 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
   const { data: item } = await supabase
     .from('sr_items')
     .select(`
-      id, title, slug, subtitle, external_url, featured_image_url,
+      id, title, slug, subtitle, external_url, featured_image_url, updated_at, created_at,
       category:sr_categories(id, name, slug),
       sections:sr_sections(id, heading, content, sort_order)
     `)
@@ -166,6 +167,54 @@ export default async function ItemDetailPage({ params }: Props) {
 
   const { collection, item, prevItem, nextItem, categories, articles } = data
 
+  // Absolute base for this brand — the serving host IS the canonical domain
+  // (including custom domains), so JSON-LD @id/url values resolve correctly
+  // per-tenant without hard-coding a domain.
+  const reqHeaders = await headers()
+  const host = reqHeaders.get('x-forwarded-host') || reqHeaders.get('host') || ''
+  const proto = reqHeaders.get('x-forwarded-proto') || 'https'
+  const base = host ? `${proto}://${host}` : ''
+  const pageUrl = `${base}/resources/${collection.slug}/${item.slug}`
+
+  // Full article body as clean text (drop links/images here — the rendered page
+  // and the /md endpoint keep them; JSON-LD articleBody wants plain prose).
+  const articleBody = item.sections
+    .map((s) => [s.heading, s.content ? convert(s.content, { wordwrap: false, selectors: [{ selector: 'a', options: { ignoreHref: true } }, { selector: 'img', format: 'skip' }] }) : '']
+      .filter(Boolean).join('\n'))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+
+  const crumbs = [
+    { name: 'Resources', url: `${base}/resources` },
+    { name: collection.name, url: `${base}/resources/${collection.slug}` },
+    ...(item.category ? [{ name: item.category.name, url: `${base}/resources/${collection.slug}?category=${item.category.slug}` }] : []),
+    { name: item.title, url: pageUrl },
+  ]
+
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'Article',
+        '@id': `${pageUrl}#article`,
+        headline: item.title,
+        ...(item.subtitle ? { description: item.subtitle } : {}),
+        ...(item.featured_image_url ? { image: item.featured_image_url } : {}),
+        ...(articleBody ? { articleBody } : {}),
+        ...(item.created_at ? { datePublished: item.created_at } : {}),
+        ...(item.updated_at ? { dateModified: item.updated_at } : {}),
+        mainEntityOfPage: pageUrl,
+        isPartOf: { '@type': 'Collection', name: collection.name, url: `${base}/resources/${collection.slug}` },
+        ...(item.external_url ? { sameAs: item.external_url } : {}),
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: crumbs.map((c, i) => ({ '@type': 'ListItem', position: i + 1, name: c.name, item: c.url })),
+      },
+    ],
+  }
+
   // Group articles under their category for the sidebar nav
   const articlesByCategory = new Map<string, NavArticle[]>()
   for (const a of articles) {
@@ -178,6 +227,7 @@ export default async function ItemDetailPage({ params }: Props) {
 
   return (
     <div className="pub-article-wrap pub-fade">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <style>{`
         .res-article-grid { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 44px; align-items: start; }
         .res-nav-link { display: block; text-decoration: none; padding: 5px 9px; border-radius: 8px; font-size: 13.5px; color: var(--ink-3); transition: background .15s ease, color .15s ease; }
