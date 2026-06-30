@@ -1,7 +1,9 @@
 // @ts-nocheck — portal deps are resolved at build time via webpack alias
 import { createClient } from '@supabase/supabase-js'
+import { headers } from 'next/headers'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
+import { convert } from 'html-to-text'
 
 interface BlogPost {
   id: string
@@ -12,7 +14,9 @@ interface BlogPost {
   featured_image: string | null
   featured_image_alt: string | null
   published_at: string | null
+  updated_at: string | null
   reading_time: number | null
+  word_count: number | null
   category: {
     name: string
     slug: string
@@ -34,7 +38,7 @@ async function getBlogPost(slug: string): Promise<BlogPost | null> {
     .from('blog_posts')
     .select(`
       id, title, slug, excerpt, content, featured_image, featured_image_alt,
-      published_at, reading_time,
+      published_at, updated_at, reading_time, word_count,
       category:blog_categories(name, slug, color),
       blog_post_tags(tag:blog_tags(name, slug))
     `)
@@ -77,10 +81,48 @@ export default async function BlogDetailPage({ params }: Props) {
   const post = await getBlogPost(slug)
   if (!post) notFound()
 
+  // Absolute base from the serving host (per-tenant canonical, incl. custom domains).
+  const reqHeaders = await headers()
+  const host = reqHeaders.get('x-forwarded-host') || reqHeaders.get('host') || ''
+  const proto = reqHeaders.get('x-forwarded-proto') || 'https'
+  const base = host ? `${proto}://${host}` : ''
+  const pageUrl = `${base}/blog/${post.slug}`
+  const articleBody = post.content
+    ? convert(post.content, { wordwrap: false, selectors: [{ selector: 'a', options: { ignoreHref: true } }, { selector: 'img', format: 'skip' }] }).trim()
+    : ''
+
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'BlogPosting',
+        '@id': `${pageUrl}#post`,
+        headline: post.title,
+        ...(post.excerpt ? { description: post.excerpt } : {}),
+        ...(post.featured_image ? { image: post.featured_image } : {}),
+        ...(articleBody ? { articleBody } : {}),
+        ...(post.published_at ? { datePublished: post.published_at } : {}),
+        ...(post.updated_at ? { dateModified: post.updated_at } : {}),
+        ...(post.word_count ? { wordCount: post.word_count } : {}),
+        ...(post.category?.name ? { articleSection: post.category.name } : {}),
+        ...(post.tags.length ? { keywords: post.tags.map((t) => t.name).join(', ') } : {}),
+        mainEntityOfPage: pageUrl,
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: 'Blog', item: `${base}/blog` },
+          { '@type': 'ListItem', position: 2, name: post.title, item: pageUrl },
+        ],
+      },
+    ],
+  }
+
   // White-label: portal workspace-shell `pub-*` article layout (two-column body + sticky sidebar),
   // token-driven so it inverts per brand UI mode. Renders inside the shell content area.
   return (
     <div className="pub-article-wrap pub-fade">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <div className="pub-article-grid">
         <article className="pub-article-main">
           <h1>{post.title}</h1>

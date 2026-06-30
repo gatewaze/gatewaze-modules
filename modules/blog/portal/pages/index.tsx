@@ -1,5 +1,6 @@
 // @ts-nocheck — portal deps are resolved at build time via webpack alias
 import { createClient } from '@supabase/supabase-js'
+import { headers } from 'next/headers'
 import Link from 'next/link'
 
 interface BlogPost {
@@ -61,10 +62,41 @@ function formatDate(dateStr: string | null): string {
 export default async function BlogListingPage() {
   const posts = await getBlogPosts()
 
+  const reqHeaders = await headers()
+  const host = reqHeaders.get('x-forwarded-host') || reqHeaders.get('host') || ''
+  const proto = reqHeaders.get('x-forwarded-proto') || 'https'
+  const base = host ? `${proto}://${host}` : ''
+  const blogUrl = `${base}/blog`
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'Blog',
+        '@id': `${blogUrl}#blog`,
+        url: blogUrl,
+        mainEntity: {
+          '@type': 'ItemList',
+          numberOfItems: posts.length,
+          itemListElement: posts.map((p, i) => ({
+            '@type': 'ListItem',
+            position: i + 1,
+            url: `${blogUrl}/${p.slug}`,
+            name: p.title,
+          })),
+        },
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [{ '@type': 'ListItem', position: 1, name: 'Blog', item: blogUrl }],
+      },
+    ],
+  }
+
   // White-label: uses the portal workspace-shell `pub-*` design system (token-driven, inverts per
   // brand UI mode) instead of hard-coded white-on-dark. Renders inside the shell content area.
   return (
     <div className="pub-wrap pub-fade">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <div className="pub-h">
         <h1>Blog</h1>
         <p>Field notes, updates and stories from the community.</p>
