@@ -25,7 +25,7 @@
  * already supports free-form messages.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ArrowPathIcon,
   SparklesIcon,
@@ -47,14 +47,30 @@ import {
 } from '../utils/aiService';
 
 export interface AiChatModelTabsProps
-  extends Omit<AiChatWidgetProps, 'threadKey' | 'modelPicker'> {
+  extends Omit<AiChatWidgetProps, 'threadKey' | 'modelPicker' | 'renderAssistantTurn'> {
   /**
-   * Hard-coded list of models to open as tabs on mount. Each must be a
-   * model id (e.g. 'claude-sonnet-4-5'). If omitted, the wrapper opens
-   * a single tab for `defaultModel` and exposes the model picker to
-   * add more.
+   * Hard-coded list of tab keys to open on mount. Each is normally a
+   * model id (e.g. 'claude-sonnet-4-5') used as both the tab's thread
+   * key and its chat model. A key can also be a synthetic id (e.g.
+   * 'editor') when paired with `tabModels` — letting two tabs run the
+   * SAME model under distinct thread keys. If omitted, the wrapper opens
+   * a single tab for `defaultModel` and exposes the model picker.
    */
   initialModels?: string[];
+  /**
+   * Map a tab key → the real model id used for chat + provider routing.
+   * Defaults to the tab key itself. Use when a tab key is synthetic
+   * (e.g. {'editor': 'claude-sonnet-5'}).
+   */
+  tabModels?: Record<string, string>;
+  /** Display label per tab key (overrides the catalog label). */
+  tabLabels?: Record<string, string>;
+  /**
+   * Render an assistant turn. Receives the tab key as the 2nd argument
+   * so a host can branch per-tab (not just per-model) — needed when two
+   * tabs share one model. Return null to fall back to the default bubble.
+   */
+  renderAssistantTurn?: (message: AiMessage, tabId: string) => ReactNode;
   /**
    * Notified whenever the set of open tabs changes (add, close,
    * reorder). Hosts use this to fan their own actions out across the
@@ -74,6 +90,20 @@ export interface AiChatModelTabsProps
    * When unset, the wrapper falls back to the generic postMessage path.
    */
   customKickoff?: (models: string[]) => Promise<void>;
+  /**
+   * Label for the primary kickoff button. Defaults to 'Run research'
+   * (daily-briefing's original). Set per host — e.g. 'Brief co-pilot'.
+   */
+  kickoffLabel?: string;
+  /** Model ids whose tabs are read-only (composer hidden) — display only. */
+  readOnlyModels?: string[];
+  /**
+   * Show the per-tab "run the bound recipe on this model" button (the
+   * outlined "Run on <model>" that posts a research-task message). Only
+   * meaningful for recipe-backed use cases; turn OFF for plain chat use
+   * cases (no bound recipe) where that message is nonsense. Default true.
+   */
+  showPerTabRun?: boolean;
 }
 
 interface TabState {
@@ -88,11 +118,19 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
     defaultProvider = 'anthropic',
     defaultModel,
     initialModels,
+    tabModels = {},
+    tabLabels = {},
     onOpenTabsChange,
     customKickoff,
+    kickoffLabel = 'Run research',
+    showPerTabRun = true,
+    readOnlyModels = [],
     renderAssistantTurn,
     onAssistantMessage,
   } = props;
+
+  /** The real model id a tab key chats with (defaults to the key). */
+  const modelForTab = (tabId: string): string => tabModels[tabId] ?? tabId;
 
   const [models, setModels] = useState<AiModelInfo[]>([]);
   const [useCaseRow, setUseCaseRow] = useState<AiUseCase | null>(null);
@@ -238,9 +276,11 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
       ? 'Start.'
       : '';
 
-  function modelLabel(modelId: string): string {
-    const info = models.find((m) => m.model === modelId);
-    return info?.label || info?.model || modelId;
+  function modelLabel(tabId: string): string {
+    if (tabLabels[tabId]) return tabLabels[tabId];
+    const real = modelForTab(tabId);
+    const info = models.find((m) => m.model === real);
+    return info?.label || info?.model || real;
   }
 
   function addTab(modelId: string) {
@@ -391,7 +431,7 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
                   "Run on Haiku" is redundant with "Run research"
                   (the latter already kicks off the parent recipe
                   whose first sub-recipe pass is haiku-equivalent). */}
-              {activeTabId && openTabs.length > 1 && (
+              {activeTabId && openTabs.length > 1 && showPerTabRun && (
                 <button
                   type="button"
                   onClick={() => void runResearchOnActiveTab()}
@@ -423,7 +463,7 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
                 ) : (
                   <SparklesIcon className="size-3 mr-1" />
                 )}
-                Run research
+                {kickoffLabel}
               </button>
             </>
           ) : (
@@ -459,18 +499,21 @@ export default function AiChatModelTabs(props: AiChatModelTabsProps) {
                 useCase={useCase}
                 hostKind={hostKind}
                 hostId={hostId}
+                // Thread key is the TAB key (may be synthetic, e.g.
+                // 'editor'); the chat model is the real model the tab
+                // runs. This lets two tabs share one model under
+                // distinct threads.
                 threadKey={tab.modelId}
-                // Infer provider per-tab from the model id. Each tab
-                // pins a specific model (Claude Haiku, Claude Sonnet,
-                // GPT-5, ...); the provider follows the model. Using a
-                // shared defaultProvider here sent the GPT-5 tab's
-                // chat turns to Anthropic, which 404'd on model=gpt-5.
-                defaultProvider={inferProviderFromModelId(tab.modelId) ?? defaultProvider}
-                defaultModel={tab.modelId}
+                // Infer provider from the real model id; a shared
+                // defaultProvider would send the GPT-5 tab's chat turns
+                // to Anthropic, which 404'd on model=gpt-5.
+                defaultProvider={inferProviderFromModelId(modelForTab(tab.modelId)) ?? defaultProvider}
+                defaultModel={modelForTab(tab.modelId)}
                 modelPicker={false}
                 embedded
-                renderAssistantTurn={renderAssistantTurn}
+                renderAssistantTurn={renderAssistantTurn ? (msg) => renderAssistantTurn(msg, tab.modelId) : undefined}
                 onAssistantMessage={onAssistantMessage}
+                readOnly={readOnlyModels.includes(tab.modelId)}
                 recipeOverride={recipeOverrideByTab[tab.modelId] ?? null}
                 onRecipeOverrideChange={(path) =>
                   setRecipeOverrideByTab((prev) => ({ ...prev, [tab.modelId]: path }))
