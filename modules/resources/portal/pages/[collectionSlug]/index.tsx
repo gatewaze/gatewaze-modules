@@ -1,6 +1,6 @@
 // @ts-nocheck — portal deps are resolved at build time via webpack alias
 import { createClient } from '@supabase/supabase-js'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
@@ -131,6 +131,45 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
   }
 
   const { collection, categories, items } = data
+
+  // Absolute base for this brand (serving host = canonical domain, incl. custom
+  // domains). Drives JSON-LD url/@id values without hard-coding a domain.
+  const reqHeaders = await headers()
+  const host = reqHeaders.get('x-forwarded-host') || reqHeaders.get('host') || ''
+  const proto = reqHeaders.get('x-forwarded-proto') || 'https'
+  const base = host ? `${proto}://${host}` : ''
+  const collectionUrl = `${base}/resources/${collection.slug}`
+
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'CollectionPage',
+        '@id': `${collectionUrl}#collection`,
+        name: collection.name,
+        ...(collection.description ? { description: collection.description } : {}),
+        url: collectionUrl,
+        mainEntity: {
+          '@type': 'ItemList',
+          numberOfItems: items.length,
+          itemListElement: items.map((it, i) => ({
+            '@type': 'ListItem',
+            position: i + 1,
+            url: `${collectionUrl}/${it.slug}`,
+            name: it.title,
+          })),
+        },
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: 'Resources', item: `${base}/resources` },
+          { '@type': 'ListItem', position: 2, name: collection.name, item: collectionUrl },
+        ],
+      },
+    ],
+  }
+
   const activeCategory = searchParams.category || ''
   const searchQuery = searchParams.q || ''
 
@@ -159,6 +198,7 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
 
   return (
     <div className="pub-wrap pub-fade">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <style>{`
         .res-grid { display: grid; grid-template-columns: 240px minmax(0,1fr); gap: 40px; align-items: start; margin-top: 24px; }
         .res-nav-link { display: block; text-decoration: none; padding: 6px 10px; border-radius: 8px; font-size: 14px; color: var(--ink-3); transition: background .15s ease, color .15s ease; }
