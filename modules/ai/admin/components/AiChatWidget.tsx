@@ -86,6 +86,12 @@ export interface AiChatWidgetProps {
    */
   recipeOverride?: string | null;
   onRecipeOverrideChange?: (path: string | null) => void;
+  /**
+   * Hide the composer — the thread becomes a read-only transcript. Used for
+   * tabs that only display content posted by another process (e.g.
+   * lunch-and-learn's per-model draft tabs).
+   */
+  readOnly?: boolean;
 }
 
 export default function AiChatWidget(props: AiChatWidgetProps) {
@@ -102,6 +108,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
     embedded = false,
     recipeOverride = null,
     onRecipeOverrideChange,
+    readOnly = false,
   } = props;
 
   const [thread, setThread] = useState<AiThread | null>(null);
@@ -604,8 +611,11 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                   ))}
                 </div>
               ) : null;
+              // Let the host render ANY assistant turn (not only structured
+              // ones) — it returns null to fall back to the default bubble.
+              // Hosts that render Markdown/HTML need this for plain-text turns.
               const structuredJsx =
-                m.role === 'assistant' && m.structured && renderAssistantTurn
+                m.role === 'assistant' && renderAssistantTurn
                   ? renderAssistantTurn(m)
                   : null;
               if (structuredJsx) {
@@ -690,18 +700,24 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
             ))}
           </div>
 
-          <ComposerPrimitive.Root className={composerClass}>
-            <ComposerPrimitive.Input
-              placeholder={isRunning ? 'Working… (your message will queue)' : 'Type a message…'}
-              className="form-input flex-1 text-sm"
-            />
-            <ComposerPrimitive.Send
-              className="inline-flex items-center px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm disabled:opacity-50"
-            >
-              <PaperAirplaneIcon className="size-4 mr-1" />
-              {isRunning ? 'Queue' : 'Send'}
-            </ComposerPrimitive.Send>
-          </ComposerPrimitive.Root>
+          {readOnly ? (
+            <div className="px-3 py-2 text-xs text-neutral-400 border-t">
+              Read-only — this tab shows the model's drafts from the generation run.
+            </div>
+          ) : (
+            <ComposerPrimitive.Root className={composerClass}>
+              <ComposerPrimitive.Input
+                placeholder={isRunning ? 'Working… (your message will queue)' : 'Type a message…'}
+                className="form-input flex-1 text-sm"
+              />
+              <ComposerPrimitive.Send
+                className="inline-flex items-center px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm disabled:opacity-50"
+              >
+                <PaperAirplaneIcon className="size-4 mr-1" />
+                {isRunning ? 'Queue' : 'Send'}
+              </ComposerPrimitive.Send>
+            </ComposerPrimitive.Root>
+          )}
         </div>
       </div>
     </AssistantRuntimeProvider>

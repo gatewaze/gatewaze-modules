@@ -617,7 +617,7 @@ export async function runRecipeViaGoose(
       for (const u of perCallUsage) {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await recordUsage(supabase as any, {
+          const ev = await recordUsage(supabase as any, {
             userId: args.userId,
             useCase: args.useCase,
             threadId: null,
@@ -633,6 +633,9 @@ export async function runRecipeViaGoose(
             status: failureReason ? 'error' : 'ok',
             error: failureReason ?? null,
           });
+          // Accumulate the run total — recordUsage computes cost from the
+          // price book; the goose `complete` event doesn't give it to us.
+          totalCost += ev.costMicroUsd ?? 0;
         } catch {
           // best-effort; cost ledger isn't critical for run completion
         }
@@ -643,7 +646,7 @@ export async function runRecipeViaGoose(
       // off the complete event so spend isn't dropped entirely.
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await recordUsage(supabase as any, {
+        const ev = await recordUsage(supabase as any, {
           userId: args.userId,
           useCase: args.useCase,
           threadId: null,
@@ -657,6 +660,7 @@ export async function runRecipeViaGoose(
           status: failureReason ? 'error' : 'ok',
           error: failureReason ?? null,
         });
+        totalCost += ev.costMicroUsd ?? 0;
       } catch {
         // best-effort; cost ledger isn't critical for run completion
       }
@@ -678,7 +682,7 @@ export async function runRecipeViaGoose(
     for (const call of mcpToolCalls) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await recordUsage(supabase as any, {
+        const ev = await recordUsage(supabase as any, {
           userId: args.userId,
           useCase: args.useCase,
           threadId: null,
@@ -692,6 +696,7 @@ export async function runRecipeViaGoose(
           status: 'ok',
           error: null,
         });
+        totalCost += ev.costMicroUsd ?? 0;
       } catch {
         // best-effort
       }
@@ -1282,6 +1287,13 @@ async function resolveMcpExtensions(
     { forceAttach: args.forceWebToolsBridge ?? false },
   );
 
+  // Wiki memory bridge: attach the gatewaze-wiki stdio MCP for every agentic
+  // run so the model can read + write its durable, searchable cross-turn
+  // knowledge (wiki_search/read/upsert/list). Auto-attached like web-tools —
+  // independent of the recipe's declared extensions + the MCP allowlist —
+  // gated by the use case's wiki_enabled flag (default on). §5.1.
+  const wikiResolve = await resolveWikiExtension(supabase, args.useCaseId);
+
   // 1. Recipe-declared extension names. Recipes that declare nothing
   //    still get the web-tools bridge if allowed_web_tools is non-empty;
   //    otherwise (no web tools either) the load is empty.
@@ -1292,7 +1304,12 @@ async function resolveMcpExtensions(
   ));
 
   if (declaredNames.length === 0) {
-    return webToolsResolve;
+    return {
+      flags: [...webToolsResolve.flags, ...wikiResolve.flags],
+      env: { ...webToolsResolve.env, ...wikiResolve.env },
+      warnings: [...webToolsResolve.warnings, ...wikiResolve.warnings],
+      loadedNames: [...webToolsResolve.loadedNames, ...wikiResolve.loadedNames],
+    };
   }
 
   // 2. Use-case allowlist.
@@ -1446,10 +1463,10 @@ async function resolveMcpExtensions(
   // declares an MCP server AND the use case has allowed_web_tools both
   // load. Order matters only for stable warning ordering.
   return {
-    flags: [...webToolsResolve.flags, ...flags],
-    env: { ...webToolsResolve.env, ...env },
-    warnings: [...webToolsResolve.warnings, ...warnings],
-    loadedNames: [...webToolsResolve.loadedNames, ...loadedNames],
+    flags: [...webToolsResolve.flags, ...wikiResolve.flags, ...flags],
+    env: { ...webToolsResolve.env, ...wikiResolve.env, ...env },
+    warnings: [...webToolsResolve.warnings, ...wikiResolve.warnings, ...warnings],
+    loadedNames: [...webToolsResolve.loadedNames, ...wikiResolve.loadedNames, ...loadedNames],
   };
 }
 
@@ -1620,6 +1637,90 @@ async function resolveGatewazeGooseLauncherPath(): Promise<string> {
     if (existsSync(c)) return c;
   }
   throw new Error(`gatewaze-goose-launcher script not found. Tried: ${candidates.join(', ')}. Set GATEWAZE_GOOSE_LAUNCHER_PATH to override.`);
+}
+
+/**
+ * Attach the gatewaze-wiki stdio MCP (wiki_search/read/upsert/list +
+ * read_source/list_sources) so an agentic run can use its durable wiki
+ * memory. Auto-attached for every run whose use case has wiki_enabled
+ * (default true) — independent of declared extensions + the MCP allowlist,
+ * mirroring resolveWebToolsExtension. spec-ai-memory-wiki.md §5.1.
+ *
+ * The MCP calls the AI module's /internal/wiki/* routes, so it needs the
+ * internal API base. GATEWAZE_USE_CASE + SUPABASE_SERVICE_ROLE_KEY are
+ * inherited from the Goose spawn env (the launcher merges process.env); we
+ * inject only GATEWAZE_API_URL via the descriptor. A global
+ * WIKI_RUNTIME_DISABLED=1 kill-switch and a missing internal-API-base both
+ * fall through to a no-op (the run continues without wiki tools).
+ */
+async function resolveWikiExtension(
+  supabase: SupabaseClient,
+  useCaseId: string,
+): Promise<McpResolveResult> {
+  const empty: McpResolveResult = { flags: [], env: {}, warnings: [], loadedNames: [] };
+  if (process.env.WIKI_RUNTIME_DISABLED === '1') return empty;
+
+  // Per-use-case opt-out: wiki_enabled defaults to true. If the column does
+  // not exist yet (pre-toggle migration) the select errors → data null →
+  // we keep the default-on behaviour.
+  try {
+    const res = await supabase
+      .from('ai_use_cases')
+      .select('wiki_enabled')
+      .eq('id', useCaseId)
+      .maybeSingle();
+    const row = (res.data as { wiki_enabled?: boolean } | null) ?? null;
+    if (row && row.wiki_enabled === false) return empty;
+  } catch {
+    // default-on
+  }
+
+  const apiBase = process.env.GATEWAZE_INTERNAL_API_URL || process.env.GATEWAZE_API_URL;
+  if (!apiBase) {
+    return {
+      flags: [],
+      env: {},
+      warnings: [{ code: 'wiki_no_api_base', server: 'gatewaze-wiki', details: 'Set GATEWAZE_INTERNAL_API_URL so the wiki MCP can reach /api/modules/ai/internal/wiki/*.' }],
+      loadedNames: [],
+    };
+  }
+
+  const launcherPath = await resolveGatewazeGooseLauncherPath();
+  const scriptPath = await resolveGatewazeWikiMcpPath();
+  const descriptorEnvName = 'GATEWAZE_MCP_LAUNCH_DESCRIPTOR_GATEWAZE_WIKI';
+  const env: Record<string, string> = {
+    [descriptorEnvName]: JSON.stringify({
+      cmd: 'node',
+      args: [scriptPath],
+      env: { GATEWAZE_API_URL: apiBase },
+    }),
+  };
+  return {
+    flags: ['--with-extension', `node ${launcherPath} ${descriptorEnvName}`],
+    env,
+    warnings: [],
+    loadedNames: ['gatewaze-wiki'],
+  };
+}
+
+/** Locate scripts/gatewaze-wiki-mcp.mjs — same fallback walk as the memory MCP. */
+async function resolveGatewazeWikiMcpPath(): Promise<string> {
+  const envPath = process.env.GATEWAZE_WIKI_MCP_PATH;
+  if (envPath) return envPath;
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, resolve } = await import('node:path');
+  const { existsSync } = await import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath((globalThis as any).import?.meta?.url ?? `file://${process.cwd()}/`));
+  const candidates = [
+    resolve(here, '..', '..', 'scripts', 'gatewaze-wiki-mcp.mjs'),
+    resolve(here, '..', '..', '..', 'scripts', 'gatewaze-wiki-mcp.mjs'),
+    '/usr/local/bin/gatewaze-wiki-mcp',
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  throw new Error(`gatewaze-wiki-mcp script not found. Tried: ${candidates.join(', ')}. Set GATEWAZE_WIKI_MCP_PATH to override.`);
 }
 
 async function resolveGatewazeMemoryMcpPath(): Promise<string> {
