@@ -266,6 +266,11 @@ const newslettersModule: GatewazeModule = {
     // rows per edition. Worker `newsletters:edition-snapshot` populates
     // snapshots for editions stable >30 days.
     'migrations/061_edition_stats_snapshots.sql',
+    // 062 drops the legacy `link_type` column reference from
+    // newsletter_poll_results. 053 was authored against the pre-link-
+    // tracking-rebuild schema and silently 500'd on the Stats > Blocks
+    // panel for every install whose table no longer carried the column.
+    'migrations/062_poll_results_drop_link_type_ref.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
