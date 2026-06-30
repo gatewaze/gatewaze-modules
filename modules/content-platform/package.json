@@ -9,7 +9,7 @@
     ".": "./index.ts",
     "./admin/*": "./admin/*",
     "./migrations/*": "./migrations/*",
-    "./worker/*": "./worker/*"
+    "./workers/*": "./workers/*"
   },
   "scripts": {
     "build": "tsc",
