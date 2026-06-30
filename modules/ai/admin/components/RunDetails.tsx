@@ -47,7 +47,9 @@ export default function RunDetails({ message }: Props): JSX.Element | null {
   if (!message.prompt_source && !message.model) return null;
 
   const ps = message.prompt_source;
-  const kind = ps?.system_prompt.kind ?? 'empty';
+  // A snapshot may be partial (e.g. a synthetic message that only records
+  // use_case) — guard every nested access, don't assume the full shape.
+  const kind = ps?.system_prompt?.kind ?? 'empty';
   const chipColor = KIND_COLORS[kind];
   const chipLabel = KIND_LABELS[kind];
 
@@ -74,7 +76,7 @@ export default function RunDetails({ message }: Props): JSX.Element | null {
           <Row label="Tokens (in / out)" value={`${message.input_tokens} / ${message.output_tokens}`} />
           <Row label="Cost (micro-USD)" value={String(message.cost_micro_usd)} />
           <Row label="Latency (ms)" value={String(message.latency_ms)} />
-          {ps && (
+          {ps?.system_prompt && (
             <>
               <hr className="border-neutral-200" />
               <Row label="System prompt source" value={KIND_LABELS[ps.system_prompt.kind]} />
@@ -102,14 +104,16 @@ export default function RunDetails({ message }: Props): JSX.Element | null {
                   <Row label="Recipe commit" value={shortHash(ps.system_prompt.recipe.last_commit_sha)} />
                 </>
               )}
-              <Row
-                label="Kickoff message"
-                value={
-                  ps.kickoff_message.kind === 'empty'
-                    ? 'none'
-                    : `${ps.kickoff_message.kind} (${ps.kickoff_message.char_count} chars)`
-                }
-              />
+              {ps.kickoff_message && (
+                <Row
+                  label="Kickoff message"
+                  value={
+                    ps.kickoff_message.kind === 'empty'
+                      ? 'none'
+                      : `${ps.kickoff_message.kind} (${ps.kickoff_message.char_count} chars)`
+                  }
+                />
+              )}
             </>
           )}
         </div>
