@@ -112,11 +112,20 @@ export function extractTrackableLinks(blocks: ReadonlyArray<LinkSourceBlock>): L
   const occ: LinkOccurrence[] = [];
   const sortedBlocks = [...blocks].sort((a, b) => a.sort_order - b.sort_order);
   for (const block of sortedBlocks) {
-    walkContent(block.content ?? {}, '', { occ, fieldCount: new Map(), block, brickId: null });
+    // ONE fieldCount per block, shared across the block's own content and ALL
+    // its bricks. The registry's UNIQUE key is (block_id, field, link_index)
+    // — when multiple bricks of the same brick_type sit in one block (e.g.
+    // three podcast bricks in mlops_community), giving each brick its own
+    // fieldCount restarts link_index at 0 and produces colliding tuples. The
+    // batch upsert then dies with "ON CONFLICT DO UPDATE command cannot
+    // affect row a second time", the catch in syncEditionLinkRegistry
+    // swallows it, and the registry never gets populated.
+    const fieldCount = new Map<string, number>();
+    walkContent(block.content ?? {}, '', { occ, fieldCount, block, brickId: null });
     const bricks = [...(block.bricks ?? [])].sort((a, b) => a.sort_order - b.sort_order);
     for (const brick of bricks) {
       walkContent(brick.content ?? {}, `brick:${brick.brick_type}`, {
-        occ, fieldCount: new Map(), block, brickId: brick.id,
+        occ, fieldCount, block, brickId: brick.id,
       });
     }
   }
