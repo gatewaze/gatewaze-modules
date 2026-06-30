@@ -46,6 +46,7 @@ import type { Readable } from 'node:stream';
 
 import { dump as yamlDump } from 'js-yaml';
 import { recordUsage } from '../cost.js';
+import { resolveWikiAttach } from '../wiki/runtime-attach.js';
 import type { ParsedRecipe } from './parse-recipe.js';
 import type { RunnerContext } from '../runner.js';
 
@@ -1292,7 +1293,7 @@ async function resolveMcpExtensions(
   // knowledge (wiki_search/read/upsert/list). Auto-attached like web-tools —
   // independent of the recipe's declared extensions + the MCP allowlist —
   // gated by the use case's wiki_enabled flag (default on). §5.1.
-  const wikiResolve = await resolveWikiExtension(supabase, args.useCaseId);
+  const wikiResolve = await resolveWikiAttach(supabase, args.useCaseId);
 
   // 1. Recipe-declared extension names. Recipes that declare nothing
   //    still get the web-tools bridge if allowed_web_tools is non-empty;
@@ -1637,90 +1638,6 @@ async function resolveGatewazeGooseLauncherPath(): Promise<string> {
     if (existsSync(c)) return c;
   }
   throw new Error(`gatewaze-goose-launcher script not found. Tried: ${candidates.join(', ')}. Set GATEWAZE_GOOSE_LAUNCHER_PATH to override.`);
-}
-
-/**
- * Attach the gatewaze-wiki stdio MCP (wiki_search/read/upsert/list +
- * read_source/list_sources) so an agentic run can use its durable wiki
- * memory. Auto-attached for every run whose use case has wiki_enabled
- * (default true) — independent of declared extensions + the MCP allowlist,
- * mirroring resolveWebToolsExtension. spec-ai-memory-wiki.md §5.1.
- *
- * The MCP calls the AI module's /internal/wiki/* routes, so it needs the
- * internal API base. GATEWAZE_USE_CASE + SUPABASE_SERVICE_ROLE_KEY are
- * inherited from the Goose spawn env (the launcher merges process.env); we
- * inject only GATEWAZE_API_URL via the descriptor. A global
- * WIKI_RUNTIME_DISABLED=1 kill-switch and a missing internal-API-base both
- * fall through to a no-op (the run continues without wiki tools).
- */
-async function resolveWikiExtension(
-  supabase: SupabaseClient,
-  useCaseId: string,
-): Promise<McpResolveResult> {
-  const empty: McpResolveResult = { flags: [], env: {}, warnings: [], loadedNames: [] };
-  if (process.env.WIKI_RUNTIME_DISABLED === '1') return empty;
-
-  // Per-use-case opt-out: wiki_enabled defaults to true. If the column does
-  // not exist yet (pre-toggle migration) the select errors → data null →
-  // we keep the default-on behaviour.
-  try {
-    const res = await supabase
-      .from('ai_use_cases')
-      .select('wiki_enabled')
-      .eq('id', useCaseId)
-      .maybeSingle();
-    const row = (res.data as { wiki_enabled?: boolean } | null) ?? null;
-    if (row && row.wiki_enabled === false) return empty;
-  } catch {
-    // default-on
-  }
-
-  const apiBase = process.env.GATEWAZE_INTERNAL_API_URL || process.env.GATEWAZE_API_URL;
-  if (!apiBase) {
-    return {
-      flags: [],
-      env: {},
-      warnings: [{ code: 'wiki_no_api_base', server: 'gatewaze-wiki', details: 'Set GATEWAZE_INTERNAL_API_URL so the wiki MCP can reach /api/modules/ai/internal/wiki/*.' }],
-      loadedNames: [],
-    };
-  }
-
-  const launcherPath = await resolveGatewazeGooseLauncherPath();
-  const scriptPath = await resolveGatewazeWikiMcpPath();
-  const descriptorEnvName = 'GATEWAZE_MCP_LAUNCH_DESCRIPTOR_GATEWAZE_WIKI';
-  const env: Record<string, string> = {
-    [descriptorEnvName]: JSON.stringify({
-      cmd: 'node',
-      args: [scriptPath],
-      env: { GATEWAZE_API_URL: apiBase },
-    }),
-  };
-  return {
-    flags: ['--with-extension', `node ${launcherPath} ${descriptorEnvName}`],
-    env,
-    warnings: [],
-    loadedNames: ['gatewaze-wiki'],
-  };
-}
-
-/** Locate scripts/gatewaze-wiki-mcp.mjs — same fallback walk as the memory MCP. */
-async function resolveGatewazeWikiMcpPath(): Promise<string> {
-  const envPath = process.env.GATEWAZE_WIKI_MCP_PATH;
-  if (envPath) return envPath;
-  const { fileURLToPath } = await import('node:url');
-  const { dirname, resolve } = await import('node:path');
-  const { existsSync } = await import('node:fs');
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath((globalThis as any).import?.meta?.url ?? `file://${process.cwd()}/`));
-  const candidates = [
-    resolve(here, '..', '..', 'scripts', 'gatewaze-wiki-mcp.mjs'),
-    resolve(here, '..', '..', '..', 'scripts', 'gatewaze-wiki-mcp.mjs'),
-    '/usr/local/bin/gatewaze-wiki-mcp',
-  ];
-  for (const c of candidates) {
-    if (existsSync(c)) return c;
-  }
-  throw new Error(`gatewaze-wiki-mcp script not found. Tried: ${candidates.join(', ')}. Set GATEWAZE_WIKI_MCP_PATH to override.`);
 }
 
 async function resolveGatewazeMemoryMcpPath(): Promise<string> {

@@ -83,6 +83,8 @@ const aiModule: GatewazeModule = {
     // Split editor-ai-copilot → newsletter-editor + site-editor so each
     // host kind carries its own model defaults + default brand skill.
     'migrations/039_ai_editor_use_cases_split.sql',
+    // Per-use-case wiki memory toggle (default on). spec-ai-memory-wiki.md.
+    'migrations/040_ai_use_cases_wiki_enabled.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every

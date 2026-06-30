@@ -12,6 +12,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { runChat } from '../lib/runner.js';
 import { runChatViaGoose } from '../lib/chat/run-chat-goose.js';
+import { buildWikiExtraTools, buildWikiRagBlock } from '../lib/wiki/in-process-tools.js';
 import { resolveUseCasePrompt } from '../lib/use-case-prompt.js';
 import { subscribeCancel } from '../lib/jobs/cancel.js';
 import { releaseUseCaseSemaphore } from '../lib/jobs/enqueue.js';
@@ -432,6 +433,26 @@ export default async function runChatHandler(
         mcp_warnings: gooseResult.mcp_warnings,
       };
     } else {
+      // Durable wiki memory: expose wiki_search/read/list/upsert as in-process
+      // ExtraTools so the default (non-Goose) chat executor gets the same
+      // memory surface the Goose paths load via the wiki MCP. Empty when the
+      // use case has wiki_enabled=false. spec-ai-memory-wiki.md §5.1.
+      const wikiTools = await buildWikiExtraTools(supabase as never, threadRow.use_case, {
+        messageId: assistantMessageId,
+      });
+      // Pre-turn RAG: search the wiki for the latest user message and inject
+      // the top hits into the system prompt so memory recall is automatic
+      // (the model can still call wiki_search itself). spec §5.2.
+      let chatSystemPrompt = resolved.systemPrompt;
+      if (wikiTools.length) {
+        const lastUser = [...messages].reverse().find(
+          (m: { role?: string; content?: string }) => m.role === 'user',
+        );
+        const ragBlock = lastUser?.content
+          ? await buildWikiRagBlock(supabase as never, threadRow.use_case, String(lastUser.content))
+          : '';
+        if (ragBlock) chatSystemPrompt = `${resolved.systemPrompt}\n\n${ragBlock}`;
+      }
       result = await runChat(
         {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -445,10 +466,11 @@ export default async function runChatHandler(
           userId: threadRow.created_by,
           threadId,
           messageId: assistantMessageId,
-          systemPrompt: resolved.systemPrompt,
+          systemPrompt: chatSystemPrompt,
           messages,
           ...(job.data.provider && { provider: job.data.provider as 'auto' }),
           ...(job.data.model && { model: job.data.model }),
+          ...(wikiTools.length ? { extraTools: wikiTools } : {}),
           onToken: (delta: string): void => {
             void appendStreamEvent(redis, streamKey, { type: 'token', delta });
           },
