@@ -31,6 +31,12 @@ const segmentsModule: GatewazeModule = {
     // ambassador_application. See spec-segments-cross-module-targeting.md.
     'migrations/005_condition_source_registry.sql',
     'migrations/006_membership_providers.sql',
+    // 007 resolves event_registered/event_attended against the real events
+    // tables so event_filters (event_city, …) work without people_events.
+    'migrations/007_event_source_tables.sql',
+    // 008 adds geo_radius targeting (haversine on attributes.location) + a
+    // self-contained place geocoder from our own contact/event coordinates.
+    'migrations/008_geo_radius.sql',
   ],
 
   adminRoutes: [
