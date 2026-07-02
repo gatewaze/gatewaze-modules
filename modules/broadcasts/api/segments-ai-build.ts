@@ -54,7 +54,8 @@ async function loadRunChat(): Promise<RunChat> {
 // --- Segment vocabulary (mirrors packages/admin/src/lib/segments/types.ts) --
 const ATTRIBUTE_FIELDS = [
   'email', 'attributes.first_name', 'attributes.last_name', 'attributes.company',
-  'attributes.job_title', 'attributes.country', 'attributes.city', 'attributes.region',
+  'attributes.job_title', 'attributes.country', 'attributes.state', 'attributes.city',
+  'attributes.postal', 'attributes.region',
   'attributes.timezone', 'attributes.linkedin_url', 'attributes.twitter_handle',
 ];
 const ATTRIBUTE_OPERATORS = [
@@ -145,8 +146,8 @@ function buildSystemPrompt(eventNames: string[], catalog: Catalog): string {
     'Rules:',
     '- Use ONLY these attribute fields: ' + ATTRIBUTE_FIELDS.join(', ') + '.',
     '- Use ONLY these event types: ' + EVENT_TYPES.join(', ') + (eventNames.length ? ' (also custom: ' + eventNames.join(', ') + ')' : '') + '.',
-    '- For location targeting prefer attributes.city (city name, e.g. "New York") and attributes.country (ISO-2 code, e.g. "US"). Do NOT use attributes.region for cities or US states — in this dataset region holds only coarse continent codes ("eu", "na") and is sparsely populated, so it will match almost no one.',
-    '- For "<city> and the surrounding area" you cannot do true radius targeting yet (no per-person lat/long), so target attributes.city = "<city>" and add a warning that surrounding-area/radius matching is not yet supported.',
+    '- For location targeting: attributes.city (city name, e.g. "New York"), attributes.state (state/province full name, e.g. "California", "New York", "Hesse"), attributes.country (ISO-2 code, e.g. "US"), attributes.postal (ZIP/postal code). Use attributes.state for US state / province targeting. Do NOT use attributes.region for cities or states — region holds only coarse continent codes ("eu", "na") and is sparsely populated.',
+    '- For "<place> and the surrounding area" or "within N km/miles of <place>", use a geo_radius condition: { type: "geo_radius", place: "<place>", radius_km: <number> } (convert miles to km). The place is geocoded server-side from our own contact/event coordinates. Use this for true radius targeting instead of an exact city match.',
     '- For "attended/registered for an event in <place>", use an event condition (event_attended/event_registered, operator performed) with event_filters like { property: "event_city", operator: "equals", value: "<place>" }.',
     ...(sourceLines ? [
       '- For membership / subscription targeting, emit a condition of the given "type", set the operator, and merge in the params for the chosen entity from these module sources (prefer the NEWSLETTER entry when the user names a newsletter — its list resolves live). Do NOT guess an id that is not listed — add a warning instead:',
@@ -298,11 +299,33 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
     const o = out as { match: 'all' | 'any'; conditions: unknown[]; suggested_name?: string; explanation?: string; warnings?: string[] };
     const definition = { match: o.match, conditions: o.conditions };
 
+    // Geocode any geo_radius conditions server-side (from our own data) so the
+    // stored condition carries lat/lng; the SQL predicate is a pure haversine.
+    const geoWarnings: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resolveGeo = async (conds: any[]): Promise<void> => {
+      for (const c of conds ?? []) {
+        if (c && c.type === 'group' && Array.isArray(c.conditions)) { await resolveGeo(c.conditions); continue; }
+        if (c && c.type === 'geo_radius' && (c.lat == null || c.lng == null)) {
+          const place = typeof c.place === 'string' ? c.place.trim() : '';
+          if (!place) { geoWarnings.push('A radius condition had no place to geocode.'); continue; }
+          try {
+            const { data } = await callerClient.rpc('segments_geocode_place', { p_place: place });
+            const g = data as { lat?: number; lng?: number } | null;
+            if (g && typeof g.lat === 'number' && typeof g.lng === 'number') { c.lat = g.lat; c.lng = g.lng; }
+            else geoWarnings.push(`Couldn't locate "${place}" from our contact/event data, so a radius around it matches nobody. Try a larger nearby city.`);
+          } catch { geoWarnings.push(`Geocoding "${place}" failed.`); }
+        }
+      }
+    };
+    await resolveGeo(definition.conditions as unknown[]);
+    const allWarnings = [...(o.warnings ?? []), ...geoWarnings];
+
     const { data: preview, error: previewError } = await callerClient.rpc('segments_preview', { p_definition: definition, p_limit: 8 });
     if (previewError) {
       const msg = previewError.message || '';
       if (/permission|admin|denied|rls/i.test(msg)) { res.status(403).json({ success: false, error: 'Admin privileges required' }); return; }
-      res.status(200).json({ success: true, definition, suggested_name: o.suggested_name, explanation: o.explanation, warnings: [...(o.warnings ?? []), `Preview unavailable: ${msg}`], count: null, sample: [] });
+      res.status(200).json({ success: true, definition, suggested_name: o.suggested_name, explanation: o.explanation, warnings: [...allWarnings, `Preview unavailable: ${msg}`], count: null, sample: [] });
       return;
     }
 
@@ -311,7 +334,7 @@ export function createSegmentsAiBuildRoute(deps: Deps) {
       definition,
       suggested_name: o.suggested_name,
       explanation: o.explanation,
-      warnings: o.warnings ?? [],
+      warnings: allWarnings,
       count: (preview as { count?: number })?.count ?? 0,
       sample: (preview as { sample?: unknown[] })?.sample ?? [],
     });
