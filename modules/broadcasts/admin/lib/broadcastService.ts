@@ -117,6 +117,22 @@ export const EVENT_VARIABLES: { token: string; label: string }[] = [
 
 export interface EventOption { id: string; event_title: string | null; event_start: string | null; }
 
+export interface CategoryList { id: string; name: string; }
+
+/** Subscribable lists a broadcast can be tied to for unsubscribe (excludes
+ *  internal/staff-only lists). EVERY broadcast must pick one — unsubscribing
+ *  removes the recipient from this list. */
+export async function listCategoryLists(): Promise<CategoryList[]> {
+  const { data, error } = await supabase
+    .from('lists')
+    .select('id, name')
+    .eq('is_active', true)
+    .eq('is_internal', false)
+    .order('name');
+  if (error) throw error;
+  return (data ?? []) as CategoryList[];
+}
+
 /** Events available to link to a broadcast (most recent first). */
 export async function listEventsForLink(): Promise<EventOption[]> {
   const { data, error } = await supabase
@@ -219,6 +235,9 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
   const parent = await getBroadcast(parentId);
   if (!parent) throw new Error('Broadcast not found');
   if (!parent.rendered_html) throw new Error('Add content before sending');
+  // Mandatory: every broadcast is tied to a list so recipients can unsubscribe
+  // from it (the send injects the unsubscribe footer for that list). No list → no send.
+  if (!parent.category_list_id) throw new Error('Select an unsubscribe list before sending');
 
   // Bake the linked event's {{event_*}} variables into this send's snapshot.
   // These are constant per send (event details don't vary per recipient), so

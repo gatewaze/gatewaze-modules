@@ -14,7 +14,7 @@ import {
 // Cross-module reuse: the visual Segments Builder (controlled value/onChange).
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
-import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, EVENT_VARIABLES, type Broadcast, type EventOption } from '../lib/broadcastService';
+import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
 
 const STEPS = [
   { id: 'audience', label: '1. Audience' },
@@ -76,8 +76,13 @@ export default function BroadcastDetailPage() {
       logSendIdColumn: 'broadcast_send_id',
       tzBreakdownRpc: 'broadcast_send_timezone_breakdown',
       sendEndpoint: 'broadcast-send',
-      canSend: !!b.rendered_html && hasAudience,
-      canSendReason: !b.rendered_html ? 'Add content before sending' : !hasAudience ? 'Set an audience first' : undefined,
+      // A broadcast can't send without content, an audience, AND an unsubscribe
+      // list (the send is tied to that list; unsubscribing removes from it).
+      canSend: !!b.rendered_html && hasAudience && !!b.category_list_id,
+      canSendReason: !b.rendered_html ? 'Add content before sending'
+        : !hasAudience ? 'Set an audience first'
+        : !b.category_list_id ? 'Choose an unsubscribe list (in the Content step) before sending'
+        : undefined,
       features: { deliveryStrategy: true, excludeSent: true },
       emailDetails: {
         editable: true,
@@ -378,8 +383,12 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
   // Optional linked event (CFP / event promotion) — supplies {{event_*}} vars.
   const [events, setEvents] = useState<EventOption[]>([]);
   const [eventId, setEventId] = useState<string>(b.event_id ?? '');
+  // MANDATORY: the list this broadcast is tied to for unsubscribe.
+  const [lists, setLists] = useState<CategoryList[]>([]);
+  const [categoryListId, setCategoryListId] = useState<string>(b.category_list_id ?? '');
 
   useEffect(() => { listEventsForLink().then(setEvents).catch(() => setEvents([])); }, []);
+  useEffect(() => { listCategoryLists().then(setLists).catch(() => setLists([])); }, []);
 
   async function linkEvent(value: string) {
     setEventId(value);
@@ -387,6 +396,15 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
       await updateBroadcast(b.id, { event_id: value || null } as Partial<Broadcast>);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to link event');
+    }
+  }
+
+  async function linkCategoryList(value: string) {
+    setCategoryListId(value);
+    try {
+      await updateBroadcast(b.id, { category_list_id: value || null } as Partial<Broadcast>);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to set unsubscribe list');
     }
   }
 
@@ -418,6 +436,22 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
   return (
     <div className="max-w-3xl space-y-3">
       <Card className="p-4">
+        {/* MANDATORY unsubscribe list — every broadcast is tied to a list so
+            recipients can unsubscribe from it; the send injects the footer. */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-[var(--gray-12)] mb-1">Unsubscribe list <span className="text-[var(--red-11)]">*</span></label>
+          <p className="text-xs text-[var(--gray-10)] mb-1">Required. Recipients unsubscribe from this list; the unsubscribe footer is added to every email automatically.</p>
+          <select className={inputCls} value={categoryListId} onChange={(e) => linkCategoryList(e.target.value)} disabled={!editable}>
+            <option value="">Select a list…</option>
+            {lists.map((l) => (
+              <option key={l.id} value={l.id}>{l.name}</option>
+            ))}
+          </select>
+          {!categoryListId && (
+            <p className="text-xs text-[var(--red-11)] mt-1">A broadcast can’t be sent until it’s tied to an unsubscribe list.</p>
+          )}
+        </div>
+
         {/* Optional event link — for Call-for-Speakers / event promotion to a
             segment of the whole database. Adds {{event_*}} merge variables. */}
         <div className="mb-3">
