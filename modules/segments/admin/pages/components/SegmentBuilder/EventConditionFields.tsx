@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Input } from '@/components/ui/Form';
 import { supabase } from '@/lib/supabase';
+import { TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
 import {
   EventCondition,
   SegmentCondition,
+  PropertyFilter,
+  AttributeOperator,
   EVENT_OPERATORS,
   TIME_UNITS,
   TimeWindow,
@@ -14,6 +17,22 @@ interface EventConditionFieldsProps {
   condition: EventCondition;
   onChange: (condition: SegmentCondition) => void;
 }
+
+// Filterable properties of the event itself (map to events columns for
+// event_registered/event_attended; to event_data keys for other event types).
+const EVENT_FILTER_PROPERTIES = [
+  { value: 'event_city', label: 'Event city' },
+  { value: 'event_country_code', label: 'Event country (ISO-2)' },
+  { value: 'event_title', label: 'Event title' },
+  { value: 'event_id', label: 'Event ID' },
+  { value: 'status', label: 'Registration status' },
+];
+const EVENT_FILTER_OPERATORS: { value: AttributeOperator; label: string }[] = [
+  { value: 'equals', label: 'is' },
+  { value: 'not_equals', label: 'is not' },
+  { value: 'contains', label: 'contains' },
+  { value: 'starts_with', label: 'starts with' },
+];
 
 // Distinct people_events names, fetched once and shared across condition rows.
 let cachedEventNames: string[] | null = null;
@@ -98,6 +117,17 @@ export function EventConditionFields({
       } as TimeWindow,
     });
   };
+
+  // --- Event property filters (e.g. "registered for an event in <city>") -----
+  const filters: PropertyFilter[] = condition.event_filters ?? [];
+  const setFilters = (next: PropertyFilter[]) => {
+    const { event_filters, ...rest } = condition;
+    onChange(next.length > 0 ? { ...rest, event_filters: next } : (rest as EventCondition));
+  };
+  const addFilter = () => setFilters([...filters, { property: 'event_city', operator: 'equals', value: '' }]);
+  const updateFilter = (i: number, patch: Partial<PropertyFilter>) =>
+    setFilters(filters.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
+  const removeFilter = (i: number) => setFilters(filters.filter((_, idx) => idx !== i));
 
   return (
     <div className="space-y-3">
@@ -208,6 +238,45 @@ export function EventConditionFields({
           </select>
         </div>
       )}
+
+      {/* Event property filters — e.g. only events in a given city */}
+      <div className="pl-4 border-l-2 border-gray-200 dark:border-gray-600 space-y-2">
+        {filters.map((f, i) => (
+          <div key={i} className="flex items-end gap-2 flex-wrap">
+            <span className="text-sm text-gray-600 dark:text-gray-400 pb-2">where the event's</span>
+            <select
+              value={f.property}
+              onChange={(e) => updateFilter(i, { property: e.target.value })}
+              className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-2 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              {EVENT_FILTER_PROPERTIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </select>
+            <select
+              value={f.operator}
+              onChange={(e) => updateFilter(i, { operator: e.target.value as AttributeOperator })}
+              className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-2 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+              {EVENT_FILTER_OPERATORS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <input
+              value={typeof f.value === 'string' ? f.value : ''}
+              onChange={(e) => updateFilter(i, { value: e.target.value })}
+              placeholder="e.g. San Francisco"
+              className="flex-1 min-w-[140px] rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <button type="button" onClick={() => removeFilter(i)} title="Remove filter" className="p-2 text-gray-400 hover:text-red-500">
+              <TrashIcon className="size-4" />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={addFilter}
+          className="inline-flex items-center gap-1 text-xs font-medium text-primary-600 dark:text-primary-400 hover:underline"
+        >
+          <PlusIcon className="size-3" /> Add event property filter (e.g. event city)
+        </button>
+      </div>
 
       {/* Hint */}
       {!condition.event_type && (

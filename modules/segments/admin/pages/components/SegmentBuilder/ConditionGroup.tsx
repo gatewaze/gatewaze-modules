@@ -5,6 +5,7 @@ import { ConditionRow } from './ConditionRow';
 import {
   SegmentCondition,
   GroupCondition,
+  ConditionSource,
   isGroupCondition,
   createEmptyAttributeCondition,
   createEmptyGroupCondition,
@@ -15,6 +16,7 @@ interface ConditionGroupProps {
   onChange: (conditions: SegmentCondition[]) => void;
   match: 'all' | 'any';
   depth: number;
+  sources?: ConditionSource[];
 }
 
 const depthColors = [
@@ -29,6 +31,7 @@ export function ConditionGroup({
   onChange,
   match,
   depth,
+  sources = [],
 }: ConditionGroupProps) {
   const handleConditionChange = (index: number, condition: SegmentCondition) => {
     const newConditions = [...conditions];
@@ -138,6 +141,7 @@ export function ConditionGroup({
                   }
                   match={condition.match}
                   depth={depth + 1}
+                  sources={sources}
                 />
 
                 {/* Add to Group */}
@@ -171,6 +175,7 @@ export function ConditionGroup({
               onChange={(newCondition) => handleConditionChange(index, newCondition)}
               onRemove={() => handleRemoveCondition(index)}
               depth={depth}
+              sources={sources}
             />
           )}
         </React.Fragment>
