@@ -29,6 +29,8 @@ const listsModule: GatewazeModule = {
     'migrations/002_event_updates_list.sql',
     // 003 adds the is_internal flag and seeds the staff-only 'internal' list.
     'migrations/003_internal_list.sql',
+    // 004 cascades subscription deletion when the owning person is deleted.
+    'migrations/004_subscriptions_cascade_on_person_delete.sql',
   ],
 
   adminRoutes: [
