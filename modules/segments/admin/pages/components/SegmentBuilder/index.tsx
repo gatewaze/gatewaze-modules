@@ -1,13 +1,16 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { PlusIcon } from '@heroicons/react/24/outline';
 import { Button, Card } from '@/components/ui';
+import { supabase } from '@/lib/supabase';
 import { ConditionGroup } from './ConditionGroup';
 import { SegmentPreview } from '../SegmentPreview';
 import {
   SegmentDefinition,
   SegmentCondition,
+  ConditionSource,
   createEmptyAttributeCondition,
   createEmptyGroupCondition,
+  createSegmentService,
 } from '@/lib/segments';
 
 interface SegmentBuilderProps {
@@ -21,6 +24,14 @@ export function SegmentBuilder({
   onChange,
   showPreview = true,
 }: SegmentBuilderProps) {
+  // Registry condition sources (geo_radius, event_registration, …) for the
+  // manual builder's Type dropdown + editors. Best-effort; core types work regardless.
+  const [sources, setSources] = useState<ConditionSource[]>([]);
+  useEffect(() => {
+    if (!supabase) return;
+    createSegmentService(supabase).listConditionSources().then(setSources).catch(() => setSources([]));
+  }, []);
+
   const handleMatchChange = (match: 'all' | 'any') => {
     onChange({ ...value, match });
   };
@@ -69,6 +80,7 @@ export function SegmentBuilder({
           onChange={handleConditionsChange}
           match={value.match}
           depth={0}
+          sources={sources}
         />
       )}
 
