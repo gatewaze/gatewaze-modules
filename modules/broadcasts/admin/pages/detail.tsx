@@ -15,11 +15,13 @@ import {
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
 import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
+import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
 
 const STEPS = [
   { id: 'audience', label: '1. Audience' },
   { id: 'content', label: '2. Content' },
   { id: 'sending', label: '3. Sending' },
+  { id: 'replies', label: 'Replies' },
 ];
 
 const inputCls = 'w-full rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm disabled:opacity-60';
@@ -181,6 +183,7 @@ export default function BroadcastDetailPage() {
         {step === 'audience' && <AudienceStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('content'); }} />}
         {step === 'content' && <ContentStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('sending'); }} />}
         {step === 'sending' && broadcastAdapter && <SendingPanel adapter={broadcastAdapter} />}
+        {step === 'replies' && <BroadcastRepliesTab broadcast={b} onUpdated={setB} />}
       </WorkspaceLayout>
     </Page>
   );

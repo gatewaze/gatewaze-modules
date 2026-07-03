@@ -76,6 +76,9 @@ const broadcastsModule: GatewazeModule = {
     // 008 optionally links a broadcast to an event (CFP / event promotion):
     // {{event_*}} variables baked into content at send-creation.
     'migrations/008_broadcast_event_link.sql',
+    // 009 captures inbound replies to broadcast emails (broadcast_replies +
+    // forward_replies_to), mirroring the newsletter replies model.
+    'migrations/009_broadcast_replies.sql',
   ],
 
   adminRoutes: [
