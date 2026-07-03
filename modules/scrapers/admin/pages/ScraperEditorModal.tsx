@@ -361,7 +361,7 @@ export function ScraperEditorModal({ isOpen, onClose, onSave, scraper }: Scraper
     account: '',
     timeout_minutes: 30,
     alert_on_failure: true,
-    triage_mode: '' as '' | 'auto_publish' | 'auto_approve' | 'review',
+    default_publish_state: 'pending_review' as 'published' | 'pending_review',
     schedule_enabled: false,
     schedule_frequency: 'none' as 'none' | '5min' | 'hourly' | 'daily' | 'weekly' | 'custom',
     schedule_time: randomPreMorningTime(),
@@ -399,7 +399,7 @@ export function ScraperEditorModal({ isOpen, onClose, onSave, scraper }: Scraper
         account: (scraper as any).account || cfg.account || '',
         timeout_minutes: (scraper as any).timeout_minutes ?? 30,
         alert_on_failure: (scraper as any).alert_on_failure ?? true,
-        triage_mode: ((scraper as any).triage_mode ?? '') as '' | 'auto_publish' | 'auto_approve' | 'review',
+        default_publish_state: ((scraper as any).default_publish_state ?? 'pending_review') as 'published' | 'pending_review',
         schedule_enabled: scraper.schedule_enabled || false,
         schedule_frequency: scraper.schedule_frequency || 'none',
         schedule_time: toHHMM(scraper.schedule_time) || randomPreMorningTime(),
@@ -421,7 +421,7 @@ export function ScraperEditorModal({ isOpen, onClose, onSave, scraper }: Scraper
       setFormData({
         name: '', description: '', scraper_type: '', object_type: 'events',
         event_type: '', content_category: '', base_url: '', enabled: true,
-        account: '', timeout_minutes: 30, alert_on_failure: true, triage_mode: '',
+        account: '', timeout_minutes: 30, alert_on_failure: true, default_publish_state: 'pending_review',
         schedule_enabled: false, schedule_frequency: 'none', schedule_time: randomPreMorningTime(),
         schedule_days: [], schedule_cron: '',
       });
@@ -532,7 +532,10 @@ export function ScraperEditorModal({ isOpen, onClose, onSave, scraper }: Scraper
         account: formData.account || undefined,
         timeout_minutes: formData.timeout_minutes,
         alert_on_failure: formData.alert_on_failure,
-        triage_mode: formData.triage_mode || null,
+        // default_publish_state (migration 017) replaces the deprecated triage_mode.
+        // The scraper handler reads this first and only falls back to triage_mode
+        // if this column is null — since the column is NOT NULL, always send it.
+        default_publish_state: formData.default_publish_state,
         config: cleanedConfig,
         schedule_enabled: formData.schedule_enabled,
         schedule_frequency: formData.schedule_frequency,
@@ -887,19 +890,17 @@ export function ScraperEditorModal({ isOpen, onClose, onSave, scraper }: Scraper
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-[var(--gray-11)] mb-1">Triage mode</label>
+              <label className="block text-sm font-medium text-[var(--gray-11)] mb-1">Default publish state</label>
               <select
-                value={formData.triage_mode}
-                onChange={(e) => setFormData({ ...formData, triage_mode: e.target.value as any })}
+                value={formData.default_publish_state}
+                onChange={(e) => setFormData({ ...formData, default_publish_state: e.target.value as 'published' | 'pending_review' })}
                 className={inputClass}
               >
-                <option value="">Use module default (no content-triage = auto_publish)</option>
-                <option value="auto_publish">auto_publish — content goes live immediately (no audit)</option>
-                <option value="auto_approve">auto_approve — content goes live, audit row created</option>
-                <option value="review">review — content enters human-review queue</option>
+                <option value="published">published — content goes live immediately (auto-publish)</option>
+                <option value="pending_review">pending_review — content enters the review queue before going live</option>
               </select>
               <p className="text-xs text-[var(--gray-9)] mt-1">
-                Only applies when the content-triage module is installed. See spec §8.
+                Initial publish_state for events created by this scraper. See spec-content-publishing-pipeline §5.2.
               </p>
             </div>
 
