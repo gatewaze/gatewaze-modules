@@ -24,6 +24,7 @@ const eventSpeakersModule: GatewazeModule = {
     'migrations/004_speaker_id_nullable.sql',
     'migrations/005_triage_adapter.sql',
     'migrations/006_register_with_platform.sql',
+    'migrations/007_talk_edit_token_default.sql',
   ],
 
   edgeFunctions: [
