@@ -98,6 +98,7 @@ export default function BroadcastDetailPage() {
           fromAddress: b.from_address || '',
           fromName: b.from_name || '',
           replyTo: b.reply_to || '',
+          forwardRepliesTo: b.forward_replies_to || '',
         },
         async save(values: EmailDetails) {
           const nb = await updateBroadcast(b.id, {
@@ -106,7 +107,8 @@ export default function BroadcastDetailPage() {
             from_address: values.fromAddress || null,
             from_name: values.fromName || null,
             reply_to: values.replyTo || null,
-          });
+            forward_replies_to: values.forwardRepliesTo || null,
+          } as Partial<Broadcast>);
           setB(nb);
         },
       },
@@ -200,7 +202,7 @@ export default function BroadcastDetailPage() {
         {step === 'audience' && <AudienceStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('content'); }} />}
         {step === 'content' && <ContentStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('sending'); }} />}
         {step === 'sending' && broadcastAdapter && <SendingPanel adapter={broadcastAdapter} />}
-        {step === 'replies' && <BroadcastRepliesTab broadcast={b} onUpdated={setB} />}
+        {step === 'replies' && <BroadcastRepliesTab broadcastId={b.id} />}
       </WorkspaceLayout>
     </Page>
   );
