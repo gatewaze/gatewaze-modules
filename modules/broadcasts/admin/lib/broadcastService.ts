@@ -38,6 +38,8 @@ export interface Broadcast {
   category_list_id: string | null;
   /** Optional linked event (CFP / event promotion) — supplies {{event_*}} vars. */
   event_id: string | null;
+  /** Optional mailbox to forward human replies to (like newsletter collections). */
+  forward_replies_to: string | null;
   subject: string | null;
   preheader: string | null;
   from_address: string | null;

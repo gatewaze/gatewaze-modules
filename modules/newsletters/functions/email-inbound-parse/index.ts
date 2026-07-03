@@ -207,6 +207,97 @@ async function handler(req: Request) {
       inReplyTo = inReplyToMatch[1];
     }
 
+    // =========================================================================
+    // Route: Broadcast replies
+    // Resolve the originating send via In-Reply-To → email_send_log. If the
+    // matched log row is a BROADCAST send, store it as a broadcast reply and
+    // return — so a reply isn't ALSO stored as a newsletter reply when a
+    // broadcast shares its From/Reply-To address with a newsletter collection.
+    // =========================================================================
+    if (inReplyTo) {
+      const baseId = inReplyTo.split('.')[0].replace(/[<>]/g, '');
+      const { data: bLog } = await supabase
+        .from('email_send_log')
+        .select('id, broadcast_send_id')
+        .eq('provider_message_id', baseId)
+        .eq('recipient_email', fromEmail)
+        .not('broadcast_send_id', 'is', null)
+        .limit(1)
+        .maybeSingle();
+
+      if (bLog?.broadcast_send_id) {
+        const { data: bSend } = await supabase
+          .from('broadcast_sends')
+          .select('broadcast_id')
+          .eq('id', bLog.broadcast_send_id)
+          .maybeSingle();
+        const broadcastId = bSend?.broadcast_id as string | undefined;
+
+        if (broadcastId) {
+          const { data: parent } = await supabase
+            .from('broadcasts')
+            .select('name, from_address, forward_replies_to')
+            .eq('id', broadcastId)
+            .maybeSingle();
+
+          const { data: inserted, error: bInsErr } = await supabase
+            .from('broadcast_replies')
+            .insert({
+              broadcast_id: broadcastId,
+              broadcast_send_id: bLog.broadcast_send_id,
+              from_email: fromEmail,
+              from_name: fromName,
+              subject,
+              body_text: text || null,
+              body_html: html || null,
+              in_reply_to: inReplyTo,
+              send_log_id: bLog.id,
+              is_auto_reply: autoReplyVerdict.isAuto,
+              auto_reply_reason: autoReplyVerdict.reason,
+              forwarded_to: parent?.forward_replies_to || null,
+            })
+            .select('id')
+            .single();
+          if (bInsErr) console.error('Error storing broadcast reply:', bInsErr);
+
+          // Forward human replies to the configured mailbox (never auto-replies).
+          let bForwarded = 0;
+          if (parent?.forward_replies_to && isEmailConfigured() && !autoReplyVerdict.isAuto) {
+            try {
+              // Send from the address the reply landed at (a verified inbound
+              // sender), parsing "Name - email" if from_address uses that form.
+              const fromMatch2 = (parent.from_address || '').match(/([^<>\s]+@[^<>\s]+)/);
+              const fwdFrom = fromMatch2?.[1] || toEmails[0];
+              const senderDisplay = fromName || fromEmail.split('@')[0];
+              await sendEmail({
+                to: parent.forward_replies_to,
+                subject,
+                html: html || `<pre style="white-space: pre-wrap; font-family: sans-serif;">${text}</pre>`,
+                text: text || '',
+                fromEmail: fwdFrom,
+                fromName: `${senderDisplay} (via ${parent.name || 'Broadcast'})`,
+                replyTo: fromEmail,
+              });
+              if (inserted) {
+                await supabase.from('broadcast_replies')
+                  .update({ forwarded_at: new Date().toISOString() })
+                  .eq('id', inserted.id);
+              }
+              bForwarded = 1;
+            } catch (fwdErr) {
+              console.error('Error forwarding broadcast reply:', fwdErr);
+            }
+          }
+
+          console.log(`Processed inbound broadcast reply: stored 1, forwarded ${bForwarded}`);
+          return new Response(
+            JSON.stringify({ success: true, handler: 'broadcast', stored: 1, forwarded: bForwarded }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          );
+        }
+      }
+    }
+
     // Find the newsletter collection(s) that match the recipient address.
     // Replies can land at either:
     //   - `from_email` (most common — no separate Reply-To set), or
