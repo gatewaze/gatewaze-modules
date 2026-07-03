@@ -164,7 +164,12 @@ export default function NewsletterListingPage() {
                   {newsletter.require_login ? (
                     <p className="pub-nl-note">Subscribers only — sign in to read.</p>
                   ) : (
-                    <NewsletterSignupSurface collectionSlug={newsletter.slug} />
+                    // Boxed sub-panel so the signup reads as its own unit rather
+                    // than blending into the editions content beside/below it.
+                    <div className="pub-nl-sub">
+                      <div className="pub-nl-sub-h">Get new editions in your inbox</div>
+                      <NewsletterSignupSurface collectionSlug={newsletter.slug} />
+                    </div>
                   )}
                 </div>
               </div>
@@ -182,16 +187,22 @@ export default function NewsletterListingPage() {
                   </Link>
                 )}
                 {recent.length > 0 && (
-                  <ul className="pub-nl-rows">
-                    {recent.map((edition) => (
-                      <li key={edition.id}>
-                        <Link href={editionHref(edition)} className="pub-nl-row">
-                          <span className="pub-nl-row-date">{formatDate(edition.edition_date)}</span>
-                          <span className="pub-nl-row-title">{edition.title || 'Untitled edition'}</span>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <div className="pub-nl-eyebrow">Past editions</div>
+                    <ul className="pub-nl-rows">
+                      {recent.map((edition) => (
+                        <li key={edition.id}>
+                          <Link href={editionHref(edition)} className="pub-nl-row">
+                            <span className="pub-nl-row-date">{formatDate(edition.edition_date)}</span>
+                            <span className="pub-nl-row-main">
+                              <span className="pub-nl-row-title">{edition.title || 'Untitled edition'}</span>
+                              {edition.preheader && <span className="pub-nl-row-pre">{edition.preheader}</span>}
+                            </span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
                 )}
                 {editions.length > RECENT_LIMIT && (
                   <Link href={`/newsletters/${newsletter.slug}`} className="pub-nl-viewall">

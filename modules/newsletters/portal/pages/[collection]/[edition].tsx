@@ -244,6 +244,25 @@ export default function NewsletterEditionPage({ params }: { params: { collection
         .nl-edition-render-inner * { all: revert; }
         .nl-edition-render-inner table { max-width: 100% !important; }
         .nl-edition-render-inner img { max-width: 100% !important; height: auto !important; }
+
+        /* Small screens: the email is authored at a fixed ~650px and the panel
+         * clips overflow (rounded corners), so on phones the right edge was
+         * CROPPED with no way to scroll. Capping only table/img isn't enough:
+         * fixed-width divs/columns inside blocks still force the layout wide,
+         * and the reverted content-box sizing lets padding re-widen 100%-wide
+         * elements. Cap EVERY element (border-box), kill inline min-widths, and
+         * make long words/links breakable so table min-content can shrink —
+         * the email then REFLOWS to the panel width. Scoped to narrow viewports
+         * so the desktop render keeps the sent email's exact metrics.
+         */
+        @media (max-width: 760px) {
+          .nl-edition-render-inner * {
+            max-width: 100% !important;
+            min-width: 0 !important;
+            box-sizing: border-box !important;
+          }
+          .nl-edition-render-inner { overflow-wrap: anywhere; word-break: break-word; }
+        }
       `}</style>
       <div className="pub-article-grid">
         {/* Left: the real edition, rendered with the declarative renderer so it
