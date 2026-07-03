@@ -79,6 +79,9 @@ const broadcastsModule: GatewazeModule = {
     // 009 captures inbound replies to broadcast emails (broadcast_replies +
     // forward_replies_to), mirroring the newsletter replies model.
     'migrations/009_broadcast_replies.sql',
+    // 010 intersects the broadcast audience with the unsubscribe list's subscribers
+    // (count + fan-out), so only list subscribers within the audience are emailed.
+    'migrations/010_broadcast_list_intersection.sql',
   ],
 
   adminRoutes: [
