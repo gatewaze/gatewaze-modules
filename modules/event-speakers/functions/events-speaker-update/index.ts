@@ -140,72 +140,37 @@ async function handler(req: Request) {
       }
     }
 
-    // Get the primary speaker for this talk
+    // Get the primary speaker for this talk. Plain two-step queries — the old
+    // nested embed used a singular table name (event_speakers) and an
+    // events_speakers→people_profiles relation that has no FK, so PostgREST
+    // rejected the whole select and the swallowed error made every update fail
+    // with "Speaker not found".
     if (talk) {
       const { data: talkSpeaker } = await supabase
         .from('events_talk_speakers')
-        .select(`
-          speaker_id,
-          speaker:event_speakers!speaker_id (
-            id,
-            status,
-            speaker_bio,
-            speaker_title,
-            edit_token,
-            people_profile_id,
-            people_profiles!inner (
-              id,
-              person_id,
-              people!inner (
-                id,
-                auth_user_id,
-                email,
-                attributes
-              )
-            )
-          )
-        `)
+        .select('speaker_id')
         .eq('talk_id', talk.id)
         .eq('is_primary', true)
         .maybeSingle()
 
-      if (talkSpeaker?.speaker) {
-        speaker = talkSpeaker.speaker
+      if (talkSpeaker?.speaker_id) {
+        const { data: speakerData } = await supabase
+          .from('events_speakers')
+          .select('id, status, speaker_bio, speaker_title, people_profile_id')
+          .eq('id', talkSpeaker.speaker_id)
+          .maybeSingle()
+        speaker = speakerData ?? null
       }
     }
 
-    // Fallback: Try speaker_id or speaker's edit_token (legacy support)
-    if (!speaker) {
-      let speakerQuery = supabase
+    // Fallback: explicit speaker_id (legacy speaker-only submissions). NOTE:
+    // events_speakers has no edit_token column — tokens only exist on talks.
+    if (!speaker && speaker_id) {
+      const { data: speakerData, error: speakerError } = await supabase
         .from('events_speakers')
-        .select(`
-          id,
-          status,
-          talk_title,
-          talk_synopsis,
-          speaker_bio,
-          speaker_title,
-          edit_token,
-          people_profile_id,
-          people_profiles!inner (
-            id,
-            person_id,
-            people!inner (
-              id,
-              auth_user_id,
-              email,
-              attributes
-            )
-          )
-        `)
-
-      if (speaker_id) {
-        speakerQuery = speakerQuery.eq('id', speaker_id)
-      } else if (edit_token) {
-        speakerQuery = speakerQuery.eq('edit_token', edit_token)
-      }
-
-      const { data: speakerData, error: speakerError } = await speakerQuery.single()
+        .select('id, status, talk_title, talk_synopsis, speaker_bio, speaker_title, people_profile_id')
+        .eq('id', speaker_id)
+        .single()
 
       if (speakerError || !speakerData) {
         console.error('Error fetching speaker:', speakerError)
@@ -220,14 +185,46 @@ async function handler(req: Request) {
       if (!talk) {
         const { data: speakerTalk } = await supabase
           .from('events_talk_speakers')
-          .select('talk:event_talks(*)')
+          .select('talk_id')
           .eq('speaker_id', speaker.id)
           .eq('is_primary', true)
           .maybeSingle()
 
-        if (speakerTalk?.talk) {
-          talk = speakerTalk.talk
+        if (speakerTalk?.talk_id) {
+          const { data: talkData } = await supabase
+            .from('events_talks')
+            .select('id, status, title, synopsis, duration_minutes, edit_token')
+            .eq('id', speakerTalk.talk_id)
+            .maybeSingle()
+          talk = talkData ?? null
         }
+      }
+    }
+
+    if (!speaker && !talk) {
+      return new Response(JSON.stringify({ success: false, error: 'Speaker not found' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+    // Resolve the person behind the speaker (drives authorization + profile
+    // writes): events_speakers.people_profile_id → people_profiles.person_id
+    // → people. Plain lookups — there is no FK chain to embed.
+    let person: { id: string; auth_user_id: string | null; email: string | null; attributes: Record<string, any> | null } | null = null
+    if (speaker?.people_profile_id) {
+      const { data: profile } = await supabase
+        .from('people_profiles')
+        .select('id, person_id')
+        .eq('id', speaker.people_profile_id)
+        .maybeSingle()
+      if (profile?.person_id) {
+        const { data: personData } = await supabase
+          .from('people')
+          .select('id, auth_user_id, email, attributes')
+          .eq('id', profile.person_id)
+          .maybeSingle()
+        person = personData ?? null
       }
     }
 
@@ -242,16 +239,9 @@ async function handler(req: Request) {
       console.log('✅ Authorized via talk edit token')
     }
 
-    // Check speaker's edit token (legacy)
-    if (edit_token && speaker?.edit_token === edit_token) {
-      authorized = true
-      console.log('✅ Authorized via speaker edit token')
-    }
-
-    // Check if authenticated user owns this submission
+    // Check if authenticated user owns this submission (person resolved above).
     if (isAuthenticated && authUserId) {
-      const customerAuthUserId = (speaker?.people_profiles as any)?.people?.auth_user_id
-      if (customerAuthUserId === authUserId) {
+      if (person?.auth_user_id === authUserId) {
         authorized = true
         console.log('✅ Authorized via auth user ID match')
       }
@@ -368,9 +358,9 @@ async function handler(req: Request) {
     // Debug info to include in response
     let debugInfo: SpeakerUpdateResponse['debug'] = undefined
 
-    if (hasProfileUpdate || hasAvatarUpdate) {
-      const personId = (speaker.people_profiles as any)?.people?.id
-      const existingAttrs = (speaker.people_profiles as any)?.people?.attributes || {}
+    if ((hasProfileUpdate || hasAvatarUpdate) && person?.id) {
+      const personId = person.id
+      const existingAttrs = (person.attributes as Record<string, any>) || {}
 
       const personUpdate: Record<string, any> = {}
 
