@@ -37,6 +37,7 @@ const segmentsModule: GatewazeModule = {
     // 008 adds geo_radius targeting (haversine on attributes.location) + a
     // self-contained place geocoder from our own contact/event coordinates.
     'migrations/008_geo_radius.sql',
+    'migrations/009_geo_aggregate.sql',
   ],
 
   adminRoutes: [
