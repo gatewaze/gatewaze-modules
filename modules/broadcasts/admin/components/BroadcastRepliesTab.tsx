@@ -2,10 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   EnvelopeIcon, EnvelopeOpenIcon, ChevronDownIcon, ChevronUpIcon, ArrowUturnRightIcon,
 } from '@heroicons/react/24/outline';
-import { toast } from 'sonner';
-import { Card, Badge, Button } from '@/components/ui';
+import { Card, Badge } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
-import { updateBroadcast, type Broadcast } from '../lib/broadcastService';
 
 interface Reply {
   id: string;
@@ -25,8 +23,7 @@ interface Reply {
 }
 
 interface BroadcastRepliesTabProps {
-  broadcast: Broadcast;
-  onUpdated: (b: Broadcast) => void;
+  broadcastId: string;
 }
 
 function formatTime(dateStr: string): string {
@@ -38,25 +35,21 @@ function formatTime(dateStr: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-const inputCls = 'w-full rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm';
-
-export function BroadcastRepliesTab({ broadcast, onUpdated }: BroadcastRepliesTabProps) {
+export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
   const [replies, setReplies] = useState<Reply[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAutoReplies, setShowAutoReplies] = useState(false);
-  const [forwardTo, setForwardTo] = useState(broadcast.forward_replies_to ?? '');
-  const [savingForward, setSavingForward] = useState(false);
 
   const load = useCallback(async () => {
     const { data } = await supabase
       .from('broadcast_replies')
       .select('*, send:broadcast_sends(subject, created_at)')
-      .eq('broadcast_id', broadcast.id)
+      .eq('broadcast_id', broadcastId)
       .order('created_at', { ascending: false });
     setReplies((data as Reply[]) || []);
     setLoading(false);
-  }, [broadcast.id]);
+  }, [broadcastId]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
@@ -77,44 +70,8 @@ export function BroadcastRepliesTab({ broadcast, onUpdated }: BroadcastRepliesTa
     }
   };
 
-  async function saveForward() {
-    const val = forwardTo.trim() || null;
-    if (val === (broadcast.forward_replies_to ?? null)) return;
-    setSavingForward(true);
-    try {
-      const nb = await updateBroadcast(broadcast.id, { forward_replies_to: val } as Partial<Broadcast>);
-      onUpdated(nb);
-      toast.success(val ? `Replies will be forwarded to ${val}` : 'Reply forwarding turned off');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save');
-    } finally {
-      setSavingForward(false);
-    }
-  }
-
   return (
     <div className="max-w-4xl space-y-4">
-      {/* Forward replies config (parity with newsletters) */}
-      <Card className="p-4">
-        <label className="block text-sm font-medium text-[var(--gray-12)] mb-1">Forward Replies To</label>
-        <p className="text-xs text-[var(--gray-10)] mb-2">
-          Human replies to this broadcast are also emailed to this address (auto-replies and bounces are not forwarded). Leave blank to only collect them here.
-        </p>
-        <div className="flex items-center gap-2">
-          <input
-            type="email"
-            className={inputCls}
-            placeholder="team@example.com"
-            value={forwardTo}
-            onChange={(e) => setForwardTo(e.target.value)}
-            onBlur={saveForward}
-          />
-          <Button variant="soft" onClick={saveForward} disabled={savingForward}>
-            {savingForward ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-      </Card>
-
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
