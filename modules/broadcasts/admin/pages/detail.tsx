@@ -9,8 +9,9 @@ import { SendingPanel } from '@/components/sending';
 import type { SendingAdapter, EmailDetails, SendComposerConfig } from '@/components/sending';
 import {
   createSegmentService, createEmptySegmentDefinition, isValidSegmentDefinition,
-  type SegmentDefinition, type SegmentMember,
+  type SegmentDefinition, type SegmentMember, type SegmentGeoPoint,
 } from '@/lib/segments';
+import { PersonLocationMap } from '@/components/charts/PersonLocationMap';
 // Cross-module reuse: the visual Segments Builder (controlled value/onChange).
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
@@ -217,6 +218,10 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
   const [suggestedName, setSuggestedName] = useState<string>('');
   const [count, setCount] = useState<number | null>(null);
   const [sample, setSample] = useState<SegmentMember[]>([]);
+  // Preview view: table of sample people, or a map (for location/distance criteria).
+  const [view, setView] = useState<'table' | 'map'>('table');
+  const locationCriteria = hasLocationCriteria(definition);
+  const activeView = locationCriteria ? view : 'table';
 
   // Load the existing backing segment's definition (if any).
   useEffect(() => {
@@ -319,12 +324,30 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
             <SegmentBuilder value={definition} onChange={(def) => { setDefinition(def); setHasDefinition(true); }} showPreview={false} />
           </div>
         </div>
-        {/* Fixed bottom: status bar (count) + data preview table */}
+        {/* Fixed bottom: status bar (count) + preview (table or map) */}
         <div className="shrink-0 border-t border-[var(--gray-5)] bg-[var(--color-surface)]">
-          <div className="px-4 py-2 border-b border-[var(--gray-5)] text-xs font-medium text-[var(--gray-11)]">
-            {count == null ? 'No audience selected yet' : `${count.toLocaleString()} ${count === 1 ? 'person' : 'people'} in this filter`}
+          <div className="px-4 py-2 border-b border-[var(--gray-5)] flex items-center justify-between">
+            <span className="text-xs font-medium text-[var(--gray-11)]">
+              {count == null ? 'No audience selected yet' : `${count.toLocaleString()} ${count === 1 ? 'person' : 'people'} in this filter`}
+            </span>
+            {locationCriteria && (
+              <div className="inline-flex rounded-md border border-[var(--gray-6)] overflow-hidden text-xs">
+                {(['table', 'map'] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setView(v)}
+                    className={`px-2.5 py-1 ${activeView === v ? 'bg-[var(--accent-9)] text-white' : 'text-[var(--gray-11)] hover:bg-[var(--gray-3)]'}`}
+                  >
+                    {v === 'table' ? 'Table' : 'Map'}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <AudiencePreviewTable definition={definition} sample={sample} />
+          {activeView === 'map'
+            ? <AudienceMapPreview definition={definition} />
+            : <AudiencePreviewTable definition={definition} sample={sample} locationCriteria={locationCriteria} />}
         </div>
       </div>
     </div>
@@ -340,9 +363,25 @@ const ALWAYS_FIELDS: { key: string; label: string }[] = [
   { key: 'job_title', label: 'Job title' },
 ];
 const FIELD_LABELS: Record<string, string> = {
-  city: 'City', country: 'Country', region: 'Region', email: 'Email',
+  city: 'City', state: 'State', country: 'Country', region: 'Region', postal: 'Postal', email: 'Email',
   timezone: 'Timezone', linkedin_url: 'LinkedIn', twitter_handle: 'Twitter',
 };
+// Location-ish attribute keys — when the audience filters on any of these (or a
+// geo_radius distance), we show the location columns + enable the Map view.
+const LOCATION_FIELDS = ['city', 'state', 'region', 'country', 'postal', 'location'];
+function hasLocationCriteria(def: SegmentDefinition): boolean {
+  let found = false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const walk = (conds: any[]) => {
+    for (const c of conds ?? []) {
+      if (c?.type === 'geo_radius') found = true;
+      else if (c?.type === 'attribute' && typeof c.field === 'string' && LOCATION_FIELDS.includes(c.field.replace(/^attributes\./, ''))) found = true;
+      else if (c?.type === 'group') walk(c.conditions);
+    }
+  };
+  walk(def.conditions);
+  return found;
+}
 function labelFor(key: string): string {
   return FIELD_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
 }
@@ -366,8 +405,12 @@ function memberValue(m: SegmentMember, key: string): string {
   const v = (m.attributes as Record<string, unknown> | undefined)?.[key];
   return v == null ? '' : String(v);
 }
-function AudiencePreviewTable({ definition, sample }: { definition: SegmentDefinition; sample: SegmentMember[] }) {
-  const extra = collectFilteredKeys(definition).filter((k) => !ALWAYS_FIELDS.some((f) => f.key === k));
+function AudiencePreviewTable({ definition, sample, locationCriteria }: { definition: SegmentDefinition; sample: SegmentMember[]; locationCriteria?: boolean }) {
+  // Location columns surface when the audience is location/distance-based;
+  // otherwise just the fields the segment filters on. Email is always useful.
+  const locCols = locationCriteria ? ['city', 'state', 'region', 'country'] : [];
+  const extra = Array.from(new Set([...locCols, ...collectFilteredKeys(definition), 'email']))
+    .filter((k) => !ALWAYS_FIELDS.some((f) => f.key === k));
   const columns = [...ALWAYS_FIELDS, ...extra.map((k) => ({ key: k, label: labelFor(k) }))];
   if (sample.length === 0) {
     return <div className="px-4 py-4 text-xs text-[var(--gray-10)]">No matching people to preview yet.</div>;
@@ -394,6 +437,40 @@ function AudiencePreviewTable({ definition, sample }: { definition: SegmentDefin
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// Map preview: aggregated location points (one dot per city, sized by count),
+// so several thousand people become a readable map instead of a dot swarm.
+function AudienceMapPreview({ definition }: { definition: SegmentDefinition }) {
+  const [points, setPoints] = useState<SegmentGeoPoint[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!isValidSegmentDefinition(definition)) { setPoints([]); setLoading(false); return; }
+    setLoading(true);
+    const t = setTimeout(() => {
+      createSegmentService(supabase).geoAggregate(definition)
+        .then(setPoints)
+        .catch(() => setPoints([]))
+        .finally(() => setLoading(false));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [definition]);
+
+  const totalLocated = points.reduce((s, p) => s + p.count, 0);
+
+  return (
+    <div className="p-4 overflow-auto" style={{ maxHeight: 480 }}>
+      <PersonLocationMap locations={points} loading={loading} />
+      {!loading && (
+        <p className="mt-2 text-xs text-[var(--gray-9)]">
+          {points.length > 0
+            ? `${totalLocated.toLocaleString()} located across ${points.length} ${points.length === 1 ? 'city' : 'cities'} (grouped; contacts without coordinates aren't shown).`
+            : 'No location data for this audience yet — dots appear for contacts that have coordinates.'}
+        </p>
+      )}
     </div>
   );
 }
