@@ -64,6 +64,10 @@ export default function BroadcastDetailPage() {
     return () => { cancelled = true; };
   }, [b?.segment_id]);
 
+  // Subscribable lists for the unsubscribe-list picker (now in the Sending tab).
+  const [categoryLists, setCategoryLists] = useState<CategoryList[]>([]);
+  useEffect(() => { listCategoryLists().then(setCategoryLists).catch(() => setCategoryLists([])); }, []);
+
   // Shared sending adapter — broadcasts edit their email-details inline (unlike
   // newsletters) and snapshot the parent's content/audience into each send.
   const broadcastAdapter: SendingAdapter | null = useMemo(() => {
@@ -83,7 +87,7 @@ export default function BroadcastDetailPage() {
       canSend: !!b.rendered_html && hasAudience && !!b.category_list_id,
       canSendReason: !b.rendered_html ? 'Add content before sending'
         : !hasAudience ? 'Set an audience first'
-        : !b.category_list_id ? 'Choose an unsubscribe list (in the Content step) before sending'
+        : !b.category_list_id ? 'Choose an unsubscribe list before sending'
         : undefined,
       features: { deliveryStrategy: true, excludeSent: true },
       emailDetails: {
@@ -114,14 +118,27 @@ export default function BroadcastDetailPage() {
         editHref: `/broadcasts/${b.id}/audience`,
         editLabel: 'Edit',
       },
+      unsubscribeList: {
+        options: categoryLists,
+        value: b.category_list_id,
+        required: true,
+        label: 'Unsubscribe list',
+        helpText: 'Required. Recipients unsubscribe from this list; the footer is added automatically, and only its subscribers within the audience are emailed.',
+        async save(listId: string | null) {
+          const nb = await updateBroadcast(b.id, { category_list_id: listId } as Partial<Broadcast>);
+          setB(nb);
+        },
+      },
       recipientCount: audienceCount,
-      async countRecipients(excludeSentSendIds: string[]) {
+      async countRecipients(excludeSentSendIds: string[], unsubscribeListId?: string | null) {
         const { data, error } = await supabase.rpc('broadcast_recipient_preview_count', {
           p_audience_type: b.audience_type,
           p_segment_id: b.audience_type === 'segment' ? b.segment_id : null,
           p_list_ids: b.audience_type === 'list' ? (b.list_ids ?? []) : null,
           p_suppression_topic: 'broadcasts',
           p_exclude_send_ids: excludeSentSendIds.length > 0 ? excludeSentSendIds : null,
+          // Cross-reference the audience with the selected list's subscribers.
+          p_category_list_id: unsubscribeListId ?? b.category_list_id,
         });
         if (error) throw error;
         return (data as number) ?? 0;
@@ -154,7 +171,7 @@ export default function BroadcastDetailPage() {
         if (!res?.success) throw new Error(res?.error || 'Test send failed');
       },
     };
-  }, [b, audienceCount]);
+  }, [b, audienceCount, categoryLists]);
 
   if (loading || !b) {
     return (
@@ -386,12 +403,8 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
   // Optional linked event (CFP / event promotion) — supplies {{event_*}} vars.
   const [events, setEvents] = useState<EventOption[]>([]);
   const [eventId, setEventId] = useState<string>(b.event_id ?? '');
-  // MANDATORY: the list this broadcast is tied to for unsubscribe.
-  const [lists, setLists] = useState<CategoryList[]>([]);
-  const [categoryListId, setCategoryListId] = useState<string>(b.category_list_id ?? '');
 
   useEffect(() => { listEventsForLink().then(setEvents).catch(() => setEvents([])); }, []);
-  useEffect(() => { listCategoryLists().then(setLists).catch(() => setLists([])); }, []);
 
   async function linkEvent(value: string) {
     setEventId(value);
@@ -399,15 +412,6 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
       await updateBroadcast(b.id, { event_id: value || null } as Partial<Broadcast>);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to link event');
-    }
-  }
-
-  async function linkCategoryList(value: string) {
-    setCategoryListId(value);
-    try {
-      await updateBroadcast(b.id, { category_list_id: value || null } as Partial<Broadcast>);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to set unsubscribe list');
     }
   }
 
@@ -439,22 +443,6 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
   return (
     <div className="max-w-3xl space-y-3">
       <Card className="p-4">
-        {/* MANDATORY unsubscribe list — every broadcast is tied to a list so
-            recipients can unsubscribe from it; the send injects the footer. */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-[var(--gray-12)] mb-1">Unsubscribe list <span className="text-[var(--red-11)]">*</span></label>
-          <p className="text-xs text-[var(--gray-10)] mb-1">Required. Recipients unsubscribe from this list; the unsubscribe footer is added to every email automatically.</p>
-          <select className={inputCls} value={categoryListId} onChange={(e) => linkCategoryList(e.target.value)} disabled={!editable}>
-            <option value="">Select a list…</option>
-            {lists.map((l) => (
-              <option key={l.id} value={l.id}>{l.name}</option>
-            ))}
-          </select>
-          {!categoryListId && (
-            <p className="text-xs text-[var(--red-11)] mt-1">A broadcast can’t be sent until it’s tied to an unsubscribe list.</p>
-          )}
-        </div>
-
         {/* Optional event link — for Call-for-Speakers / event promotion to a
             segment of the whole database. Adds {{event_*}} merge variables. */}
         <div className="mb-3">
