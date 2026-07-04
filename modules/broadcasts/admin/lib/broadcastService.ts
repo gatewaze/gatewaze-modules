@@ -121,15 +121,15 @@ export interface EventOption { id: string; event_title: string | null; event_sta
 
 export interface CategoryList { id: string; name: string; }
 
-/** Subscribable lists a broadcast can be tied to for unsubscribe (excludes
- *  internal/staff-only lists). EVERY broadcast must pick one — unsubscribing
- *  removes the recipient from this list. */
+/** Lists a broadcast can be tied to for unsubscribe. EVERY broadcast must pick
+ *  one — unsubscribing removes the recipient from this list. Shows ALL lists
+ *  (including internal + inactive): we deliberately don't filter on is_internal
+ *  — that both hid staff lists here and, on brands where the column isn't present
+ *  yet (migration 003 unapplied), made the whole query error and return nothing. */
 export async function listCategoryLists(): Promise<CategoryList[]> {
   const { data, error } = await supabase
     .from('lists')
     .select('id, name')
-    .eq('is_active', true)
-    .eq('is_internal', false)
     .order('name');
   if (error) throw error;
   return (data ?? []) as CategoryList[];
