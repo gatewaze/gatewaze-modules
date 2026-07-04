@@ -214,9 +214,14 @@ async function handler(req: Request) {
     // return — so a reply isn't ALSO stored as a newsletter reply when a
     // broadcast shares its From/Reply-To address with a newsletter collection.
     // =========================================================================
+    // Resolve which broadcast send this is a reply to: In-Reply-To (precise)
+    // first, then a recipient+address fallback for replies whose In-Reply-To is
+    // missing/malformed — so broadcasts capture replies as reliably as
+    // newsletters (which also match by the recipient address).
+    let bLog: { id: string; broadcast_send_id: string | null } | null = null;
     if (inReplyTo) {
       const baseId = inReplyTo.split('.')[0].replace(/[<>]/g, '');
-      const { data: bLog } = await supabase
+      const { data } = await supabase
         .from('email_send_log')
         .select('id, broadcast_send_id')
         .eq('provider_message_id', baseId)
@@ -224,7 +229,27 @@ async function handler(req: Request) {
         .not('broadcast_send_id', 'is', null)
         .limit(1)
         .maybeSingle();
+      bLog = data;
+    }
+    if (!bLog?.broadcast_send_id) {
+      // The replier received a broadcast to one of the reply's recipient
+      // addresses — pick their most recent such send.
+      const { data: recent } = await supabase
+        .from('email_send_log')
+        .select('id, broadcast_send_id, from_address, reply_to, sent_at')
+        .eq('recipient_email', fromEmail)
+        .not('broadcast_send_id', 'is', null)
+        .order('sent_at', { ascending: false })
+        .limit(20);
+      const m = (recent ?? []).find((r: { from_address?: string | null; reply_to?: string | null }) => {
+        const fa = (r.from_address || '').toLowerCase();
+        const rt = (r.reply_to || '').toLowerCase();
+        return toEmails.some((t) => fa.includes(t) || rt.includes(t));
+      });
+      if (m) bLog = { id: (m as { id: string }).id, broadcast_send_id: (m as { broadcast_send_id: string }).broadcast_send_id };
+    }
 
+    {
       if (bLog?.broadcast_send_id) {
         const { data: bSend } = await supabase
           .from('broadcast_sends')
