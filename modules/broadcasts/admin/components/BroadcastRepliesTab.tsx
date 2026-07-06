@@ -26,6 +26,34 @@ interface BroadcastRepliesTabProps {
   broadcastId: string;
 }
 
+type ReplyCategory = 'reply' | 'ooo' | 'job_change' | 'bounce';
+type FilterKey = 'all' | ReplyCategory;
+
+// Derive a reply's category from the classifier flags stored by the inbound
+// parser. `departed:*` reasons are job changes (sender auto-unsubscribed);
+// delivery/bounce notices are bounces; anything else auto is out-of-office.
+function replyCategory(r: { is_auto_reply: boolean; auto_reply_reason: string | null }): ReplyCategory {
+  const reason = r.auto_reply_reason || '';
+  if (reason.startsWith('departed')) return 'job_change';
+  if (!r.is_auto_reply) return 'reply';
+  if (reason === 'dsn' || reason === 'bounce-sender') return 'bounce';
+  return 'ooo';
+}
+
+const CATEGORY_BADGE: Record<Exclude<ReplyCategory, 'reply'>, { label: string; color: 'amber' | 'red' | 'gray' }> = {
+  ooo: { label: 'Out of office', color: 'amber' },
+  job_change: { label: 'Job change', color: 'red' },
+  bounce: { label: 'Bounce', color: 'gray' },
+};
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'reply', label: 'Replies' },
+  { key: 'ooo', label: 'Out of office' },
+  { key: 'job_change', label: 'Job changes' },
+  { key: 'bounce', label: 'Bounces' },
+];
+
 function formatTime(dateStr: string): string {
   const d = new Date(dateStr);
   const diffDays = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
@@ -39,7 +67,7 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
   const [replies, setReplies] = useState<Reply[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [showAutoReplies, setShowAutoReplies] = useState(false);
+  const [filter, setFilter] = useState<FilterKey>('reply');
 
   const load = useCallback(async () => {
     const { data } = await supabase
@@ -54,10 +82,14 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
 
-  const autoReplyCount = useMemo(() => replies.filter((r) => r.is_auto_reply).length, [replies]);
+  const counts = useMemo(() => {
+    const c: Record<FilterKey, number> = { all: replies.length, reply: 0, ooo: 0, job_change: 0, bounce: 0 };
+    for (const r of replies) c[replyCategory(r)] += 1;
+    return c;
+  }, [replies]);
   const visibleReplies = useMemo(
-    () => (showAutoReplies ? replies : replies.filter((r) => !r.is_auto_reply)),
-    [replies, showAutoReplies],
+    () => (filter === 'all' ? replies : replies.filter((r) => replyCategory(r) === filter)),
+    [replies, filter],
   );
   const unreadCount = visibleReplies.filter((r) => !r.is_read).length;
 
@@ -78,21 +110,31 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
           <h2 className="text-lg font-semibold text-[var(--gray-12)]">Replies</h2>
           {unreadCount > 0 && <Badge variant="solid" color="blue" size="1">{unreadCount} new</Badge>}
         </div>
-        <div className="flex items-center gap-3">
-          {autoReplyCount > 0 && (
+        <span className="text-sm text-[var(--gray-9)]">{visibleReplies.length} shown</span>
+      </div>
+
+      {/* Category filters */}
+      <div className="flex flex-wrap gap-2">
+        {FILTERS.map((f) => {
+          const active = filter === f.key;
+          const n = counts[f.key];
+          if (f.key !== 'all' && f.key !== 'reply' && n === 0) return null;
+          return (
             <button
+              key={f.key}
               type="button"
-              onClick={() => setShowAutoReplies((v) => !v)}
-              className="text-xs text-[var(--gray-11)] hover:text-[var(--gray-12)] underline-offset-2 hover:underline"
+              onClick={() => setFilter(f.key)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                active
+                  ? 'bg-[var(--accent-9)] border-[var(--accent-9)] text-white'
+                  : 'bg-transparent border-[var(--gray-a5)] text-[var(--gray-11)] hover:border-[var(--gray-a8)]'
+              }`}
             >
-              {showAutoReplies ? `Hide ${autoReplyCount} auto-replies` : `Show ${autoReplyCount} auto-replies`}
+              {f.label}
+              <span className={active ? 'ml-1.5 opacity-80' : 'ml-1.5 text-[var(--gray-9)]'}>{n}</span>
             </button>
-          )}
-          <span className="text-sm text-[var(--gray-9)]">
-            {visibleReplies.length} shown
-            {!showAutoReplies && autoReplyCount > 0 ? ` · ${autoReplyCount} auto-replies hidden` : ''}
-          </span>
-        </div>
+          );
+        })}
       </div>
 
       {loading ? (
@@ -125,9 +167,16 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
                     </p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {reply.is_auto_reply && (
-                      <Badge variant="soft" color="gray" size="1" className="hidden md:inline-flex" title={reply.auto_reply_reason || undefined}>Auto-reply</Badge>
-                    )}
+                    {(() => {
+                      const cat = replyCategory(reply);
+                      if (cat === 'reply') return null;
+                      const meta = CATEGORY_BADGE[cat];
+                      return (
+                        <Badge variant="soft" color={meta.color} size="1" className="hidden md:inline-flex" title={reply.auto_reply_reason || undefined}>
+                          {meta.label}
+                        </Badge>
+                      );
+                    })()}
                     {reply.forwarded_at && (
                       <ArrowUturnRightIcon className="w-3.5 h-3.5 text-[var(--gray-9)]" title={`Forwarded to ${reply.forwarded_to}`} />
                     )}

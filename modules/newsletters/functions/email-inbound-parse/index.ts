@@ -87,6 +87,40 @@ function classifyAutoReply(
   return { isAuto: false, reason: null };
 }
 
+/**
+ * Detect "the recipient has left / changed jobs" auto-notices, so a now-dead
+ * address can be unsubscribed from the list it was sent as part of — distinct
+ * from a temporary out-of-office (which we only categorise). Content-based
+ * (these rarely set auto headers); patterns are kept tight so a genuine human
+ * reply that merely says "no longer" isn't mistaken for a departure.
+ */
+function classifyDeparted(subject: string, text: string): { departed: boolean; reason: string | null } {
+  const hay = `${subject || ''}\n${(text || '').slice(0, 2000)}`.toLowerCase();
+  const patterns: Array<[RegExp, string]> = [
+    [/no longer (with|employed|working (?:at|for|here)|works? (?:at|for|here)|a member of|part of)\b/, 'no-longer-with'],
+    [/(?:has|have) left (?:the )?(?:company|organi[sz]ation|firm|business|team)\b/, 'left-company'],
+    [/is no longer (?:with|employed|at this (?:company|organi))/, 'no-longer-with'],
+    [/(?:mailbox|email(?: address)?) is no longer (?:monitored|active|in use|valid)/, 'address-retired'],
+    [/chang(?:ed|ing) (?:jobs|employers?|companies)/, 'changed-jobs'],
+    [/moved on from (?:the )?(?:company|[a-z])/, 'moved-on'],
+    [/no longer (?:a|an) [a-z]+ (?:employee|member)/, 'no-longer-employee'],
+  ];
+  for (const [re, reason] of patterns) if (re.test(hay)) return { departed: true, reason };
+  return { departed: false, reason: null };
+}
+
+// Remove an address from a list (job-change / departed sender). Idempotent.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function unsubscribeFromList(supabase: any, listId: string | null | undefined, email: string): Promise<void> {
+  if (!listId || !email) return;
+  const { error } = await supabase
+    .from('list_subscriptions')
+    .update({ subscribed: false, unsubscribed_at: new Date().toISOString() })
+    .eq('list_id', listId)
+    .ilike('email', email);
+  if (error) console.error('[inbound] departed unsubscribe failed:', error.message);
+}
+
 async function handler(req: Request) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -188,9 +222,15 @@ async function handler(req: Request) {
     } catch { /* ignore envelope parse errors */ }
 
     const autoReplyVerdict = classifyAutoReply(headers, subject, fromEmail);
+    // A departure/job-change notice: categorised (auto) AND triggers unsubscribe.
+    const departedVerdict = classifyDeparted(subject, text);
+    const isAuto = autoReplyVerdict.isAuto || departedVerdict.departed;
+    // reason drives the Replies-tab category filter: 'departed:*' → Job changes,
+    // 'dsn'/'bounce-sender' → Bounces, other auto reasons → Out of office.
+    const autoReason = departedVerdict.departed ? `departed:${departedVerdict.reason}` : autoReplyVerdict.reason;
     console.log(
       `Inbound email from ${fromEmail} to ${toEmails.join(', ')}: ${subject}` +
-        (autoReplyVerdict.isAuto ? ` [auto:${autoReplyVerdict.reason}]` : ''),
+        (isAuto ? ` [auto:${autoReason}]` : '') + (departedVerdict.departed ? ' [departed]' : ''),
     );
 
     if (toEmails.length === 0) {
@@ -253,7 +293,7 @@ async function handler(req: Request) {
       if (bLog?.broadcast_send_id) {
         const { data: bSend } = await supabase
           .from('broadcast_sends')
-          .select('broadcast_id')
+          .select('broadcast_id, category_list_id')
           .eq('id', bLog.broadcast_send_id)
           .maybeSingle();
         const broadcastId = bSend?.broadcast_id as string | undefined;
@@ -277,17 +317,24 @@ async function handler(req: Request) {
               body_html: html || null,
               in_reply_to: inReplyTo,
               send_log_id: bLog.id,
-              is_auto_reply: autoReplyVerdict.isAuto,
-              auto_reply_reason: autoReplyVerdict.reason,
+              is_auto_reply: isAuto,
+              auto_reply_reason: autoReason,
               forwarded_to: parent?.forward_replies_to || null,
             })
             .select('id')
             .single();
           if (bInsErr) console.error('Error storing broadcast reply:', bInsErr);
 
-          // Forward human replies to the configured mailbox (never auto-replies).
+          // Job-change / departed sender → unsubscribe the now-dead address from
+          // the list this broadcast was sent as part of.
+          if (departedVerdict.departed) {
+            await unsubscribeFromList(supabase, bSend?.category_list_id, fromEmail);
+          }
+
+          // Forward human replies to the configured mailbox (never auto-replies
+          // or departure notices).
           let bForwarded = 0;
-          if (parent?.forward_replies_to && isEmailConfigured() && !autoReplyVerdict.isAuto) {
+          if (parent?.forward_replies_to && isEmailConfigured() && !isAuto) {
             try {
               // Deliverability: forward as a clear "someone replied to your
               // broadcast" notification — NOT a spoofed reply. From = the
@@ -343,7 +390,7 @@ async function handler(req: Request) {
     const inList = toEmails.map((e) => `"${e}"`).join(',');
     const { data: collections } = await supabase
       .from('newsletters_template_collections')
-      .select('id, name, from_email, reply_to, forward_replies_to')
+      .select('id, name, from_email, reply_to, forward_replies_to, list_id')
       .or(`from_email.in.(${inList}),reply_to.in.(${inList})`);
 
     if (!collections || collections.length === 0) {
@@ -401,19 +448,25 @@ async function handler(req: Request) {
           send_log_id: sendLogId,
           edition_id: editionId,
           forwarded_to: collection.forward_replies_to || null,
-          is_auto_reply: autoReplyVerdict.isAuto,
-          auto_reply_reason: autoReplyVerdict.reason,
+          is_auto_reply: isAuto,
+          auto_reply_reason: autoReason,
         });
 
       if (insertError) {
         console.error(`Error storing reply for ${collection.name}:`, insertError);
         continue;
       }
+
+      // Job-change / departed sender → unsubscribe the now-dead address from
+      // this newsletter's list.
+      if (departedVerdict.departed) {
+        await unsubscribeFromList(supabase, (collection as { list_id?: string | null }).list_id, fromEmail);
+      }
       stored++;
 
       // Forward the reply if configured — never forward auto-replies (OOOs
       // and bounces would just clutter the human inbox the forward points at).
-      if (collection.forward_replies_to && isEmailConfigured() && !autoReplyVerdict.isAuto) {
+      if (collection.forward_replies_to && isEmailConfigured() && !isAuto) {
         try {
           // Deliverability: forward as a clear "someone replied" notification —
           // From = the newsletter's authenticated sender with the NEWSLETTER name
