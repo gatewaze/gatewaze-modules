@@ -289,18 +289,26 @@ async function handler(req: Request) {
           let bForwarded = 0;
           if (parent?.forward_replies_to && isEmailConfigured() && !autoReplyVerdict.isAuto) {
             try {
-              // Send from the address the reply landed at (a verified inbound
-              // sender), parsing "Name - email" if from_address uses that form.
+              // Deliverability: forward as a clear "someone replied to your
+              // broadcast" notification — NOT a spoofed reply. From = the
+              // broadcast's authenticated sender (aaif.live is domain-authed) with
+              // the BROADCAST name as the display, so there's no person/address
+              // mismatch (the previous "Replier (via Broadcast)" over a different
+              // person's address reads as phishing and lands in spam). The actual
+              // replier goes in Reply-To + a header line; subject is prefixed.
               const fromMatch2 = (parent.from_address || '').match(/([^<>\s]+@[^<>\s]+)/);
               const fwdFrom = fromMatch2?.[1] || toEmails[0];
-              const senderDisplay = fromName || fromEmail.split('@')[0];
+              const replier = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
+              const bcastName = parent.name || 'your broadcast';
+              const notice = `<p style="color:#555;font-size:13px;margin:0 0 12px">↩ Reply from <strong>${replier}</strong> to “${bcastName}”. Reply to this email to respond to them directly.</p><hr style="border:0;border-top:1px solid #e5e5e5;margin:0 0 14px">`;
+              const bodyHtml = html || `<pre style="white-space:pre-wrap;font-family:sans-serif">${text}</pre>`;
               await sendEmail({
                 to: parent.forward_replies_to,
-                subject,
-                html: html || `<pre style="white-space: pre-wrap; font-family: sans-serif;">${text}</pre>`,
-                text: text || '',
+                subject: `[Reply] ${subject || bcastName}`,
+                html: notice + bodyHtml,
+                text: `Reply from ${replier} to "${bcastName}":\n\n${text || ''}`,
                 fromEmail: fwdFrom,
-                fromName: `${senderDisplay} (via ${parent.name || 'Broadcast'})`,
+                fromName: `${bcastName} (replies)`,
                 replyTo: fromEmail,
               });
               if (inserted) {
