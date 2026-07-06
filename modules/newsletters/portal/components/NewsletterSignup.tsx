@@ -3,6 +3,7 @@
 
 import { useState } from 'react'
 import { getClientBrandConfig } from '@/config/brand'
+import { ConsentNote } from './ConsentNote'
 
 /**
  * Neutral newsletter signup using the portal's standard form styling.
@@ -49,23 +50,27 @@ export function NewsletterSignup({ collectionSlug }: { collectionSlug: string })
   }
 
   return (
-    <form onSubmit={submit} className="pub-nl-signup">
-      <input
-        type="email"
-        inputMode="email"
-        autoComplete="email"
-        value={email}
-        onChange={(e) => { setEmail(e.target.value); if (state === 'invalid' || state === 'error') setState('idle') }}
-        placeholder="you@example.com"
-        aria-label="Email address"
-        className="pub-nl-signup-input"
-      />
-      <button type="submit" className="pub-nl-signup-btn" disabled={state === 'submitting'}>
-        {state === 'submitting' ? 'Subscribing…' : 'Subscribe'}
-      </button>
-      {state === 'invalid' && <p className="pub-nl-signup-msg err">Please enter a valid email address.</p>}
-      {state === 'error' && <p className="pub-nl-signup-msg err">Couldn’t subscribe right now — please try again.</p>}
-    </form>
+    <>
+      <form onSubmit={submit} className="pub-nl-signup">
+        <input
+          type="email"
+          inputMode="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => { setEmail(e.target.value); if (state === 'invalid' || state === 'error') setState('idle') }}
+          placeholder="you@example.com"
+          aria-label="Email address"
+          className="pub-nl-signup-input"
+        />
+        <button type="submit" className="pub-nl-signup-btn" disabled={state === 'submitting'}>
+          {state === 'submitting' ? 'Subscribing…' : 'Subscribe'}
+        </button>
+        {state === 'invalid' && <p className="pub-nl-signup-msg err">Please enter a valid email address.</p>}
+        {state === 'error' && <p className="pub-nl-signup-msg err">Couldn’t subscribe right now — please try again.</p>}
+      </form>
+      {/* Per-brand marketing-consent note (renders nothing when unconfigured). */}
+      <ConsentNote />
+    </>
   )
 }
 

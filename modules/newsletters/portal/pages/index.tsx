@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slug'
 import { NewsletterSignup } from '../components/NewsletterSignup'
+import { ConsentNote } from '../components/ConsentNote'
 // When the onboarding module is installed + enabled it registers the
 // 'newsletters:signup' slot (the email→chat morph). Importing ModuleSlot runs
 // the generated slot registrations as a side-effect.
@@ -28,13 +29,18 @@ function NewsletterSignupSurface({ collectionSlug }: { collectionSlug: string })
     } catch { /* best-effort */ }
   }
   return (
-    <ModuleSlot
-      name="newsletters:signup"
-      enabledModuleIds={['onboarding']}
-      enabledFeatures={['onboarding']}
-      props={{ collectionSlug, onFallbackSubscribe: fallbackSubscribe }}
-      fallback={<NewsletterSignup collectionSlug={collectionSlug} />}
-    />
+    <>
+      <ModuleSlot
+        name="newsletters:signup"
+        enabledModuleIds={['onboarding']}
+        enabledFeatures={['onboarding']}
+        props={{ collectionSlug, onFallbackSubscribe: fallbackSubscribe }}
+        fallback={<NewsletterSignup collectionSlug={collectionSlug} />}
+      />
+      {/* The plain NewsletterSignup renders its own consent note; the onboarding
+          morph doesn't, so add it here for that branch. */}
+      <ConsentNote />
+    </>
   )
 }
 
