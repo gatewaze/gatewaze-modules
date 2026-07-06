@@ -31,6 +31,10 @@ const eventSpeakersModule: GatewazeModule = {
     // makes impossible to store, so `speakers` was always [] and the admin
     // showed every CFP submission as "Unknown Speaker".
     'migrations/008_fix_talks_with_speakers_view.sql',
+    // 009 lets CFP submitters upload their photo: INSERT policy for
+    // media/speaker-submissions/ (anon + authenticated). Without it the
+    // form's upload silently failed RLS and speakers had no avatar.
+    'migrations/009_speaker_submission_uploads.sql',
   ],
 
   edgeFunctions: [
