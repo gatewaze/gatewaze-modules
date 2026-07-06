@@ -25,6 +25,12 @@ const eventSpeakersModule: GatewazeModule = {
     'migrations/005_triage_adapter.sql',
     'migrations/006_register_with_platform.sql',
     'migrations/007_talk_edit_token_default.sql',
+    // 008 recreates events_talks_with_speakers per the actual FK:
+    // events_talk_speakers.speaker_id → events_speaker_profiles(id). The
+    // 004 view joined the bridge against events_speakers.id, which the FK
+    // makes impossible to store, so `speakers` was always [] and the admin
+    // showed every CFP submission as "Unknown Speaker".
+    'migrations/008_fix_talks_with_speakers_view.sql',
   ],
 
   edgeFunctions: [
