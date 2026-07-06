@@ -288,7 +288,10 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
       default_timezone: config.defaultTimezone,
       exclude_sent_send_ids: config.excludeSentSendIds.length > 0 ? config.excludeSentSendIds : null,
       total_recipients: 0, sent_count: 0, failed_count: 0,
-      metadata: {},
+      // Portal base for the send's unsubscribe/manage-preferences footer links —
+      // like newsletters, so they open the portal Subscription Centre
+      // ({portal}/subscriptions?token=…) instead of the raw edge-fn URL.
+      metadata: { portal_base_url: portalBaseFromAdmin() },
     })
     .select('id')
     .single();
