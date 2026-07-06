@@ -58,7 +58,7 @@ export function NewsletterSignup({ collectionSlug }: { collectionSlug: string })
           autoComplete="email"
           value={email}
           onChange={(e) => { setEmail(e.target.value); if (state === 'invalid' || state === 'error') setState('idle') }}
-          placeholder="you@example.com"
+          placeholder="Email address"
           aria-label="Email address"
           className="pub-nl-signup-input"
         />
