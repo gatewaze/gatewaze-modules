@@ -91,12 +91,23 @@ export async function registerPublicApiRoutes(
     throw e;
   }
 
-  // scrapling-fetcher backend — REQUIRED env at boot.
+  // scrapling-fetcher backend URL + shared secret — set when the operator
+  // enables the scrapling-fetcher service (helm value `scraplingFetcher.
+  // enabled: true` wires both env vars into the api pod). Missing config
+  // used to `throw` here, which propagated all the way up and crash-looped
+  // the api pod at boot on any brand where the module is enabled but the
+  // fetcher isn't wired (observed on AAIF prod 2026-07-06). Downgrade to
+  // fail-soft: log a warning and register no routes. `/api/v1/fetch/*`
+  // will 404 until the operator configures the backend — same practical
+  // result as leaving the module disabled, minus the crash-loop.
   const backendUrl = process.env.GATEWAZE_FETCH_BACKEND_URL;
   const internalToken = process.env.SCRAPLING_INTERNAL_TOKEN;
   if (!backendUrl || !internalToken) {
-    ctx.logger.error('GATEWAZE_FETCH_BACKEND_URL and SCRAPLING_INTERNAL_TOKEN are required');
-    throw new Error('gatewaze-fetch: missing backend configuration');
+    ctx.logger.warn(
+      '[gatewaze-fetch] GATEWAZE_FETCH_BACKEND_URL / SCRAPLING_INTERNAL_TOKEN not set — '
+      + 'module registered no routes. Set both env vars (or disable the module) to silence.',
+    );
+    return;
   }
   const client = new ScraplingFetcherClient({
     baseUrl: backendUrl,
