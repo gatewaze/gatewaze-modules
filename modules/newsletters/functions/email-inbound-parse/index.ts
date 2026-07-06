@@ -415,17 +415,23 @@ async function handler(req: Request) {
       // and bounces would just clutter the human inbox the forward points at).
       if (collection.forward_replies_to && isEmailConfigured() && !autoReplyVerdict.isAuto) {
         try {
-          // Send from the newsletter address with the replier's name,
-          // and set reply-to to the original sender so replies go back to them
-          const senderDisplay = fromName || fromEmail.split('@')[0];
+          // Deliverability: forward as a clear "someone replied" notification —
+          // From = the newsletter's authenticated sender with the NEWSLETTER name
+          // as the display (no person/address mismatch, which spam-filters flag
+          // as spoofing); the actual replier goes in Reply-To + a header line;
+          // subject is prefixed. (cf. the broadcast forward.)
+          const replier = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
+          const listName = collection.name || 'the newsletter';
+          const notice = `<p style="color:#555;font-size:13px;margin:0 0 12px">↩ Reply from <strong>${replier}</strong> to “${listName}”. Reply to this email to respond to them directly.</p><hr style="border:0;border-top:1px solid #e5e5e5;margin:0 0 14px">`;
+          const bodyHtml = html || `<pre style="white-space:pre-wrap;font-family:sans-serif">${text}</pre>`;
 
           await sendEmail({
             to: collection.forward_replies_to,
-            subject,
-            html: html || `<pre style="white-space: pre-wrap; font-family: sans-serif;">${text}</pre>`,
-            text: text || '',
+            subject: `[Reply] ${subject || listName}`,
+            html: notice + bodyHtml,
+            text: `Reply from ${replier} to "${listName}":\n\n${text || ''}`,
             fromEmail: collection.from_email,
-            fromName: `${senderDisplay} (via ${collection.name})`,
+            fromName: `${listName} (replies)`,
             replyTo: fromEmail,
           });
 
