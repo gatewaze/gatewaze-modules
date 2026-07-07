@@ -86,6 +86,8 @@ const broadcastsModule: GatewazeModule = {
     'migrations/011_broadcast_reply_messages.sql',
     // 012 adds star/archive triage status to broadcast replies.
     'migrations/012_broadcast_reply_status.sql',
+    // 013 per-broadcast engagement rollup for the dashboard table.
+    'migrations/013_broadcast_engagement.sql',
   ],
 
   adminRoutes: [
