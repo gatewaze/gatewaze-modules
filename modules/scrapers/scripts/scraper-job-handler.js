@@ -809,6 +809,23 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
           // Extract and persist event hosts + speakers (non-blocking).
           try {
             const gatewazeEventUuid = isUpdate ? existingEventUuid : newEventUuid;
+
+            // Persist full page-body HTML (e.g. LinuxFoundationEventsScraper's
+            // extracted event-page content) to events.page_content — first in
+            // the portal's content-render priority (page_content →
+            // luma_processed_html → meetup_processed_html). Kept as a dedicated
+            // field so it never collides with the Luma scraper's raw-text
+            // pageContent (which renders via luma_processed_html instead). The
+            // create/update RPC has no p_page_content param, so write directly.
+            if (gatewazeEventUuid && cleanedEvent.pageContentHtml) {
+              const { error: pcErr } = await getSupabase()
+                .from('events')
+                .update({ page_content: cleanedEvent.pageContentHtml })
+                .eq('id', gatewazeEventUuid);
+              if (pcErr) logger.log(`⚠️ page_content update failed (non-fatal): ${pcErr.message}`, 'warn');
+              else logger.log(`📄 Saved page content (${cleanedEvent.pageContentHtml.length} chars) for ${cleanedEvent.eventTitle}`);
+            }
+
             const eventContext = {
               sourceEventId: dbEvent.luma_event_id || dbEvent.source_event_id || dbEvent.event_id,
               gatewazeEventId: gatewazeEventUuid,
@@ -862,7 +879,7 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
             // Anthropic latency from the user-facing scrape job.
             // The handler reads events.luma_processed_html (just written
             // above) and events.event_description as input.
-            if (gatewazeEventUuid && (processedHtml || cleanedEvent.description || cleanedEvent.pageContent)) {
+            if (gatewazeEventUuid && (processedHtml || cleanedEvent.description || cleanedEvent.pageContent || cleanedEvent.pageContentHtml)) {
               speakerExtractEventUuids.push(gatewazeEventUuid);
             }
           } catch (extractErr) {
