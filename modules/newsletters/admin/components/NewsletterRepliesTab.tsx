@@ -5,8 +5,10 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   ArrowUturnRightIcon,
+  ArrowUturnLeftIcon,
 } from '@heroicons/react/24/outline';
 import { Card, Badge } from '@/components/ui';
+import { ReplyComposer, SentReplyList, type SentReplyMessage } from '@/components/emails/ReplyComposer';
 import { supabase } from '@/lib/supabase';
 
 interface Reply {
@@ -93,13 +95,14 @@ function normaliseForMatch(s: string): string {
 
 export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps) {
   const [replies, setReplies] = useState<Reply[]>([]);
+  const [sentByReply, setSentByReply] = useState<Record<string, SentReplyMessage[]>>({});
   const [editionTitles, setEditionTitles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('reply');
 
   const load = useCallback(async () => {
-    const [repliesRes, editionsRes] = await Promise.all([
+    const [repliesRes, editionsRes, sentRes] = await Promise.all([
       supabase
         .from('newsletter_replies')
         .select('*, edition:newsletters_editions(title, edition_date)')
@@ -110,6 +113,11 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
         .select('title')
         .eq('collection_id', newsletterId)
         .not('title', 'is', null),
+      supabase
+        .from('newsletter_reply_messages')
+        .select('id, reply_id, from_address, to_address, subject, body_html, body_text, attachments, created_at')
+        .eq('collection_id', newsletterId)
+        .order('created_at', { ascending: true }),
     ]);
     setReplies(repliesRes.data || []);
     setEditionTitles(
@@ -117,6 +125,11 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
         .map((e) => e.title || '')
         .filter((t) => t.length >= MIN_TITLE_MATCH_LENGTH),
     );
+    const grouped: Record<string, SentReplyMessage[]> = {};
+    for (const m of (sentRes.data as (SentReplyMessage & { reply_id: string })[]) || []) {
+      (grouped[m.reply_id] ||= []).push(m);
+    }
+    setSentByReply(grouped);
     setLoading(false);
   }, [newsletterId]);
 
@@ -280,6 +293,9 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
                     {reply.forwarded_at && (
                       <ArrowUturnRightIcon className="w-3.5 h-3.5 text-[var(--gray-9)]" title={`Forwarded to ${reply.forwarded_to}`} />
                     )}
+                    {(sentByReply[reply.id]?.length ?? 0) > 0 && (
+                      <ArrowUturnLeftIcon className="w-3.5 h-3.5 text-[var(--accent-9)]" title={`Replied ${sentByReply[reply.id].length}×`} />
+                    )}
                     <span className="text-xs text-[var(--gray-9)] whitespace-nowrap">
                       {formatTime(reply.created_at)}
                     </span>
@@ -318,6 +334,15 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
                           {reply.body_text || '(empty)'}
                         </pre>
                       )}
+
+                      <SentReplyList messages={sentByReply[reply.id] || []} />
+                      <ReplyComposer
+                        kind="newsletter"
+                        replyId={reply.id}
+                        toEmail={reply.from_email}
+                        toName={reply.from_name}
+                        onSent={load}
+                      />
                     </div>
                   </div>
                 )}

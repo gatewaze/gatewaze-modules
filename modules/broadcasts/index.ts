@@ -82,6 +82,8 @@ const broadcastsModule: GatewazeModule = {
     // 010 intersects the broadcast audience with the unsubscribe list's subscribers
     // (count + fan-out), so only list subscribers within the audience are emailed.
     'migrations/010_broadcast_list_intersection.sql',
+    // 011 records outbound admin replies (the "reply to a reply" composer).
+    'migrations/011_broadcast_reply_messages.sql',
   ],
 
   adminRoutes: [
