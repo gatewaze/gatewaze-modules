@@ -30,7 +30,7 @@ function CalendarCard({ calendar }: { calendar: Calendar }) {
   const href = `/calendars/${calendar.slug || calendar.calendar_id}`
 
   return (
-    <Link href={href} className="pub-card">
+    <Link href={href} className="pub-card gw-card-glow">
       <div className="pub-cover">
         {calendar.cover_image_url ? (
           <img src={calendar.cover_image_url} alt={calendar.name} />

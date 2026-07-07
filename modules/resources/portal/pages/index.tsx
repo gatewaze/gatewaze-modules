@@ -140,7 +140,7 @@ export default async function ResourcesListingPage() {
             }
 
             return (
-              <Link href={`/resources/${collection.slug}`} className="pub-card" key={collection.id}>
+              <Link href={`/resources/${collection.slug}`} className="pub-card gw-card-glow" key={collection.id}>
                 {cover}
                 <div className="pub-card-body">
                   <h3>{collection.name}</h3>
