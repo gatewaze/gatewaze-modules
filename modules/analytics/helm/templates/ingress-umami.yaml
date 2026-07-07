@@ -1,0 +1,40 @@
+{{/*
+Optional public Ingress for Umami — OFF by default.
+
+Spec §10.1's v1 hard rule keeps Umami cluster-internal (the Gatewaze
+admin proxies dashboard reads). Operators can opt in per-brand when they
+want the Umami UI + tracker served on its own hostname (e.g.
+analytics.<brand-domain>), which also gives the tracker script a
+first-party URL for sites that embed it directly.
+*/}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "gatewaze-analytics.fullname" . }}-umami
+  labels:
+    {{- include "gatewaze-analytics.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - secretName: {{ .Values.ingress.tls.secretName }}
+      hosts:
+        - {{ .Values.ingress.host | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "gatewaze-analytics.fullname" . }}-umami
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}
