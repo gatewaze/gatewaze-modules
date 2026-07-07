@@ -7,12 +7,47 @@ const calendarsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Calendars',
   description: 'Manage event calendars with discovery, CSV import, and scheduling APIs',
-  version: '1.0.0',
+  version: '1.1.0',
   features: [
     'calendars',
     'calendars.discover',
     'calendars.import',
   ],
+
+  publicApiScopes: [
+    { action: 'read', description: 'Read the public calendar directory' },
+  ],
+
+  publicApiRoutes: async (router: unknown, ctx: unknown) => {
+    const { registerPublicApi } = await import('./public-api');
+    registerPublicApi(router, ctx);
+  },
+
+  publicApiSchema: {
+    tag: { name: 'Calendars', description: 'Public calendar directory' },
+    paths: {
+      '/': {
+        get: {
+          summary: 'List public calendars with event counts',
+          operationId: 'listCalendars',
+          parameters: [
+            { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Filter by name (partial match)' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, minimum: 1, maximum: 100 } },
+            { name: 'offset', in: 'query', schema: { type: 'integer', default: 0, minimum: 0 } },
+          ],
+          responses: { 200: { description: 'Paginated list of public calendars' } },
+        },
+      },
+      '/{id}': {
+        get: {
+          summary: 'Get a public calendar by UUID, external calendar_id, or slug',
+          operationId: 'getCalendar',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { 200: { description: 'Calendar with event count' }, 404: { $ref: '#/components/responses/NotFound' } },
+        },
+      },
+    },
+  },
 
   edgeFunctions: [
     'calendars-api',
