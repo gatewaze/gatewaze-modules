@@ -27,6 +27,10 @@ const newslettersModule: GatewazeModule = {
     'newsletter-unsubscribe',
     'newsletter-gdoc-import',
     'email-inbound-parse',
+    // Outbound admin replies (shared by broadcasts + newsletters, like
+    // email-inbound-parse). Sends FROM the original send address; verifies the
+    // caller is an active admin.
+    'reply-send',
     'helix-task-create',
     'helix-task-embed-url',
     'newsletter-helix-output-sync',
@@ -280,6 +284,8 @@ const newslettersModule: GatewazeModule = {
     // is extended to pre-warm the common geo combos
     // (country-level, open/click metrics).
     'migrations/063_geo_rpcs_snapshot_wrappers.sql',
+    // 064 records outbound admin replies (the "reply to a reply" composer).
+    'migrations/064_newsletter_reply_messages.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

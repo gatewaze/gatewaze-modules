@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  EnvelopeIcon, EnvelopeOpenIcon, ChevronDownIcon, ChevronUpIcon, ArrowUturnRightIcon,
+  EnvelopeIcon, EnvelopeOpenIcon, ChevronDownIcon, ChevronUpIcon, ArrowUturnRightIcon, ArrowUturnLeftIcon,
 } from '@heroicons/react/24/outline';
 import { Card, Badge } from '@/components/ui';
+import { ReplyComposer, SentReplyList, type SentReplyMessage } from '@/components/emails/ReplyComposer';
 import { supabase } from '@/lib/supabase';
 
 interface Reply {
@@ -65,17 +66,30 @@ function formatTime(dateStr: string): string {
 
 export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
   const [replies, setReplies] = useState<Reply[]>([]);
+  const [sentByReply, setSentByReply] = useState<Record<string, SentReplyMessage[]>>({});
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('reply');
 
   const load = useCallback(async () => {
-    const { data } = await supabase
-      .from('broadcast_replies')
-      .select('*, send:broadcast_sends(subject, created_at)')
-      .eq('broadcast_id', broadcastId)
-      .order('created_at', { ascending: false });
-    setReplies((data as Reply[]) || []);
+    const [repliesRes, sentRes] = await Promise.all([
+      supabase
+        .from('broadcast_replies')
+        .select('*, send:broadcast_sends(subject, created_at)')
+        .eq('broadcast_id', broadcastId)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('broadcast_reply_messages')
+        .select('id, reply_id, from_address, to_address, subject, body_html, body_text, attachments, created_at')
+        .eq('broadcast_id', broadcastId)
+        .order('created_at', { ascending: true }),
+    ]);
+    setReplies((repliesRes.data as Reply[]) || []);
+    const grouped: Record<string, SentReplyMessage[]> = {};
+    for (const m of (sentRes.data as (SentReplyMessage & { reply_id: string })[]) || []) {
+      (grouped[m.reply_id] ||= []).push(m);
+    }
+    setSentByReply(grouped);
     setLoading(false);
   }, [broadcastId]);
 
@@ -180,6 +194,9 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
                     {reply.forwarded_at && (
                       <ArrowUturnRightIcon className="w-3.5 h-3.5 text-[var(--gray-9)]" title={`Forwarded to ${reply.forwarded_to}`} />
                     )}
+                    {(sentByReply[reply.id]?.length ?? 0) > 0 && (
+                      <ArrowUturnLeftIcon className="w-3.5 h-3.5 text-[var(--accent-9)]" title={`Replied ${sentByReply[reply.id].length}×`} />
+                    )}
                     <span className="text-xs text-[var(--gray-9)] whitespace-nowrap">{formatTime(reply.created_at)}</span>
                     {isExpanded ? <ChevronUpIcon className="w-4 h-4 text-[var(--gray-9)]" /> : <ChevronDownIcon className="w-4 h-4 text-[var(--gray-9)]" />}
                   </div>
@@ -201,6 +218,14 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
                       ) : (
                         <pre className="text-sm text-[var(--gray-12)] whitespace-pre-wrap font-sans">{reply.body_text || '(empty)'}</pre>
                       )}
+                      <SentReplyList messages={sentByReply[reply.id] || []} />
+                      <ReplyComposer
+                        kind="broadcast"
+                        replyId={reply.id}
+                        toEmail={reply.from_email}
+                        toName={reply.from_name}
+                        onSent={load}
+                      />
                     </div>
                   </div>
                 )}
