@@ -8,7 +8,7 @@
 
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { DevEventsConferenceScraper } from './scrapers/DevEventsConferenceScraper.js';
 import { DevEventsMeetupScraper } from './scrapers/DevEventsMeetupScraper.js';
 import { LumaEventsScraper } from './scrapers/LumaEventsScraper.js';
@@ -162,6 +162,62 @@ const scraperClasses = {
   // markup + drills into each event's detail page for full enrichment.
   'LinuxFoundationEventsScraper': LinuxFoundationEventsScraper,
 };
+
+// ──────────────────────────────────────────────────────────────────────
+// Pluggable registry — other modules contribute scraper classes.
+// ──────────────────────────────────────────────────────────────────────
+// So the Scrapers dashboard is the single home for EVERY content type
+// (events here, plus blog / projects / press contributed by lf-gatewaze
+// modules) without this module importing each one. A contributing module
+// ships `<module>/scrapers/register.js` whose default export is a
+// { scraper_type: Class } map; we scan the materialised module roots
+// (same roots job-worker.js uses to discover module workers) and merge.
+// Best-effort: a module whose register.js fails to load is logged + skipped,
+// never blocking the built-in event scrapers.
+const MODULE_ROOTS = [
+  '/var/lib/gatewaze/modules',   // live snapshot installed by the api
+  '/gatewaze-modules/modules',   // baked-in / runtime symlink
+  '/app/.gatewaze-modules',      // loader cache (nested <repo-slug>/modules/<mod>)
+];
+
+let _moduleScrapersLoaded = false;
+async function ensureModuleScrapers() {
+  if (_moduleScrapersLoaded) return;
+  _moduleScrapersLoaded = true;
+  const visit = async (modDir) => {
+    for (const rel of ['scrapers/register.js', 'scrapers/register.mjs']) {
+      const regPath = path.join(modDir, rel);
+      if (!fs.existsSync(regPath)) continue;
+      try {
+        const mod = await import(pathToFileURL(regPath).href);
+        const map = mod.default ?? mod;
+        for (const [type, cls] of Object.entries(map)) {
+          if (typeof cls === 'function' && !scraperClasses[type]) {
+            scraperClasses[type] = cls;
+            console.log(`🧩 [scrapers] registered module scraper: ${type} (${modDir})`);
+          }
+        }
+      } catch (err) {
+        console.warn(`⚠️ [scrapers] failed to load ${regPath}: ${err.message}`);
+      }
+    }
+  };
+  for (const root of MODULE_ROOTS) {
+    if (!fs.existsSync(root)) continue;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(root, entry.name);
+      const nested = path.join(dir, 'modules'); // /app/.gatewaze-modules/<repo>/modules/<mod>
+      if (fs.existsSync(nested)) {
+        for (const sub of fs.readdirSync(nested, { withFileTypes: true })) {
+          if (sub.isDirectory()) await visit(path.join(nested, sub.name));
+        }
+      } else {
+        await visit(dir);
+      }
+    }
+  }
+}
 
 // Region mapping helper
 function mapRegionToCode(regionName) {
@@ -348,7 +404,8 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
     jobTempDir = paths.jobTempDir;
     logger.log(`📁 Created job temp directory: ${jobTempDir}`);
 
-    // Initialize scraper class
+    // Initialize scraper class (merge in module-contributed scrapers first).
+    await ensureModuleScrapers();
     const ScraperClass = scraperClasses[scraperData.scraper_type];
     if (!ScraperClass) {
       throw new Error(`Unknown scraper type: ${scraperData.scraper_type}`);
