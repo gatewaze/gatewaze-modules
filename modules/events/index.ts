@@ -8,7 +8,7 @@ const eventsModule: GatewazeModule = {
   group: 'events',
   name: 'Events',
   description: 'Core events management - create, manage, and run events with registrations, attendance tracking, and check-in',
-  version: '1.2.0',
+  version: '1.2.1',
   features: [
     'events',
     'events.registrations',
@@ -236,7 +236,12 @@ const eventsModule: GatewazeModule = {
       table: 'events',
       scope: 'events:read',
       fields: { id: 'event_id', title: 'event_title', date: 'event_start', summary: 'listing_intro' },
-      visibilityFilter: [{ column: 'is_listed', eq: true }],
+      // PUBLISHED rule — both flags, matching public-api.ts and the portal
+      // sitemap. is_listed alone leaks live=false placeholder drafts.
+      visibilityFilter: [
+        { column: 'is_live_in_production', eq: true },
+        { column: 'is_listed', eq: true },
+      ],
       resourcePath: (row) => `/events/${row.event_id}`,
       // Mirror PUBLIC_EVENT_FIELDS in public-api.ts — keep in sync when adding fields.
       fullFields: [

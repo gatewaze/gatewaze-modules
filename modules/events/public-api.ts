@@ -13,10 +13,13 @@ export const PUBLIC_EVENT_FIELDS = [
   'content_category',
 ] as const;
 
+// Columns as they exist on the events_speakers_with_details view. The
+// previous list ('name', 'title', 'bio', …) never matched the view — every
+// speakers call 500'd with "column … does not exist".
 const PUBLIC_SPEAKER_FIELDS = [
-  'id', 'name', 'title', 'company', 'bio', 'avatar_url',
-  'linkedin_url', 'twitter_url', 'website_url',
-  'role', 'sort_order', 'is_featured', 'speaker_topic',
+  'id', 'full_name', 'job_title', 'company', 'speaker_bio', 'avatar_url',
+  'linkedin_url', 'role', 'sort_order', 'is_featured', 'speaker_topic',
+  'talk_title', 'talk_synopsis',
 ] as const;
 
 const PUBLIC_SPONSOR_FIELDS = [
@@ -34,17 +37,23 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const publicOnly = (q: any) => q.eq('is_live_in_production', true).eq('is_listed', true);
 
+  // `id` is a uuid column — comparing it against a short event_id slug makes
+  // PostgREST reject the whole query (invalid uuid input), so `.or(id.eq.X,
+  // event_id.eq.X)` can never serve slug lookups. Branch on the key shape.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const byIdOrSlug = (q: any, key: string) =>
+    UUID_RE.test(key) ? q.eq('id', key) : q.eq('event_id', key);
+
   /**
    * Resolve an id-or-slug to a PUBLIC event's UUID, or null. The speakers /
    * sponsors sub-routes must gate on the parent event's visibility — querying
    * their tables directly would serve data for unpublished events.
    */
   async function resolvePublicEventUuid(idOrSlug: string): Promise<string | null> {
-    const { data } = await publicOnly(
-      supabase
-        .from('events')
-        .select('id')
-        .or(`id.eq.${idOrSlug},event_id.eq.${idOrSlug}`),
+    const { data } = await byIdOrSlug(
+      publicOnly(supabase.from('events').select('id')),
+      idOrSlug,
     ).maybeSingle();
     return (data as { id: string } | null)?.id ?? null;
   }
@@ -117,11 +126,9 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
   router.get('/:id', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
       const fields = ctx.parseFields(req.query.fields, [...PUBLIC_EVENT_FIELDS], [...PUBLIC_EVENT_FIELDS]);
-      const { data, error } = await publicOnly(
-        supabase
-          .from('events')
-          .select(fields.join(','))
-          .or(`id.eq.${req.params.id},event_id.eq.${req.params.id}`),
+      const { data, error } = await byIdOrSlug(
+        publicOnly(supabase.from('events').select(fields.join(','))),
+        req.params.id,
       ).single();
 
       if (error || !data) {
@@ -154,6 +161,9 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
         .from('events_speakers_with_details')
         .select(PUBLIC_SPEAKER_FIELDS.join(','))
         .eq('event_uuid', eventUuid)
+        // Only confirmed speakers are public — pending/declined submissions
+        // are not announced (mirrors the portal speakers rule).
+        .eq('status', 'confirmed')
         .order('sort_order');
 
       if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
