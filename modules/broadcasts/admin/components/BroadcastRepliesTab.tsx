@@ -4,6 +4,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { Card, Badge } from '@/components/ui';
 import { ReplyComposer, SentReplyList, type SentReplyMessage } from '@/components/emails/ReplyComposer';
+import { PersonLink } from '@/components/people/PersonLink';
+import { resolvePeopleByEmail } from '@/lib/resolvePeopleByEmail';
 import { supabase } from '@/lib/supabase';
 
 interface Reply {
@@ -67,6 +69,7 @@ function formatTime(dateStr: string): string {
 export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
   const [replies, setReplies] = useState<Reply[]>([]);
   const [sentByReply, setSentByReply] = useState<Record<string, SentReplyMessage[]>>({});
+  const [personByEmail, setPersonByEmail] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('reply');
@@ -84,12 +87,14 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
         .eq('broadcast_id', broadcastId)
         .order('created_at', { ascending: true }),
     ]);
-    setReplies((repliesRes.data as Reply[]) || []);
+    const rows = (repliesRes.data as Reply[]) || [];
+    setReplies(rows);
     const grouped: Record<string, SentReplyMessage[]> = {};
     for (const m of (sentRes.data as (SentReplyMessage & { reply_id: string })[]) || []) {
       (grouped[m.reply_id] ||= []).push(m);
     }
     setSentByReply(grouped);
+    setPersonByEmail(await resolvePeopleByEmail(rows.map((r) => r.from_email)));
     setLoading(false);
   }, [broadcastId]);
 
@@ -171,9 +176,12 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
                     : <EnvelopeIcon className="w-4 h-4 text-[var(--accent-9)] flex-shrink-0" />}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className={`text-sm truncate ${!reply.is_read ? 'font-semibold text-[var(--gray-12)]' : 'text-[var(--gray-12)]'}`}>
-                        {reply.from_name || reply.from_email}
-                      </span>
+                      <PersonLink
+                        personId={personByEmail[reply.from_email?.toLowerCase()]}
+                        label={reply.from_name || reply.from_email}
+                        className={`text-sm truncate ${!reply.is_read ? 'font-semibold' : ''}`}
+                        title={personByEmail[reply.from_email?.toLowerCase()] ? 'View person profile' : undefined}
+                      />
                       {reply.from_name && <span className="text-xs text-[var(--gray-9)] truncate hidden sm:inline">{reply.from_email}</span>}
                     </div>
                     <p className={`text-sm truncate ${!reply.is_read ? 'font-medium text-[var(--gray-11)]' : 'text-[var(--gray-9)]'}`}>
@@ -205,7 +213,14 @@ export function BroadcastRepliesTab({ broadcastId }: BroadcastRepliesTabProps) {
                   <div className="px-4 pb-4 border-t border-[var(--gray-a4)]">
                     <div className="pt-3">
                       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--gray-9)] mb-3">
-                        <span>From: {reply.from_name ? `${reply.from_name} <${reply.from_email}>` : reply.from_email}</span>
+                        <span>
+                          From:{' '}
+                          <PersonLink
+                            personId={personByEmail[reply.from_email?.toLowerCase()]}
+                            label={reply.from_name ? `${reply.from_name} <${reply.from_email}>` : reply.from_email}
+                            className="text-xs"
+                          />
+                        </span>
                         <span>Date: {new Date(reply.created_at).toLocaleString()}</span>
                         {reply.forwarded_at && (
                           <span className="flex items-center gap-1">
