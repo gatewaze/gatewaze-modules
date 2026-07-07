@@ -263,7 +263,7 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
                     {cat.description && <p style={{ color: 'var(--ink-3)', fontSize: 14, margin: '0 0 14px' }}>{cat.description}</p>}
                     <div className="pub-grid res-items" style={{ marginTop: cat.description ? 0 : 14 }}>
                       {(itemsByCategory.get(cat.id) || []).map((item) => (
-                        <Link key={item.id} href={`/resources/${collection.slug}/${item.slug}`} className="pub-card">
+                        <Link key={item.id} href={`/resources/${collection.slug}/${item.slug}`} className="pub-card gw-card-glow">
                           <div className="pub-cover">
                             {item.featured_image_url && (
                               <SafeImg src={item.featured_image_url} alt={item.title} />
