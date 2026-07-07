@@ -11,7 +11,7 @@ export interface SrCollection {
   description: string | null;
   cover_image_url: string | null;
   status: 'draft' | 'published' | 'archived';
-  access: 'public' | 'authenticated' | 'inherit';
+  access: 'public' | 'authenticated' | 'inherit' | 'metered';
   meta_title: string | null;
   meta_description: string | null;
   sort_order: number;
