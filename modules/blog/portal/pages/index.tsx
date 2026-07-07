@@ -12,6 +12,8 @@ interface BlogPost {
   featured_image_alt: string | null
   published_at: string | null
   reading_time: number | null
+  is_external: boolean | null
+  canonical_url: string | null
   category: {
     name: string
     slug: string
@@ -32,7 +34,7 @@ async function getBlogPosts(): Promise<BlogPost[]> {
     .from('blog_posts')
     .select(`
       id, title, slug, excerpt, featured_image, featured_image_alt,
-      published_at, reading_time,
+      published_at, reading_time, is_external, canonical_url,
       category:blog_categories(name, slug, color)
     `)
     .eq('status', 'published')
@@ -106,8 +108,17 @@ export default async function BlogListingPage() {
         <div className="pub-empty">No posts published yet.</div>
       ) : (
         <div className="pub-grid">
-          {posts.map((post) => (
-            <Link key={post.id} href={`/blog/${post.slug}`} className="pub-card gw-card-glow">
+          {posts.map((post) => {
+            // Scraped/syndicated posts (e.g. the AAIF blog) live off-site — link
+            // the card straight out to canonical_url in a new tab instead of the
+            // internal /blog/<slug> page (which has no body for external posts).
+            const isExternal = post.is_external && post.canonical_url
+            const CardTag: any = isExternal ? 'a' : Link
+            const cardProps = isExternal
+              ? { href: post.canonical_url as string, target: '_blank', rel: 'noopener noreferrer' }
+              : { href: `/blog/${post.slug}` }
+            return (
+            <CardTag key={post.id} {...cardProps} className="pub-card gw-card-glow">
               <div className="pub-cover">
                 {post.featured_image ? (
                   <img src={post.featured_image} alt={post.featured_image_alt || post.title} />
@@ -133,8 +144,9 @@ export default async function BlogListingPage() {
                   ) : null}
                 </div>
               </div>
-            </Link>
-          ))}
+            </CardTag>
+            )
+          })}
         </div>
       )}
     </div>
