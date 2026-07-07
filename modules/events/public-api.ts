@@ -27,16 +27,39 @@ const PUBLIC_SPONSOR_FIELDS = [
 export function registerPublicApi(router: Router, ctx: PublicApiContext) {
   const supabase = ctx.supabase as SupabaseClient;
 
+  // The PUBLISHED rule — must match the portal (sitemap.ts): an event is
+  // public only when it is BOTH live in production AND listed. is_listed
+  // alone leaks placeholder/internal drafts ("Town Hall N - Placeholder")
+  // that are listed but not yet live.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const publicOnly = (q: any) => q.eq('is_live_in_production', true).eq('is_listed', true);
+
+  /**
+   * Resolve an id-or-slug to a PUBLIC event's UUID, or null. The speakers /
+   * sponsors sub-routes must gate on the parent event's visibility — querying
+   * their tables directly would serve data for unpublished events.
+   */
+  async function resolvePublicEventUuid(idOrSlug: string): Promise<string | null> {
+    const { data } = await publicOnly(
+      supabase
+        .from('events')
+        .select('id')
+        .or(`id.eq.${idOrSlug},event_id.eq.${idOrSlug}`),
+    ).maybeSingle();
+    return (data as { id: string } | null)?.id ?? null;
+  }
+
   // GET /api/v1/events
   router.get('/', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
       const { limit, offset } = ctx.parsePagination(req.query);
       const fields = ctx.parseFields(req.query.fields, [...PUBLIC_EVENT_FIELDS], [...PUBLIC_EVENT_FIELDS]);
 
-      let query = supabase
-        .from('events')
-        .select(fields.join(','), { count: 'exact' })
-        .eq('is_listed', true)
+      let query = publicOnly(
+        supabase
+          .from('events')
+          .select(fields.join(','), { count: 'exact' }),
+      )
         .order('event_start', { ascending: true })
         .range(offset, offset + limit - 1);
 
@@ -94,12 +117,12 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
   router.get('/:id', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
       const fields = ctx.parseFields(req.query.fields, [...PUBLIC_EVENT_FIELDS], [...PUBLIC_EVENT_FIELDS]);
-      const { data, error } = await supabase
-        .from('events')
-        .select(fields.join(','))
-        .or(`id.eq.${req.params.id},event_id.eq.${req.params.id}`)
-        .eq('is_listed', true)
-        .single();
+      const { data, error } = await publicOnly(
+        supabase
+          .from('events')
+          .select(fields.join(','))
+          .or(`id.eq.${req.params.id},event_id.eq.${req.params.id}`),
+      ).single();
 
       if (error || !data) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found' } });
@@ -123,10 +146,14 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
   // GET /api/v1/events/:id/speakers
   router.get('/:id/speakers', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
+      const eventUuid = await resolvePublicEventUuid(req.params.id);
+      if (!eventUuid) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found' } });
+      }
       const { data, error } = await supabase
         .from('events_speakers_with_details')
         .select(PUBLIC_SPEAKER_FIELDS.join(','))
-        .eq('event_uuid', req.params.id)
+        .eq('event_uuid', eventUuid)
         .order('sort_order');
 
       if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
@@ -142,10 +169,14 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
   // GET /api/v1/events/:id/sponsors
   router.get('/:id/sponsors', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
+      const eventUuid = await resolvePublicEventUuid(req.params.id);
+      if (!eventUuid) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found' } });
+      }
       const { data, error } = await supabase
         .from('events_sponsors')
         .select(PUBLIC_SPONSOR_FIELDS.join(','))
-        .eq('event_id', req.params.id)
+        .eq('event_id', eventUuid)
         .eq('is_active', true)
         .order('sponsorship_tier');
 
