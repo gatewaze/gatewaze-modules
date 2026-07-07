@@ -20,6 +20,8 @@ export interface BroadcastSendInstance {
   schedule_type: 'immediate' | 'scheduled';
   delivery_strategy: DeliveryStrategy;
   scheduled_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   total_recipients: number;
   sent_count: number;
   failed_count: number;
@@ -185,10 +187,35 @@ function portalBaseFromAdmin(): string {
 export async function listBroadcasts(): Promise<Broadcast[]> {
   const { data, error } = await supabase
     .from('broadcasts')
-    .select('*, sends:broadcast_sends(id, broadcast_id, status, schedule_type, delivery_strategy, scheduled_at, total_recipients, sent_count, failed_count, created_at)')
+    .select('*, sends:broadcast_sends(id, broadcast_id, status, schedule_type, delivery_strategy, scheduled_at, started_at, completed_at, total_recipients, sent_count, failed_count, created_at)')
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data ?? []) as Broadcast[];
+}
+
+/** Per-broadcast engagement (sent/opens/clicks/human split) via the
+ *  broadcast_engagement RPC — same shape the dashboard table renders. */
+export interface BroadcastEngagement {
+  broadcast_id: string;
+  sent: number;
+  delivered: number;
+  unique_opens: number;
+  unique_clicks: number;
+  human_opens: number | null;
+  human_clicks: number | null;
+  machine_opens: number | null;
+  machine_clicks: number | null;
+  human_source: 'signals-v1' | 'estimate' | null;
+  bounced: number;
+  unsubscribed: number;
+  suppressed: number;
+}
+
+export async function broadcastEngagement(broadcastIds: string[]): Promise<BroadcastEngagement[]> {
+  if (broadcastIds.length === 0) return [];
+  const { data, error } = await supabase.rpc('broadcast_engagement', { p_broadcast_ids: broadcastIds });
+  if (error) throw error;
+  return (data ?? []) as BroadcastEngagement[];
 }
 
 export async function getBroadcast(id: string): Promise<Broadcast | null> {
