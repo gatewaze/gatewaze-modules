@@ -115,21 +115,80 @@ function extractEntryContentHtml(html) {
   return null;
 }
 
-// Strip the non-content noise WordPress/page-builder markup carries so the
-// stored HTML is small and safe to render. The portal DOMPurifies again on
-// its side; this keeps page_content lean and free of scripts/handlers.
+// Remove whole elements (depth-matched <div>) whose opening tag matches `re`.
+// Used to drop interactive widgets whose JS never runs on the portal (e.g. the
+// "Ultimate Blocks" countdown timer), which would otherwise render as dead
+// markup / stray numbers + "Weeks Days Hours…" labels.
+function stripBlocks(html, re) {
+  let out = html;
+  for (let i = 0; i < 20; i++) {
+    const open = out.match(re);
+    if (!open) break;
+    const afterOpen = open.index + open[0].length;
+    let depth = 1;
+    let end = out.length;
+    for (const t of out.slice(afterOpen).matchAll(/<(\/?)div\b[^>]*>/g)) {
+      depth += t[1] === '/' ? -1 : 1;
+      if (depth === 0) { end = afterOpen + t.index + t[0].length; break; }
+    }
+    out = out.slice(0, open.index) + out.slice(end);
+  }
+  return out;
+}
+
+// The LF schedule is a <table> ("Schedule at a glance"), but the portal's
+// sanitizer allow-list has no table tags, so it collapses each row's cells
+// into run-together text. Convert every row to a paragraph the portal renders
+// cleanly: "<strong>Day</strong> — session summary".
+function tablesToParagraphs(html) {
+  return html.replace(/<table\b[\s\S]*?<\/table>/gi, (tbl) => {
+    const rows = [...tbl.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)];
+    return rows
+      .map((r) => {
+        const cells = [...r[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((c) => c[1].trim());
+        if (cells.length === 0) return '';
+        if (cells.length === 1) return `<p>${cells[0]}</p>`;
+        return `<p>${cells[0]} — ${cells.slice(1).join(' ')}</p>`;
+      })
+      .join('');
+  });
+}
+
+// Reduce a raw LF event-page body to lean, portal-safe HTML: just the
+// descriptive prose, a readable "Schedule at a glance", and the real links
+// (session recordings, livestreams). Everything that doesn't survive / doesn't
+// belong on the portal is dropped — the hero cover (its own image + date +
+// venue + Register/Sponsor buttons + hashtags), the countdown widget, layout
+// spacers, and every <img> (LF lazy-loads them via srcset/data-src, which the
+// portal sanitizer strips, so they'd render broken). Links stay so the media
+// remains reachable on the LF/YouTube source. The portal DOMPurifies again.
 const MAX_PAGE_CONTENT = 120_000;
 function cleanContentHtml(html) {
   if (!html) return '';
-  let out = html
+  let out = html;
+  // 1. Drop whole junk blocks (depth-matched divs).
+  out = stripBlocks(out, /<div[^>]*class="[^"]*\bwp-block-cover\b[^"]*"[^>]*>/i);   // hero: image/date/venue/register+sponsor
+  out = stripBlocks(out, /<div[^>]*class="[^"]*\bub[-_]countdown\b[^"]*"[^>]*>/i);  // countdown timer
+  out = stripBlocks(out, /<div[^>]*class="[^"]*\bwp-block-spacer\b[^"]*"[^>]*>/i);  // layout spacers
+  // 2. Schedule table → readable paragraphs.
+  out = tablesToParagraphs(out);
+  // 3. Drop media that breaks on the portal + the now-empty wrappers; keep
+  //    real links. Also drop stray Register/Sponsor buttons outside the hero.
+  out = out
+    .replace(/<img\b[^>]*>/gi, '')
+    .replace(/<a\b[^>]*>\s*(?:Register|Sponsor)\s*<\/a>/gi, '')
+    .replace(/<a\b[^>]*>\s*<\/a>/gi, '')
+    .replace(/<figure\b[^>]*>\s*<\/figure>/gi, '');
+  // 4. Strip scripts/styles/svg/etc + inline handlers + data-* noise.
+  out = out
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<svg[\s\S]*?<\/svg>/gi, '')
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
     .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\son[a-z]+="[^"]*"/gi, '')      // inline event handlers
-    .replace(/\sdata-[\w-]+="[^"]*"/gi, '')    // page-builder data-* noise
+    .replace(/\son[a-z]+="[^"]*"/gi, '')
+    .replace(/\sdata-[\w-]+="[^"]*"/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (out.length > MAX_PAGE_CONTENT) out = out.slice(0, MAX_PAGE_CONTENT);
