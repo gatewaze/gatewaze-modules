@@ -48,11 +48,15 @@ export class BaseScraper {
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
-        '--single-process', // Helps with Docker memory issues
+        // NOTE: '--single-process' + '--no-zygote' were removed 2026-07 — that
+        // combo is unstable in containerised Chromium and crashes the browser
+        // process non-deterministically per pod/node ("Cannot use V8 Proxy
+        // resolver in single process mode" → failed launch). Multi-process is
+        // the puppeteer-recommended config; --disable-dev-shm-usage already
+        // handles the small /dev/shm, and the worker has ample memory headroom.
         // Disable crash reporting to avoid crashpad fork issues in containers
         '--disable-crash-reporter',
         '--disable-breakpad',
-        '--no-zygote' // Prevents zygote process spawning
       ],
       ignoreHTTPSErrors: true,
       timeout: 120000
