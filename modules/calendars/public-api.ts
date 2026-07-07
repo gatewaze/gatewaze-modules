@@ -27,13 +27,33 @@ export function registerPublicApi(router: any, ctx: any): void {
   const supabase = ctx.supabase;
   const cols = PUBLIC_CALENDAR_FIELDS.join(',');
 
-  // GET / — list public calendars with their event counts.
+  // event_count must count PUBLISHED events only (is_live_in_production AND
+  // is_listed — the portal rule). A raw calendars_events(count) embed counts
+  // link rows, advertising events the public events API will never serve —
+  // agents see "1 event" then get 0 rows back.
+  async function publishedCounts(calendarIds: string[]): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (calendarIds.length === 0) return counts;
+    const { data, error } = await supabase
+      .from('calendars_events')
+      .select('calendar_id, events!inner(id)')
+      .in('calendar_id', calendarIds)
+      .eq('events.is_live_in_production', true)
+      .eq('events.is_listed', true);
+    if (error) throw new Error(error.message);
+    for (const row of data ?? []) {
+      counts.set(row.calendar_id, (counts.get(row.calendar_id) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  // GET / — list public calendars with their PUBLISHED event counts.
   router.get('/', ctx.requireScope('read'), async (req: any, res: any) => {
     try {
       const { limit, offset } = ctx.parsePagination(req.query);
       let q = supabase
         .from('calendars')
-        .select(`${cols}, calendars_events(count)`, { count: 'exact' })
+        .select(cols, { count: 'exact' })
         .eq('is_active', true)
         .eq('visibility', 'public')
         .order('name', { ascending: true })
@@ -43,13 +63,11 @@ export function registerPublicApi(router: any, ctx: any): void {
       const { data, error, count } = await q;
       if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
 
-      const rows = (data ?? []).map((row: any) => {
-        const { calendars_events, ...rest } = row;
-        return {
-          ...rest,
-          event_count: Array.isArray(calendars_events) ? calendars_events[0]?.count ?? 0 : 0,
-        };
-      });
+      const counts = await publishedCounts((data ?? []).map((r: any) => r.id));
+      const rows = (data ?? []).map((row: any) => ({
+        ...row,
+        event_count: counts.get(row.id) ?? 0,
+      }));
 
       ctx.setCache(res, { kind: 'public', maxAge: 300, sMaxAge: 600 });
       res.json({
@@ -70,7 +88,7 @@ export function registerPublicApi(router: any, ctx: any): void {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
       const { data, error } = await supabase
         .from('calendars')
-        .select(`${cols}, calendars_events(count)`)
+        .select(cols)
         .eq('is_active', true)
         .eq('visibility', 'public')
         .or(isUuid ? `id.eq.${key}` : `calendar_id.eq.${key},slug.eq.${key}`)
@@ -78,9 +96,9 @@ export function registerPublicApi(router: any, ctx: any): void {
       if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
       if (!data) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Calendar not found' } });
 
-      const { calendars_events, ...rest } = data as any;
+      const counts = await publishedCounts([data.id]);
       ctx.setCache(res, { kind: 'public', maxAge: 300, sMaxAge: 600 });
-      res.json({ data: { ...rest, event_count: Array.isArray(calendars_events) ? calendars_events[0]?.count ?? 0 : 0 } });
+      res.json({ data: { ...data, event_count: counts.get(data.id) ?? 0 } });
     } catch (err: any) {
       res.status(500).json({ error: { code: 'INTERNAL', message: err?.message ?? 'Internal server error' } });
     }
