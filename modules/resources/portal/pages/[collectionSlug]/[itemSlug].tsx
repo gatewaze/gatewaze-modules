@@ -75,8 +75,11 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
 
   if (!collection) return null
 
-  const effectiveAccess = collection.access === 'public' ? 'public' : 'authenticated'
-  if (effectiveAccess === 'authenticated' && !isAuthenticated) return null
+  // 'public' + 'metered' collections are readable by anon (RLS permits it); a
+  // metered item is gated VISUALLY in the render (teaser + sign-in), while
+  // crawlers/agents get the full text. 'authenticated'/'inherit' stay a hard
+  // gate — only signed-in users may load them at all.
+  if ((collection.access === 'authenticated' || collection.access === 'inherit') && !isAuthenticated) return null
 
   // Get item with sections
   const { data: item } = await supabase

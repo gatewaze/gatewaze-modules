@@ -645,7 +645,7 @@ function SettingsTab({ collection, onUpdate }: { collection: SrCollection; onUpd
     }
   };
 
-  const accessLabel = (a: string) => a === 'public' ? 'Public' : a === 'authenticated' ? 'Login Required' : 'Module Default';
+  const accessLabel = (a: string) => a === 'public' ? 'Public' : a === 'metered' ? 'Metered (SEO gate)' : a === 'authenticated' ? 'Login Required' : 'Module Default';
 
   return (
     <div>
@@ -679,7 +679,7 @@ function SettingsTab({ collection, onUpdate }: { collection: SrCollection; onUpd
                 <Select label="Status" value={formData.status} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, status: e.target.value })}
                   data={[{ value: 'draft', label: 'Draft' }, { value: 'published', label: 'Published' }, { value: 'archived', label: 'Archived' }]} />
                 <Select label="Access" value={formData.access} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, access: e.target.value })}
-                  data={[{ value: 'inherit', label: 'Module Default' }, { value: 'public', label: 'Public' }, { value: 'authenticated', label: 'Login Required' }]} />
+                  data={[{ value: 'inherit', label: 'Module Default' }, { value: 'public', label: 'Public' }, { value: 'metered', label: 'Metered (SEO gate)' }, { value: 'authenticated', label: 'Login Required' }]} />
               </div>
               <Input label="Cover Image URL" value={formData.cover_image_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, cover_image_url: e.target.value })} />
               <Input label="Meta Title" value={formData.meta_title} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, meta_title: e.target.value })} />

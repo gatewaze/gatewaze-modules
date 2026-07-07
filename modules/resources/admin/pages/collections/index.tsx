@@ -21,7 +21,7 @@ const collectionSchema = yup.object({
   name: yup.string().required('Name is required').min(2, 'Name must be at least 2 characters'),
   description: yup.string().nullable().optional(),
   status: yup.string().oneOf(['draft', 'published', 'archived']).required(),
-  access: yup.string().oneOf(['public', 'authenticated', 'inherit']).required(),
+  access: yup.string().oneOf(['public', 'authenticated', 'inherit', 'metered']).required(),
   cover_image_url: yup.string().url('Must be a valid URL').nullable().optional(),
   meta_title: yup.string().max(60, 'Meta title must be 60 characters or less').nullable().optional(),
   meta_description: yup.string().max(160, 'Meta description must be 160 characters or less').nullable().optional(),
@@ -128,6 +128,7 @@ const CollectionsPage: React.FC = () => {
     switch (access) {
       case 'public': return 'Public';
       case 'authenticated': return 'Login Required';
+      case 'metered': return 'Metered (SEO gate)';
       case 'inherit': return 'Module Default';
       default: return access;
     }
@@ -233,6 +234,7 @@ const CollectionsPage: React.FC = () => {
               data={[
                 { value: 'inherit', label: 'Module Default' },
                 { value: 'public', label: 'Public' },
+                { value: 'metered', label: 'Metered (SEO gate)' },
                 { value: 'authenticated', label: 'Login Required' },
               ]}
             />

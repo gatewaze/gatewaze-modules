@@ -22,6 +22,7 @@ const structuredResourcesModule: GatewazeModule = {
     'migrations/003_keyword_adapter.sql',
     'migrations/004_register_with_platform.sql',
     'migrations/005_public_items_view.sql',
+    'migrations/006_metered_access.sql',
   ],
 
   // Surface public resource items in the unified /api/v1/content feed. The
