@@ -59,19 +59,37 @@ export async function resolveWikiAttach(
 ): Promise<WikiAttachResult> {
   if (process.env.WIKI_RUNTIME_DISABLED === '1') return EMPTY;
 
-  // Per-use-case opt-out: wiki_enabled defaults to true. If the column does
-  // not exist yet (pre-toggle migration) the select errors → data null → we
-  // keep the default-on behaviour.
+  // Per-use-case participation. The wiki MCP (live tools) is attached ONLY
+  // for effective mode 'tools'. spec-ai-wiki-runtime-integration.md §4.2:
+  //   - wiki_enabled=false  OR  wiki_mode='off'      → 'off'  → no attach
+  //   - wiki_mode='context'                          → no attach (memory is
+  //     delivered out-of-band via the runner's recall/persist, not MCP tools)
+  //   - wiki_mode='tools' (default)                  → attach the MCP
+  // Pre-migration (no wiki_mode column) the select on it errors → we fall back
+  // to the legacy wiki_enabled boolean (default-on 'tools').
   try {
     const res = await supabase
       .from('ai_use_cases')
-      .select('wiki_enabled')
+      .select('wiki_enabled, wiki_mode')
       .eq('id', useCaseId)
       .maybeSingle();
-    const row = (res.data as { wiki_enabled?: boolean } | null) ?? null;
-    if (row && row.wiki_enabled === false) return EMPTY;
+    const row = (res.data as { wiki_enabled?: boolean; wiki_mode?: string } | null) ?? null;
+    const effectiveMode =
+      row?.wiki_enabled === false ? 'off' : (row?.wiki_mode ?? 'tools');
+    if (effectiveMode !== 'tools') return EMPTY;
   } catch {
-    // default-on
+    // Pre-migration fallback: honour only the legacy boolean.
+    try {
+      const res = await supabase
+        .from('ai_use_cases')
+        .select('wiki_enabled')
+        .eq('id', useCaseId)
+        .maybeSingle();
+      const row = (res.data as { wiki_enabled?: boolean } | null) ?? null;
+      if (row && row.wiki_enabled === false) return EMPTY;
+    } catch {
+      // default-on
+    }
   }
 
   const apiBase = process.env.GATEWAZE_INTERNAL_API_URL || process.env.GATEWAZE_API_URL;

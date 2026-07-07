@@ -85,6 +85,9 @@ const aiModule: GatewazeModule = {
     'migrations/039_ai_editor_use_cases_split.sql',
     // Per-use-case wiki memory toggle (default on). spec-ai-memory-wiki.md.
     'migrations/040_ai_use_cases_wiki_enabled.sql',
+    // Per-use-case wiki participation MODE (tools/context/off) + persist flag.
+    // spec-ai-wiki-runtime-integration.md §4.2/§6.
+    'migrations/041_ai_use_cases_wiki_mode.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every
