@@ -228,6 +228,41 @@ export async function runRecipeViaGoose(
     });
   }
 
+  // spec-ai-wiki-runtime-integration.md §4.1 — classify this run as structured
+  // iff the recipe or any sub-recipe declares a response_schema (Goose then
+  // injects the `recipe__final_output` tool the model must call). Structured
+  // runs carry the minimal tool surface; `settings.structured_tools` re-admits.
+  const isStructuredRun = !!recipeWithSkills.response_schema
+    || Array.from(subRecipesWithSkills.values()).some(
+      (sr) => !!(sr as { response_schema?: unknown }).response_schema,
+    );
+  const structuredToolsAllow = Array.isArray(
+    (recipeWithSkills.settings as { structured_tools?: unknown } | undefined)?.structured_tools,
+  )
+    ? ((recipeWithSkills.settings as { structured_tools?: string[] }).structured_tools as string[])
+    : [];
+
+  // §4.3 recall: for a structured `context`-mode run whose recipe declares a
+  // `wiki_context` param, inject a bounded recall block before the model turn.
+  // Best-effort; the recipe's `wiki_context` default ("") applies otherwise.
+  const { readWikiUseCaseConfig, getWikiContextAdapter, recallWikiContext } =
+    await import('../wiki/context-adapters.js');
+  // The wiki repository types its client more strictly (needs rpc); SupabaseClient
+  // satisfies it structurally at runtime.
+  const wikiDb = supabase as unknown as import('../wiki/repository.js').WikiDbClient;
+  const wikiCfg = await readWikiUseCaseConfig(wikiDb, args.useCase);
+  const runParams: Record<string, unknown> = { ...args.params };
+  let wikiRecallHitCount = 0;
+  const declaresWikiContext = (recipeWithSkills.parameters ?? []).some(
+    (p) => (p as { key?: string }).key === 'wiki_context',
+  );
+  const wikiContextAdapter = getWikiContextAdapter(args.useCase);
+  if (isStructuredRun && wikiCfg.mode === 'context' && declaresWikiContext && wikiContextAdapter) {
+    const recall = await recallWikiContext(wikiDb, args.useCase, wikiContextAdapter, runParams, {});
+    runParams.wiki_context = recall.text;
+    wikiRecallHitCount = recall.hitCount;
+  }
+
   // 2. Materialize recipe + sub-recipes into a tmpdir Goose can read.
   let workdir: string | null = null;
   let recipePath: string;
@@ -250,7 +285,7 @@ export async function runRecipeViaGoose(
   //    from secret stores. PATH is preserved so uvx/npx-resolved stdio
   //    MCP extensions can find their dependencies.
   const paramArgs: string[] = [];
-  for (const [k, v] of Object.entries(args.params)) {
+  for (const [k, v] of Object.entries(runParams)) {
     paramArgs.push('--params', `${k}=${formatParam(v)}`);
   }
   // Iteration ceilings — set EXPLICITLY rather than letting Goose's
@@ -297,6 +332,7 @@ export async function runRecipeViaGoose(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       recipeExtensions: (recipeStripped.extensions ?? []) as any[],
       forceWebToolsBridge: ccSubstituted,
+      structuredStrip: isStructuredRun ? { allow: structuredToolsAllow } : null,
     });
     extensionFlags = resolved.flags;
     extensionEnv = resolved.env;
@@ -705,6 +741,38 @@ export async function runRecipeViaGoose(
     const status: RunRecipeViaGooseResult['status'] = cancelled
       ? 'cancelled'
       : failureReason ? 'failed' : 'complete';
+
+    // spec-ai-wiki-runtime-integration.md §4.3 auto-persist: on terminal success
+    // of a single-shot structured `context` run, write the result back to the
+    // wiki. Suppressed when the recipe sets settings.wiki_auto_persist=false —
+    // multi-sub-run coordinators (e.g. L&L) persist explicitly once on the
+    // accepted final result (§5.5). Best-effort; never fails the run.
+    if (
+      status === 'complete'
+      && isStructuredRun
+      && wikiCfg.mode === 'context'
+      && wikiCfg.persistEnabled
+      && wikiContextAdapter
+      && finalOutput != null && typeof finalOutput === 'object'
+      && (recipeWithSkills.settings as { wiki_auto_persist?: boolean } | undefined)?.wiki_auto_persist !== false
+    ) {
+      try {
+        const { persistWikiPage } = await import('../wiki/context-adapters.js');
+        const p = await persistWikiPage(
+          wikiDb, args.useCase, wikiContextAdapter,
+          finalOutput as Record<string, unknown>, runParams,
+        );
+        if (!p.ok && p.error) {
+          extensionWarnings.push({ code: 'wiki_persist_failed', server: 'gatewaze-wiki', details: String(p.error).slice(0, 300) });
+        }
+      } catch (err) {
+        extensionWarnings.push({ code: 'wiki_persist_failed', server: 'gatewaze-wiki', details: (err instanceof Error ? err.message : String(err)).slice(0, 300) });
+      }
+    }
+    if (wikiRecallHitCount > 0) {
+      _ctx.logger?.info?.('ai.recipe-goose.wiki_recall', { run_id: runId, hit_count: wikiRecallHitCount });
+    }
+
     await supabase
       .from('ai_recipe_runs')
       .update({
@@ -1276,24 +1344,51 @@ async function resolveMcpExtensions(
      * the recipe — the MCP stands in as the web-search replacement.
      */
     forceWebToolsBridge?: boolean;
+    /**
+     * spec-ai-wiki-runtime-integration.md §4.1 — minimal-tool-surface
+     * guardrail. Set for STRUCTURED-OUTPUT runs (recipe/sub-recipe declares a
+     * response_schema). When present, every agentic tool surface (wiki +
+     * web-tools + allowlisted MCP servers) is stripped so an agentic-leaning
+     * model (e.g. Sonnet 5) can't skip Goose's `recipe__final_output` call.
+     * `allow` re-admits named tools (recipe `settings.structured_tools`).
+     */
+    structuredStrip?: { allow: string[] } | null;
   },
 ): Promise<McpResolveResult> {
+  // spec-ai-wiki-runtime-integration.md §4.1 (audit-narrowed) — for a
+  // structured-output run, strip the WIKI MCP only. The wiki tools are the
+  // proven cause of Sonnet 5 not calling `recipe__final_output`; web-tools are
+  // NOT stripped, because a large fleet of structured research recipes
+  // (daily-briefing-research-*, aaif-* sweeps, quick-test-research-*)
+  // legitimately uses web_search/fetch_url alongside a response_schema and
+  // finalizes fine. An operator may re-admit wiki via
+  // settings.structured_tools ['gatewaze-wiki']. runChat runs never pass strip.
+  const strip = args.structuredStrip ?? null;
+  const strippedSurfaces: string[] = [];
+  const allowSurface = (name: string): boolean =>
+    !strip || (strip.allow?.includes(name) ?? false);
+  const EMPTY_RESOLVE: McpResolveResult = { flags: [], env: {}, warnings: [], loadedNames: [] };
+
   // Web-tools bridge: bring ai_use_cases.allowed_web_tools into the
   // Goose spawn as a gatewaze-owned stdio MCP exposing gatewaze_search.
   // Same backend (Serper/DDG) the inline runChat path uses. When
   // forceWebToolsBridge is set, attach regardless of allowed_web_tools.
+  // NOT stripped on structured runs — the research fleet depends on it.
   const webToolsResolve = await resolveWebToolsExtension(
     supabase,
     args.useCaseId,
     { forceAttach: args.forceWebToolsBridge ?? false },
   );
 
-  // Wiki memory bridge: attach the gatewaze-wiki stdio MCP for every agentic
-  // run so the model can read + write its durable, searchable cross-turn
-  // knowledge (wiki_search/read/upsert/list). Auto-attached like web-tools —
-  // independent of the recipe's declared extensions + the MCP allowlist —
-  // gated by the use case's wiki_enabled flag (default on). §5.1.
-  const wikiResolve = await resolveWikiAttach(supabase, args.useCaseId);
+  // Wiki memory bridge: the gatewaze-wiki stdio MCP (wiki_search/read/upsert/
+  // list). Attached only for effective wiki_mode='tools' (§4.2). On a
+  // structured run it is STRIPPED (§4.1) — `context`-mode memory is delivered
+  // out-of-band (recall/persist), never as live tools.
+  let wikiResolve = await resolveWikiAttach(supabase, args.useCaseId);
+  if (wikiResolve.loadedNames.length && !allowSurface('gatewaze-wiki')) {
+    strippedSurfaces.push(...wikiResolve.loadedNames);
+    wikiResolve = EMPTY_RESOLVE;
+  }
 
   // 1. Recipe-declared extension names. Recipes that declare nothing
   //    still get the web-tools bridge if allowed_web_tools is non-empty;
@@ -1304,11 +1399,16 @@ async function resolveMcpExtensions(
       .filter((n): n is string => typeof n === 'string' && n.length > 0),
   ));
 
+  const stripWarning = (): Array<Record<string, unknown>> =>
+    strippedSurfaces.length
+      ? [{ code: 'structured_wiki_stripped', server: null, details: `Structured-output run: stripped wiki MCP [${strippedSurfaces.join(', ')}] so the model finalizes via recipe__final_output (context-mode memory is delivered via recall/persist). Re-admit via settings.structured_tools. spec-ai-wiki-runtime-integration.md §4.1.` }]
+      : [];
+
   if (declaredNames.length === 0) {
     return {
       flags: [...webToolsResolve.flags, ...wikiResolve.flags],
       env: { ...webToolsResolve.env, ...wikiResolve.env },
-      warnings: [...webToolsResolve.warnings, ...wikiResolve.warnings],
+      warnings: [...webToolsResolve.warnings, ...wikiResolve.warnings, ...stripWarning()],
       loadedNames: [...webToolsResolve.loadedNames, ...wikiResolve.loadedNames],
     };
   }
@@ -1466,7 +1566,7 @@ async function resolveMcpExtensions(
   return {
     flags: [...webToolsResolve.flags, ...wikiResolve.flags, ...flags],
     env: { ...webToolsResolve.env, ...wikiResolve.env, ...env },
-    warnings: [...webToolsResolve.warnings, ...wikiResolve.warnings, ...warnings],
+    warnings: [...webToolsResolve.warnings, ...wikiResolve.warnings, ...warnings, ...stripWarning()],
     loadedNames: [...webToolsResolve.loadedNames, ...wikiResolve.loadedNames, ...loadedNames],
   };
 }

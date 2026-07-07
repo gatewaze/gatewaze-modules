@@ -19,20 +19,35 @@ import {
   type EmbedFn,
 } from './repository.js';
 
+// Live in-process wiki tools + RAG injection are exposed only for effective
+// wiki_mode 'tools' (conversational use cases). 'context' delivers memory via
+// the recipe runner's recall/persist, not live chat tools; 'off' disables it.
+// spec-ai-wiki-runtime-integration.md §4.2/§4.6.
 async function wikiEnabled(supabase: WikiDbClient, useCase: string): Promise<boolean> {
   if (process.env.WIKI_RUNTIME_DISABLED === '1') return false;
   try {
     const res = await supabase
       .from('ai_use_cases')
-      .select('wiki_enabled')
+      .select('wiki_enabled, wiki_mode')
       .eq('id', useCase)
       .maybeSingle();
-    const row = (res.data as { wiki_enabled?: boolean } | null) ?? null;
-    if (row && row.wiki_enabled === false) return false;
+    const row = (res.data as { wiki_enabled?: boolean; wiki_mode?: string } | null) ?? null;
+    const effectiveMode = row?.wiki_enabled === false ? 'off' : (row?.wiki_mode ?? 'tools');
+    return effectiveMode === 'tools';
   } catch {
-    // column may not exist yet → default-on
+    // Pre-migration fallback: honour only the legacy boolean (default-on).
+    try {
+      const res = await supabase
+        .from('ai_use_cases')
+        .select('wiki_enabled')
+        .eq('id', useCase)
+        .maybeSingle();
+      const row = (res.data as { wiki_enabled?: boolean } | null) ?? null;
+      return !(row && row.wiki_enabled === false);
+    } catch {
+      return true; // default-on
+    }
   }
-  return true;
 }
 
 function makeEmbed(supabase: WikiDbClient): EmbedFn {
