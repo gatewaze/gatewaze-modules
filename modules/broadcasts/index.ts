@@ -84,6 +84,8 @@ const broadcastsModule: GatewazeModule = {
     'migrations/010_broadcast_list_intersection.sql',
     // 011 records outbound admin replies (the "reply to a reply" composer).
     'migrations/011_broadcast_reply_messages.sql',
+    // 012 adds star/archive triage status to broadcast replies.
+    'migrations/012_broadcast_reply_status.sql',
   ],
 
   adminRoutes: [
