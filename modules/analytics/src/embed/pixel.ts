@@ -62,27 +62,31 @@ export function buildPixelBundle(input: BuildPixelBundleInput): string {
   const stripScriptTags = (markup: string): string =>
     markup.replace(/<script[^>]*>/g, '').replace(/<\/script>/g, '');
 
-  // Runtime dimension resolver: tags every event with the current page's
-  // path + URL so external sites still get the basics. Operators can call
-  // window.gatewazeAnalytics.setDimensions({...}) to add more.
+  // Runtime dimension resolver. Operators call
+  // window.gatewazeAnalytics.setDimensions({...}) and the values are merged
+  // into every subsequent custom event's data.
+  //
+  // NOTE: Umami v3 has no persistent payload-transformer API — track(fn)
+  // fires ONE immediate beacon with fn's return value (the v1 transformer
+  // semantics this used to rely on). So we wrap umami.track instead; page
+  // views (auto-tracked) already carry url/referrer natively.
   const runtimeDimensionInit = `
 (function(){
-  function deriveDims(){
-    return {
-      page_path: location.pathname,
-      page_url: location.href,
-      referrer: document.referrer || null,
-    };
-  }
   window.gatewazeAnalytics = window.gatewazeAnalytics || {};
   window.gatewazeAnalytics.setDimensions = function(d){
     window.gatewazeAnalytics._extra = Object.assign({}, window.gatewazeAnalytics._extra || {}, d);
   };
   function ready(){
     if(window.umami && typeof window.umami.track==='function'){
-      window.umami.track(function(props){
-        return Object.assign({}, props||{}, deriveDims(), window.gatewazeAnalytics._extra||{});
-      });
+      if(window.umami.__gwWrapped) return;
+      var orig = window.umami.track.bind(window.umami);
+      window.umami.track = function(a, b){
+        if(typeof a === 'string'){
+          return orig(a, Object.assign({}, b || {}, window.gatewazeAnalytics._extra || {}));
+        }
+        return orig(a, b);
+      };
+      window.umami.__gwWrapped = true;
     } else { setTimeout(ready, 50); }
   }
   ready();

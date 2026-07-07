@@ -60,10 +60,12 @@ function fakeRes(): Response & { _status?: number; _body?: unknown; _headers?: R
 }
 
 const PROPERTY_ID = '11111111-2222-3333-4444-555555555555';
+const WEBSITE_UUID = '99999999-8888-7777-6666-555555555555';
 
 const baseDeps = (over: Partial<IngestRoutesDeps> = {}): IngestRoutesDeps => ({
   supabase: makeFakeSupabase({ data: null, error: null }),
   umamiCollect: vi.fn(async () => ({ ok: true, status: 200 })),
+  fetchUmamiTracker: vi.fn(async () => ({ ok: true, status: 200, body: 'tracker("/api/send")' })),
   decryptSecret: (b) => Buffer.isBuffer(b) ? b.toString('utf-8') : (b as string),
   rateLimit: async () => ({ allowed: true, resetAt: Date.now() + 60_000 }),
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -108,7 +110,7 @@ describe('createIngestRoutes — collect', () => {
   it('returns 403 when origin not in domains allowlist', async () => {
     const routes = createIngestRoutes(baseDeps({
       supabase: makeFakeSupabase({
-        data: { property_id: PROPERTY_ID, kind: 'gatewaze_site', domains: ['example.com'], status: 'active' },
+        data: { property_id: PROPERTY_ID, kind: 'gatewaze_site', domains: ['example.com'], status: 'active', website_uuid: WEBSITE_UUID },
         error: null,
       }),
     }));
@@ -125,7 +127,7 @@ describe('createIngestRoutes — collect', () => {
     const routes = createIngestRoutes(baseDeps({
       umamiCollect: umami,
       supabase: makeFakeSupabase({
-        data: { property_id: PROPERTY_ID, kind: 'gatewaze_site', domains: ['example.com'], status: 'active' },
+        data: { property_id: PROPERTY_ID, kind: 'gatewaze_site', domains: ['example.com'], status: 'active', website_uuid: WEBSITE_UUID },
         error: null,
       }),
     }));
@@ -139,14 +141,53 @@ describe('createIngestRoutes — collect', () => {
     );
     expect(res._status).toBe(204);
     expect(umami).toHaveBeenCalledTimes(1);
-    const [, headers] = umami.mock.calls[0]!;
+    const [forwarded, headers] = umami.mock.calls[0]!;
+    // The browser-facing property_id is swapped for Umami's website_uuid.
+    expect((forwarded as Record<string, unknown>)['website']).toBe(WEBSITE_UUID);
     expect((headers as Record<string, string>)['User-Agent']).toBe('Mozilla/5.0');
+  });
+
+  it('accepts the stock tracker shape (payload.website nested) and swaps the uuid', async () => {
+    const umami = vi.fn(async () => ({ ok: true, status: 200 }));
+    const routes = createIngestRoutes(baseDeps({
+      umamiCollect: umami,
+      supabase: makeFakeSupabase({
+        data: { property_id: PROPERTY_ID, kind: 'portal', domains: ['example.com'], status: 'active', website_uuid: WEBSITE_UUID },
+        error: null,
+      }),
+    }));
+    const res = fakeRes();
+    await routes.collect(
+      fakeReq({
+        body: { type: 'event', payload: { website: PROPERTY_ID, url: '/x' } },
+        headers: { origin: 'https://example.com' },
+      }),
+      res,
+    );
+    expect(res._status).toBe(204);
+    const [forwarded] = umami.mock.calls[0]!;
+    expect(((forwarded as Record<string, unknown>)['payload'] as Record<string, unknown>)['website']).toBe(WEBSITE_UUID);
+  });
+
+  it('returns 404 when the property has no provisioned website_uuid', async () => {
+    const routes = createIngestRoutes(baseDeps({
+      supabase: makeFakeSupabase({
+        data: { property_id: PROPERTY_ID, kind: 'portal', domains: ['example.com'], status: 'active', website_uuid: null },
+        error: null,
+      }),
+    }));
+    const res = fakeRes();
+    await routes.collect(
+      fakeReq({ body: { website: PROPERTY_ID }, headers: { origin: 'https://example.com' } }),
+      res,
+    );
+    expect(res._status).toBe(404);
   });
 
   it('honours wildcard domains for external properties', async () => {
     const routes = createIngestRoutes(baseDeps({
       supabase: makeFakeSupabase({
-        data: { property_id: PROPERTY_ID, kind: 'external', domains: ['*'], status: 'active' },
+        data: { property_id: PROPERTY_ID, kind: 'external', domains: ['*'], status: 'active', website_uuid: WEBSITE_UUID },
         error: null,
       }),
     }));
@@ -161,7 +202,7 @@ describe('createIngestRoutes — collect', () => {
   it('falls back to Referer when Origin is missing', async () => {
     const routes = createIngestRoutes(baseDeps({
       supabase: makeFakeSupabase({
-        data: { property_id: PROPERTY_ID, kind: 'gatewaze_site', domains: ['example.com'], status: 'active' },
+        data: { property_id: PROPERTY_ID, kind: 'gatewaze_site', domains: ['example.com'], status: 'active', website_uuid: WEBSITE_UUID },
         error: null,
       }),
     }));
@@ -179,7 +220,7 @@ describe('createIngestRoutes — collect', () => {
       logger,
       umamiCollect: async () => ({ ok: false, status: 503 }),
       supabase: makeFakeSupabase({
-        data: { property_id: PROPERTY_ID, kind: 'gatewaze_site', domains: ['example.com'], status: 'active' },
+        data: { property_id: PROPERTY_ID, kind: 'gatewaze_site', domains: ['example.com'], status: 'active', website_uuid: WEBSITE_UUID },
         error: null,
       }),
     }));
@@ -241,5 +282,56 @@ describe('createIngestRoutes — pixelBundle', () => {
     expect(res._headers!['Access-Control-Allow-Origin']).toBe('*');
     expect(typeof res._body).toBe('string');
     expect(res._body as string).toContain(PROPERTY_ID);
+  });
+});
+
+describe('createIngestRoutes — trackerScript', () => {
+  it('serves the tracker with the beacon path rewritten to /a/collect', async () => {
+    const routes = createIngestRoutes(baseDeps({
+      fetchUmamiTracker: async () => ({ ok: true, status: 200, body: 'x("/api/send")' }),
+    }));
+    const res = fakeRes();
+    await routes.trackerScript(fakeReq(), res);
+    expect(res._status).toBe(200);
+    expect(res._headers!['Content-Type']).toMatch(/javascript/);
+    expect(res._body).toBe('x("/a/collect")');
+  });
+
+  it('caches the tracker between requests', async () => {
+    const fetcher = vi.fn(async () => ({ ok: true, status: 200, body: 'x("/api/send")' }));
+    const routes = createIngestRoutes(baseDeps({ fetchUmamiTracker: fetcher }));
+    await routes.trackerScript(fakeReq(), fakeRes());
+    await routes.trackerScript(fakeReq(), fakeRes());
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 502 when umami is unreachable and no cache exists', async () => {
+    const routes = createIngestRoutes(baseDeps({
+      fetchUmamiTracker: async () => { throw new Error('boom'); },
+    }));
+    const res = fakeRes();
+    await routes.trackerScript(fakeReq(), res);
+    expect(res._status).toBe(502);
+  });
+});
+
+describe('createIngestRoutes — portalConfig', () => {
+  it('returns the active portal property id', async () => {
+    const routes = createIngestRoutes(baseDeps({
+      supabase: makeFakeSupabase({ data: { property_id: PROPERTY_ID, status: 'active' }, error: null }),
+    }));
+    const res = fakeRes();
+    await routes.portalConfig(fakeReq(), res);
+    expect(res._status ?? 200).toBe(200);
+    expect(res._body).toEqual({ property_id: PROPERTY_ID });
+  });
+
+  it('404s when no active portal property exists', async () => {
+    const routes = createIngestRoutes(baseDeps({
+      supabase: makeFakeSupabase({ data: null, error: null }),
+    }));
+    const res = fakeRes();
+    await routes.portalConfig(fakeReq(), res);
+    expect(res._status).toBe(404);
   });
 });

@@ -4,10 +4,16 @@
  *
  * Per spec-analytics-module §11.3 + §14.1.
  *
- * Two endpoints:
+ * Endpoints:
  *   POST /a/collect       — receives a single event payload, validates
  *                           Origin against the property's domains list,
  *                           rate-limits, forwards to Umami /api/send.
+ *   GET  /a/script.js     — serves the Umami tracker itself, proxied from
+ *                           the Umami service with its beacon path
+ *                           rewritten from /api/send to /a/collect so all
+ *                           browser traffic flows through our validated
+ *                           ingest (the embed tags point here).
+ *   GET  /a/portal-config — public discovery of the brand's portal property.
  *   GET  /a/<id>.js       — serves the pre-rendered pixel bundle for
  *                           an `external` property.
  *
@@ -32,6 +38,8 @@ export interface IngestRoutesDeps {
   supabase: IngestSupabaseClient;
   /** Forward to Umami /api/send (returns the response body). */
   umamiCollect: (payload: Record<string, unknown>, headers: Record<string, string>) => Promise<{ ok: boolean; status: number }>;
+  /** Fetch the Umami tracker script (GET <umami>/script.js). */
+  fetchUmamiTracker: () => Promise<{ ok: boolean; status: number; body: string }>;
   /** Decrypt a stored secret blob. */
   decryptSecret: (encrypted: Buffer | string) => string;
   /** Sliding-window rate limit. Same shape as @/lib/rate-limit. */
@@ -56,6 +64,7 @@ interface PropertyRow {
   kind: 'gatewaze_site' | 'gatewaze_host' | 'portal' | 'external';
   domains: string[];
   status: string;
+  website_uuid: string | null;
 }
 
 /**
@@ -98,8 +107,13 @@ export function createIngestRoutes(deps: IngestRoutesDeps) {
     const body = req.body as { website?: unknown; payload?: unknown; type?: unknown } | undefined;
     if (!body || typeof body !== 'object') return sendError(res, 400, 'validation_failed', 'body required');
 
-    // Umami expects the property_id under `website` per its /api/send shape.
-    const propertyId = typeof body.website === 'string' ? body.website : '';
+    // Umami's /api/send shape nests the property under payload.website
+    // ({ type, payload: { website, ... } }) — that's what the stock tracker
+    // posts. Accept a top-level `website` too for hand-rolled senders.
+    const nested = body.payload as { website?: unknown } | undefined;
+    const propertyId = typeof body.website === 'string'
+      ? body.website
+      : typeof nested?.website === 'string' ? nested.website : '';
     if (!UUID_RE.test(propertyId)) return sendError(res, 400, 'validation_failed', 'website (property_id) required');
 
     const ip = getClientIp(req);
@@ -113,11 +127,14 @@ export function createIngestRoutes(deps: IngestRoutesDeps) {
     // Look up the property to validate Origin + property-level limit
     const { data: prop } = await deps.supabase
       .from('analytics_properties')
-      .select('property_id, kind, domains, status')
+      .select('property_id, kind, domains, status, website_uuid')
       .eq('property_id', propertyId)
       .maybeSingle<PropertyRow>();
     if (!prop || prop.status !== 'active') {
       return sendError(res, 404, 'property_not_found', 'property not found or not active');
+    }
+    if (!prop.website_uuid) {
+      return sendError(res, 404, 'property_not_found', 'property has no provisioned website');
     }
 
     if (!isOriginAllowed(req.header('origin'), req.header('referer'), prop.domains)) {
@@ -142,8 +159,16 @@ export function createIngestRoutes(deps: IngestRoutesDeps) {
       'User-Agent': req.header('user-agent') ?? '',
     };
 
+    // The browser talks in property_id (the only id we publish); Umami only
+    // knows its own website_uuid — swap before forwarding.
+    const forwarded: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+    if (typeof forwarded['website'] === 'string') forwarded['website'] = prop.website_uuid;
+    if (nested && typeof nested.website === 'string') {
+      forwarded['payload'] = { ...(nested as Record<string, unknown>), website: prop.website_uuid };
+    }
+
     try {
-      const result = await deps.umamiCollect(body as Record<string, unknown>, upstreamHeaders);
+      const result = await deps.umamiCollect(forwarded, upstreamHeaders);
       if (!result.ok) {
         deps.logger.warn('analytics.ingest.upstream_error', { property_id: propertyId, status: result.status });
         return sendError(res, 502, 'upstream_error', `umami responded ${result.status}`);
@@ -211,10 +236,67 @@ export function createIngestRoutes(deps: IngestRoutesDeps) {
     res.status(200).send(bundle);
   }
 
-  return { collect, pixelBundle };
+  // -------------------------------------------------------------------------
+  // GET /a/script.js — the Umami tracker, proxied + rewritten
+  // -------------------------------------------------------------------------
+  // The embed tags (render.ts) point at `${origin}/a/script.js`, but the
+  // tracker itself lives on the Umami service (in-cluster, not browser-
+  // reachable). Proxy it here and rewrite its beacon endpoint so events
+  // POST to our validated /a/collect instead of Umami's raw /api/send
+  // (the tracker builds its endpoint as `${data-host-url}/api/send`).
+  let trackerCache: { body: string; fetchedAt: number } | null = null;
+
+  async function trackerScript(_req: Request, res: Response): Promise<void> {
+    const ttlMs = deps.embedCacheMaxAgeSeconds * 1000;
+    if (!trackerCache || Date.now() - trackerCache.fetchedAt > ttlMs) {
+      try {
+        const upstream = await deps.fetchUmamiTracker();
+        if (!upstream.ok) {
+          deps.logger.warn('analytics.tracker.upstream_error', { status: upstream.status });
+          // Serve a stale copy over an error if we have one.
+          if (!trackerCache) return sendError(res, 502, 'upstream_error', `umami responded ${upstream.status}`);
+        } else {
+          trackerCache = {
+            body: upstream.body.replace('/api/send', '/a/collect'),
+            fetchedAt: Date.now(),
+          };
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'unknown error';
+        deps.logger.error('analytics.tracker.upstream_threw', { error: message });
+        if (!trackerCache) return sendError(res, 502, 'upstream_error', message);
+      }
+    }
+
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', `public, max-age=${deps.embedCacheMaxAgeSeconds}, stale-while-revalidate=60`);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.status(200).send(trackerCache!.body);
+  }
+
+  // GET /a/portal-config — public discovery endpoint so the PORTAL app can
+  // self-configure its embed without RLS access to analytics_properties: it
+  // returns the active `portal` property's id (404 when none / module
+  // disabled), letting the layout compose the tracker + pixel script tags.
+  async function portalConfig(_req: Request, res: Response): Promise<void> {
+    const { data: prop } = await deps.supabase
+      .from('analytics_properties')
+      .select('property_id, status')
+      .eq('kind', 'portal')
+      .eq('status', 'active')
+      .maybeSingle<{ property_id: string; status: string }>();
+    if (!prop) return sendError(res, 404, 'not_found', 'no active portal property');
+    res.setHeader('Cache-Control', `public, max-age=${deps.embedCacheMaxAgeSeconds}`);
+    res.json({ property_id: prop.property_id });
+  }
+
+  return { collect, pixelBundle, portalConfig, trackerScript };
 }
 
 export function mountIngestRoutes(router: Router, routes: ReturnType<typeof createIngestRoutes>): void {
   router.post('/a/collect', routes.collect);
+  // Fixed paths BEFORE the :filename catch-all.
+  router.get('/a/script.js', routes.trackerScript);
+  router.get('/a/portal-config', routes.portalConfig);
   router.get('/a/:filename', routes.pixelBundle);
 }
