@@ -7,7 +7,7 @@ const structuredResourcesModule: GatewazeModule = {
   visibility: 'premium',
   name: 'Structured Resources',
   description: 'Create and manage hierarchical resource guides with configurable section templates and access control',
-  version: '1.0.0',
+  version: '1.1.0',
   features: [
     'resources',
     'resources.collections',
@@ -44,11 +44,16 @@ const structuredResourcesModule: GatewazeModule = {
 
   publicApiScopes: [
     { action: 'read', description: 'Read public resource collections and items' },
+    { action: 'write', description: 'Create and manage resource collections, categories, items, and sections (drafts included)' },
   ],
 
   publicApiRoutes: async (router: unknown, ctx: unknown) => {
     const { registerPublicApi } = await import('./public-api');
     registerPublicApi(router, ctx);
+    // Management (write-scoped) surface — the programmatic path used by the
+    // Gatewaze MCP server's resources_* tools.
+    const { registerManageApi } = await import('./manage-api');
+    registerManageApi(router, ctx);
   },
 
   publicApiSchema: {
@@ -72,6 +77,140 @@ const structuredResourcesModule: GatewazeModule = {
           operationId: 'getResourceItem',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
           responses: { 200: { description: 'Resource item' }, 404: { $ref: '#/components/responses/NotFound' } },
+        },
+        patch: {
+          summary: 'Update an item, e.g. publish it (requires resources:write)',
+          operationId: 'updateResourceItem',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { 200: { description: 'Updated item' }, 404: { $ref: '#/components/responses/NotFound' } },
+        },
+      },
+      '/collections': {
+        get: {
+          summary: 'List all resource collections (requires resources:write)',
+          operationId: 'listResourceCollections',
+          parameters: [
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, minimum: 1, maximum: 100 } },
+            { name: 'offset', in: 'query', schema: { type: 'integer', default: 0, minimum: 0 } },
+          ],
+          responses: { 200: { description: 'Paginated list of collections, drafts included' } },
+        },
+        post: {
+          summary: 'Create a resource collection (requires resources:write)',
+          operationId: 'createResourceCollection',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['name'],
+                  properties: {
+                    name: { type: 'string' },
+                    slug: { type: 'string' },
+                    description: { type: 'string' },
+                    status: { type: 'string', enum: ['draft', 'published', 'archived'], default: 'draft' },
+                    access: { type: 'string', enum: ['public', 'authenticated', 'inherit'], default: 'inherit' },
+                  },
+                },
+              },
+            },
+          },
+          responses: { 201: { description: 'Created collection' } },
+        },
+      },
+      '/collections/{id}': {
+        get: {
+          summary: 'Get a collection with its categories and section templates (requires resources:write)',
+          operationId: 'getResourceCollection',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { 200: { description: 'Collection detail' }, 404: { $ref: '#/components/responses/NotFound' } },
+        },
+        patch: {
+          summary: 'Update a collection, e.g. publish it (requires resources:write)',
+          operationId: 'updateResourceCollection',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { 200: { description: 'Updated collection' }, 404: { $ref: '#/components/responses/NotFound' } },
+        },
+      },
+      '/collections/{id}/categories': {
+        post: {
+          summary: 'Create a category in a collection (requires resources:write)',
+          operationId: 'createResourceCategory',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { 201: { description: 'Created category' }, 404: { $ref: '#/components/responses/NotFound' } },
+        },
+      },
+      '/collections/{id}/templates': {
+        post: {
+          summary: 'Create a section template in a collection (requires resources:write)',
+          operationId: 'createResourceSectionTemplate',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { 201: { description: 'Created section template' }, 404: { $ref: '#/components/responses/NotFound' } },
+        },
+      },
+      '/collections/{id}/items': {
+        get: {
+          summary: 'List a collection\'s items across all statuses (requires resources:write)',
+          operationId: 'listResourceCollectionItems',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'status', in: 'query', schema: { type: 'string', enum: ['draft', 'published', 'archived'] } },
+          ],
+          responses: { 200: { description: 'Paginated list of items' } },
+        },
+        post: {
+          summary: 'Create an item, optionally with sections (requires resources:write)',
+          operationId: 'createResourceItem',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['title', 'category_id'],
+                  properties: {
+                    title: { type: 'string' },
+                    category_id: { type: 'string', format: 'uuid' },
+                    subtitle: { type: 'string' },
+                    external_url: { type: 'string' },
+                    status: { type: 'string', enum: ['draft', 'published', 'archived'], default: 'draft' },
+                    sections: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        required: ['heading'],
+                        properties: {
+                          heading: { type: 'string' },
+                          content: { type: 'string' },
+                          template_id: { type: 'string', format: 'uuid' },
+                          sort_order: { type: 'integer' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: { 201: { description: 'Created item with sections' } },
+        },
+      },
+      '/items/{id}/manage': {
+        get: {
+          summary: 'Get a full item with sections, any status (requires resources:write)',
+          operationId: 'getResourceItemManage',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { 200: { description: 'Item with sections' }, 404: { $ref: '#/components/responses/NotFound' } },
+        },
+      },
+      '/items/{id}/sections': {
+        put: {
+          summary: 'Replace an item\'s full section list (requires resources:write)',
+          operationId: 'setResourceItemSections',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: { 200: { description: 'Replaced sections' }, 404: { $ref: '#/components/responses/NotFound' } },
         },
       },
     },
