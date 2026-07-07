@@ -1,89 +1,28 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import {
-  EnvelopeIcon,
-  EnvelopeOpenIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  ArrowUturnRightIcon,
-  ArrowUturnLeftIcon,
-} from '@heroicons/react/24/outline';
-import { Card, Badge } from '@/components/ui';
-import { ReplyComposer, SentReplyList, type SentReplyMessage } from '@/components/emails/ReplyComposer';
-import { PersonLink } from '@/components/people/PersonLink';
+import { RepliesWorkspace, type WorkspaceReply } from '@/components/replies/RepliesWorkspace';
+import type { SentReplyMessage } from '@/components/emails/ReplyComposer';
 import { resolvePeopleByEmail } from '@/lib/resolvePeopleByEmail';
 import { supabase } from '@/lib/supabase';
-
-interface Reply {
-  id: string;
-  from_email: string;
-  from_name: string | null;
-  subject: string | null;
-  body_text: string | null;
-  body_html: string | null;
-  edition_id: string | null;
-  is_read: boolean;
-  forwarded_to: string | null;
-  forwarded_at: string | null;
-  created_at: string;
-  is_auto_reply: boolean;
-  auto_reply_reason: string | null;
-  edition?: { title: string | null; edition_date: string } | null;
-}
 
 interface NewsletterRepliesTabProps {
   newsletterId: string;
 }
 
-type ReplyCategory = 'reply' | 'ooo' | 'job_change' | 'bounce';
-type FilterKey = 'all' | ReplyCategory;
-
-// Derive a reply's category from the classifier flags stored by the inbound
-// parser. `departed:*` reasons are job changes (sender auto-unsubscribed);
-// delivery/bounce notices are bounces; anything else auto is out-of-office.
-function replyCategory(r: { is_auto_reply: boolean; auto_reply_reason: string | null }): ReplyCategory {
-  const reason = r.auto_reply_reason || '';
-  if (reason.startsWith('departed')) return 'job_change';
-  if (!r.is_auto_reply) return 'reply';
-  if (reason === 'dsn' || reason === 'bounce-sender') return 'bounce';
-  return 'ooo';
+interface LoadedReply extends WorkspaceReply {
+  edition_id: string | null;
+  edition?: { title: string | null; edition_date: string } | null;
 }
 
-const CATEGORY_BADGE: Record<Exclude<ReplyCategory, 'reply'>, { label: string; color: 'amber' | 'red' | 'gray' }> = {
-  ooo: { label: 'Out of office', color: 'amber' },
-  job_change: { label: 'Job change', color: 'red' },
-  bounce: { label: 'Bounce', color: 'gray' },
-};
+const REPLY_COLS =
+  'id, from_email, from_name, subject, body_text, body_html, is_read, is_starred, is_archived, is_auto_reply, auto_reply_reason, forwarded_to, forwarded_at, created_at, edition_id';
 
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'reply', label: 'Replies' },
-  { key: 'ooo', label: 'Out of office' },
-  { key: 'job_change', label: 'Job changes' },
-  { key: 'bounce', label: 'Bounces' },
-];
-
-function formatTime(dateStr: string): string {
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) {
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  }
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return `${diffDays} days ago`;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-// Reply-bleed across collections: when two collections share the same
-// Reply-To (e.g. demetrios@aaif.live used for both MLOps Community and
-// AAIF User Community), the email-inbound-parse Edge Function stores
-// ONE row per matching collection — so each Reply-To-routed reply
-// appears in BOTH tabs. Until that's deduped at insertion time, scope
-// what this tab shows to replies whose subject references an edition
-// of THIS collection. Subjects shorter than this won't be matched
-// against to avoid e.g. a one-word edition title hiding nothing.
+// Reply-bleed across collections: when two collections share the same Reply-To
+// (e.g. demetrios@aaif.live used by several newsletters), the inbound parser
+// stores one row per matching collection — so a Reply-To-routed reply appears in
+// every such collection's tab. Until that's deduped at insertion time, scope
+// what this tab shows to replies whose subject references an edition of THIS
+// collection. Subjects shorter than this aren't matched against, to avoid a
+// one-word edition title hiding nothing.
 const MIN_TITLE_MATCH_LENGTH = 4;
 
 function normaliseForMatch(s: string): string {
@@ -96,19 +35,17 @@ function normaliseForMatch(s: string): string {
 }
 
 export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps) {
-  const [replies, setReplies] = useState<Reply[]>([]);
-  const [sentByReply, setSentByReply] = useState<Record<string, SentReplyMessage[]>>({});
-  const [personByEmail, setPersonByEmail] = useState<Record<string, string>>({});
+  const [replies, setReplies] = useState<LoadedReply[]>([]);
   const [editionTitles, setEditionTitles] = useState<string[]>([]);
+  const [sent, setSent] = useState<(SentReplyMessage & { reply_id: string })[]>([]);
+  const [personByEmail, setPersonByEmail] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterKey>('reply');
 
   const load = useCallback(async () => {
     const [repliesRes, editionsRes, sentRes] = await Promise.all([
       supabase
         .from('newsletter_replies')
-        .select('*, edition:newsletters_editions(title, edition_date)')
+        .select(`${REPLY_COLS}, edition:newsletters_editions(title, edition_date)`)
         .eq('collection_id', newsletterId)
         .order('created_at', { ascending: false }),
       supabase
@@ -122,69 +59,35 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
         .eq('collection_id', newsletterId)
         .order('created_at', { ascending: true }),
     ]);
-    const rows = repliesRes.data || [];
+    const rows = (repliesRes.data as LoadedReply[]) || [];
     setReplies(rows);
     setEditionTitles(
       ((editionsRes.data || []) as Array<{ title: string | null }>)
         .map((e) => e.title || '')
         .filter((t) => t.length >= MIN_TITLE_MATCH_LENGTH),
     );
-    const grouped: Record<string, SentReplyMessage[]> = {};
-    for (const m of (sentRes.data as (SentReplyMessage & { reply_id: string })[]) || []) {
-      (grouped[m.reply_id] ||= []).push(m);
-    }
-    setSentByReply(grouped);
-    setPersonByEmail(await resolvePeopleByEmail((rows as Reply[]).map((r) => r.from_email)));
+    setSent((sentRes.data as (SentReplyMessage & { reply_id: string })[]) || []);
+    setPersonByEmail(await resolvePeopleByEmail(rows.map((r) => r.from_email)));
     setLoading(false);
   }, [newsletterId]);
 
-  const collectionReplies = useMemo(() => {
-    if (editionTitles.length === 0) return replies;
-    const needles = editionTitles.map(normaliseForMatch);
-    return replies.filter((r) => {
-      // Already linked to an edition by In-Reply-To header → trust the link.
-      if (r.edition_id) return true;
-      if (!r.subject) return false;
-      const haystack = normaliseForMatch(r.subject);
-      return needles.some((n) => haystack.includes(n));
-    });
-  }, [replies, editionTitles]);
-
-  const counts = useMemo(() => {
-    const c: Record<FilterKey, number> = { all: collectionReplies.length, reply: 0, ooo: 0, job_change: 0, bounce: 0 };
-    for (const r of collectionReplies) c[replyCategory(r)] += 1;
-    return c;
-  }, [collectionReplies]);
-
-  const visibleReplies = useMemo(
-    () => (filter === 'all' ? collectionReplies : collectionReplies.filter((r) => replyCategory(r) === filter)),
-    [collectionReplies, filter],
-  );
-
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
 
-  // Poll for new replies
-  useEffect(() => {
-    const interval = setInterval(load, 30000);
-    return () => clearInterval(interval);
-  }, [load]);
-
-  const toggleExpand = async (reply: Reply) => {
-    const isExpanding = expandedId !== reply.id;
-    setExpandedId(isExpanding ? reply.id : null);
-
-    // Mark as read when expanded
-    if (isExpanding && !reply.is_read) {
-      await supabase
-        .from('newsletter_replies')
-        .update({ is_read: true })
-        .eq('id', reply.id);
-      setReplies(prev => prev.map(r => r.id === reply.id ? { ...r, is_read: true } : r));
-    }
-  };
-
-  const hiddenCount = replies.length - collectionReplies.length;
-  const unreadCount = visibleReplies.filter(r => !r.is_read).length;
+  // Scope to this collection's replies, then attach the edition as a badge.
+  const scoped = useMemo<WorkspaceReply[]>(() => {
+    const needles = editionTitles.map(normaliseForMatch);
+    const inCollection = (r: LoadedReply) => {
+      if (needles.length === 0) return true;
+      if (r.edition_id) return true; // linked by In-Reply-To → trust it
+      if (!r.subject) return false;
+      const hay = normaliseForMatch(r.subject);
+      return needles.some((n) => hay.includes(n));
+    };
+    return replies
+      .filter(inCollection)
+      .map((r) => ({ ...r, badge: r.edition?.title || r.edition?.edition_date || null }));
+  }, [replies, editionTitles]);
 
   if (loading) {
     return (
@@ -195,177 +98,13 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
   }
 
   return (
-    <div className="max-w-4xl">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-lg font-semibold text-[var(--gray-12)]">Replies</h2>
-          {unreadCount > 0 && (
-            <Badge variant="solid" color="blue" size="1">{unreadCount} new</Badge>
-          )}
-        </div>
-        <span className="text-sm text-[var(--gray-9)]">
-          {visibleReplies.length} shown
-          {hiddenCount > 0 ? ` · ${hiddenCount} other newsletter` : ''}
-        </span>
-      </div>
-
-      {/* Category filters */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {FILTERS.map((f) => {
-          const active = filter === f.key;
-          const n = counts[f.key];
-          if (f.key !== 'all' && f.key !== 'reply' && n === 0) return null;
-          return (
-            <button
-              key={f.key}
-              type="button"
-              onClick={() => setFilter(f.key)}
-              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                active
-                  ? 'bg-[var(--accent-9)] border-[var(--accent-9)] text-white'
-                  : 'bg-transparent border-[var(--gray-a5)] text-[var(--gray-11)] hover:border-[var(--gray-a8)]'
-              }`}
-            >
-              {f.label}
-              <span className={active ? 'ml-1.5 opacity-80' : 'ml-1.5 text-[var(--gray-9)]'}>{n}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {visibleReplies.length === 0 ? (
-        <Card variant="surface" className="p-12 text-center">
-          <EnvelopeIcon className="w-10 h-10 text-[var(--gray-8)] mx-auto mb-3" />
-          <p className="text-[var(--gray-11)] mb-1">No replies yet</p>
-          <p className="text-sm text-[var(--gray-9)]">
-            Replies to your newsletter sending address will appear here
-          </p>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {visibleReplies.map(reply => {
-            const isExpanded = expandedId === reply.id;
-            return (
-              <Card
-                key={reply.id}
-                variant="surface"
-                className={`transition-colors ${!reply.is_read ? 'border-l-2 border-l-[var(--accent-9)]' : ''}`}
-              >
-                {/* Reply header — clickable */}
-                <button
-                  onClick={() => toggleExpand(reply)}
-                  className="w-full text-left px-4 py-3 flex items-center gap-3"
-                >
-                  {reply.is_read ? (
-                    <EnvelopeOpenIcon className="w-4 h-4 text-[var(--gray-9)] flex-shrink-0" />
-                  ) : (
-                    <EnvelopeIcon className="w-4 h-4 text-[var(--accent-9)] flex-shrink-0" />
-                  )}
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <PersonLink
-                        personId={personByEmail[reply.from_email?.toLowerCase()]}
-                        label={reply.from_name || reply.from_email}
-                        className={`text-sm truncate ${!reply.is_read ? 'font-semibold' : ''}`}
-                        title={personByEmail[reply.from_email?.toLowerCase()] ? 'View person profile' : undefined}
-                      />
-                      {reply.from_name && (
-                        <span className="text-xs text-[var(--gray-9)] truncate hidden sm:inline">
-                          {reply.from_email}
-                        </span>
-                      )}
-                    </div>
-                    <p className={`text-sm truncate ${!reply.is_read ? 'font-medium text-[var(--gray-11)]' : 'text-[var(--gray-9)]'}`}>
-                      {reply.subject || '(no subject)'}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    {(() => {
-                      const cat = replyCategory(reply);
-                      if (cat === 'reply') return null;
-                      const meta = CATEGORY_BADGE[cat];
-                      return (
-                        <Badge variant="soft" color={meta.color} size="1" className="hidden md:inline-flex" title={reply.auto_reply_reason || undefined}>
-                          {meta.label}
-                        </Badge>
-                      );
-                    })()}
-                    {reply.edition && (
-                      <Badge variant="soft" color="blue" size="1" className="hidden md:inline-flex">
-                        {reply.edition.title || reply.edition.edition_date}
-                      </Badge>
-                    )}
-                    {reply.forwarded_at && (
-                      <ArrowUturnRightIcon className="w-3.5 h-3.5 text-[var(--gray-9)]" title={`Forwarded to ${reply.forwarded_to}`} />
-                    )}
-                    {(sentByReply[reply.id]?.length ?? 0) > 0 && (
-                      <ArrowUturnLeftIcon className="w-3.5 h-3.5 text-[var(--accent-9)]" title={`Replied ${sentByReply[reply.id].length}×`} />
-                    )}
-                    <span className="text-xs text-[var(--gray-9)] whitespace-nowrap">
-                      {formatTime(reply.created_at)}
-                    </span>
-                    {isExpanded ? (
-                      <ChevronUpIcon className="w-4 h-4 text-[var(--gray-9)]" />
-                    ) : (
-                      <ChevronDownIcon className="w-4 h-4 text-[var(--gray-9)]" />
-                    )}
-                  </div>
-                </button>
-
-                {/* Expanded body */}
-                {isExpanded && (
-                  <div className="px-4 pb-4 border-t border-[var(--gray-a4)]">
-                    <div className="pt-3">
-                      {/* Metadata */}
-                      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--gray-9)] mb-3">
-                        <span>
-                          From:{' '}
-                          <PersonLink
-                            personId={personByEmail[reply.from_email?.toLowerCase()]}
-                            label={reply.from_name ? `${reply.from_name} <${reply.from_email}>` : reply.from_email}
-                            className="text-xs"
-                          />
-                        </span>
-                        <span>Date: {new Date(reply.created_at).toLocaleString()}</span>
-                        {reply.forwarded_at && (
-                          <span className="flex items-center gap-1">
-                            <ArrowUturnRightIcon className="w-3 h-3" />
-                            Forwarded to {reply.forwarded_to} at {new Date(reply.forwarded_at).toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Body */}
-                      {reply.body_html ? (
-                        <div
-                          className="prose prose-sm max-w-none text-[var(--gray-12)] [&_a]:text-[var(--accent-9)]"
-                          dangerouslySetInnerHTML={{ __html: reply.body_html }}
-                        />
-                      ) : (
-                        <pre className="text-sm text-[var(--gray-12)] whitespace-pre-wrap font-sans">
-                          {reply.body_text || '(empty)'}
-                        </pre>
-                      )}
-
-                      <SentReplyList messages={sentByReply[reply.id] || []} />
-                      <ReplyComposer
-                        kind="newsletter"
-                        replyId={reply.id}
-                        toEmail={reply.from_email}
-                        toName={reply.from_name}
-                        onSent={load}
-                      />
-                    </div>
-                  </div>
-                )}
-              </Card>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    <RepliesWorkspace
+      kind="newsletter"
+      replies={scoped}
+      sent={sent}
+      personByEmail={personByEmail}
+      onReload={load}
+      emptyHint="Replies to your newsletter sending address will appear here"
+    />
   );
 }

@@ -286,6 +286,8 @@ const newslettersModule: GatewazeModule = {
     'migrations/063_geo_rpcs_snapshot_wrappers.sql',
     // 064 records outbound admin replies (the "reply to a reply" composer).
     'migrations/064_newsletter_reply_messages.sql',
+    // 065 adds star/archive triage status to newsletter replies.
+    'migrations/065_newsletter_reply_status.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
