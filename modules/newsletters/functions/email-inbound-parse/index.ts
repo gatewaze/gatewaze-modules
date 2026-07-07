@@ -272,21 +272,31 @@ async function handler(req: Request) {
       bLog = data;
     }
     if (!bLog?.broadcast_send_id) {
-      // The replier received a broadcast to one of the reply's recipient
-      // addresses — pick their most recent such send.
+      // No precise In-Reply-To match. Fall back to the replier's most recent
+      // send whose From/Reply-To matches one of the reply's recipient
+      // addresses — but consider BOTH broadcast AND newsletter sends, because
+      // they routinely share a From/Reply-To (e.g. a newsletter with
+      // reply_to=demetrios@aaif.live and a broadcast sent from the same
+      // address). Whichever campaign send is MORE RECENT wins. If that most-
+      // recent match is a newsletter send, leave bLog null so the reply flows
+      // to the newsletter branch below instead of being misfiled here.
       const { data: recent } = await supabase
         .from('email_send_log')
-        .select('id, broadcast_send_id, from_address, reply_to, sent_at')
+        .select('id, broadcast_send_id, newsletter_send_id, from_address, reply_to, sent_at')
         .eq('recipient_email', fromEmail)
-        .not('broadcast_send_id', 'is', null)
-        .order('sent_at', { ascending: false })
-        .limit(20);
+        .or('broadcast_send_id.not.is.null,newsletter_send_id.not.is.null')
+        .order('sent_at', { ascending: false, nullsFirst: false })
+        .limit(30);
       const m = (recent ?? []).find((r: { from_address?: string | null; reply_to?: string | null }) => {
         const fa = (r.from_address || '').toLowerCase();
         const rt = (r.reply_to || '').toLowerCase();
         return toEmails.some((t) => fa.includes(t) || rt.includes(t));
       });
-      if (m) bLog = { id: (m as { id: string }).id, broadcast_send_id: (m as { broadcast_send_id: string }).broadcast_send_id };
+      // Only claim it for the broadcast branch when the most-recent matching
+      // send is actually a broadcast; a newsletter match falls through.
+      if (m && (m as { broadcast_send_id: string | null }).broadcast_send_id) {
+        bLog = { id: (m as { id: string }).id, broadcast_send_id: (m as { broadcast_send_id: string }).broadcast_send_id };
+      }
     }
 
     {
