@@ -111,16 +111,24 @@ function dimensionInitScript(input: RenderEmbedInput): string {
   }
   const dims = jsString(input.dimensions);
   // Wrap in a tiny readiness check — umami may not be loaded yet
-  // (the pixel script is async/defer). Use a queue so calls before
-  // umami is ready get replayed.
+  // (the pixel script is async/defer).
+  //
+  // NOTE: Umami v3 removed the v1 track(fn) transformer semantics — passing
+  // a function fires ONE immediate beacon instead of registering a mapper.
+  // Wrap umami.track so the pre-baked dimensions ride along on every
+  // custom event's data instead.
   return `<script>
 (function(){
   var d=${dims};
   function ready(){
     if(window.umami&&typeof window.umami.track==='function'){
-      window.umami.track(function(props){
-        return Object.assign({},props||{},d);
-      });
+      if(window.umami.__gwDimsWrapped)return;
+      var orig=window.umami.track.bind(window.umami);
+      window.umami.track=function(a,b){
+        if(typeof a==='string'){return orig(a,Object.assign({},b||{},d));}
+        return orig(a,b);
+      };
+      window.umami.__gwDimsWrapped=true;
     } else { setTimeout(ready,50); }
   }
   ready();

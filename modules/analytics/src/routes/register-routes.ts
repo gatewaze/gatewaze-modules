@@ -174,6 +174,11 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       });
       return { ok: res.ok, status: res.status };
     },
+    fetchUmamiTracker: async () => {
+      const baseUrl = (process.env['UMAMI_BASE_URL'] ?? 'http://umami:3000').replace(/\/+$/, '');
+      const res = await fetch(`${baseUrl}/script.js`);
+      return { ok: res.ok, status: res.status, body: res.ok ? await res.text() : '' };
+    },
     decryptSecret: context?.decryptSecret ?? ((b: Buffer | string) => Buffer.isBuffer(b) ? b.toString('utf-8') : (b as string)),
     rateLimit: context?.rateLimit ?? (async () => ({ allowed: true, resetAt: Date.now() + 60_000 })),
     logger,
