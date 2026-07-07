@@ -121,6 +121,17 @@ async function unsubscribeFromList(supabase: any, listId: string | null | undefi
   if (error) console.error('[inbound] departed unsubscribe failed:', error.message);
 }
 
+// Normalise a subject for matching a reply back to its originating send: strip
+// leading reply/forward/auto-reply prefixes (Re:, Fwd:, Automatic reply:, and
+// common localisations), lowercase, collapse whitespace.
+const SUBJECT_PREFIX_RE =
+  /^\s*(re|fwd?|fw|aw|sv|vs|antwort|automatic reply|automatische antwort|respuesta autom[aá]tica|r[eé]ponse automatique|out of office|auto(?:matic)?[- ]?reply)\s*:\s*/i;
+function normSubject(s: string | null | undefined): string {
+  let t = s || '';
+  for (let i = 0; i < 5 && SUBJECT_PREFIX_RE.test(t); i++) t = t.replace(SUBJECT_PREFIX_RE, '');
+  return t.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 async function handler(req: Request) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -272,30 +283,46 @@ async function handler(req: Request) {
       bLog = data;
     }
     if (!bLog?.broadcast_send_id) {
-      // No precise In-Reply-To match. Fall back to the replier's most recent
-      // send whose From/Reply-To matches one of the reply's recipient
-      // addresses — but consider BOTH broadcast AND newsletter sends, because
+      // No precise In-Reply-To match. Fall back to the replier's own campaign
+      // sends whose From/Reply-To matches one of the reply's recipient
+      // addresses — considering BOTH broadcast AND newsletter sends, because
       // they routinely share a From/Reply-To (e.g. a newsletter with
       // reply_to=demetrios@aaif.live and a broadcast sent from the same
-      // address). Whichever campaign send is MORE RECENT wins. If that most-
-      // recent match is a newsletter send, leave bLog null so the reply flows
-      // to the newsletter branch below instead of being misfiled here.
+      // address). Disambiguate by SUBJECT first (the strongest signal): the
+      // send whose subject equals the reply's subject (sans "Re:/Fwd:"). If the
+      // replier changed the subject so nothing matches, revert to the MOST
+      // RECENT address-matching send. Either way, only claim it here when the
+      // chosen send is a broadcast; a newsletter match falls through to the
+      // newsletter branch below instead of being misfiled here.
+      type SendRow = {
+        id: string;
+        broadcast_send_id: string | null;
+        newsletter_send_id: string | null;
+        from_address?: string | null;
+        reply_to?: string | null;
+        subject?: string | null;
+      };
       const { data: recent } = await supabase
         .from('email_send_log')
-        .select('id, broadcast_send_id, newsletter_send_id, from_address, reply_to, sent_at')
+        .select('id, broadcast_send_id, newsletter_send_id, from_address, reply_to, subject, sent_at')
         .eq('recipient_email', fromEmail)
         .or('broadcast_send_id.not.is.null,newsletter_send_id.not.is.null')
         .order('sent_at', { ascending: false, nullsFirst: false })
         .limit(30);
-      const m = (recent ?? []).find((r: { from_address?: string | null; reply_to?: string | null }) => {
+      const rows = (recent ?? []) as SendRow[];
+      const addrMatch = (r: SendRow) => {
         const fa = (r.from_address || '').toLowerCase();
         const rt = (r.reply_to || '').toLowerCase();
         return toEmails.some((t) => fa.includes(t) || rt.includes(t));
-      });
-      // Only claim it for the broadcast branch when the most-recent matching
-      // send is actually a broadcast; a newsletter match falls through.
-      if (m && (m as { broadcast_send_id: string | null }).broadcast_send_id) {
-        bLog = { id: (m as { id: string }).id, broadcast_send_id: (m as { broadcast_send_id: string }).broadcast_send_id };
+      };
+      // rows are already newest-first, so the first hit is the most recent.
+      const replySubject = normSubject(subject);
+      const bySubject = replySubject
+        ? rows.find((r) => addrMatch(r) && normSubject(r.subject) === replySubject)
+        : undefined;
+      const chosen = bySubject ?? rows.find(addrMatch);
+      if (chosen?.broadcast_send_id) {
+        bLog = { id: chosen.id, broadcast_send_id: chosen.broadcast_send_id };
       }
     }
 
