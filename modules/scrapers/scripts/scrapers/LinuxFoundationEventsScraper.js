@@ -99,6 +99,44 @@ function stripTags(html) {
 }
 
 
+// LF event pages are WordPress; the full event body lives in a single
+// `<div class="entry-content">`. Pull its inner HTML by depth-matching the
+// opening div to its closing tag (regex alone can't handle the nested
+// page-builder divs). Returns null when the container isn't present.
+function extractEntryContentHtml(html) {
+  const open = html.match(/<div[^>]*class="[^"]*\bentry-content\b[^"]*"[^>]*>/);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  let depth = 1;
+  for (const tag of html.slice(start).matchAll(/<(\/?)div\b[^>]*>/g)) {
+    depth += tag[1] === '/' ? -1 : 1;
+    if (depth === 0) return html.slice(start, start + tag.index);
+  }
+  return null;
+}
+
+// Strip the non-content noise WordPress/page-builder markup carries so the
+// stored HTML is small and safe to render. The portal DOMPurifies again on
+// its side; this keeps page_content lean and free of scripts/handlers.
+const MAX_PAGE_CONTENT = 120_000;
+function cleanContentHtml(html) {
+  if (!html) return '';
+  let out = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\son[a-z]+="[^"]*"/gi, '')      // inline event handlers
+    .replace(/\sdata-[\w-]+="[^"]*"/gi, '')    // page-builder data-* noise
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (out.length > MAX_PAGE_CONTENT) out = out.slice(0, MAX_PAGE_CONTENT);
+  return out;
+}
+
+
 /**
  * Parse the LF date strings into ISO8601. Handles:
  *   "Jun 9–10, 2026"      → start=2026-06-09, end=2026-06-10
@@ -343,6 +381,15 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
       enrich.eventDescriptionLong = og.description.replace(/&amp;/g, '&').replace(/&#039;/g, "'");
     }
 
+    // Full event-page body → rendered on the portal detail page. Stored in
+    // events.page_content (first in the portal's content priority) via a
+    // dedicated `pageContentHtml` field so it never collides with the Luma
+    // scraper's raw-text `pageContent`. Also feeds speaker/agenda extraction.
+    const bodyHtml = cleanContentHtml(extractEntryContentHtml(html) || '');
+    if (bodyHtml && bodyHtml.length > 200) {
+      enrich.pageContentHtml = bodyHtml;
+    }
+
     return enrich;
   }
 
@@ -423,6 +470,9 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
           // available (falls back to the card text).
           listingIntro: description,
           eventDescription: enrich.eventDescriptionLong || description,
+          // Full page-body HTML from the detail page → events.page_content
+          // (portal detail render + speaker/agenda extraction input).
+          pageContentHtml: enrich.pageContentHtml || null,
           venueAddress: enrich.venueAddress || '',
           eventLogo: enrich.eventLogo || null,
           eventFeaturedImage: enrich.eventLogo || null,

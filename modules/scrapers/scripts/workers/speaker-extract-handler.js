@@ -96,6 +96,7 @@ async function processOneEvent({ sb, eventRow, brandId, scraperId, log }) {
   // prefer the rich processed HTML, fall back to free-form description.
   const html =
     eventRow.luma_processed_html ||
+    eventRow.page_content ||
     eventRow.event_description ||
     '';
 
@@ -199,7 +200,7 @@ export default async function handler(job) {
   const { data: rows, error: fetchErr } = await sb
     .from('events')
     .select(
-      'id, event_id, event_title, event_link, event_description, luma_processed_html, luma_event_id, source_event_id, event_start, event_end, luma_guest_count, speakers_extracted_at, speakers_extracted_content_hash',
+      'id, event_id, event_title, event_link, event_description, luma_processed_html, page_content, luma_event_id, source_event_id, event_start, event_end, luma_guest_count, speakers_extracted_at, speakers_extracted_content_hash',
     )
     .in('id', eventUuids);
   if (fetchErr) {
