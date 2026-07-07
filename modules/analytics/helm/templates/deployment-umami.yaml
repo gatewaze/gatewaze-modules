@@ -63,5 +63,9 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false  # Umami writes to /tmp on first request
             runAsNonRoot: true
+            # The upstream image's USER is the non-numeric `nextjs`, which
+            # kubelet can't verify against runAsNonRoot — pin its uid (1001
+            # in umamisoftware/umami) or the pod CreateContainerConfigErrors.
+            runAsUser: 1001
             capabilities:
               drop: ["ALL"]

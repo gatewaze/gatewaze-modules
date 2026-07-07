@@ -28,8 +28,8 @@ umami:
   port: 3000
 
 # Connection to the existing platform Postgres. The pre-install Job
-# creates a dedicated `gatewaze_umami` database + `gatewaze_umami_role`
-# role using the platform service-role connection from this Secret.
+# creates a dedicated `gatewaze_umami` database + role using the platform
+# service-role connection from this Secret.
 database:
   # Secret containing the platform Postgres connection string. Same Secret
   # the api uses; we don't duplicate credentials.
@@ -37,9 +37,13 @@ database:
     name: gatewaze-platform-postgres
     key: dsn
   bootstrapDatabase: gatewaze_umami
-  bootstrapRole: gatewaze_umami_role
-  # Generated at install time by the pre-install Job and stored in
-  # gatewaze-analytics-umami-db. Umami reads this for its DATABASE_URL.
+  # OPERATOR PRE-CREATES this Secret with the final Umami connection
+  # string; the pre-install Job parses role+password out of it and makes
+  # the database agree (create/alter role, create db). This is what lets
+  # the same chart work against direct Postgres (username `role`) and
+  # Supabase's Supavisor pooler (username `role.<tenant-ref>`).
+  #   kubectl create secret generic gatewaze-analytics-umami-db \
+  #     --from-literal=dsn='postgresql://gatewaze_umami_role.<tenant>:<pw>@<pooler-host>:5432/gatewaze_umami'
   umamiDsnSecretRef:
     name: gatewaze-analytics-umami-db
     key: dsn

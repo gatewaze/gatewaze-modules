@@ -3,19 +3,24 @@ Pre-install Job — runs ONCE before the Umami Deployment starts.
 
 Per spec-analytics-module §10.1 hard rule 4: NO Supabase CLI. The bootstrap
 runs raw SQL against the existing platform Postgres using the operator's
-service-role connection, idempotent (CREATE DATABASE / CREATE ROLE both
-gated by `IF NOT EXISTS` patterns).
+service-role connection, idempotent (role + database creation both gated
+by existence checks).
 
-What it creates:
-  1. CREATE DATABASE gatewaze_umami     (Umami's own schema lives here)
-  2. CREATE ROLE gatewaze_umami_role    (Umami's app role; min privileges)
-  3. GRANT CONNECT/CREATE on the new DB to the role
-  4. Generates a per-install password for the role, writes to the
-     gatewaze-analytics-umami-db Secret which Umami mounts as DATABASE_URL.
+Design (v2): the operator PRE-CREATES the Umami DSN Secret
+(database.umamiDsnSecretRef) with the final connection string, and this
+Job makes the database agree with it — it parses the role password out of
+that DSN and creates/alters the role, then creates the database. The
+original v1 design generated a password in-job and wrote the Secret back
+via kubectl, which failed everywhere real:
+  * postgres:16-alpine ships neither kubectl nor curl, and the chart has
+    no ServiceAccount/RBAC for Secret writes anyway;
+  * the composed DSN used the bare role name, which Supabase's Supavisor
+    pooler rejects — pooler usernames must be `role.<tenant-ref>`.
+Operator-supplied DSN sidesteps both: whatever host/username format the
+environment needs lives in the Secret, and the Job only needs psql.
 
-The Job is annotated with `helm.sh/hook: pre-install,pre-upgrade` so it
-runs on first install + on chart upgrades. `before-hook-creation`
-ensures a previous attempt's pod is reaped before the new run.
+The DSN's username may be `role` (direct Postgres) or `role.tenant`
+(Supavisor) — the Job strips the tenant suffix to get the role to create.
 */}}
 apiVersion: batch/v1
 kind: Job
@@ -45,84 +50,51 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.database.dsnSecretRef.name }}
                   key: {{ .Values.database.dsnSecretRef.key }}
+            - name: UMAMI_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.umamiDsnSecretRef.name }}
+                  key: {{ .Values.database.umamiDsnSecretRef.key }}
             - name: BOOTSTRAP_DATABASE
               value: {{ .Values.database.bootstrapDatabase | quote }}
-            - name: BOOTSTRAP_ROLE
-              value: {{ .Values.database.bootstrapRole | quote }}
           command:
             - /bin/sh
             - -ec
             - |
-              # Generate or read the per-install password
-              PASSWORD=$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)
+              # Pull role + password out of the operator-supplied DSN.
+              # Username may carry a Supavisor tenant suffix (role.tenant);
+              # the ROLE to create is the part before the first dot.
+              DSN_USER=$(echo "$UMAMI_DSN" | sed -E 's,^postgres(ql)?://([^:@]+).*$,\2,')
+              PASSWORD=$(echo "$UMAMI_DSN" | sed -E 's,^postgres(ql)?://[^:]+:([^@]+)@.*$,\2,')
+              ROLE=$(echo "$DSN_USER" | cut -d. -f1)
+              DSN_DB=$(echo "$UMAMI_DSN" | sed -E 's,^[^@]+@[^/]+/([^?]+).*$,\1,')
 
-              # Create the role + database. Idempotent — both DO blocks
-              # check existence before running. Then write a per-DB DSN
-              # for Umami.
-              # Extract the connecting username from the DSN — needed for
-              # the GRANT below so CREATE DATABASE ... OWNER can succeed
-              # (Postgres demands the connecting user be a member of the
-              # target owner role).
-              CONNECT_USER=$(echo "$PLATFORM_DSN" | sed -E 's,^postgres(ql)?://([^:@]+).*$,\2,')
+              if [ "$DSN_DB" != "$BOOTSTRAP_DATABASE" ]; then
+                echo "DSN database ($DSN_DB) != bootstrapDatabase ($BOOTSTRAP_DATABASE)" >&2
+                exit 1
+              fi
+
+              # Who are we connecting as (for the OWNER grant below)?
+              CONNECT_USER=$(echo "$PLATFORM_DSN" | sed -E 's,^postgres(ql)?://([^:@]+).*$,\2,' | cut -d. -f1)
 
               psql "$PLATFORM_DSN" -v ON_ERROR_STOP=1 <<SQL
                 DO \$\$
                 BEGIN
-                  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${BOOTSTRAP_ROLE}') THEN
-                    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '${BOOTSTRAP_ROLE}', '${PASSWORD}');
+                  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${ROLE}') THEN
+                    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '${ROLE}', '${PASSWORD}');
                   ELSE
-                    EXECUTE format('ALTER ROLE %I WITH PASSWORD %L', '${BOOTSTRAP_ROLE}', '${PASSWORD}');
+                    EXECUTE format('ALTER ROLE %I LOGIN PASSWORD %L', '${ROLE}', '${PASSWORD}');
                   END IF;
                 END
                 \$\$;
-                GRANT "${BOOTSTRAP_ROLE}" TO "${CONNECT_USER}";
+                GRANT "${ROLE}" TO "${CONNECT_USER}";
               SQL
               psql "$PLATFORM_DSN" -v ON_ERROR_STOP=1 -tAc \
                 "SELECT 1 FROM pg_database WHERE datname = '${BOOTSTRAP_DATABASE}'" \
                 | grep -q 1 || \
                 psql "$PLATFORM_DSN" -v ON_ERROR_STOP=1 \
-                  -c "CREATE DATABASE \"${BOOTSTRAP_DATABASE}\" OWNER \"${BOOTSTRAP_ROLE}\""
+                  -c "CREATE DATABASE \"${BOOTSTRAP_DATABASE}\" OWNER \"${ROLE}\""
               psql "$PLATFORM_DSN" -v ON_ERROR_STOP=1 \
-                -c "GRANT CONNECT, CREATE ON DATABASE \"${BOOTSTRAP_DATABASE}\" TO \"${BOOTSTRAP_ROLE}\""
+                -c "GRANT CONNECT, CREATE ON DATABASE \"${BOOTSTRAP_DATABASE}\" TO \"${ROLE}\""
 
-              # Compose the Umami DSN. Pull host/port from the platform
-              # DSN; substitute role + DB.
-              HOST_PORT=$(echo "$PLATFORM_DSN" | sed -E 's,^postgres(ql)?://[^@]+@([^/]+)/.*$,\2,')
-              UMAMI_DSN="postgresql://${BOOTSTRAP_ROLE}:${PASSWORD}@${HOST_PORT}/${BOOTSTRAP_DATABASE}"
-
-              # Write the Umami DSN into the Kubernetes Secret. Use the
-              # downward API + kubectl patch (the Job runs with a SA that
-              # has patch on Secrets in this namespace — see the chart's
-              # ServiceAccount).
-              cat >/tmp/dsn-secret.yaml <<YAML
-              apiVersion: v1
-              kind: Secret
-              metadata:
-                name: {{ .Values.database.umamiDsnSecretRef.name }}
-              type: Opaque
-              stringData:
-                {{ .Values.database.umamiDsnSecretRef.key }}: "${UMAMI_DSN}"
-              YAML
-
-              # apply via kubectl (image is too small; we exec via the
-              # service-account token mounted at /var/run/secrets/...).
-              # If kubectl isn't available, fall back to the curl path.
-              if command -v kubectl >/dev/null 2>&1; then
-                kubectl apply -f /tmp/dsn-secret.yaml
-              else
-                TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-                NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
-                CA=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-                curl --cacert "$CA" \
-                  -H "Authorization: Bearer $TOKEN" \
-                  -H "Content-Type: application/yaml" \
-                  -X PATCH \
-                  --data-binary @/tmp/dsn-secret.yaml \
-                  "https://kubernetes.default.svc/api/v1/namespaces/${NS}/secrets/{{ .Values.database.umamiDsnSecretRef.name }}?fieldManager=helm" \
-                  || curl --cacert "$CA" \
-                    -H "Authorization: Bearer $TOKEN" \
-                    -H "Content-Type: application/yaml" \
-                    -X POST \
-                    --data-binary @/tmp/dsn-secret.yaml \
-                    "https://kubernetes.default.svc/api/v1/namespaces/${NS}/secrets"
-              fi
+              echo "bootstrap complete: role=${ROLE} database=${BOOTSTRAP_DATABASE}"
