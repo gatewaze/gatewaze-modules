@@ -82,10 +82,11 @@ export function createPublicBlogRoutes(deps: PublicBlogRoutesDeps) {
     let query = supabase
       .from('blog_posts')
       .select(
-        'id, title, slug, excerpt, featured_image, featured_image_alt, published_at, is_featured, reading_time, word_count, meta_title, meta_description, ' +
+        'id, title, slug, excerpt, featured_image, featured_image_alt, published_at, is_featured, reading_time, word_count, meta_title, meta_description, is_external, canonical_url, ' +
         'category:blog_categories(id, name, slug, color), ' +
         'tags:blog_post_tags(tag:blog_tags(id, name, slug, color)), ' +
-        'author_id'  // FK to people.id; the theme fetches author detail via /api/people/:id when needed (no PostgREST FK yet)
+        'author:blog_authors(slug, display_name, avatar_url), ' +
+        'author_id'  // legacy system uuid; the display author is `author` (blog_authors)
       )
       .eq('status', 'published')
       .eq('visibility', 'public')
@@ -117,6 +118,7 @@ export function createPublicBlogRoutes(deps: PublicBlogRoutesDeps) {
       tags: ((p.tags as Array<{ tag?: unknown }> | undefined) ?? [])
         .map((entry) => entry.tag)
         .filter((t) => t !== undefined && t !== null),
+      author: Array.isArray(p.author) ? (p.author[0] ?? null) : (p.author ?? null),
     }));
 
     if (tagSlug) {
@@ -143,11 +145,12 @@ export function createPublicBlogRoutes(deps: PublicBlogRoutesDeps) {
     const result = await supabase
       .from('blog_posts')
       .select(
-        'id, title, slug, excerpt, content, featured_image, featured_image_alt, published_at, is_featured, reading_time, word_count, ' +
+        'id, title, slug, excerpt, content, featured_image, featured_image_alt, published_at, is_featured, reading_time, word_count, is_external, ' +
         'meta_title, meta_description, canonical_url, og_title, og_description, og_image, twitter_title, twitter_description, twitter_image, ' +
         'category:blog_categories(id, name, slug, color), ' +
         'tags:blog_post_tags(tag:blog_tags(id, name, slug, color)), ' +
-        'author_id'  // FK to people.id; the theme fetches author detail via /api/people/:id when needed (no PostgREST FK yet)
+        'author:blog_authors(slug, display_name, avatar_url), ' +
+        'author_id'  // legacy system uuid; the display author is `author` (blog_authors)
       )
       .eq('slug', slug)
       .eq('status', 'published')
@@ -169,8 +172,45 @@ export function createPublicBlogRoutes(deps: PublicBlogRoutesDeps) {
       tags: ((post.tags as Array<{ tag?: unknown }> | undefined) ?? [])
         .map((entry) => entry.tag)
         .filter((t) => t !== undefined && t !== null),
+      author: Array.isArray(post.author) ? (post.author[0] ?? null) : (post.author ?? null),
     };
     sendCacheable(req, res, flat, ['blog', `blog:post:${slug}`]);
+  }
+
+  // Author + their published posts. Reads blog_authors only (never people) so
+  // synthetic author emails can't leak. Agent-discoverable author index.
+  async function getAuthor(req: Request, res: Response): Promise<void> {
+    const slug = paramAs(req.params.slug);
+    if (!slug) {
+      sendError(res, 400, 'missing_slug', 'slug required');
+      return;
+    }
+    const authorRes = await supabase
+      .from('blog_authors')
+      .select('id, slug, display_name, avatar_url, bio')
+      .eq('slug', slug)
+      .maybeSingle();
+    if (authorRes.error) {
+      sendError(res, 500, 'internal', String(authorRes.error.message ?? ''));
+      return;
+    }
+    if (!authorRes.data) {
+      sendError(res, 404, 'not_found', `author '${slug}' not found`);
+      return;
+    }
+    const author = authorRes.data as Record<string, unknown>;
+    const postsRes = await supabase
+      .from('blog_posts')
+      .select('id, title, slug, excerpt, featured_image, published_at, reading_time, is_external, canonical_url')
+      .eq('blog_author_id', author.id)
+      .eq('status', 'published')
+      .eq('visibility', 'public')
+      .order('published_at', { ascending: false });
+    if (postsRes.error) {
+      sendError(res, 500, 'internal', String(postsRes.error.message ?? ''));
+      return;
+    }
+    sendCacheable(req, res, { author, posts: postsRes.data ?? [] }, ['blog', `blog:author:${slug}`]);
   }
 
   async function listTags(req: Request, res: Response): Promise<void> {
@@ -202,7 +242,7 @@ export function createPublicBlogRoutes(deps: PublicBlogRoutesDeps) {
     );
   }
 
-  return { listPosts, getPost, listTags, listCategories };
+  return { listPosts, getPost, getAuthor, listTags, listCategories };
 }
 
 export function mountPublicBlogRoutes(
@@ -211,6 +251,7 @@ export function mountPublicBlogRoutes(
 ): void {
   router.get('/blog/posts', routes.listPosts);
   router.get('/blog/posts/:slug', routes.getPost);
+  router.get('/blog/authors/:slug', routes.getAuthor);
   router.get('/blog/tags', routes.listTags);
   router.get('/blog/categories', routes.listCategories);
 }
