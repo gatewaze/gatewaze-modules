@@ -180,9 +180,10 @@ const scraperClasses = {
 // Best-effort: a module whose register.js fails to load is logged + skipped,
 // never blocking the built-in event scrapers.
 const MODULE_ROOTS = [
-  '/var/lib/gatewaze/modules',   // live snapshot installed by the api
-  '/gatewaze-modules/modules',   // baked-in / runtime symlink
-  '/app/.gatewaze-modules',      // loader cache (nested <repo-slug>/modules/<mod>)
+  '/var/lib/gatewaze/modules',      // live snapshot installed by the api
+  '/gatewaze-modules/modules',      // gatewaze repo clone (symlink → raw clone, all modules)
+  '/lf-gatewaze-modules/modules',   // lf-gatewaze repo clone (symlink → raw clone, all modules)
+  '/app/.gatewaze-modules',         // loader cache (nested <repo-slug>/modules/<mod>, enabled only)
 ];
 
 let _moduleScrapersLoaded = false;
