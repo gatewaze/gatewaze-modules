@@ -41,6 +41,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.2.6)
+      '@fontsource/inter':
+        specifier: ^5.1.0
+        version: 5.2.8
       '@formkit/auto-animate':
         specifier: ^0.8.2
         version: 0.8.4
@@ -629,6 +632,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
+      '@react-email/components':
+        specifier: ^1.0.12
+        version: 1.0.12(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      '@react-email/render':
+        specifier: ^2.0.8
+        version: 2.0.8(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@react-three/fiber':
         specifier: ^9.5.0
         version: 9.6.1(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(three@0.182.0)
@@ -773,6 +782,18 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  ../gatewaze/packages/tracking:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.19
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.0
+        version: 4.1.6(@opentelemetry/api@1.9.1)(@types/node@22.19.19)(happy-dom@20.9.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@7.3.3(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.2)(yaml@2.9.0))
+
   modules/_template:
     dependencies:
       '@gatewaze/shared':
@@ -891,6 +912,21 @@ importers:
       react:
         specifier: '*'
         version: 19.2.6
+
+  modules/broadcasts:
+    dependencies:
+      '@gatewaze-modules/ai':
+        specifier: '*'
+        version: link:../ai
+      '@gatewaze/shared':
+        specifier: '*'
+        version: link:../../../gatewaze/packages/shared
+      '@supabase/supabase-js':
+        specifier: '*'
+        version: 2.106.0
+      express:
+        specifier: '*'
+        version: 4.22.2
 
   modules/bulk-emailing:
     dependencies:
@@ -1327,6 +1363,24 @@ importers:
         specifier: '*'
         version: link:../../../gatewaze/packages/shared
 
+  modules/resources:
+    dependencies:
+      '@gatewaze/shared':
+        specifier: '*'
+        version: link:../../../gatewaze/packages/shared
+      '@supabase/supabase-js':
+        specifier: '*'
+        version: 2.106.0
+      isomorphic-dompurify:
+        specifier: '*'
+        version: 3.13.0(@noble/hashes@1.8.0)
+      next:
+        specifier: '*'
+        version: 15.5.18(@opentelemetry/api@1.9.1)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: '*'
+        version: 19.2.6
+
   modules/scheduler:
     dependencies:
       '@gatewaze/shared':
@@ -1452,24 +1506,6 @@ importers:
       stripe:
         specifier: ^17.0.0
         version: 17.7.0
-
-  modules/structured-resources:
-    dependencies:
-      '@gatewaze/shared':
-        specifier: '*'
-        version: link:../../../gatewaze/packages/shared
-      '@supabase/supabase-js':
-        specifier: '*'
-        version: 2.106.0
-      isomorphic-dompurify:
-        specifier: '*'
-        version: 3.13.0(@noble/hashes@1.8.0)
-      next:
-        specifier: '*'
-        version: 15.5.18(@opentelemetry/api@1.9.1)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      react:
-        specifier: '*'
-        version: 19.2.6
 
   modules/surveys:
     dependencies:
@@ -3067,6 +3103,9 @@ packages:
 
   '@floating-ui/vue@1.1.9':
     resolution: {integrity: sha512-BfNqNW6KA83Nexspgb9DZuz578R7HT8MZw1CfK9I6Ah4QReNWEJsXWHN+SdmOVLNGmTPDi+fDT535Df5PzMLbQ==}
+
+  '@fontsource/inter@5.2.8':
+    resolution: {integrity: sha512-P6r5WnJoKiNVV+zvW2xM13gNdFhAEpQ9dQJHt3naLvfg+LkF2ldgSLiF4T41lf1SQCM9QmkqPTn4TH568IRagg==}
 
   '@formkit/auto-animate@0.8.4':
     resolution: {integrity: sha512-DHHC01EJ1p70Q0z/ZFRBIY8NDnmfKccQoyoM84Tgb6omLMat6jivCdf272Y8k3nf4Lzdin/Y4R9q8uFtU0GbnA==}
@@ -13139,6 +13178,8 @@ snapshots:
     transitivePeerDependencies:
       - '@vue/composition-api'
       - vue
+
+  '@fontsource/inter@5.2.8': {}
 
   '@formkit/auto-animate@0.8.4': {}
 
