@@ -23,13 +23,16 @@ const blogModule: GatewazeModule = {
     'migrations/005_keyword_adapter.sql',
     'migrations/006_register_with_platform.sql',
     'migrations/007_webhook_topic.sql',
+    'migrations/008_blog_authors.sql',
   ],
 
   adminRoutes: [
     { path: 'blog/posts', component: () => import('./admin/pages/posts/index'), requiredFeature: 'blog', guard: 'none' },
+    { path: 'blog/authors', component: () => import('./admin/pages/authors/index'), requiredFeature: 'blog', guard: 'admin' },
   ],
   adminNavItems: [
     { path: '/blog/posts', label: 'Blog', icon: 'FileText', requiredFeature: 'blog', defaultSection: 'Content', defaultLocation: 'sidebar', order: 20 },
+    { path: '/blog/authors', label: 'Blog Authors', icon: 'Users', requiredFeature: 'blog', defaultSection: 'Content', defaultLocation: 'sidebar', order: 21 },
   ],
 
   apiRoutes: async (app: unknown) => {
@@ -53,6 +56,9 @@ const blogModule: GatewazeModule = {
 
   portalRoutes: [
     { path: '/blog', component: () => import('./portal/pages/index') },
+    // Author page must be registered before the catch-all :slug so it isn't
+    // captured as a post slug.
+    { path: '/blog/author/:slug', component: () => import('./portal/pages/author/[slug]') },
     { path: '/blog/:slug', component: () => import('./portal/pages/_slug') },
   ],
 
