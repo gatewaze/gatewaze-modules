@@ -426,6 +426,13 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
       type: scraperData.event_type,
       url: scraperData.base_url,
       base_url: scraperData.base_url,
+      // Scraper-level settings that non-event scrapers (e.g. the blog scraper,
+      // which persists rows itself instead of going through events_create) need
+      // to honour directly. Event scrapers get these applied by the handler's
+      // save pipeline (content_category via events_create, default_publish_state
+      // via events_publish_state_set); these fields expose them to the scraper.
+      content_category: scraperData.content_category || null,
+      default_publish_state: scraperData.default_publish_state || null,
       config: {
         ...scraperData.config || {},
         baseUrl: scraperData.base_url,
