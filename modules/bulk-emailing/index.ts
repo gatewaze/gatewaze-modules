@@ -97,6 +97,11 @@ const bulkEmailingModule: GatewazeModule = {
     'migrations/018_event_batch_engine_columns.sql',
     // 019 adds reminder_email_lead_hours for the date-driven reminder cron.
     'migrations/019_event_reminder_lead_hours.sql',
+    // 007_recipient_customer_id_uuid (late-numbered, ordered here so it runs
+    // after 002 creates the column): fixes email_send_log.recipient_customer_id
+    // integer -> uuid. The wrong type meant the column could never hold a
+    // people UUID, so it is empty everywhere and the in-place change is safe.
+    'migrations/007_recipient_customer_id_uuid.sql',
   ],
 
   workers: [
