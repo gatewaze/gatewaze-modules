@@ -44,6 +44,41 @@ import {
 
 const SITE_ORIGIN = 'https://home.mlops.community';
 const MAX_DESCRIPTION = 20_000;
+const MAX_PAGE_CONTENT = 40_000;
+
+// The MLOps Community detail page's `event.description` is already a clean
+// rich-text HTML body (paragraphs, lists, links). Reduce it to lean,
+// portal-safe HTML for events.page_content: the portal re-sanitises with
+// DOMPurify (which has no <table> allow-list and strips lazy-loaded imgs), so
+// convert any tables to paragraphs and drop <img> tags (kept links keep the
+// media reachable at the source). Cap the length as a guard.
+function tablesToParagraphs(html) {
+  return html.replace(/<table\b[\s\S]*?<\/table>/gi, (tbl) => {
+    const rows = [...tbl.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)];
+    return rows
+      .map((r) => {
+        const cells = [...r[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((c) => c[1].trim());
+        if (cells.length === 0) return '';
+        if (cells.length === 1) return `<p>${cells[0]}</p>`;
+        return `<p>${cells[0]} — ${cells.slice(1).join(' ')}</p>`;
+      })
+      .join('');
+  });
+}
+
+function cleanDescriptionHtml(html) {
+  if (!html) return '';
+  let out = String(html)
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+="[^"]*"/gi, '')
+    .replace(/\son\w+='[^']*'/gi, '');
+  out = tablesToParagraphs(out);
+  out = out.replace(/<img\b[^>]*>/gi, '');
+  out = out.trim();
+  if (out.length > MAX_PAGE_CONTENT) out = out.slice(0, MAX_PAGE_CONTENT);
+  return out;
+}
 
 function stripTags(html) {
   if (!html) return '';
@@ -144,7 +179,14 @@ export class AaifVirtualEventsScraper extends BaseScraper {
     if (ev.description) {
       let desc = stripTags(ev.description);
       if (desc.length > MAX_DESCRIPTION) desc = desc.slice(0, MAX_DESCRIPTION);
-      if (desc.length > 20) enrich.eventDescription = desc;
+      if (desc.length > 20) {
+        enrich.eventDescription = desc;
+        // Full HTML body → events.page_content (first in the portal's
+        // content-render priority). Without this the event detail page renders
+        // blank even though we captured the description.
+        const bodyHtml = cleanDescriptionHtml(ev.description);
+        if (bodyHtml.length > 20) enrich.pageContentHtml = bodyHtml;
+      }
     }
 
     const tags = Array.isArray(ev.tags)
@@ -237,6 +279,9 @@ export class AaifVirtualEventsScraper extends BaseScraper {
           eventTopics: enrich.eventTopics || [],
           listingIntro: '',
           eventDescription: enrich.eventDescription || '',
+          // Full page-body HTML from the detail page → events.page_content
+          // (dedicated field the handler writes directly; see scraper-job-handler).
+          pageContentHtml: enrich.pageContentHtml || null,
           coverImageUrl,
           eventLogo: coverImageUrl,
           eventFeaturedImage: coverImageUrl,
