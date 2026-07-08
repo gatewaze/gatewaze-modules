@@ -20,6 +20,7 @@ import { LumaICalScraperFast } from './scrapers/LumaICalScraperFast.js';
 import { LumaSearchScraperFast } from './scrapers/LumaSearchScraperFast.js';
 import { LumaCategoryScraperFast } from './scrapers/LumaCategoryScraperFast.js';
 import { LinuxFoundationEventsScraper } from './scrapers/LinuxFoundationEventsScraper.js';
+import { AaifVirtualEventsScraper } from './scrapers/AaifVirtualEventsScraper.js';
 import { TopicMatcher } from './scrapers/TopicMatcher.js';
 import { GeocodingService } from './scrapers/GeocodingService.js';
 import { EventProcessor } from './scrapers/EventProcessor.js';
@@ -161,6 +162,10 @@ const scraperClasses = {
   // scrapling-fetcher when configured); parses the WordPress card
   // markup + drills into each event's detail page for full enrichment.
   'LinuxFoundationEventsScraper': LinuxFoundationEventsScraper,
+  // Agentic AI Foundation virtual events on the MLOps Community hub
+  // (home.mlops.community/public/events). Pure HTTP; parses the Next.js
+  // __NEXT_DATA__ event list + drills each future event's detail page.
+  'AaifVirtualEventsScraper': AaifVirtualEventsScraper,
 };
 
 // ──────────────────────────────────────────────────────────────────────
