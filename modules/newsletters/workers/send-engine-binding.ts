@@ -20,6 +20,11 @@ import type { EngineDeps, SendContext, SendEngineBinding, Recipient } from '../.
 // Edge fn's link tagging so the worker path has parity (works once migration 032
 // — the tracking_key registry — is applied; skips gracefully otherwise).
 import { extractTrackableLinks, generateTrackingKey, tagHtmlLinks, type LinkSourceBlock, type TaggableLink } from '../functions/_shared/link-tracking.js';
+import {
+  LOCAL_TOKEN, VIRTUAL_TOKEN, parseLocalConfig, parseVirtualConfig, stripEventMarkers,
+  pickLoc, areaKey, renderEventsHtml, resolveLocalEvents, resolveVirtualEvents,
+  type LocalConfig, type EventRpcClient,
+} from './event-personalisation.js';
 
 const MERGE_FIELDS = ['first_name', 'last_name', 'name', 'company', 'job_title'];
 const WEATHER_TOKENS = ['weather_emoji', 'weather_temp', 'weather_summary', 'weather_location'];
@@ -30,6 +35,9 @@ type NlCtx = SendContext & {
   usesWeather: boolean; weatherUnits: 'celsius' | 'fahrenheit';
   attrs: Map<string, Record<string, unknown>>;       // email -> attributes
   weatherCache: Map<string, Record<string, string>>; // city|country|units -> {weather_* -> value}
+  usesLocalEvents: boolean; localConfig: LocalConfig;
+  localEventsCache: Map<string, string>;             // area key -> rendered events HTML (or '')
+  virtualEventsHtml: string;                         // resolved once per send (global); '' when none/unused
 };
 
 function escapeHtml(s: string): string {
@@ -156,6 +164,25 @@ export const newsletterBinding: SendEngineBinding = {
     subject = subject || 'Newsletter';
     const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html);
     const unitMarker = html.match(/<!--gw-weather-units:(celsius|fahrenheit)-->/);
+    const portalBaseUrl: string | null = (send.metadata?.portal_base_url) || process.env.SITE_URL || null;
+
+    // Location-dependent event blocks. Detect the tokens, parse per-block config
+    // from the marker comments, then strip those markers so they don't ship.
+    const usesLocalEvents = html.includes(LOCAL_TOKEN);
+    const usesVirtualEvents = html.includes(VIRTUAL_TOKEN);
+    const localConfig = parseLocalConfig(html);
+    const virtualConfig = parseVirtualConfig(html);
+    html = stripEventMarkers(html);
+
+    // Virtual events are global (same for every recipient) → resolve once here.
+    let virtualEventsHtml = '';
+    if (usesVirtualEvents) {
+      try {
+        const events = await resolveVirtualEvents(deps.supabase as unknown as EventRpcClient, virtualConfig, new Date().toISOString());
+        virtualEventsHtml = renderEventsHtml(events, { heading: virtualConfig.heading, intro: virtualConfig.intro, portalBaseUrl });
+      } catch (e) { deps.logger.warn('[send-engine] virtual events resolve failed', e); }
+    }
+
     const ctx: NlCtx = {
       sendId, brand: send.brand || process.env.SEND_ENGINE_DEFAULT_BRAND || 'default', channel: send.channel || 'email',
       subject, html,
@@ -163,10 +190,11 @@ export const newsletterBinding: SendEngineBinding = {
       fromName: send.from_name || process.env.EMAIL_FROM_NAME || 'Gatewaze',
       replyTo, disableSubscriptionTracking: true,
       listId, hmacSecret: process.env.UNSUBSCRIBE_HMAC_SECRET,
-      portalBaseUrl: (send.metadata?.portal_base_url) || process.env.SITE_URL || null,
+      portalBaseUrl,
       tokens: scanTokens(html, subject),
       usesWeather, weatherUnits: unitMarker && unitMarker[1] === 'fahrenheit' ? 'fahrenheit' : 'celsius',
       attrs: new Map(), weatherCache: new Map(),
+      usesLocalEvents, localConfig, localEventsCache: new Map(), virtualEventsHtml,
     };
     return ctx;
   },
@@ -177,6 +205,25 @@ export const newsletterBinding: SendEngineBinding = {
     for (let i = 0; i < emails.length; i += 500) {
       const { data } = await deps.supabase.from('people').select('email, attributes').in('email', emails.slice(i, i + 500));
       for (const row of data ?? []) c.attrs.set(row.email, row.attributes ?? {});
+    }
+
+    // Local events: resolve once per unique area (recipients in the same metro
+    // share a lookup + rendered HTML). Cache persists across batches on the ctx.
+    if (c.usesLocalEvents) {
+      const afterIso = new Date().toISOString();
+      for (const r of recipients) {
+        const attrs = (r.email && c.attrs.get(r.email)) || {};
+        const key = areaKey(pickLoc(attrs));
+        if (!key || c.localEventsCache.has(key)) continue;
+        try {
+          const loc = pickLoc(attrs);
+          const events = await resolveLocalEvents(deps.supabase as unknown as EventRpcClient, loc, c.localConfig, afterIso);
+          c.localEventsCache.set(key, renderEventsHtml(events, { heading: c.localConfig.heading, intro: c.localConfig.intro, portalBaseUrl: c.portalBaseUrl }));
+        } catch (e) {
+          c.localEventsCache.set(key, ''); // resolve failed → omit the block for this area
+          deps.logger.warn('[send-engine] local events resolve failed', e);
+        }
+      }
     }
   },
 
@@ -214,6 +261,15 @@ export const newsletterBinding: SendEngineBinding = {
       if (inner === 'unsubscribe_url') { subs[token] = unsubUrl; continue; }
       if (inner === 'manage_subscriptions_url') { subs[token] = manageUrl; continue; }
       if (weather && WEATHER_TOKENS.includes(inner)) { subs[token] = weather[inner] ?? ''; continue; }
+      // Event blocks: substitute the self-contained rendered HTML (raw, not
+      // escaped) or '' — '' omits the block for this recipient. Always set so
+      // SendGrid never leaves the literal {{token}} in a recipient's email.
+      if (inner === 'local_events_block') {
+        const key = c.usesLocalEvents ? areaKey(pickLoc(attrs)) : null;
+        subs[token] = (key && c.localEventsCache.get(key)) || '';
+        continue;
+      }
+      if (inner === 'virtual_events_block') { subs[token] = c.virtualEventsHtml || ''; continue; }
       // merge field, optionally `field|fallback`
       const m = inner.match(/^([a-z_]+)\s*(?:\|(.*))?$/);
       if (m && MERGE_FIELDS.includes(m[1])) {

@@ -55,6 +55,8 @@ import { BulletListBlock } from './blocks/BulletList.js';
 import { SocialIconsRowBlock } from './blocks/SocialIconsRow.js';
 import { LogoHeaderBlock } from './blocks/LogoHeader.js';
 import { WeatherBlock } from './blocks/Weather.js';
+import { LocalEventsBlock } from './blocks/LocalEvents.js';
+import { VirtualEventsBlock } from './blocks/VirtualEvents.js';
 // Phase A — react.email/components parity, variant fills:
 import { HeaderWithNavBlock } from './blocks/HeaderWithNav.js';
 import { MultiColumnFooterBlock } from './blocks/MultiColumnFooter.js';
@@ -176,6 +178,9 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   HelixAiContentBlock as unknown as EmailBlockEntry,
   // Content — composites (data-driven via Puck resolveData)
   WeatherBlock as unknown as EmailBlockEntry,
+  // Content — location-dependent (resolved per recipient / per send at send time)
+  LocalEventsBlock as unknown as EmailBlockEntry,
+  VirtualEventsBlock as unknown as EmailBlockEntry,
   // Articles
   FeaturedArticleBlock as unknown as EmailBlockEntry,
   ArticleCardBlock as unknown as EmailBlockEntry,

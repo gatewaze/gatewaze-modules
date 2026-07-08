@@ -288,6 +288,12 @@ const newslettersModule: GatewazeModule = {
     'migrations/064_newsletter_reply_messages.sql',
     // 065 adds star/archive triage status to newsletter replies.
     'migrations/065_newsletter_reply_status.sql',
+    // 066 adds list-returning RPCs backing the Local Events (per-recipient,
+    // geo-filtered) and Virtual Events (global) email blocks.
+    'migrations/066_newsletter_event_blocks.sql',
+    // 067 seeds the local_events / virtual_events react-email block-defs into
+    // every email library so they appear in the editor drawer.
+    'migrations/067_event_block_defs.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
