@@ -12,6 +12,7 @@
  * lands when wired into the admin design system.
  */
 import { useEffect, useState } from 'react';
+import { authedFetch } from './api';
 import { useParams } from 'react-router';
 
 interface Property {
@@ -41,9 +42,9 @@ export default function PropertySettingsPage() {
     if (!id) return;
     const apiUrl = import.meta.env.VITE_API_URL ?? '';
     Promise.all([
-      fetch(`${apiUrl}/api/analytics/properties/${id}`, { credentials: 'include' }).then((r) => r.json()),
-      fetch(`${apiUrl}/api/analytics/properties/${id}/scripts`, { credentials: 'include' }).then((r) => r.json()),
-      fetch(`${apiUrl}/api/analytics/properties/${id}/segment`, { credentials: 'include' }).then((r) => r.json()),
+      authedFetch(`${apiUrl}/api/modules/analytics/properties/${id}`, { credentials: 'include' }).then((r) => r.json()),
+      authedFetch(`${apiUrl}/api/modules/analytics/properties/${id}/scripts`, { credentials: 'include' }).then((r) => r.json()),
+      authedFetch(`${apiUrl}/api/modules/analytics/properties/${id}/segment`, { credentials: 'include' }).then((r) => r.json()),
     ])
       .then(([prop, sc, seg]) => {
         setProperty((prop as { property: Property }).property);
@@ -58,7 +59,7 @@ export default function PropertySettingsPage() {
     setSavingScripts(true);
     try {
       const apiUrl = import.meta.env.VITE_API_URL ?? '';
-      await fetch(`${apiUrl}/api/analytics/properties/${id}/scripts`, {
+      await authedFetch(`${apiUrl}/api/modules/analytics/properties/${id}/scripts`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -72,7 +73,7 @@ export default function PropertySettingsPage() {
   async function saveSegment() {
     if (!id || !segmentWriteKey.trim()) return;
     const apiUrl = import.meta.env.VITE_API_URL ?? '';
-    await fetch(`${apiUrl}/api/analytics/properties/${id}/segment`, {
+    await authedFetch(`${apiUrl}/api/modules/analytics/properties/${id}/segment`, {
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },

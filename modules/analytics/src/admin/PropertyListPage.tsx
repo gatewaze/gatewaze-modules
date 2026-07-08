@@ -7,6 +7,7 @@
  * wired in. This placeholder confirms the route is mounted + rendered.
  */
 import { useEffect, useState } from 'react';
+import { authedFetch } from './api';
 
 interface Property {
   id: string;
@@ -23,7 +24,7 @@ export default function PropertyListPage() {
 
   useEffect(() => {
     const apiUrl = import.meta.env.VITE_API_URL ?? '';
-    fetch(`${apiUrl}/api/analytics/properties`, { credentials: 'include' })
+    authedFetch(`${apiUrl}/api/modules/analytics/properties`, { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((body: { properties: Property[] }) => setProperties(body.properties ?? []))
       .catch((e: Error) => setError(e.message))
