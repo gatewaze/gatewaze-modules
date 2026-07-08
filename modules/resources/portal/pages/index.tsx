@@ -76,8 +76,9 @@ async function getCollections(isAuthenticated: boolean): Promise<Collection[]> {
 }
 
 // Resolve effective access: 'inherit' falls back to module config default
-function resolveAccess(access: string): 'public' | 'authenticated' {
+function resolveAccess(access: string): 'public' | 'authenticated' | 'metered' {
   if (access === 'public') return 'public'
+  if (access === 'metered') return 'metered'
   if (access === 'authenticated') return 'authenticated'
   // 'inherit' — default to authenticated (safe default; module config resolved at app layer)
   return 'authenticated'
@@ -143,6 +144,9 @@ export default async function ResourcesListingPage() {
               <Link href={`/resources/${collection.slug}`} className="pub-card gw-card-glow" key={collection.id}>
                 {cover}
                 <div className="pub-card-body">
+                  {effective === 'metered' && !isAuthenticated && (
+                    <span className="pub-side-h" style={{ marginBottom: 8, display: 'block' }}>Members · free preview</span>
+                  )}
                   <h3>{collection.name}</h3>
                   {collection.description && <p>{collection.description}</p>}
                 </div>
