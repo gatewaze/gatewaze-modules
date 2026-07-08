@@ -76,9 +76,9 @@ async function getCollectionData(slug: string, isAuthenticated: boolean) {
 
   if (colError || !collection) return null
 
-  // Check access
-  const effectiveAccess = collection.access === 'public' ? 'public' : 'authenticated'
-  if (effectiveAccess === 'authenticated' && !isAuthenticated) return null
+  // Check access. 'public' + 'metered' collections are browsable by anon (item
+  // pages meter individually); 'authenticated'/'inherit' require a session.
+  if ((collection.access === 'authenticated' || collection.access === 'inherit') && !isAuthenticated) return null
 
   // Use authenticated client for content (handles inherit collections where anon RLS blocks)
   const supabase = await getSupabaseClient(isAuthenticated)

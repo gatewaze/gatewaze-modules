@@ -170,6 +170,11 @@ export default async function ItemDetailPage({ params }: Props) {
 
   const { collection, item, prevItem, nextItem, categories, articles } = data
 
+  // Metered collections: a logged-out human sees a teaser + sign-in gate, while
+  // the full text stays in the DOM (and in the JSON-LD + /md + API) for search
+  // engines and AI agents. Signed-in users and public collections are never gated.
+  const gated = collection.access === 'metered' && !isAuthenticated
+
   // Absolute base for this brand — the serving host IS the canonical domain
   // (including custom domains), so JSON-LD @id/url values resolve correctly
   // per-tenant without hard-coding a domain.
@@ -210,6 +215,13 @@ export default async function ItemDetailPage({ params }: Props) {
         mainEntityOfPage: pageUrl,
         isPartOf: { '@type': 'Collection', name: collection.name, url: `${base}/resources/${collection.slug}` },
         ...(item.external_url ? { sameAs: item.external_url } : {}),
+        // Google "paywalled content" markup — declares the gated body so full
+        // text can still be indexed without a cloaking penalty (matches the
+        // anon-rendered DOM: Googlebot is anonymous, so it sees `gated`).
+        ...(gated ? {
+          isAccessibleForFree: false,
+          hasPart: { '@type': 'WebPageElement', isAccessibleForFree: false, cssSelector: '.res-gate-body' },
+        } : {}),
       },
       {
         '@type': 'BreadcrumbList',
@@ -228,6 +240,19 @@ export default async function ItemDetailPage({ params }: Props) {
 
   const slugify = (s: string) => s.toLowerCase().replace(/\s+/g, '-')
 
+  // When gated, keep the first section as the free teaser and clip the rest
+  // behind the sign-in gate. (Single-section items gate the whole body.)
+  const teaserCount = gated ? (item.sections.length > 1 ? 1 : 0) : item.sections.length
+  const teaserSections = item.sections.slice(0, teaserCount)
+  const gatedSections = gated ? item.sections.slice(teaserCount) : []
+
+  const renderSection = (section: { id: string; heading: string; content: string | null }) => (
+    <section key={section.id} id={slugify(section.heading)} style={{ scrollMarginTop: 96 }}>
+      <h2>{section.heading}</h2>
+      {section.content && <div dangerouslySetInnerHTML={{ __html: section.content }} />}
+    </section>
+  )
+
   return (
     <div className="pub-article-wrap pub-fade">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
@@ -236,6 +261,15 @@ export default async function ItemDetailPage({ params }: Props) {
         .res-nav-link { display: block; text-decoration: none; padding: 5px 9px; border-radius: 8px; font-size: 13.5px; color: var(--ink-3); transition: background .15s ease, color .15s ease; }
         .res-nav-link:hover { background: rgba(var(--ui-text), 0.06); color: var(--ink); }
         .res-nav-link[aria-current="page"] { background: rgba(var(--ui-text), 0.10); color: var(--ink); font-weight: 600; }
+        .res-gate { position: relative; }
+        .res-gate-body { max-height: 240px; overflow: hidden; user-select: none; pointer-events: none;
+          -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0%, #000 35%, transparent 100%); }
+        .res-gate-cta { position: relative; margin-top: -64px; text-align: center;
+          border: 1px solid var(--line); background: var(--paper); border-radius: 16px; padding: 28px 24px;
+          box-shadow: 0 -24px 44px -16px var(--paper); }
+        .res-gate-cta h3 { font: 600 20px var(--font-display); color: var(--ink); margin: 4px 0 8px; letter-spacing: -0.01em; }
+        .res-gate-cta p { color: var(--ink-3); font-size: 14px; line-height: 1.55; margin: 0 auto 18px; max-width: 44ch; }
         @media (max-width: 760px) { .res-article-grid { grid-template-columns: 1fr; gap: 24px; } }
       `}</style>
       <div className="res-article-grid">
@@ -314,18 +348,33 @@ export default async function ItemDetailPage({ params }: Props) {
             </div>
           )}
 
-          {/* Sections */}
-          <div className="pub-body">
-            {item.sections.map((section) => (
-              <section key={section.id} id={slugify(section.heading)} style={{ scrollMarginTop: 96 }}>
-                <h2>{section.heading}</h2>
-                {section.content && <div dangerouslySetInnerHTML={{ __html: section.content }} />}
-              </section>
-            ))}
-          </div>
+          {/* Sections — free teaser first */}
+          {teaserSections.length > 0 && (
+            <div className="pub-body">
+              {teaserSections.map(renderSection)}
+            </div>
+          )}
+
+          {/* Gated remainder: in the DOM for crawlers/agents, clipped + faded
+              for logged-out humans, capped by a sign-in CTA. */}
+          {gated && gatedSections.length > 0 && (
+            <div className="res-gate">
+              <div className="pub-body res-gate-body">
+                {gatedSections.map(renderSection)}
+              </div>
+              <div className="res-gate-cta">
+                <div className="pub-side-h" style={{ marginBottom: 6 }}>Members-only resource</div>
+                <h3>Keep reading — it’s free</h3>
+                <p>Sign in (or create a free account) to read the full guide. The complete text stays open to search engines and AI agents.</p>
+                <Link href={`/sign-in?redirectTo=${encodeURIComponent(`/resources/${collection.slug}/${item.slug}`)}`} className="btn btn-primary">
+                  Sign in to keep reading
+                </Link>
+              </div>
+            </div>
+          )}
 
           {/* Previous/Next navigation */}
-          {(prevItem || nextItem) && (
+          {!gated && (prevItem || nextItem) && (
             <div className="pub-prevnext">
               {prevItem ? (
                 <Link href={`/resources/${collection.slug}/${prevItem.slug}`} className="pub-pn-card">
