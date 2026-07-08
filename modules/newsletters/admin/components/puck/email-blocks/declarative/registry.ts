@@ -19,6 +19,13 @@ interface DeclarativeSource {
   brick_type?: string;
   name?: string;
   render_kind?: string;
+  /**
+   * Present on `render_kind='react-email'` rows (selected as a column, equal to
+   * `block_type` for these). Lets us look the block up in the static
+   * `emailBlockRegistry` when merging react-email blocks into a git-driven
+   * newsletter's registry (see `addReactEmail`).
+   */
+  component_id?: string;
   content?: {
     html_template?: string;
     /**
@@ -91,5 +98,29 @@ export function buildEmailRegistry(
   const merged = new Map<string, EmailBlockEntry>();
   addDeclarative(merged, blockTemplates);
   addDeclarative(merged, brickTemplates);
+  // React-email blocks can't be expressed declaratively (dynamic, send-time
+  // data — e.g. Local/Virtual Events). A newsletter opts one in by seeding a
+  // `render_kind='react-email'` block_def; we surface its static-registry
+  // Component alongside the git-authored declarative blocks so it's available
+  // in the editor AND resolves on the publish/send path. Without this, the
+  // hasDeclarative branch would silently drop it.
+  addReactEmail(merged, blockTemplates);
+  addReactEmail(merged, brickTemplates);
   return merged;
+}
+
+/**
+ * Merge `render_kind='react-email'` block_defs by pulling their Component from
+ * the static `emailBlockRegistry` (keyed by component_id, which equals
+ * block_type for these rows). Unknown ids are skipped — a seeded block_def with
+ * no matching registry entry simply doesn't appear (safe, non-fatal).
+ */
+function addReactEmail(merged: Map<string, EmailBlockEntry>, items: ReadonlyArray<DeclarativeSource>): void {
+  for (const t of items) {
+    if (t.render_kind !== 'react-email') continue;
+    const id = t.component_id ?? t.block_type ?? t.brick_type;
+    if (!id || merged.has(id)) continue;
+    const entry = emailBlockRegistry.get(id);
+    if (entry) merged.set(id, entry);
+  }
 }
