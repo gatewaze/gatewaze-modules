@@ -201,7 +201,6 @@ export default async function BlogListingPage() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <div className="pub-h">
         <h1>Blog</h1>
-        <p>Field notes, updates and stories from the community.</p>
       </div>
 
       {posts.length === 0 ? (
