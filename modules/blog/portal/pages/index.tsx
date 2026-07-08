@@ -20,6 +20,11 @@ interface BlogPost {
     slug: string
     color: string
   } | null
+  author: {
+    slug: string
+    display_name: string
+    avatar_url: string | null
+  } | null
 }
 
 interface ContentCategoryOption {
@@ -63,7 +68,8 @@ async function getBlogData(): Promise<{ posts: BlogPost[]; categories: ContentCa
       .select(`
         id, title, slug, excerpt, featured_image, featured_image_alt,
         published_at, reading_time, is_external, canonical_url, content_category,
-        category:blog_categories(name, slug, color)
+        category:blog_categories(name, slug, color),
+        author:blog_authors(slug, display_name, avatar_url)
       `)
       .eq('status', 'published')
       .eq('visibility', 'public')
@@ -79,6 +85,7 @@ async function getBlogData(): Promise<{ posts: BlogPost[]; categories: ContentCa
   const posts = (data ?? []).map((row: any) => ({
     ...row,
     category: Array.isArray(row.category) ? row.category[0] ?? null : row.category,
+    author: Array.isArray(row.author) ? row.author[0] ?? null : row.author,
   }))
   return { posts, categories }
 }
@@ -117,26 +124,27 @@ function categoryLabel(value: string | null, categories: ContentCategoryOption[]
 }
 
 function BlogPostCard({ post, categories }: { post: BlogPost; categories: ContentCategoryOption[] }) {
-  // Scraped/syndicated posts (e.g. the AAIF blog) live off-site — link
-  // the card straight out to canonical_url in a new tab instead of the
-  // internal /blog/<slug> page (which has no body for external posts).
+  // Scraped/syndicated posts (e.g. the AAIF blog) live off-site — the cover +
+  // title link straight out to canonical_url; internal posts link to the
+  // /blog/<slug> page. The card itself is a non-anchor container so the author
+  // name can be its own link without nesting <a> inside <a> (invalid HTML).
   const isExternal = post.is_external && post.canonical_url
-  const CardTag: any = isExternal ? 'a' : Link
-  const cardProps = isExternal
+  const LinkTag: any = isExternal ? 'a' : Link
+  const linkProps = isExternal
     ? { href: post.canonical_url as string, target: '_blank', rel: 'noopener noreferrer' }
     : { href: `/blog/${post.slug}` }
   const pill = categoryLabel(post.content_category, categories)
   return (
-    <CardTag {...cardProps} className="pub-card pub-card-flex gw-card-glow">
+    <article className="pub-card pub-card-flex gw-card-glow">
       {/* natural: show the whole cover at its own aspect ratio (no crop).
           Placeholders keep the default fixed aspect so they don't collapse. */}
-      <div className={post.featured_image ? 'pub-cover natural' : 'pub-cover'}>
+      <LinkTag {...linkProps} className={post.featured_image ? 'pub-cover natural' : 'pub-cover'}>
         {post.featured_image ? (
           <img src={post.featured_image} alt={post.featured_image_alt || post.title} />
         ) : (
           <span className="pub-cover-ph">cover</span>
         )}
-      </div>
+      </LinkTag>
       <div className="pub-card-body">
         {pill && <span className="pub-cat">{pill}</span>}
         {post.category && (
@@ -144,9 +152,28 @@ function BlogPostCard({ post, categories }: { post: BlogPost; categories: Conten
             {post.category.name}
           </span>
         )}
-        <h3>{post.title}</h3>
+        <h3>
+          <LinkTag {...linkProps} className="pub-card-title-link">
+            {post.title}
+          </LinkTag>
+        </h3>
         {post.excerpt && <p>{post.excerpt}</p>}
         <div className="pub-meta pub-meta-pin">
+          {post.author && (
+            <>
+              <Link href={`/blog/author/${post.author.slug}`} className="pub-author-link">
+                {post.author.avatar_url ? (
+                  <img className="pub-author-avatar" src={post.author.avatar_url} alt={post.author.display_name} />
+                ) : (
+                  <span className="pub-author-avatar pub-author-avatar-ph" aria-hidden>
+                    {initials(post.author.display_name)}
+                  </span>
+                )}
+                {post.author.display_name}
+              </Link>
+              <span className="dotsep" />
+            </>
+          )}
           {post.published_at && formatDate(post.published_at)}
           {post.reading_time ? (
             <>
@@ -156,8 +183,17 @@ function BlogPostCard({ post, categories }: { post: BlogPost; categories: Conten
           ) : null}
         </div>
       </div>
-    </CardTag>
+    </article>
   )
+}
+
+function initials(name: string): string {
+  return (name || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('')
 }
 
 export default async function BlogListingPage() {
