@@ -294,6 +294,10 @@ const newslettersModule: GatewazeModule = {
     // 067 seeds the local_events / virtual_events react-email block-defs into
     // every email library so they appear in the editor drawer.
     'migrations/067_event_block_defs.sql',
+    // 068 fixes tz_local fanout: send_at rolls forward to the next local
+    // target occurrence instead of resolving to a past instant (which blasted
+    // the whole queue at once when scheduled_at was later than target_local).
+    'migrations/068_fanout_tz_local_roll_forward.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
