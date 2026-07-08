@@ -118,8 +118,10 @@ export default async function BlogListingPage() {
               ? { href: post.canonical_url as string, target: '_blank', rel: 'noopener noreferrer' }
               : { href: `/blog/${post.slug}` }
             return (
-            <CardTag key={post.id} {...cardProps} className="pub-card gw-card-glow">
-              <div className="pub-cover">
+            <CardTag key={post.id} {...cardProps} className="pub-card pub-card-flex gw-card-glow">
+              {/* natural: show the whole cover at its own aspect ratio (no crop).
+                  Placeholders keep the default fixed aspect so they don't collapse. */}
+              <div className={post.featured_image ? 'pub-cover natural' : 'pub-cover'}>
                 {post.featured_image ? (
                   <img src={post.featured_image} alt={post.featured_image_alt || post.title} />
                 ) : (
@@ -134,7 +136,7 @@ export default async function BlogListingPage() {
                 )}
                 <h3>{post.title}</h3>
                 {post.excerpt && <p>{post.excerpt}</p>}
-                <div className="pub-meta">
+                <div className="pub-meta pub-meta-pin">
                   {post.published_at && formatDate(post.published_at)}
                   {post.reading_time ? (
                     <>
