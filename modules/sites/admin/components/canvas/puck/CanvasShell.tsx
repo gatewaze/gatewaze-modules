@@ -112,6 +112,14 @@ const DEFAULT_VIEWPORTS: CanvasShellViewport[] = [
   { width: 375, height: 'auto', label: 'Mobile', icon: 'Smartphone' },
 ];
 
+// Stable references for props that feed Puck's `generateAppStore`. Puck
+// regenerates its store (remounting fields, dropping input focus after
+// one character) whenever `plugins`/`iframe`/etc. change identity. When a
+// host re-renders CanvasShell on every keystroke (newsletters does, via
+// onChange → setEdition), inline literals here would churn the store.
+const EMPTY_PLUGINS: ReadonlyArray<Plugin> = [];
+const PUCK_IFRAME = { enabled: true } as const;
+
 export function CanvasShell(props: CanvasShellProps): ReactElement {
   const {
     hostKind,
@@ -126,7 +134,7 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
     onPublish,
     toolbar,
     overrides,
-    extraPlugins = [],
+    extraPlugins = EMPTY_PLUGINS,
     viewports = DEFAULT_VIEWPORTS,
     extraMetadata,
     className = '',
@@ -197,7 +205,7 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
             // _PuckLayout { height: 100% !important } rule below this
             // lets the inner grid resolve to a concrete pixel height.
             height="100%"
-            iframe={{ enabled: true }}
+            iframe={PUCK_IFRAME}
             metadata={mergedMetadata as never}
             viewports={viewports as never}
             plugins={plugins as never}
