@@ -17,10 +17,17 @@ interface BlogPost {
   updated_at: string | null
   reading_time: number | null
   word_count: number | null
+  is_external: boolean | null
+  canonical_url: string | null
   category: {
     name: string
     slug: string
     color: string
+  } | null
+  author: {
+    slug: string
+    display_name: string
+    avatar_url: string | null
   } | null
   tags: { name: string; slug: string }[]
 }
@@ -38,8 +45,9 @@ async function getBlogPost(slug: string): Promise<BlogPost | null> {
     .from('blog_posts')
     .select(`
       id, title, slug, excerpt, content, featured_image, featured_image_alt,
-      published_at, updated_at, reading_time, word_count,
+      published_at, updated_at, reading_time, word_count, is_external, canonical_url,
       category:blog_categories(name, slug, color),
+      author:blog_authors(slug, display_name, avatar_url),
       blog_post_tags(tag:blog_tags(name, slug))
     `)
     .eq('slug', slug)
@@ -57,7 +65,17 @@ async function getBlogPost(slug: string): Promise<BlogPost | null> {
   return {
     ...row,
     category: Array.isArray(row.category) ? row.category[0] ?? null : row.category,
+    author: Array.isArray(row.author) ? row.author[0] ?? null : row.author,
     tags: (row.blog_post_tags ?? []).map((pt: any) => pt.tag).filter(Boolean),
+  }
+}
+
+function hostLabel(url: string | null): string {
+  if (!url) return 'the original site'
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return 'the original site'
   }
 }
 
@@ -87,9 +105,16 @@ export default async function BlogDetailPage({ params }: Props) {
   const proto = reqHeaders.get('x-forwarded-proto') || 'https'
   const base = host ? `${proto}://${host}` : ''
   const pageUrl = `${base}/blog/${post.slug}`
+  const isExternal = !!(post.is_external && post.canonical_url)
+  // The full body is stored for agents even when it's hidden from the human
+  // portal (external posts link out). articleBody carries it into the JSON-LD.
   const articleBody = post.content
     ? convert(post.content, { wordwrap: false, selectors: [{ selector: 'a', options: { ignoreHref: true } }, { selector: 'img', format: 'skip' }] }).trim()
     : ''
+  // Canonical attribution: external posts point search engines / agents at the
+  // source (anti-cloaking — an additive representation, never a bot-only swap).
+  const canonicalTarget = isExternal ? (post.canonical_url as string) : pageUrl
+  const authorUrl = post.author ? `${base}/blog/author/${post.author.slug}` : null
 
   const jsonLd = {
     '@context': 'https://schema.org',
@@ -106,7 +131,11 @@ export default async function BlogDetailPage({ params }: Props) {
         ...(post.word_count ? { wordCount: post.word_count } : {}),
         ...(post.category?.name ? { articleSection: post.category.name } : {}),
         ...(post.tags.length ? { keywords: post.tags.map((t) => t.name).join(', ') } : {}),
-        mainEntityOfPage: pageUrl,
+        ...(post.author && authorUrl
+          ? { author: { '@type': 'Person', name: post.author.display_name, url: authorUrl } }
+          : {}),
+        ...(isExternal ? { sameAs: post.canonical_url } : {}),
+        mainEntityOfPage: canonicalTarget,
       },
       {
         '@type': 'BreadcrumbList',
@@ -127,6 +156,14 @@ export default async function BlogDetailPage({ params }: Props) {
         <article className="pub-article-main">
           <h1>{post.title}</h1>
           <div className="pub-byline">
+            {post.author && (
+              <>
+                <Link href={`/blog/author/${post.author.slug}`} className="pub-author-link">
+                  {post.author.display_name}
+                </Link>
+                {' · '}
+              </>
+            )}
             {post.published_at && formatDate(post.published_at)}
             {post.reading_time ? ` · ${post.reading_time} min read` : ''}
           </div>
@@ -135,7 +172,19 @@ export default async function BlogDetailPage({ params }: Props) {
               <img src={post.featured_image} alt={post.featured_image_alt || post.title} />
             </div>
           )}
-          <div className="pub-body" dangerouslySetInnerHTML={{ __html: post.content }} />
+          {isExternal ? (
+            // Syndicated post: the human view links out to the source (canonical
+            // attribution). The full body is stored + exposed to agents via the
+            // JSON-LD articleBody above, but not re-hosted for human readers.
+            <div className="pub-external-cta">
+              {post.excerpt && <p className="pub-lede">{post.excerpt}</p>}
+              <a className="pub-btn" href={post.canonical_url as string} target="_blank" rel="noopener noreferrer">
+                Read the full article on {hostLabel(post.canonical_url)} →
+              </a>
+            </div>
+          ) : (
+            <div className="pub-body" dangerouslySetInnerHTML={{ __html: post.content }} />
+          )}
         </article>
 
         <aside className="pub-article-side">
