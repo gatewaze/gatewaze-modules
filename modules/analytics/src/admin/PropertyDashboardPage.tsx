@@ -20,6 +20,7 @@ import SessionsTab from './tabs/SessionsTab';
 import JourneysTab from './tabs/JourneysTab';
 import FunnelsTab from './tabs/FunnelsTab';
 import UtmTab from './tabs/UtmTab';
+import LinksTab from './tabs/LinksTab';
 import RetentionTab from './tabs/RetentionTab';
 import SettingsTab from './tabs/SettingsTab';
 
@@ -30,6 +31,7 @@ const TABS = [
   { id: 'journeys', label: 'Journeys' },
   { id: 'funnels', label: 'Funnels' },
   { id: 'utm', label: 'UTM' },
+  { id: 'links', label: 'Links' },
   { id: 'retention', label: 'Retention' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -85,7 +87,7 @@ export default function PropertyDashboardPage() {
       subTabs={TABS}
       activeSubTabId={activeTab}
       onSubTabChange={onTabChange}
-      actions={activeTab === 'settings' || activeTab === 'realtime' ? undefined : rangePicker}
+      actions={['settings', 'realtime', 'links'].includes(activeTab) ? undefined : rangePicker}
     >
       <div className="px-6 py-6 max-w-7xl mx-auto">
         {activeTab === 'overview' && <OverviewTab propertyId={id} rangeKey={rangeKey} />}
@@ -94,6 +96,7 @@ export default function PropertyDashboardPage() {
         {activeTab === 'journeys' && <JourneysTab propertyId={id} rangeKey={rangeKey} />}
         {activeTab === 'funnels' && <FunnelsTab propertyId={id} rangeKey={rangeKey} />}
         {activeTab === 'utm' && <UtmTab propertyId={id} rangeKey={rangeKey} />}
+        {activeTab === 'links' && <LinksTab propertyId={id} />}
         {activeTab === 'retention' && <RetentionTab propertyId={id} rangeKey={rangeKey} />}
         {activeTab === 'settings' && <SettingsTab propertyId={id} />}
       </div>
