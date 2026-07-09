@@ -12,8 +12,12 @@ import {
   DocumentTextIcon,
   MagnifyingGlassIcon,
   TagIcon,
+  CalendarIcon,
+  UserCircleIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { Modal, Button, Input, Card, Badge, ConfirmModal, Select, ImageUpload, Tabs } from '@/components/ui';
+import { Modal, Button, Input, Card, Badge, ConfirmModal, Select, ImageUpload, WorkspaceLayout } from '@/components/ui';
+import { Page } from '@/components/shared/Page';
 import RichTextEditor from '@/components/ui/RichTextEditor';
 import {
   BlogPost,
@@ -106,6 +110,10 @@ const BlogManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('');
+  const [contentCategoryFilter, setContentCategoryFilter] = useState<string>('');
+  const [authorFilter, setAuthorFilter] = useState<string>('');
+  const [dateFromFilter, setDateFromFilter] = useState<string>('');
+  const [dateToFilter, setDateToFilter] = useState<string>('');
 
   // Forms
   const postForm = useForm<PostFormData>({
@@ -173,19 +181,63 @@ const BlogManagement: React.FC = () => {
     loadData();
   }, []);
 
+  // The date a post card displays — published date when published, last update otherwise.
+  const postDisplayDate = (post: BlogPost) =>
+    post.status === 'published' && post.published_at ? post.published_at : post.updated_at;
+
+  // Author options for the filter bar, derived from the loaded posts so the
+  // dropdown only offers authors that actually have posts.
+  const authorOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    posts.forEach((post) => {
+      if (post.author) seen.set(post.author.id, post.author.display_name);
+    });
+    return [...seen.entries()]
+      .map(([id, name]) => ({ value: id, label: name }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [posts]);
+
+  const hasActiveFilters = Boolean(
+    searchTerm || statusFilter || categoryFilter || contentCategoryFilter ||
+    authorFilter || dateFromFilter || dateToFilter
+  );
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('');
+    setCategoryFilter('');
+    setContentCategoryFilter('');
+    setAuthorFilter('');
+    setDateFromFilter('');
+    setDateToFilter('');
+  };
+
   // Filter posts
   const filteredPosts = useMemo(() => {
     return posts.filter((post) => {
-      const matchesSearch = !searchTerm ||
-        post.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        post.excerpt?.toLowerCase().includes(searchTerm.toLowerCase());
+      const q = searchTerm.toLowerCase();
+      const matchesSearch = !q ||
+        post.title.toLowerCase().includes(q) ||
+        post.excerpt?.toLowerCase().includes(q) ||
+        post.author?.display_name.toLowerCase().includes(q);
 
       const matchesStatus = !statusFilter || post.status === statusFilter;
       const matchesCategory = !categoryFilter || post.category_id === categoryFilter;
+      const matchesContentCategory = !contentCategoryFilter || post.content_category === contentCategoryFilter;
+      const matchesAuthor = !authorFilter || post.blog_author_id === authorFilter;
 
-      return matchesSearch && matchesStatus && matchesCategory;
+      // Date range compares against the same date the card shows.
+      const displayDate = postDisplayDate(post).slice(0, 10);
+      const matchesDateFrom = !dateFromFilter || displayDate >= dateFromFilter;
+      const matchesDateTo = !dateToFilter || displayDate <= dateToFilter;
+
+      return matchesSearch && matchesStatus && matchesCategory &&
+        matchesContentCategory && matchesAuthor && matchesDateFrom && matchesDateTo;
     });
-  }, [posts, searchTerm, statusFilter, categoryFilter]);
+  }, [posts, searchTerm, statusFilter, categoryFilter, contentCategoryFilter, authorFilter, dateFromFilter, dateToFilter]);
+
+  const contentCategoryLabel = (value?: string | null) =>
+    contentCategories.find((c) => c.value === value)?.label;
 
   // Handle post submission
   const onPostSubmit = async (data: PostFormData) => {
@@ -481,42 +533,29 @@ const BlogManagement: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
+      <Page title="Blog">
+        <WorkspaceLayout title="Blog">
+          <div className="flex items-center justify-center h-64">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          </div>
+        </WorkspaceLayout>
+      </Page>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-[var(--gray-12)]">
-            Blog Management
-          </h1>
-          <p className="text-[var(--gray-11)]">
-            Manage your blog posts, categories, and tags
-          </p>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <Tabs
-        value={activeTab}
-        onChange={setActiveTab}
+    <Page title="Blog">
+      <WorkspaceLayout
+        title="Blog"
         tabs={[
           { id: 'posts', label: 'Posts', count: posts.length },
           { id: 'categories', label: 'Categories', count: categories.length },
           { id: 'tags', label: 'Tags', count: tags.length },
         ]}
-      />
-
-      {/* Posts Tab */}
-      {activeTab === 'posts' && (
-        <div className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h2 className="text-lg font-semibold text-[var(--gray-12)]">Posts</h2>
+        activeTabId={activeTab}
+        onTabChange={(id) => setActiveTab(id as TabType)}
+        actions={
+          activeTab === 'posts' ? (
             <Button
               onClick={() => handleOpenPostModal()}
               className="inline-flex items-center space-x-2"
@@ -524,22 +563,42 @@ const BlogManagement: React.FC = () => {
               <PlusIcon className="h-5 w-5" />
               <span>New Post</span>
             </Button>
-          </div>
+          ) : activeTab === 'categories' ? (
+            <Button
+              onClick={() => handleOpenCategoryModal()}
+              className="inline-flex items-center space-x-2"
+            >
+              <PlusIcon className="h-5 w-5" />
+              <span>Add Category</span>
+            </Button>
+          ) : (
+            <Button
+              onClick={() => handleOpenTagModal()}
+              className="inline-flex items-center space-x-2"
+            >
+              <PlusIcon className="h-5 w-5" />
+              <span>Add Tag</span>
+            </Button>
+          )
+        }
+      >
 
+      {/* Posts Tab */}
+      {activeTab === 'posts' && (
+        <div className="space-y-6">
           {/* Filters */}
           <Card className="p-4">
-            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-              <div className="flex items-center gap-2">
-                <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
-                <Input
-                  placeholder="Search posts..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-64"
-                />
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <Input
+                label="Search"
+                placeholder="Title, description, author..."
+                prefix={<MagnifyingGlassIcon className="h-4 w-4 text-gray-400" />}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
 
               <Select
+                label="Status"
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
@@ -550,6 +609,7 @@ const BlogManagement: React.FC = () => {
               </Select>
 
               <Select
+                label="Category"
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value)}
               >
@@ -560,91 +620,152 @@ const BlogManagement: React.FC = () => {
                   </option>
                 ))}
               </Select>
+
+              <Select
+                label="Content Category"
+                value={contentCategoryFilter}
+                onChange={(e) => setContentCategoryFilter(e.target.value)}
+                disabled={contentCategories.length === 0}
+              >
+                <option value="">All content categories</option>
+                {contentCategories.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </Select>
+
+              <Select
+                label="Author"
+                value={authorFilter}
+                onChange={(e) => setAuthorFilter(e.target.value)}
+              >
+                <option value="">All authors</option>
+                {authorOptions.map((a) => (
+                  <option key={a.value} value={a.value}>
+                    {a.label}
+                  </option>
+                ))}
+              </Select>
+
+              <Input
+                label="From"
+                type="date"
+                value={dateFromFilter}
+                onChange={(e) => setDateFromFilter(e.target.value)}
+              />
+
+              <Input
+                label="To"
+                type="date"
+                value={dateToFilter}
+                onChange={(e) => setDateToFilter(e.target.value)}
+              />
+
+              <div className="flex items-end justify-between gap-2">
+                <span className="text-sm text-[var(--gray-11)] pb-2">
+                  {filteredPosts.length} of {posts.length} posts
+                </span>
+                {hasActiveFilters && (
+                  <Button variant="outlined" onClick={clearFilters} className="inline-flex items-center">
+                    <XMarkIcon className="h-4 w-4 mr-1" />
+                    Clear
+                  </Button>
+                )}
+              </div>
             </div>
           </Card>
 
           {/* Posts Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredPosts.map((post) => (
-              <Card key={post.id} className="p-6 hover:shadow-lg transition-shadow">
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-[var(--gray-12)] mb-2 line-clamp-2">
+              <Card
+                key={post.id}
+                className="cursor-pointer hover:shadow-md transition-shadow"
+                onClick={() => handleOpenPostModal(post)}
+              >
+                {post.featured_image && (
+                  <div className="aspect-[16/9] overflow-hidden rounded-t-lg -mx-4 -mt-4 mb-4">
+                    <img
+                      src={post.featured_image}
+                      alt={post.featured_image_alt || post.title}
+                      className="w-full h-full object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  </div>
+                )}
+
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-[var(--gray-12)] line-clamp-2">
                       {post.title}
                     </h3>
-                    <div className="flex items-center space-x-2 mb-2">
-                      <Badge
-                        color={post.status === 'published' ? 'success' : post.status === 'draft' ? 'warning' : 'error'}
-                      >
-                        {post.status}
-                      </Badge>
-                      {post.is_featured && (
-                        <Badge color="primary">
-                          Featured
-                        </Badge>
-                      )}
-                    </div>
+                    {post.excerpt && (
+                      <p className="text-sm text-[var(--gray-11)] mt-1 line-clamp-2">
+                        {post.excerpt}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 ml-2" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => handleOpenPostModal(post)}
+                      className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
+                      title="Edit post"
+                    >
+                      <PencilIcon className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setDeletePost(post)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded"
+                      title="Delete post"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
 
-                {post.excerpt && (
-                  <p className="text-[var(--gray-11)] text-sm mb-4 line-clamp-3">
-                    {post.excerpt}
-                  </p>
-                )}
-
-                {post.category && (
-                  <div className="mb-3">
-                    <span className="inline-block px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded">
+                <div className="flex items-center flex-wrap gap-2 mt-3">
+                  <Badge
+                    color={post.status === 'published' ? 'success' : post.status === 'draft' ? 'warning' : 'error'}
+                  >
+                    {post.status}
+                  </Badge>
+                  {post.is_featured && (
+                    <Badge color="primary">Featured</Badge>
+                  )}
+                  {post.category && (
+                    <span className="inline-block px-2 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded">
                       {post.category.name}
                     </span>
-                  </div>
-                )}
-
-                {post.tags && post.tags.length > 0 && (
-                  <div className="mb-4">
-                    <div className="flex flex-wrap gap-1">
-                      {post.tags.slice(0, 3).map((tag) => (
-                        <span
-                          key={tag.id}
-                          className="inline-block px-2 py-1 text-xs bg-gray-100 dark:bg-gray-800 text-[var(--gray-11)] rounded"
-                        >
-                          {tag.name}
-                        </span>
-                      ))}
-                      {post.tags.length > 3 && (
-                        <span className="inline-block px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 text-[var(--gray-11)] rounded">
-                          +{post.tags.length - 3} more
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                <div className="text-xs text-[var(--gray-11)] mb-4">
-                  {post.status === 'published' && post.published_at
-                    ? `Published ${new Date(post.published_at).toLocaleDateString()}`
-                    : `Updated ${new Date(post.updated_at).toLocaleDateString()}`
-                  }
+                  )}
+                  {contentCategoryLabel(post.content_category) && (
+                    <span className="inline-block px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-800 text-[var(--gray-11)] rounded">
+                      {contentCategoryLabel(post.content_category)}
+                    </span>
+                  )}
                 </div>
 
-                <div className="flex items-center space-x-2">
-                  <Button
-                    variant="outlined"
-                    onClick={() => handleOpenPostModal(post)}
-                    className="flex-1"
-                  >
-                    <PencilIcon className="h-4 w-4 mr-1" />
-                    Edit
-                  </Button>
-
-                  <Button
-                    variant="outlined"
-                    color="error"
-                    onClick={() => setDeletePost(post)}
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                  </Button>
+                <div className="flex items-center justify-between gap-2 mt-3 text-xs text-[var(--gray-11)]">
+                  <span className="inline-flex items-center gap-1.5 min-w-0">
+                    {post.author?.avatar_url ? (
+                      <img
+                        src={post.author.avatar_url}
+                        alt={post.author.display_name}
+                        className="w-5 h-5 rounded-full object-cover shrink-0"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    ) : (
+                      <UserCircleIcon className="w-5 h-5 text-gray-400 shrink-0" />
+                    )}
+                    <span className="truncate">{post.author?.display_name || 'No author'}</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1 shrink-0">
+                    <CalendarIcon className="w-4 h-4 text-gray-400" />
+                    {post.status === 'published' && post.published_at
+                      ? new Date(post.published_at).toLocaleDateString()
+                      : `Updated ${new Date(post.updated_at).toLocaleDateString()}`
+                    }
+                  </span>
                 </div>
               </Card>
             ))}
@@ -653,15 +774,15 @@ const BlogManagement: React.FC = () => {
               <div className="col-span-full text-center py-12">
                 <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
                 <h3 className="mt-2 text-sm font-medium text-[var(--gray-12)]">
-                  {searchTerm || statusFilter || categoryFilter ? 'No posts match your filters' : 'No blog posts'}
+                  {hasActiveFilters ? 'No posts match your filters' : 'No blog posts'}
                 </h3>
                 <p className="mt-1 text-sm text-[var(--gray-11)]">
-                  {searchTerm || statusFilter || categoryFilter
+                  {hasActiveFilters
                     ? 'Try adjusting your search criteria.'
                     : 'Get started by creating your first blog post.'
                   }
                 </p>
-                {!searchTerm && !statusFilter && !categoryFilter && (
+                {!hasActiveFilters && (
                   <div className="mt-6">
                     <Button onClick={() => handleOpenPostModal()}>
                       <PlusIcon className="h-5 w-5 mr-2" />
@@ -678,17 +799,6 @@ const BlogManagement: React.FC = () => {
       {/* Categories Tab */}
       {activeTab === 'categories' && (
         <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-lg font-semibold text-[var(--gray-12)]">Categories</h2>
-            <Button
-              onClick={() => handleOpenCategoryModal()}
-              className="inline-flex items-center space-x-2"
-            >
-              <PlusIcon className="h-5 w-5" />
-              <span>Add Category</span>
-            </Button>
-          </div>
-
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {categories.map((category) => (
               <Card key={category.id} className="p-6 hover:shadow-lg transition-shadow">
@@ -773,17 +883,6 @@ const BlogManagement: React.FC = () => {
       {/* Tags Tab */}
       {activeTab === 'tags' && (
         <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-lg font-semibold text-[var(--gray-12)]">Tags</h2>
-            <Button
-              onClick={() => handleOpenTagModal()}
-              className="inline-flex items-center space-x-2"
-            >
-              <PlusIcon className="h-5 w-5" />
-              <span>Add Tag</span>
-            </Button>
-          </div>
-
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {tags.map((tag) => (
               <Card key={tag.id} className="p-4 hover:shadow-lg transition-shadow">
@@ -856,6 +955,7 @@ const BlogManagement: React.FC = () => {
           </div>
         </div>
       )}
+      </WorkspaceLayout>
 
       {/* Post Modal */}
       {showModal && modalType === 'post' && (
@@ -1396,7 +1496,7 @@ const BlogManagement: React.FC = () => {
         title="Delete Tag"
         message={`Are you sure you want to delete "${deleteTag?.name}"? This action cannot be undone.`}
       />
-    </div>
+    </Page>
   );
 };
 
