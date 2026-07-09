@@ -80,21 +80,28 @@ function cleanDescriptionHtml(html) {
   return out;
 }
 
+// Decode HTML entities — named, decimal (&#39;) AND hex (&#x27;). Scraped pages
+// mix all three; handling only named+decimal leaked raw hex entities into text.
+function decodeHtmlEntities(input) {
+  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', copy: '©', reg: '®', trade: '™', hellip: '…', mdash: '—', ndash: '–', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', laquo: '«', raquo: '»', deg: '°', middot: '·', bull: '•' };
+  const toChar = (code, orig) => {
+    if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return orig;
+    try { return String.fromCodePoint(code); } catch { return orig; }
+  };
+  return String(input == null ? '' : input)
+    .replace(/&#[xX]([0-9a-fA-F]+);/g, (m, h) => toChar(parseInt(h, 16), m))
+    .replace(/&#(\d+);/g, (m, d) => toChar(parseInt(d, 10), m))
+    .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (m, n) => named[n] ?? named[n.toLowerCase()] ?? m);
+}
+
 function stripTags(html) {
   if (!html) return '';
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#039;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
+  return decodeHtmlEntities(
+    html
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' '),
+  ).replace(/\s+/g, ' ').trim();
 }
 
 // Pull and parse the Next.js data blob from a fetched HTML page.
