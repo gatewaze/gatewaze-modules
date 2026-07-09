@@ -82,20 +82,26 @@ const COUNTRY_NAME_TO_CODE = {
 };
 
 
+// Decode HTML entities — named, decimal (&#39;) AND hex (&#x27;). Scraped pages
+// mix all three; handling only named+decimal leaked raw hex entities into text.
+function decodeHtmlEntities(input) {
+  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', copy: '©', reg: '®', trade: '™', hellip: '…', mdash: '—', ndash: '–', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', laquo: '«', raquo: '»', deg: '°', middot: '·', bull: '•' };
+  const toChar = (code, orig) => {
+    if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return orig;
+    try { return String.fromCodePoint(code); } catch { return orig; }
+  };
+  return String(input == null ? '' : input)
+    .replace(/&#[xX]([0-9a-fA-F]+);/g, (m, h) => toChar(parseInt(h, 16), m))
+    .replace(/&#(\d+);/g, (m, d) => toChar(parseInt(d, 10), m))
+    .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (m, n) => named[n] ?? named[n.toLowerCase()] ?? m);
+}
+
 function stripTags(html) {
-  return html
-    .replace(/<svg[\s\S]*?<\/svg>/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&#8211;/g, '–')
-    .replace(/&#8212;/g, '—')
-    .replace(/&#8217;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return decodeHtmlEntities(
+    html
+      .replace(/<svg[\s\S]*?<\/svg>/g, ' ')
+      .replace(/<[^>]+>/g, ' '),
+  ).replace(/\s+/g, ' ').trim();
 }
 
 
@@ -437,7 +443,7 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
     // og:image is often larger than the JSON-LD image — prefer it for cover
     if (og.image) enrich.coverImageUrl = og.image;
     if (og.description && (!enrich.eventDescriptionLong || og.description.length > enrich.eventDescriptionLong.length)) {
-      enrich.eventDescriptionLong = og.description.replace(/&amp;/g, '&').replace(/&#039;/g, "'");
+      enrich.eventDescriptionLong = decodeHtmlEntities(og.description);
     }
 
     // Full event-page body → rendered on the portal detail page. Stored in
