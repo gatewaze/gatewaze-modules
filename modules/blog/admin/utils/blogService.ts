@@ -27,6 +27,13 @@ export interface BlogTag {
   updated_at: string;
 }
 
+export interface BlogAuthor {
+  id: string;
+  slug: string;
+  display_name: string;
+  avatar_url?: string | null;
+}
+
 export interface BlogPost {
   id: string;
   title: string;
@@ -71,11 +78,14 @@ export interface BlogPost {
 
   // Relationships
   category_id?: string | null;
+  content_category?: string | null;
   author_id: string;
+  blog_author_id?: string | null;
 
   // Populated relationships
   category?: BlogCategory;
   tags?: BlogTag[];
+  author?: BlogAuthor | null;
 }
 
 export interface BlogPostTag {
@@ -434,7 +444,8 @@ export class BlogPostsService {
         .select(`
           *,
           category:blog_categories(*),
-          tags:blog_post_tags(tag:blog_tags(*))
+          tags:blog_post_tags(tag:blog_tags(*)),
+          author:blog_authors(id, slug, display_name, avatar_url)
         `)
         .order('created_at', { ascending: false });
 
@@ -491,7 +502,8 @@ export class BlogPostsService {
         .select(`
           *,
           category:blog_categories(*),
-          tags:blog_post_tags(tag:blog_tags(*))
+          tags:blog_post_tags(tag:blog_tags(*)),
+          author:blog_authors(id, slug, display_name, avatar_url)
         `)
         .eq('id', id)
         .single();
