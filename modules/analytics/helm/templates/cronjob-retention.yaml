@@ -49,22 +49,26 @@ spec:
               command:
                 - /bin/sh
                 - -ec
+                # The cutoff is computed IN Postgres (now() - interval) —
+                # postgres:16-alpine's BusyBox `date` supports neither GNU
+                # "N days ago" nor BSD -v syntax, so any shell-side cutoff
+                # silently comes up empty and ON_ERROR_STOP kills the run.
                 - |
-                  CUTOFF=$(date -u -d "${RETENTION_DAYS} days ago" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
-                    || date -u -v-${RETENTION_DAYS}d '+%Y-%m-%d %H:%M:%S')
-                  echo "[analytics:retention] pruning rows older than $CUTOFF"
+                  case "$RETENTION_DAYS" in (*[!0-9]*|'') echo "invalid RETENTION_DAYS: $RETENTION_DAYS" >&2; exit 1;; esac
+                  echo "[analytics:retention] pruning rows older than ${RETENTION_DAYS} days"
                   psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
                     "DELETE FROM event_data
                        WHERE website_event_id IN (
-                         SELECT event_id FROM website_event WHERE created_at < '${CUTOFF}'
+                         SELECT event_id FROM website_event
+                          WHERE created_at < now() - interval '${RETENTION_DAYS} days'
                        )"
                   psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
-                    "DELETE FROM session_data WHERE created_at < '${CUTOFF}'"
+                    "DELETE FROM session_data WHERE created_at < now() - interval '${RETENTION_DAYS} days'"
                   psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
-                    "DELETE FROM website_event WHERE created_at < '${CUTOFF}'"
+                    "DELETE FROM website_event WHERE created_at < now() - interval '${RETENTION_DAYS} days'"
                   psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
                     "DELETE FROM session s
-                       WHERE s.created_at < '${CUTOFF}'
+                       WHERE s.created_at < now() - interval '${RETENTION_DAYS} days'
                          AND NOT EXISTS (
                            SELECT 1 FROM website_event we WHERE we.session_id = s.session_id
                          )"
