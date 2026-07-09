@@ -12,7 +12,7 @@
  */
 
 import type { Request, Response, Router } from 'express';
-import type { AnalyticsService, Bucket, ServiceResult } from '../service/contract.js';
+import type { AnalyticsService, BreakdownType, Bucket, ServiceResult } from '../service/contract.js';
 
 export interface DashboardsRoutesDeps {
   service: AnalyticsService;
@@ -26,6 +26,9 @@ export interface DashboardsRoutesDeps {
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 const VALID_BUCKETS = new Set<Bucket>(['hour', 'day', 'week', 'month']);
+const VALID_BREAKDOWNS = new Set<BreakdownType>([
+  'path', 'referrer', 'browser', 'os', 'device', 'country', 'language', 'title', 'event', 'host',
+]);
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: { code, message } });
@@ -83,6 +86,52 @@ export function createDashboardsRoutes(deps: DashboardsRoutesDeps) {
 
     const result = await deps.service.getPropertySummary({ property_id: id }, range);
     unwrapResult(res, result, (data) => ({ summary: data }));
+  }
+
+  // -------------------------------------------------------------------------
+  // GET /properties/:id/overview?from&to — Umami-style headline stats
+  // -------------------------------------------------------------------------
+  async function overview(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+    const id = req.params['id'];
+    if (!id || !UUID_RE.test(id)) return sendError(res, 400, 'validation_failed', 'id must be a uuid');
+    const range = parseDateRange(req);
+    if ('error' in range) return sendError(res, 400, 'validation_failed', range.error);
+
+    const result = await deps.service.getOverview({ property_id: id }, range);
+    unwrapResult(res, result, (data) => ({ overview: data }));
+  }
+
+  // -------------------------------------------------------------------------
+  // GET /properties/:id/breakdown?from&to&type&limit — generic dimension table
+  // -------------------------------------------------------------------------
+  async function breakdown(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+    const id = req.params['id'];
+    if (!id || !UUID_RE.test(id)) return sendError(res, 400, 'validation_failed', 'id must be a uuid');
+    const range = parseDateRange(req);
+    if ('error' in range) return sendError(res, 400, 'validation_failed', range.error);
+    const type = (req.query['type'] ?? '') as string;
+    if (!VALID_BREAKDOWNS.has(type as BreakdownType)) {
+      return sendError(res, 400, 'validation_failed', `type must be one of ${[...VALID_BREAKDOWNS].join(', ')}`);
+    }
+    const limit = Math.min(Math.max(parseInt((req.query['limit'] ?? '10') as string, 10) || 10, 1), 50);
+
+    const result = await deps.service.getBreakdown({ property_id: id }, range, type as BreakdownType, limit);
+    unwrapResult(res, result, (data) => ({ rows: data }));
+  }
+
+  // -------------------------------------------------------------------------
+  // GET /relay-status — is the platform's server-side Segment leg configured?
+  // Non-secret boolean only; lets the settings UI show the effective config
+  // (the write key itself lives in deployment env, never per-property).
+  // -------------------------------------------------------------------------
+  async function relayStatus(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+    res.json({ segment_configured: Boolean(process.env['SEGMENT_WRITE_KEY']) });
   }
 
   // -------------------------------------------------------------------------
@@ -259,6 +308,9 @@ export function createDashboardsRoutes(deps: DashboardsRoutesDeps) {
 
   return {
     summary,
+    overview,
+    breakdown,
+    relayStatus,
     pageviews,
     topPages,
     topReferrers,
@@ -273,7 +325,10 @@ export function createDashboardsRoutes(deps: DashboardsRoutesDeps) {
 }
 
 export function mountDashboardsRoutes(router: Router, routes: ReturnType<typeof createDashboardsRoutes>): void {
+  router.get('/relay-status', routes.relayStatus);
   router.get('/properties/:id/summary', routes.summary);
+  router.get('/properties/:id/overview', routes.overview);
+  router.get('/properties/:id/breakdown', routes.breakdown);
   router.get('/properties/:id/pageviews', routes.pageviews);
   router.get('/properties/:id/top-pages', routes.topPages);
   router.get('/properties/:id/referrers', routes.topReferrers);

@@ -181,12 +181,52 @@ export type ServiceResult<T> =
  * The contract. Implementations: src/service/umami.ts (v1). Future:
  * src/service/clickhouse.ts.
  */
+/** Umami-style headline overview: views/visits/visitors/bounce/duration
+ *  with previous-period comparison, per spec §12.2 (v1 dashboard). */
+export interface OverviewStats {
+  pageviews: number;
+  visitors: number;
+  visits: number;
+  /** 0..1 — bounces / visits. */
+  bounce_rate: number;
+  /** Mean visit duration in seconds. */
+  avg_visit_seconds: number;
+  active_now: number;
+  /** Previous-period values for delta chips (same field meanings). */
+  comparison: {
+    pageviews: number;
+    visitors: number;
+    visits: number;
+    bounce_rate: number;
+    avg_visit_seconds: number;
+  };
+}
+
+/** Dimensions the generic breakdown endpoint accepts — mirrors Umami v3's
+ *  /metrics `type` values (path, not v2's url). */
+export type BreakdownType =
+  | 'path' | 'referrer' | 'browser' | 'os' | 'device'
+  | 'country' | 'language' | 'title' | 'event' | 'host';
+
+export interface BreakdownRow {
+  label: string;
+  count: number;
+}
+
 export interface AnalyticsService {
   /** Pageviews-over-time chart. */
   getPageviews(filter: DimensionFilter, range: DateRange, bucket: Bucket): Promise<ServiceResult<PageviewBucket[]>>;
 
   /** Headline summary card for the property dashboard. */
   getPropertySummary(filter: DimensionFilter, range: DateRange): Promise<ServiceResult<PropertySummary>>;
+
+  /** Full Umami-style overview (views/visits/visitors/bounce/duration +
+   *  previous-period comparison + active-now). */
+  getOverview(filter: DimensionFilter, range: DateRange): Promise<ServiceResult<OverviewStats>>;
+
+  /** Generic dimension breakdown (pages/referrers/browsers/os/devices/
+   *  countries/languages/titles/events/hosts). */
+  getBreakdown(filter: DimensionFilter, range: DateRange, type: BreakdownType, limit: number): Promise<ServiceResult<BreakdownRow[]>>;
 
   /** Top pages by pageviews. */
   getTopPages(filter: DimensionFilter, range: DateRange, limit: number): Promise<ServiceResult<TopPage[]>>;
