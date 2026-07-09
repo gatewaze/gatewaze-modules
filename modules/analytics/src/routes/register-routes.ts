@@ -22,6 +22,7 @@ import { createPropertiesRoutes, mountPropertiesRoutes } from './properties.js';
 import { createDashboardsRoutes, mountDashboardsRoutes } from './dashboards.js';
 import { createSitesConvenienceRoutes, mountSitesConvenienceRoutes } from './sites-convenience.js';
 import { createIngestRoutes, mountIngestRoutes } from './ingest.js';
+import { createSavedReportsRoutes, mountSavedReportsRoutes } from './saved-reports.js';
 import { createUmamiClient } from '../service/umami-client.js';
 import { createUmamiAnalyticsService } from '../service/umami.js';
 
@@ -126,6 +127,15 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     },
   });
 
+  const savedReportsRoutes = createSavedReportsRoutes({
+    supabase: serviceRoleClient,
+    logger,
+    getUserId: (req: Request) => {
+      const r = req as Request & { userId?: string; user?: { id?: string } };
+      return r.userId ?? r.user?.id ?? null;
+    },
+  });
+
   // Site-scoped convenience routes — same dashboard surface, addressed
   // by site_id rather than property_id. Drives the per-page analytics
   // tab in the sites editor where the caller knows the site but not
@@ -146,11 +156,13 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
   if (context?.labeledRouter) {
     mountPropertiesRoutes(jwtRouter, propertiesRoutes);
     mountDashboardsRoutes(jwtRouter, dashboardsRoutes);
+    mountSavedReportsRoutes(jwtRouter, savedReportsRoutes);
     mountSitesConvenienceRoutes(jwtRouter, sitesConvenienceRoutes);
   } else {
     const sub = Router();
     mountPropertiesRoutes(sub, propertiesRoutes);
     mountDashboardsRoutes(sub, dashboardsRoutes);
+    mountSavedReportsRoutes(sub, savedReportsRoutes);
     mountSitesConvenienceRoutes(sub, sitesConvenienceRoutes);
     // Mount under /api/modules/analytics — the frontend (sites/admin/
     // pages/PageAnalytics.tsx) hits this prefix, and the platform's
