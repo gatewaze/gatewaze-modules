@@ -27,7 +27,8 @@ export interface DashboardsRoutesDeps {
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 const VALID_BUCKETS = new Set<Bucket>(['hour', 'day', 'week', 'month']);
 const VALID_BREAKDOWNS = new Set<BreakdownType>([
-  'path', 'referrer', 'browser', 'os', 'device', 'country', 'language', 'title', 'event', 'host',
+  'path', 'referrer', 'browser', 'os', 'device', 'country', 'region', 'city',
+  'language', 'title', 'event', 'hostname', 'query', 'tag',
 ]);
 
 function sendError(res: Response, status: number, code: string, message: string): void {
@@ -121,6 +122,71 @@ export function createDashboardsRoutes(deps: DashboardsRoutesDeps) {
 
     const result = await deps.service.getBreakdown({ property_id: id }, range, type as BreakdownType, limit);
     unwrapResult(res, result, (data) => ({ rows: data }));
+  }
+
+  // -------------------------------------------------------------------------
+  // POST /properties/:id/reports/funnel?from&to — ad-hoc funnel
+  // Body: { steps: [{type:'path'|'event', value}], window?: minutes }
+  // -------------------------------------------------------------------------
+  async function reportFunnel(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+    const id = req.params['id'];
+    if (!id || !UUID_RE.test(id)) return sendError(res, 400, 'validation_failed', 'id must be a uuid');
+    const range = parseDateRange(req);
+    if ('error' in range) return sendError(res, 400, 'validation_failed', range.error);
+
+    const body = req.body as { steps?: unknown; window?: unknown } | undefined;
+    const rawSteps = Array.isArray(body?.steps) ? body!.steps : [];
+    const steps = rawSteps
+      .filter((st): st is { type: string; value: string } =>
+        !!st && typeof st === 'object'
+        && ((st as { type?: unknown }).type === 'path' || (st as { type?: unknown }).type === 'event')
+        && typeof (st as { value?: unknown }).value === 'string'
+        && ((st as { value: string }).value.length > 0))
+      .slice(0, 8)
+      .map((st) => ({ type: st.type as 'path' | 'event', value: st.value.slice(0, 500) }));
+    if (steps.length < 2) return sendError(res, 400, 'validation_failed', 'at least 2 valid steps required');
+    const windowMinutes = Math.min(Math.max(Number(body?.window) || 60, 1), 24 * 60);
+
+    const result = await deps.service.runFunnel({ property_id: id }, range, steps, windowMinutes);
+    unwrapResult(res, result, (data) => ({ steps: data }));
+  }
+
+  // -------------------------------------------------------------------------
+  // POST /properties/:id/reports/journey?from&to — common visitor paths
+  // Body: { steps?: 2..7, startStep?, endStep? }
+  // -------------------------------------------------------------------------
+  async function reportJourney(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+    const id = req.params['id'];
+    if (!id || !UUID_RE.test(id)) return sendError(res, 400, 'validation_failed', 'id must be a uuid');
+    const range = parseDateRange(req);
+    if ('error' in range) return sendError(res, 400, 'validation_failed', range.error);
+
+    const body = req.body as { steps?: unknown; startStep?: unknown; endStep?: unknown } | undefined;
+    const steps = Math.min(Math.max(Number(body?.steps) || 3, 2), 7);
+    const startStep = typeof body?.startStep === 'string' && body.startStep ? body.startStep.slice(0, 500) : undefined;
+    const endStep = typeof body?.endStep === 'string' && body.endStep ? body.endStep.slice(0, 500) : undefined;
+
+    const result = await deps.service.runJourney({ property_id: id }, range, steps, startStep, endStep);
+    unwrapResult(res, result, (data) => ({ journeys: data }));
+  }
+
+  // -------------------------------------------------------------------------
+  // GET /properties/:id/utm?from&to — UTM campaign breakdowns
+  // -------------------------------------------------------------------------
+  async function utm(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+    const id = req.params['id'];
+    if (!id || !UUID_RE.test(id)) return sendError(res, 400, 'validation_failed', 'id must be a uuid');
+    const range = parseDateRange(req);
+    if ('error' in range) return sendError(res, 400, 'validation_failed', range.error);
+
+    const result = await deps.service.runUtm({ property_id: id }, range);
+    unwrapResult(res, result, (data) => ({ utm: data }));
   }
 
   // -------------------------------------------------------------------------
@@ -310,6 +376,9 @@ export function createDashboardsRoutes(deps: DashboardsRoutesDeps) {
     summary,
     overview,
     breakdown,
+    reportFunnel,
+    reportJourney,
+    utm,
     relayStatus,
     pageviews,
     topPages,
@@ -329,6 +398,9 @@ export function mountDashboardsRoutes(router: Router, routes: ReturnType<typeof 
   router.get('/properties/:id/summary', routes.summary);
   router.get('/properties/:id/overview', routes.overview);
   router.get('/properties/:id/breakdown', routes.breakdown);
+  router.get('/properties/:id/utm', routes.utm);
+  router.post('/properties/:id/reports/funnel', routes.reportFunnel);
+  router.post('/properties/:id/reports/journey', routes.reportJourney);
   router.get('/properties/:id/pageviews', routes.pageviews);
   router.get('/properties/:id/top-pages', routes.topPages);
   router.get('/properties/:id/referrers', routes.topReferrers);

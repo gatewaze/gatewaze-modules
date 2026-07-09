@@ -22,7 +22,11 @@
 import type {
   BreakdownRow,
   BreakdownType,
+  FunnelStepDef,
+  FunnelStepResult,
+  JourneyPath,
   OverviewStats,
+  UtmReport,
   AnalyticsService,
   Bucket,
   CohortCell,
@@ -163,6 +167,62 @@ export function createUmamiAnalyticsService(deps: UmamiServiceDeps): AnalyticsSe
             pageviews: p.y,
             unique_visitors: 0, // Umami's metrics endpoint doesn't return per-row uniques
           })),
+        };
+      });
+    },
+
+    async runFunnel(filter, range, steps, windowMinutes): Promise<ServiceResult<FunnelStepResult[]>> {
+      return withAuthAndCache('runFunnel', filter, { range, steps, windowMinutes }, 60_000, async (websiteUuid) => {
+        const rows = (await deps.umami.post(`/api/reports/funnel`, {
+          websiteId: websiteUuid,
+          type: 'funnel',
+          filters: {},
+          parameters: {
+            startDate: range.from,
+            endDate: range.to,
+            window: windowMinutes,
+            steps,
+          },
+        })) as FunnelStepResult[];
+        return rows ?? [];
+      });
+    },
+
+    async runJourney(filter, range, steps, startStep, endStep): Promise<ServiceResult<JourneyPath[]>> {
+      return withAuthAndCache('runJourney', filter, { range, steps, startStep, endStep }, 60_000, async (websiteUuid) => {
+        const rows = (await deps.umami.post(`/api/reports/journey`, {
+          websiteId: websiteUuid,
+          type: 'journey',
+          filters: {},
+          parameters: {
+            startDate: range.from,
+            endDate: range.to,
+            steps,
+            ...(startStep ? { startStep } : {}),
+            ...(endStep ? { endStep } : {}),
+          },
+        })) as JourneyPath[];
+        return rows ?? [];
+      });
+    },
+
+    async runUtm(filter, range): Promise<ServiceResult<UtmReport>> {
+      return withAuthAndCache('runUtm', filter, { range }, 60_000, async (websiteUuid) => {
+        const res = (await deps.umami.post(`/api/reports/utm`, {
+          websiteId: websiteUuid,
+          type: 'utm',
+          filters: {},
+          parameters: { startDate: range.from, endDate: range.to },
+        })) as Record<string, { utm: string | null; views: number }[]>;
+        // v3 utm report rows are { utm, views } (not the metrics {x,y} shape).
+        const toRows = (arr?: { utm: string | null; views: number }[]) =>
+          (arr ?? []).map((r) => ({ label: r.utm ?? '(none)', count: r.views }));
+        return {
+          utm_source: toRows(res['utm_source']),
+          utm_medium: toRows(res['utm_medium']),
+          utm_campaign: toRows(res['utm_campaign']),
+          utm_term: toRows(res['utm_term']),
+          utm_content: toRows(res['utm_content']),
         };
       });
     },

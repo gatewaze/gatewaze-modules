@@ -53,6 +53,7 @@ const analyticsModule: GatewazeModule = {
     'migrations/00004_provisioning_jobs.sql',
     'migrations/00005_service_helpers.sql',
     'migrations/00006_sites_integration.sql',
+    'migrations/00007_portal_site_dedup.sql',
   ],
 
   // Provisioning queue: when an analytics_property row is inserted with
