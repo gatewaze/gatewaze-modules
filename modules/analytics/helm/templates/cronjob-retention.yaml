@@ -1,9 +1,13 @@
 {{/*
-Daily retention CronJob — prunes Umami's `event` and `event_data` rows
-older than retention.days.
+Daily retention CronJob — prunes Umami's `website_event`, `event_data`,
+and orphaned `session` rows older than retention.days.
 
 Per spec-analytics-module §10.4. Default 13 months (395 days) — operators
 typically want a year-over-year comparison + a month of buffer.
+
+Umami v3 schema: events live in `website_event` (not v1's `event`), and
+`event_data` joins via `website_event_id`. Sessions are pruned only once
+they have no remaining events.
 
 The job runs psql against gatewaze_umami with the `gatewaze_umami_role`
 credentials provisioned by job-bootstrap-db.yaml. ON_ERROR_STOP so a
@@ -51,9 +55,17 @@ spec:
                   echo "[analytics:retention] pruning rows older than $CUTOFF"
                   psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
                     "DELETE FROM event_data
-                       WHERE event_id IN (
-                         SELECT event_id FROM event WHERE created_at < '${CUTOFF}'
+                       WHERE website_event_id IN (
+                         SELECT event_id FROM website_event WHERE created_at < '${CUTOFF}'
                        )"
                   psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
-                    "DELETE FROM event WHERE created_at < '${CUTOFF}'"
+                    "DELETE FROM session_data WHERE created_at < '${CUTOFF}'"
+                  psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
+                    "DELETE FROM website_event WHERE created_at < '${CUTOFF}'"
+                  psql "$UMAMI_DSN" -v ON_ERROR_STOP=1 -tAc \
+                    "DELETE FROM session s
+                       WHERE s.created_at < '${CUTOFF}'
+                         AND NOT EXISTS (
+                           SELECT 1 FROM website_event we WHERE we.session_id = s.session_id
+                         )"
                   echo "[analytics:retention] complete"
