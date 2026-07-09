@@ -12,7 +12,7 @@
  * lands when wired into the admin design system.
  */
 import { useEffect, useState } from 'react';
-import { authedFetch } from './api';
+import { authedFetch } from './authed-fetch';
 import { useParams } from 'react-router';
 
 interface Property {
