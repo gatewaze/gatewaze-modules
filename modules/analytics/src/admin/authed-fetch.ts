@@ -1,6 +1,10 @@
 /**
  * Authenticated fetch for the analytics admin pages.
  *
+ * NOTE the filename: this must NOT be `api.ts` — the admin vite plugin
+ * (vite-plugin-gatewaze-modules.ts) stubs any relative import matching
+ * `./api*` as server-only, silently replacing the export with a no-op.
+ *
  * /api/analytics/* is JWT-gated (requireJwt reads the Authorization
  * header) — a plain fetch({ credentials: 'include' }) carries no
  * Supabase session, so every dashboard call 401s. Attach the access

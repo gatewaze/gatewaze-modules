@@ -7,7 +7,7 @@
  * wired in. This placeholder confirms the route is mounted + rendered.
  */
 import { useEffect, useState } from 'react';
-import { authedFetch } from './api';
+import { authedFetch } from './authed-fetch';
 
 interface Property {
   id: string;
