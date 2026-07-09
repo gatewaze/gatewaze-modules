@@ -1,8 +1,11 @@
 /**
  * Property workspace — the per-property analytics surface, per spec §12.2.
  *
- * WorkspaceLayout hero + tab strip (Overview | Sessions | Retention |
- * Settings), with the range picker in the hero actions. Tab state is
+ * WorkspaceLayout hero + combined breadcrumb/sub-tab row (breadcrumb
+ * flag on the left, Overview | Sessions | Retention | Settings tabs to
+ * its right — same pattern as newsletter editions, since the tabs apply
+ * to the breadcrumb's entity). Range picker in the hero actions. Tab
+ * state is
  * URL-synced: /analytics/properties/:id renders Overview and
  * /analytics/properties/:id/settings deep-links the Settings tab (the
  * standalone settings route renders this same shell).
@@ -71,9 +74,9 @@ export default function PropertyDashboardPage() {
       title="Analytics"
       breadcrumbs={[{ label: 'Analytics', to: '/analytics' }, { label: propertyName || 'Property' }]}
       onBreadcrumbNavigate={(to: string) => navigate(to)}
-      tabs={TABS}
-      activeTabId={activeTab}
-      onTabChange={onTabChange}
+      subTabs={TABS}
+      activeSubTabId={activeTab}
+      onSubTabChange={onTabChange}
       actions={activeTab === 'settings' ? undefined : rangePicker}
     >
       <div className="px-6 py-6 max-w-7xl mx-auto">
