@@ -20,6 +20,9 @@
  */
 
 import type {
+  BreakdownRow,
+  BreakdownType,
+  OverviewStats,
   AnalyticsService,
   Bucket,
   CohortCell,
@@ -161,6 +164,56 @@ export function createUmamiAnalyticsService(deps: UmamiServiceDeps): AnalyticsSe
             unique_visitors: 0, // Umami's metrics endpoint doesn't return per-row uniques
           })),
         };
+      });
+    },
+
+    async getOverview(filter, range): Promise<ServiceResult<OverviewStats>> {
+      return withAuthAndCache('getOverview', filter, { range }, 60_000, async (websiteUuid) => {
+        const stats = (await deps.umami.get(`/api/websites/${websiteUuid}/stats`, {
+          startAt: toUnixMs(range.from),
+          endAt: toUnixMs(range.to),
+          // v3 returns a `comparison` block for the preceding period when
+          // compare=prev is passed; harmless on versions that ignore it.
+          compare: 'prev',
+        })) as {
+          pageviews: unknown; visitors: unknown; visits: unknown;
+          bounces: unknown; totaltime: unknown;
+          comparison?: { pageviews?: unknown; visitors?: unknown; visits?: unknown; bounces?: unknown; totaltime?: unknown };
+        };
+        const active = (await deps.umami.get(`/api/websites/${websiteUuid}/active`)) as Record<string, unknown>;
+
+        const derive = (pv: unknown, vis: unknown, vst: unknown, b: unknown, tt: unknown) => {
+          const visits = metricValue(vst);
+          return {
+            pageviews: metricValue(pv),
+            visitors: metricValue(vis),
+            visits,
+            bounce_rate: visits > 0 ? metricValue(b) / visits : 0,
+            avg_visit_seconds: visits > 0 ? metricValue(tt) / visits : 0,
+          };
+        };
+        const current = derive(stats.pageviews, stats.visitors, stats.visits, stats.bounces, stats.totaltime);
+        const prev = stats.comparison
+          ? derive(stats.comparison.pageviews, stats.comparison.visitors, stats.comparison.visits, stats.comparison.bounces, stats.comparison.totaltime)
+          : { pageviews: 0, visitors: 0, visits: 0, bounce_rate: 0, avg_visit_seconds: 0 };
+
+        return {
+          ...current,
+          active_now: metricValue((active as { visitors?: unknown })?.visitors ?? (active as { x?: unknown })?.x),
+          comparison: prev,
+        };
+      });
+    },
+
+    async getBreakdown(filter, range, type, limit): Promise<ServiceResult<BreakdownRow[]>> {
+      return withAuthAndCache('getBreakdown', filter, { range, type, limit }, 60_000, async (websiteUuid) => {
+        const rows = (await deps.umami.get(`/api/websites/${websiteUuid}/metrics`, {
+          startAt: toUnixMs(range.from),
+          endAt: toUnixMs(range.to),
+          type,
+          limit,
+        })) as { x: string | null; y: number }[];
+        return (rows ?? []).map((r) => ({ label: r.x ?? '(none)', count: r.y }));
       });
     },
 

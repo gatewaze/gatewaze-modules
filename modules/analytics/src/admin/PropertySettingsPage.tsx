@@ -34,6 +34,7 @@ export default function PropertySettingsPage() {
   const [property, setProperty] = useState<Property | null>(null);
   const [scripts, setScripts] = useState<Scripts>({ script_head: '', script_body: '', updated_at: null });
   const [segmentConfigured, setSegmentConfigured] = useState<boolean | null>(null);
+  const [relaySegmentConfigured, setRelaySegmentConfigured] = useState<boolean | null>(null);
   const [segmentWriteKey, setSegmentWriteKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [savingScripts, setSavingScripts] = useState(false);
@@ -45,11 +46,15 @@ export default function PropertySettingsPage() {
       authedFetch(`${apiUrl}/api/modules/analytics/properties/${id}`, { credentials: 'include' }).then((r) => r.json()),
       authedFetch(`${apiUrl}/api/modules/analytics/properties/${id}/scripts`, { credentials: 'include' }).then((r) => r.json()),
       authedFetch(`${apiUrl}/api/modules/analytics/properties/${id}/segment`, { credentials: 'include' }).then((r) => r.json()),
+      authedFetch(`${apiUrl}/api/modules/analytics/relay-status`, { credentials: 'include' })
+        .then((r) => r.json())
+        .catch(() => ({ segment_configured: null })),
     ])
-      .then(([prop, sc, seg]) => {
+      .then(([prop, sc, seg, relay]) => {
         setProperty((prop as { property: Property }).property);
         setScripts(sc as Scripts);
         setSegmentConfigured((seg as { configured: boolean }).configured);
+        setRelaySegmentConfigured((relay as { segment_configured: boolean | null }).segment_configured);
       })
       .finally(() => setLoading(false));
   }, [id]);
@@ -127,8 +132,21 @@ export default function PropertySettingsPage() {
       </Section>
 
       <Section title="Segment integration">
+        <div style={{ padding: '0.75rem 1rem', background: '#f0f7ff', border: '1px solid #cce2ff', borderRadius: '0.5rem', fontSize: '0.875rem', marginBottom: '1rem' }}>
+          <strong>Portal &amp; server events:</strong> Segment forwarding for portal traffic is handled by the
+          server-side tracking relay and configured platform-wide via the <code>SEGMENT_WRITE_KEY</code> deployment
+          environment variable — not by this per-property field.
+          {' '}Relay status:{' '}
+          {relaySegmentConfigured === null
+            ? <em>unknown</em>
+            : relaySegmentConfigured
+              ? <strong style={{ color: '#0a7' }}>configured ✓</strong>
+              : <strong style={{ color: '#b00' }}>not configured</strong>}
+        </div>
         <p style={{ fontSize: '0.875rem', color: '#737373', marginBottom: '0.5rem' }}>
-          Status: {segmentConfigured ? <strong style={{ color: '#0a7' }}>configured ✓</strong> : <span>not configured</span>}
+          The key below applies only to <strong>external-embed properties</strong> (sites that paste the
+          <code> /a/&lt;id&gt;.js</code> pixel): it loads Segment&apos;s analytics.js in the embedding page.
+          {' '}Per-property status: {segmentConfigured ? <strong style={{ color: '#0a7' }}>configured ✓</strong> : <span>not configured</span>}
         </p>
         <input
           type="password"
