@@ -59,6 +59,7 @@ export default function TemplateDetailPage() {
   const navigate = useNavigate();
   const hasShortio = useHasModule('redirects-shortio');
   const hasBitly = useHasModule('redirects-bitly');
+  const hasUmami = useHasModule('redirects-umami');
 
   const [collection, setCollection] = useState<TemplateCollection | null>(null);
   const [blocks, setBlocks] = useState<BlockTemplate[]>([]);
@@ -78,6 +79,7 @@ export default function TemplateDetailPage() {
     { value: '', label: 'None (use full URLs)' },
     ...(hasShortio ? [{ value: 'redirects-shortio', label: 'Short.io' }] : []),
     ...(hasBitly ? [{ value: 'redirects-bitly', label: 'Bitly' }] : []),
+    ...(hasUmami ? [{ value: 'redirects-umami', label: 'Umami (self-hosted)' }] : []),
   ];
 
   useEffect(() => {
@@ -277,7 +279,7 @@ export default function TemplateDetailPage() {
         </DetailPageHeader>
 
         {/* Settings Panel */}
-        {(hasShortio || hasBitly) && (
+        {(hasShortio || hasBitly || hasUmami) && (
           <Card className="p-4 mb-6">
             <div className="flex items-center gap-2 mb-3">
               <Cog6ToothIcon className="w-5 h-5 text-[var(--gray-10)]" />
