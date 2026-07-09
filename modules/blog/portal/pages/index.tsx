@@ -136,9 +136,9 @@ function BlogPostCard({ post, categories }: { post: BlogPost; categories: Conten
   const pill = categoryLabel(post.content_category, categories)
   return (
     <article className="pub-card pub-card-flex gw-card-glow">
-      {/* natural: show the whole cover at its own aspect ratio (no crop).
-          Placeholders keep the default fixed aspect so they don't collapse. */}
-      <LinkTag {...linkProps} className={post.featured_image ? 'pub-cover natural' : 'pub-cover'}>
+      {/* fit: uniform 16:10 cover box that letterboxes instead of cropping —
+          the whole image is visible AND every card is the same size. */}
+      <LinkTag {...linkProps} className={post.featured_image ? 'pub-cover fit' : 'pub-cover'}>
         {post.featured_image ? (
           <img src={post.featured_image} alt={post.featured_image_alt || post.title} />
         ) : (
