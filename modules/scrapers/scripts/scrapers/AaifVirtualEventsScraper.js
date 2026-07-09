@@ -275,7 +275,11 @@ export class AaifVirtualEventsScraper extends BaseScraper {
           eventRegion: '',
           eventLocation: '',
           eventTimezone: card.timezone || 'UTC',
-          eventType: 'webinar',
+          // These are all online/virtual sessions. Use the brand's configured
+          // 'virtual' event type (Settings → Event types) so the portal shows a
+          // real type label rather than an unconfigured 'webinar' string.
+          // Overridable per-scraper via config.event_type.
+          eventType: this.config.event_type || 'virtual',
           eventTopics: enrich.eventTopics || [],
           listingIntro: '',
           eventDescription: enrich.eventDescription || '',
