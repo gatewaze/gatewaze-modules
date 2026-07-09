@@ -53,7 +53,7 @@ export default function PropertyDashboardPage() {
           <option value={90}>Last 90 days</option>
         </select>
         <a
-          href={`/admin/analytics/properties/${id}/settings`}
+          href={`/analytics/properties/${id}/settings`}
           style={{ marginLeft: 'auto', color: '#0066cc' }}
         >
           Settings
