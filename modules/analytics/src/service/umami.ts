@@ -11,7 +11,7 @@
  * Umami API endpoints used (from the websites/{id} group):
  *   GET /api/websites/{id}/pageviews?startAt&endAt&unit
  *   GET /api/websites/{id}/stats?startAt&endAt
- *   GET /api/websites/{id}/metrics?startAt&endAt&type=url|referrer|event
+ *   GET /api/websites/{id}/metrics?startAt&endAt&type=path|referrer|event (v3: 'path', not v2's 'url')
  *   GET /api/websites/{id}/active
  *   GET /api/websites/{id}/events/series?startAt&endAt&unit&eventName
  *
@@ -63,6 +63,18 @@ const UNIT_FOR_BUCKET: Record<Bucket, 'hour' | 'day' | 'month' | 'year'> = {
   week: 'day',  // Umami doesn't natively bucket by week; client groups
   month: 'month',
 };
+
+
+/** Umami v3 flattened the stats/active payloads to plain numbers where
+ *  v2 nested `{ value }` — accept both so the service works across
+ *  versions. */
+function metricValue(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'number') {
+    return (v as { value: number }).value;
+  }
+  return 0;
+}
 
 function toUnixMs(iso: string): number {
   const t = Date.parse(iso);
@@ -135,14 +147,14 @@ export function createUmamiAnalyticsService(deps: UmamiServiceDeps): AnalyticsSe
         const topPages = (await deps.umami.get(`/api/websites/${websiteUuid}/metrics`, {
           startAt: toUnixMs(range.from),
           endAt: toUnixMs(range.to),
-          type: 'url',
+          type: 'path',  // umami v3 renamed metrics type 'url' → 'path' (v2 name 400s)
           limit: 5,
         })) as { x: string; y: number }[];
 
         return {
-          pageviews: stats.pageviews?.value ?? 0,
-          unique_visitors: stats.visitors?.value ?? 0,
-          active_now: active?.x ?? 0,
+          pageviews: metricValue(stats.pageviews),
+          unique_visitors: metricValue(stats.visitors),
+          active_now: metricValue((active as { visitors?: unknown })?.visitors ?? (active as { x?: unknown })?.x),
           top_pages: (topPages ?? []).map((p) => ({
             page_path: p.x,
             pageviews: p.y,
@@ -157,7 +169,7 @@ export function createUmamiAnalyticsService(deps: UmamiServiceDeps): AnalyticsSe
         const rows = (await deps.umami.get(`/api/websites/${websiteUuid}/metrics`, {
           startAt: toUnixMs(range.from),
           endAt: toUnixMs(range.to),
-          type: 'url',
+          type: 'path',  // umami v3 renamed metrics type 'url' → 'path' (v2 name 400s)
           limit,
         })) as { x: string; y: number }[];
         return (rows ?? []).map((p) => ({ page_path: p.x, pageviews: p.y, unique_visitors: 0 }));
@@ -206,12 +218,12 @@ export function createUmamiAnalyticsService(deps: UmamiServiceDeps): AnalyticsSe
         const topPages = (await deps.umami.get(`/api/websites/${websiteUuid}/metrics`, {
           startAt: toUnixMs(oneHourAgo),
           endAt: toUnixMs(now),
-          type: 'url',
+          type: 'path',  // umami v3 renamed metrics type 'url' → 'path' (v2 name 400s)
           limit: 5,
         })) as { x: string; y: number }[];
         return {
-          active_visitors: active?.x ?? 0,
-          views_last_hour: stats.pageviews?.value ?? 0,
+          active_visitors: metricValue((active as { visitors?: unknown })?.visitors ?? (active as { x?: unknown })?.x),
+          views_last_hour: metricValue(stats.pageviews),
           top_pages: (topPages ?? []).map((p) => ({ page_path: p.x, pageviews: p.y, unique_visitors: 0 })),
         };
       });
@@ -282,7 +294,7 @@ export function createUmamiAnalyticsService(deps: UmamiServiceDeps): AnalyticsSe
             // cohort size so retention_rate stays in [0, 1]. A future
             // ClickHouse backend can compute this exactly via session
             // joins; the contract shape doesn't change.
-            const periodVisitors = stats.visitors?.value ?? 0;
+            const periodVisitors = metricValue(stats.visitors);
             const active = Math.min(cohort.size, periodVisitors);
             cells.push({
               cohort_bucket: cohort.start,
@@ -319,7 +331,7 @@ export function createUmamiAnalyticsService(deps: UmamiServiceDeps): AnalyticsSe
             startAt: dayStart,
             endAt: dayEnd,
           })) as { visitors: { value: number } };
-          const dayVisitors = stats.visitors?.value ?? 0;
+          const dayVisitors = metricValue(stats.visitors);
           const overlap = Math.min(cohortSize, dayVisitors);
           points.push({
             day,

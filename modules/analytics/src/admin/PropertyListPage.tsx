@@ -54,7 +54,7 @@ export default function PropertyListPage() {
               }}
             >
               <a
-                href={`/admin/analytics/properties/${p.property_id}`}
+                href={`/analytics/properties/${p.property_id}`}
                 style={{ fontWeight: 600, color: '#0066cc', textDecoration: 'none' }}
               >
                 {p.name}
