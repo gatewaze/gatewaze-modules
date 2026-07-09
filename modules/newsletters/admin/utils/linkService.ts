@@ -117,6 +117,7 @@ export async function generateEditionShortLinks(
       },
       body: JSON.stringify({
         domain: getShortLinkDomain(),
+        provider: redirectProvider,
         links: linksToCreate.map(l => ({
           path: l.path,
           originalUrl: l.originalUrl,

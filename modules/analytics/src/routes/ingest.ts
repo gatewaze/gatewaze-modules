@@ -14,6 +14,8 @@
  *                           browser traffic flows through our validated
  *                           ingest (the embed tags point here).
  *   GET  /a/portal-config — public discovery of the brand's portal property.
+ *   GET  /a/q/:slug       — public short-link redirect, proxied from Umami
+ *                           Links' /q/{slug} (Umami is cluster-internal).
  *   GET  /a/<id>.js       — serves the pre-rendered pixel bundle for
  *                           an `external` property.
  *
@@ -40,6 +42,10 @@ export interface IngestRoutesDeps {
   umamiCollect: (payload: Record<string, unknown>, headers: Record<string, string>) => Promise<{ ok: boolean; status: number }>;
   /** Fetch the Umami tracker script (GET <umami>/script.js). */
   fetchUmamiTracker: () => Promise<{ ok: boolean; status: number; body: string }>;
+  /** Resolve a short-link slug via Umami's redirect endpoint (GET
+   *  <umami>/q/<slug>, redirect: manual). Returns the upstream status +
+   *  Location so the route can relay the 307 without following it. */
+  umamiResolveLink: (slug: string, headers: Record<string, string>) => Promise<{ status: number; location: string | null }>;
   /** Decrypt a stored secret blob. */
   decryptSecret: (encrypted: Buffer | string) => string;
   /** Sliding-window rate limit. Same shape as @/lib/rate-limit. */
@@ -274,6 +280,46 @@ export function createIngestRoutes(deps: IngestRoutesDeps) {
     res.status(200).send(trackerCache!.body);
   }
 
+  // -------------------------------------------------------------------------
+  // GET /a/q/:slug — public short-link redirect (Umami Links proxy)
+  // -------------------------------------------------------------------------
+  // Umami stays cluster-internal, so its /q/{slug} redirect endpoint isn't
+  // reachable from the internet. This proxy relays it: forwards the real
+  // client IP + UA (so umami's click sessions get correct geo/device) and
+  // passes the 307 Location back without following it. Rate-limited per IP
+  // with the same budget as collect.
+  const SLUG_RE = /^[A-Za-z0-9._~-]{1,100}$/;
+
+  async function shortLinkRedirect(req: Request, res: Response): Promise<void> {
+    const slug = req.params['slug'] ?? '';
+    if (!SLUG_RE.test(slug)) return sendError(res, 404, 'not_found', 'unknown link');
+
+    const ip = getClientIp(req);
+    const ipLimit = await deps.rateLimit(`analytics-redirect:ip:${ip}`, deps.perIpRpm, 60_000);
+    if (!ipLimit.allowed) {
+      return sendError(res, 429, 'rate_limited', 'per-IP redirect limit exceeded', ipLimit.resetAt - Date.now());
+    }
+
+    try {
+      const upstream = await deps.umamiResolveLink(slug, {
+        'X-Forwarded-For': ip,
+        'User-Agent': req.header('user-agent') ?? '',
+        ...(req.header('referer') ? { Referer: req.header('referer') as string } : {}),
+      });
+      if (upstream.status >= 300 && upstream.status < 400 && upstream.location) {
+        // 307 preserves method semantics and keeps clicks uncached.
+        res.setHeader('Cache-Control', 'no-store');
+        res.redirect(307, upstream.location);
+        return;
+      }
+      return sendError(res, 404, 'not_found', 'unknown link');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'unknown error';
+      deps.logger.error('analytics.redirect.upstream_threw', { slug, error: message });
+      return sendError(res, 502, 'upstream_error', message);
+    }
+  }
+
   // GET /a/portal-config — public discovery endpoint so the PORTAL app can
   // self-configure its embed without RLS access to analytics_properties: it
   // returns the active `portal` property's id (404 when none / module
@@ -290,13 +336,14 @@ export function createIngestRoutes(deps: IngestRoutesDeps) {
     res.json({ property_id: prop.property_id });
   }
 
-  return { collect, pixelBundle, portalConfig, trackerScript };
+  return { collect, pixelBundle, portalConfig, trackerScript, shortLinkRedirect };
 }
 
 export function mountIngestRoutes(router: Router, routes: ReturnType<typeof createIngestRoutes>): void {
   router.post('/a/collect', routes.collect);
   // Fixed paths BEFORE the :filename catch-all.
   router.get('/a/script.js', routes.trackerScript);
+  router.get('/a/q/:slug', routes.shortLinkRedirect);
   router.get('/a/portal-config', routes.portalConfig);
   router.get('/a/:filename', routes.pixelBundle);
 }

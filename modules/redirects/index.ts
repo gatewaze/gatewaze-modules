@@ -16,6 +16,7 @@ const redirectsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_redirects_tables.sql',
+    'migrations/002_provider_column.sql',
   ],
 
   adminRoutes: [

@@ -66,6 +66,7 @@ const baseDeps = (over: Partial<IngestRoutesDeps> = {}): IngestRoutesDeps => ({
   supabase: makeFakeSupabase({ data: null, error: null }),
   umamiCollect: vi.fn(async () => ({ ok: true, status: 200 })),
   fetchUmamiTracker: vi.fn(async () => ({ ok: true, status: 200, body: 'tracker("/api/send")' })),
+  umamiResolveLink: vi.fn(async () => ({ status: 307, location: 'https://example.com/target' })),
   decryptSecret: (b) => Buffer.isBuffer(b) ? b.toString('utf-8') : (b as string),
   rateLimit: async () => ({ allowed: true, resetAt: Date.now() + 60_000 }),
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -333,5 +334,46 @@ describe('createIngestRoutes — portalConfig', () => {
     const res = fakeRes();
     await routes.portalConfig(fakeReq(), res);
     expect(res._status).toBe(404);
+  });
+});
+
+describe('createIngestRoutes — shortLinkRedirect', () => {
+  it('relays the upstream 307 Location with no-store', async () => {
+    const routes = createIngestRoutes(baseDeps({
+      umamiResolveLink: async () => ({ status: 307, location: 'https://example.com/article' }),
+    }));
+    const res = fakeRes();
+    const redirects: Array<[number, string]> = [];
+    (res as unknown as { redirect: (code: number, url: string) => void }).redirect = (code, url) => { redirects.push([code, url]); };
+    await routes.shortLinkRedirect(fakeReq({ params: { slug: 'nl-abc-1' } }), res);
+    expect(redirects).toEqual([[307, 'https://example.com/article']]);
+    expect(res._headers!['Cache-Control']).toBe('no-store');
+  });
+
+  it('404s on unknown slugs and invalid slug shapes', async () => {
+    const routes = createIngestRoutes(baseDeps({
+      umamiResolveLink: async () => ({ status: 404, location: null }),
+    }));
+    const res = fakeRes();
+    await routes.shortLinkRedirect(fakeReq({ params: { slug: 'missing' } }), res);
+    expect(res._status).toBe(404);
+
+    const res2 = fakeRes();
+    await routes.shortLinkRedirect(fakeReq({ params: { slug: 'bad slug!' } }), res2);
+    expect(res2._status).toBe(404);
+  });
+
+  it('forwards client ip + UA to the resolver', async () => {
+    const resolver = vi.fn(async () => ({ status: 307, location: 'https://x.example/' }));
+    const routes = createIngestRoutes(baseDeps({ umamiResolveLink: resolver }));
+    const res = fakeRes();
+    (res as unknown as { redirect: (c: number, u: string) => void }).redirect = () => undefined;
+    await routes.shortLinkRedirect(
+      fakeReq({ params: { slug: 'ok-1' }, headers: { 'x-forwarded-for': '9.9.9.9', 'user-agent': 'UA-1' } }),
+      res,
+    );
+    const [, headers] = resolver.mock.calls[0]! as [string, Record<string, string>];
+    expect(headers['X-Forwarded-For']).toBe('9.9.9.9');
+    expect(headers['User-Agent']).toBe('UA-1');
   });
 });
