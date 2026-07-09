@@ -75,7 +75,7 @@ function AuthorCard({ post }: { post: AuthorPost }) {
     : { href: `/blog/${post.slug}` }
   return (
     <article className="pub-card pub-card-flex gw-card-glow">
-      <LinkTag {...linkProps} className={post.featured_image ? 'pub-cover natural' : 'pub-cover'}>
+      <LinkTag {...linkProps} className={post.featured_image ? 'pub-cover fit' : 'pub-cover'}>
         {post.featured_image ? (
           <img src={post.featured_image} alt={post.featured_image_alt || post.title} />
         ) : (
@@ -170,7 +170,7 @@ export default async function BlogAuthorPage({ params }: Props) {
             </div>
           </div>
         </div>
-        <Link href="/blog" className="pub-back-link">← All posts</Link>
+        <Link href="/blog" className="pub-btn">← All posts</Link>
       </div>
 
       {posts.length === 0 ? (
