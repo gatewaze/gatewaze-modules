@@ -15,13 +15,21 @@ import { useLocation, useNavigate, useParams } from 'react-router';
 import { WorkspaceLayout } from '@/components/ui';
 import { getJson, RANGES, type RangeKey } from './tabs/shared';
 import OverviewTab from './tabs/OverviewTab';
+import RealtimeTab from './tabs/RealtimeTab';
 import SessionsTab from './tabs/SessionsTab';
+import JourneysTab from './tabs/JourneysTab';
+import FunnelsTab from './tabs/FunnelsTab';
+import UtmTab from './tabs/UtmTab';
 import RetentionTab from './tabs/RetentionTab';
 import SettingsTab from './tabs/SettingsTab';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'realtime', label: 'Realtime' },
   { id: 'sessions', label: 'Sessions' },
+  { id: 'journeys', label: 'Journeys' },
+  { id: 'funnels', label: 'Funnels' },
+  { id: 'utm', label: 'UTM' },
   { id: 'retention', label: 'Retention' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -77,11 +85,15 @@ export default function PropertyDashboardPage() {
       subTabs={TABS}
       activeSubTabId={activeTab}
       onSubTabChange={onTabChange}
-      actions={activeTab === 'settings' ? undefined : rangePicker}
+      actions={activeTab === 'settings' || activeTab === 'realtime' ? undefined : rangePicker}
     >
       <div className="px-6 py-6 max-w-7xl mx-auto">
         {activeTab === 'overview' && <OverviewTab propertyId={id} rangeKey={rangeKey} />}
+        {activeTab === 'realtime' && <RealtimeTab propertyId={id} />}
         {activeTab === 'sessions' && <SessionsTab propertyId={id} rangeKey={rangeKey} />}
+        {activeTab === 'journeys' && <JourneysTab propertyId={id} rangeKey={rangeKey} />}
+        {activeTab === 'funnels' && <FunnelsTab propertyId={id} rangeKey={rangeKey} />}
+        {activeTab === 'utm' && <UtmTab propertyId={id} rangeKey={rangeKey} />}
         {activeTab === 'retention' && <RetentionTab propertyId={id} rangeKey={rangeKey} />}
         {activeTab === 'settings' && <SettingsTab propertyId={id} />}
       </div>

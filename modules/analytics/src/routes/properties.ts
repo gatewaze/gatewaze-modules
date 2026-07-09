@@ -93,7 +93,27 @@ export function createPropertiesRoutes(deps: PropertiesRoutesDeps) {
       deps.logger.error('analytics.properties.list.failed', { error: error.message });
       return sendError(res, 500, 'internal_error', error.message);
     }
-    res.status(200).json({ properties: data ?? [] });
+
+    // Site-backed properties only make sense while the sites module is
+    // enabled — disabling sites leaves the rows behind (the table isn't
+    // dropped), so hide them from the picker rather than listing hosts
+    // the operator can no longer reach.
+    let properties = data ?? [];
+    if (properties.some((p) => p['kind'] === 'gatewaze_site')) {
+      const { data: sitesMod, error: modError } = await deps.supabase
+        .from('installed_modules')
+        .select('id')
+        .eq('id', 'sites')
+        .eq('status', 'enabled')
+        .maybeSingle();
+      if (modError) {
+        deps.logger.warn('analytics.properties.list.sites_module_check_failed', { error: modError.message });
+      } else if (!sitesMod) {
+        properties = properties.filter((p) => p['kind'] !== 'gatewaze_site');
+      }
+    }
+
+    res.status(200).json({ properties });
   }
 
   // -------------------------------------------------------------------------

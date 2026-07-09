@@ -206,11 +206,44 @@ export interface OverviewStats {
  *  /metrics `type` values (path, not v2's url). */
 export type BreakdownType =
   | 'path' | 'referrer' | 'browser' | 'os' | 'device'
-  | 'country' | 'language' | 'title' | 'event' | 'host';
+  | 'country' | 'region' | 'city' | 'language' | 'title'
+  | 'event' | 'hostname' | 'query' | 'tag';
 
 export interface BreakdownRow {
   label: string;
   count: number;
+}
+
+/** One step of a funnel definition + its computed result. Mirrors
+ *  Umami v3's POST /api/reports/funnel response rows. */
+export interface FunnelStepDef {
+  type: 'path' | 'event';
+  value: string;
+}
+export interface FunnelStepResult extends FunnelStepDef {
+  visitors: number;
+  previous: number;
+  dropped: number;
+  /** Fraction dropped vs previous step (null on the first step). */
+  dropoff: number | null;
+  /** Fraction of the original cohort remaining at this step. */
+  remaining: number;
+}
+
+/** One observed visitor path (pageviews + event names interleaved);
+ *  null-padded to the requested step count. */
+export interface JourneyPath {
+  items: (string | null)[];
+  count: number;
+}
+
+/** UTM dimension breakdowns — one list per utm_* parameter. */
+export interface UtmReport {
+  utm_source: BreakdownRow[];
+  utm_medium: BreakdownRow[];
+  utm_campaign: BreakdownRow[];
+  utm_term: BreakdownRow[];
+  utm_content: BreakdownRow[];
 }
 
 export interface AnalyticsService {
@@ -227,6 +260,15 @@ export interface AnalyticsService {
   /** Generic dimension breakdown (pages/referrers/browsers/os/devices/
    *  countries/languages/titles/events/hosts). */
   getBreakdown(filter: DimensionFilter, range: DateRange, type: BreakdownType, limit: number): Promise<ServiceResult<BreakdownRow[]>>;
+
+  /** Ad-hoc funnel report (Umami v3 reports API). */
+  runFunnel(filter: DimensionFilter, range: DateRange, steps: FunnelStepDef[], windowMinutes: number): Promise<ServiceResult<FunnelStepResult[]>>;
+
+  /** Ad-hoc journey report — the most common N-step visitor paths. */
+  runJourney(filter: DimensionFilter, range: DateRange, steps: number, startStep?: string, endStep?: string): Promise<ServiceResult<JourneyPath[]>>;
+
+  /** UTM campaign breakdowns for the range. */
+  runUtm(filter: DimensionFilter, range: DateRange): Promise<ServiceResult<UtmReport>>;
 
   /** Top pages by pageviews. */
   getTopPages(filter: DimensionFilter, range: DateRange, limit: number): Promise<ServiceResult<TopPage[]>>;
