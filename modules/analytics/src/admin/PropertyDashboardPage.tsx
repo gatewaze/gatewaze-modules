@@ -7,7 +7,7 @@
  * iteration; this confirms the data flow end-to-end.
  */
 import { useEffect, useState } from 'react';
-import { authedFetch } from './api';
+import { authedFetch } from './authed-fetch';
 import { useParams } from 'react-router';
 
 interface Summary {
