@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slug'
-import { NewsletterSignup } from '../components/NewsletterSignup'
+import { NewsletterSignup, SubscribedPanel, useNewsletterSubscription } from '../components/NewsletterSignup'
 import { ConsentNote } from '../components/ConsentNote'
 // When the onboarding module is installed + enabled it registers the
 // 'newsletters:signup' slot (the email→chat morph). Importing ModuleSlot runs
@@ -19,9 +19,28 @@ import { ModuleSlot, hasPortalSlot } from '@/lib/modules/ModuleSlot'
 // blank the field). The morph degrades to a plain subscribe via onFallbackSubscribe.
 const ONB_IDS = new Set(['onboarding'])
 function NewsletterSignupSurface({ collectionSlug }: { collectionSlug: string }) {
+  // Subscription state is decided HERE, above the morph: an already-subscribed
+  // signed-in user gets the subscribed panel and the onboarding morph (which
+  // would otherwise replace it with its own email field once hydrated) plus
+  // the consent note are not rendered at all.
+  const subscription = useNewsletterSubscription(collectionSlug)
   let useMorph = false
   try { useMorph = hasPortalSlot('newsletters:signup', ONB_IDS, ONB_IDS) } catch { useMorph = false }
-  if (!useMorph) return <NewsletterSignup collectionSlug={collectionSlug} />
+
+  if (subscription.sub?.subscribed) {
+    return (
+      <SubscribedPanel
+        sub={subscription.sub}
+        unsubState={subscription.unsubState}
+        unsubscribe={subscription.unsubscribe}
+      />
+    )
+  }
+  // Signed in but status still resolving: render nothing for a beat rather
+  // than mounting the morph and yanking it away if the answer is "subscribed".
+  if (subscription.user && subscription.sub === undefined) return null
+
+  if (!useMorph) return <NewsletterSignup collectionSlug={collectionSlug} subscription={subscription} />
   const fallbackSubscribe = async (email: string) => {
     try {
       const sb = getSupabaseClient()
@@ -35,7 +54,7 @@ function NewsletterSignupSurface({ collectionSlug }: { collectionSlug: string })
         enabledModuleIds={['onboarding']}
         enabledFeatures={['onboarding']}
         props={{ collectionSlug, onFallbackSubscribe: fallbackSubscribe }}
-        fallback={<NewsletterSignup collectionSlug={collectionSlug} />}
+        fallback={<NewsletterSignup collectionSlug={collectionSlug} subscription={subscription} />}
       />
       {/* The plain NewsletterSignup renders its own consent note; the onboarding
           morph doesn't, so add it here for that branch. */}
