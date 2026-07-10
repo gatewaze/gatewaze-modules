@@ -398,13 +398,67 @@ function TemplatesTab({ collectionId, templates, onUpdate }: { collectionId: str
 // Items Tab — card list with inline add, edit navigates to item detail
 // ============================================================
 
+// Section editing modes under the structured-blocks model:
+//  'classic' — no blocks: the original RichTextEditor over sr_sections.content
+//  'mirror'  — exactly one html block (the migration backfill state): the
+//              RichTextEditor edits the block's html, and saving writes BOTH
+//              the block and content so the mirror never goes stale
+//  'blocks'  — typed blocks (talk cards etc.): the structured block editor
+type BlockDraft = { kind: string; slug: string | null; sort_order: number; data: Record<string, any> };
+type EditableSection = {
+  id?: string;
+  heading: string;
+  content: string;
+  template_id: string | null;
+  sort_order: number;
+  mode: 'classic' | 'mirror' | 'blocks';
+  blocks: BlockDraft[];
+};
+
+function sectionMode(blocks: { kind: string }[] | undefined): EditableSection['mode'] {
+  if (!blocks || blocks.length === 0) return 'classic';
+  if (blocks.length === 1 && blocks[0].kind === 'html') return 'mirror';
+  return 'blocks';
+}
+
+const EMPTY_TALK: () => Record<string, any> = () => ({
+  title: '', speaker: { name: '' }, youtube_id: '', worth_noting: '', quote: '', topics: [],
+});
+
+function TalkBlockForm({ block, onChange }: { block: BlockDraft; onChange: (data: Record<string, any>) => void }) {
+  const d = block.data;
+  const set = (patch: Record<string, any>) => onChange({ ...d, ...patch });
+  const setSpeaker = (patch: Record<string, any>) => set({ speaker: { ...(d.speaker || {}), ...patch } });
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <Input label="Talk title" value={d.title || ''} onChange={(e: any) => set({ title: e.target.value })} />
+        <Input label="YouTube ID" value={d.youtube_id || ''} onChange={(e: any) => set({ youtube_id: e.target.value })} />
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <Input label="Speaker name" value={d.speaker?.name || ''} onChange={(e: any) => setSpeaker({ name: e.target.value })} />
+        <Input label="Company / role line" value={d.speaker?.company || ''} onChange={(e: any) => setSpeaker({ company: e.target.value || undefined })} />
+        <Input label="LinkedIn URL" value={d.speaker?.linkedin || ''} onChange={(e: any) => setSpeaker({ linkedin: e.target.value || undefined })} />
+      </div>
+      <Input label="Worth noting" value={d.worth_noting || ''} onChange={(e: any) => set({ worth_noting: e.target.value })} />
+      <Input label="Quote" value={d.quote || ''} onChange={(e: any) => set({ quote: e.target.value })} />
+      <div className="grid grid-cols-3 gap-2">
+        <Input label="Topics (comma-separated)" value={(d.topics || []).join(', ')}
+          onChange={(e: any) => set({ topics: e.target.value.split(',').map((t: string) => t.trim()).filter(Boolean) })} />
+        <Input label="Accent (#hex)" value={d.accent || ''} onChange={(e: any) => set({ accent: e.target.value || undefined })} />
+        <Input label="External URL (title link)" value={d.url || ''} onChange={(e: any) => set({ url: e.target.value || undefined })} />
+      </div>
+    </div>
+  );
+}
+
 function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
   collectionId: string; items: SrItem[]; categories: SrCategory[]; templates: SrSectionTemplate[]; onUpdate: () => void;
 }) {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ title: '', subtitle: '', category_id: '', external_url: '', featured_image_url: '', status: 'draft' as string });
-  const [itemSections, setItemSections] = useState<{ id?: string; heading: string; content: string; template_id: string | null; sort_order: number }[]>([]);
+  const [itemSections, setItemSections] = useState<EditableSection[]>([]);
   const [saving, setSaving] = useState(false);
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
@@ -414,7 +468,7 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
     setAdding(true);
     setEditingId(null);
     setFormData({ title: '', subtitle: '', category_id: categories[0]?.id || '', external_url: '', featured_image_url: '', status: 'draft' });
-    setItemSections(templates.map((t, i) => ({ heading: t.heading, content: '', template_id: t.id, sort_order: i })));
+    setItemSections(templates.map((t, i) => ({ heading: t.heading, content: '', template_id: t.id, sort_order: i, mode: 'classic' as const, blocks: [] })));
   };
 
   const handleEdit = async (item: SrItem) => {
@@ -423,7 +477,20 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
     setFormData({ title: item.title, subtitle: item.subtitle || '', category_id: item.category_id, external_url: item.external_url || '', featured_image_url: item.featured_image_url || '', status: item.status });
     const secRes = await SectionsService.getByItem(item.id);
     if (secRes.success && secRes.data) {
-      setItemSections(secRes.data.map(s => ({ id: s.id, heading: s.heading, content: s.content || '', template_id: s.template_id, sort_order: s.sort_order })));
+      setItemSections(secRes.data.map(s => {
+        const blocks = ((s as any).blocks || []).map((b: any) => ({ kind: b.kind, slug: b.slug, sort_order: b.sort_order, data: b.data }));
+        const mode = sectionMode(blocks);
+        return {
+          id: s.id,
+          heading: s.heading,
+          // mirror mode edits the block's html (the render source of truth)
+          content: mode === 'mirror' ? (blocks[0].data.html ?? '') : (s.content || ''),
+          template_id: s.template_id,
+          sort_order: s.sort_order,
+          mode,
+          blocks,
+        };
+      }));
     } else {
       setItemSections([]);
     }
@@ -446,8 +513,31 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
       if (editingId) {
         const res = await ItemsService.update(editingId, cleaned);
         if (!res.success) throw new Error(res.error);
-        const secRes = await SectionsService.upsertForItem(editingId, itemSections.map(s => ({ ...s, content: s.content || null })));
+        // blocks-mode sections keep their stored content untouched (null for
+        // promoted talk sections); mirror mode writes the edited html to BOTH
+        // content and the block so the pair never diverges
+        const secRes = await SectionsService.upsertForItem(editingId, itemSections.map(s => ({
+          id: s.id, heading: s.heading, template_id: s.template_id, sort_order: s.sort_order,
+          content: s.mode === 'blocks' ? null : (s.content || null),
+        })));
         if (!secRes.success) throw new Error(secRes.error);
+        // item-wide pre-write talk slugs (title -> slug) for the reuse rule
+        const preWrite = new Map<string, string>();
+        for (const s of itemSections) {
+          for (const b of s.blocks) {
+            if (b.kind === 'talk' && b.slug && typeof b.data.title === 'string' && !preWrite.has(b.data.title)) {
+              preWrite.set(b.data.title, b.slug);
+            }
+          }
+        }
+        for (const s of itemSections) {
+          if (!s.id || s.mode === 'classic') continue;
+          const blocks = s.mode === 'mirror'
+            ? (s.content.trim() ? [{ kind: 'html', slug: null, sort_order: 0, data: { ...s.blocks[0]?.data, html: s.content } }] : [])
+            : s.blocks;
+          const blkRes = await SectionsService.replaceSectionBlocks(editingId, s.id, blocks, preWrite);
+          if (!blkRes.success) throw new Error(blkRes.error);
+        }
         toast.success('Item updated');
       } else {
         const res = await ItemsService.create(
@@ -475,7 +565,11 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
   };
 
   const addSection = () => {
-    setItemSections(prev => [...prev, { heading: 'New Section', content: '', template_id: null, sort_order: prev.length }]);
+    setItemSections(prev => [...prev, { heading: 'New Section', content: '', template_id: null, sort_order: prev.length, mode: 'classic' as const, blocks: [] }]);
+  };
+
+  const updateSectionBlocks = (index: number, fn: (blocks: BlockDraft[]) => BlockDraft[]) => {
+    setItemSections(prev => prev.map((s, i) => i === index ? { ...s, blocks: fn(s.blocks) } : s));
   };
 
   const filteredItems = items.filter(item => {
@@ -523,9 +617,66 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
                 <TrashIcon className="w-4 h-4" />
               </button>
             </div>
-            <RichTextEditor value={section.content} onChange={(val: string) => {
-              setItemSections(prev => prev.map((s, i) => i === index ? { ...s, content: val } : s));
-            }} />
+            {section.mode !== 'blocks' && (
+              <RichTextEditor value={section.content} onChange={(val: string) => {
+                setItemSections(prev => prev.map((s, i) => i === index ? { ...s, content: val } : s));
+              }} />
+            )}
+            {section.mode === 'blocks' && (
+              <div className="space-y-3">
+                {section.blocks.map((block, bi) => (
+                  <div key={bi} className="border rounded-lg p-3 bg-white dark:bg-gray-900">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Badge color={block.kind === 'talk' ? 'success' : 'neutral'}>{block.kind}</Badge>
+                        {block.slug && <span className="text-xs text-[var(--gray-a9)] font-mono">{block.slug}</span>}
+                      </div>
+                      <div className="flex gap-1">
+                        <button type="button" disabled={bi === 0} className="p-1 text-gray-400 hover:text-gray-700 disabled:opacity-30"
+                          onClick={() => updateSectionBlocks(index, (blocks) => {
+                            const next = [...blocks];[next[bi - 1], next[bi]] = [next[bi], next[bi - 1]];return next;
+                          })}>↑</button>
+                        <button type="button" disabled={bi === section.blocks.length - 1} className="p-1 text-gray-400 hover:text-gray-700 disabled:opacity-30"
+                          onClick={() => updateSectionBlocks(index, (blocks) => {
+                            const next = [...blocks];[next[bi + 1], next[bi]] = [next[bi], next[bi + 1]];return next;
+                          })}>↓</button>
+                        <button type="button" className="p-1 text-gray-400 hover:text-red-600"
+                          onClick={() => updateSectionBlocks(index, (blocks) => blocks.filter((_, k) => k !== bi))}>
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    {block.kind === 'talk' ? (
+                      <TalkBlockForm block={block} onChange={(data) =>
+                        updateSectionBlocks(index, (blocks) => blocks.map((b, k) => k === bi ? { ...b, data } : b))} />
+                    ) : (
+                      <textarea
+                        className="w-full h-40 font-mono text-xs border rounded p-2 bg-gray-50 dark:bg-gray-800"
+                        value={block.data.html || ''}
+                        onChange={(e) => updateSectionBlocks(index, (blocks) =>
+                          blocks.map((b, k) => k === bi ? { ...b, data: { ...b.data, html: e.target.value } } : b))}
+                      />
+                    )}
+                  </div>
+                ))}
+                <div className="flex gap-2">
+                  <Button variant="ghost" onClick={() => updateSectionBlocks(index, (blocks) =>
+                    [...blocks, { kind: 'talk', slug: null, sort_order: blocks.length, data: EMPTY_TALK() }])}>
+                    <PlusIcon className="w-4 h-4 mr-1" />Talk block
+                  </Button>
+                  <Button variant="ghost" onClick={() => updateSectionBlocks(index, (blocks) =>
+                    [...blocks, { kind: 'html', slug: null, sort_order: blocks.length, data: { html: '' } }])}>
+                    <PlusIcon className="w-4 h-4 mr-1" />HTML block
+                  </Button>
+                </div>
+              </div>
+            )}
+            {section.mode === 'mirror' && section.id && (
+              <button type="button" className="mt-2 text-xs text-[var(--gray-a9)] hover:text-[var(--gray-11)] underline"
+                onClick={() => setItemSections(prev => prev.map((s, i) => i === index ? { ...s, mode: 'blocks' as const } : s))}>
+                Convert to structured blocks…
+              </button>
+            )}
           </div>
         ))}
       </div>

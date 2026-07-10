@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { convert } from 'html-to-text'
 import { SafeImg } from '../../components/SafeImg'
 import { TocSpy } from '../../components/TocSpy'
+import { sectionBodyHtml, type SectionWithBlocks } from '../../render-blocks'
 
 interface ItemData {
   id: string
@@ -15,7 +16,7 @@ interface ItemData {
   external_url: string | null
   featured_image_url: string | null
   category: { id: string; name: string; slug: string } | null
-  sections: { id: string; heading: string; content: string | null; sort_order: number }[]
+  sections: SectionWithBlocks[]
 }
 
 interface CollectionData {
@@ -88,7 +89,7 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
     .select(`
       id, title, slug, subtitle, external_url, featured_image_url, updated_at, created_at,
       category:sr_categories(id, name, slug),
-      sections:sr_sections(id, heading, content, sort_order)
+      sections:sr_sections(id, heading, content, sort_order, blocks:sr_blocks(id, kind, slug, sort_order, data))
     `)
     .eq('collection_id', collection.id)
     .eq('slug', itemSlug)
@@ -185,11 +186,20 @@ export default async function ItemDetailPage({ params }: Props) {
   const base = host ? `${proto}://${host}` : ''
   const pageUrl = `${base}/resources/${collection.slug}/${item.slug}`
 
+  // Precedence rule: a section with blocks renders (and text-projects) its
+  // blocks; otherwise its legacy content. One body-HTML source feeds both the
+  // DOM and the JSON-LD articleBody so they can never disagree.
+  const renderCtx = { pagePath: `/resources/${collection.slug}/${item.slug}` }
+  const bodyHtmlFor = (s: SectionWithBlocks) => sectionBodyHtml(s, renderCtx)
+
   // Full article body as clean text (drop links/images here — the rendered page
   // and the /md endpoint keep them; JSON-LD articleBody wants plain prose).
   const articleBody = item.sections
-    .map((s) => [s.heading, s.content ? convert(s.content, { wordwrap: false, selectors: [{ selector: 'a', options: { ignoreHref: true } }, { selector: 'img', format: 'skip' }] }) : '']
-      .filter(Boolean).join('\n'))
+    .map((s) => {
+      const body = bodyHtmlFor(s)
+      return [s.heading, body ? convert(body, { wordwrap: false, selectors: [{ selector: 'a', options: { ignoreHref: true } }, { selector: 'img', format: 'skip' }] }) : '']
+        .filter(Boolean).join('\n')
+    })
     .filter(Boolean)
     .join('\n\n')
     .trim()
@@ -247,12 +257,15 @@ export default async function ItemDetailPage({ params }: Props) {
   const teaserSections = item.sections.slice(0, teaserCount)
   const gatedSections = gated ? item.sections.slice(teaserCount) : []
 
-  const renderSection = (section: { id: string; heading: string; content: string | null }) => (
-    <section key={section.id} id={slugify(section.heading)} style={{ scrollMarginTop: 96 }}>
-      <h2>{section.heading}</h2>
-      {section.content && <div dangerouslySetInnerHTML={{ __html: section.content }} />}
-    </section>
-  )
+  const renderSection = (section: SectionWithBlocks) => {
+    const body = bodyHtmlFor(section)
+    return (
+      <section key={section.id} id={slugify(section.heading)} style={{ scrollMarginTop: 96 }}>
+        <h2>{section.heading}</h2>
+        {body && <div dangerouslySetInnerHTML={{ __html: body }} />}
+      </section>
+    )
+  }
 
   return (
     <div className="pub-article-wrap pub-fade">
