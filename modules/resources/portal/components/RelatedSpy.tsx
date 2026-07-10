@@ -98,25 +98,29 @@ async function openPanel(cardEl: HTMLElement, itemPath: string): Promise<void> {
   document.querySelectorAll(`.${PANEL_CLASS}`).forEach((p) => {
     if (p.parentElement !== cardEl) p.remove()
   })
-  if (cardEl.querySelector(`.${PANEL_CLASS}`)) return
+  // already open, mid-fetch, or known-empty (a zero-height child still adds
+  // the card's flex gap, so the DOM is only touched once cards exist)
+  if (cardEl.querySelector(`.${PANEL_CLASS}`) || cardEl.dataset.gwRel) return
 
   const topics = (cardEl.getAttribute('data-topics') || '').split(',').filter(Boolean)
   if (topics.length === 0) return
 
-  ensureStyle()
-  const panel = document.createElement('div')
-  panel.className = PANEL_CLASS
-  cardEl.appendChild(panel)
-
+  cardEl.dataset.gwRel = 'loading'
   let cards: RelatedCard[] = []
   try {
     const res = await fetch(`/api/related-content?topics=${encodeURIComponent(topics.join(','))}&exclude=${encodeURIComponent(itemPath)}`)
     cards = ((await res.json()) as { cards?: RelatedCard[] }).cards ?? []
   } catch { /* resolver failure = no panel, never a broken card */ }
   if (cards.length === 0) {
-    panel.remove()
+    cardEl.dataset.gwRel = 'empty' // don't refetch/flicker on replays
     return
   }
+  delete cardEl.dataset.gwRel
+
+  ensureStyle()
+  const panel = document.createElement('div')
+  panel.className = PANEL_CLASS
+  cardEl.appendChild(panel)
 
   const inner = document.createElement('div')
   inner.className = 'gw-rel-inner'
