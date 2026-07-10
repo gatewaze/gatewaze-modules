@@ -167,7 +167,8 @@ async function openPanel(cardEl: HTMLElement, itemPath: string): Promise<void> {
   try {
     const loc = await visitorLoc()
     const geo = loc ? `&lat=${loc.lat}&lon=${loc.lon}` : ''
-    const res = await fetch(`/api/related-content?topics=${encodeURIComponent(topics.join(','))}&exclude=${encodeURIComponent(itemPath)}${geo}`)
+    // the card id is the block slug — the resolver's semantic-fill source
+    const res = await fetch(`/api/related-content?topics=${encodeURIComponent(topics.join(','))}&exclude=${encodeURIComponent(itemPath)}&block=${encodeURIComponent(cardEl.id)}${geo}`)
     cards = ((await res.json()) as { cards?: RelatedCard[] }).cards ?? []
   } catch { /* resolver failure = no panel, never a broken card */ }
   if (cards.length === 0) {
