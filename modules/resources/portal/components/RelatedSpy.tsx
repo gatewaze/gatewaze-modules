@@ -42,6 +42,44 @@ const PANEL_CSS = `
 .${PANEL_CLASS} .gw-rel-meta { font-size: 11.5px; color: var(--ink-3); margin-top: auto; padding-top: 2px; }
 `
 
+// Coarse visitor location for nearby-event ranking — shares the portal's
+// existing IP-geo cache (useIpInfo hook: gatewaze_ip_info in localStorage,
+// 30-min TTL, ipinfo.io) so whichever surface looks it up first pays once.
+// A cache miss races a fresh lookup against a short timeout: the first play
+// on a cold cache proceeds without geo rather than delaying the panel.
+const IP_INFO_CACHE_KEY = 'gatewaze_ip_info'
+const IP_INFO_CACHE_TTL = 1000 * 60 * 30
+
+function cachedLoc(): { lat: number; lon: number } | null {
+  try {
+    const raw = localStorage.getItem(IP_INFO_CACHE_KEY)
+    if (!raw) return null
+    const { data, timestamp } = JSON.parse(raw)
+    if (Date.now() - timestamp > IP_INFO_CACHE_TTL || typeof data?.loc !== 'string') return null
+    const [lat, lon] = data.loc.split(',').map(parseFloat)
+    return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null
+  } catch {
+    return null
+  }
+}
+
+async function visitorLoc(): Promise<{ lat: number; lon: number } | null> {
+  const cached = cachedLoc()
+  if (cached) return cached
+  const lookup = (async () => {
+    const res = await fetch('https://ipinfo.io/json')
+    if (!res.ok) return null
+    const data = await res.json()
+    try {
+      localStorage.setItem(IP_INFO_CACHE_KEY, JSON.stringify({ data, timestamp: Date.now() }))
+    } catch { /* storage full/blocked — lookup still usable this once */ }
+    if (typeof data?.loc !== 'string') return null
+    const [lat, lon] = data.loc.split(',').map(parseFloat)
+    return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null
+  })().catch(() => null)
+  return Promise.race([lookup, new Promise<null>((r) => setTimeout(() => r(null), 400))])
+}
+
 function beacon(event: string, properties: Record<string, unknown>): void {
   try {
     navigator.sendBeacon('/api/t', new Blob([JSON.stringify({
@@ -127,7 +165,9 @@ async function openPanel(cardEl: HTMLElement, itemPath: string): Promise<void> {
   cardEl.dataset.gwRel = 'loading'
   let cards: RelatedCard[] = []
   try {
-    const res = await fetch(`/api/related-content?topics=${encodeURIComponent(topics.join(','))}&exclude=${encodeURIComponent(itemPath)}`)
+    const loc = await visitorLoc()
+    const geo = loc ? `&lat=${loc.lat}&lon=${loc.lon}` : ''
+    const res = await fetch(`/api/related-content?topics=${encodeURIComponent(topics.join(','))}&exclude=${encodeURIComponent(itemPath)}${geo}`)
     cards = ((await res.json()) as { cards?: RelatedCard[] }).cards ?? []
   } catch { /* resolver failure = no panel, never a broken card */ }
   if (cards.length === 0) {
