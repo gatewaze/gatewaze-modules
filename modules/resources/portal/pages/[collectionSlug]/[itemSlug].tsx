@@ -257,6 +257,8 @@ export default async function ItemDetailPage({ params }: Props) {
     <div className="pub-article-wrap pub-fade">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <style>{`
+        /* the public shell scrolls .pub-area, not the document root */
+        html, .pub-area { scroll-behavior: smooth; }
         .res-article-grid { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 44px; align-items: start; }
         .res-nav-link { display: block; text-decoration: none; padding: 5px 9px; border-radius: 8px; font-size: 13.5px; color: var(--ink-3); transition: background .15s ease, color .15s ease; }
         .res-nav-link:hover { background: rgba(var(--ui-text), 0.06); color: var(--ink); }
@@ -270,8 +272,44 @@ export default async function ItemDetailPage({ params }: Props) {
           box-shadow: 0 -24px 44px -16px var(--paper); }
         .res-gate-cta h3 { font: 600 20px var(--font-display); color: var(--ink); margin: 4px 0 8px; letter-spacing: -0.01em; }
         .res-gate-cta p { color: var(--ink-3); font-size: 14px; line-height: 1.55; margin: 0 auto 18px; max-width: 44ch; }
-        @media (max-width: 760px) { .res-article-grid { grid-template-columns: 1fr; gap: 24px; } }
+        /* the rail is sticky; when taller than the viewport it must scroll
+           on its own or the lower entries are unreachable */
+        @media (min-width: 761px) {
+          .res-article-grid .pub-article-side { max-height: calc(100vh - 120px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+        }
+        .res-toc-inline { display: none; margin: 12px 0 28px; }
+        @media (max-width: 760px) { .res-article-grid { grid-template-columns: 1fr; gap: 24px; } .res-toc { display: none; } .res-toc-inline { display: block; } }
       `}</style>
+      {/* Scrollspy: mark the TOC entry whose section is at the reading line.
+          Plain script (not a client component) so the RSC page stays server-only. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: [
+            "(function(){",
+            // the TOC links and sections stream in after this inline script
+            // parses, so poll until they exist before wiring the spy
+            "function init(){",
+            "var links=Array.prototype.slice.call(document.querySelectorAll('.res-toc a[href^=\"#\"], .res-toc-inline a[href^=\"#\"]'));",
+            "if(!links.length)return false;",
+            "var sections=[];",
+            "links.forEach(function(l){var id=decodeURIComponent(l.getAttribute('href').slice(1));var el=document.getElementById(id);if(el&&sections.indexOf(el)<0)sections.push(el);});",
+            "if(!sections.length)return false;",
+            "var scroller=document.querySelector('.pub-area')||document.documentElement;",
+            "function setActive(id){links.forEach(function(l){if(decodeURIComponent(l.getAttribute('href').slice(1))===id){l.setAttribute('aria-current','page');}else{l.removeAttribute('aria-current');}});}",
+            "var ticking=false;",
+            "function update(){ticking=false;var origin=scroller.getBoundingClientRect?scroller.getBoundingClientRect().top:0;var cur=sections[0].id;",
+            "sections.forEach(function(s){if(s.getBoundingClientRect().top-origin<=140)cur=s.id;});setActive(cur);}",
+            "function onScroll(){if(!ticking){ticking=true;requestAnimationFrame(update);}}",
+            "(scroller===document.documentElement?window:scroller).addEventListener('scroll',onScroll,{passive:true});",
+            "update();",
+            "return true;",
+            "}",
+            "function start(){var tries=0;var timer=setInterval(function(){if(init()||++tries>40)clearInterval(timer);},250);if(init())clearInterval(timer);}",
+            "if(document.readyState==='complete'){start();}else{window.addEventListener('load',start);}",
+            "})();",
+          ].join(''),
+        }}
+      />
       <div className="res-article-grid">
         {/* Left: browse the collection */}
         <aside className="pub-article-side">
@@ -299,6 +337,18 @@ export default async function ItemDetailPage({ params }: Props) {
               </div>
             )
           })}
+          {/* Table of contents — lives in the rail so it doesn't compete
+              with the article's own opening content */}
+          {item.sections.length > 1 && (
+            <div className="pub-side-card res-toc">
+              <div className="pub-side-h">On this page</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {item.sections.map((section) => (
+                  <a key={section.id} href={`#${slugify(section.heading)}`} className="res-nav-link" suppressHydrationWarning>{section.heading}</a>
+                ))}
+              </div>
+            </div>
+          )}
         </aside>
 
         {/* Right: the article */}
@@ -336,13 +386,14 @@ export default async function ItemDetailPage({ params }: Props) {
             </a>
           )}
 
-          {/* Table of contents */}
+          {/* Mobile TOC — the rail stacks above the article on small screens,
+              so surface the section nav after the intro instead */}
           {item.sections.length > 1 && (
-            <div className="pub-side-card" style={{ margin: '12px 0 28px' }}>
+            <div className="pub-side-card res-toc-inline">
               <div className="pub-side-h">On this page</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {item.sections.map((section) => (
-                  <a key={section.id} href={`#${slugify(section.heading)}`} className="res-nav-link">{section.heading}</a>
+                  <a key={section.id} href={`#${slugify(section.heading)}`} className="res-nav-link" suppressHydrationWarning>{section.heading}</a>
                 ))}
               </div>
             </div>
