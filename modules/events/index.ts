@@ -132,12 +132,12 @@ const eventsModule: GatewazeModule = {
   portalNav: {
     label: 'Events',
     path: '/events/upcoming',
-    icon: 'calendar',
+    icon: 'ticket',
     order: 10,
   },
   // Workspace-shell rail item (spec-portal-workspace-shell.md §8). Public top-level module.
   portalShell: {
-    rail: { label: 'Events', full: 'Events', icon: 'calendar', order: 10, visibility: 'public' },
+    rail: { label: 'Events', full: 'Events', icon: 'ticket', order: 10, visibility: 'public' },
     nav: [],
     publicNav: [],
   },
