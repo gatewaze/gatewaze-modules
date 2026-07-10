@@ -205,6 +205,11 @@ export function RelatedSpy() {
   const pathname = usePathname()
 
   useEffect(() => {
+    // Pre-warm the shared IP-location cache at page load so the click-time
+    // 400ms race almost always finds it already resolved (a cold cache on the
+    // very first play would otherwise send no location at all).
+    void visitorLoc()
+
     // the visitor might be on the anchor deep-link route — exclude the ITEM
     const parts = (pathname || '').split('/')
     const itemPath = parts[1] === 'resources' && parts.length >= 4 ? parts.slice(0, 4).join('/') : pathname || ''
