@@ -113,20 +113,22 @@ export default async function ResourcesListingPage() {
             const isGated = effective === 'authenticated' && !isAuthenticated
 
             const cover = (
-              <div className="pub-cover">
-                {collection.cover_image_url && (
+              <div className={collection.cover_image_url ? 'pub-cover fit' : 'pub-cover'}>
+                {collection.cover_image_url ? (
                   <SafeImg
                     src={collection.cover_image_url}
                     alt={collection.name}
                     style={isGated ? { filter: 'blur(4px)', opacity: 0.5 } : undefined}
                   />
+                ) : (
+                  <span className="pub-cover-ph">cover</span>
                 )}
               </div>
             )
 
             if (isGated) {
               return (
-                <div className="pub-card" key={collection.id} style={{ cursor: 'default' }}>
+                <div className="pub-card pub-card-flex" key={collection.id} style={{ cursor: 'default' }}>
                   {cover}
                   <div className="pub-card-body">
                     <span className="pub-side-h" style={{ marginBottom: 8, display: 'block' }}>🔒 Login required</span>
@@ -141,7 +143,7 @@ export default async function ResourcesListingPage() {
             }
 
             return (
-              <Link href={`/resources/${collection.slug}`} className="pub-card gw-card-glow" key={collection.id}>
+              <Link href={`/resources/${collection.slug}`} className="pub-card pub-card-flex gw-card-glow" key={collection.id}>
                 {cover}
                 <div className="pub-card-body">
                   {effective === 'metered' && !isAuthenticated && (
