@@ -21,6 +21,8 @@ interface Props {
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,120}$/
+const FALLBACK_SCAN_MAX_BYTES = 1_048_576
+const FALLBACK_SCAN_MAX_MS = 50
 
 async function anchorExists(collectionSlug: string, itemSlug: string, anchorId: string): Promise<boolean> {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -42,15 +44,62 @@ async function anchorExists(collectionSlug: string, itemSlug: string, anchorId: 
 
   const { data: item } = await supabase
     .from('sr_items')
-    .select('id, sections:sr_sections(content)')
+    .select('id')
     .eq('collection_id', collection.id)
     .eq('slug', itemSlug)
     .eq('status', 'published')
     .maybeSingle()
   if (!item) return false
 
+  // 1) unique-index probe: promoted anchors are sr_blocks slugs
+  const { data: block } = await supabase
+    .from('sr_blocks')
+    .select('id')
+    .eq('item_id', item.id)
+    .eq('slug', anchorId)
+    .maybeSingle()
+  if (block) return true
+
+  // 2) bounded, deterministic fallback: literal substring scan (never a
+  //    regex) over html-kind block payloads then legacy section content, in
+  //    (sort_order, id) order, for anchors never promoted to a slug (e.g.
+  //    sub-anchors inside a guide chapter). Double-quoted lowercase ids only
+  //    — accepted false negatives per the structured-blocks spec.
+  const { data: sections } = await supabase
+    .from('sr_sections')
+    .select('id, content, sort_order, blocks:sr_blocks(id, kind, sort_order, data)')
+    .eq('item_id', item.id)
   const needle = `id="${anchorId}"`
-  return (item.sections || []).some((s: { content: string | null }) => (s.content || '').includes(needle))
+  const started = Date.now()
+  let scanned = 0
+  const overBudget = () => {
+    if (scanned > FALLBACK_SCAN_MAX_BYTES || Date.now() - started > FALLBACK_SCAN_MAX_MS) {
+      console.warn(JSON.stringify({ event: 'resources.anchor.fallback_cap_exceeded', item_id: item.id, anchor: anchorId }))
+      return true
+    }
+    return false
+  }
+  const bySort = (a: any, b: any) => a.sort_order - b.sort_order || (a.id < b.id ? -1 : 1)
+  for (const section of (sections || []).sort(bySort)) {
+    for (const b of (section.blocks || []).sort(bySort)) {
+      if (b.kind !== 'html' || typeof b.data?.html !== 'string') continue
+      scanned += b.data.html.length
+      if (overBudget()) return false
+      if (b.data.html.includes(needle)) {
+        console.warn(JSON.stringify({ event: 'resources.anchor.fallback_hit', item_id: item.id, anchor: anchorId, source: 'block', block_id: b.id }))
+        return true
+      }
+    }
+    if (typeof section.content === 'string' && section.content.length > 0) {
+      scanned += section.content.length
+      if (overBudget()) return false
+      if (section.content.includes(needle)) {
+        console.warn(JSON.stringify({ event: 'resources.anchor.fallback_hit', item_id: item.id, anchor: anchorId, source: 'content', section_id: section.id }))
+        return true
+      }
+    }
+  }
+  return false
 }
 
 export default async function ResourceItemAnchorPage({ params, searchParams }: Props) {

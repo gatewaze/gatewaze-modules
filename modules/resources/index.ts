@@ -23,6 +23,7 @@ const structuredResourcesModule: GatewazeModule = {
     'migrations/004_register_with_platform.sql',
     'migrations/005_public_items_view.sql',
     'migrations/006_metered_access.sql',
+    'migrations/007_structured_blocks.sql',
   ],
 
   // Surface public resource items in the unified /api/v1/content feed. The
@@ -208,10 +209,63 @@ const structuredResourcesModule: GatewazeModule = {
       },
       '/items/{id}/sections': {
         put: {
-          summary: 'Replace an item\'s full section list (requires resources:write)',
+          summary: 'Replace an item\'s full section list; sections carry content OR typed blocks (requires resources:write)',
           operationId: 'setResourceItemSections',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          responses: { 200: { description: 'Replaced sections' }, 404: { $ref: '#/components/responses/NotFound' } },
+          responses: {
+            200: { description: 'Replaced sections (response echoes persisted sections with blocks and the item version)' },
+            404: { $ref: '#/components/responses/NotFound' },
+            409: { description: 'Version mismatch (if_match) or slug conflict' },
+          },
+        },
+      },
+      '/items/{itemId}/sections/{sectionId}/blocks': {
+        put: {
+          summary: 'Replace one section\'s typed blocks; never touches legacy content (requires resources:write)',
+          operationId: 'setResourceSectionBlocks',
+          parameters: [
+            { name: 'itemId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'sectionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['blocks'],
+                  properties: {
+                    if_match: { type: 'string', description: 'Optional concurrency token (the item version from GET /items/{id}/manage, echoed verbatim)' },
+                    blocks: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        required: ['kind', 'data'],
+                        properties: {
+                          kind: { type: 'string', enum: ['html', 'talk'] },
+                          slug: { type: 'string' },
+                          sort_order: { type: 'integer' },
+                          data: { type: 'object' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Replaced blocks' },
+            404: { $ref: '#/components/responses/NotFound' },
+            409: { description: 'Version mismatch (if_match) or slug conflict' },
+          },
+        },
+      },
+      '/block-kinds': {
+        get: {
+          summary: 'Registered block kinds with their JSON Schemas (requires resources:write)',
+          operationId: 'listResourceBlockKinds',
+          responses: { 200: { description: 'Kind definitions' } },
         },
       },
     },

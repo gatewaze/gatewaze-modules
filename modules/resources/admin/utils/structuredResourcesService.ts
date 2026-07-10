@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { validateBlock, projectSearchText, generateTalkSlug, deriveHtmlSlug } from '../../blocks';
 
 // ============================================================
 // TypeScript interfaces
@@ -536,17 +537,77 @@ export class ItemsService {
 // Sections Service
 // ============================================================
 
+export interface SrBlock {
+  id: string;
+  kind: string;
+  slug: string | null;
+  sort_order: number;
+  data: Record<string, any>;
+}
+
 export class SectionsService {
-  static async getByItem(itemId: string): Promise<ServiceResponse<SrSection[]>> {
+  static async getByItem(itemId: string): Promise<ServiceResponse<(SrSection & { blocks?: SrBlock[] })[]>> {
     try {
       const { data, error } = await supabase
         .from('sr_sections')
-        .select('*')
+        .select('*, blocks:sr_blocks(id, kind, slug, sort_order, data)')
         .eq('item_id', itemId)
         .order('sort_order', { ascending: true });
 
       if (error) throw error;
+      for (const s of data || []) {
+        (s as any).blocks = ((s as any).blocks || []).sort(
+          (a: SrBlock, b: SrBlock) => a.sort_order - b.sort_order || (a.id < b.id ? -1 : 1),
+        );
+      }
       return { success: true, data: data || [] };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Replace ONE section's blocks atomically (sr_replace_section_blocks RPC —
+   * security invoker, so admin RLS still gates every row). Validates through
+   * the module's shared kind registry, applies the talk slug rules, and
+   * computes search_text — the same write-layer duties the manage API
+   * performs, running in the admin bundle.
+   */
+  static async replaceSectionBlocks(
+    itemId: string,
+    sectionId: string,
+    blocks: { kind: string; slug: string | null; sort_order: number; data: Record<string, any> }[],
+    preWriteTalks: Map<string, string>,
+  ): Promise<ServiceResponse<void>> {
+    try {
+      const taken = new Set<string>();
+      const rows = blocks.map((b, i) => ({ ...b, sort_order: i, search_text: null as string | null }));
+      for (let i = 0; i < rows.length; i++) {
+        const block = rows[i];
+        if (block.kind === 'talk' && !block.slug) {
+          const title = typeof block.data.title === 'string' ? block.data.title : '';
+          const reused = preWriteTalks.get(title);
+          block.slug = reused && !taken.has(reused) ? reused : generateTalkSlug(title || 'untitled', taken);
+        }
+        if (block.kind === 'html' && !block.slug && typeof block.data.html === 'string') {
+          block.slug = deriveHtmlSlug(block.data.html);
+        }
+        const issues = validateBlock(block, `blocks[${i}]`);
+        if (issues.length > 0) throw new Error(`${issues[0].path}: ${issues[0].message}`);
+        if (block.slug) {
+          if (taken.has(block.slug)) throw new Error(`blocks[${i}].slug: duplicate slug '${block.slug}'`);
+          taken.add(block.slug);
+        }
+        block.search_text = projectSearchText(block.kind, block.data);
+      }
+      const { error } = await supabase.rpc('sr_replace_section_blocks', {
+        p_item_id: itemId,
+        p_section_id: sectionId,
+        p_blocks: rows,
+        p_expected_version: null,
+      });
+      if (error) throw error;
+      return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
     }
