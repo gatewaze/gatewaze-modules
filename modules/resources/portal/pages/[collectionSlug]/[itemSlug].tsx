@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { convert } from 'html-to-text'
 import { SafeImg } from '../../components/SafeImg'
+import { TocSpy } from '../../components/TocSpy'
 
 interface ItemData {
   id: string
@@ -280,38 +281,9 @@ export default async function ItemDetailPage({ params }: Props) {
         .res-toc-inline { display: none; margin: 12px 0 28px; }
         @media (max-width: 760px) { .res-article-grid { grid-template-columns: 1fr; gap: 24px; } .res-toc { display: none; } .res-toc-inline { display: block; } }
       `}</style>
-      {/* Scrollspy: mark the TOC entry whose section is at the reading line.
-          Plain script (not a client component) so the RSC page stays server-only. */}
-      <script
-        dangerouslySetInnerHTML={{
-          __html: [
-            "(function(){",
-            // the TOC links and sections stream in after this inline script
-            // parses, so poll until they exist before wiring the spy
-            "function init(){",
-            "var links=Array.prototype.slice.call(document.querySelectorAll('.res-toc a[href^=\"#\"], .res-toc-inline a[href^=\"#\"]'));",
-            "if(!links.length)return false;",
-            "var sections=[];",
-            "links.forEach(function(l){var id=decodeURIComponent(l.getAttribute('href').slice(1));var el=document.getElementById(id);if(el&&sections.indexOf(el)<0)sections.push(el);});",
-            "if(!sections.length)return false;",
-            "function setActive(id){links.forEach(function(l){if(decodeURIComponent(l.getAttribute('href').slice(1))===id){l.setAttribute('aria-current','page');}else{l.removeAttribute('aria-current');}});}",
-            "var ticking=false;",
-            // viewport-relative measurement — no scroller assumptions; a
-            // capture listener on document sees scrolls from any container
-            // (signed-out .pub-area, signed-in .gw-content, or the window)
-            "function update(){ticking=false;var cur=sections[0].id;",
-            "sections.forEach(function(s){if(s.getBoundingClientRect().top<=140)cur=s.id;});setActive(cur);}",
-            "function onScroll(){if(!ticking){ticking=true;requestAnimationFrame(update);}}",
-            "document.addEventListener('scroll',onScroll,{passive:true,capture:true});",
-            "update();",
-            "return true;",
-            "}",
-            "function start(){var tries=0;var timer=setInterval(function(){if(init()||++tries>40)clearInterval(timer);},250);if(init())clearInterval(timer);}",
-            "if(document.readyState==='complete'){start();}else{window.addEventListener('load',start);}",
-            "})();",
-          ].join(''),
-        }}
-      />
+      {/* Scrollspy + anchor focus (client component: inline scripts don't
+          run on soft navigations) */}
+      <TocSpy />
       <div className="res-article-grid">
         {/* Left: browse the collection */}
         <aside className="pub-article-side">
