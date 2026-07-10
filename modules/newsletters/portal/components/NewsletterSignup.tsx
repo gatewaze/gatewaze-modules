@@ -1,7 +1,7 @@
 // @ts-nocheck — portal deps are resolved at build time via webpack alias
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getClientBrandConfig } from '@/config/brand'
 import { useAuth } from '@/hooks/useAuth'
 import { ConsentNote } from './ConsentNote'
@@ -21,44 +21,110 @@ import { ConsentNote } from './ConsentNote'
  * emails are theirs — including person_emails aliases — so nobody can query
  * or unsubscribe an address they don't own).
  */
-export function NewsletterSignup({ collectionSlug }: { collectionSlug: string }) {
+
+const fnUrl = () => `${getClientBrandConfig().supabaseUrl}/functions/v1/newsletter-signup`
+
+/**
+ * Signed-in subscription state for one collection.
+ * `sub`: undefined = unknown/loading, null = signed out, else {subscribed, email}.
+ * A FAILED status check never flips an established state (it only settles an
+ * unknown one to not-subscribed) — surfaces like the onboarding morph swap on
+ * this value, so a transient error must not yank a subscribed panel away.
+ */
+export function useNewsletterSubscription(collectionSlug: string) {
   const { user, session } = useAuth()
-  const [email, setEmail] = useState('')
-  const [state, setState] = useState<'idle' | 'submitting' | 'done' | 'invalid' | 'error'>('idle')
-  // Signed-in subscription status: undefined = unknown/loading, null = signed out.
   const [sub, setSub] = useState<{ subscribed: boolean; email: string | null } | null | undefined>(undefined)
   const [unsubState, setUnsubState] = useState<'idle' | 'working' | 'done' | 'error'>('idle')
+  // Token read via ref at call time: keying the effect on the access token
+  // would refetch (and worse, transiently re-decide) on every token refresh.
+  const sessionRef = useRef(session)
+  sessionRef.current = session
 
-  const fnUrl = () => `${getClientBrandConfig().supabaseUrl}/functions/v1/newsletter-signup`
-  const anonHeaders = () => {
-    const config = getClientBrandConfig()
-    return { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey, Authorization: `Bearer ${config.supabaseAnonKey}` }
-  }
-
-  // Prefill + fetch subscription status once the session is known.
   useEffect(() => {
     let cancelled = false
-    if (!session?.access_token || !user) {
+    if (!user) {
       setSub(null)
       return
     }
-    if (user.email) setEmail((prev) => prev || user.email)
+    setSub(undefined)
     ;(async () => {
       try {
         const config = getClientBrandConfig()
+        const token = sessionRef.current?.access_token
+        if (!token) { if (!cancelled) setSub((prev) => prev ?? { subscribed: false, email: null }); return }
         const res = await fetch(fnUrl(), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey, Authorization: `Bearer ${session.access_token}` },
+          headers: { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey, Authorization: `Bearer ${token}` },
           body: JSON.stringify({ action: 'status', collection: collectionSlug }),
         })
-        const data = res.ok ? await res.json() : null
-        if (!cancelled) setSub(data && typeof data.subscribed === 'boolean' ? data : { subscribed: false, email: null })
+        const data = res.ok ? await res.json().catch(() => null) : null
+        if (cancelled) return
+        if (data && typeof data.subscribed === 'boolean') setSub(data)
+        else setSub((prev) => prev ?? { subscribed: false, email: null })
       } catch {
-        if (!cancelled) setSub({ subscribed: false, email: null })
+        if (!cancelled) setSub((prev) => prev ?? { subscribed: false, email: null })
       }
     })()
     return () => { cancelled = true }
-  }, [session?.access_token, user?.id, collectionSlug])
+  }, [user?.id, collectionSlug])
+
+  const unsubscribe = async () => {
+    const token = sessionRef.current?.access_token
+    if (!token) return
+    setUnsubState('working')
+    try {
+      const config = getClientBrandConfig()
+      const res = await fetch(fnUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey, Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'unsubscribe', collection: collectionSlug }),
+      })
+      if (!res.ok) throw new Error()
+      setUnsubState('done')
+      setSub({ subscribed: false, email: null })
+    } catch {
+      setUnsubState('error')
+    }
+  }
+
+  return { user, sub, setSub, unsubState, setUnsubState, unsubscribe }
+}
+
+/** "You're subscribed as … [Unsubscribe]" — shared by the plain form and the
+ *  index page's morph surface (which must not mount the morph in this state). */
+export function SubscribedPanel({ sub, unsubState, unsubscribe }: {
+  sub: { subscribed: boolean; email: string | null }
+  unsubState: 'idle' | 'working' | 'done' | 'error'
+  unsubscribe: () => void
+}) {
+  return (
+    <div className="pub-nl-substate">
+      <p className="pub-nl-signup-msg ok" style={{ margin: '14px 0 10px' }}>
+        ✓ You’re subscribed{sub.email ? <> as <strong>{sub.email}</strong></> : null}.
+      </p>
+      <button type="button" className="pub-nl-unsub-btn" onClick={unsubscribe} disabled={unsubState === 'working'}>
+        {unsubState === 'working' ? 'Unsubscribing…' : 'Unsubscribe'}
+      </button>
+      {unsubState === 'error' && <p className="pub-nl-signup-msg err">Couldn’t unsubscribe right now — please try again.</p>}
+    </div>
+  )
+}
+
+export function NewsletterSignup({ collectionSlug, subscription }: {
+  collectionSlug: string
+  /** Pass a shared useNewsletterSubscription() so a parent surface and this
+   *  form agree on one state (avoids duplicate status fetches). */
+  subscription?: ReturnType<typeof useNewsletterSubscription>
+}) {
+  const own = useNewsletterSubscription(collectionSlug)
+  const { user, sub, setSub, unsubState, unsubscribe } = subscription ?? own
+  const [email, setEmail] = useState('')
+  const [state, setState] = useState<'idle' | 'submitting' | 'done' | 'invalid' | 'error'>('idle')
+
+  // Prefill the signed-in user's address once known.
+  useEffect(() => {
+    if (user?.email) setEmail((prev) => prev || user.email)
+  }, [user?.email])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -66,53 +132,24 @@ export function NewsletterSignup({ collectionSlug }: { collectionSlug: string })
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) { setState('invalid'); return }
     setState('submitting')
     try {
+      const config = getClientBrandConfig()
       const res = await fetch(fnUrl(), {
         method: 'POST',
-        headers: anonHeaders(),
+        headers: { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey, Authorization: `Bearer ${config.supabaseAnonKey}` },
         body: JSON.stringify({ email: value, collection: collectionSlug }),
       })
       if (!res.ok) throw new Error()
       setState('done')
       if (!user) setEmail('')
       setSub((prev) => (prev === null ? null : { subscribed: true, email: value.toLowerCase() }))
-      setUnsubState('idle')
     } catch {
       setState('error')
     }
   }
 
-  const unsubscribe = async () => {
-    if (!session?.access_token) return
-    setUnsubState('working')
-    try {
-      const config = getClientBrandConfig()
-      const res = await fetch(fnUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey, Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ action: 'unsubscribe', collection: collectionSlug }),
-      })
-      if (!res.ok) throw new Error()
-      setUnsubState('done')
-      setSub({ subscribed: false, email: null })
-      setState('idle')
-    } catch {
-      setUnsubState('error')
-    }
-  }
-
   // Signed in + already subscribed → status + unsubscribe instead of the form.
   if (sub?.subscribed) {
-    return (
-      <div className="pub-nl-substate">
-        <p className="pub-nl-signup-msg ok" style={{ margin: '14px 0 10px' }}>
-          ✓ You’re subscribed{sub.email ? <> as <strong>{sub.email}</strong></> : null}.
-        </p>
-        <button type="button" className="pub-nl-unsub-btn" onClick={unsubscribe} disabled={unsubState === 'working'}>
-          {unsubState === 'working' ? 'Unsubscribing…' : 'Unsubscribe'}
-        </button>
-        {unsubState === 'error' && <p className="pub-nl-signup-msg err">Couldn’t unsubscribe right now — please try again.</p>}
-      </div>
-    )
+    return <SubscribedPanel sub={sub} unsubState={unsubState} unsubscribe={unsubscribe} />
   }
 
   if (state === 'done') {
