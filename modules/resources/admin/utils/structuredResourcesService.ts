@@ -660,6 +660,73 @@ export class SectionsService {
 }
 
 // ============================================================
+// Related Pins Service — curated topic -> content pairings consumed by the
+// portal's /api/related-content resolver (pins rank above inferred matches)
+// ============================================================
+
+export interface SrRelatedPin {
+  id: string;
+  topic: string;
+  title: string;
+  href: string;
+  description: string | null;
+  image_url: string | null;
+  card_type: string;
+  sort_order: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type RelatedPinInput = Omit<SrRelatedPin, 'id' | 'created_at' | 'updated_at'>;
+
+export class RelatedPinsService {
+  static async getAll(): Promise<ServiceResponse<SrRelatedPin[]>> {
+    try {
+      const { data, error } = await supabase
+        .from('related_pins')
+        .select('*')
+        .order('topic', { ascending: true })
+        .order('sort_order', { ascending: true });
+      if (error) throw error;
+      return { success: true, data: data || [] };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  static async create(input: RelatedPinInput): Promise<ServiceResponse<SrRelatedPin>> {
+    try {
+      const { data, error } = await supabase.from('related_pins').insert(input).select().single();
+      if (error) throw error;
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  static async update(id: string, input: Partial<RelatedPinInput>): Promise<ServiceResponse<SrRelatedPin>> {
+    try {
+      const { data, error } = await supabase.from('related_pins').update(input).eq('id', id).select().single();
+      if (error) throw error;
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  static async delete(id: string): Promise<ServiceResponse<void>> {
+    try {
+      const { error } = await supabase.from('related_pins').delete().eq('id', id);
+      if (error) throw error;
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+}
+
+// ============================================================
 // Markdown Import Parser
 // ============================================================
 

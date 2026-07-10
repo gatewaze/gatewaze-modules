@@ -9,6 +9,7 @@ import {
   PencilIcon,
   TrashIcon,
   FolderOpenIcon,
+  LinkIcon,
 } from '@heroicons/react/24/outline';
 import { Modal, Button, Input, Card, Badge, ConfirmModal, Select, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
@@ -139,9 +140,14 @@ const CollectionsPage: React.FC = () => {
       <WorkspaceLayout
         title="Resources"
         actions={
-          <Button onClick={openCreate}>
-            <PlusIcon className="h-4 w-4 mr-1" /> New Collection
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => navigate('/resources/related-pins')}>
+              <LinkIcon className="h-4 w-4 mr-1" /> Related Pins
+            </Button>
+            <Button onClick={openCreate}>
+              <PlusIcon className="h-4 w-4 mr-1" /> New Collection
+            </Button>
+          </div>
         }
       >
       {loading ? (

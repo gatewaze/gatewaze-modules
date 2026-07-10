@@ -297,6 +297,12 @@ const structuredResourcesModule: GatewazeModule = {
       requiredFeature: 'resources.import',
       guard: 'admin',
     },
+    {
+      path: 'resources/related-pins',
+      component: () => import('./admin/pages/related-pins/index'),
+      requiredFeature: 'resources',
+      guard: 'admin',
+    },
   ],
 
   adminNavItems: [
