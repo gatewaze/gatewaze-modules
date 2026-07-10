@@ -93,10 +93,29 @@ function expand(panel: HTMLElement): void {
   panel.style.maxHeight = `${panel.scrollHeight + 24}px`
 }
 
+/** Mirror of expand: animate closed, then remove once the transition ends. */
+function collapse(panel: HTMLElement): void {
+  if (panel.dataset.gwClosing) return
+  panel.dataset.gwClosing = '1'
+  panel.classList.remove('gw-rel-open')
+  panel.style.maxHeight = '0px'
+  let done = false
+  const finish = () => {
+    if (done) return
+    done = true
+    const card = panel.parentElement as HTMLElement | null
+    if (card?.dataset) delete card.dataset.gwRel
+    panel.remove()
+  }
+  panel.addEventListener('transitionend', finish, { once: true })
+  window.setTimeout(finish, 600) // fallback: transition is .45s
+}
+
 async function openPanel(cardEl: HTMLElement, itemPath: string): Promise<void> {
-  // one open panel at a time, matching single-video playback
-  document.querySelectorAll(`.${PANEL_CLASS}`).forEach((p) => {
-    if (p.parentElement !== cardEl) p.remove()
+  // one open panel at a time, matching single-video playback — the previous
+  // card's panel animates closed rather than vanishing
+  document.querySelectorAll<HTMLElement>(`.${PANEL_CLASS}`).forEach((p) => {
+    if (p.parentElement !== cardEl) collapse(p)
   })
   // already open, mid-fetch, or known-empty (a zero-height child still adds
   // the card's flex gap, so the DOM is only touched once cards exist)
