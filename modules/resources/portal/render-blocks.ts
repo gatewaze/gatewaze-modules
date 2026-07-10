@@ -163,6 +163,13 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
   const title = data.title ?? ''
   const url = data.url ?? (data.youtube_id ? `https://youtu.be/${data.youtube_id}` : '#')
 
+  // topics ride on the card as a data attribute so the RelatedSpy client
+  // component can resolve cross-promotions on play without another fetch
+  const topics = Array.isArray(data.topics)
+    ? (data.topics as unknown[]).filter((t): t is string => typeof t === 'string' && /^[a-z0-9][a-z0-9-]{0,60}$/.test(t))
+    : []
+  const topicsAttr = topics.length > 0 ? ` data-topics="${topics.join(',')}"` : ''
+
   const speakerList: Array<{ name: string; url?: string; join?: string }> =
     data.speakers && data.speakers.length > 0
       ? data.speakers
@@ -179,7 +186,7 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
   const video = data.youtube_id ? videoEmbed(data.youtube_id, color, title) : ''
 
   return `
-  <div id="${tid}" style="border:1px solid var(--line); border-top:3px solid ${color}; background:var(--paper); border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:14px; scroll-margin-top:96px;">
+  <div id="${tid}"${topicsAttr} style="border:1px solid var(--line); border-top:3px solid ${color}; background:var(--paper); border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:14px; scroll-margin-top:96px;">
     <div style="display:flex; align-items:flex-start; gap:12px;">
       <span style="flex:none; min-width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; background:${color}26; color:${color}; border-radius:9px; font-weight:700; font-size:16px;">${num}</span>
       <div style="min-width:0;">

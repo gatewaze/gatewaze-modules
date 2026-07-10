@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { convert } from 'html-to-text'
 import { SafeImg } from '../../components/SafeImg'
 import { TocSpy } from '../../components/TocSpy'
+import { RelatedSpy } from '../../components/RelatedSpy'
 import { sectionBodyHtml, type SectionWithBlocks } from '../../render-blocks'
 
 interface ItemData {
@@ -297,6 +298,8 @@ export default async function ItemDetailPage({ params }: Props) {
       {/* Scrollspy + anchor focus (client component: inline scripts don't
           run on soft navigations) */}
       <TocSpy />
+      {/* Related-content panel on talk-card video play */}
+      <RelatedSpy />
       <div className="res-article-grid">
         {/* Left: browse the collection */}
         <aside className="pub-article-side">
