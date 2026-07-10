@@ -258,7 +258,7 @@ export default async function ItemDetailPage({ params }: Props) {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <style>{`
         /* the public shell scrolls .pub-area, not the document root */
-        html, .pub-area { scroll-behavior: smooth; }
+        html, .pub-area, .gw-content { scroll-behavior: smooth; }
         .res-article-grid { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 44px; align-items: start; }
         .res-nav-link { display: block; text-decoration: none; padding: 5px 9px; border-radius: 8px; font-size: 13.5px; color: var(--ink-3); transition: background .15s ease, color .15s ease; }
         .res-nav-link:hover { background: rgba(var(--ui-text), 0.06); color: var(--ink); }
@@ -294,13 +294,15 @@ export default async function ItemDetailPage({ params }: Props) {
             "var sections=[];",
             "links.forEach(function(l){var id=decodeURIComponent(l.getAttribute('href').slice(1));var el=document.getElementById(id);if(el&&sections.indexOf(el)<0)sections.push(el);});",
             "if(!sections.length)return false;",
-            "var scroller=document.querySelector('.pub-area')||document.documentElement;",
             "function setActive(id){links.forEach(function(l){if(decodeURIComponent(l.getAttribute('href').slice(1))===id){l.setAttribute('aria-current','page');}else{l.removeAttribute('aria-current');}});}",
             "var ticking=false;",
-            "function update(){ticking=false;var origin=scroller.getBoundingClientRect?scroller.getBoundingClientRect().top:0;var cur=sections[0].id;",
-            "sections.forEach(function(s){if(s.getBoundingClientRect().top-origin<=140)cur=s.id;});setActive(cur);}",
+            // viewport-relative measurement — no scroller assumptions; a
+            // capture listener on document sees scrolls from any container
+            // (signed-out .pub-area, signed-in .gw-content, or the window)
+            "function update(){ticking=false;var cur=sections[0].id;",
+            "sections.forEach(function(s){if(s.getBoundingClientRect().top<=140)cur=s.id;});setActive(cur);}",
             "function onScroll(){if(!ticking){ticking=true;requestAnimationFrame(update);}}",
-            "(scroller===document.documentElement?window:scroller).addEventListener('scroll',onScroll,{passive:true});",
+            "document.addEventListener('scroll',onScroll,{passive:true,capture:true});",
             "update();",
             "return true;",
             "}",

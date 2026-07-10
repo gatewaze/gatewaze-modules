@@ -72,10 +72,15 @@ export default async function ResourceItemAnchorPage({ params, searchParams }: P
     'function go(){var el=document.getElementById(id);if(!el||!el.getClientRects().length)return false;',
     "el.scrollIntoView({block:'start'});",
     "el.style.boxShadow='0 0 0 2px var(--accent)';",
-    'setTimeout(function(){var e2=document.getElementById(id);if(e2)e2.scrollIntoView({block:\'start\'});},500);',
     "setTimeout(function(){el.style.boxShadow='';},4000);return true;}",
-    'var n=0;var t=setInterval(function(){if(go()||++n>80)clearInterval(t);},200);',
-    'if(go())clearInterval(t);',
+    // the signed-in shell hydrates as a client component and can remount its
+    // scroll container, resetting our scroll — re-assert unless the user has
+    // taken over
+    'var cancelled=false;',
+    "['wheel','touchstart','keydown'].forEach(function(ev){window.addEventListener(ev,function(){cancelled=true;},{passive:true,once:true});});",
+    'function settle(){[600,1600,3200].forEach(function(ms){setTimeout(function(){if(!cancelled)go();},ms);});}',
+    'var n=0;var t=setInterval(function(){if(go()){clearInterval(t);settle();}else if(++n>80){clearInterval(t);}},200);',
+    'if(go()){clearInterval(t);settle();}',
     '})();',
   ].join('')
 
