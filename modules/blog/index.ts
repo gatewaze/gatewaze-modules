@@ -44,7 +44,7 @@ const blogModule: GatewazeModule = {
   portalNav: {
     label: 'Blog',
     path: '/blog',
-    icon: 'newspaper',
+    icon: 'file-text',
     order: 20,
   },
   // Workspace-shell rail item (spec-portal-workspace-shell.md §8). Public top-level module.
