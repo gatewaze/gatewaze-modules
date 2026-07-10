@@ -164,10 +164,15 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
   const url = data.url ?? (data.youtube_id ? `https://youtu.be/${data.youtube_id}` : '#')
 
   // topics ride on the card as a data attribute so the RelatedSpy client
-  // component can resolve cross-promotions on play without another fetch
-  const topics = Array.isArray(data.topics)
-    ? (data.topics as unknown[]).filter((t): t is string => typeof t === 'string' && /^[a-z0-9][a-z0-9-]{0,60}$/.test(t))
-    : []
+  // component can resolve cross-promotions on play without another fetch.
+  // Hand-set topics and rule-derived topics_auto (content-keywords sync)
+  // merge here — the resolver matches both.
+  const topicList = ([] as unknown[])
+    .concat(Array.isArray(data.topics) ? data.topics : [])
+    .concat(Array.isArray((data as any).topics_auto) ? (data as any).topics_auto : [])
+  const topics = [...new Set(topicList.filter(
+    (t): t is string => typeof t === 'string' && /^[a-z0-9][a-z0-9-]{0,60}$/.test(t),
+  ))]
   const topicsAttr = topics.length > 0 ? ` data-topics="${topics.join(',')}"` : ''
 
   const speakerList: Array<{ name: string; url?: string; join?: string }> =
