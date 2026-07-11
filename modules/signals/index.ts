@@ -76,7 +76,8 @@ const signalsModule: GatewazeModule = {
 
   adminNavItems: [
     {
-      path: '/signals',
+      // admin-guarded routes mount under the /admin branch of the router
+      path: '/admin/signals',
       label: 'Signals',
       icon: 'Radio',
       requiredFeature: 'signals',

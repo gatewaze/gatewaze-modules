@@ -141,7 +141,7 @@ const CollectionsPage: React.FC = () => {
         title="Resources"
         actions={
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => navigate('/resources/related-pins')}>
+            <Button variant="outline" onClick={() => navigate('/admin/resources/related-pins')}>
               <LinkIcon className="h-4 w-4 mr-1" /> Related Pins
             </Button>
             <Button onClick={openCreate}>
