@@ -103,6 +103,11 @@ function buildCard(card: RelatedCard): HTMLAnchorElement {
   const a = document.createElement('a')
   a.className = 'gw-rel-card'
   a.href = card.href
+  if (/^https?:\/\//.test(card.href)) {
+    // external destination (e.g. a canonical blog article off-portal)
+    a.target = '_blank'
+    a.rel = 'noopener noreferrer'
+  }
   const type = document.createElement('span')
   type.className = 'gw-rel-type'
   type.textContent = card.type
