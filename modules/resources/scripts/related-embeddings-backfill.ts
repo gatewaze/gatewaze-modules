@@ -120,25 +120,30 @@ async function collectUnits(): Promise<Unit[]> {
     });
   }
 
-  // published blog posts
-  const { data: posts } = await supabase
+  // published blog posts — external posts (scraped, canonical elsewhere)
+  // link out to the real article; the full content text feeds the embedding
+  const { data: posts, error: postsErr } = await supabase
     .from('blog_posts')
-    .select('id, title, slug, excerpt, featured_image_url, status')
+    .select('id, title, slug, excerpt, content, featured_image, canonical_url, is_external, status')
     .eq('status', 'published')
     .limit(500);
+  if (postsErr) console.warn(`blog_posts skipped: ${postsErr.message}`);
   for (const p of posts ?? []) {
     if (!p.slug || !p.title) continue;
+    const bodyText = typeof p.content === 'string'
+      ? p.content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+      : '';
     units.push({
       content_type: 'blog_post',
       content_id: p.id,
       item_id: null,
-      href: `/blog/${p.slug}`,
+      href: p.is_external && p.canonical_url ? p.canonical_url : `/blog/${p.slug}`,
       title: p.title,
       card_type: 'blog',
       description: p.excerpt ?? null,
-      image_url: p.featured_image_url ?? null,
+      image_url: p.featured_image ?? null,
       meta: 'Blog',
-      embed_text: clip([p.title, p.excerpt].filter(Boolean).join(' — ')),
+      embed_text: clip([p.title, p.excerpt, bodyText].filter(Boolean).join(' — ')),
     });
   }
 
