@@ -77,7 +77,8 @@ async function collectUnits(): Promise<Unit[]> {
       embed_text: clip([item.title, item.subtitle].filter(Boolean).join(' — ')),
     });
     for (const block of (item.blocks ?? []) as any[]) {
-      if (block.kind !== 'talk' || !block.slug || !block.search_text) continue;
+      // talk + video blocks both carry a talk-shaped render snapshot
+      if ((block.kind !== 'talk' && block.kind !== 'video') || !block.slug || !block.search_text) continue;
       units.push({
         content_type: 'sr_block',
         content_id: block.id,
@@ -145,6 +146,37 @@ async function collectUnits(): Promise<Unit[]> {
       meta: 'Blog',
       embed_text: clip([p.title, p.excerpt, bodyText].filter(Boolean).join(' — ')),
     });
+  }
+
+  // published videos (YouTube-hosted; canonical `videos` table). Guarded — the
+  // videos module may not be installed on every brand.
+  const { data: vids, error: vidsErr } = await supabase
+    .from('videos')
+    .select('id, title, description, url, thumbnail_url, channel_title, speakers, status, visibility')
+    .eq('status', 'published')
+    .eq('visibility', 'public')
+    .limit(1000);
+  if (vidsErr) {
+    console.warn(`videos skipped: ${vidsErr.message}`);
+  } else {
+    for (const v of vids ?? []) {
+      if (!v.id || !v.title) continue;
+      const speakerNames = Array.isArray(v.speakers)
+        ? (v.speakers as any[]).map((s) => s?.name).filter(Boolean).join(', ')
+        : '';
+      units.push({
+        content_type: 'video',
+        content_id: v.id,
+        item_id: null,
+        href: v.url,
+        title: v.title,
+        card_type: 'video',
+        description: v.description ? String(v.description).slice(0, 300) : null,
+        image_url: v.thumbnail_url ?? null,
+        meta: v.channel_title ?? 'Video',
+        embed_text: clip([v.title, v.description, speakerNames].filter(Boolean).join(' — ')),
+      });
+    }
   }
 
   return units.filter((u) => u.embed_text.trim().length > 0);

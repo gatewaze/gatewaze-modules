@@ -21,7 +21,7 @@ function def(rule) {
     minOverlap: Number.isInteger(d.min_overlap) ? d.min_overlap : 1,
     minWeight: typeof d.min_weight === 'number' ? d.min_weight : 1.0,
     content: {
-      types: Array.isArray(d.content?.types) ? d.content.types : ['sr_item', 'event'],
+      types: Array.isArray(d.content?.types) ? d.content.types : ['sr_item', 'event', 'video'],
       hrefs: Array.isArray(d.content?.hrefs) ? d.content.hrefs : [],
     },
     audience: {
@@ -84,6 +84,25 @@ async function contentCandidates(supabase, d) {
       const ref = e.event_slug || e.event_id;
       if (!ref || !e.event_title) continue;
       push({ type: 'event', href: `/events/${ref}`, title: e.event_title });
+    }
+  }
+
+  // published videos whose canonical topics overlap the rule. Guarded — the
+  // videos module may not be installed on every brand (missing table → skip).
+  if (d.content.types.includes('video')) {
+    const { data: videos, error: vErr } = await supabase
+      .from('videos')
+      .select('id, url, title, topics')
+      .overlaps('topics', d.topics)
+      .eq('status', 'published')
+      .eq('visibility', 'public')
+      .order('published_at', { ascending: false })
+      .limit(20);
+    if (!vErr) {
+      for (const v of videos || []) {
+        if (!v.url || !v.title) continue;
+        push({ type: 'video', href: v.url, title: v.title });
+      }
     }
   }
 
@@ -177,7 +196,9 @@ const CHANNELS = {
       title: fire.content_title,
       href,
       description: typeof config.description === 'string' ? config.description : null,
-      card_type: fire.content_type === 'event' ? 'event' : 'resource',
+      card_type: fire.content_type === 'event' ? 'event'
+        : fire.content_type === 'video' ? 'video'
+        : 'resource',
       sort_order: Number.isInteger(config.sort_order) ? config.sort_order : 50,
       active: true,
     });

@@ -24,6 +24,7 @@ const signalsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_signals.sql',
+    'migrations/002_video_play_outcome.sql',
   ],
 
   publicApiScopes: [

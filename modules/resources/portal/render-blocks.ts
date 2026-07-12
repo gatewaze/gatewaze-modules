@@ -227,7 +227,9 @@ function renderBlockHtml(block: SrBlockRow, index: number, ctx: RenderCtx): stri
     if (block.kind === 'html') {
       return typeof block.data?.html === 'string' ? block.data.html : ''
     }
-    if (block.kind === 'talk') {
+    // `video` blocks reference a canonical videos row but carry a talk-shaped
+    // render snapshot (youtube_id/title/speakers), so they share the facade.
+    if (block.kind === 'talk' || block.kind === 'video') {
       return renderTalkCardHtml(block, index, ctx)
     }
     if (typeof block.data?.html === 'string') {
@@ -276,7 +278,7 @@ export function sectionBodyHtml(section: SectionWithBlocks, ctx: RenderCtx): str
     }
   }
   blocks.forEach((block) => {
-    if (block.kind === 'talk') {
+    if (block.kind === 'talk' || block.kind === 'video') {
       talkRun.push(renderBlockHtml(block, talkRun.length, ctx))
     } else {
       flushTalks()
