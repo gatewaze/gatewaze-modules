@@ -15,6 +15,7 @@ export const BLOCK_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,120}$/;
 export const BLOCK_KIND_RE = /^[a-z][a-z0-9_]{0,40}$/;
 export const TOPIC_RE = /^[a-z0-9][a-z0-9-]{0,60}$/;
 export const YOUTUBE_ID_RE = /^[A-Za-z0-9_-]{6,20}$/;
+export const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /** Serialized-data byte ceiling for typed kinds; `html` is bounded by its own field limit. */
 export const TYPED_DATA_MAX_BYTES = 256 * 1024;
@@ -349,9 +350,30 @@ const talkKind: BlockKindDef = {
   },
 };
 
+// A `video` block references a canonical `videos` row by `video_id` and carries
+// a denormalized render snapshot (`youtube_id`, `title`, speakers) captured at
+// author time, so the renderer stays a pure function (reuses the talk facade)
+// while `video_id` remains the durable link for dedup/linkage. Curation
+// overrides (worth_noting, quote, topics, accent) behave exactly like talk.
+const videoKind: BlockKindDef = {
+  kind: 'video',
+  requireSlug: true,
+  jsonSchema: {
+    type: 'object',
+    required: ['video_id', 'title'],
+    properties: {
+      video_id: { type: 'string', pattern: UUID_RE.source },
+      ...talkKind.jsonSchema.properties,
+    },
+    additionalProperties: true,
+  },
+  searchText: talkKind.searchText,
+};
+
 export const BLOCK_KINDS: Record<string, BlockKindDef> = {
   html: htmlKind,
   talk: talkKind,
+  video: videoKind,
 };
 
 // ── Write-layer entry points ────────────────────────────────────────────────
