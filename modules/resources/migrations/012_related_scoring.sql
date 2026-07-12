@@ -15,7 +15,7 @@ create or replace function related_score_hrefs(
 )
 returns table (href text, similarity real)
 language sql stable security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
   with src as (
     select embedding from public.related_embeddings
