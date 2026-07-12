@@ -7,6 +7,7 @@ import { convert } from 'html-to-text'
 import { SafeImg } from '../../components/SafeImg'
 import { TocSpy } from '../../components/TocSpy'
 import { RelatedSpy } from '../../components/RelatedSpy'
+import { RelatedInline } from '@/components/RelatedInline'
 import { sectionBodyHtml, type SectionWithBlocks } from '../../render-blocks'
 
 interface ItemData {
@@ -413,6 +414,11 @@ export default async function ItemDetailPage({ params }: Props) {
               </div>
             </div>
           )}
+
+          {/* Related content — the resolver derives topics from the item's
+              blocks and gates on relevance; renders nothing when no card
+              clears the bar */}
+          {!gated && <RelatedInline sourceType="sr_item" sourceId={item.id} surface="resource_item" />}
 
           {/* Previous/Next navigation */}
           {!gated && (prevItem || nextItem) && (
