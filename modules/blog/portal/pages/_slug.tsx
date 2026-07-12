@@ -4,6 +4,7 @@ import { headers } from 'next/headers'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { convert } from 'html-to-text'
+import { RelatedInline } from '@/components/RelatedInline'
 
 interface BlogPost {
   id: string
@@ -185,6 +186,10 @@ export default async function BlogDetailPage({ params }: Props) {
           ) : (
             <div className="pub-body" dangerouslySetInnerHTML={{ __html: post.content }} />
           )}
+
+          {/* Related content — topics derive from the post's keyword matches;
+              relevance-gated server-side, renders nothing when nothing clears */}
+          <RelatedInline sourceType="blog_post" sourceId={post.id} surface="blog_post" />
         </article>
 
         <aside className="pub-article-side">
