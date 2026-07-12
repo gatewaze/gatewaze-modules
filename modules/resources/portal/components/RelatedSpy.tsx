@@ -35,23 +35,24 @@ const PANEL_CSS = `
 .${PANEL_CLASS}.gw-rel-open { opacity: 1; }
 .${PANEL_CLASS} .gw-rel-inner { border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
 .${PANEL_CLASS} .gw-rel-label { font-size: 12px; font-weight: 700; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; }
-.${PANEL_CLASS} .gw-rel-carousel { position: relative; }
+.${PANEL_CLASS} .gw-rel-carousel { position: relative; container-type: inline-size; }
 .${PANEL_CLASS} .gw-rel-track { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .${PANEL_CLASS} .gw-rel-track::-webkit-scrollbar { display: none; }
 .${PANEL_CLASS} a.gw-rel-card { flex: 0 0 calc((100% - 20px) / 3); scroll-snap-align: start; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: rgba(var(--ui-text), 0.03); text-decoration: none !important; color: inherit; transition: background .15s ease, border-color .15s ease; min-width: 0; }
 .${PANEL_CLASS} a.gw-rel-card:hover { background: rgba(var(--ui-text), 0.07); border-color: var(--accent); }
-@media (max-width: 900px) { .${PANEL_CLASS} a.gw-rel-card { flex-basis: calc((100% - 10px) / 2); } }
-@media (max-width: 560px) { .${PANEL_CLASS} a.gw-rel-card { flex-basis: 80%; } }
+@container (max-width: 700px) { .${PANEL_CLASS} a.gw-rel-card { flex-basis: calc((100% - 10px) / 2); } }
+@container (max-width: 460px) { .${PANEL_CLASS} a.gw-rel-card { flex-basis: 80%; } }
 .${PANEL_CLASS} .gw-rel-img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 7px; background: rgba(var(--ui-text), 0.06); }
 .${PANEL_CLASS} .gw-rel-type { font-size: 10.5px; font-weight: 700; color: var(--accent); letter-spacing: .05em; text-transform: uppercase; }
 .${PANEL_CLASS} .gw-rel-title { font-size: 13.5px; font-weight: 600; color: var(--ink); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .${PANEL_CLASS} .gw-rel-desc { font-size: 12.5px; color: var(--ink-3); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .${PANEL_CLASS} .gw-rel-meta { font-size: 11.5px; color: var(--ink-3); margin-top: auto; padding-top: 2px; }
-.${PANEL_CLASS} .gw-rel-arrow { position: absolute; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: var(--paper); color: var(--ink); display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 2; box-shadow: 0 2px 10px rgba(0, 0, 0, .28); font-size: 15px; line-height: 1; padding: 0; }
-.${PANEL_CLASS} .gw-rel-arrow:hover { border-color: var(--accent); }
+.${PANEL_CLASS} .gw-rel-arrow { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--accent); color: #111; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 2; box-shadow: 0 4px 16px rgba(0, 0, 0, .4); padding: 0; transition: transform .15s ease, box-shadow .15s ease; }
+.${PANEL_CLASS} .gw-rel-arrow:hover { transform: translateY(-50%) scale(1.08); box-shadow: 0 6px 20px rgba(0, 0, 0, .5); }
+.${PANEL_CLASS} .gw-rel-arrow svg { display: block; }
 .${PANEL_CLASS} .gw-rel-arrow[data-off='1'] { display: none; }
-.${PANEL_CLASS} .gw-rel-arrow-left { left: -12px; }
-.${PANEL_CLASS} .gw-rel-arrow-right { right: -12px; }
+.${PANEL_CLASS} .gw-rel-arrow-left { left: 8px; }
+.${PANEL_CLASS} .gw-rel-arrow-right { right: 8px; }
 `
 
 // Coarse visitor location for nearby-event ranking — shares the portal's
@@ -167,7 +168,10 @@ function buildCarousel(cardEls: HTMLAnchorElement[]): HTMLDivElement {
     btn.type = 'button'
     btn.className = `gw-rel-arrow gw-rel-arrow-${dir === 1 ? 'right' : 'left'}`
     btn.setAttribute('aria-label', dir === 1 ? 'More related items' : 'Previous related items')
-    btn.textContent = dir === 1 ? '›' : '‹'
+    btn.innerHTML =
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' +
+      (dir === 1 ? 'm9 18 6-6-6-6' : 'm15 18-6-6 6-6') + '"/></svg>'
     btn.addEventListener('click', (e) => {
       e.preventDefault()
       const card = track.querySelector<HTMLElement>('a.gw-rel-card')
