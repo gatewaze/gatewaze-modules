@@ -23,10 +23,13 @@
  */
 export function normalizeServiceResponse(serviceResult, opts = {}) {
   const next = serviceResult?.nextData ?? null;
-  const data =
-    next?.props?.pageProps?.initialData?.data ||
-    next?.props?.pageProps?.data ||
-    null;
+  // The scrapling-fetcher service returns next_data already unwrapped to
+  // `{ buildId, pageProps }`, whereas Puppeteer-scraped __NEXT_DATA__ is
+  // `{ props: { pageProps }, … }`. Resolve pageProps under either shape — a
+  // mismatch here silently nulls `event`, so the cover image (and every other
+  // page-derived field) is lost and the portal falls back to the OG image.
+  const pageProps = next?.props?.pageProps ?? next?.pageProps ?? null;
+  const data = pageProps?.initialData?.data || pageProps?.data || null;
   const event = data?.event ?? null;
 
   const lumaData = event
@@ -56,8 +59,15 @@ export function normalizeServiceResponse(serviceResult, opts = {}) {
   const lumaPageData = next ? structuredClone(next) : null;
   if (lumaPageData) {
     try {
-      delete lumaPageData.props?.pageProps?.initialData?.data?.guests;
-      delete lumaPageData.props?.pageProps?.initialData?.data?.user;
+      // Same dual-shape resolution as above so the guest/user PII strip
+      // actually targets the persisted blob (it was a no-op on the
+      // scrapling-fetcher shape).
+      const clonedData = (lumaPageData.props?.pageProps ?? lumaPageData.pageProps)
+        ?.initialData?.data;
+      if (clonedData) {
+        delete clonedData.guests;
+        delete clonedData.user;
+      }
     } catch {
       /* ignore */
     }
