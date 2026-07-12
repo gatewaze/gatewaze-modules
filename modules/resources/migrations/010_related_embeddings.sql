@@ -54,7 +54,7 @@ returns table (
   description text, image_url text, meta text, similarity real
 )
 language sql stable security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
   with src as (
     select e.embedding, e.item_id, e.content_id
