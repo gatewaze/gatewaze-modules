@@ -47,6 +47,12 @@ async function embed(texts: string[]): Promise<number[][]> {
   return payload.data.map((d) => d.embedding);
 }
 
+/** sr_block_transcripts is 1:1 but PostgREST returns it as object-or-array. */
+function extractTranscript(rel: unknown): string {
+  const row = Array.isArray(rel) ? rel[0] : rel;
+  return (row as { transcript?: string } | null)?.transcript ?? '';
+}
+
 function clip(s: string, max = 6000): string {
   return s.length > max ? s.slice(0, max) : s;
 }
@@ -57,7 +63,7 @@ async function collectUnits(): Promise<Unit[]> {
   // published resource items + their talk blocks
   const { data: items, error: itemsErr } = await supabase
     .from('sr_items')
-    .select('id, title, subtitle, slug, featured_image_url, status, collection:sr_collections(slug, name, status, access), blocks:sr_blocks(id, kind, slug, search_text, data)')
+    .select('id, title, subtitle, slug, featured_image_url, status, collection:sr_collections(slug, name, status, access), blocks:sr_blocks(id, kind, slug, search_text, data, transcript:sr_block_transcripts(transcript))')
     .eq('status', 'published');
   if (itemsErr) throw new Error(itemsErr.message);
   for (const item of items ?? []) {
@@ -89,7 +95,11 @@ async function collectUnits(): Promise<Unit[]> {
         description: block.data?.worth_noting ?? null,
         image_url: block.data?.youtube_id ? `https://i.ytimg.com/vi/${block.data.youtube_id}/hqdefault.jpg` : null,
         meta: item.title,
-        embed_text: clip(block.search_text),
+        // prefer what was actually said: card summary + transcript, clipped
+        // like blog bodies. Falls back to the card text when no transcript.
+        embed_text: clip(
+          [block.search_text, extractTranscript(block.transcript)].filter(Boolean).join('\n'),
+        ),
       });
     }
   }
