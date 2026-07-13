@@ -47,6 +47,12 @@ async function embed(texts: string[]): Promise<number[][]> {
   return payload.data.map((d) => d.embedding);
 }
 
+/** sr_block_transcripts is 1:1 but PostgREST returns it as object-or-array. */
+function extractTranscript(rel: unknown): string {
+  const row = Array.isArray(rel) ? rel[0] : rel;
+  return (row as { transcript?: string } | null)?.transcript ?? '';
+}
+
 function clip(s: string, max = 6000): string {
   return s.length > max ? s.slice(0, max) : s;
 }
@@ -57,7 +63,7 @@ async function collectUnits(): Promise<Unit[]> {
   // published resource items + their talk blocks
   const { data: items, error: itemsErr } = await supabase
     .from('sr_items')
-    .select('id, title, subtitle, slug, featured_image_url, status, collection:sr_collections(slug, name, status, access), blocks:sr_blocks(id, kind, slug, search_text, data)')
+    .select('id, title, subtitle, slug, featured_image_url, status, collection:sr_collections(slug, name, status, access), blocks:sr_blocks(id, kind, slug, search_text, data, transcript:sr_block_transcripts(transcript))')
     .eq('status', 'published');
   if (itemsErr) throw new Error(itemsErr.message);
   for (const item of items ?? []) {
@@ -77,7 +83,8 @@ async function collectUnits(): Promise<Unit[]> {
       embed_text: clip([item.title, item.subtitle].filter(Boolean).join(' — ')),
     });
     for (const block of (item.blocks ?? []) as any[]) {
-      if (block.kind !== 'talk' || !block.slug || !block.search_text) continue;
+      // talk + video blocks both carry a talk-shaped render snapshot
+      if ((block.kind !== 'talk' && block.kind !== 'video') || !block.slug || !block.search_text) continue;
       units.push({
         content_type: 'sr_block',
         content_id: block.id,
@@ -88,7 +95,11 @@ async function collectUnits(): Promise<Unit[]> {
         description: block.data?.worth_noting ?? null,
         image_url: block.data?.youtube_id ? `https://i.ytimg.com/vi/${block.data.youtube_id}/hqdefault.jpg` : null,
         meta: item.title,
-        embed_text: clip(block.search_text),
+        // prefer what was actually said: card summary + transcript, clipped
+        // like blog bodies. Falls back to the card text when no transcript.
+        embed_text: clip(
+          [block.search_text, extractTranscript(block.transcript)].filter(Boolean).join('\n'),
+        ),
       });
     }
   }
@@ -145,6 +156,39 @@ async function collectUnits(): Promise<Unit[]> {
       meta: 'Blog',
       embed_text: clip([p.title, p.excerpt, bodyText].filter(Boolean).join(' — ')),
     });
+  }
+
+  // published videos (YouTube-hosted; canonical `videos` table). Guarded — the
+  // videos module may not be installed on every brand.
+  const { data: vids, error: vidsErr } = await supabase
+    .from('videos')
+    .select('id, title, description, url, thumbnail_url, channel_title, speakers, status, visibility')
+    .eq('status', 'published')
+    .eq('visibility', 'public')
+    .limit(1000);
+  if (vidsErr) {
+    console.warn(`videos skipped: ${vidsErr.message}`);
+  } else {
+    for (const v of vids ?? []) {
+      if (!v.id || !v.title) continue;
+      const speakerNames = Array.isArray(v.speakers)
+        ? (v.speakers as any[]).map((s) => s?.name).filter(Boolean).join(', ')
+        : '';
+      units.push({
+        content_type: 'video',
+        content_id: v.id,
+        item_id: null,
+        // in-portal video page (not the external YouTube url) so a related
+        // click keeps the visitor on-site; the page embeds the recording
+        href: `/videos/${v.id}`,
+        title: v.title,
+        card_type: 'video',
+        description: v.description ? String(v.description).slice(0, 300) : null,
+        image_url: v.thumbnail_url ?? null,
+        meta: v.channel_title ?? 'Video',
+        embed_text: clip([v.title, v.description, speakerNames].filter(Boolean).join(' — ')),
+      });
+    }
   }
 
   return units.filter((u) => u.embed_text.trim().length > 0);

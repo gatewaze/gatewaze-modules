@@ -26,6 +26,8 @@ const videosModule: GatewazeModule = {
     'migrations/002_register_with_platform.sql',
     'migrations/003_keyword_adapter.sql',
     'migrations/004_triage_adapter.sql',
+    'migrations/005_rls.sql',
+    'migrations/006_event_link_rpcs.sql',
   ],
 
   apiRoutes: async (app: unknown) => {
