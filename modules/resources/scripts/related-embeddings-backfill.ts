@@ -34,6 +34,8 @@ interface Unit {
   image_url: string | null;
   meta: string | null;
   embed_text: string;
+  /** publication date for recency-aware ranking; null = undated (no decay) */
+  published_at: string | null;
 }
 
 async function embed(texts: string[]): Promise<number[][]> {
@@ -81,6 +83,7 @@ async function collectUnits(): Promise<Unit[]> {
       image_url: item.featured_image_url ?? null,
       meta: collection.name,
       embed_text: clip([item.title, item.subtitle].filter(Boolean).join(' — ')),
+      published_at: null,
     });
     for (const block of (item.blocks ?? []) as any[]) {
       // talk + video blocks both carry a talk-shaped render snapshot
@@ -100,6 +103,7 @@ async function collectUnits(): Promise<Unit[]> {
         embed_text: clip(
           [block.search_text, extractTranscript(block.transcript)].filter(Boolean).join('\n'),
         ),
+        published_at: null,
       });
     }
   }
@@ -107,7 +111,7 @@ async function collectUnits(): Promise<Unit[]> {
   // listed upcoming events
   const { data: events } = await supabase
     .from('events')
-    .select('id, event_id, event_title, event_description, event_start, event_city, event_country_code, event_featured_image, event_slug')
+    .select('id, event_id, event_title, event_description, listing_intro, page_content, event_start, event_city, event_country_code, event_featured_image, screenshot_url, event_slug')
     .eq('is_listed', true)
     .gt('event_start', new Date().toISOString());
   for (const e of events ?? []) {
@@ -125,9 +129,19 @@ async function collectUnits(): Promise<Unit[]> {
       title: e.event_title,
       card_type: 'event',
       description: null,
-      image_url: e.event_featured_image ?? null,
+      image_url: e.event_featured_image ?? e.screenshot_url ?? null,
       meta: [when, where].filter(Boolean).join(' · '),
-      embed_text: clip([e.event_title, e.event_description].filter(Boolean).join(' — ')),
+      // description is often empty on scraped events — fall through to the
+      // listing intro and the scraped page body so the embedding has meaning
+      embed_text: clip([
+        e.event_title,
+        e.event_description,
+        e.listing_intro,
+        typeof e.page_content === 'string'
+          ? e.page_content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+          : '',
+      ].filter(Boolean).join(' — ')),
+      published_at: null,
     });
   }
 
@@ -135,7 +149,7 @@ async function collectUnits(): Promise<Unit[]> {
   // link out to the real article; the full content text feeds the embedding
   const { data: posts, error: postsErr } = await supabase
     .from('blog_posts')
-    .select('id, title, slug, excerpt, content, featured_image, canonical_url, is_external, status')
+    .select('id, title, slug, excerpt, content, featured_image, canonical_url, is_external, status, published_at')
     .eq('status', 'published')
     .limit(500);
   if (postsErr) console.warn(`blog_posts skipped: ${postsErr.message}`);
@@ -155,6 +169,7 @@ async function collectUnits(): Promise<Unit[]> {
       image_url: p.featured_image ?? null,
       meta: 'Blog',
       embed_text: clip([p.title, p.excerpt, bodyText].filter(Boolean).join(' — ')),
+      published_at: p.published_at ?? null,
     });
   }
 
@@ -162,7 +177,7 @@ async function collectUnits(): Promise<Unit[]> {
   // videos module may not be installed on every brand.
   const { data: vids, error: vidsErr } = await supabase
     .from('videos')
-    .select('id, title, description, url, thumbnail_url, channel_title, speakers, status, visibility')
+    .select('id, title, description, url, thumbnail_url, channel_title, speakers, status, visibility, published_at, created_at')
     .eq('status', 'published')
     .eq('visibility', 'public')
     .limit(1000);
@@ -187,6 +202,7 @@ async function collectUnits(): Promise<Unit[]> {
         image_url: v.thumbnail_url ?? null,
         meta: v.channel_title ?? 'Video',
         embed_text: clip([v.title, v.description, speakerNames].filter(Boolean).join(' — ')),
+        published_at: v.published_at ?? v.created_at ?? null,
       });
     }
   }
@@ -225,6 +241,22 @@ async function main() {
     if (error) throw new Error(error.message);
     console.log(`embedded ${Math.min(i + 64, todo.length)}/${todo.length}`);
   }
+
+  // rows skipped as text-fresh still get their card metadata refreshed —
+  // hrefs, images and published_at change without the embed text changing
+  const freshUnits = units.filter((u) => fresh.has(`${u.content_type}:${u.content_id}:${u.embed_text}`));
+  for (const u of freshUnits) {
+    await supabase
+      .from('related_embeddings')
+      .update({
+        href: u.href, title: u.title, card_type: u.card_type,
+        description: u.description, image_url: u.image_url, meta: u.meta,
+        item_id: u.item_id, published_at: u.published_at,
+      })
+      .eq('content_type', u.content_type)
+      .eq('content_id', u.content_id);
+  }
+  if (freshUnits.length) console.log(`metadata refreshed for ${freshUnits.length} up-to-date rows`);
 
   // drop rows whose source vanished (unpublished/deleted)
   const liveKeys = new Set(units.map((u) => `${u.content_type}:${u.content_id}`));
