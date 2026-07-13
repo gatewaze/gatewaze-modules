@@ -68,7 +68,7 @@ import { EventQrService, EventRegistration, EventAttendance } from '@/utils/even
 import { useAuthContext } from '@/app/contexts/auth/context';
 import { ModuleSlot } from '@/components/ModuleSlot';
 import { getBrandId } from '@/utils/brandUtils';
-import { getPortalDomain } from '@/config/brands';
+import { getPortalUrl } from '@/config/brands';
 import { AddPersonModal } from '@/components/events/AddPersonModal';
 import { BulkRegistrationUpload } from '@/components/events/BulkRegistrationUpload';
 import { BulkAttendanceUpload } from '@/components/events/BulkAttendanceUpload';
@@ -655,17 +655,18 @@ const EventDetailPage = () => {
 
         {/* View on portal — opens the public event page in a new tab.
             Honours custom domain when set + verified, otherwise falls back
-            to the brand portal at /events/<eventId>. Uses http:// for
-            *.localhost domains so local dev works (no TLS); https://
-            everywhere else. */}
+            to the brand portal at /events/<eventId>. getPortalUrl()
+            resolves the portal origin (VITE_PORTAL_DOMAIN / VITE_PORTAL_URL
+            / derived from the admin hostname) with http:// for *.localhost
+            so local dev works (no TLS); https:// everywhere else. */}
         <div className="absolute top-6 z-10" style={{ right: 'calc(var(--margin-x) + 1.5rem)' }}>
           <a
             href={(() => {
-              const host = event.customDomain && event.customDomainStatus === 'active'
-                ? event.customDomain
-                : `${getPortalDomain()}/events/${event.eventId}`;
-              const isLocal = /(^|\.)localhost(:|$|\/)/.test(host) || host.includes('://localhost');
-              return `${isLocal ? 'http' : 'https'}://${host}`;
+              if (event.customDomain && event.customDomainStatus === 'active') {
+                const isLocal = /(^|\.)localhost(:\d+)?$/.test(event.customDomain);
+                return `${isLocal ? 'http' : 'https'}://${event.customDomain}`;
+              }
+              return `${getPortalUrl()}/events/${event.eventId}`;
             })()}
             target="_blank"
             rel="noopener noreferrer"
