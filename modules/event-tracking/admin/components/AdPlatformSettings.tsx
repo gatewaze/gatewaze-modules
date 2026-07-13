@@ -12,7 +12,7 @@ import {
 import { toast } from 'sonner';
 import { Button, Card, Input } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
-import { getPortalDomain } from '@/config/brands';
+import { getPortalUrl } from '@/config/brands';
 
 interface AdPlatformConfig {
   id: string;
@@ -102,9 +102,8 @@ export function AdPlatformSettings({ eventId, accountId, eventSlug }: AdPlatform
   // Form state for each platform
   const [formData, setFormData] = useState<Record<string, Record<string, string>>>({});
 
-  const portalDomain = getPortalDomain();
   const eventPath = eventSlug || eventId;
-  const baseEventUrl = eventPath ? `https://${portalDomain}/e/${eventPath}` : null;
+  const baseEventUrl = eventPath ? `${getPortalUrl()}/e/${eventPath}` : null;
 
   // Fetch existing configs
   const fetchConfigs = async () => {
