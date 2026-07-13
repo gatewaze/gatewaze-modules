@@ -59,6 +59,7 @@ const scrapersModule: GatewazeModule = {
     'migrations/017_default_publish_state.sql',
     'migrations/018_fast_vs_slow_comparison.sql',
     'migrations/019_started_at_on_pickup.sql',
+    'migrations/020_event_type_manual_wins.sql',
   ],
 
   adminRoutes: [
