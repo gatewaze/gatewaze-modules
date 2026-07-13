@@ -168,7 +168,9 @@ async function collectUnits(): Promise<Unit[]> {
         content_type: 'video',
         content_id: v.id,
         item_id: null,
-        href: v.url,
+        // in-portal video page (not the external YouTube url) so a related
+        // click keeps the visitor on-site; the page embeds the recording
+        href: `/videos/${v.id}`,
         title: v.title,
         card_type: 'video',
         description: v.description ? String(v.description).slice(0, 300) : null,
