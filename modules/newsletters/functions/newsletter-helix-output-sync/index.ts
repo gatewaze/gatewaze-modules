@@ -97,6 +97,15 @@ async function fetchOutputHtml(
   return typeof fileData.content === 'string' ? fileData.content : null
 }
 
+// Stable, cheap fingerprint of a field's HTML. Lets a re-sync detect whether
+// the operator hand-edited an AI field since it was last imported, so we don't
+// silently clobber their edits (djb2).
+function fingerprint(s: string): string {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return String(h >>> 0)
+}
+
 function findHelixFields(content: Record<string, unknown>): Array<{
   field: string
   taskId: string
@@ -123,12 +132,18 @@ async function handler(req: Request) {
   // Optional targeted sync: POST { task_id } from the admin UI to sync
   // a single task immediately instead of waiting for the cron tick.
   let onlyTaskId: string | undefined
+  let onlyEditionId: string | undefined
+  let force = false
   if (req.method === 'POST') {
     try {
       const body = await req.json().catch(() => ({}))
-      if (typeof body?.task_id === 'string' && body.task_id) {
-        onlyTaskId = body.task_id
-      }
+      if (typeof body?.task_id === 'string' && body.task_id) onlyTaskId = body.task_id
+      // Scope the sync to one edition (a manual 'Sync now' from the editor) so
+      // it can't touch blocks in other editions.
+      if (typeof body?.edition_id === 'string' && body.edition_id) onlyEditionId = body.edition_id
+      // Explicit opt-in to overwrite a field the operator hand-edited since the
+      // last import (see the hand-edit guard below).
+      force = body?.force === true
     } catch {
       // ignore — empty body is fine for full-scan mode
     }
@@ -153,9 +168,12 @@ async function handler(req: Request) {
 
   // Fetch every block. We filter in JS because the field name is dynamic
   // (`<field>_helix_task_id` lives at unknown keys in the JSONB column).
-  const { data: blocks, error: queryError } = await supabase
+  const blocksQuery = supabase
     .from('newsletters_edition_blocks')
     .select('id, content')
+    .is('deleted_at', null)              // never resurrect content into a soft-deleted block
+  if (onlyEditionId) blocksQuery.eq('edition_id', onlyEditionId)
+  const { data: blocks, error: queryError } = await blocksQuery
 
   if (queryError) {
     console.error('failed to fetch blocks:', queryError)
@@ -188,10 +206,32 @@ async function handler(req: Request) {
         continue
       }
 
+      // Hand-edit protection: if the operator changed this AI field since it was
+      // last imported, re-importing would silently overwrite their edits. Skip
+      // unless force=true. Detected by comparing the current field's fingerprint
+      // to the one stored at last import.
+      const storedHash = content[`${field}_helix_output_hash`]
+      if (
+        !force &&
+        typeof storedHash === 'string' &&
+        typeof content[field] === 'string' &&
+        fingerprint(content[field] as string) !== storedHash
+      ) {
+        results.push({
+          block_id: block.id,
+          field,
+          task_id: taskId,
+          imported: false,
+          reason: 'field edited since last import — pass force:true to overwrite',
+        })
+        continue
+      }
+
       const newContent = {
         ...content,
         [field]: html,
         [`${field}_helix_output_imported_at`]: new Date().toISOString(),
+        [`${field}_helix_output_hash`]: fingerprint(html),
       }
 
       const { error: updateError } = await supabase

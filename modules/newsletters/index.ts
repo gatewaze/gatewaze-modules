@@ -314,6 +314,11 @@ const newslettersModule: GatewazeModule = {
     // target occurrence instead of resolving to a past instant (which blasted
     // the whole queue at once when scheduled_at was later than target_local).
     'migrations/068_fanout_tz_local_roll_forward.sql',
+    // 069 adds safe, concurrency-controlled edition saving: version column,
+    // block/brick soft-delete, revision snapshots, and the atomic
+    // newsletters_save_edition / restore RPCs (replaces the destructive
+    // delete-all-then-reinsert client save).
+    'migrations/069_edition_safe_save.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

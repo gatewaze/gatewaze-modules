@@ -18,6 +18,7 @@ import { NewsletterCanvasEditor } from '../../components/puck/NewsletterCanvasEd
 import { EditionSendingTab } from '../../components/EditionSendingTab';
 import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
+import { useEditionPresence } from '../../hooks/useEditionPresence';
 import { stripStorageUrlsInJson, resolveStoragePathsInJson } from '@gatewaze/shared';
 import {
   type NewsletterEdition,
@@ -118,6 +119,14 @@ export default function EditionEditorPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [edition, setEdition] = useState<NewsletterEdition | null>(null);
+  // Optimistic-lock counter: the newsletters_editions.version we loaded. Sent
+  // with each save so newsletters_save_edition can reject a stale write (a
+  // second tab / session / any writer that changed the edition since we loaded)
+  // instead of silently clobbering it. Updated from the RPC result on success.
+  const editionVersionRef = useRef<number>(0);
+  // Other operators currently in this edition (realtime presence). Drives the
+  // "also editing" banner; the optimistic lock is what actually prevents a clobber.
+  const presencePeers = useEditionPresence(edition?.id ?? null);
   const [blockTemplates, setBlockTemplates] = useState<(DbBlockTemplate & BlockTemplate)[]>([]);
   const [brickTemplates, setBrickTemplates] = useState<BrickTemplate[]>([]);
   const [collectionId, setCollectionId] = useState<string | null>(null);
@@ -353,6 +362,9 @@ export default function EditionEditorPage() {
     try {
       const { data: editionData, error: editionError } = await supabase.from('newsletters_editions').select('*').eq('id', id).single();
       if (editionError) throw editionError;
+      // Track the loaded version for optimistic-locked saves (0 if the column
+      // isn't present yet — pre-migration environments still save fine).
+      editionVersionRef.current = typeof editionData.version === 'number' ? editionData.version : 0;
 
       if (editionData.collection_id) {
         setCollectionId(editionData.collection_id);
@@ -363,6 +375,7 @@ export default function EditionEditorPage() {
         .from('newsletters_edition_blocks')
         .select('*, block_template:templates_block_defs!templates_block_def_id(id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key)')
         .eq('edition_id', id)
+        .is('deleted_at', null)   // exclude soft-deleted blocks (migration 069)
         .order('sort_order');
       if (blocksError) throw blocksError;
 
@@ -373,6 +386,7 @@ export default function EditionEditorPage() {
           .from('newsletters_edition_bricks')
           .select('*, brick_template:templates_brick_defs!templates_brick_def_id(id, block_def_id, key, name, schema, html, rich_text_template, sort_order, brick_type:key, render_kind, component_id)')
           .in('block_id', blockIds)
+          .is('deleted_at', null)   // exclude soft-deleted bricks (migration 069)
           .order('sort_order');
         if (bricksError) throw bricksError;
         bricksData = bricks || [];
@@ -566,77 +580,70 @@ export default function EditionEditorPage() {
           navigate(`${edBasePath}/${newEdition.id}/editor`, { replace: true });
         }
       } else {
-        const { error: updateErr } = await supabase.from('newsletters_editions').update({
-          edition_date: edition.edition_date, title: edition.subject || 'Untitled',
-          preheader: edition.preheader || null, content_category: collection?.content_category || null,
-          updated_at: new Date().toISOString(),
-        }).eq('id', edition.id);
-        if (updateErr) { console.error('Update edition error:', updateErr); throw updateErr; }
-
-        const { error: deleteErr } = await supabase.from('newsletters_edition_blocks').delete().eq('edition_id', edition.id);
-        if (deleteErr) { console.error('Delete blocks error:', deleteErr); throw deleteErr; }
-
-        for (const block of edition.blocks) {
-          // Registry blocks (render_kind='react-email') carry a synthesised
-          // BlockTemplate with `id: ''` from puckDataToEdition — there's no
-          // matching `templates_block_defs` row to point at. Persist as
-          // NULL templates_block_def_id; `block_type` carries the registry
-          // componentId so the load path can synthesise the template back.
-          // Per spec-builder-evaluation §3.6 (extended).
-          const tplDefId = block.block_template.id && block.block_template.id !== ''
-            ? block.block_template.id
-            : null;
-          const { data: blockRows, error: blockInsertErr } = await supabase
-            .from('newsletters_edition_blocks')
-            .insert({
-              id: block.id,
-              edition_id: edition.id,
-              templates_block_def_id: tplDefId,
-              block_type: block.block_template.block_type,
-              content: stripStorageUrlsInJson(block.content),
-              sort_order: block.sort_order,
-            })
-            .select();
-          if (blockInsertErr) {
-            console.error('Block insert error:', blockInsertErr);
-            throw blockInsertErr;
+        // Atomic, concurrency-controlled save (migration 069's
+        // newsletters_save_edition). ONE RPC does: optimistic version-check →
+        // snapshot current blocks into a revision → diff-upsert the canvas
+        // blocks/bricks → soft-delete removed ones → bump version. This
+        // replaces the old destructive "update edition, delete EVERY block,
+        // re-insert one by one" — which was non-atomic (a mid-loop failure
+        // lost blocks) and had no concurrency control (a stale tab / second
+        // session / any writer silently clobbered newer content — the
+        // lost-update that wiped edition 21afd12a). Empty-id template refs map
+        // to NULL exactly as before (registry blocks carry no block_def row).
+        const payloadBlocks = edition.blocks.map((block) => ({
+          id: block.id,
+          block_type: block.block_template.block_type,
+          templates_block_def_id:
+            block.block_template.id && block.block_template.id !== '' ? block.block_template.id : null,
+          content: stripStorageUrlsInJson(block.content),
+          sort_order: block.sort_order,
+          bricks: block.bricks.map((brick) => ({
+            id: brick.id,
+            brick_type: brick.brick_template.brick_type,
+            templates_brick_def_id:
+              brick.brick_template.id && brick.brick_template.id !== '' ? brick.brick_template.id : null,
+            content: stripStorageUrlsInJson(brick.content),
+            sort_order: brick.sort_order,
+          })),
+        }));
+        const { data: saveResult, error: saveErr } = await supabase.rpc('newsletters_save_edition', {
+          p_edition_id: edition.id,
+          p_expected_version: editionVersionRef.current,
+          p_title: edition.subject || 'Untitled',
+          p_preheader: edition.preheader || null,
+          p_content_category: collection?.content_category || null,
+          p_edition_date: edition.edition_date,
+          p_blocks: payloadBlocks,
+        });
+        if (saveErr) {
+          // 55006 = version_conflict: the edition changed since we loaded it.
+          // Do NOT overwrite — keep the operator's in-memory work and tell them
+          // to reload. Throw a marked error so callers know the save failed;
+          // the catch below skips its generic toast for this case.
+          const isConflict = saveErr.code === '55006' || /version_conflict/i.test(saveErr.message || '');
+          if (isConflict) {
+            toast.error(
+              'This edition was changed elsewhere since you opened it. Reload to get the latest before saving — your current changes were NOT saved.',
+              { duration: 12000 },
+            );
+            throw new Error('__edition_version_conflict__');
           }
-          const newBlock = blockRows?.[0];
-          if (newBlock) {
-            for (const brick of block.bricks) {
-              // Same empty-id → null normalization as the block-level
-              // tplDefId above: registry bricks (render_kind='react-email')
-              // carry a synthesised BrickTemplate with id='' because no
-              // templates_brick_defs row backs them. Sending '' to a uuid
-              // column triggers PG 22P02; persist NULL so the load path
-              // can re-synthesise from `brick_type`.
-              const brickDefId = brick.brick_template.id && brick.brick_template.id !== ''
-                ? brick.brick_template.id
-                : null;
-              const { error: brickInsertErr } = await supabase.from('newsletters_edition_bricks').insert({
-                id: brick.id,
-                block_id: newBlock.id,
-                templates_brick_def_id: brickDefId,
-                brick_type: brick.brick_template.brick_type,
-                content: stripStorageUrlsInJson(brick.content),
-                sort_order: brick.sort_order,
-              });
-              if (brickInsertErr) console.error('Brick insert error:', brickInsertErr);
-            }
-          }
+          console.error('Save edition error:', saveErr);
+          throw saveErr;
         }
+        // Advance our optimistic-lock counter to the just-written version so the
+        // next save from this session doesn't self-conflict.
+        const newVersion = (saveResult as { version?: number } | null)?.version;
+        if (typeof newVersion === 'number') editionVersionRef.current = newVersion;
         if (!options?.silent) toast.success('Edition saved');
-
-        // Note: previously this path also fired publish-to-git as
-        // best-effort after every save. That's been removed — Publish
-        // is now an explicit operator action (the canvas's Publish
-        // button) that renders the HTML client-side via
-        // exportEditionHtml and POSTs it to publish-to-git directly.
-        // Auto-firing here pushed git noise on every keystroke and
-        // also tried to render server-side, which couldn't resolve
-        // the admin chain anyway.
       }
     } catch (error) {
+      // The version-conflict path already showed a specific toast — don't stack
+      // the generic one on top.
+      if ((error as Error)?.message === '__edition_version_conflict__') {
+        setSaving(false);
+        return;
+      }
       console.error('Error saving edition:', error);
       if (!options?.silent) toast.error('Failed to save edition');
       throw error;
@@ -703,6 +710,23 @@ export default function EditionEditorPage() {
         activeSubTabId={activeTab}
         onSubTabChange={handleTabChange}
       >
+      {presencePeers.length > 0 && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 14px', fontSize: 13,
+            background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A',
+          }}
+        >
+          <span aria-hidden>👀</span>
+          <span>
+            {presencePeers.length === 1
+              ? `${presencePeers[0].name} is also editing this edition`
+              : `${presencePeers.length} other people are also editing this edition`}
+            {' — your changes are protected, but coordinate to avoid conflicting saves.'}
+          </span>
+        </div>
+      )}
       {/* Tab Content */}
       {activeTab === 'editor' && (
         <div
