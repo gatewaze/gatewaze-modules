@@ -28,7 +28,7 @@ import type { Job } from 'bullmq';
 
 import { dispatchBuzzwordRun } from '../lib/buzzword/dispatch.js';
 import { DEFAULT_BATCH_SIZE, DEFAULT_MAX_BODY_CHARS, prepareReply, toBatches } from '../lib/buzzword/prepare.js';
-import { ensureLeaderboardTarget, writeLeaderboardHtml } from '../lib/buzzword/resource.js';
+import { ensureLeaderboardTarget, pinResourceItemId, writeLeaderboardHtml } from '../lib/buzzword/resource.js';
 import { renderLeaderboardHtml } from '../lib/buzzword/render.js';
 import { buildLeaderboard, extractionToStamp, knownPhrasesParam } from '../lib/buzzword/tally.js';
 import type {
@@ -160,6 +160,9 @@ export default async function handleBuzzwordReplies(_job: Job<{ kind: string }>)
 
   const target = await ensureLeaderboardTarget(supabase, cfg.resource_item_id);
   if (target) {
+    // Pin a first-time auto-provisioned item so a later rename (which changes
+    // its slug) can't make the next tick re-create a duplicate collection.
+    if (target.autoProvisioned) await pinResourceItemId(supabase, target.itemId);
     const html = renderLeaderboardHtml(board, {
       submissions,
       distinct: board.length,

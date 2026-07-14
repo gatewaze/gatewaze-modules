@@ -24,6 +24,13 @@ const SECTION_HEADING = 'Leaderboard';
 export interface LeaderboardTarget {
   itemId: string;
   sectionId: string;
+  /**
+   * True when the item was resolved via slug auto-provision (no configured
+   * item id). The worker pins `itemId` back into config on the first such
+   * run, so a later rename of the collection/item — which changes its slug —
+   * can never make the next tick re-provision a duplicate.
+   */
+  autoProvisioned: boolean;
 }
 
 async function findOrCreate(
@@ -55,6 +62,7 @@ export async function ensureLeaderboardTarget(
   configuredItemId?: string | null,
 ): Promise<LeaderboardTarget | null> {
   let itemId = configuredItemId ?? null;
+  const autoProvisioned = !itemId;
 
   if (!itemId) {
     const collection = await findOrCreate(
@@ -105,7 +113,22 @@ export async function ensureLeaderboardTarget(
   );
   if (!section) return null;
 
-  return { itemId, sectionId: section.id };
+  return { itemId, sectionId: section.id, autoProvisioned };
+}
+
+/**
+ * Pin an auto-provisioned item id into installed_modules.config so future
+ * ticks use it directly instead of matching by slug. Makes the turnkey path
+ * survive a later rename (which changes the slug) without re-provisioning.
+ */
+export async function pinResourceItemId(supabase: SupabaseLike, itemId: string): Promise<void> {
+  const res = await supabase.from('installed_modules').select('config').eq('id', 'newsletters').maybeSingle();
+  const config = ((res?.data as { config?: Record<string, unknown> } | null)?.config ?? {}) as Record<string, unknown>;
+  const buzzword = { ...((config['buzzword'] as Record<string, unknown>) ?? {}), resource_item_id: itemId };
+  await supabase
+    .from('installed_modules')
+    .update({ config: { ...config, buzzword } })
+    .eq('id', 'newsletters');
 }
 
 /** Write the rendered leaderboard HTML into the section and touch the item. */
