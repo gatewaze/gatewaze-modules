@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
@@ -28,6 +28,8 @@ import {
   ItemsService,
   SectionsService,
   SectionTemplatesService,
+  generateCover,
+  uploadCoverImage,
 } from '../../utils/structuredResourcesService';
 
 // ============================================================
@@ -460,9 +462,35 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
   const [formData, setFormData] = useState({ title: '', subtitle: '', category_id: '', external_url: '', featured_image_url: '', status: 'draft' as string });
   const [itemSections, setItemSections] = useState<EditableSection[]>([]);
   const [saving, setSaving] = useState(false);
+  const [genCover, setGenCover] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
+
+  const handleGenerateCover = async () => {
+    if (!editingId) { toast.error('Save the item first, then generate its cover'); return; }
+    setGenCover(true);
+    try {
+      const res = await generateCover('item', editingId);
+      if (res.success) { setFormData(prev => ({ ...prev, featured_image_url: res.url })); toast.success('Cover image generated'); }
+      else toast.error(res.error || 'Failed to generate cover');
+    } finally { setGenCover(false); }
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!editingId) { toast.error('Save the item first, then upload its image'); return; }
+    setUploading(true);
+    try {
+      const res = await uploadCoverImage(file, 'item', editingId);
+      if (res.success) { setFormData(prev => ({ ...prev, featured_image_url: res.url })); toast.success('Image uploaded'); }
+      else toast.error(res.error || 'Upload failed');
+    } finally { setUploading(false); }
+  };
 
   const handleAdd = () => {
     setAdding(true);
@@ -598,7 +626,21 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
           data={[{ value: 'draft', label: 'Draft' }, { value: 'published', label: 'Published' }, { value: 'archived', label: 'Archived' }]} />
         <Input label="External URL" value={formData.external_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, external_url: e.target.value })} />
       </div>
-      <Input label="Featured Image URL" value={formData.featured_image_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, featured_image_url: e.target.value })} />
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <Input label="Featured Image URL" value={formData.featured_image_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, featured_image_url: e.target.value })} placeholder="Paste a URL, upload, or generate with AI →" />
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+        <Button type="button" variant="outline" onClick={() => fileRef.current?.click()} disabled={uploading || !editingId} title={!editingId ? 'Save the item first' : 'Upload an image from your computer'}>
+          {uploading ? 'Uploading…' : 'Upload'}
+        </Button>
+        <Button type="button" variant="outline" onClick={handleGenerateCover} disabled={genCover || !editingId} title={!editingId ? 'Save the item first' : 'Generate an AAIF-branded cover with AI'}>
+          {genCover ? 'Generating…' : 'Generate with AI'}
+        </Button>
+      </div>
+      {formData.featured_image_url && (
+        <img src={formData.featured_image_url} alt="" className="rounded-lg border max-h-40 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+      )}
 
       {/* Sections */}
       <div className="border-t pt-4">
@@ -750,6 +792,30 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
 function SettingsTab({ collection, onUpdate }: { collection: SrCollection; onUpdate: () => void }) {
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [genCover, setGenCover] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleGenerateCover = async () => {
+    setGenCover(true);
+    try {
+      const res = await generateCover('collection', collection.id);
+      if (res.success) { setFormData(prev => ({ ...prev, cover_image_url: res.url })); toast.success('Cover image generated'); }
+      else toast.error(res.error || 'Failed to generate cover');
+    } finally { setGenCover(false); }
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    try {
+      const res = await uploadCoverImage(file, 'collection', collection.id);
+      if (res.success) { setFormData(prev => ({ ...prev, cover_image_url: res.url })); toast.success('Image uploaded'); }
+      else toast.error(res.error || 'Upload failed');
+    } finally { setUploading(false); }
+  };
   const [formData, setFormData] = useState({
     name: collection.name,
     description: collection.description || '',
@@ -832,7 +898,21 @@ function SettingsTab({ collection, onUpdate }: { collection: SrCollection; onUpd
                 <Select label="Access" value={formData.access} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, access: e.target.value })}
                   data={[{ value: 'inherit', label: 'Module Default' }, { value: 'public', label: 'Public' }, { value: 'metered', label: 'Metered (SEO gate)' }, { value: 'authenticated', label: 'Login Required' }]} />
               </div>
-              <Input label="Cover Image URL" value={formData.cover_image_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, cover_image_url: e.target.value })} />
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <Input label="Cover Image URL" value={formData.cover_image_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, cover_image_url: e.target.value })} placeholder="Paste a URL, upload, or generate with AI →" />
+                </div>
+                <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+                <Button type="button" variant="outline" onClick={() => fileRef.current?.click()} disabled={uploading} title="Upload an image from your computer">
+                  {uploading ? 'Uploading…' : 'Upload'}
+                </Button>
+                <Button type="button" variant="outline" onClick={handleGenerateCover} disabled={genCover} title="Generate an AAIF-branded cover with AI">
+                  {genCover ? 'Generating…' : 'Generate with AI'}
+                </Button>
+              </div>
+              {formData.cover_image_url && (
+                <img src={formData.cover_image_url} alt="" className="rounded-lg border max-h-40 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+              )}
               <Input label="Meta Title" value={formData.meta_title} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, meta_title: e.target.value })} />
               <Input label="Meta Description" value={formData.meta_description} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, meta_description: e.target.value })} />
             </div>
