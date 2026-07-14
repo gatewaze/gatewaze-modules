@@ -18,7 +18,7 @@ create function related_source_meta(
 )
 returns table (href text, item_id uuid, embed_len integer, published_at timestamptz)
 language sql stable security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
   select e.href, e.item_id, length(e.embed_text), e.published_at
   from public.related_embeddings e
@@ -35,7 +35,7 @@ create function related_score_hrefs(
 )
 returns table (href text, similarity real, published_at timestamptz)
 language sql stable security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
   with src as (
     select embedding from public.related_embeddings
