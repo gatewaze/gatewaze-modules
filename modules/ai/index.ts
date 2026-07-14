@@ -159,7 +159,13 @@ const aiModule: GatewazeModule = {
     // at deploy time via env if needed.
     {
       name: 'ai:run-recipe',
-      handler: 'workers/run-recipe-handler.js',
+      // File stem MUST equal the job name: the prod worker
+      // (scripts/workers/job-worker.js) discovers handlers by
+      // `<moduleId>:<file-stem>`, so `run-recipe.ts` → `ai:run-recipe`,
+      // matching what every caller enqueues (JOB_RUN_RECIPE). A
+      // `-handler` suffix here registered `ai:run-recipe-handler` and
+      // silently dropped every recipe run on file-stem workers.
+      handler: 'workers/run-recipe.js',
       concurrency: Number(process.env.AI_RECIPE_WORKER_CONCURRENCY ?? 4),
     },
     {
