@@ -70,6 +70,13 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletters:edition-snapshot',
       handler: './workers/edition-snapshot.ts',
     },
+    {
+      // Turns newsletter reply emails into a live AI-buzzword leaderboard
+      // (structured resource). Per tick: apply finished extract-runs → render
+      // the board → dispatch one new batch. Gated on config.buzzword.enabled.
+      name: 'newsletters:buzzword-replies',
+      handler: './workers/buzzword-replies.ts',
+    },
   ],
 
   crons: [
@@ -110,6 +117,15 @@ const newslettersModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 7 * 24 * 60 * 60_000 },
       data: { kind: 'newsletters:list-hygiene' },
+    },
+    {
+      // Process reply-driven buzzword submissions into the leaderboard. Every
+      // 5 min drains the backlog one batch/tick and keeps the board fresh;
+      // no-ops when config.buzzword.enabled is unset.
+      name: 'newsletter-buzzword-replies',
+      queue: 'jobs',
+      schedule: { every: 5 * 60_000 },
+      data: { kind: 'newsletters:buzzword-replies' },
     },
   ],
 
@@ -298,6 +314,11 @@ const newslettersModule: GatewazeModule = {
     // target occurrence instead of resolving to a past instant (which blasted
     // the whole queue at once when scheduled_at was later than target_local).
     'migrations/068_fanout_tz_local_roll_forward.sql',
+    // 069 adds safe, concurrency-controlled edition saving: version column,
+    // block/brick soft-delete, revision snapshots, and the atomic
+    // newsletters_save_edition / restore RPCs (replaces the destructive
+    // delete-all-then-reinsert client save).
+    'migrations/069_edition_safe_save.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

@@ -11,7 +11,8 @@ interface Collection {
   slug: string
   description: string | null
   cover_image_url: string | null
-  access: 'public' | 'authenticated' | 'inherit'
+  access: 'public' | 'authenticated' | 'inherit' | 'metered'
+  status: 'draft' | 'published' | 'archived'
 }
 
 async function getSession() {
@@ -30,10 +31,12 @@ async function getSession() {
   return session
 }
 
-async function getCollections(isAuthenticated: boolean): Promise<Collection[]> {
+async function getCollections(isAuthenticated: boolean): Promise<{ collections: Collection[]; isAdmin: boolean }> {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
-  if (!url || !key) return []
+  if (!url || !key) return { collections: [], isAdmin: false }
+
+  const cols = 'id, name, slug, description, cover_image_url, access, status'
 
   if (isAuthenticated) {
     // Use server client with cookies for authenticated access
@@ -44,35 +47,41 @@ async function getCollections(isAuthenticated: boolean): Promise<Collection[]> {
       },
     })
 
+    // Admins may preview draft collections in place (RLS admin-preview policy);
+    // everyone else is limited to published.
+    const { data: adminData } = await supabase.rpc('is_admin')
+    const isAdmin = adminData === true
+    const statuses = isAdmin ? ['published', 'draft'] : ['published']
+
     const { data, error } = await supabase
       .from('sr_collections')
-      .select('id, name, slug, description, cover_image_url, access')
-      .eq('status', 'published')
+      .select(cols)
+      .in('status', statuses)
       .order('sort_order', { ascending: true })
 
     if (error) {
       console.error('[resources] Failed to fetch collections:', error)
-      return []
+      return { collections: [], isAdmin }
     }
-    return data || []
-  } else {
-    // Anon client — can see all published collection metadata (for teaser)
-    const supabase = createClient(url, key, {
-      global: { fetch: (url, options = {}) => fetch(url, { ...options, cache: 'no-store' }) },
-    })
-
-    const { data, error } = await supabase
-      .from('sr_collections')
-      .select('id, name, slug, description, cover_image_url, access')
-      .eq('status', 'published')
-      .order('sort_order', { ascending: true })
-
-    if (error) {
-      console.error('[resources] Failed to fetch collections:', error)
-      return []
-    }
-    return data || []
+    return { collections: data || [], isAdmin }
   }
+
+  // Anon client — can see all published collection metadata (for teaser)
+  const supabase = createClient(url, key, {
+    global: { fetch: (url, options = {}) => fetch(url, { ...options, cache: 'no-store' }) },
+  })
+
+  const { data, error } = await supabase
+    .from('sr_collections')
+    .select(cols)
+    .eq('status', 'published')
+    .order('sort_order', { ascending: true })
+
+  if (error) {
+    console.error('[resources] Failed to fetch collections:', error)
+    return { collections: [], isAdmin: false }
+  }
+  return { collections: data || [], isAdmin: false }
 }
 
 // Resolve effective access: 'inherit' falls back to module config default
@@ -87,7 +96,7 @@ function resolveAccess(access: string): 'public' | 'authenticated' | 'metered' {
 export default async function ResourcesListingPage() {
   const session = await getSession()
   const isAuthenticated = !!session
-  const collections = await getCollections(isAuthenticated)
+  const { collections, isAdmin } = await getCollections(isAuthenticated)
 
   const visibleCollections = collections.filter(c => {
     const effective = resolveAccess(c.access)
@@ -146,6 +155,9 @@ export default async function ResourcesListingPage() {
               <Link href={`/resources/${collection.slug}`} className="pub-card pub-card-flex gw-card-glow" key={collection.id}>
                 {cover}
                 <div className="pub-card-body">
+                  {isAdmin && collection.status === 'draft' && (
+                    <span className="pub-side-h" style={{ marginBottom: 8, display: 'block', color: 'var(--warning-color)' }}>● Draft — admin preview</span>
+                  )}
                   {effective === 'metered' && !isAuthenticated && (
                     <span className="pub-side-h" style={{ marginBottom: 8, display: 'block' }}>Members · free preview</span>
                   )}

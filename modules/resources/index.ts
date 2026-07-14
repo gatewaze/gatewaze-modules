@@ -34,6 +34,9 @@ const structuredResourcesModule: GatewazeModule = {
     'migrations/015_block_transcripts.sql',
     'migrations/016_related_recency.sql',
     'migrations/017_related_type_diversity.sql',
+    'migrations/018_admin_preview_status.sql',
+    'migrations/019_sr_items_occurred_at.sql',
+    'migrations/020_seed_cover_image_use_case.sql',
   ],
 
   // Surface public resource items in the unified /api/v1/content feed. The
@@ -66,6 +69,13 @@ const structuredResourcesModule: GatewazeModule = {
     // Gatewaze MCP server's resources_* tools.
     const { registerManageApi } = await import('./manage-api');
     registerManageApi(router, ctx);
+  },
+
+  // Server (session-gated) routes under /api/modules/resources/* — hosts the
+  // admin-only AI cover-image generation trigger (POST /generate-cover).
+  apiRoutes: async (app: unknown, ctx?: unknown) => {
+    const { registerRoutes } = await import('./api/register-routes.js');
+    await registerRoutes(app as never, ctx as never);
   },
 
   publicApiSchema: {
