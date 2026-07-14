@@ -69,12 +69,20 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
     cookies: { get(name: string) { return cookieStore.get(name)?.value } },
   })
 
+  // Admins may preview draft collections/items in place (admin-preview RLS).
+  let isAdmin = false
+  if (isAuthenticated) {
+    const { data: adminData } = await supabase.rpc('is_admin')
+    isAdmin = adminData === true
+  }
+  const statuses = isAdmin ? ['published', 'draft'] : ['published']
+
   // Get collection
   const { data: collection } = await supabase
     .from('sr_collections')
-    .select('id, name, slug, access')
+    .select('id, name, slug, access, status')
     .eq('slug', collectionSlug)
-    .eq('status', 'published')
+    .in('status', statuses)
     .single()
 
   if (!collection) return null
@@ -89,13 +97,13 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
   const { data: item } = await supabase
     .from('sr_items')
     .select(`
-      id, title, slug, subtitle, external_url, featured_image_url, updated_at, created_at,
+      id, title, slug, subtitle, external_url, featured_image_url, updated_at, created_at, status,
       category:sr_categories(id, name, slug),
       sections:sr_sections(id, heading, content, sort_order, blocks:sr_blocks(id, kind, slug, sort_order, data))
     `)
     .eq('collection_id', collection.id)
     .eq('slug', itemSlug)
-    .eq('status', 'published')
+    .in('status', statuses)
     .single()
 
   if (!item) return null
@@ -110,7 +118,7 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
       .from('sr_items')
       .select('title, slug')
       .eq('category_id', category.id)
-      .eq('status', 'published')
+      .in('status', statuses)
       .order('sort_order', { ascending: true })
 
     if (siblings) {
@@ -131,7 +139,7 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
     .from('sr_items')
     .select('id, title, slug, category_id')
     .eq('collection_id', collection.id)
-    .eq('status', 'published')
+    .in('status', statuses)
     .order('sort_order', { ascending: true })
 
   return {
@@ -145,6 +153,7 @@ async function getItemData(collectionSlug: string, itemSlug: string, isAuthentic
     nextItem,
     categories: (navCategories || []) as NavCategory[],
     articles: (navArticles || []) as NavArticle[],
+    isAdmin,
   }
 }
 
@@ -172,7 +181,7 @@ export default async function ItemDetailPage({ params }: Props) {
     notFound()
   }
 
-  const { collection, item, prevItem, nextItem, categories, articles } = data
+  const { collection, item, prevItem, nextItem, categories, articles, isAdmin } = data
 
   // Metered collections: a logged-out human sees a teaser + sign-in gate, while
   // the full text stays in the DOM (and in the JSON-LD + /md + API) for search
@@ -367,6 +376,9 @@ export default async function ItemDetailPage({ params }: Props) {
             </div>
           )}
 
+          {isAdmin && item.status === 'draft' && (
+            <span className="pub-side-h" style={{ display: 'block', marginBottom: 6, color: 'var(--warning-color)' }}>● Draft — admin preview (not live)</span>
+          )}
           <h1>{item.title}</h1>
           {item.subtitle && (
             <p style={{ color: 'var(--ink-3)', fontSize: 16, lineHeight: 1.6, margin: '-4px 0 16px' }}>{item.subtitle}</p>
