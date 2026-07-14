@@ -45,7 +45,7 @@ const newslettersModule: GatewazeModule = {
       // Re-resolves click interactions stored with a NULL edition_link_id
       // (late-registered links / webhook redeliveries). Idempotent.
       name: 'newsletters:link-reconcile',
-      handler: './workers/link-reconciler.ts',
+      handler: './workers/link-reconcile.ts',
     },
     {
       // Heartbeat that dispatches due scheduled sends (status='scheduled',
