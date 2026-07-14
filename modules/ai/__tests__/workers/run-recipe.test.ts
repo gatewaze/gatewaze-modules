@@ -1,5 +1,5 @@
 /**
- * Integration-flavoured test for workers/run-recipe-handler.ts.
+ * Integration-flavoured test for workers/run-recipe.ts.
  *
  * Mocks Redis + Supabase + the runRecipe executor so we can assert
  * the worker's lifecycle: row hydration → start event → executor call
@@ -136,7 +136,7 @@ function makeSupabase(): unknown {
   };
 }
 
-const { default: runRecipeHandler } = await import('../../workers/run-recipe-handler.js');
+const { default: runRecipeHandler } = await import('../../workers/run-recipe.js');
 
 beforeEach(() => {
   streamWrites.splice(0, streamWrites.length);
