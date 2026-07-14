@@ -33,6 +33,7 @@ const structuredResourcesModule: GatewazeModule = {
     'migrations/014_video_related_source.sql',
     'migrations/015_block_transcripts.sql',
     'migrations/016_related_recency.sql',
+    'migrations/017_related_type_diversity.sql',
   ],
 
   // Surface public resource items in the unified /api/v1/content feed. The
