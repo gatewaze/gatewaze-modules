@@ -22,7 +22,9 @@
     "@babel/types": "^7.27.0",
     "@puckeditor/core": "~0.21.3",
     "@react-email/components": "^1.0.12",
-    "@react-email/render": "^2.0.8"
+    "@react-email/render": "^2.0.8",
+    "@supabase/supabase-js": "^2.0.0",
+    "bullmq": "^5.0.0"
   },
   "devDependencies": {
     "@types/babel__traverse": "^7.0.0"
