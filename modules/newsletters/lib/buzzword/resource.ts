@@ -3,17 +3,17 @@
  * and upsert its section HTML.
  *
  * Turnkey by design: if no `resource_item_id` is configured, the worker
- * auto-provisions a "Community Pulse" collection → "AI Buzzword Leaderboard"
- * item → single "Leaderboard" section by slug, so the feature works on a
- * fresh deploy with zero manual setup. Everything is keyed by slug, so it is
+ * auto-provisions a "Downtime" collection → "AI Buzzword Leaderboard" item →
+ * single "Leaderboard" section by slug, so the feature works on a fresh
+ * deploy with zero manual setup. Everything is keyed by slug, so it is
  * idempotent — re-running never duplicates rows.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseLike = { from(table: string): any };
 
-const COLLECTION_SLUG = 'community-pulse';
-const COLLECTION_NAME = 'Community Pulse';
+const COLLECTION_SLUG = 'downtime';
+const COLLECTION_NAME = 'Downtime';
 const CATEGORY_SLUG = 'leaderboards';
 const CATEGORY_NAME = 'Leaderboards';
 const ITEM_SLUG = 'ai-buzzword-leaderboard';
@@ -72,7 +72,7 @@ export async function ensureLeaderboardTarget(
       {
         slug: COLLECTION_SLUG,
         name: COLLECTION_NAME,
-        description: 'Live pulse of what the community is talking about.',
+        description: 'What the community is hearing, saying, and building right now.',
         status: 'published',
       },
     );
