@@ -2,6 +2,73 @@ import { supabase } from '@/lib/supabase';
 import { validateBlock, projectSearchText, generateTalkSlug, deriveHtmlSlug } from '../../blocks';
 
 // ============================================================
+// AI cover-image generation (server-side, admin-gated)
+// ============================================================
+
+function apiUrl(): string {
+  return (import.meta as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
+}
+
+/**
+ * Trigger AI cover-image generation for a collection or item. Calls the
+ * resources module's server route (/api/modules/resources/generate-cover),
+ * which renders the image via @gatewaze-modules/ai, uploads it, writes the
+ * URL onto the row, and returns the public URL. Admin session required.
+ */
+/**
+ * Upload a user-chosen image file to Cloud Storage (the public `media`
+ * bucket) and return its public URL. Client-side upload via the admin
+ * session — the `media` bucket allows authenticated inserts and is publicly
+ * readable, and the admin supabase client is configured with the
+ * browser-facing URL so getPublicUrl returns a portal-resolvable URL.
+ */
+export async function uploadCoverImage(
+  file: File,
+  kind: 'collection' | 'item',
+  id: string,
+): Promise<{ success: true; url: string } | { success: false; error: string }> {
+  try {
+    const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const path = `resources/${kind}/${id}/upload-${Date.now()}.${ext || 'png'}`;
+    const { error } = await supabase.storage.from('media').upload(path, file, {
+      contentType: file.type || 'image/png',
+      upsert: false,
+    });
+    if (error) return { success: false, error: error.message };
+    const { data } = supabase.storage.from('media').getPublicUrl(path);
+    if (!data?.publicUrl) return { success: false, error: 'Could not resolve public URL' };
+    return { success: true, url: data.publicUrl };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Upload failed' };
+  }
+}
+
+export async function generateCover(
+  kind: 'collection' | 'item',
+  id: string,
+): Promise<{ success: true; url: string } | { success: false; error: string }> {
+  try {
+    const { data: session } = await supabase.auth.getSession();
+    const token = session.session?.access_token;
+    const res = await fetch(`${apiUrl()}/api/modules/resources/generate-cover`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ kind, id }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { success: false, error: body?.error || `Request failed (${res.status})` };
+    }
+    return { success: true, url: body.url as string };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+  }
+}
+
+// ============================================================
 // TypeScript interfaces
 // ============================================================
 

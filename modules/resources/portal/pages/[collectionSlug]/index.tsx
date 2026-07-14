@@ -12,6 +12,7 @@ interface Collection {
   slug: string
   description: string | null
   access: string
+  status: string
 }
 
 interface Category {
@@ -30,6 +31,7 @@ interface Item {
   external_url: string | null
   featured_image_url: string | null
   category_id: string
+  status: string
 }
 
 async function getSupabaseClient(authenticated: boolean) {
@@ -63,15 +65,24 @@ async function getSession() {
 }
 
 async function getCollectionData(slug: string, isAuthenticated: boolean) {
-  // Use anon client for collection metadata (visible to all per RLS)
-  const anonClient = await getSupabaseClient(false)
-  if (!anonClient) return null
+  // Authenticated (cookie) client when logged in so is_admin() + the
+  // admin-preview RLS resolve; anon otherwise (still sees published metadata).
+  const supabase = await getSupabaseClient(isAuthenticated)
+  if (!supabase) return null
 
-  const { data: collection, error: colError } = await anonClient
+  // Admins may preview drafts (collection + items) in place.
+  let isAdmin = false
+  if (isAuthenticated) {
+    const { data: adminData } = await supabase.rpc('is_admin')
+    isAdmin = adminData === true
+  }
+  const statuses = isAdmin ? ['published', 'draft'] : ['published']
+
+  const { data: collection, error: colError } = await supabase
     .from('sr_collections')
-    .select('id, name, slug, description, access')
+    .select('id, name, slug, description, access, status')
     .eq('slug', slug)
-    .eq('status', 'published')
+    .in('status', statuses)
     .single()
 
   if (colError || !collection) return null
@@ -79,10 +90,6 @@ async function getCollectionData(slug: string, isAuthenticated: boolean) {
   // Check access. 'public' + 'metered' collections are browsable by anon (item
   // pages meter individually); 'authenticated'/'inherit' require a session.
   if ((collection.access === 'authenticated' || collection.access === 'inherit') && !isAuthenticated) return null
-
-  // Use authenticated client for content (handles inherit collections where anon RLS blocks)
-  const supabase = await getSupabaseClient(isAuthenticated)
-  if (!supabase) return null
 
   const { data: categories } = await supabase
     .from('sr_categories')
@@ -92,15 +99,16 @@ async function getCollectionData(slug: string, isAuthenticated: boolean) {
 
   const { data: items } = await supabase
     .from('sr_items')
-    .select('id, title, slug, subtitle, external_url, featured_image_url, category_id')
+    .select('id, title, slug, subtitle, external_url, featured_image_url, category_id, status')
     .eq('collection_id', collection.id)
-    .eq('status', 'published')
+    .in('status', statuses)
     .order('sort_order', { ascending: true })
 
   return {
     collection: collection as Collection,
     categories: (categories || []) as Category[],
     items: (items || []) as Item[],
+    isAdmin,
   }
 }
 
@@ -130,7 +138,7 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
     notFound()
   }
 
-  const { collection, categories, items } = data
+  const { collection, categories, items, isAdmin } = data
 
   // Absolute base for this brand (serving host = canonical domain, incl. custom
   // domains). Drives JSON-LD url/@id values without hard-coding a domain.
@@ -219,6 +227,9 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
           <span>/</span>
           <span style={{ color: 'var(--ink-3)' }}>{collection.name}</span>
         </div>
+        {isAdmin && collection.status === 'draft' && (
+          <span className="pub-side-h" style={{ display: 'block', marginBottom: 6, color: 'var(--warning-color)' }}>● Draft collection — admin preview</span>
+        )}
         <h1 style={{ margin: 0 }}>{collection.name}</h1>
         {collection.description && <p>{collection.description}</p>}
       </div>
@@ -275,6 +286,9 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
                             )}
                           </div>
                           <div className="pub-card-body">
+                            {isAdmin && item.status === 'draft' && (
+                              <span className="pub-side-h" style={{ display: 'block', marginBottom: 4, color: 'var(--warning-color)' }}>● Draft</span>
+                            )}
                             <h3>{item.title}</h3>
                             {item.subtitle && <p>{item.subtitle}</p>}
                           </div>
