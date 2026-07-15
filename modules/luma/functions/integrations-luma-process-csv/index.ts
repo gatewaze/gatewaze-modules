@@ -131,7 +131,7 @@ const regionToContinent: Record<string, string> = {
  * Known Luma CSV columns that are NOT survey questions
  */
 const KNOWN_LUMA_COLUMNS = new Set([
-  'api_id', 'name', 'first_name', 'last_name', 'email', 'phone_number',
+  'api_id', 'guest_id', 'name', 'first_name', 'last_name', 'email', 'phone_number',
   'created_at', 'approval_status', 'checked_in_at', 'custom_source',
   'qr_code_url', 'amount', 'amount_tax', 'amount_discount', 'currency',
   'coupon_code', 'eth_address', 'solana_address', 'survey_response_rating',
@@ -166,7 +166,11 @@ async function processEventGuests(
   upload: LumaCsvUpload,
   updateProgress: (processed: number, errors: any[], registrationsCreated: number) => Promise<void>
 ) {
-  const rows = upload.csv_data
+  // Newer Luma exports renamed the guest api-id column api_id -> guest_id;
+  // normalise so the rest of the pipeline (and older uploads) see api_id.
+  const rows = (upload.csv_data as Record<string, any>[]).map((row) =>
+    row.api_id || !row.guest_id ? row : { ...row, api_id: row.guest_id }
+  )
   const errors: Array<{ row: number; error: string }> = []
   let processed = 0
   let registrationsCreated = 0
@@ -539,7 +543,11 @@ async function processCalendarMembers(
   upload: LumaCsvUpload,
   updateProgress: (processed: number, errors: any[], registrationsCreated: number) => Promise<void>
 ) {
-  const rows = upload.csv_data
+  // Newer Luma exports renamed the guest api-id column api_id -> guest_id;
+  // normalise so the rest of the pipeline (and older uploads) see api_id.
+  const rows = (upload.csv_data as Record<string, any>[]).map((row) =>
+    row.api_id || !row.guest_id ? row : { ...row, api_id: row.guest_id }
+  )
   const errors: Array<{ row: number; error: string }> = []
 
   // Track rows with missing required fields
