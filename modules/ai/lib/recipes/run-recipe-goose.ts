@@ -1694,12 +1694,27 @@ async function resolveGooseOverrides(
   try {
     const res = await supabase
       .from('ai_use_cases')
-      .select('goose_runtime_overrides')
+      .select('goose_runtime_overrides, max_output_tokens')
       .eq('id', useCaseId)
       .maybeSingle();
     if (res.error || !res.data) return {};
-    const overrides = ((res.data as { goose_runtime_overrides?: Record<string, unknown> }).goose_runtime_overrides) ?? {};
+    const data = res.data as {
+      goose_runtime_overrides?: Record<string, unknown>;
+      max_output_tokens?: number | null;
+    };
     const out: Record<string, string> = {};
+    // Honor the use case's configured output cap. Goose defaults max_tokens to
+    // 4096; a full structured write-up (e.g. lunch-and-learn, 16000) overruns
+    // that, so the recipe__final_output tool call truncates mid-generation,
+    // goose can't parse the partial JSON, and it re-prompts "You MUST call
+    // final_output" forever — the recipe appears to hang. Seed GOOSE_MAX_TOKENS
+    // from max_output_tokens so the goose path respects the same limit the
+    // direct provider clients already use. Explicit goose_runtime_overrides
+    // below still win (they're applied after).
+    if (typeof data.max_output_tokens === 'number' && data.max_output_tokens > 0) {
+      out.GOOSE_MAX_TOKENS = String(data.max_output_tokens);
+    }
+    const overrides = data.goose_runtime_overrides ?? {};
     for (const [k, v] of Object.entries(overrides)) {
       if (v == null) continue;
       out[k] = typeof v === 'string' ? v : String(v);
