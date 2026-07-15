@@ -175,15 +175,18 @@ async function handler(req: Request) {
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+        // NB: must be JSON — the Luma processor parses multipart/form-data or
+        // falls back to req.json(); a urlencoded body lands in the JSON path
+        // and throws, so every forwarded email used to fail here.
         const lumaResponse = await fetch(
           `${supabaseUrl}/functions/v1/integrations-luma-process-registration`,
           {
             method: 'POST',
             headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
+              'Content-Type': 'application/json',
               'Authorization': `Bearer ${serviceKey}`,
             },
-            body: new URLSearchParams({
+            body: JSON.stringify({
               from: fromRaw,
               to: toRaw,
               subject,
@@ -191,7 +194,7 @@ async function handler(req: Request) {
               html,
               envelope,
               headers,
-              'reply-to': replyTo,
+              replyTo,
             }),
           }
         );
