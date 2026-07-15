@@ -1,10 +1,15 @@
 -- ============================================================================
--- content-platform — inbox preview cache helper.
--- See spec-unified-content-management.md §8.8.
+-- content-platform — fix refresh_inbox_cache preview-function call
+--
+-- inbox_preview_fn is stored as a regprocedure; its ::text form includes the
+-- argument list ("events_inbox_preview(uuid)"), so the dynamic SQL became
+-- "SELECT ... FROM events_inbox_preview(uuid)($1)" — a syntax error caught by
+-- the WARNING handler on every call. Inbox rows therefore never got cached
+-- title/subtitle/thumbnail previews. Re-creates the function casting via
+-- regproc to the bare callable name (fix also folded into 004 for fresh
+-- installs).
 -- ============================================================================
 
--- Refresh cached title/subtitle/thumbnail for any open triage item targeting
--- this content. Called by per-content-type UPDATE paths (events_update, etc.).
 CREATE OR REPLACE FUNCTION public.refresh_inbox_cache(
   p_content_type text,
   p_content_id   uuid

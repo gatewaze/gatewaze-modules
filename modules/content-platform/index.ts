@@ -41,6 +41,8 @@ const contentPlatformModule: GatewazeModule = {
     'migrations/002_category_adapter_registry.sql',
     'migrations/003_content_sources.sql',
     'migrations/004_inbox_cache.sql',
+    'migrations/005_fix_verdict_triage_priority.sql',
+    'migrations/006_fix_inbox_cache_preview_call.sql',
   ],
 
   adminRoutes: [
