@@ -384,6 +384,15 @@ export async function runRecipeViaGoose(
   let provider: string | null = args.recipe.settings?.goose_provider ?? null;
   let model: string | null = args.recipe.settings?.goose_model ?? null;
   let failureReason: string | undefined;
+  // Goose masks provider errors: an Anthropic 400 (credit exhaustion,
+  // `temperature` rejected by the model, etc.) comes back as an assistant
+  // TEXT turn beginning "Ran into this error: Request failed…" rather than a
+  // stream `error` event, so the run otherwise looks like a silent "wrote
+  // prose, never called final_output" hang. Capture that text and the count
+  // of goose's "You MUST call final_output" re-prompts so we can surface the
+  // real cause in failure_reason instead of sending future debuggers on a hunt.
+  let maskedProviderError: string | null = null;
+  let finalOutputReprompts = 0;
   // spec-ai-mcp-extensions.md §Tool-call capture — each MCP tool call
   // surfaces as an ai_usage_events row tagged kind='mcp_tool' so the
   // cost ledger attributes per-server / per-tool spend the same way
@@ -546,6 +555,17 @@ export async function runRecipeViaGoose(
         for (const item of content) {
           if (!item || typeof item !== 'object') continue;
           const it = item as Record<string, unknown>;
+          // Un-mask provider errors + count final_output re-prompts. Goose
+          // reports both as plain text turns, not structured events.
+          if (it.type === 'text' && typeof it.text === 'string') {
+            const t = it.text;
+            if (!maskedProviderError && t.includes('Ran into this error')) {
+              maskedProviderError = t.slice(0, 500).replace(/\s+/g, ' ').trim();
+            } else if (t.includes('You MUST call the `final_output` tool')) {
+              finalOutputReprompts += 1;
+            }
+            continue;
+          }
           // Pair toolResponse → toolRequest for latency before the
           // toolRequest-only branch (the existing flow skipped non-
           // toolRequest items entirely).
@@ -639,6 +659,27 @@ export async function runRecipeViaGoose(
 
     if (exitCode !== 0 && !failureReason) {
       failureReason = `goose_exit_${exitCode}: ${stderrBuf.slice(0, 1000)}`;
+    }
+
+    // Un-mask goose's silent failures. A structured run that ends with no
+    // recipe__final_output otherwise records status='complete' with a null
+    // result (or an opaque hang until max-turns) — the exact trap that turned
+    // the lunch-and-learn max_tokens truncation into a multi-session hunt.
+    // Translate the captured signals into an actionable failure_reason so the
+    // Jobs tab / SessionRunView shows the real cause.
+    if (isStructuredRun && finalOutput == null && !cancelled && !failureReason) {
+      if (maskedProviderError) {
+        // Credit exhaustion, `temperature` rejected by the model, any 400.
+        failureReason = `provider_error (masked by goose): ${maskedProviderError}`;
+      } else if (finalOutputReprompts >= 3) {
+        failureReason =
+          `no_final_output after ${finalOutputReprompts} "call final_output" re-prompts — the model ` +
+          `never delivered structured output. This usually means the output exceeded the model's ` +
+          `max_tokens cap and the tool call truncated: raise this use case's max_output_tokens ` +
+          `(goose defaults to 4096). Otherwise rule out a masked provider error.`;
+      } else {
+        failureReason = 'no_final_output: goose finished without a recipe__final_output tool call.';
+      }
     }
 
     // Per-LLM-call cost attribution. Goose's stream-json `complete`
