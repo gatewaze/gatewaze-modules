@@ -272,9 +272,30 @@ export async function createFullRegistration(
         .single()
 
       if (createError) {
-        return { success: false, error: `Failed to create person: ${createError.message}` }
+        // The ensure_person_on_signup trigger on auth.users may have created
+        // the person the moment the auth user was created above — recover by
+        // fetching it and merging our attributes underneath its own.
+        if (createError.code === '23505' || createError.message?.includes('duplicate key')) {
+          const { data: racedPerson } = await supabase
+            .from('people')
+            .select('id, cio_id, attributes')
+            .ilike('email', email)
+            .maybeSingle()
+          if (racedPerson) {
+            const existingAttrs = (racedPerson.attributes as Record<string, any>) || {}
+            await supabase
+              .from('people')
+              .update({ attributes: { ...personAttributes, ...existingAttrs } })
+              .eq('id', racedPerson.id)
+            person = racedPerson
+          }
+        }
+        if (!person) {
+          return { success: false, error: `Failed to create person: ${createError.message}` }
+        }
+      } else {
+        person = newPerson
       }
-      person = newPerson
     }
 
     if (!person) {
