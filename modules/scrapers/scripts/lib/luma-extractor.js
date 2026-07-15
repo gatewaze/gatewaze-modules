@@ -541,19 +541,43 @@ export async function upsertSpeakers(supabase, speakers, eventContext) {
       // Link to event. If the speaker has talks, create one events_speakers row
       // per talk so each talk is addressable. If no talks, create a single
       // speaker-only row with no talk fields.
+      //
+      // Re-scrape convergence: the AI extraction REPHRASES talk titles between
+      // runs (and sometimes extracts none), so title-keyed dedupe accreted a
+      // sibling placeholder row per drift — the same speaker showed several
+      // times on the portal. Placeholder rows for this (event, speaker) are
+      // fetched once: the common single-talk case UPDATES the existing row in
+      // place, untitled extractions never add rows next to titled ones, and
+      // only genuinely new titles in multi-talk sets insert.
       const talks = Array.isArray(s.talks) && s.talks.length > 0 ? s.talks : [{ title: null, synopsis: null, durationMinutes: null }];
-      for (const t of talks) {
-        // Avoid duplicate placeholder rows on re-scrape: check by (event, speaker, talk_title).
-        const dupQuery = supabase
-          .from('events_speakers')
-          .select('id')
-          .eq('event_uuid', eventContext.gatewazeEventId)
-          .eq('speaker_id', speakerProfileId);
-        if (t.title) dupQuery.eq('talk_title', t.title);
-        else dupQuery.is('talk_title', null);
-        const { data: dup } = await dupQuery.maybeSingle();
+      const { data: existingLinks } = await supabase
+        .from('events_speakers')
+        .select('id, talk_title')
+        .eq('event_uuid', eventContext.gatewazeEventId)
+        .eq('speaker_id', speakerProfileId)
+        .eq('status', 'placeholder');
+      const links = existingLinks ?? [];
 
-        if (dup) continue;
+      if (links.length === 1 && talks.length === 1) {
+        const t = talks[0];
+        // Refresh the single placeholder in place; never wipe a title with an
+        // empty extraction.
+        if (t.title && t.title !== links[0].talk_title) {
+          await supabase
+            .from('events_speakers')
+            .update({ talk_title: t.title, talk_synopsis: t.synopsis || null, talk_duration_minutes: t.durationMinutes || null })
+            .eq('id', links[0].id);
+        }
+        linked++;
+        continue;
+      }
+
+      for (const t of talks) {
+        // Untitled extraction: only ever create the speaker-only row when the
+        // speaker has NO rows at all for this event.
+        if (!t.title && links.length > 0) continue;
+        // Titled: skip titles we already have.
+        if (t.title && links.some((l) => l.talk_title === t.title)) continue;
 
         const { error: linkErr } = await supabase
           .from('events_speakers')
@@ -566,6 +590,7 @@ export async function upsertSpeakers(supabase, speakers, eventContext) {
             talk_synopsis: t.synopsis || null,
             talk_duration_minutes: t.durationMinutes || null,
           });
+        if (!linkErr) links.push({ id: null, talk_title: t.title || null });
         if (linkErr) {
           console.warn(`⚠️ Failed to link speaker "${s.name}" to event: ${linkErr.message}`);
         } else {
