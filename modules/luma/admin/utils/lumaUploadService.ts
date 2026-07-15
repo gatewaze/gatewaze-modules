@@ -131,8 +131,9 @@ export class LumaUploadService {
   static detectCsvType(headers: string[]): LumaCsvType | null {
     const normalizedHeaders = headers.map(h => h.toLowerCase().trim());
 
-    // Event Guests CSV has 'api_id' and 'qr_code_url'
-    if (normalizedHeaders.includes('api_id') && normalizedHeaders.includes('qr_code_url')) {
+    // Event Guests CSV has 'api_id' and 'qr_code_url'.
+    // Newer Luma exports renamed api_id -> guest_id; accept both.
+    if ((normalizedHeaders.includes('api_id') || normalizedHeaders.includes('guest_id')) && normalizedHeaders.includes('qr_code_url')) {
       return 'event_guests';
     }
 
