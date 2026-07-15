@@ -67,6 +67,10 @@ const eventsModule: GatewazeModule = {
     // next-local-event personalisation provider
     // (spec-newsletter-personalised-delivery.md B.2).
     'migrations/017_next_local_event.sql',
+    // 018: registering for an event converts an outreach prospect
+    // (people.contact_kind='prospect') into an 'event_contact' — counterpart
+    // of core migration 00042 which owns the contact_kind column.
+    'migrations/018_registration_contact_kind.sql',
   ],
 
   edgeFunctions: [

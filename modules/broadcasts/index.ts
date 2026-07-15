@@ -88,6 +88,9 @@ const broadcastsModule: GatewazeModule = {
     'migrations/012_broadcast_reply_status.sql',
     // 013 per-broadcast engagement rollup for the dashboard table.
     'migrations/013_broadcast_engagement.sql',
+    // 014 excludes outreach prospects (people.contact_kind='prospect') from
+    // preview + fan-out unless the send's include_prospects flag is set.
+    'migrations/014_broadcast_prospect_gating.sql',
   ],
 
   adminRoutes: [
