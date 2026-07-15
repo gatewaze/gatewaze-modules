@@ -226,10 +226,12 @@ BEGIN
     RAISE EXCEPTION 'VALIDATION_ERROR: no adapter for content_type=%', p_content_type USING ERRCODE = '23514';
   END IF;
 
-  SELECT * INTO v_existing FROM public.content_triage_items
-  WHERE content_type = p_content_type
-    AND content_id   = p_content_id
-    AND status IN ('pending','changes_requested')
+  -- NB: alias + qualified columns are load-bearing — a bare "status" here is
+  -- ambiguous against this function's OUT parameter and raises at runtime.
+  SELECT cti.* INTO v_existing FROM public.content_triage_items cti
+  WHERE cti.content_type = p_content_type
+    AND cti.content_id   = p_content_id
+    AND cti.status IN ('pending','changes_requested')
   LIMIT 1;
   IF FOUND THEN
     status := 'already_pending';

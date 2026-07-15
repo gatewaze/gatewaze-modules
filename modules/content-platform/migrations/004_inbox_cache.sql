@@ -21,8 +21,11 @@ BEGIN
     RETURN;
   END IF;
 
+  -- inbox_preview_fn is a regprocedure whose text form carries the arg list
+  -- ("events_inbox_preview(uuid)") — cast via regproc to get the bare
+  -- callable name, else the format() below produces "fn(uuid)($1)".
   v_sql := format('SELECT title, subtitle, thumbnail_url FROM %s($1)',
-                  v_adapter.inbox_preview_fn::text);
+                  v_adapter.inbox_preview_fn::oid::regproc::text);
   EXECUTE v_sql INTO v_row USING p_content_id;
 
   UPDATE public.content_triage_items

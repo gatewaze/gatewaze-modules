@@ -25,6 +25,7 @@ const contentTriageModule: GatewazeModule = {
     'migrations/001_content_triage_schema.sql',
     'migrations/002_content_triage_rpcs.sql',
     'migrations/003_seed_default_route.sql',
+    'migrations/004_fix_triage_submit_ambiguity.sql',
   ],
 
   // Surfaced inside the Content hub via adminSlots below.

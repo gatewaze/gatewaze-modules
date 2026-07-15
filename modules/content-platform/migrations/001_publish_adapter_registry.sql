@@ -214,7 +214,7 @@ BEGIN
         p_suggested_categories => NULL,
         p_suggested_from       => NULL,
         p_auto_approved_reason => NULL,
-        p_priority             => 50,
+        p_priority             => 50::smallint,
         p_metadata             => jsonb_build_object('via','keyword_verdict'),
         p_actor_id             => NULL,
         p_idempotency_key      => NULL,
