@@ -38,6 +38,10 @@ export interface Broadcast {
   segment_id: string | null;
   list_ids: string[];
   category_list_id: string | null;
+  /** Explicit opt-in: include outreach prospects (contact_kind='prospect' —
+   *  legitimate-interest contacts who never opted in). Off by default; the
+   *  fan-out and preview RPCs exclude prospects unless this is set. */
+  include_prospects: boolean;
   /** Optional linked event (CFP / event promotion) — supplies {{event_*}} vars. */
   event_id: string | null;
   /** Optional mailbox to forward human replies to (like newsletter collections). */
@@ -298,6 +302,7 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
       segment_id: parent.segment_id,
       list_ids: parent.list_ids,
       category_list_id: parent.category_list_id,
+      include_prospects: parent.include_prospects ?? false,
       subject,
       preheader: parent.preheader,
       from_address: parent.from_address,

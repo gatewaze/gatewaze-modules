@@ -142,6 +142,8 @@ export default function BroadcastDetailPage() {
           p_exclude_send_ids: excludeSentSendIds.length > 0 ? excludeSentSendIds : null,
           // Cross-reference the audience with the selected list's subscribers.
           p_category_list_id: unsubscribeListId ?? b.category_list_id,
+          // Outreach prospects are excluded unless explicitly included.
+          p_include_prospects: b.include_prospects ?? false,
         });
         if (error) throw error;
         return (data as number) ?? 0;
@@ -202,7 +204,12 @@ export default function BroadcastDetailPage() {
       >
         {step === 'audience' && <AudienceStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('content'); }} />}
         {step === 'content' && <ContentStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('sending'); }} />}
-        {step === 'sending' && broadcastAdapter && <SendingPanel adapter={broadcastAdapter} />}
+        {step === 'sending' && broadcastAdapter && (
+          <div className="space-y-4">
+            <OutreachToggle b={b} editable={editable} onChanged={setB} />
+            <SendingPanel adapter={broadcastAdapter} />
+          </div>
+        )}
         {step === 'replies' && <BroadcastRepliesTab broadcastId={b.id} />}
       </WorkspaceLayout>
     </Page>
@@ -472,6 +479,49 @@ function AudienceMapPreview({ definition }: { definition: SegmentDefinition }) {
         </p>
       )}
     </div>
+  );
+}
+
+// --- Sending: outreach-prospects toggle --------------------------------------
+// Prospects (people.contact_kind='prospect' — legitimate-interest contacts who
+// never opted in) are excluded from every broadcast by default, at the RPC
+// level. This is the one place that exclusion can be deliberately lifted, for
+// CFP / sponsorship outreach sends.
+function OutreachToggle({ b, editable, onChanged }: { b: Broadcast; editable: boolean; onChanged: (b: Broadcast) => void }) {
+  const [saving, setSaving] = useState(false);
+  const on = b.include_prospects ?? false;
+
+  async function toggle() {
+    setSaving(true);
+    try {
+      const nb = await updateBroadcast(b.id, { include_prospects: !on } as Partial<Broadcast>);
+      onChanged(nb);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update outreach setting');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className={`p-4 ${on ? 'border-amber-500/60' : ''}`}>
+      <label className="flex items-start gap-3 cursor-pointer">
+        <input type="checkbox" className="mt-0.5 rounded" checked={on} disabled={!editable || saving} onChange={toggle} />
+        <span>
+          <span className="block text-sm font-medium text-[var(--gray-12)]">Outreach send — include prospects</span>
+          <span className="block text-xs text-[var(--gray-10)] mt-0.5">
+            Prospects are contacts stored under legitimate interest (e.g. potential speakers or sponsors) who have not
+            opted in. They are excluded from broadcasts unless this is enabled. Only enable for deliberate, targeted
+            outreach (CFP invitations, sponsorship) — never for general marketing. Unsubscribes are honoured either way.
+          </span>
+          {on && (
+            <span className="block text-xs font-medium text-amber-600 dark:text-amber-500 mt-1">
+              This send may reach people who never consented to marketing email. Keep it targeted and relevant.
+            </span>
+          )}
+        </span>
+      </label>
+    </Card>
   );
 }
 
