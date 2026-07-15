@@ -11,12 +11,18 @@ import { LumaICalScraper } from './LumaICalScraper.js';
  *   1. For queued luma_event_ids whose event ALREADY exists (created by a
  *      calendar scraper, CSV import, or manually), replay the stored email
  *      back through the registration edge function so the person is attached.
- *   2. For luma_event_ids with no event, scrape the public event page
+ *   2. For luma_event_ids with no event, fetch the public event page
  *      (https://luma.com/event/<evt-id> 301s to the event's slug URL) and
  *      save it through the normal pipeline — the scraper row's
  *      content_category / default_publish_state config decides categorisation
  *      and Content Inbox triage, same as every other scraper.
  *   3. Replay the queued registrations for the events just created.
+ *
+ * Event pages are fetched over PLAIN HTTP and __NEXT_DATA__ is parsed from
+ * the HTML — no browser. Headless-Chromium navigation to luma.com times out
+ * from the production cluster (verified 2026-07-15: puppeteer networkidle2
+ * fails while a plain fetch of the same URL returns the full page), and
+ * everything this scraper needs lives in the server-rendered JSON anyway.
  *
  * Unlike calendar scrapers this never skips past/today events: a queued row
  * means a real person registered, so the event is always worth ingesting —
@@ -29,6 +35,8 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
   constructor(config, globalConfig) {
     super(config, globalConfig);
     this.replayStats = { replayed: 0, replayFailed: 0 };
+    // Plain-HTTP fetches are cheap; a short politeness delay is enough.
+    this.pageFetchDelay = 1000;
   }
 
   async scrape() {
@@ -89,69 +97,58 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
     }
 
     const scrapedIds = [];
-    if (toScrape.length > 0) {
-      await this.initialize();
+    const streamingSave = typeof this.globalConfig?.saveEvent === 'function';
+    for (const lumaEventId of toScrape.slice(0, maxPerRun)) {
+      if (this.isShutdownRequested()) {
+        console.log(`📴 Shutdown requested, stopping after ${scrapedIds.length} events`);
+        break;
+      }
+      if (this.pageFetchDelay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.pageFetchDelay));
+      }
+
+      // The /event/<evt-id> path 301s to the event's public slug page.
+      const probeLink = `https://luma.com/event/${lumaEventId}`;
       try {
-        const streamingSave = typeof this.globalConfig?.saveEvent === 'function';
-        for (const lumaEventId of toScrape.slice(0, maxPerRun)) {
-          if (this.isShutdownRequested()) {
-            console.log(`📴 Shutdown requested, stopping after ${scrapedIds.length} events`);
-            break;
-          }
-          if (this.pageFetchDelay > 0) {
-            await new Promise((resolve) => setTimeout(resolve, this.pageFetchDelay));
-          }
+        const pageData = await this.fetchEventPageHttp(probeLink);
+        const parsedEvent = this.buildEventFromPageData(lumaEventId, pageData);
 
-          // The /event/<evt-id> path 301s to the event's public slug page.
-          const probeLink = `https://luma.com/event/${lumaEventId}`;
-          try {
-            const pageData = await this.fetchEventPageData(probeLink);
-            const parsedEvent = this.buildEventFromPageData(lumaEventId, probeLink, pageData);
-
-            if (!parsedEvent) {
-              this.stats.failed++;
-              // Page rendered but carries no event object — the event was
-              // deleted or is private. Mark its queued rows failed so they
-              // aren't retried forever; admins can reset status to retry.
-              if (pageData?.pageContent) {
-                await supabase
-                  .from('integrations_luma_pending_registrations')
-                  .update({
-                    status: 'failed',
-                    error_message: 'Luma event page has no event data (deleted or private event?)',
-                  })
-                  .eq('status', 'no_event')
-                  .eq('luma_event_id', lumaEventId);
-                console.warn(`❌ ${lumaEventId}: page has no event data — queued rows marked failed`);
-              } else {
-                console.warn(`⚠️ ${lumaEventId}: page fetch failed — will retry next run`);
-              }
-              continue;
-            }
-
-            this.stats.found++;
-            if (streamingSave) {
-              try {
-                await this.globalConfig.saveEvent(parsedEvent);
-                scrapedIds.push(lumaEventId);
-              } catch (saveErr) {
-                console.warn(`⚠️ Streaming save failed for "${parsedEvent.eventTitle}": ${saveErr.message}`);
-                this.events.push(parsedEvent);
-              }
-            } else {
-              this.events.push(parsedEvent);
-            }
-          } catch (error) {
-            if (this.isBrowserDeadError(error)) {
-              console.error(`❌ Browser is dead, aborting scrape: ${error.message}`);
-              throw error;
-            }
-            console.warn(`⚠️ Failed to scrape ${lumaEventId}: ${error.message}`);
-            this.stats.failed++;
+        if (!parsedEvent) {
+          this.stats.failed++;
+          // Page rendered but carries no event object — the event was
+          // deleted or is private. Mark its queued rows failed so they
+          // aren't retried forever; admins can reset status to retry.
+          if (pageData?.htmlLoaded) {
+            await supabase
+              .from('integrations_luma_pending_registrations')
+              .update({
+                status: 'failed',
+                error_message: 'Luma event page has no event data (deleted or private event?)',
+              })
+              .eq('status', 'no_event')
+              .eq('luma_event_id', lumaEventId);
+            console.warn(`❌ ${lumaEventId}: page has no event data — queued rows marked failed`);
+          } else {
+            console.warn(`⚠️ ${lumaEventId}: page fetch failed — will retry next run`);
           }
+          continue;
         }
-      } finally {
-        await this.cleanup();
+
+        this.stats.found++;
+        if (streamingSave) {
+          try {
+            await this.globalConfig.saveEvent(parsedEvent);
+            scrapedIds.push(lumaEventId);
+          } catch (saveErr) {
+            console.warn(`⚠️ Streaming save failed for "${parsedEvent.eventTitle}": ${saveErr.message}`);
+            this.events.push(parsedEvent);
+          }
+        } else {
+          this.events.push(parsedEvent);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to scrape ${lumaEventId}: ${error.message}`);
+        this.stats.failed++;
       }
     }
 
@@ -170,13 +167,112 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
   }
 
   /**
+   * Fetch a Luma event page over plain HTTP and extract __NEXT_DATA__.
+   * Returns { htmlLoaded, finalUrl, coverImageUrl, pageContent, isVirtual,
+   * lumaData, lumaPageData } — the same distilled shape the browser-based
+   * LumaICalScraper.fetchEventPageData produces, minus the browser.
+   */
+  async fetchEventPageHttp(eventLink) {
+    const empty = {
+      htmlLoaded: false, finalUrl: eventLink, coverImageUrl: null,
+      pageContent: '', isVirtual: false, lumaData: null, lumaPageData: null,
+    };
+
+    let res;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 25_000);
+      try {
+        res = await fetch(eventLink, {
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err) {
+      console.warn(`⚠️ HTTP fetch failed for ${eventLink}: ${err.message}`);
+      return empty;
+    }
+
+    if (!res.ok) {
+      console.warn(`⚠️ HTTP ${res.status} for ${eventLink}`);
+      return empty;
+    }
+
+    const html = await res.text();
+    const finalUrl = res.url || eventLink;
+    console.log(`🌐 Fetched ${finalUrl} (${html.length} bytes)`);
+
+    const nextDataMatch = html.match(
+      /<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/
+    );
+
+    let lumaData = null;
+    let lumaPageData = null;
+    let isVirtual = false;
+    let coverImageUrl = null;
+
+    if (nextDataMatch) {
+      try {
+        const data = JSON.parse(nextDataMatch[1]);
+        if (data?.props?.pageProps) {
+          lumaPageData = { buildId: data.buildId, pageProps: { ...data.props.pageProps } };
+          delete lumaPageData.pageProps.initialUserData;
+        }
+        const initialData = data?.props?.pageProps?.initialData?.data;
+        const eventData = initialData?.event;
+        if (eventData) {
+          lumaData = {
+            lumaEventId: eventData.api_id || initialData.api_id,
+            timezone: eventData.timezone,
+            coverUrl: eventData.cover_url,
+            latitude: eventData.coordinate?.latitude,
+            longitude: eventData.coordinate?.longitude,
+            city: eventData.geo_address_info?.city,
+            country: eventData.geo_address_info?.country,
+            countryCode: eventData.geo_address_info?.country_code,
+            region: eventData.geo_address_info?.region,
+            venueAddress: eventData.geo_address_info?.address,
+            fullAddress: eventData.geo_address_info?.full_address,
+            shortAddress: eventData.geo_address_info?.short_address,
+            locationType: eventData.location_type, // 'offline' or 'online'
+          };
+          isVirtual = eventData.location_type === 'online';
+          coverImageUrl = eventData.cover_url || null;
+        }
+      } catch (err) {
+        console.warn(`⚠️ Failed to parse __NEXT_DATA__ for ${finalUrl}: ${err.message}`);
+      }
+    }
+
+    // Crude text extraction for topic matching (browser version used
+    // document.body.innerText).
+    const pageContent = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&[a-z#0-9]+;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .substring(0, 5000);
+
+    return { htmlLoaded: true, finalUrl, coverImageUrl, pageContent, isVirtual, lumaData, lumaPageData };
+  }
+
+  /**
    * Build a parsedEvent (same shape as LumaICalScraper.parseICalEvent) from
    * the event page alone. The full event object lives in __NEXT_DATA__ at
    * pageProps.initialData.data.event: name, start_at, end_at plus the
-   * location/timezone/cover fields fetchEventPageData already distils into
+   * location/timezone/cover fields fetchEventPageHttp distils into
    * pageData.lumaData.
    */
-  buildEventFromPageData(lumaEventId, probeLink, pageData) {
+  buildEventFromPageData(lumaEventId, pageData) {
     const eventObj = pageData?.lumaPageData?.pageProps?.initialData?.data?.event;
     if (!eventObj?.name || !eventObj?.start_at) return null;
 
@@ -184,11 +280,9 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
     const eventName = eventObj.name;
 
     // Prefer the resolved public slug URL over the /event/<evt-id> probe link.
-    let eventLink = probeLink;
-    try {
-      const current = this.page?.url();
-      if (current && /^https:\/\/(lu\.ma|luma\.com)\//.test(current)) eventLink = current;
-    } catch { /* page gone — keep probe link */ }
+    const eventLink = /^https:\/\/(lu\.ma|luma\.com)\//.test(pageData.finalUrl || '')
+      ? pageData.finalUrl
+      : `https://luma.com/event/${lumaEventId}`;
 
     let coordinates = null;
     let eventLocation = null;
@@ -199,8 +293,7 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
 
     let eventCity = lumaData.city || null;
     let eventRegion = lumaData.region || null;
-    const isVirtual = pageData.isVirtual || lumaData.locationType === 'online';
-    if (isVirtual && !eventCity && !eventRegion) {
+    if (pageData.isVirtual && !eventCity && !eventRegion) {
       eventCity = 'online';
       eventRegion = 'on';
     }
