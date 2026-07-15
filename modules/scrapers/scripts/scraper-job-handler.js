@@ -17,6 +17,7 @@ import { LumaSearchScraper } from './scrapers/LumaSearchScraper.js';
 import { LumaCategoryScraper } from './scrapers/LumaCategoryScraper.js';
 import { LumaHostEnricher } from './scrapers/LumaHostEnricher.js';
 import { LumaICalScraperFast } from './scrapers/LumaICalScraperFast.js';
+import { LumaPendingEventsScraper } from './scrapers/LumaPendingEventsScraper.js';
 import { LumaSearchScraperFast } from './scrapers/LumaSearchScraperFast.js';
 import { LumaCategoryScraperFast } from './scrapers/LumaCategoryScraperFast.js';
 import { LinuxFoundationEventsScraper } from './scrapers/LinuxFoundationEventsScraper.js';
@@ -153,6 +154,9 @@ const scraperClasses = {
   'LumaSearchScraper': LumaSearchScraper,
   'LumaCategoryScraper': LumaCategoryScraper,
   'LumaHostEnricher': LumaHostEnricher,
+  // Reverse signup flow — scrapes events for queued Luma signup emails whose
+  // event doesn't exist yet, then replays the queued registrations.
+  'LumaPendingEventsScraper': LumaPendingEventsScraper,
   // Fast variants — route per-event-page fetches through scrapling-fetcher.
   // See spec-scrapling-fetcher-service.md §4.3.
   'LumaICalScraperFast': LumaICalScraperFast,
