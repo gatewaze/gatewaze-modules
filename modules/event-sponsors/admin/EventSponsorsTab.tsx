@@ -28,6 +28,7 @@ import {
   Td,
 } from '@/components/ui';
 import { RowActions } from '@/components/shared/table/RowActions';
+import { supabase } from '@/lib/supabase';
 import { ScrollableTable } from '@/components/shared/table/ScrollableTable';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Event } from '@/utils/eventService';
@@ -60,6 +61,11 @@ export function EventSponsorsTab({ eventId, event }: { eventId: string; event: E
   const [primaryContactId, setPrimaryContactId] = useState<string | null>(null);
   const [teamModalLoading, setTeamModalLoading] = useState(false);
   const [teamSearchQuery, setTeamSearchQuery] = useState('');
+  // Inline "add new team member" form (creates/matches a person + registration,
+  // since team members must be registered attendees for badge scanning).
+  const [showAddMemberForm, setShowAddMemberForm] = useState(false);
+  const [addingMember, setAddingMember] = useState(false);
+  const [newMember, setNewMember] = useState({ first_name: '', last_name: '', email: '', job_title: '', company: '' });
 
   // Scans view modal state
   const [showScansModal, setShowScansModal] = useState(false);
@@ -219,6 +225,94 @@ export function EventSponsorsTab({ eventId, event }: { eventId: string; event: E
       toast.error('Failed to load registrations');
     } finally {
       setTeamModalLoading(false);
+    }
+  };
+
+  // Create (or match by email) a person, register them for this event, and
+  // pre-select them in the team list — Save Team then persists the assignment.
+  const handleAddTeamMember = async () => {
+    const email = newMember.email.trim().toLowerCase();
+    if (!email || !/.+@.+\..+/.test(email)) {
+      toast.error('Enter a valid email address');
+      return;
+    }
+    setAddingMember(true);
+    try {
+      // 1. Match an existing person by email (case-insensitive; escape ilike
+      //    wildcards — _ is common in emails), else create one. New people are
+      //    event contacts (they're being registered), not marketing-consented.
+      const pattern = email.replace(/([%_\\])/g, '\\$1');
+      const { data: existing, error: findError } = await supabase
+        .from('people')
+        .select('id')
+        .ilike('email', pattern)
+        .maybeSingle();
+      if (findError) throw findError;
+
+      let personId: string | undefined = existing?.id;
+      if (!personId) {
+        const { data: created, error: createError } = await supabase
+          .from('people')
+          .insert({
+            email,
+            contact_kind: 'event_contact',
+            acquisition_source: 'sponsor_team',
+            attributes: {
+              first_name: newMember.first_name.trim(),
+              last_name: newMember.last_name.trim(),
+              company: newMember.company.trim() || managingSponsor?.sponsor?.name || '',
+              job_title: newMember.job_title.trim(),
+              source: 'sponsor_team',
+            },
+          })
+          .select('id')
+          .single();
+        if (createError) throw createError;
+        personId = created.id;
+      }
+
+      // 2. Member profile (QR/check-in identity) — same RPC the bulk path uses.
+      const { data: profileId } = await supabase.rpc('people_get_or_create_profile', { p_person_id: personId });
+
+      // 3. Find or create their registration for this event.
+      const { data: existingReg } = await supabase
+        .from('events_registrations')
+        .select('id')
+        .eq('event_id', eventId)
+        .eq('person_id', personId)
+        .maybeSingle();
+
+      let regId: string | undefined = existingReg?.id;
+      if (!regId) {
+        const { data: reg, error: regError } = await supabase
+          .from('events_registrations')
+          .insert({
+            event_id: eventId,
+            person_id: personId,
+            people_profile_id: profileId ?? null,
+            registration_type: 'sponsor',
+            registration_source: 'sponsor_team',
+            status: 'confirmed',
+            registered_at: new Date().toISOString(),
+          })
+          .select('id')
+          .single();
+        if (regError) throw regError;
+        regId = reg.id;
+      }
+
+      // 4. Refresh the pool and pre-select them; Save Team persists the assignment.
+      const allRegs = await EventQrService.getEventRegistrations(eventId);
+      setEventRegistrations(allRegs);
+      setSelectedRegistrationIds((prev) => new Set(prev).add(regId!));
+      setNewMember({ first_name: '', last_name: '', email: '', job_title: '', company: '' });
+      setShowAddMemberForm(false);
+      toast.success('Registered and selected — click Save Team to confirm');
+    } catch (error) {
+      console.error('Error adding team member:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to add team member');
+    } finally {
+      setAddingMember(false);
     }
   };
 
@@ -832,18 +926,80 @@ export function EventSponsorsTab({ eventId, event }: { eventId: string; event: E
                   Select attendees to add to this sponsor's team. Team members will be able to scan badges and view all team scans in the check-in app.
                 </p>
 
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <MagnifyingGlassIcon className="h-5 w-5 text-[var(--gray-a9)]" />
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <MagnifyingGlassIcon className="h-5 w-5 text-[var(--gray-a9)]" />
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Search by name, email, job title, or company..."
+                      value={teamSearchQuery}
+                      onChange={(e) => setTeamSearchQuery(e.target.value)}
+                      className="block w-full pl-10 pr-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-background)] text-[var(--gray-12)] placeholder-[var(--gray-a9)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-8)] focus:border-transparent"
+                    />
                   </div>
-                  <input
-                    type="text"
-                    placeholder="Search by name, email, job title, or company..."
-                    value={teamSearchQuery}
-                    onChange={(e) => setTeamSearchQuery(e.target.value)}
-                    className="block w-full pl-10 pr-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-background)] text-[var(--gray-12)] placeholder-[var(--gray-a9)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-8)] focus:border-transparent"
-                  />
+                  <Button variant="secondary" onClick={() => setShowAddMemberForm((v) => !v)}>
+                    <PlusIcon className="w-4 h-4 mr-1" />
+                    New person
+                  </Button>
                 </div>
+
+                {showAddMemberForm && (
+                  <div className="rounded-lg border border-[var(--gray-a6)] bg-[var(--gray-a2)] p-4 space-y-3">
+                    <p className="text-sm font-medium text-[var(--gray-12)]">
+                      Add a new team member
+                      <span className="ml-2 font-normal text-[var(--gray-a11)]">
+                        They'll be registered for this event so they can scan badges.
+                      </span>
+                    </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        placeholder="First name"
+                        value={newMember.first_name}
+                        onChange={(e) => setNewMember((m) => ({ ...m, first_name: e.target.value }))}
+                        className="px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-background)] text-[var(--gray-12)] placeholder-[var(--gray-a9)]"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Last name"
+                        value={newMember.last_name}
+                        onChange={(e) => setNewMember((m) => ({ ...m, last_name: e.target.value }))}
+                        className="px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-background)] text-[var(--gray-12)] placeholder-[var(--gray-a9)]"
+                      />
+                      <input
+                        type="email"
+                        placeholder="Email (required)"
+                        value={newMember.email}
+                        onChange={(e) => setNewMember((m) => ({ ...m, email: e.target.value }))}
+                        className="px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-background)] text-[var(--gray-12)] placeholder-[var(--gray-a9)]"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Job title"
+                        value={newMember.job_title}
+                        onChange={(e) => setNewMember((m) => ({ ...m, job_title: e.target.value }))}
+                        className="px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-background)] text-[var(--gray-12)] placeholder-[var(--gray-a9)]"
+                      />
+                      <input
+                        type="text"
+                        placeholder={`Company (default: ${managingSponsor.sponsor?.name || 'sponsor'})`}
+                        value={newMember.company}
+                        onChange={(e) => setNewMember((m) => ({ ...m, company: e.target.value }))}
+                        className="px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-background)] text-[var(--gray-12)] placeholder-[var(--gray-a9)] col-span-2"
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button variant="secondary" onClick={() => setShowAddMemberForm(false)} disabled={addingMember}>
+                        Cancel
+                      </Button>
+                      <Button variant="primary" onClick={handleAddTeamMember} disabled={addingMember || !newMember.email.trim()}>
+                        {addingMember ? 'Adding…' : 'Add & select'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="max-h-96 overflow-y-auto border border-[var(--gray-a6)] rounded-lg">
                   <Table>
@@ -895,6 +1051,17 @@ export function EventSponsorsTab({ eventId, event }: { eventId: string; event: E
                       </Tr>
                     </THead>
                     <TBody>
+                      {eventRegistrations.length === 0 && (
+                        <Tr>
+                          <Td colSpan={6}>
+                            <div className="py-6 text-center text-sm text-[var(--gray-a11)]">
+                              No one is registered for this event yet — team members must be registered
+                              attendees so they can scan badges. Use <span className="font-medium">New person</span> above
+                              to add and register a team member.
+                            </div>
+                          </Td>
+                        </Tr>
+                      )}
                       {eventRegistrations
                         .filter((reg: any) => {
                           if (!teamSearchQuery.trim()) return true;

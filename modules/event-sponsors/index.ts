@@ -18,6 +18,10 @@ const eventSponsorsModule: GatewazeModule = {
     'migrations/001_event_sponsors_tables.sql',
     'migrations/002_triage_adapter.sql',
     'migrations/003_register_with_platform.sql',
+    // 004: the sponsor-team schema the admin UI always wrote to but no
+    // migration ever created (events_registrations.sponsor_team_id +
+    // is_primary_contact + 'sponsor_staff' registration_type + view refresh).
+    'migrations/004_sponsor_team_columns.sql',
   ],
 
   adminSlots: [
