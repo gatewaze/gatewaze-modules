@@ -101,10 +101,18 @@ export async function runChatViaGoose(
   try {
     const res = await supabase
       .from('ai_use_cases')
-      .select('goose_runtime_overrides')
+      .select('goose_runtime_overrides, max_output_tokens')
       .eq('id', args.useCase)
       .maybeSingle();
-    const o = (res.data as { goose_runtime_overrides?: Record<string, unknown> } | null)?.goose_runtime_overrides ?? {};
+    const row = res.data as { goose_runtime_overrides?: Record<string, unknown>; max_output_tokens?: number | null } | null;
+    // Honor the use case's output cap. Goose defaults max_tokens to 4096; a
+    // large copilot edit (regenerating the document) overruns that and the
+    // response truncates. Seed GOOSE_MAX_TOKENS from max_output_tokens; explicit
+    // goose_runtime_overrides below still win. (Mirrors run-recipe-goose.)
+    if (typeof row?.max_output_tokens === 'number' && row.max_output_tokens > 0) {
+      overrides.GOOSE_MAX_TOKENS = String(row.max_output_tokens);
+    }
+    const o = row?.goose_runtime_overrides ?? {};
     for (const [k, v] of Object.entries(o)) {
       if (v != null) overrides[k] = typeof v === 'string' ? v : String(v);
     }
