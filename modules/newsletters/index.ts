@@ -327,6 +327,10 @@ const newslettersModule: GatewazeModule = {
     // so each RPC stays well under the 8s statement_timeout that was cancelling
     // the single-shot fanout of large lists.
     'migrations/071_fanout_batch.sql',
+    // 072 corrects tz_local send_at: GREATEST(scheduled_at, local target on
+    // schedule date) — already-passed (eastern) recipients send at the schedule
+    // time instead of rolling to the next day.
+    'migrations/072_fanout_send_at_clamp.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
