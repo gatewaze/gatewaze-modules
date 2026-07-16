@@ -323,6 +323,10 @@ const newslettersModule: GatewazeModule = {
     // pg_timezone_names re-scan, so large fanouts finish under the 8s RPC cap
     // (was ~20s → statement timeout → send marked failed).
     'migrations/070_fanout_default_tz_once.sql',
+    // 071 chunked fanout: the worker loops fanout_..._batch (keyset by email)
+    // so each RPC stays well under the 8s statement_timeout that was cancelling
+    // the single-shot fanout of large lists.
+    'migrations/071_fanout_batch.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

@@ -59,14 +59,54 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
     throw new Error(`[newsletter:dispatch-scheduled] select due sends failed: ${selectErr.message}`);
   }
 
-  // 2. Fan out each due send + flip status.
+  // 2. Fan out each due send in keyset-paginated batches, then flip status.
+  // Fanning out a large list in a single RPC exceeds the PostgREST/role
+  // statement_timeout (~8s) and gets cancelled ("canceling statement due to
+  // statement timeout"). fanout_..._batch does one ~5k-row slice per call —
+  // each a separate, fast RPC — so no statement approaches the cap regardless
+  // of list size. Idempotent: the keyset cursor advances by email, so a partial
+  // run resumes cleanly on the next tick.
+  const FANOUT_BATCH = Number(process.env.NEWSLETTER_FANOUT_BATCH ?? 5000);
   for (const send of (due ?? []) as DueSend[]) {
-    const { error: fanoutErr } = await supabase.rpc(
-      'fanout_newsletter_send_recipients',
-      { p_send_id: send.id },
-    );
-    if (fanoutErr) {
-      const msg = `Send ${send.id}: ${fanoutErr.message}`;
+    try {
+      let after: string | null = null;
+      let guard = 0;
+      for (;;) {
+        const { data, error } = await supabase.rpc('fanout_newsletter_send_recipients_batch', {
+          p_send_id: send.id,
+          p_batch_size: FANOUT_BATCH,
+          p_after_email: after,
+        });
+        if (error) throw new Error(error.message);
+        const row = (Array.isArray(data) ? data[0] : data) as
+          | { last_email: string | null; remaining: boolean }
+          | null;
+        if (!row) break;
+        after = row.last_email ?? after;
+        if (!row.remaining) break;
+        // Backstop against a non-advancing cursor (shouldn't happen).
+        if (++guard > 10_000) throw new Error('fanout batch guard tripped');
+      }
+
+      // Recompute the authoritative recipient count (idempotent-safe) and flip.
+      const { count } = await supabase
+        .from('newsletter_send_recipients')
+        .select('*', { count: 'exact', head: true })
+        .eq('send_id', send.id);
+
+      const { error: flipErr } = await supabase
+        .from('newsletter_sends')
+        .update({
+          status: 'sending',
+          started_at: new Date().toISOString(),
+          total_recipients: count ?? 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', send.id);
+      if (flipErr) throw new Error(`flip to sending: ${flipErr.message}`);
+      processed++;
+    } catch (err) {
+      const msg = `Send ${send.id}: ${(err as Error).message}`;
       console.error('[newsletter:dispatch-scheduled] fanout failed:', msg);
       errors.push(msg);
       // Mark the send failed so it doesn't get retried forever and operators
@@ -75,23 +115,7 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
         .from('newsletter_sends')
         .update({ status: 'failed', updated_at: new Date().toISOString() })
         .eq('id', send.id);
-      continue;
     }
-    const { error: flipErr } = await supabase
-      .from('newsletter_sends')
-      .update({
-        status: 'sending',
-        started_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', send.id);
-    if (flipErr) {
-      const msg = `Send ${send.id} flip to sending: ${flipErr.message}`;
-      console.error('[newsletter:dispatch-scheduled]', msg);
-      errors.push(msg);
-      continue;
-    }
-    processed++;
   }
 
   if (processed) {
