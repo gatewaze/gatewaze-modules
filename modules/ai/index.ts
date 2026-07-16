@@ -169,8 +169,14 @@ const aiModule: GatewazeModule = {
       concurrency: Number(process.env.AI_RECIPE_WORKER_CONCURRENCY ?? 4),
     },
     {
+      // File stem MUST equal the job-name suffix ('run-chat'): the prod worker
+      // (scripts/workers/job-worker.js) derives the job name from the handler
+      // FILENAME as `${moduleId}:${stem}`, ignoring this declared `name`. The
+      // file was `run-chat-handler.ts` → registered `ai:run-chat-handler`, but
+      // every caller enqueues `ai:run-chat` (JOB_RUN_CHAT), so chat turns sat
+      // queued forever with "No handler registered". Renamed to run-chat.ts.
       name: 'ai:run-chat',
-      handler: 'workers/run-chat-handler.js',
+      handler: 'workers/run-chat.js',
       concurrency: Number(process.env.AI_CHAT_WORKER_CONCURRENCY ?? 8),
     },
     // Orphan-stream sweep — runs every hour via the platform's cron
