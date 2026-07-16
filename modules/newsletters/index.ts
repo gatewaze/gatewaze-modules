@@ -319,6 +319,10 @@ const newslettersModule: GatewazeModule = {
     // newsletters_save_edition / restore RPCs (replaces the destructive
     // delete-all-then-reinsert client save).
     'migrations/069_edition_safe_save.sql',
+    // 070 validates the send default timezone once instead of a per-recipient
+    // pg_timezone_names re-scan, so large fanouts finish under the 8s RPC cap
+    // (was ~20s → statement timeout → send marked failed).
+    'migrations/070_fanout_default_tz_once.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
