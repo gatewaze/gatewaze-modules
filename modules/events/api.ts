@@ -36,6 +36,28 @@ function initSupabase(projectRoot: string) {
   return _supabase;
 }
 
+/**
+ * Extract a human-readable message from an error thrown by supabase-js /
+ * PostgREST. Those errors are plain objects ({ message, details, hint, code }),
+ * NOT Error instances — so `String(err)` yields the useless "[object Object]"
+ * that masked a foreign-key violation behind the events bulk-delete route.
+ */
+function pgErrorMessage(err: unknown): string {
+  if (!err) return 'unknown error';
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'object') {
+    const e = err as { message?: string; details?: string; hint?: string; code?: string };
+    const parts = [
+      e.message,
+      e.details,
+      e.hint ? `hint: ${e.hint}` : undefined,
+      e.code ? `(${e.code})` : undefined,
+    ].filter(Boolean);
+    if (parts.length) return parts.join(' ');
+  }
+  return String(err);
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 /**
@@ -465,7 +487,7 @@ function registerEventsAdminListing(app: Express, projectRoot: string) {
         .in('id', ids);
 
       if (error) {
-        res.status(500).json({ error: { code: 'DELETE_FAILED', message: (error instanceof Error ? error.message : String(error)) } });
+        res.status(500).json({ error: { code: 'DELETE_FAILED', message: pgErrorMessage(error) } });
         return;
       }
       // Bust admin listing cache for events so the next list call reflects
@@ -473,8 +495,74 @@ function registerEventsAdminListing(app: Express, projectRoot: string) {
       listingCache.emit({ module: 'events', table: 'events', reason: 'bulk-delete' });
       res.json({ success: true, deleted: count ?? ids.length });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: { code: 'LISTING_INTERNAL_ERROR', message } });
+      res.status(500).json({ error: { code: 'LISTING_INTERNAL_ERROR', message: pgErrorMessage(err) } });
+    }
+  });
+
+  // Change an event's publish_state from the event detail page. Runs the central
+  // state-machine RPC (events_publish_state_set → content_publish_state_set),
+  // which is GRANTed to service_role only — hence this server-side route rather
+  // than a browser rpc() call. The RPC validates the transition and writes an
+  // audit row. Mirrors the inbox's set_state action for a single event.
+  app.post('/api/admin/events/:id/publish-state', async (req: Request, res: Response) => {
+    try {
+      const supabase = initSupabase(projectRoot);
+      const { to, reason } = (req.body ?? {}) as { to?: string; reason?: string };
+      const VALID_STATES = [
+        'draft', 'pending_review', 'auto_suppressed', 'rejected', 'published', 'unpublished',
+      ];
+      if (!to || !VALID_STATES.includes(to)) {
+        res.status(400).json({ error: { code: 'INVALID_STATE', message: `\"to\" must be one of: ${VALID_STATES.join(', ')}` } });
+        return;
+      }
+
+      // Resolve the acting admin from the bearer token when present (audit trail).
+      let actor = 'admin:ui';
+      const authHeader = req.headers.authorization;
+      if (authHeader) {
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        try {
+          const { data, error: authErr } = await supabase.auth.getUser(token);
+          if (!authErr && data?.user?.id) actor = `admin:${data.user.id}`;
+        } catch {
+          // fall through — actor stays 'admin:ui'
+        }
+      }
+
+      const { error } = await supabase.rpc('events_publish_state_set', {
+        p_id: req.params.id,
+        p_to: to,
+        p_actor: actor,
+        p_reason: reason ?? 'admin_ui:event_detail',
+      });
+
+      if (error) {
+        // 23514 = invalid state transition (raised by content_publish_state_set),
+        // P0002 = event row not found. Surface both as client errors.
+        const code = (error as { code?: string }).code;
+        if (code === '23514') {
+          res.status(409).json({ error: { code: 'INVALID_STATE_TRANSITION', message: pgErrorMessage(error) } });
+          return;
+        }
+        if (code === 'P0002') {
+          res.status(404).json({ error: { code: 'NOT_FOUND', message: pgErrorMessage(error) } });
+          return;
+        }
+        res.status(500).json({ error: { code: 'PUBLISH_STATE_FAILED', message: pgErrorMessage(error) } });
+        return;
+      }
+
+      // Read back the persisted state so the client can trust the result.
+      const { data: row } = await supabase
+        .from('events')
+        .select('publish_state')
+        .eq('id', req.params.id)
+        .single();
+
+      listingCache.emit({ module: 'events', table: 'events', reason: 'publish-state' });
+      res.json({ success: true, publish_state: row?.publish_state ?? to });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'PUBLISH_STATE_FAILED', message: pgErrorMessage(err) } });
     }
   });
 }
@@ -617,7 +705,7 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
       res.status(204).send();
     } catch (err) {
       console.error('Error deleting event:', err);
-      res.status(500).json({ error: 'Failed to delete event' });
+      res.status(500).json({ error: `Failed to delete event: ${pgErrorMessage(err)}` });
     }
   });
 

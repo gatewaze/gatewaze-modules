@@ -229,6 +229,7 @@ export class EventService {
         accountId: data.account_id,
         offerBeta: data.offer_beta,
         isLiveInProduction: data.is_live_in_production !== undefined ? data.is_live_in_production : true,
+        publishState: data.publish_state,
         checkinQrCode: data.checkin_qr_code,
         enableRegistration: data.enable_registration !== undefined ? data.enable_registration : true,
         enableNativeRegistration: data.enable_native_registration || false,
@@ -331,6 +332,7 @@ export class EventService {
         accountId: data.account_id,
         offerBeta: data.offer_beta,
         isLiveInProduction: data.is_live_in_production !== undefined ? data.is_live_in_production : true,
+        publishState: data.publish_state,
         checkinQrCode: data.checkin_qr_code,
         enableRegistration: data.enable_registration !== undefined ? data.enable_registration : true,
         enableNativeRegistration: data.enable_native_registration || false,
@@ -853,6 +855,39 @@ static async createEvent(eventData: Omit<Event, 'id' | 'createdAt' | 'updatedAt'
     } catch (error) {
       console.error('Error in deleteEvent:', error);
       return { success: false, error: 'Failed to delete event' };
+    }
+  }
+
+  /**
+   * Change an event's publish_state via the central state-machine RPC. Runs
+   * through the server-side route (POST /api/admin/events/:id/publish-state)
+   * because events_publish_state_set is GRANTed to service_role only. The
+   * bearer token is forwarded so the transition is attributed to the admin.
+   */
+  static async setPublishState(
+    id: string,
+    to: 'draft' | 'pending_review' | 'auto_suppressed' | 'rejected' | 'published' | 'unpublished',
+    reason?: string,
+  ): Promise<EventServiceResponse<{ publishState: string }>> {
+    try {
+      const apiBase = import.meta.env.VITE_API_URL ?? '';
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const res = await fetch(`${apiBase}/api/admin/events/${id}/publish-state`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ to, reason }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: out?.error?.message ?? `Publish state change failed (${res.status})` };
+      }
+      return { success: true, data: { publishState: out.publish_state ?? to } };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to change publish state' };
     }
   }
 
