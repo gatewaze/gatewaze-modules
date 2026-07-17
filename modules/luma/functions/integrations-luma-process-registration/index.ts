@@ -173,12 +173,15 @@ function extractUserName(text: string): string | null {
 
   const lines = text.split(/[\r\n]+/).map(line => line.trim()).filter(Boolean)
 
-  // Strategy 1: Name on first line, "registered", "cancelled", or "declined" on second line
-  // This handles the Luma format where first line is just the name
+  // Strategy 1: Name on first line, "registered", "cancelled", "declined",
+  // or "accepted" on second line. Handles both the direct-signup format
+  // ("registered for your event") and the invited-guest format
+  // ("accepted your invite").
   if (lines.length >= 2) {
     const firstLine = lines[0]
     const secondLine = lines[1].toLowerCase()
-    if ((secondLine.includes('registered') || secondLine.includes('cancelled') || secondLine.includes('declined')) &&
+    if ((secondLine.includes('registered') || secondLine.includes('cancelled') ||
+         secondLine.includes('declined') || secondLine.includes('accepted')) &&
         /^[\p{L}\s\-'.]+$/u.test(firstLine) && firstLine.length < 100) {
       return firstLine
     }
@@ -192,6 +195,16 @@ function extractUserName(text: string): string | null {
     const name = urlPatternMatch[1].trim()
     // Validate it looks like a name (letters, spaces, hyphens, apostrophes, periods)
     if (/^[\p{L}\s\-'.]+$/u.test(name) && name.length < 100) {
+      return name
+    }
+  }
+
+  // Strategy 2b: invited-guest format renders the profile link as a bare
+  // colon-separated URL: "Tarun Chhabra: https://... has registered for ..."
+  const colonUrlMatch = text.match(/^([\p{L}\s\-'.]+?):\s*https?:\/\/\S+\s+has registered for/imu)
+  if (colonUrlMatch) {
+    const name = colonUrlMatch[1].trim()
+    if (name.length < 100) {
       return name
     }
   }
@@ -343,6 +356,56 @@ function extractRegistrationAnswers(text: string): Array<{
   if (!text) return []
 
   const answers: Array<{ label: string; value: any; answer: any; question_type?: string }> = []
+
+  // Invited-guest format: a bulleted block with question and answer on ONE
+  // line — "They answered the following N questions:" followed by
+  // " * {Question}? {Answer}" lines. Parse it first; fall through to the
+  // classic question-line/answer-line format if the header is absent.
+  const bulletBlock = text.match(/They answered the following \d+ questions?:\s*\r?\n([\s\S]*?)(?=\r?\n\s*\r?\n\s*(?:Here|You can manage|Sent using)|$)/i)
+  if (bulletBlock) {
+    // Re-join continuation lines: anything that doesn't start a new bullet
+    // belongs to the previous bullet's answer.
+    const items: string[] = []
+    for (const rawLine of bulletBlock[1].split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line) continue
+      if (/^[*•-]\s+/.test(line)) {
+        items.push(line.replace(/^[*•-]\s+/, ''))
+      } else if (items.length > 0) {
+        items[items.length - 1] += ` ${line}`
+      }
+    }
+
+    for (const item of items) {
+      let label = ''
+      let answerText = ''
+      const qIdx = item.lastIndexOf('?')
+      if (qIdx > 0) {
+        label = item.slice(0, qIdx + 1).trim()
+        answerText = item.slice(qIdx + 1).trim()
+      } else {
+        // Consent-style rows have no question mark: "Terms and Conditions Agreed"
+        const consent = item.match(/^(Terms and Conditions|Code of Conduct)\s+(.+)$/i)
+        if (!consent) continue
+        label = consent[1].trim()
+        answerText = consent[2].trim()
+      }
+      if (!answerText || /^No answer provided\.?$/i.test(answerText)) continue
+
+      let question_type = 'text'
+      let value: any = answerText
+      if (/linkedin/i.test(label)) {
+        question_type = 'linkedin'
+      } else if (/company|work for/i.test(label) && !/sponsor/i.test(label)) {
+        question_type = 'company'
+      } else if (/terms and conditions|code of conduct|do not want.*shared|not.*information.*shared.*sponsor/i.test(label)) {
+        question_type = 'agree-check'
+        value = answerText.toLowerCase() === 'agreed' ? true : answerText
+      }
+      answers.push({ label, value, answer: answerText, question_type })
+    }
+    return answers
+  }
 
   // Find the Q&A section: after "has registered for {Event}." or after "UTM source" line
   // Split into lines and find the start of the Q&A block
