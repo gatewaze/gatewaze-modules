@@ -35,6 +35,7 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
   constructor(config, globalConfig) {
     super(config, globalConfig);
     this.replayStats = { replayed: 0, replayFailed: 0 };
+    this.refreshStats = { refreshed: 0 };
     // Plain-HTTP fetches are cheap; a short politeness delay is enough.
     this.pageFetchDelay = 1000;
   }
@@ -60,17 +61,20 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
       .limit(500);
 
     if (pendErr) {
-      // Table absent (luma module not installed) or unreadable — clean no-op.
-      console.log(`ℹ️ Pending Luma registrations unavailable (${pendErr.message}) — nothing to do`);
-      return [];
+      // Table absent (luma module not installed) or unreadable — skip the
+      // queue phases; the refresh pass below still runs.
+      console.log(`ℹ️ Pending Luma registrations unavailable (${pendErr.message}) — no queue work`);
     }
-    if (!pendingRows?.length) {
+    const queuedRows = pendErr ? [] : (pendingRows || []);
+    if (!queuedRows.length) {
       console.log('✅ No queued Luma signups awaiting an event');
-      return [];
+      await this.refreshStaleEvents(supabase);
+      console.log(`📊 Stats: 0 events scraped, ${this.refreshStats.refreshed} events refreshed`);
+      return this.events;
     }
 
-    const ids = [...new Set(pendingRows.map((r) => r.luma_event_id).filter(Boolean))];
-    console.log(`📬 ${pendingRows.length} queued signups across ${ids.length} Luma events`);
+    const ids = [...new Set(queuedRows.map((r) => r.luma_event_id).filter(Boolean))];
+    console.log(`📬 ${queuedRows.length} queued signups across ${ids.length} Luma events`);
 
     // Which of these events already exist? (created since the email arrived —
     // by a calendar scraper, CSV import, or manually)
@@ -86,7 +90,7 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
     // Phase 1: replay signups whose event already exists.
     await this.replayPendingRegistrations(
       supabase,
-      pendingRows.filter((r) => existingIds.has(r.luma_event_id))
+      queuedRows.filter((r) => existingIds.has(r.luma_event_id))
     );
 
     // Phase 2: scrape the events that don't exist yet.
@@ -156,14 +160,95 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
     // are already in the DB; batch-fallback events get replayed next run).
     await this.replayPendingRegistrations(
       supabase,
-      pendingRows.filter((r) => scrapedIds.includes(r.luma_event_id))
+      queuedRows.filter((r) => scrapedIds.includes(r.luma_event_id))
     );
+
+    // Phase 4: refresh stale Luma counts / page data for events people are
+    // actually registering for, so the admin "Luma guests" stat tracks the
+    // live event page instead of freezing at creation time.
+    await this.refreshStaleEvents(supabase);
 
     console.log(
       `📊 Stats: ${this.stats.found} events scraped, ${this.stats.failed} failed, ` +
-      `${this.replayStats.replayed} registrations attached, ${this.replayStats.replayFailed} replay failures`
+      `${this.replayStats.replayed} registrations attached, ${this.replayStats.replayFailed} replay failures, ` +
+      `${this.refreshStats.refreshed} events refreshed`
     );
     return this.events;
+  }
+
+  /**
+   * Re-scrape the event pages of registration-bearing Luma events whose
+   * counts are stale, feeding them through the normal save pipeline — which
+   * updates luma_guest_count / luma_ticket_count / page data on existing
+   * events without touching publish_state.
+   *
+   * Each event is refreshed at most once per refreshStaleHours (default 24h
+   * — i.e. daily), up to maxRefreshPerRun per run (default 15), so the
+   * hourly schedule spreads the work and no event page is hammered.
+   */
+  async refreshStaleEvents(supabase) {
+    const cfg = this.config?.config || {};
+    const maxRefresh = cfg.maxRefreshPerRun ?? 15;
+    const staleHours = cfg.refreshStaleHours ?? 24;
+    if (maxRefresh <= 0) return;
+    if (typeof this.globalConfig?.saveEvent !== 'function') {
+      console.log('ℹ️ No saveEvent pipeline available — skipping refresh pass');
+      return;
+    }
+
+    const staleCutoff = new Date(Date.now() - staleHours * 3600_000).toISOString();
+    const recencyCutoff = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
+
+    // Candidates: Luma events that started within the last 7 days or are
+    // upcoming, whose counts have never been synced or are stale.
+    const { data: candidates, error: candErr } = await supabase
+      .from('events')
+      .select('id, luma_event_id, event_title, luma_counts_updated_at')
+      .not('luma_event_id', 'is', null)
+      .gte('event_start', recencyCutoff)
+      .or(`luma_counts_updated_at.is.null,luma_counts_updated_at.lt.${staleCutoff}`)
+      .order('luma_counts_updated_at', { ascending: true, nullsFirst: true })
+      .limit(100);
+    if (candErr || !candidates?.length) {
+      if (candErr) console.warn(`⚠️ Refresh candidate query failed: ${candErr.message}`);
+      return;
+    }
+
+    // Only refresh events that actually have registrations — that's where
+    // the counts are looked at.
+    const { data: regRows } = await supabase
+      .from('events_registrations')
+      .select('event_id')
+      .in('event_id', candidates.map((e) => e.id));
+    const withRegs = new Set((regRows || []).map((r) => r.event_id));
+    const toRefresh = candidates.filter((e) => withRegs.has(e.id)).slice(0, maxRefresh);
+    if (!toRefresh.length) return;
+
+    console.log(`🔄 Refreshing ${toRefresh.length} registration-bearing Luma events (stale > ${staleHours}h)`);
+    for (const ev of toRefresh) {
+      if (this.isShutdownRequested()) break;
+      if (this.pageFetchDelay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.pageFetchDelay));
+      }
+      try {
+        const pageData = await this.fetchEventPageHttp(`https://luma.com/event/${ev.luma_event_id}`);
+        const parsedEvent = this.buildEventFromPageData(ev.luma_event_id, pageData);
+        if (!parsedEvent) {
+          // Page gone or private now — leave the stored event untouched;
+          // stamp the sync time so a dead page isn't retried every run.
+          await supabase
+            .from('events')
+            .update({ luma_counts_updated_at: new Date().toISOString() })
+            .eq('id', ev.id);
+          console.warn(`⚠️ Refresh skipped for "${ev.event_title}" — no event data on page`);
+          continue;
+        }
+        await this.globalConfig.saveEvent(parsedEvent);
+        this.refreshStats.refreshed++;
+      } catch (err) {
+        console.warn(`⚠️ Refresh failed for "${ev.event_title}": ${err.message}`);
+      }
+    }
   }
 
   /**
