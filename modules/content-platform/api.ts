@@ -305,10 +305,13 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       const memberOnly = String(req.query.member_only ?? '') === 'true';
       const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
       const sort = String(req.query.sort ?? 'newest');
-      // Events default to upcoming-only; past events live behind the filter.
-      // Non-event rows (no cached event_start) always show except under 'past'.
+      // Events are upcoming-only when the UI asks for it (the shipped
+      // InboxPage sends time=upcoming by default); with no param — older
+      // admin builds — show everything so the list never silently hides
+      // the backlog behind a filter the UI can't reach. Non-event rows
+      // (no cached event_start) always show except under 'past'.
       const time = ['upcoming', 'past', 'all'].includes(String(req.query.time))
-        ? String(req.query.time) : 'upcoming';
+        ? String(req.query.time) : 'all';
       const assignedTo = typeof req.query.assigned_to === 'string' ? req.query.assigned_to : null;
 
       const invalid = publishStates.find((s) => !ALLOWED_PUBLISH_STATES.includes(s));
@@ -332,54 +335,74 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
         });
       }
 
-      let q = sb()
-        .from('content_triage_items')
-        .select(`
-          id, content_type, content_id, status, lifecycle_key,
-          assigned_to, assigned_at, team_name, priority, created_at,
-          metadata, applied_categories, suggested_categories
-        `, { count: 'estimated' })
-        .in('status', ['pending', 'changes_requested']);
-
-      if (contentTypes && contentTypes.length) q = q.in('content_type', contentTypes);
-      if (assignedTo) q = q.eq('assigned_to', assignedTo);
-
-      if (cursor) {
-        q = q.or(`created_at.lt.${cursor.ts},and(created_at.eq.${cursor.ts},id.lt.${cursor.id})`);
-      }
-
-      if (sort === 'oldest') {
-        q = q.order('created_at', { ascending: true }).order('id', { ascending: true });
-      } else {
-        q = q.order('created_at', { ascending: false }).order('id', { ascending: false });
-      }
-
-      const { data, error, count } = await q.limit(limit + 1);
-      if (error) {
-        return res.status(500).json({ error: { code: 'internal', message: error.message } });
-      }
-
-      // Fetch matching content_sources rows in one batch (no FK exists between
-      // these tables; both are keyed on the composite (content_type, content_id),
-      // so PostgREST can't infer the join).
-      const triageRows = data ?? [];
+      // The metadata/source filters below run AFTER the DB fetch, so a page
+      // whose rows all get filtered out must not end pagination — scan
+      // forward (bounded) until we have a full page or run out of rows.
       const sourcesByKey = new Map<string, { source_kind: string; source_ref: string | null; source_meta: any }>();
-      if (triageRows.length > 0) {
-        const types = Array.from(new Set(triageRows.map((r: any) => r.content_type)));
-        const ids = Array.from(new Set(triageRows.map((r: any) => r.content_id)));
-        const { data: sources } = await sb()
-          .from('content_sources')
-          .select('content_type, content_id, source_kind, source_ref, source_meta')
-          .in('content_type', types)
-          .in('content_id', ids);
-        for (const s of sources ?? []) {
-          sourcesByKey.set(`${(s as any).content_type}::${(s as any).content_id}`, s as any);
-        }
-      }
+      const kept: any[] = [];
+      let estimatedTotal: number | null = null;
+      let scanCursor = cursor;
+      let lastScanned: { ts: string; id: string } | null = null;
+      let dbExhausted = false;
+      const MAX_SCAN_PAGES = 6;
 
-      // Server-side filtering on jsonb metadata + source kind that PostgREST
-      // can't easily express. Cheap because we only have up to `limit + 1` rows.
-      let rows = triageRows.filter((r: any) => {
+      for (let page = 0; page < MAX_SCAN_PAGES && kept.length <= limit && !dbExhausted; page++) {
+        let q = sb()
+          .from('content_triage_items')
+          .select(`
+            id, content_type, content_id, status, lifecycle_key,
+            assigned_to, assigned_at, team_name, priority, created_at,
+            metadata, applied_categories, suggested_categories
+          `, { count: page === 0 ? 'estimated' : undefined })
+          .in('status', ['pending', 'changes_requested']);
+
+        if (contentTypes && contentTypes.length) q = q.in('content_type', contentTypes);
+        if (assignedTo) q = q.eq('assigned_to', assignedTo);
+
+        if (scanCursor) {
+          if (sort === 'oldest') {
+            q = q.or(`created_at.gt.${scanCursor.ts},and(created_at.eq.${scanCursor.ts},id.gt.${scanCursor.id})`);
+          } else {
+            q = q.or(`created_at.lt.${scanCursor.ts},and(created_at.eq.${scanCursor.ts},id.lt.${scanCursor.id})`);
+          }
+        }
+
+        if (sort === 'oldest') {
+          q = q.order('created_at', { ascending: true }).order('id', { ascending: true });
+        } else {
+          q = q.order('created_at', { ascending: false }).order('id', { ascending: false });
+        }
+
+        const { data, error, count } = await q.limit(limit + 1);
+        if (error) {
+          return res.status(500).json({ error: { code: 'internal', message: error.message } });
+        }
+        if (page === 0) estimatedTotal = count ?? null;
+
+        const batch = data ?? [];
+        if (batch.length <= limit) dbExhausted = true;
+        if (batch.length === 0) break;
+        const lastRow = batch[batch.length - 1];
+        lastScanned = { ts: lastRow.created_at, id: lastRow.id };
+        scanCursor = lastScanned;
+
+        // Fetch matching content_sources rows for this batch (no FK exists
+        // between these tables; both are keyed on the composite
+        // (content_type, content_id), so PostgREST can't infer the join).
+        {
+          const types = Array.from(new Set(batch.map((r: any) => r.content_type)));
+          const ids = Array.from(new Set(batch.map((r: any) => r.content_id)));
+          const { data: sources } = await sb()
+            .from('content_sources')
+            .select('content_type, content_id, source_kind, source_ref, source_meta')
+            .in('content_type', types)
+            .in('content_id', ids);
+          for (const s of sources ?? []) {
+            sourcesByKey.set(`${(s as any).content_type}::${(s as any).content_id}`, s as any);
+          }
+        }
+
+        kept.push(...batch.filter((r: any) => {
         const meta = r.metadata ?? {};
         const src = sourcesByKey.get(`${r.content_type}::${r.content_id}`);
         const sourceKind = src?.source_kind ?? 'unknown';
@@ -399,17 +422,26 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
         }
         if (time !== 'all') {
           const startMs = meta.event_start ? Date.parse(meta.event_start) : NaN;
-          const isPastEvent = !Number.isNaN(startMs) && startMs < Date.now();
+          // 24h grace: an event that started earlier today is likely still
+          // running (or worth triaging) — keep it in the upcoming view.
+          const isPastEvent = !Number.isNaN(startMs) && startMs < Date.now() - 24 * 3600_000;
           if (time === 'upcoming' && isPastEvent) return false;
           if (time === 'past' && !isPastEvent) return false;
         }
         return true;
-      });
+        }));
+      }
 
-      const hasMore = rows.length > limit;
-      if (hasMore) rows = rows.slice(0, limit);
+      const hasMore = kept.length > limit || !dbExhausted;
+      const rows = kept.slice(0, limit);
+      // Resume from the last RETURNED row when we kept more than a page;
+      // otherwise from the last SCANNED row so filtered-out stretches are
+      // skipped, not re-served as a dead end.
       const last = rows[rows.length - 1];
-      const nextCursor = hasMore && last ? encodeCursor(last.created_at, last.id) : null;
+      const nextCursor = !hasMore ? null
+        : kept.length > limit && last ? encodeCursor(last.created_at, last.id)
+        : lastScanned ? encodeCursor(lastScanned.ts, lastScanned.id)
+        : null;
 
       const matchedRulesByKey = await loadMatchedRulesByKey(
         Array.from(new Set(rows.map((r: any) => r.content_type))),
@@ -455,7 +487,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
         // content first). 'event_date' opts into the future-soonest-first
         // shuffle for planning-style review.
         data: sort === 'event_date' ? smartEventSort(responseRows) : responseRows,
-        page: { next_cursor: nextCursor, estimated_total: count ?? null },
+        page: { next_cursor: nextCursor, estimated_total: estimatedTotal },
       });
     } catch (err: any) {
       res.status(500).json({ error: { code: 'internal', message: err?.message ?? String(err) } });
