@@ -23,6 +23,7 @@ export default function InboxPage() {
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<InboxListFilters>({
     publish_state: ['pending_review', 'auto_suppressed'],
+    time: 'upcoming',
   });
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -282,7 +283,7 @@ export default function InboxPage() {
           <select
             className={inputClass}
             value={filters.time ?? 'upcoming'}
-            onChange={(e) => setFilter('time', e.target.value === 'upcoming' ? undefined : (e.target.value as 'past' | 'all'))}
+            onChange={(e) => setFilter('time', e.target.value as 'upcoming' | 'past' | 'all')}
           >
             <option value="upcoming">Upcoming events (default)</option>
             <option value="past">Past events</option>
@@ -296,7 +297,7 @@ export default function InboxPage() {
             />
             Member only
           </label>
-          <Button size="1" variant="ghost" onClick={() => { setFilters({ publish_state: ['pending_review','auto_suppressed'] }); setSearch(''); }}>
+          <Button size="1" variant="ghost" onClick={() => { setFilters({ publish_state: ['pending_review','auto_suppressed'], time: 'upcoming' }); setSearch(''); }}>
             Reset
           </Button>
         </div>
