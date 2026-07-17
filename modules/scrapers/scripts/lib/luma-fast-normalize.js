@@ -32,6 +32,11 @@ export function normalizeServiceResponse(serviceResult, opts = {}) {
   const data = pageProps?.initialData?.data || pageProps?.data || null;
   const event = data?.event ?? null;
 
+  // Prefer Luma's pre-rendered 16:9 social card over the raw cover upload
+  // (often square) so portal cards match other event sources.
+  const socialImage = event?.social_image_url && !/\/discovery\//.test(event.social_image_url)
+    ? event.social_image_url : null;
+
   const lumaData = event
     ? {
         lumaEventId: event.api_id,
@@ -39,7 +44,7 @@ export function normalizeServiceResponse(serviceResult, opts = {}) {
         startAt: event.start_at,
         endAt: event.end_at,
         timezone: event.timezone,
-        coverUrl: event.cover_url,
+        coverUrl: socialImage || event.cover_url,
         latitude: event.coordinate?.latitude || event.geo_latitude,
         longitude: event.coordinate?.longitude || event.geo_longitude,
         city: event.geo_address_info?.city,
@@ -74,7 +79,7 @@ export function normalizeServiceResponse(serviceResult, opts = {}) {
   }
 
   const result = {
-    coverImageUrl: event?.cover_url || null,
+    coverImageUrl: socialImage || event?.cover_url || null,
     pageContent: '',
     isVirtual: event?.location_type === 'online',
     lumaData,

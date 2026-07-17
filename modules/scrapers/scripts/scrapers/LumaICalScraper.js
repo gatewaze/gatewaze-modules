@@ -636,10 +636,18 @@ export class LumaICalScraper extends BaseScraper {
             const eventData = initialData?.event;
 
             if (eventData) {
+              // Prefer Luma's pre-rendered 16:9 social card over the raw
+              // cover upload (often square) so portal cards match other
+              // event sources.
+              const socialImage = eventData.social_image_url && !/\/discovery\//.test(eventData.social_image_url)
+                ? eventData.social_image_url : null;
+              if (socialImage) {
+                coverImageUrl = socialImage;
+              }
               lumaData = {
                 lumaEventId: eventData.api_id || initialData.api_id,
                 timezone: eventData.timezone,
-                coverUrl: eventData.cover_url,
+                coverUrl: socialImage || eventData.cover_url,
                 latitude: eventData.coordinate?.latitude,
                 longitude: eventData.coordinate?.longitude,
                 city: eventData.geo_address_info?.city,
