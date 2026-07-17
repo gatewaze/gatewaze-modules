@@ -686,6 +686,17 @@ async function handler(req: Request) {
       console.log('Reply-To header line:', replyToLine || 'NOT FOUND')
     }
 
+    // Luma also notifies this address when someone invites it to CO-HOST an
+    // event ("Please join me as a host for ..."). That's not a registration —
+    // ignore it rather than registering the inviting organizer as a guest.
+    if (/join me as a host|invited you to (co-)?host/i.test(emailData.text || '')) {
+      console.log('Ignoring Luma co-host invitation email')
+      return new Response(JSON.stringify({ success: true, action: 'ignored_host_invite' }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
     // Parse the email to extract registration data
     const parsed = parseRegistrationEmail(emailData)
 
