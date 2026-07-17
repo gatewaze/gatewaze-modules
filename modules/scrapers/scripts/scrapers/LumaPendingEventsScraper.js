@@ -313,10 +313,14 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
         const initialData = data?.props?.pageProps?.initialData?.data;
         const eventData = initialData?.event;
         if (eventData) {
+          // Prefer Luma's pre-rendered 16:9 social card over the raw cover
+          // upload (often square) so portal cards match other event sources.
+          const socialImage = eventData.social_image_url && !/\/discovery\//.test(eventData.social_image_url)
+            ? eventData.social_image_url : null;
           lumaData = {
             lumaEventId: eventData.api_id || initialData.api_id,
             timezone: eventData.timezone,
-            coverUrl: eventData.cover_url,
+            coverUrl: socialImage || eventData.cover_url,
             latitude: eventData.coordinate?.latitude,
             longitude: eventData.coordinate?.longitude,
             city: eventData.geo_address_info?.city,
@@ -329,7 +333,7 @@ export class LumaPendingEventsScraper extends LumaICalScraper {
             locationType: eventData.location_type, // 'offline' or 'online'
           };
           isVirtual = eventData.location_type === 'online';
-          coverImageUrl = eventData.cover_url || null;
+          coverImageUrl = socialImage || eventData.cover_url || null;
         }
       } catch (err) {
         console.warn(`⚠️ Failed to parse __NEXT_DATA__ for ${finalUrl}: ${err.message}`);
