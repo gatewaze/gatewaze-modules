@@ -25,6 +25,7 @@ const lumaIntegrationModule: GatewazeModule = {
     'migrations/001_luma_tables.sql',
     'migrations/002_registration_field_mappings.sql',
     'migrations/003_registration_action.sql',
+    'migrations/004_registration_fk_ondelete_setnull.sql',
   ],
 
   adminSlots: [

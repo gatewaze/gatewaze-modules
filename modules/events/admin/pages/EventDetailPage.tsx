@@ -818,6 +818,7 @@ const EventDetailPage = () => {
               qrCodeDataUrl={qrCodeDataUrl}
               eventTypes={eventTypes}
               contentCategories={contentCategories}
+              onReload={loadEvent}
             />
           </div>
         )}
@@ -1038,7 +1039,46 @@ const ScrapedDataSection = ({ title, data, colorClass }: { title: string; data: 
 };
 
 // Event Details Tab Component
-const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue, onGenerateQrCode, isGeneratingQr, isSaving, accounts, allEvents, qrCodeDataUrl, eventTypes, contentCategories }: any) => {
+// Display metadata for each publish_state. Mirrors the badge used in the
+// events list (PUBLISH_STATE_BADGE) so the detail page reads consistently.
+const PUBLISH_STATE_META: Record<string, { label: string; color: 'green' | 'gray' | 'yellow' | 'orange' | 'red' }> = {
+  draft: { label: 'Draft', color: 'gray' },
+  pending_review: { label: 'Pending review', color: 'yellow' },
+  auto_suppressed: { label: 'Auto-suppressed', color: 'orange' },
+  rejected: { label: 'Rejected', color: 'red' },
+  published: { label: 'Published', color: 'green' },
+  unpublished: { label: 'Unpublished', color: 'gray' },
+};
+
+// Admin-initiated transitions offered on the detail page. Mirrors the state
+// machine enforced by content_publish_state_set — the RPC rejects anything not
+// listed here. System-only edges (e.g. keyword auto_suppressed) are omitted.
+const PUBLISH_STATE_ACTIONS: Record<string, Array<{ to: string; label: string; color: 'green' | 'gray' | 'red' | 'yellow' }>> = {
+  draft: [
+    { to: 'published', label: 'Publish', color: 'green' },
+    { to: 'pending_review', label: 'Submit for review', color: 'yellow' },
+  ],
+  pending_review: [
+    { to: 'published', label: 'Approve & publish', color: 'green' },
+    { to: 'rejected', label: 'Reject', color: 'red' },
+  ],
+  published: [
+    { to: 'unpublished', label: 'Unpublish', color: 'gray' },
+    { to: 'pending_review', label: 'Send back to review', color: 'yellow' },
+  ],
+  auto_suppressed: [
+    { to: 'published', label: 'Publish', color: 'green' },
+    { to: 'pending_review', label: 'Send to review', color: 'yellow' },
+  ],
+  rejected: [
+    { to: 'pending_review', label: 'Reopen', color: 'yellow' },
+  ],
+  unpublished: [
+    { to: 'published', label: 'Publish', color: 'green' },
+  ],
+};
+
+const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue, onGenerateQrCode, isGeneratingQr, isSaving, accounts, allEvents, qrCodeDataUrl, eventTypes, contentCategories, onReload }: any) => {
   const { isModuleEnabled } = useModulesContext();
   const hasTopicsModule = isModuleEnabled('event-topics');
   const hasSpeakersModule = isModuleEnabled('event-speakers');
@@ -1046,6 +1086,24 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
   // Use form value in edit mode, event value in view mode
   const [showLumaPreview, setShowLumaPreview] = useState(false);
   const [showMeetupPreview, setShowMeetupPreview] = useState(false);
+  const [publishBusy, setPublishBusy] = useState<string | null>(null);
+
+  const handlePublishStateChange = async (to: string, label: string) => {
+    setPublishBusy(to);
+    try {
+      const res = await EventService.setPublishState(event.id, to as any, `admin_ui:event_detail:${label}`);
+      if (res.success) {
+        toast.success(`Event set to "${PUBLISH_STATE_META[to]?.label ?? to}"`);
+        await onReload?.();
+      } else {
+        toast.error(res.error || 'Failed to change publish status');
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to change publish status');
+    } finally {
+      setPublishBusy(null);
+    }
+  };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
@@ -1721,6 +1779,32 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
                 </>
               ) : (
                 <>
+                  {/* Publish status — change without leaving the detail page.
+                      Runs the same state-machine RPC the Content Inbox uses. */}
+                  <div className="pb-3 mb-1 border-b border-[var(--gray-a6)]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-[var(--gray-a11)]">Publish status</span>
+                      <Badge variant="soft" color={PUBLISH_STATE_META[event.publishState ?? 'published']?.color ?? 'gray'}>
+                        {PUBLISH_STATE_META[event.publishState ?? 'published']?.label ?? (event.publishState ?? 'Published')}
+                      </Badge>
+                    </div>
+                    {(PUBLISH_STATE_ACTIONS[event.publishState ?? 'published'] ?? []).length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {(PUBLISH_STATE_ACTIONS[event.publishState ?? 'published'] ?? []).map((action) => (
+                          <Button
+                            key={action.to}
+                            size="1"
+                            variant="soft"
+                            color={action.color}
+                            disabled={publishBusy !== null}
+                            onClick={() => handlePublishStateChange(action.to, action.label)}
+                          >
+                            {publishBusy === action.to ? 'Working…' : action.label}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-[var(--gray-a11)]">Registration</span>
                     <Badge variant="soft" color={event.enableRegistration ? 'green' : 'gray'}>
