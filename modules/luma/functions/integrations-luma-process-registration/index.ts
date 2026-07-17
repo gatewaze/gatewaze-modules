@@ -674,7 +674,8 @@ async function handler(req: Request) {
       const { data: commSettings } = await supabase
         .from('events_communication_settings')
         .select('registrant_marketing_consent')
-        .eq('event_id', event.event_id)
+        // uuid column — the short text event_id errors the query silently
+        .eq('event_id', event.id)
         .maybeSingle()
       registrantMarketingConsent = commSettings?.registrant_marketing_consent === true
     }

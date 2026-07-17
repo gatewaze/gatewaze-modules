@@ -216,12 +216,14 @@ async function processEventGuests(
   } else {
     const { data: event } = await supabase
       .from('events')
-      .select('event_id, event_city, event_country_code, event_region, event_location')
+      .select('id, event_city, event_country_code, event_region, event_location')
       .eq('luma_event_id', lumaEventId)
       .maybeSingle()
 
     if (event) {
-      internalEventId = event.event_id
+      // NB: the UUID primary key — events_registrations.event_id is a uuid
+      // FK, so the short text event_id here fails with a type error.
+      internalEventId = event.id
       eventCity = event.event_city || undefined
       eventCountryCode = event.event_country_code || undefined
       eventCountry = event.event_country_code ? countryCodeToName[event.event_country_code] : undefined
