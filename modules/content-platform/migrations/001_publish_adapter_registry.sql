@@ -223,6 +223,12 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
       v_triage_outcome := jsonb_build_object('error', SQLERRM);
     END;
+    -- Populate the inbox preview cache (title/subtitle/thumbnail/event
+    -- fields) immediately so new triage rows never render "untitled".
+    BEGIN
+      PERFORM public.refresh_inbox_cache(p_content_type, p_content_id);
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
   END IF;
 
   RETURN jsonb_build_object(

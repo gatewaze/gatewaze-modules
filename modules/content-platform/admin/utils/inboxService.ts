@@ -31,7 +31,8 @@ export interface InboxListFilters {
   category?: string[];
   member_only?: boolean;
   search?: string;
-  sort?: 'newest' | 'oldest' | 'member_first';
+  sort?: 'newest' | 'oldest' | 'member_first' | 'event_date';
+  time?: 'upcoming' | 'past' | 'all';
   assigned_to?: string;
 }
 
@@ -102,6 +103,7 @@ function toQS(filters: InboxListFilters & { cursor?: string; limit?: number }) {
   if (filters.limit) q.set('limit', String(filters.limit));
   if (filters.content_type?.length) q.set('content_type', filters.content_type.join(','));
   if (filters.source_kind?.length) q.set('source_kind', filters.source_kind.join(','));
+  if (filters.time) q.set('time', filters.time);
   if (filters.publish_state?.length) q.set('publish_state', filters.publish_state.join(','));
   if (filters.category?.length) q.set('category', filters.category.join(','));
   if (filters.member_only) q.set('member_only', 'true');

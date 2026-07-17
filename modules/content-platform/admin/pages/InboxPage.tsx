@@ -279,6 +279,15 @@ export default function InboxPage() {
             <option value="">Pending review (default)</option>
             {ALL_STATES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
           </select>
+          <select
+            className={inputClass}
+            value={filters.time ?? 'upcoming'}
+            onChange={(e) => setFilter('time', e.target.value === 'upcoming' ? undefined : (e.target.value as 'past' | 'all'))}
+          >
+            <option value="upcoming">Upcoming events (default)</option>
+            <option value="past">Past events</option>
+            <option value="all">All dates</option>
+          </select>
           <label className="flex items-center gap-1 text-sm">
             <input
               type="checkbox"
