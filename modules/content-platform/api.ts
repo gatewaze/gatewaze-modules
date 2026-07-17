@@ -305,6 +305,10 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       const memberOnly = String(req.query.member_only ?? '') === 'true';
       const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
       const sort = String(req.query.sort ?? 'newest');
+      // Events default to upcoming-only; past events live behind the filter.
+      // Non-event rows (no cached event_start) always show except under 'past'.
+      const time = ['upcoming', 'past', 'all'].includes(String(req.query.time))
+        ? String(req.query.time) : 'upcoming';
       const assignedTo = typeof req.query.assigned_to === 'string' ? req.query.assigned_to : null;
 
       const invalid = publishStates.find((s) => !ALLOWED_PUBLISH_STATES.includes(s));
@@ -393,6 +397,12 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
           const hay = `${meta.title ?? ''} ${meta.subtitle ?? ''}`.toLowerCase();
           if (!hay.includes(search.toLowerCase())) return false;
         }
+        if (time !== 'all') {
+          const startMs = meta.event_start ? Date.parse(meta.event_start) : NaN;
+          const isPastEvent = !Number.isNaN(startMs) && startMs < Date.now();
+          if (time === 'upcoming' && isPastEvent) return false;
+          if (time === 'past' && !isPastEvent) return false;
+        }
         return true;
       });
 
@@ -441,7 +451,10 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       });
 
       res.json({
-        data: smartEventSort(responseRows),
+        // Default 'newest' keeps the DB order (created_at DESC — newest
+        // content first). 'event_date' opts into the future-soonest-first
+        // shuffle for planning-style review.
+        data: sort === 'event_date' ? smartEventSort(responseRows) : responseRows,
         page: { next_cursor: nextCursor, estimated_total: count ?? null },
       });
     } catch (err: any) {
