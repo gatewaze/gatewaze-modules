@@ -39,7 +39,7 @@ begin
   create temp table if not exists _sr_transcript_stash (
     video_id text, transcript text, source text, fetched_at timestamptz
   ) on commit drop;
-  delete from _sr_transcript_stash;
+  truncate _sr_transcript_stash;
   insert into _sr_transcript_stash
     select coalesce(t.video_id, b.data->>'youtube_id'), t.transcript, t.source, t.fetched_at
     from public.sr_block_transcripts t
@@ -115,7 +115,7 @@ begin
   create temp table if not exists _sr_transcript_stash (
     video_id text, transcript text, source text, fetched_at timestamptz
   ) on commit drop;
-  delete from _sr_transcript_stash;
+  truncate _sr_transcript_stash;
   insert into _sr_transcript_stash
     select coalesce(t.video_id, b.data->>'youtube_id'), t.transcript, t.source, t.fetched_at
     from public.sr_block_transcripts t
