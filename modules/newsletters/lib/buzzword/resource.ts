@@ -39,18 +39,28 @@ async function findOrCreate(
   match: Record<string, unknown>,
   insert: Record<string, unknown>,
 ): Promise<{ id: string } | null> {
-  let q = supabase.from(table).select('id');
-  for (const [k, v] of Object.entries(match)) q = q.eq(k, v);
-  const found = await q.maybeSingle();
-  if (found?.data?.id) return found.data as { id: string };
+  // Return the OLDEST matching row. Deliberately NOT maybeSingle(): these
+  // matches (e.g. item_id + heading for the section) have no unique
+  // constraint, so a concurrent-run race can leave two rows — and
+  // maybeSingle() ERRORS on >1 match, which the old code treated as
+  // "not found" and inserted yet another, growing the duplicates by one
+  // every run (see the 262-section AI Buzzword Leaderboard). limit(1) +
+  // deterministic order makes find idempotent under existing duplicates.
+  const findExisting = async (): Promise<{ id: string } | null> => {
+    let q = supabase.from(table).select('id').order('created_at', { ascending: true }).limit(1);
+    for (const [k, v] of Object.entries(match)) q = q.eq(k, v);
+    const { data } = await q;
+    const row = Array.isArray(data) ? data[0] : data;
+    return (row as { id: string } | null)?.id ? (row as { id: string }) : null;
+  };
+
+  const existing = await findExisting();
+  if (existing) return existing;
 
   const created = await supabase.from(table).insert(insert).select('id').maybeSingle();
   if (created?.data?.id) return created.data as { id: string };
-  // Lost a create race — re-read.
-  let q2 = supabase.from(table).select('id');
-  for (const [k, v] of Object.entries(match)) q2 = q2.eq(k, v);
-  const reread = await q2.maybeSingle();
-  return (reread?.data as { id: string } | null) ?? null;
+  // Lost a create race — re-read (same idempotent find).
+  return findExisting();
 }
 
 /**
