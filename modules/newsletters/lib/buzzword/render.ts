@@ -45,22 +45,28 @@ export function renderLeaderboardHtml(
   }
 
   const top = board[0].count || 1;
+  // Share of all mentions — the label shown against each bar. Raw counts on a
+  // small board read as underwhelming ("6 mentions"); a percentage of the
+  // conversation is the meaningful stat.
+  const totalMentions = board.reduce((sum, e) => sum + e.count, 0) || 1;
   const rows = board
     .map((e, i) => {
       const rank = i + 1;
       const badge = RANK_MEDAL[i] ?? `<span style="opacity:.55;font-variant-numeric:tabular-nums;">${rank}</span>`;
-      const pct = Math.max(6, Math.round((e.count / top) * 100));
-      const plural = e.count === 1 ? 'mention' : 'mentions';
+      // bar length ranks visually (leader fills the row); label is the share
+      const barPct = Math.max(6, Math.round((e.count / top) * 100));
+      const share = (e.count / totalMentions) * 100;
+      const shareLabel = share < 1 ? '<1%' : `${Math.round(share)}%`;
       return [
         '<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid rgba(128,128,128,.18);">',
         `<div style="flex:none;width:28px;text-align:center;font-size:16px;">${badge}</div>`,
         '<div style="flex:1;min-width:0;">',
         `<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;">`,
         `<span style="font-weight:600;overflow-wrap:anywhere;">${esc(e.display)}</span>`,
-        `<span style="flex:none;opacity:.65;font-size:13px;font-variant-numeric:tabular-nums;">${e.count} ${plural}</span>`,
+        `<span style="flex:none;opacity:.65;font-size:13px;font-variant-numeric:tabular-nums;">${shareLabel}</span>`,
         '</div>',
         `<div style="margin-top:5px;height:7px;border-radius:4px;background:rgba(128,128,128,.16);overflow:hidden;">`,
-        `<div style="height:100%;width:${pct}%;border-radius:4px;background:linear-gradient(90deg,#6366f1,#8b5cf6);"></div>`,
+        `<div style="height:100%;width:${barPct}%;border-radius:4px;background:linear-gradient(90deg,#6366f1,#8b5cf6);"></div>`,
         '</div>',
         '</div>',
         '</div>',
@@ -72,7 +78,8 @@ export function renderLeaderboardHtml(
   const caption = `${meta.submissions} ${meta.submissions === 1 ? 'submission' : 'submissions'} · ${meta.distinct} distinct ${meta.distinct === 1 ? 'phrase' : 'phrases'}${updated ? ` · updated ${updated}` : ''}`;
 
   return [
-    '<div style="max-width:640px;">',
+    // full section width — the bars are the point, let them use the space
+    '<div>',
     `<p style="opacity:.7;font-size:13px;margin:0 0 12px;">${esc(caption)}</p>`,
     '<div>',
     rows,

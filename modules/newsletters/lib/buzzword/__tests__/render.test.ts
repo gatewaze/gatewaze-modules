@@ -9,19 +9,22 @@ describe('renderLeaderboardHtml', () => {
     expect(html).toContain('No buzzwords have been submitted yet');
   });
 
-  it('renders rows with display labels and counts', () => {
+  it('renders rows with display labels and share percentages', () => {
     const html = renderLeaderboardHtml(
       [
-        { canonical: 'harness', display: 'Harness', count: 5 },
-        { canonical: 'agentic', display: 'Agentic', count: 1 },
+        { canonical: 'harness', display: 'Harness', count: 6 },
+        { canonical: 'agentic', display: 'Agentic', count: 2 },
       ],
       meta,
     );
     expect(html).toContain('Harness');
-    expect(html).toContain('5 mentions');
-    expect(html).toContain('1 mention'); // singular
+    // percentages of total mentions (8), not raw counts
+    expect(html).toContain('75%'); // 6/8
+    expect(html).toContain('25%'); // 2/8
+    expect(html).not.toContain('mentions');
     expect(html).toContain('🥇');
     expect(html).not.toContain('<table');
+    expect(html).not.toContain('max-width'); // bars use the full section width
   });
 
   it('escapes HTML in display labels', () => {
