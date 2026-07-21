@@ -13,7 +13,10 @@ const gradualIntegrationModule: GatewazeModule = {
     'gradual.webhooks',
   ],
 
-  dependencies: ['events'],
+  // luma is required: the webhook and import-history functions import the shared
+  // registration helper (createFullRegistration/cancelRegistration) from the luma
+  // module's functions/_shared/lumaRegistration.ts.
+  dependencies: ['events', 'luma'],
 
   edgeFunctions: [
     'integrations-gradual-sync',

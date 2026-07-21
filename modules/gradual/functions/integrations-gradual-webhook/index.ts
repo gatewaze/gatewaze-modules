@@ -255,40 +255,6 @@ async function updateCustomerInCustomerIO(
 }
 
 // =============================================================================
-// Webhook Forwarding (Make.com Integration)
-// =============================================================================
-
-// User-related webhooks (newUserIsCreated, userProfileUpdate)
-const MAKE_USER_WEBHOOK_URL = 'https://hook.eu1.make.com/0ff9h59k21q04fy19ca846xo41v3q6km'
-// Event-related webhooks (registrations, check-ins, etc.)
-const MAKE_EVENT_WEBHOOK_URL = 'https://hook.eu1.make.com/dm163febs1nl6tabqx539h1r6xqv94p9'
-
-/**
- * Forward the complete webhook payload to Make.com for migration continuity.
- * This is a fire-and-forget operation - we don't wait for the response.
- * Called AFTER processing to ensure Make.com failures don't affect our app.
- */
-async function forwardToMakeWebhook(payload: GradualWebhookPayload, webhookUrl: string): Promise<void> {
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    })
-
-    if (response.ok) {
-      console.log(`Forwarded ${payload.type} to Make.com webhook`)
-    } else {
-      console.error(`Failed to forward to Make.com: ${response.status} ${response.statusText}`)
-    }
-  } catch (error) {
-    console.error('Error forwarding to Make.com webhook:', error)
-  }
-}
-
-// =============================================================================
 // Database Operations
 // =============================================================================
 
@@ -724,7 +690,7 @@ async function storePendingRegistration(
 
   try {
     const { data, error } = await supabase
-      .from('gradual_pending_registrations')
+      .from('integrations_gradual_pending_registrations')
       .upsert(
         {
           gradual_user_id: payload.userId,
@@ -785,7 +751,7 @@ async function storePendingAttendance(
 
   try {
     const { data, error } = await supabase
-      .from('gradual_pending_attendance')
+      .from('integrations_gradual_pending_attendance')
       .upsert(
         {
           gradual_user_id: payload.userId,
@@ -831,7 +797,7 @@ async function logGradualEvent(
   userEmail?: string
 ) {
   try {
-    const { error } = await supabase.from('gradual_webhook_events').insert({
+    const { error } = await supabase.from('integrations_gradual_webhook_events').insert({
       event_type: eventType,
       user_email: userEmail,
       payload: payload,
@@ -840,10 +806,10 @@ async function logGradualEvent(
 
     if (error) {
       // Table might not exist, just log the error
-      console.log('Could not log to gradual_webhook_events table:', error.message)
+      console.log('Could not log to integrations_gradual_webhook_events table:', error.message)
     }
   } catch (e) {
-    console.log('gradual_webhook_events table not available')
+    console.log('integrations_gradual_webhook_events table not available')
   }
 }
 
@@ -916,8 +882,6 @@ async function handleNewUserCreated(payload: NewUserCreatedPayload): Promise<Res
     })
   }
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_USER_WEBHOOK_URL)
 
   return new Response(JSON.stringify({ success: true, action: 'user_created' }), {
     status: 200,
@@ -970,9 +934,6 @@ async function handleUserRegistersForEvent(payload: UserRegistersForEventPayload
         if (existingReg) {
           console.log(`Registration already exists for ${payload.userEmail} on event ${event.event_id} (reg: ${existingReg.id}) — skipping (loop prevention)`)
 
-          // Still forward to Make.com for tracking
-          forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
-
           return new Response(
             JSON.stringify({
               success: true,
@@ -1012,8 +973,6 @@ async function handleUserRegistersForEvent(payload: UserRegistersForEventPayload
       })
     }
 
-    // Forward to Make.com after processing (fire-and-forget)
-    forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
     return new Response(
       JSON.stringify({
@@ -1101,8 +1060,6 @@ async function handleUserRegistersForEvent(payload: UserRegistersForEventPayload
     })
   }
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
   return new Response(
     JSON.stringify({
@@ -1194,8 +1151,6 @@ async function handleUserCancelsEventRegistration(payload: UserCancelsEventRegis
     previous_status: result.previousStatus,
   })
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
   return new Response(
     JSON.stringify({
@@ -1295,8 +1250,6 @@ async function handleUserCheckin(
     attendance_id: attendance?.id,
   })
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
   return new Response(
     JSON.stringify({
@@ -1345,8 +1298,6 @@ async function handleUserAttendsEvent(payload: UserAttendsEventPayload): Promise
       pending_attendance_id: pendingAtt?.id,
     })
 
-    // Forward to Make.com after processing (fire-and-forget)
-    forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
     return new Response(
       JSON.stringify({
@@ -1400,8 +1351,6 @@ async function handleUserAttendsEvent(payload: UserAttendsEventPayload): Promise
     attendance_id: attendance?.id,
   })
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
   return new Response(
     JSON.stringify({
@@ -1493,8 +1442,6 @@ async function handleUserUnChecksIn(payload: UserUnChecksInToEventPayload): Prom
     uncheckin_success: success,
   })
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
   return new Response(
     JSON.stringify({
@@ -1526,8 +1473,6 @@ async function handleUserRefersEventRegistrant(payload: UserRefersEventRegistran
     })
   }
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
   return new Response(JSON.stringify({ success: true, action: 'referral_success' }), {
     status: 200,
@@ -1557,8 +1502,6 @@ async function handleUserProfileUpdate(payload: UserProfileUpdatePayload): Promi
     })
   }
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_USER_WEBHOOK_URL)
 
   return new Response(JSON.stringify({ success: true, action: 'profile_updated' }), {
     status: 200,
@@ -1665,8 +1608,6 @@ async function handleNewEventIsPublished(payload: NewEventIsPublishedPayload): P
 
   console.log(`Created new event: ${newEvent.id} (${newEvent.event_id}) - ${newEvent.event_title}`)
 
-  // Forward to Make.com after processing (fire-and-forget)
-  forwardToMakeWebhook(payload, MAKE_EVENT_WEBHOOK_URL)
 
   return new Response(
     JSON.stringify({
