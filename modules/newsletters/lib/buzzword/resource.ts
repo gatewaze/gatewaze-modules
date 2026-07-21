@@ -18,7 +18,7 @@ const CATEGORY_SLUG = 'leaderboards';
 const CATEGORY_NAME = 'Leaderboards';
 const ITEM_SLUG = 'ai-buzzword-leaderboard';
 const ITEM_TITLE = 'AI Buzzword Leaderboard';
-const ITEM_SUBTITLE = 'The phrases the community hears most in AI right now — from your newsletter replies.';
+const ITEM_SUBTITLE = 'The phrases the community hears most in AI right now.';
 const SECTION_HEADING = 'Leaderboard';
 
 export interface LeaderboardTarget {
