@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS public.integrations_gradual_sync_jobs (
 CREATE INDEX IF NOT EXISTS idx_gradual_sync_jobs_event ON public.integrations_gradual_sync_jobs(event_id);
 CREATE INDEX IF NOT EXISTS idx_gradual_sync_jobs_status ON public.integrations_gradual_sync_jobs(status);
 
+DROP TRIGGER IF EXISTS integrations_gradual_sync_jobs_updated_at
+  ON public.integrations_gradual_sync_jobs;
 CREATE TRIGGER integrations_gradual_sync_jobs_updated_at
   BEFORE UPDATE ON public.integrations_gradual_sync_jobs
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
