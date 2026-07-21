@@ -75,7 +75,7 @@ export function renderLeaderboardHtml(
     .join('');
 
   const updated = formatUpdated(meta.updatedAt);
-  const caption = `${meta.submissions} ${meta.submissions === 1 ? 'submission' : 'submissions'} · ${meta.distinct} distinct ${meta.distinct === 1 ? 'phrase' : 'phrases'}${updated ? ` · updated ${updated}` : ''}`;
+  const caption = `${meta.distinct} distinct ${meta.distinct === 1 ? 'phrase' : 'phrases'}${updated ? ` · updated ${updated}` : ''}`;
 
   return [
     // full section width — the bars are the point, let them use the space

@@ -36,10 +36,10 @@ describe('renderLeaderboardHtml', () => {
     expect(html).toContain('&lt;script&gt;');
   });
 
-  it('includes the submissions caption', () => {
+  it('captions with distinct phrases, not submissions', () => {
     const html = renderLeaderboardHtml([{ canonical: 'a', display: 'A', count: 1 }], meta);
-    expect(html).toContain('3 submissions');
     expect(html).toContain('2 distinct phrases');
+    expect(html).not.toContain('submission');
   });
 });
 
