@@ -266,7 +266,7 @@ async function findProfileByEmail(email: string): Promise<string | null> {
 async function storePendingRegistration(record: GradualHistoricRecord): Promise<{ id: string } | null> {
   try {
     const { data, error } = await supabase
-      .from('gradual_pending_registrations')
+      .from('integrations_gradual_pending_registrations')
       .upsert(
         {
           gradual_user_id: record.userId,
@@ -312,7 +312,7 @@ async function storePendingRegistration(record: GradualHistoricRecord): Promise<
 async function storePendingAttendance(record: GradualHistoricRecord): Promise<{ id: string } | null> {
   try {
     const { data, error } = await supabase
-      .from('gradual_pending_attendance')
+      .from('integrations_gradual_pending_attendance')
       .upsert(
         {
           gradual_user_id: record.userId,
