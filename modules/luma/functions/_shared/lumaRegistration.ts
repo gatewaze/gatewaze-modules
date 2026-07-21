@@ -101,6 +101,58 @@ export function parseName(fullName: string | undefined): { firstName: string; la
 }
 
 /**
+ * Subscribe a registrant to the global "Event Updates" mailing list.
+ * Every event registration that flows through createFullRegistration (Luma
+ * webhook, Gradual webhook, Luma CSV import) opts the person into event
+ * updates. Idempotent upsert on (list_id, email); this re-subscribes anyone
+ * previously unsubscribed, matching the lists module's own subscribe behaviour.
+ * Best-effort: failures are logged and never block registration.
+ */
+async function subscribeToEventUpdates(
+  supabase: SupabaseClient,
+  personId: string,
+  email: string,
+  source: string
+): Promise<void> {
+  try {
+    const { data: list, error: listError } = await supabase
+      .from('lists')
+      .select('id')
+      .eq('slug', 'event-updates')
+      .maybeSingle()
+
+    if (listError || !list) {
+      console.error('Could not resolve event-updates list:', listError?.message ?? 'not found')
+      return
+    }
+
+    const now = new Date().toISOString()
+    const { error: subError } = await supabase
+      .from('list_subscriptions')
+      .upsert(
+        {
+          list_id: list.id,
+          person_id: personId,
+          email: email.toLowerCase(),
+          subscribed: true,
+          subscribed_at: now,
+          unsubscribed_at: null,
+          source,
+        },
+        { onConflict: 'list_id,email' }
+      )
+
+    if (subError) {
+      console.error('Failed to subscribe to event-updates list:', subError.message)
+    } else {
+      console.log(`Subscribed ${email} to event-updates list`)
+    }
+  } catch (err) {
+    console.error('Error subscribing to event-updates list:', err)
+  }
+}
+
+/**
  * Create a full registration including auth user, person, people profile, and event registration
  */
 export async function createFullRegistration(
@@ -311,6 +363,11 @@ export async function createFullRegistration(
     if (profileError) {
       return { success: false, error: `Failed to create people profile: ${profileError.message}` }
     }
+
+    // Opt the registrant into the global "Event Updates" list. Runs for every
+    // registration path through this helper (Luma/Gradual webhooks, Luma CSV),
+    // covering both new and already-existing registrations below.
+    await subscribeToEventUpdates(supabase, person.id, email, registration.source || 'luma_webhook')
 
     // Check if already registered
     const { data: existingReg } = await supabase

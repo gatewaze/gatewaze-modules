@@ -757,6 +757,170 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
     }
   });
 
+  // Bulk-create registrations (admin CSV import → BulkRegistrationService).
+  // Per row: find or create the person (via the people-signup edge function),
+  // ensure a people profile, insert the events_registrations row (idempotent
+  // per person+event, honouring update_existing), and opt the person into the
+  // global "Event Updates" list. Returns the { total, successful, failed,
+  // errors:[{index,email,error}] } shape the client expects.
+  app.post('/api/registrations/bulk', async (req: Request, res: Response) => {
+    try {
+      const { event_id, update_existing = false, registrations } = req.body ?? {};
+
+      if (!event_id) {
+        return res.status(400).json({ error: 'event_id is required' });
+      }
+      if (!Array.isArray(registrations) || registrations.length === 0) {
+        return res.status(400).json({ error: 'registrations array required' });
+      }
+
+      const supabase = initSupabase(projectRoot);
+
+      // events_registrations.event_id references events.id (UUID). Accept a UUID
+      // as-is, otherwise resolve the short public event_id (varchar) to the UUID.
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let eventUuid: string | null = null;
+      if (uuidRe.test(String(event_id))) {
+        eventUuid = String(event_id);
+      } else {
+        const { data: ev } = await supabase.from('events').select('id').eq('event_id', event_id).maybeSingle();
+        eventUuid = ev?.id ?? null;
+      }
+      if (!eventUuid) {
+        return res.status(404).json({ error: `Event not found: ${event_id}` });
+      }
+
+      // Resolve the global "Event Updates" list once (subscription is best-effort).
+      const { data: eventUpdatesList } = await supabase
+        .from('lists').select('id').eq('slug', 'event-updates').maybeSingle();
+
+      const VALID_TYPES = ['free', 'paid', 'comp', 'sponsor', 'speaker', 'staff', 'vip'];
+      const errors: Array<{ index: number; email: string; error: string }> = [];
+      let successful = 0;
+
+      for (let i = 0; i < registrations.length; i++) {
+        const reg = registrations[i] ?? {};
+        const email = String(reg.email || '').trim().toLowerCase();
+        try {
+          if (!email) throw new Error('Missing email');
+
+          // Find or create the person.
+          let { data: person } = await supabase
+            .from('people').select('id').ilike('email', email).maybeSingle();
+
+          if (!person) {
+            const { error: signupError } = await supabase.functions.invoke('people-signup', {
+              body: {
+                email,
+                source: reg.source || 'admin_bulk_registration',
+                user_metadata: {
+                  first_name: reg.first_name || '',
+                  last_name: reg.last_name || '',
+                  company: reg.company || '',
+                  job_title: reg.job_title || '',
+                  linkedin_url: reg.linkedin_url || '',
+                },
+              },
+            });
+            if (signupError) throw new Error(`Failed to create person: ${signupError.message ?? signupError}`);
+
+            const { data: created } = await supabase
+              .from('people').select('id').ilike('email', email).maybeSingle();
+            person = created;
+          } else if (update_existing) {
+            // Enrich attributes for existing people when requested (best-effort).
+            const { error: updErr } = await supabase.rpc('people_update_attributes', {
+              p_person_id: person.id,
+              p_first_name: reg.first_name || '',
+              p_last_name: reg.last_name || '',
+              p_company: reg.company || '',
+              p_job_title: reg.job_title || '',
+              ...(reg.linkedin_url ? { p_linkedin_url: reg.linkedin_url } : {}),
+            });
+            if (updErr) console.error(`people_update_attributes failed for ${email}:`, updErr.message);
+          }
+
+          if (!person) throw new Error('Person could not be created');
+
+          // Ensure a people profile.
+          const { data: peopleProfileId, error: profileError } = await supabase
+            .rpc('people_get_or_create_profile', { p_person_id: person.id });
+          if (profileError) throw new Error(`Failed to create profile: ${profileError.message}`);
+
+          // Idempotent per person + event.
+          const { data: existingReg } = await supabase
+            .from('events_registrations')
+            .select('id')
+            .eq('event_id', eventUuid)
+            .eq('person_id', person.id)
+            .maybeSingle();
+
+          const regType = VALID_TYPES.includes(reg.registration_type) ? reg.registration_type : 'comp';
+
+          if (existingReg) {
+            if (update_existing) {
+              const updates: Record<string, unknown> = {};
+              if (reg.ticket_type) updates.ticket_type = reg.ticket_type;
+              if (reg.registration_type && VALID_TYPES.includes(reg.registration_type)) {
+                updates.registration_type = reg.registration_type;
+              }
+              if (reg.registered_at) updates.registered_at = reg.registered_at;
+              if (Object.keys(updates).length > 0) {
+                await supabase.from('events_registrations').update(updates).eq('id', existingReg.id);
+              }
+            }
+            // Already registered → idempotent success.
+          } else {
+            const { error: insertError } = await supabase
+              .from('events_registrations')
+              .insert({
+                event_id: eventUuid,
+                person_id: person.id,
+                people_profile_id: peopleProfileId,
+                status: 'confirmed',
+                registration_type: regType,
+                registration_source: reg.source || 'admin_bulk_registration',
+                ticket_type: reg.ticket_type || null,
+                registered_at: reg.registered_at || new Date().toISOString(),
+              });
+            if (insertError) throw new Error(`Failed to create registration: ${insertError.message}`);
+          }
+
+          // Opt the registrant into the global "Event Updates" list (best-effort).
+          if (eventUpdatesList?.id) {
+            const now = new Date().toISOString();
+            const { error: subError } = await supabase
+              .from('list_subscriptions')
+              .upsert({
+                list_id: eventUpdatesList.id,
+                person_id: person.id,
+                email,
+                subscribed: true,
+                subscribed_at: now,
+                unsubscribed_at: null,
+                source: reg.source || 'admin_bulk_registration',
+              }, { onConflict: 'list_id,email' });
+            if (subError) console.error(`Failed to subscribe ${email} to event-updates:`, subError.message);
+          }
+
+          successful++;
+        } catch (err) {
+          errors.push({ index: i, email, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
+      res.json({
+        total: registrations.length,
+        successful,
+        failed: errors.length,
+        errors,
+      });
+    } catch (err) {
+      console.error('Error in bulk registration:', err);
+      res.status(500).json({ error: (err instanceof Error ? err.message : String(err)) || 'Failed to process bulk registration' });
+    }
+  });
+
   // Get single registration
   app.get('/api/registrations/:id', async (req: Request, res: Response) => {
     try {
