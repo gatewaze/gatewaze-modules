@@ -100,6 +100,44 @@ export default async function testMcpServerHandler(
 type ProbeResult = { ok: true; tools: string[] } | { ok: false; error: string };
 
 async function probeServer(server: McpServerRow, log: NonNullable<RuntimeContext['logger']>): Promise<ProbeResult> {
+  // streamable_http — probe IN-PROCESS with the MCP client (proper
+  // Authorization: Bearer), not a Goose subprocess. Goose 1.34 removed
+  // `session --no-tty`, and its --with-streamable-http-extension flag carries
+  // no auth, so a Goose-based probe both fails to spawn AND can't authenticate.
+  // The in-process client tests the exact path the recipe runner uses (connect
+  // + initialize + tools/list with the bearer), so a green Test means a recipe
+  // run will authenticate too.
+  if (server.type === 'streamable_http') {
+    if (!server.uri) return { ok: false, error: 'streamable_http.uri missing on row' };
+    const ssrf = await checkSsrfSafe(server.uri);
+    if (!ssrf.ok) return { ok: false, error: `ssrf_blocked: ${ssrf.reason}` };
+    let bearer: string | undefined;
+    if (server.bearer_token_ciphertext) {
+      const plaintext = decryptSecret(server.bearer_token_ciphertext);
+      if (plaintext == null) return { ok: false, error: 'bearer_decrypt_failed' };
+      try {
+        const t = JSON.parse(plaintext) as unknown;
+        if (typeof t === 'string' && t.length > 0) bearer = t;
+      } catch {
+        return { ok: false, error: 'bearer_decrypt_parse_failed' };
+      }
+    }
+    try {
+      const { createMcpClient } = await import('../lib/recipes/mcp-client.js');
+      const client = await createMcpClient({ uri: server.uri, auth: { ...(bearer && { bearer_token: bearer }) } });
+      try {
+        const tools = client.tools().map((t) => t.name).filter((n): n is string => typeof n === 'string');
+        log.info('probe_streamable_http_ok', { server: server.name, tool_count: tools.length });
+        return { ok: true, tools };
+      } finally {
+        await client.close().catch(() => undefined);
+      }
+    } catch (err) {
+      return { ok: false, error: `mcp_connect_failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  // stdio / builtin — probe via a one-shot `goose run`.
   const extensionFlags: string[] = [];
   const extraEnv: Record<string, string> = {};
 
@@ -118,39 +156,21 @@ async function probeServer(server: McpServerRow, log: NonNullable<RuntimeContext
         }
       }
     }
-  } else if (server.type === 'streamable_http') {
-    if (!server.uri) return { ok: false, error: 'streamable_http.uri missing on row' };
-    // Re-check SSRF at probe time too — DNS could have rebound since
-    // the API write.
-    const ssrf = await checkSsrfSafe(server.uri);
-    if (!ssrf.ok) return { ok: false, error: `ssrf_blocked: ${ssrf.reason}` };
-    extensionFlags.push('--with-streamable-http-extension', server.uri);
-    if (server.bearer_token_ciphertext) {
-      const plaintext = decryptSecret(server.bearer_token_ciphertext);
-      if (plaintext) {
-        try {
-          const token = JSON.parse(plaintext) as string;
-          const key = `GOOSE_HTTP_EXTENSION_${server.name.toUpperCase().replace(/-/g, '_')}_TOKEN`;
-          extraEnv[key] = token;
-        } catch {
-          return { ok: false, error: 'bearer_decrypt_parse_failed' };
-        }
-      }
-    }
   } else if (server.type === 'builtin') {
     if (!server.builtin_name) return { ok: false, error: 'builtin.builtin_name missing on row' };
     extensionFlags.push('--with-builtin', server.builtin_name);
   }
 
-  // Headless goose session that asks for a tool inventory. We use
-  // `goose session` with --text so it terminates after one turn.
+  // Goose 1.34 split chat into `goose session` (interactive, needs a TTY) and
+  // `goose run` (one-shot). The old `session --no-tty` invocation now errors
+  // with "unexpected argument '--no-tty'", so use one-shot `goose run` (mirrors
+  // the chat executor).
   const args = [
-    'session',
-    '--no-tty',
+    'run',
     '--quiet',
     '--no-session',
     '--output-format', 'stream-json',
-    '--text', 'List your available tools as a JSON array of objects with name+description. Use the structured-output tool to submit.',
+    '--text', 'List your available tools as a JSON array of objects with name+description.',
     '--max-turns', '3',
     ...extensionFlags,
   ];

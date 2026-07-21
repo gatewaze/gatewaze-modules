@@ -263,6 +263,25 @@ export async function runRecipeViaGoose(
     wikiRecallHitCount = recall.hitCount;
   }
 
+  // spec-ai-mcp-extensions — inject operator-attached streamable_http auth
+  // onto the recipe's extensions BEFORE materializing the Goose recipe YAML.
+  // Goose (1.34.x) has no per-extension bearer-token env var and its
+  // --with-streamable-http-extension flag carries no auth, so the only way an
+  // operator-attached (allowlisted) MCP authenticates is by carrying its
+  // bearer token / Authorization header on the extension entry Goose reads
+  // from the materialized recipe. Matches the use-case MCP allowlist by
+  // extension name; the ai_mcp_servers row is the source of truth for uri +
+  // token. No-op unless the recipe declares a streamable_http extension that
+  // is allowlisted + enabled, so it doesn't touch any other recipe.
+  try {
+    await injectStreamableHttpAuth(supabase, args.useCase, recipeWithSkills);
+    for (const sub of subRecipesWithSkills.values()) {
+      await injectStreamableHttpAuth(supabase, args.useCase, sub);
+    }
+  } catch {
+    // best-effort; the resolveMcpExtensions pass below still logs warnings.
+  }
+
   // 2. Materialize recipe + sub-recipes into a tmpdir Goose can read.
   let workdir: string | null = null;
   let recipePath: string;
@@ -1371,6 +1390,69 @@ interface McpResolveResult {
   env: Record<string, string>;
   warnings: Array<Record<string, unknown>>;
   loadedNames: string[];
+}
+
+/**
+ * Inject operator-attached streamable_http auth onto a recipe's declared
+ * extensions, in place. For each streamable_http extension whose name matches
+ * an enabled, allowlisted ai_mcp_servers row for this use case, set the
+ * resolved uri + bearer token (as both a `bearer_token` field and an
+ * `Authorization` header — Goose honors one or the other depending on version)
+ * onto the extension's `raw`, so the materialized Goose recipe carries the
+ * credential. No-op when the recipe declares no streamable_http extension or
+ * none is allowlisted — so it never touches other recipes.
+ */
+async function injectStreamableHttpAuth(
+  supabase: SupabaseClient,
+  useCaseId: string,
+  recipe: ParsedRecipe,
+): Promise<void> {
+  const exts = recipe.extensions as Array<{ type?: string; name?: string; raw?: Record<string, unknown> } & Record<string, unknown>> | undefined;
+  if (!Array.isArray(exts) || exts.length === 0) return;
+  if (!exts.some((e) => (e.raw?.type ?? e.type) === 'streamable_http')) return;
+
+  const allowed = await supabase
+    .from('ai_use_case_mcp_allowlist')
+    .select('ai_mcp_servers(name, type, enabled, uri, bearer_token_ciphertext, headers)')
+    .eq('use_case_id', useCaseId);
+  if (allowed.error || !Array.isArray(allowed.data)) return;
+  const byName = new Map<string, Record<string, unknown>>();
+  for (const row of allowed.data as Array<{ ai_mcp_servers: Record<string, unknown> | null }>) {
+    const s = row.ai_mcp_servers;
+    if (s && s.type === 'streamable_http' && s.enabled !== false && typeof s.name === 'string') {
+      byName.set(s.name as string, s);
+    }
+  }
+  if (byName.size === 0) return;
+
+  const { decryptSecret } = await import('../skills/secret-shim.js');
+  for (const e of exts) {
+    const raw = (e.raw ?? e) as Record<string, unknown>;
+    if (raw.type !== 'streamable_http') continue;
+    const name = typeof raw.name === 'string' ? raw.name : (typeof e.name === 'string' ? e.name : undefined);
+    if (!name) continue;
+    const server = byName.get(name);
+    if (!server) continue;
+
+    if (typeof server.uri === 'string') raw.uri = server.uri;
+    const headers: Record<string, string> = {};
+    if (raw.headers && typeof raw.headers === 'object') Object.assign(headers, raw.headers as Record<string, string>);
+    if (server.headers && typeof server.headers === 'object') Object.assign(headers, server.headers as Record<string, string>);
+    if (typeof server.bearer_token_ciphertext === 'string' && server.bearer_token_ciphertext.length > 0) {
+      const pt = decryptSecret(server.bearer_token_ciphertext);
+      if (pt != null) {
+        try {
+          const token = JSON.parse(pt) as unknown;
+          if (typeof token === 'string' && token.length > 0) {
+            raw.bearer_token = token;
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+        } catch { /* malformed envelope → leave unauthenticated */ }
+      }
+    }
+    if (Object.keys(headers).length > 0) raw.headers = headers;
+    e.raw = raw;
+  }
 }
 
 async function resolveMcpExtensions(

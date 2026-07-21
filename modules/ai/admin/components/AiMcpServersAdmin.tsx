@@ -49,6 +49,7 @@ export default function AiMcpServersAdmin(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState<McpServer | null>(null);
 
   async function refresh(): Promise<void> {
     setLoading(true);
@@ -168,6 +169,7 @@ export default function AiMcpServersAdmin(): JSX.Element {
                   </label>
                 </td>
                 <td className="py-2 pr-3 flex gap-1">
+                  <Button onClick={() => setEditing(s)}>Edit</Button>
                   <Button onClick={() => void onTest(s.id)}>Test</Button>
                   <IconButton aria-label="Delete" onClick={() => void onDelete(s.id, s.name)}>
                     <TrashIcon className="size-4" />
@@ -179,33 +181,35 @@ export default function AiMcpServersAdmin(): JSX.Element {
         </table>
       )}
 
-      {showAdd && (
-        <AddMcpServerModal
-          onClose={() => setShowAdd(false)}
-          onCreated={() => { setShowAdd(false); void refresh(); }}
+      {(showAdd || editing) && (
+        <McpServerModal
+          editing={editing}
+          onClose={() => { setShowAdd(false); setEditing(null); }}
+          onSaved={() => { setShowAdd(false); setEditing(null); void refresh(); }}
         />
       )}
     </div>
   );
 }
 
-interface AddProps { onClose: () => void; onCreated: () => void }
+interface ModalProps { editing: McpServer | null; onClose: () => void; onSaved: () => void }
 
-function AddMcpServerModal({ onClose, onCreated }: AddProps): JSX.Element {
-  const [type, setType] = useState<ServerType>('stdio');
-  const [name, setName] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [description, setDescription] = useState('');
+function McpServerModal({ editing, onClose, onSaved }: ModalProps): JSX.Element {
+  const isEdit = !!editing;
+  const [type, setType] = useState<ServerType>(editing?.type ?? 'stdio');
+  const [name, setName] = useState(editing?.name ?? '');
+  const [displayName, setDisplayName] = useState(editing?.display_name ?? '');
+  const [description, setDescription] = useState(editing?.description ?? '');
   // stdio fields
-  const [cmd, setCmd] = useState('uvx');
-  const [argsRaw, setArgsRaw] = useState('');
-  const [envKeysRaw, setEnvKeysRaw] = useState('');
-  const [envsRaw, setEnvsRaw] = useState(''); // KEY=value lines
+  const [cmd, setCmd] = useState(editing?.stdio?.cmd ?? 'uvx');
+  const [argsRaw, setArgsRaw] = useState((editing?.stdio?.args ?? []).join(' '));
+  const [envKeysRaw, setEnvKeysRaw] = useState((editing?.stdio?.env_keys ?? []).join(','));
+  const [envsRaw, setEnvsRaw] = useState(''); // KEY=value lines (values never sent back down; blank keeps current)
   // streamable_http fields
-  const [uri, setUri] = useState('');
-  const [bearerToken, setBearerToken] = useState('');
+  const [uri, setUri] = useState(editing?.streamable_http?.uri ?? '');
+  const [bearerToken, setBearerToken] = useState(''); // blank on edit = keep current token
   // builtin
-  const [builtinName, setBuiltinName] = useState('memory');
+  const [builtinName, setBuiltinName] = useState(editing?.builtin?.builtin_name ?? 'memory');
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -228,21 +232,38 @@ function AddMcpServerModal({ onClose, onCreated }: AddProps): JSX.Element {
     setSaving(true);
     setError(null);
     try {
-      const body: Record<string, unknown> = {
-        name, display_name: displayName, description: description || null, type, enabled: true,
-      };
-      if (type === 'stdio') {
-        body.stdio = { cmd, args: parsedArgs, env_keys: parsedEnvKeys, envs: parsedEnvs };
-      } else if (type === 'streamable_http') {
-        body.streamable_http = { uri, headers: {}, ...(bearerToken && { bearer_token: bearerToken }) };
+      if (isEdit && editing) {
+        // PATCH — name + type are immutable; a blank bearer/env keeps the
+        // stored value (only sent when the operator typed a new one).
+        const body: Record<string, unknown> = {
+          display_name: displayName, description: description || null,
+        };
+        if (type === 'stdio') {
+          body.stdio = { args: parsedArgs, env_keys: parsedEnvKeys, ...(Object.keys(parsedEnvs).length && { envs: parsedEnvs }) };
+        } else if (type === 'streamable_http') {
+          body.streamable_http = { uri, ...(bearerToken && { bearer_token: bearerToken }) };
+        }
+        await jsonFetch(`/api/modules/ai/admin/mcp-servers/${editing.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        });
       } else {
-        body.builtin = { builtin_name: builtinName };
+        const body: Record<string, unknown> = {
+          name, display_name: displayName, description: description || null, type, enabled: true,
+        };
+        if (type === 'stdio') {
+          body.stdio = { cmd, args: parsedArgs, env_keys: parsedEnvKeys, envs: parsedEnvs };
+        } else if (type === 'streamable_http') {
+          body.streamable_http = { uri, headers: {}, ...(bearerToken && { bearer_token: bearerToken }) };
+        } else {
+          body.builtin = { builtin_name: builtinName };
+        }
+        await jsonFetch('/api/modules/ai/admin/mcp-servers', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
       }
-      await jsonFetch('/api/modules/ai/admin/mcp-servers', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      onCreated();
+      onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -254,7 +275,7 @@ function AddMcpServerModal({ onClose, onCreated }: AddProps): JSX.Element {
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={onClose}>
       <div className="bg-white rounded-md p-6 max-w-2xl w-full space-y-3" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Add MCP server</h3>
+          <h3 className="text-lg font-semibold">{isEdit ? 'Edit MCP server' : 'Add MCP server'}</h3>
           <IconButton aria-label="Close" onClick={onClose}>✕</IconButton>
         </div>
 
@@ -263,8 +284,8 @@ function AddMcpServerModal({ onClose, onCreated }: AddProps): JSX.Element {
         <div className="flex gap-3 text-sm">
           {(['stdio', 'streamable_http', 'builtin'] as ServerType[]).map((t) => (
             <label key={t} className="inline-flex items-center gap-1">
-              <input type="radio" name="srv-type" checked={type === t} onChange={() => setType(t)} />
-              <span>{t}</span>
+              <input type="radio" name="srv-type" checked={type === t} onChange={() => setType(t)} disabled={isEdit} />
+              <span className={isEdit && type !== t ? 'text-neutral-400' : ''}>{t}</span>
             </label>
           ))}
         </div>
@@ -272,7 +293,7 @@ function AddMcpServerModal({ onClose, onCreated }: AddProps): JSX.Element {
         <div className="grid grid-cols-2 gap-3 text-sm">
           <label className="space-y-1">
             <div className="text-xs text-neutral-600">Name (kebab-case, immutable)</div>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border rounded px-2 py-1 font-mono" placeholder="hackernews" />
+            <input value={name} onChange={(e) => setName(e.target.value)} disabled={isEdit} className="w-full border rounded px-2 py-1 font-mono disabled:bg-neutral-100 disabled:text-neutral-500" placeholder="hackernews" />
           </label>
           <label className="space-y-1">
             <div className="text-xs text-neutral-600">Display name</div>
@@ -315,8 +336,10 @@ function AddMcpServerModal({ onClose, onCreated }: AddProps): JSX.Element {
               <input value={uri} onChange={(e) => setUri(e.target.value)} className="w-full border rounded px-2 py-1 font-mono" placeholder="https://mcp.lfx.dev/mcp" />
             </label>
             <label className="space-y-1 block">
-              <div className="text-xs text-neutral-600">Bearer token (optional — encrypted at rest)</div>
-              <input type="password" value={bearerToken} onChange={(e) => setBearerToken(e.target.value)} className="w-full border rounded px-2 py-1 font-mono" />
+              <div className="text-xs text-neutral-600">
+                Bearer token (optional — encrypted at rest){isEdit && editing?.streamable_http?.bearer_token_set ? ' — leave blank to keep current' : ''}
+              </div>
+              <input type="password" value={bearerToken} onChange={(e) => setBearerToken(e.target.value)} className="w-full border rounded px-2 py-1 font-mono" placeholder={isEdit && editing?.streamable_http?.bearer_token_set ? '•••••• (unchanged)' : ''} />
             </label>
           </div>
         )}
@@ -331,7 +354,7 @@ function AddMcpServerModal({ onClose, onCreated }: AddProps): JSX.Element {
         <div className="flex justify-end gap-2 pt-3">
           <Button onClick={onClose}>Cancel</Button>
           <Button onClick={() => void onSubmit()} disabled={saving || !name || !displayName}>
-            {saving ? 'Saving…' : 'Create'}
+            {saving ? 'Saving…' : isEdit ? 'Save' : 'Create'}
           </Button>
         </div>
       </div>
