@@ -72,6 +72,7 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
         .order('event_start', { ascending: true })
         .range(offset, offset + limit - 1);
 
+      if (req.query.q) query = query.ilike('event_title', `%${req.query.q}%`);
       if (req.query.city) query = query.ilike('event_city', `%${req.query.city}%`);
       if (req.query.type) query = query.eq('event_type', req.query.type);
       if (req.query.topics) query = query.overlaps('event_topics', req.query.topics.split(','));
@@ -118,6 +119,78 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
         return res.status(400).json({ error: err });
       }
       console.error('[events] public-api list error:', err);
+      res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    }
+  });
+
+  // GET /api/v1/events/metrics — registration metrics per published event.
+  // Requires the events:metrics scope: registrant numbers are operational
+  // data, deliberately NOT part of the public read surface (the keyless MCP
+  // profile never sees this tool). Registered BEFORE /:id so the literal
+  // path isn't swallowed by the param route.
+  router.get('/metrics', ctx.requireScope('metrics'), async (req: Request, res: Response) => {
+    try {
+      const { limit, offset } = ctx.parsePagination(req.query);
+      // Cap the page: counts are computed per-event (three head-count
+      // queries each) — 50 events = 150 cheap parallel counts, still snappy.
+      const pageLimit = Math.min(limit, 50);
+
+      let query = publicOnly(
+        supabase
+          .from('events')
+          .select('id, event_id, event_title, event_start, event_end, event_city, event_country_code, event_type, event_location', { count: 'exact' }),
+      )
+        .order('event_start', { ascending: false })
+        .range(offset, offset + pageLimit - 1);
+      if (req.query.q) query = query.ilike('event_title', `%${req.query.q}%`);
+      if (req.query.from) query = query.gte('event_start', req.query.from);
+      if (req.query.to) query = query.lte('event_start', req.query.to);
+      if (req.query.calendar_id) {
+        const { data: calEvents } = await supabase
+          .from('calendars_events')
+          .select('event_id')
+          .eq('calendar_id', req.query.calendar_id);
+        const ids = ((calEvents ?? []) as Array<{ event_id: string }>).map((ce) => ce.event_id);
+        if (ids.length === 0) {
+          return res.json({ data: [], pagination: { total: 0, limit: pageLimit, offset, has_more: false } });
+        }
+        query = query.in('id', ids);
+      }
+
+      const { data: events, error, count } = await query;
+      if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+
+      // Exact per-event counts via head requests — immune to PostgREST's
+      // 1000-row response cap, which a naive fetch-and-count would hit.
+      const rows = await Promise.all(
+        ((events ?? []) as Array<Record<string, unknown>>).map(async (ev) => {
+          const [registrants, checkedIn, cancelled] = await Promise.all([
+            supabase.from('events_registrations').select('id', { count: 'exact', head: true })
+              .eq('event_id', ev.id).neq('status', 'cancelled'),
+            supabase.from('events_registrations').select('id', { count: 'exact', head: true })
+              .eq('event_id', ev.id).neq('status', 'cancelled').eq('checked_in', true),
+            supabase.from('events_registrations').select('id', { count: 'exact', head: true })
+              .eq('event_id', ev.id).eq('status', 'cancelled'),
+          ]);
+          return {
+            ...ev,
+            registrations: {
+              registrants: registrants.count ?? 0,
+              checked_in: checkedIn.count ?? 0,
+              cancelled: cancelled.count ?? 0,
+            },
+          };
+        }),
+      );
+
+      ctx.setCache(res, { kind: 'no-store' });
+      res.json({
+        data: rows,
+        pagination: { total: count ?? 0, limit: pageLimit, offset, has_more: offset + rows.length < (count ?? 0) },
+        _links: { self: req.originalUrl },
+      });
+    } catch (err) {
+      console.error('[events] public-api metrics error:', err);
       res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
     }
   });

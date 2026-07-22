@@ -8,7 +8,7 @@ const eventsModule: GatewazeModule = {
   group: 'events',
   name: 'Events',
   description: 'Core events management - create, manage, and run events with registrations, attendance tracking, and check-in',
-  version: '1.2.1',
+  version: '1.3.0',
   features: [
     'events',
     'events.registrations',
@@ -148,6 +148,7 @@ const eventsModule: GatewazeModule = {
 
   publicApiScopes: [
     { action: 'read', description: 'Read public events, including speakers and sponsors via sub-resources' },
+    { action: 'metrics', description: 'Read per-event registration metrics (registrants, check-ins) for published events' },
   ],
 
   publicApiRoutes: async (router, ctx) => {
@@ -165,6 +166,7 @@ const eventsModule: GatewazeModule = {
           summary: 'List events',
           operationId: 'listEvents',
           parameters: [
+            { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Filter by event title (partial match)' },
             { name: 'city', in: 'query', schema: { type: 'string' }, description: 'Filter by city (partial match)' },
             { name: 'type', in: 'query', schema: { type: 'string' }, description: 'Filter by event type' },
             { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Events starting after this date (RFC 3339)' },
@@ -180,6 +182,24 @@ const eventsModule: GatewazeModule = {
             401: { $ref: '#/components/responses/Unauthorized' },
             403: { $ref: '#/components/responses/Forbidden' },
             429: { $ref: '#/components/responses/RateLimited' },
+          },
+        },
+      },
+      '/metrics': {
+        get: {
+          summary: 'Registration metrics per published event (requires events:metrics)',
+          operationId: 'listEventMetrics',
+          parameters: [
+            { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Filter by event title (partial match)' },
+            { name: 'calendar_id', in: 'query', schema: { type: 'string', format: 'uuid' } },
+            { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+            { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, minimum: 1, maximum: 50 } },
+            { name: 'offset', in: 'query', schema: { type: 'integer', default: 0, minimum: 0 } },
+          ],
+          responses: {
+            200: { description: 'Events with registrants / checked_in / cancelled counts' },
+            403: { $ref: '#/components/responses/Forbidden' },
           },
         },
       },
