@@ -19,11 +19,14 @@
  * These are all virtual/online community events, so isVirtual is forced true
  * (matches every card's `isOnline: true`).
  *
- * Future-only by default (the listing is an "upcoming" surface): any event
- * whose start (startedAt) is in the past is skipped. Set the scraper's config
- * `include_past: true` to also backfill the past events the listing still
- * carries — a rolling window the source caps at ~30 items, so the very oldest
- * sessions may be beyond reach. `startedAt`/`endedAt` are ISO8601 UTC (Zulu).
+ * Three collection modes (config):
+ *   - default: future-only from the SSR listing (an "upcoming" surface).
+ *   - `include_past: true`: also keep the past events the SSR listing carries
+ *     (a rolling ~30-item window).
+ *   - `backfill_all: true`: drive a real browser and click "Load more" until the
+ *     archive is exhausted — the COMPLETE history (verified back to the
+ *     community's first event, Feb 2022). Implies include_past. See
+ *     _collectEventsViaBrowser. `startedAt`/`endedAt` are ISO8601 UTC (Zulu).
  *
  * Fetch path: prefers the scrapling-fetcher service when configured, falls
  * back transparently to node-fetch (same content) — same pattern as
@@ -213,24 +216,118 @@ export class AaifVirtualEventsScraper extends BaseScraper {
     return enrich;
   }
 
+  /**
+   * Full archive via a real browser. The SSR listing (__NEXT_DATA__) is only a
+   * ~30-item window; the rest loads through a "Load more" button that fires a
+   * GraphQL `pastMeetups(skip)` query. That endpoint is persisted-query
+   * safelisted AND bot-protected, so server-side POSTs (even from inside the
+   * page) get 403 — we can't replicate the request. Instead we drive the real
+   * page: intercept every /api/graphql response, then click "Load more" until
+   * it disappears. Seeds the initial/upcoming set from __NEXT_DATA__ too.
+   * Verified: reaches the full archive back to the community's first event.
+   * Returns card-shaped events deduped by id — the shape scrape() expects.
+   */
+  async _collectEventsViaBrowser(baseUrl) {
+    const cfg = this.config?.config || {};
+    const maxClicks = Number(cfg.max_load_more_clicks) || 100;
+    const noBtnLimit = Number(cfg.load_more_miss_limit) || 15;
+    const loadWaitMs = Number(cfg.load_more_wait_ms) || 2600;
+
+    const puppeteer = (await import('puppeteer-core')).default;
+    const browser = await puppeteer.launch({
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+        '--disable-gpu', '--disable-blink-features=AutomationControlled',
+        '--no-first-run', '--no-default-browser-check',
+      ],
+      ignoreHTTPSErrors: true,
+      timeout: 120000,
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      const byId = new Map();
+      const add = (x) => { if (x && x.id && x.slug && x.startedAt) byId.set(x.id, x); };
+      const scan = (o) => {
+        if (Array.isArray(o)) { for (const x of o) add(x); }
+        else if (o && typeof o === 'object') { for (const v of Object.values(o)) scan(v); }
+      };
+      // Each "Load more" click fires a GraphQL query — capture every event in
+      // those responses (query-agnostic: upcoming + past).
+      page.on('response', async (res) => {
+        try {
+          if (!res.url().includes('/api/graphql')) return;
+          const j = await res.json().catch(() => null);
+          if (j) scan(j.data || j);
+        } catch { /* ignore malformed/binary responses */ }
+      });
+
+      await page.goto(baseUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+      await new Promise((r) => setTimeout(r, 2000));
+      // Seed with the SSR set (initial + any upcoming events, rendered from
+      // __NEXT_DATA__ rather than an XHR the interceptor sees).
+      try {
+        const nd = extractNextData(await page.content());
+        for (const e of nd?.props?.pageProps?.events || []) add(e);
+      } catch { /* best effort */ }
+
+      // Click "Load more" until it's gone (disabled = mid-load, wait; absent for
+      // noBtnLimit consecutive checks = archive exhausted).
+      let clicks = 0;
+      let noBtn = 0;
+      for (let i = 0; i < maxClicks + noBtnLimit + 20 && clicks < maxClicks && noBtn < noBtnLimit; i++) {
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await new Promise((r) => setTimeout(r, 600));
+        const state = await page.evaluate(() => {
+          const btn = [...document.querySelectorAll('button')].find((e) => /load more/i.test(e.textContent || ''));
+          if (!btn) return 'none';
+          if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return 'wait';
+          btn.scrollIntoView({ block: 'center' });
+          btn.click();
+          return 'clicked';
+        });
+        if (state === 'clicked') { clicks++; noBtn = 0; await new Promise((r) => setTimeout(r, loadWaitMs)); }
+        else if (state === 'wait') { await new Promise((r) => setTimeout(r, 1500)); }
+        else { noBtn++; await new Promise((r) => setTimeout(r, 900)); }
+      }
+      console.log(`🌐 Browser backfill: ${clicks} "Load more" clicks → ${byId.size} events`);
+      return [...byId.values()];
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  }
+
   async scrape() {
     const baseUrl =
       this.config.url ||
       this.config.base_url ||
       `${SITE_ORIGIN}/public/events`;
 
-    console.log(`🎯 AaifVirtualEventsScraper fetching: ${baseUrl}`);
-    const html = await this._fetchHtml(baseUrl);
-    console.log(`📥 Fetched ${html.length} bytes`);
+    // `backfill_all: true` drives a real browser + "Load more" to pull the ENTIRE
+    // archive (the SSR listing alone is a ~30-item window). It implies
+    // include_past. Otherwise we parse the SSR __NEXT_DATA__ listing.
+    const cfg = this.config?.config || {};
+    const backfillAll = cfg.backfill_all === true || this.config?.backfill_all === true;
 
-    const nextData = extractNextData(html);
-    const events = nextData?.props?.pageProps?.events;
-    if (!Array.isArray(events)) {
-      throw new Error(
-        'AaifVirtualEventsScraper: could not find props.pageProps.events in __NEXT_DATA__ (page structure changed?)',
-      );
+    console.log(`🎯 AaifVirtualEventsScraper fetching: ${baseUrl}`);
+    let events;
+    if (backfillAll) {
+      console.log('🌐 backfill_all enabled — driving a real browser to load the full archive');
+      events = await this._collectEventsViaBrowser(baseUrl);
+    } else {
+      const html = await this._fetchHtml(baseUrl);
+      console.log(`📥 Fetched ${html.length} bytes`);
+      const nextData = extractNextData(html);
+      events = nextData?.props?.pageProps?.events;
+      if (!Array.isArray(events)) {
+        throw new Error(
+          'AaifVirtualEventsScraper: could not find props.pageProps.events in __NEXT_DATA__ (page structure changed?)',
+        );
+      }
     }
-    console.log(`🔎 Listing has ${events.length} events (pre-filter)`);
+    console.log(`🔎 ${events.length} events collected (pre-filter)`);
 
     // Init stats so the summary log doesn't print NaN.
     if (typeof this.stats.found !== 'number') this.stats.found = 0;
@@ -248,8 +345,9 @@ export class AaifVirtualEventsScraper extends BaseScraper {
     // config `include_past: true` to also backfill past events — the listing
     // still ships them (a rolling window the source caps at ~30 items).
     const includePast =
+      backfillAll ||
       this.config?.config?.include_past === true || this.config?.include_past === true;
-    if (includePast) console.log('🕰️  include_past enabled — backfilling past events too');
+    if (includePast) console.log('🕰️  including past events');
 
     for (const card of events) {
       try {
