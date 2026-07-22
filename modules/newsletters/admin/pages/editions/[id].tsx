@@ -30,6 +30,30 @@ import { getViewOnlineUrl } from '../../utils/view-online-url';
 import { buildEmailRegistry } from '../../components/puck/email-blocks/declarative/registry';
 import { emailBlockRegistry } from '../../components/puck/email-blocks';
 import type { BlockRenderMeta } from '../../components/puck/email-blocks/EditionEmail';
+import {
+  readDraft, writeDraft, clearDraft, draftFingerprint,
+  type EditionDraftPayload, type StoredDraft,
+} from '../../hooks/useEditionDraft';
+
+/** The serialisable slice of an edition we mirror to the local draft. */
+function toDraftPayload(ed: NewsletterEdition): EditionDraftPayload {
+  return {
+    subject: ed.subject ?? '',
+    preheader: (ed as { preheader?: string }).preheader ?? '',
+    edition_date: ed.edition_date ?? '',
+    blocks: (ed.blocks ?? []) as unknown[],
+  };
+}
+
+/** True when a save failed because the auth session is gone (expired/invalid). */
+function isAuthError(err: unknown): boolean {
+  const e = err as { code?: string; status?: number; message?: string } | null;
+  if (!e) return false;
+  if (e.status === 401 || e.code === 'PGRST301' || e.code === '42501') return true;
+  return /jwt (expired|invalid)|not authori[sz]ed|invalid.*(token|claim)|auth session (missing|expired)|401/i.test(
+    e.message || '',
+  );
+}
 
 /** Shape of a templates_block_defs row, with `block_type` aliased from `key`. */
 interface DbBlockTemplate {
@@ -127,6 +151,15 @@ export default function EditionEditorPage() {
   // Other operators currently in this edition (realtime presence). Drives the
   // "also editing" banner; the optimistic lock is what actually prevents a clobber.
   const presencePeers = useEditionPresence(edition?.id ?? null);
+  // Local-draft recovery: a stored draft that differs from the loaded server
+  // state (unsaved edits from a prior session), and whether the auth session
+  // has expired mid-edit (drives the "signed out" banner). loadedSnapshotRef is
+  // the fingerprint of the last clean (server-synced) state — drift means the
+  // in-memory edits haven't been persisted.
+  const [pendingDraft, setPendingDraft] = useState<StoredDraft | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const loadedSnapshotRef = useRef<string>('');
+  const draftCheckedRef = useRef(false);
   const [blockTemplates, setBlockTemplates] = useState<(DbBlockTemplate & BlockTemplate)[]>([]);
   const [brickTemplates, setBrickTemplates] = useState<BrickTemplate[]>([]);
   const [collectionId, setCollectionId] = useState<string | null>(null);
@@ -471,6 +504,32 @@ export default function EditionEditorPage() {
   useEffect(() => { loadEdition(); }, [loadEdition]);
   useEffect(() => { if (collectionId) loadTemplates(collectionId); }, [collectionId, loadTemplates]);
 
+  // Once the edition is loaded, baseline the clean fingerprint and check for a
+  // recoverable local draft (unsaved edits a prior session couldn't persist —
+  // e.g. after an auth expiry). Runs once per mount.
+  useEffect(() => {
+    if (loading || !edition || edition.id === 'new' || draftCheckedRef.current) return;
+    draftCheckedRef.current = true;
+    const serverFp = draftFingerprint(toDraftPayload(edition));
+    loadedSnapshotRef.current = serverFp;
+    const existing = readDraft(edition.id);
+    if (existing && draftFingerprint(existing.payload) !== serverFp) {
+      setPendingDraft(existing);
+    }
+  }, [loading, edition]);
+
+  // Mirror edits to a local draft (debounced). Skipped while a recoverable
+  // draft is still pending a decision (don't clobber it) and when nothing has
+  // changed since the last server sync.
+  useEffect(() => {
+    if (!edition || edition.id === 'new' || pendingDraft) return;
+    const fp = draftFingerprint(toDraftPayload(edition));
+    if (fp === loadedSnapshotRef.current) return;
+    const editionId = edition.id;
+    const t = setTimeout(() => writeDraft(editionId, toDraftPayload(edition), Date.now()), 800);
+    return () => clearTimeout(t);
+  }, [edition, pendingDraft]);
+
   // Auto-create the DB row for a fresh edition as soon as loadEdition
   // finishes building the in-memory state. Without this, the row only
   // exists once the operator clicks "Save Draft" — which means the
@@ -628,6 +687,15 @@ export default function EditionEditorPage() {
             );
             throw new Error('__edition_version_conflict__');
           }
+          // Auth session died (expired/invalid JWT) — the save didn't persist.
+          // Preserve the work locally and surface it loudly; NEVER swallow this,
+          // even for a silent autosave (that's how Steve's edits were lost on
+          // 2026-07-22).
+          if (isAuthError(saveErr)) {
+            writeDraft(edition.id, toDraftPayload(edition), Date.now());
+            setSessionExpired(true);
+            throw new Error('__edition_session_expired__');
+          }
           console.error('Save edition error:', saveErr);
           throw saveErr;
         }
@@ -635,6 +703,11 @@ export default function EditionEditorPage() {
         // next save from this session doesn't self-conflict.
         const newVersion = (saveResult as { version?: number } | null)?.version;
         if (typeof newVersion === 'number') editionVersionRef.current = newVersion;
+        // Saved — this in-memory state is now the clean baseline; drop the local
+        // recovery draft and clear any prior session-expired flag.
+        loadedSnapshotRef.current = draftFingerprint(toDraftPayload(edition));
+        clearDraft(edition.id);
+        if (sessionExpired) setSessionExpired(false);
         if (!options?.silent) toast.success('Edition saved');
       }
     } catch (error) {
@@ -644,12 +717,49 @@ export default function EditionEditorPage() {
         setSaving(false);
         return;
       }
+      // Session expired: work is preserved locally + the banner is up. Swallow
+      // quietly — the banner is the message (no generic error toast).
+      if ((error as Error)?.message === '__edition_session_expired__') {
+        setSaving(false);
+        return;
+      }
+      // A different auth-shaped failure (e.g. the create path, or a raw 401) —
+      // preserve the draft + surface it rather than silently losing the work.
+      if (isAuthError(error) && edition) {
+        writeDraft(edition.id, toDraftPayload(edition), Date.now());
+        setSessionExpired(true);
+        setSaving(false);
+        return;
+      }
       console.error('Error saving edition:', error);
       if (!options?.silent) toast.error('Failed to save edition');
       throw error;
     } finally {
       setSaving(false);
     }
+  };
+
+  const restoreDraft = () => {
+    if (!pendingDraft || !edition) return;
+    setEdition({
+      ...edition,
+      subject: pendingDraft.payload.subject,
+      preheader: pendingDraft.payload.preheader,
+      edition_date: pendingDraft.payload.edition_date,
+      blocks: pendingDraft.payload.blocks as NewsletterEdition['blocks'],
+    });
+    setPendingDraft(null);
+    toast.success('Restored your unsaved changes — save to sync them to the server.');
+  };
+  const discardDraft = () => {
+    if (edition) clearDraft(edition.id);
+    setPendingDraft(null);
+  };
+  const handleReLogin = () => {
+    // The draft is already persisted locally; a full nav triggers the LFID SSO
+    // round-trip. On return, the draft-recovery prompt restores the work.
+    if (edition) writeDraft(edition.id, toDraftPayload(edition), Date.now());
+    navigate('/login');
   };
 
   if (loading) {
@@ -724,6 +834,26 @@ export default function EditionEditorPage() {
               ? `${presencePeers[0].name} is also editing this edition`
               : `${presencePeers.length} other people are also editing this edition`}
             {' — your changes are protected, but coordinate to avoid conflicting saves.'}
+          </span>
+        </div>
+      )}
+      {sessionExpired && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEE2E2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
+          <span aria-hidden>⚠️</span>
+          <span style={{ fontWeight: 600 }}>You&rsquo;ve been signed out.</span>
+          <span>Your recent changes are saved on this device and will be restored after you sign in again — they were <strong>not</strong> saved to the server.</span>
+          <button onClick={handleReLogin} style={{ marginLeft: 'auto', padding: '4px 12px', background: '#991B1B', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>
+            Sign in again
+          </button>
+        </div>
+      )}
+      {pendingDraft && !sessionExpired && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A' }}>
+          <span aria-hidden>💾</span>
+          <span>Unsaved changes from {new Date(pendingDraft.savedAt).toLocaleString()} were found on this device (they never reached the server).</span>
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button onClick={restoreDraft} style={{ padding: '4px 12px', background: '#92400E', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Restore</button>
+            <button onClick={discardDraft} style={{ padding: '4px 12px', background: 'transparent', color: '#92400E', border: '1px solid #92400E', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Discard</button>
           </span>
         </div>
       )}
