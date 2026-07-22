@@ -264,8 +264,20 @@ export class AaifVirtualEventsScraper extends BaseScraper {
         } catch { /* ignore malformed/binary responses */ }
       });
 
-      await page.goto(baseUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-      await new Promise((r) => setTimeout(r, 2000));
+      // DOMContentLoaded, not networkidle2: this page holds persistent
+      // sentry/analytics connections that never go idle, so networkidle2 times
+      // out (esp. on slower prod networks). The SSR events are in the initial
+      // HTML and the interceptor + Load-more loop pull the rest.
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
+      // Wait for the client to render events (the initial GraphQL fires after
+      // load): poll for event links / the interceptor's first hits, up to ~20s.
+      for (let w = 0; w < 20; w++) {
+        const ready = await page.evaluate(() =>
+          document.querySelectorAll('[href*="/public/events/"]').length > 0).catch(() => false);
+        if (ready || byId.size > 0) break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      await new Promise((r) => setTimeout(r, 1500));
       // Seed with the SSR set (initial + any upcoming events, rendered from
       // __NEXT_DATA__ rather than an XHR the interceptor sees).
       try {
