@@ -19,9 +19,11 @@
  * These are all virtual/online community events, so isVirtual is forced true
  * (matches every card's `isOnline: true`).
  *
- * Future-only: the operator asked for upcoming events only, so any event
- * whose start (startedAt) is in the past is skipped. `startedAt`/`endedAt`
- * are already ISO8601 UTC (Zulu) in the JSON.
+ * Future-only by default (the listing is an "upcoming" surface): any event
+ * whose start (startedAt) is in the past is skipped. Set the scraper's config
+ * `include_past: true` to also backfill the past events the listing still
+ * carries — a rolling window the source caps at ~30 items, so the very oldest
+ * sessions may be beyond reach. `startedAt`/`endedAt` are ISO8601 UTC (Zulu).
  *
  * Fetch path: prefers the scrapling-fetcher service when configured, falls
  * back transparently to node-fetch (same content) — same pattern as
@@ -242,6 +244,12 @@ export class AaifVirtualEventsScraper extends BaseScraper {
     }
 
     const now = Date.now();
+    // By default this is an "upcoming" surface (future-only). Set the scraper's
+    // config `include_past: true` to also backfill past events — the listing
+    // still ships them (a rolling window the source caps at ~30 items).
+    const includePast =
+      this.config?.config?.include_past === true || this.config?.include_past === true;
+    if (includePast) console.log('🕰️  include_past enabled — backfilling past events too');
 
     for (const card of events) {
       try {
@@ -256,9 +264,14 @@ export class AaifVirtualEventsScraper extends BaseScraper {
         const eventStart = card.startedAt || null;
         const eventEnd = card.endedAt || null;
 
-        // Future-only: skip anything already started/past.
+        // Skip events with no valid start date; skip past events only when the
+        // scraper is in the default future-only mode (see `includePast` above).
         const startMs = eventStart ? Date.parse(eventStart) : NaN;
-        if (Number.isNaN(startMs) || startMs < now) {
+        if (Number.isNaN(startMs)) {
+          this.stats.skipped++;
+          continue;
+        }
+        if (!includePast && startMs < now) {
           this.stats.skipped++;
           continue;
         }
@@ -338,7 +351,7 @@ export class AaifVirtualEventsScraper extends BaseScraper {
     }
 
     console.log(
-      `✅ AaifVirtualEventsScraper finished: ${this.stats.found} future found, ${this.stats.processed} processed, ${this.stats.skipped} skipped (past), ${this.stats.failed} failed`,
+      `✅ AaifVirtualEventsScraper finished: ${this.stats.found} found${includePast ? ' (incl. past)' : ' (future only)'}, ${this.stats.processed} processed, ${this.stats.skipped} skipped, ${this.stats.failed} failed`,
     );
     return this.scrapedEvents;
   }
