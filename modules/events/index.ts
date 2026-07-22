@@ -187,7 +187,7 @@ const eventsModule: GatewazeModule = {
       },
       '/metrics': {
         get: {
-          summary: 'Registration metrics per published event (requires events:metrics)',
+          summary: 'Registration metrics per event, all publish states (requires events:metrics)',
           operationId: 'listEventMetrics',
           parameters: [
             { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Filter by event title (partial match)' },
