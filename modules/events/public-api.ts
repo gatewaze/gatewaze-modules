@@ -123,11 +123,15 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
     }
   });
 
-  // GET /api/v1/events/metrics — registration metrics per published event.
-  // Requires the events:metrics scope: registrant numbers are operational
-  // data, deliberately NOT part of the public read surface (the keyless MCP
-  // profile never sees this tool). Registered BEFORE /:id so the literal
-  // path isn't swallowed by the param route.
+  // GET /api/v1/events/metrics — registration metrics per event, ALL events
+  // regardless of publish status. Requires the events:metrics scope:
+  // registrant numbers are operational data, deliberately NOT part of the
+  // public read surface (the keyless MCP profile never sees this tool) — and
+  // because the scope already gates access, the published-only rule that
+  // protects the keyless surface does not apply here. Each row carries
+  // publish_state + is_listed so consumers can tell live events from drafts.
+  // Registered BEFORE /:id so the literal path isn't swallowed by the param
+  // route.
   router.get('/metrics', ctx.requireScope('metrics'), async (req: Request, res: Response) => {
     try {
       const { limit, offset } = ctx.parsePagination(req.query);
@@ -135,11 +139,9 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
       // queries each) — 50 events = 150 cheap parallel counts, still snappy.
       const pageLimit = Math.min(limit, 50);
 
-      let query = publicOnly(
-        supabase
-          .from('events')
-          .select('id, event_id, event_title, event_start, event_end, event_city, event_country_code, event_type, event_location', { count: 'exact' }),
-      )
+      let query = supabase
+        .from('events')
+        .select('id, event_id, event_title, event_start, event_end, event_city, event_country_code, event_type, event_location, publish_state, is_listed', { count: 'exact' })
         .order('event_start', { ascending: false })
         .range(offset, offset + pageLimit - 1);
       if (req.query.q) query = query.ilike('event_title', `%${req.query.q}%`);
@@ -174,6 +176,7 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
           ]);
           return {
             ...ev,
+            is_published: ev.publish_state === 'published' && ev.is_listed === true,
             registrations: {
               registrants: registrants.count ?? 0,
               checked_in: checkedIn.count ?? 0,
