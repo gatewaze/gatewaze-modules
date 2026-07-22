@@ -218,13 +218,18 @@ export class AaifVirtualEventsScraper extends BaseScraper {
 
   /**
    * Full archive via a real browser. The SSR listing (__NEXT_DATA__) is only a
-   * ~30-item window; the rest loads through a "Load more" button that fires a
-   * GraphQL `pastMeetups(skip)` query. That endpoint is persisted-query
-   * safelisted AND bot-protected, so server-side POSTs (even from inside the
-   * page) get 403 — we can't replicate the request. Instead we drive the real
-   * page: intercept every /api/graphql response, then click "Load more" until
-   * it disappears. Seeds the initial/upcoming set from __NEXT_DATA__ too.
-   * Verified: reaches the full archive back to the community's first event.
+   * ~30-item window; the rest loads through a "Load more" button whose GraphQL
+   * `pastMeetups(skip)` endpoint is persisted-query safelisted AND bot-protected
+   * (server-side POSTs, even in-page, get 403 — the request can't be replicated).
+   *
+   * So we drive the real page and click "Load more" until it disappears, letting
+   * the page's own (authorised) requests load every event. Two things make this
+   * reliable on slower prod browsers:
+   *   - the /api/graphql response handler is SYNC (just records the response);
+   *     the bodies are read AFTER the click loop. Awaiting res.json() inside the
+   *     handler deadlocks with the loop's page.evaluate calls and hangs the run.
+   *   - the initial load retries until event links render (avoids empty runs).
+   * Verified consistent: full archive back to the community's first event (2022).
    * Returns card-shaped events deduped by id — the shape scrape() expects.
    */
   async _collectEventsViaBrowser(baseUrl) {
@@ -254,32 +259,26 @@ export class AaifVirtualEventsScraper extends BaseScraper {
         if (Array.isArray(o)) { for (const x of o) add(x); }
         else if (o && typeof o === 'object') { for (const v of Object.values(o)) scan(v); }
       };
-      // Each "Load more" click fires a GraphQL query — capture every event in
-      // those responses (query-agnostic: upcoming + past).
-      page.on('response', async (res) => {
-        try {
-          if (!res.url().includes('/api/graphql')) return;
-          const j = await res.json().catch(() => null);
-          if (j) scan(j.data || j);
-        } catch { /* ignore malformed/binary responses */ }
-      });
+      // Record graphql responses SYNCHRONOUSLY (no await here — reading bodies
+      // in-handler deadlocks with the loop's page.evaluate). Bodies drained below.
+      const responses = [];
+      page.on('response', (res) => { if (res.url().includes('/api/graphql')) responses.push(res); });
 
-      // DOMContentLoaded, not networkidle2: this page holds persistent
-      // sentry/analytics connections that never go idle, so networkidle2 times
-      // out (esp. on slower prod networks). The SSR events are in the initial
-      // HTML and the interceptor + Load-more loop pull the rest.
-      await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
-      // Wait for the client to render events (the initial GraphQL fires after
-      // load): poll for event links / the interceptor's first hits, up to ~20s.
-      for (let w = 0; w < 20; w++) {
-        const ready = await page.evaluate(() =>
-          document.querySelectorAll('[href*="/public/events/"]').length > 0).catch(() => false);
-        if (ready || byId.size > 0) break;
-        await new Promise((r) => setTimeout(r, 1000));
+      // Robust load: DOMContentLoaded (this page never network-idles) + wait for
+      // event links to render; retry the navigation once if they don't appear.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
+        let ok = false;
+        for (let w = 0; w < 30; w++) {
+          if (await page.evaluate(() =>
+            document.querySelectorAll('a[href*="/public/events/"]').length > 0).catch(() => false)) { ok = true; break; }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        if (ok) break;
       }
       await new Promise((r) => setTimeout(r, 1500));
       // Seed with the SSR set (initial + any upcoming events, rendered from
-      // __NEXT_DATA__ rather than an XHR the interceptor sees).
+      // __NEXT_DATA__ rather than an XHR).
       try {
         const nd = extractNextData(await page.content());
         for (const e of nd?.props?.pageProps?.events || []) add(e);
@@ -303,6 +302,11 @@ export class AaifVirtualEventsScraper extends BaseScraper {
         if (state === 'clicked') { clicks++; noBtn = 0; await new Promise((r) => setTimeout(r, loadWaitMs)); }
         else if (state === 'wait') { await new Promise((r) => setTimeout(r, 1500)); }
         else { noBtn++; await new Promise((r) => setTimeout(r, 900)); }
+      }
+
+      // Now (no page.evaluate in flight) drain the recorded response bodies.
+      for (const res of responses) {
+        try { scan((await res.json())?.data ?? null); } catch { /* body gone/binary */ }
       }
       console.log(`🌐 Browser backfill: ${clicks} "Load more" clicks → ${byId.size} events`);
       return [...byId.values()];
