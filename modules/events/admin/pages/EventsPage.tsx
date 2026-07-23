@@ -5,8 +5,9 @@
  * useListingQuery; everything below is presentation.
  */
 
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { DropdownMenu } from '@radix-ui/themes';
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -17,6 +18,7 @@ import { toast } from 'sonner';
 import {
   ArrowPathIcon,
   CameraIcon,
+  ChevronDownIcon,
   ClockIcon,
   DocumentDuplicateIcon,
   GlobeAltIcon,
@@ -151,6 +153,19 @@ export default function EventsPage() {
     }
     setQuery({ filters: nextFilters, page: 0 });
   };
+
+  // Default the dashboard to published events on a bare load. Only applies
+  // when the URL carries no query state, so shared/deep-linked URLs (and an
+  // explicit Reset) are honoured as-is rather than snapping back to published.
+  const didInitDefault = useRef(false);
+  useEffect(() => {
+    if (didInitDefault.current) return;
+    didInitDefault.current = true;
+    const hasQueryState =
+      !!query.search || !!query.sort || Object.keys(query.filters ?? {}).length > 0;
+    if (!hasQueryState) setFilter('publishState', ['published']);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const hidePast = !!filters.endsAfter;
   const noScreenshots = filters.screenshot === 'none';
@@ -309,6 +324,32 @@ export default function EventsPage() {
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Delete failed');
+    } finally {
+      setBusyRowId(null);
+    }
+  };
+
+  // Inline publish-state change from the Status cell. Routes through the
+  // central state-machine RPC (via EventService.setPublishState), which
+  // rejects invalid transitions — we surface any such error as a toast.
+  const changePublishState = async (row: Row, to: string) => {
+    const current = ((row as any).publishState as string | undefined) ?? 'published';
+    if (to === current) return;
+    setBusyRowId(String(row.id));
+    try {
+      const res = await EventService.setPublishState(
+        String(row.id),
+        to as Parameters<typeof EventService.setPublishState>[1],
+        `admin set publish_state=${to} from events table`,
+      );
+      if (res.success) {
+        toast.success(`Status → ${PUBLISH_STATE_BADGE[to]?.label ?? to}`);
+        refresh();
+      } else {
+        toast.error(res.error ?? 'Failed to change status');
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to change status');
     } finally {
       setBusyRowId(null);
     }
@@ -554,10 +595,44 @@ export default function EventsPage() {
         header: 'Status',
         enableSorting: true,
         cell: ({ row }) => {
-          const v = (row.original as any).publishState as string | undefined;
-          const meta = PUBLISH_STATE_BADGE[v ?? 'published']
-            ?? { color: 'gray' as const, label: v ?? '—' };
-          return <Badge color={meta.color} variant="soft">{meta.label}</Badge>;
+          const r = row.original;
+          const current = ((r as any).publishState as string | undefined) ?? 'published';
+          const meta = PUBLISH_STATE_BADGE[current]
+            ?? { color: 'gray' as const, label: current };
+          const busy = busyRowId === String(r.id);
+          return (
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger>
+                <button
+                  type="button"
+                  disabled={busy}
+                  title="Change status"
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  className="cursor-pointer disabled:opacity-60"
+                >
+                  <Badge color={meta.color} variant="soft" className="cursor-pointer">
+                    {meta.label}
+                    <ChevronDownIcon className="size-3 ml-0.5 opacity-70" />
+                  </Badge>
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="start" size="1" onClick={(e) => e.stopPropagation()}>
+                {Object.entries(PUBLISH_STATE_BADGE).map(([value, m]) => (
+                  <DropdownMenu.Item
+                    key={value}
+                    disabled={busy || value === current}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      changePublishState(r, value);
+                    }}
+                  >
+                    {m.label}
+                  </DropdownMenu.Item>
+                ))}
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
+          );
         },
       }),
 
