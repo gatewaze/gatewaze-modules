@@ -796,17 +796,32 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
 
       const VALID_TYPES = ['free', 'paid', 'comp', 'sponsor', 'speaker', 'staff', 'vip'];
       const errors: Array<{ index: number; email: string; error: string }> = [];
-      let successful = 0;
 
+      // Dedupe by lowercased email (keep first occurrence): the same address
+      // recurs across these uploads, and processing it twice would fire two
+      // concurrent people-signup calls for one person (race -> duplicate rows)
+      // and do redundant work. Empty-email rows are kept so they error alone.
+      const seenEmails = new Set<string>();
+      const work: Array<{ reg: Record<string, string>; index: number; email: string }> = [];
       for (let i = 0; i < registrations.length; i++) {
         const reg = registrations[i] ?? {};
         const email = String(reg.email || '').trim().toLowerCase();
+        if (email) {
+          if (seenEmails.has(email)) continue;
+          seenEmails.add(email);
+        }
+        work.push({ reg, index: i, email });
+      }
+
+      const processRow = async ({ reg, index, email }: { reg: Record<string, string>; index: number; email: string }) => {
         try {
           if (!email) throw new Error('Missing email');
 
-          // Find or create the person.
+          // Find or create the person. Use eq (not ilike) on the already-
+          // lowercased email: ilike can't use the people.email btree index and
+          // seq-scans the whole (large) table per row -> statement timeouts.
           let { data: person } = await supabase
-            .from('people').select('id').ilike('email', email).maybeSingle();
+            .from('people').select('id').eq('email', email).maybeSingle();
 
           if (!person) {
             const { error: signupError } = await supabase.functions.invoke('people-signup', {
@@ -825,7 +840,7 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
             if (signupError) throw new Error(`Failed to create person: ${signupError.message ?? signupError}`);
 
             const { data: created } = await supabase
-              .from('people').select('id').ilike('email', email).maybeSingle();
+              .from('people').select('id').eq('email', email).maybeSingle();
             person = created;
           } else if (update_existing) {
             // Enrich attributes for existing people when requested (best-effort).
@@ -903,15 +918,23 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
             if (subError) console.error(`Failed to subscribe ${email} to event-updates:`, subError.message);
           }
 
-          successful++;
         } catch (err) {
-          errors.push({ index: i, email, error: err instanceof Error ? err.message : String(err) });
+          errors.push({ index, email, error: err instanceof Error ? err.message : String(err) });
         }
+      };
+
+      // Bounded concurrency: people-signup is a per-new-person edge-function
+      // call (~seconds each). Processing a whole CSV sequentially blows past
+      // the request timeout (a 50-row upload took ~262s and the socket died
+      // mid-run). Run small parallel batches to keep wall time bounded.
+      const CONCURRENCY = 6;
+      for (let start = 0; start < work.length; start += CONCURRENCY) {
+        await Promise.all(work.slice(start, start + CONCURRENCY).map(processRow));
       }
 
       res.json({
         total: registrations.length,
-        successful,
+        successful: registrations.length - errors.length,
         failed: errors.length,
         errors,
       });
