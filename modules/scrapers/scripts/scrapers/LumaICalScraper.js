@@ -544,7 +544,12 @@ export class LumaICalScraper extends BaseScraper {
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
           await this.page.goto(eventLink, {
-            waitUntil: 'networkidle2',
+            // Luma pages poll/stream and never reach networkidle2, so it always
+            // burns the full 30s timeout (×2 attempts = ~60s dead wait PER
+            // event) — this is the per-event hot path that throttled chapter
+            // scrapes to ~1 event/min. domcontentloaded + the 3s wait below is
+            // enough for the enrichment data.
+            waitUntil: 'domcontentloaded',
             timeout: 30000
           });
           navigationSuccess = true;
