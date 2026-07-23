@@ -58,6 +58,10 @@ const templatesModule: GatewazeModule = {
     'migrations/024_prune_absent_block_defs.sql',
     'migrations/025_brick_def_is_current.sql',
     'migrations/026_apply_source_declarative_render_kind.sql',
+    // 027 adds owner_module + required_feature so a block-def can be owned by a
+    // module and only offered in a builder when that module is enabled (per
+    // spec-broadcasts-blocks §4.2). Git ingestion wiring follows separately.
+    'migrations/027_block_def_ownership.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under

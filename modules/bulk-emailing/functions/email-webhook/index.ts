@@ -83,6 +83,31 @@ async function resolveNewsletterLink(trackingKey: string): Promise<NewsletterLin
   }
 }
 
+interface BroadcastLinkResolution {
+  block_id: string | null
+  block_type: string | null
+}
+
+/** Look up the broadcast link registry by tracking key — the fallback when the
+ *  newsletter lookup misses (both domains share the ?nlb= scheme). NULL if not
+ *  found or the broadcasts module isn't installed (table absent). Attribution
+ *  to a broadcast is transitive via email_send_log.broadcast_send_id, so only
+ *  block_id/block_type (the generic email_interactions columns) are written. */
+async function resolveBroadcastLink(trackingKey: string): Promise<BroadcastLinkResolution | null> {
+  try {
+    const { data } = await supabase
+      .from('broadcast_links')
+      .select('block_id, block_type')
+      .eq('tracking_key', trackingKey)
+      .maybeSingle()
+    if (!data) return null
+    const r = data as { block_id: string | null; block_type: string | null }
+    return { block_id: r.block_id, block_type: r.block_type }
+  } catch {
+    return null
+  }
+}
+
 /** Personalization-consent check at ingest (opt-in model). Returns true only
  *  when the recipient has affirmatively consented to individual-level tracking;
  *  only then may reporting attribute the event to the person. Defaults to false
@@ -183,11 +208,17 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
   // make the consent decision at ingest. See spec-newsletter-link-tracking.md
   // §4.4 / §7. Both are best-effort: failures leave NULL/false, never blocking.
   let resolved: NewsletterLinkResolution | null = null
+  let broadcastResolved: BroadcastLinkResolution | null = null
   if (event.eventType === 'click' && event.clickedUrl) {
     const nlb = parseNlb(event.clickedUrl)
     if (nlb) {
       resolved = await resolveNewsletterLink(nlb)
+      // Same ?nlb= scheme serves broadcasts; fall back to the broadcast
+      // registry when the newsletter lookup misses (module may be absent).
       if (!resolved) {
+        broadcastResolved = await resolveBroadcastLink(nlb)
+      }
+      if (!resolved && !broadcastResolved) {
         console.warn(`[email-webhook] unresolved nlb '${nlb}' on click: ${event.clickedUrl}`)
       }
     }
@@ -205,8 +236,8 @@ async function processNormalizedEvent(event: NormalizedEmailEvent) {
     human_confidence: 1.0,
     bot_signals: [],
     edition_link_id: resolved?.edition_link_id ?? null,
-    block_id: resolved?.block_id ?? null,
-    block_type: resolved?.block_type ?? null,
+    block_id: resolved?.block_id ?? broadcastResolved?.block_id ?? null,
+    block_type: resolved?.block_type ?? broadcastResolved?.block_type ?? null,
     edition_id: resolved?.edition_id ?? null,
     personalization_consent: personalizationConsent,
   }).select('id').single()

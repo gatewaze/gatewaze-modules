@@ -16,6 +16,7 @@ import { PersonLocationMap } from '@/components/charts/PersonLocationMap';
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
 import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
+import { ensureInitialBlock, updateBlock, addBlock, renderAndSave } from '../lib/broadcastBlockService';
 import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
 
 const STEPS = [
@@ -525,15 +526,44 @@ function OutreachToggle({ b, editable, onChanged }: { b: Broadcast; editable: bo
   );
 }
 
-// --- Step 2: Content (rich text) --------------------------------------------
+// --- Step 2: Content (block-based body) -------------------------------------
+// The body is a list of blocks (spec-broadcasts-blocks). v1 lands on a single
+// auto-seeded core `richtext` block so the user can just start typing; on save
+// we render the blocks → rendered_html + sync per-block link tracking. Legacy
+// rich-text-only broadcasts are converted into the richtext block on open.
 function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: Broadcast) => void }) {
-  const [html, setHtml] = useState<string>(b.rendered_html ?? '');
+  const [loading, setLoading] = useState(true);
+  const [html, setHtml] = useState<string>('');
+  const [richtextBlockId, setRichtextBlockId] = useState<string | null>(null);
+  const [otherBlockCount, setOtherBlockCount] = useState(0);
   const [saving, setSaving] = useState(false);
   // Optional linked event (CFP / event promotion) — supplies {{event_*}} vars.
   const [events, setEvents] = useState<EventOption[]>([]);
   const [eventId, setEventId] = useState<string>(b.event_id ?? '');
 
   useEffect(() => { listEventsForLink().then(setEvents).catch(() => setEvents([])); }, []);
+
+  // Seed / load blocks on open: ensures a richtext block exists (new → empty;
+  // legacy → seeded from content_json.html / rendered_html) and binds the
+  // editor to it. Refresh-safe (re-derives from the block table each mount).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const blocks = await ensureInitialBlock(b.id, { content_json: b.content_json, rendered_html: b.rendered_html });
+        if (cancelled) return;
+        const rt = blocks.find((bl) => bl.block_type === 'richtext') ?? null;
+        setRichtextBlockId(rt?.id ?? null);
+        setHtml(rt && typeof rt.content?.html === 'string' ? (rt.content.html as string) : '');
+        setOtherBlockCount(blocks.filter((bl) => bl.block_type !== 'richtext').length);
+      } catch (err) {
+        if (!cancelled) toast.error(err instanceof Error ? err.message : 'Failed to load content');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [b.id]);
 
   async function linkEvent(value: string) {
     setEventId(value);
@@ -545,13 +575,24 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
   }
 
   async function saveAndContinue() {
-    if (!html.trim()) { toast.error('Add some content'); return; }
+    if (!html.trim() && otherBlockCount === 0) { toast.error('Add some content'); return; }
     setSaving(true);
     try {
-      // rendered_html is the body; the send path injects the unsubscribe footer.
-      const nb = await updateBroadcast(b.id, { rendered_html: html, content_json: { html } } as Partial<Broadcast>);
+      // Persist the editor HTML onto the richtext block (creating it if a
+      // bridge-built broadcast had only content blocks), then render + track.
+      if (richtextBlockId) {
+        await updateBlock(richtextBlockId, { content: { html } });
+      } else if (html.trim()) {
+        const nb = await addBlock(b.id, { templates_block_def_id: null, block_type: 'richtext', content: { html }, sort_order: 0 });
+        setRichtextBlockId(nb.id);
+      }
+      const { skipped } = await renderAndSave(b.id);
+      const fresh = await getBroadcast(b.id);
       toast.success('Content saved');
-      onSaved(nb);
+      if (fresh) onSaved(fresh);
+      if (skipped.length > 0) {
+        toast.message(`${skipped.length} content block${skipped.length === 1 ? '' : 's'} will render in the sent email.`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save content');
     } finally {
@@ -563,11 +604,15 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
   useEffect(() => {
     if (!editable) { setHeaderActions(null); return () => setHeaderActions(null); }
     setHeaderActions(
-      <Button variant="solid" onClick={saveAndContinue} disabled={saving}>{saving ? 'Saving…' : 'Save content & continue'}</Button>,
+      <Button variant="solid" onClick={saveAndContinue} disabled={saving || loading}>{saving ? 'Saving…' : 'Save content & continue'}</Button>,
     );
     return () => setHeaderActions(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editable, saving, html]);
+  }, [editable, saving, loading, html]);
+
+  if (loading) {
+    return <div className="max-w-3xl"><Card className="p-4"><p className="text-sm text-[var(--gray-10)]">Loading content…</p></Card></div>;
+  }
 
   return (
     <div className="max-w-3xl space-y-3">
@@ -590,6 +635,9 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
         <p className="text-xs text-[var(--gray-10)] mb-1">Recipient merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.</p>
         {eventId && (
           <p className="text-xs text-[var(--gray-10)] mb-3">Event variables: {EVENT_VARIABLES.map((v) => v.token).join(' ')} <span className="text-[var(--gray-9)]">(filled from the linked event when sent)</span></p>
+        )}
+        {otherBlockCount > 0 && (
+          <p className="text-xs text-[var(--gray-10)] mb-3">This broadcast also has {otherBlockCount} content block{otherBlockCount === 1 ? '' : 's'} (e.g. videos, event recaps) that render in the sent email.</p>
         )}
         <RichTextEditor content={html} onChange={setHtml} />
       </Card>
