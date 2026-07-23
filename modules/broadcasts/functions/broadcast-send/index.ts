@@ -1,6 +1,15 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 import { getEmailProvider } from '../_shared/provider-registry.ts'
 import type { EmailProviderModule } from '../_shared/email-provider.ts'
+// Per-recipient send-time block resolution (vendored pure resolvers) — so a
+// test send resolves local/virtual events + weather for the tester exactly as
+// the real worker send does (spec-broadcasts-blocks §11.4).
+import {
+  LOCAL_TOKEN, VIRTUAL_TOKEN, parseLocalConfig, parseVirtualConfig, stripEventMarkers,
+  pickLoc, renderEventsHtml, resolveLocalEvents, resolveVirtualEvents,
+  type LocalConfig, type VirtualConfig, type EventRpcClient,
+} from '../_shared/event-personalisation.ts'
+import { WEATHER_TOKENS, resolveWeather } from '../_shared/weather-personalisation.ts'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SB = ReturnType<typeof createClient<any, any, any>>
@@ -102,12 +111,28 @@ interface SendContext {
   portalBaseUrl: string | null
   usesMergeFields: boolean
   attrsByEmail: Map<string, Record<string, unknown>>
+  // Per-recipient send-time blocks.
+  usesLocalEvents: boolean
+  localConfig: LocalConfig
+  usesVirtualEvents: boolean
+  virtualConfig: VirtualConfig
+  usesWeather: boolean
+  weatherUnits: 'celsius' | 'fahrenheit'
 }
 
 function buildSendContext(send: any): SendContext {
-  const html = send.rendered_html as string
+  let html = send.rendered_html as string
   if (!html) throw new Error('No rendered HTML found. Compose the broadcast first.')
   const subject = send.subject || 'Message'
+  // Detect + parse the per-recipient block config, then strip the markers so
+  // they don't ship. Tokens remain in html for per-recipient substitution.
+  const usesLocalEvents = html.includes(LOCAL_TOKEN)
+  const usesVirtualEvents = html.includes(VIRTUAL_TOKEN)
+  const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html)
+  const unitMarker = html.match(/<!--gw-weather-units:(celsius|fahrenheit)-->/)
+  const localConfig = parseLocalConfig(html)
+  const virtualConfig = parseVirtualConfig(html)
+  html = stripEventMarkers(html)
   return {
     html,
     subject,
@@ -120,11 +145,18 @@ function buildSendContext(send: any): SendContext {
     portalBaseUrl: ((send.metadata as { portal_base_url?: string } | null)?.portal_base_url) || Deno.env.get('SITE_URL') || null,
     usesMergeFields: htmlUsesMergeFields(html) || htmlUsesMergeFields(subject),
     attrsByEmail: new Map(),
+    usesLocalEvents,
+    localConfig,
+    usesVirtualEvents,
+    virtualConfig,
+    usesWeather,
+    weatherUnits: unitMarker && unitMarker[1] === 'fahrenheit' ? 'fahrenheit' : 'celsius',
   }
 }
 
 async function loadRecipientAttributes(supabase: SB, emails: string[], ctx: SendContext): Promise<void> {
-  if (!ctx.usesMergeFields) return
+  // Attributes drive merge fields AND per-recipient weather / local-events location.
+  if (!ctx.usesMergeFields && !ctx.usesWeather && !ctx.usesLocalEvents) return
   const CHUNK = 500
   for (let i = 0; i < emails.length; i += CHUNK) {
     const chunk = emails.slice(i, i + CHUNK)
@@ -175,11 +207,32 @@ async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx:
       }
     }
 
+    const attrs = ctx.attrsByEmail.get(email) ?? {}
     let subject = ctx.subject
     if (ctx.usesMergeFields) {
-      const attrs = ctx.attrsByEmail.get(email) ?? {}
       personalizedHtml = substituteMergeFields(personalizedHtml, attrs, true)
       subject = substituteMergeFields(ctx.subject, attrs, false)
+    }
+
+    // Per-recipient send-time blocks: resolve for THIS recipient and substitute
+    // the token with the rendered HTML (or '' → the block is omitted). Mirrors
+    // the worker send path so a test send previews exactly what recipients get.
+    const nowIso = new Date().toISOString()
+    const rpc = supabase as unknown as EventRpcClient
+    if (ctx.usesLocalEvents) {
+      const events = await resolveLocalEvents(rpc, pickLoc(attrs), ctx.localConfig, nowIso)
+      const blockHtml = renderEventsHtml(events, { heading: ctx.localConfig.heading, intro: ctx.localConfig.intro, portalBaseUrl: ctx.portalBaseUrl })
+      personalizedHtml = personalizedHtml.split(LOCAL_TOKEN).join(blockHtml)
+    }
+    if (ctx.usesVirtualEvents) {
+      const events = await resolveVirtualEvents(rpc, ctx.virtualConfig, nowIso)
+      const blockHtml = renderEventsHtml(events, { heading: ctx.virtualConfig.heading, intro: ctx.virtualConfig.intro, portalBaseUrl: ctx.portalBaseUrl })
+      personalizedHtml = personalizedHtml.split(VIRTUAL_TOKEN).join(blockHtml)
+    }
+    if (ctx.usesWeather) {
+      const s = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
+      const weather = await resolveWeather(s(attrs.city), s(attrs.country), ctx.weatherUnits)
+      for (const t of WEATHER_TOKENS) personalizedHtml = personalizedHtml.split(`{{${t}}}`).join(weather[t] ?? '')
     }
 
     const { data: logEntry } = await supabase.from('email_send_log').insert({

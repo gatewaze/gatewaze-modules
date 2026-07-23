@@ -1,23 +1,12 @@
 /**
- * Per-recipient / per-send resolution for the Local Events and Virtual Events
- * email blocks (spec: location-dependent newsletter blocks, v1 — radius only).
- *
- * The blocks emit a single self-contained token in their publish HTML
- * ({{local_events_block}} / {{virtual_events_block}}) plus a config marker
- * comment. The send-engine binding resolves each token to either a rendered
- * HTML card list OR an empty string — an empty string makes the whole block
- * disappear for that recipient (true per-recipient omission under SendGrid's
- * shared-body legacy substitutions, which insert values verbatim, not escaped).
- *
- *   - Local Events  — per recipient. Resolved from newsletter_local_events()
- *     against the recipient's location (attributes.location "lat,lng" or city).
- *     Cached by coarse area so recipients in the same metro share one lookup.
- *   - Virtual Events — global (same for every recipient). Resolved once per send
- *     from newsletter_virtual_events().
- *
- * Pure helpers (parse/render/pickLoc/areaKey) are unit-tested; the resolve*
- * functions take a supabase client and are exercised against the DB.
+ * VENDORED COPY of modules/newsletters/workers/event-personalisation.ts.
+ * The Deno edge runtime flattens each function to its own dir and does NOT
+ * serve the modules/ tree, so the edge fn cannot import the Node worker copy.
+ * This file is byte-identical to that source (both are pure / zero-import) and
+ * MUST be kept in sync. Used by broadcast-send test-send to resolve
+ * local/virtual events per the tester, matching the real (worker) send path.
  */
+
 
 // Minimal supabase surface we use (avoids pulling the full client type into the worker).
 export interface EventRpcClient {
