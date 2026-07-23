@@ -9,19 +9,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      // The HelixAiContent registry entry imports the
-      // helix-ai-field-adapter, which transitively pulls react-dom +
-      // @heroicons/react + the admin's RichTextEditor + supabase
-      // client. None of those resolve in the node-env vitest run for
-      // this module (which only checks registry shape, not runtime
-      // behaviour). Stub the whole adapter file so the import graph
-      // terminates cleanly. Runtime behaviour is exercised in the
-      // browser at edit time, where the real adapter loads.
-      '../helix-ai-field-adapter.js': resolve(
-        __dirname,
-        './admin/__test-stubs__/helix-ai-field-adapter.tsx',
-      ),
-      // Same reasoning for the image-field adapter — pulls
+      // The image-field adapter pulls
       // host-media's uploadHostMedia (→ supabase) + heroicons +
       // sonner. Registry shape tests don't render it.
       '../image-field-adapter.js': resolve(
