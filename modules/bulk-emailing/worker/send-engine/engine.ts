@@ -208,13 +208,10 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
     // email_send_log rows, finalise batch row. Recovery covers a crash here.
     const ids = recips.map((r) => r.id);
     await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'sent', batch_id: batchId, updated_at: new Date().toISOString() });
-    // NOTE: we intentionally do NOT write recipient_customer_id here yet. On
-    // prod that column is still `integer` (migration 007 integer->uuid has not
-    // been applied), so writing a people UUID would fail the insert and break
-    // sending. The Emails tab + Activity timeline already link sends to a person
-    // by recipient_email, so this is deferred until the column is converted.
+    // recipient_customer_id is the recipient row's people UUID (already claimed
+    // onto the row — no extra query). The column is uuid on prod (migration 007).
     const logRows = addressed.map((r) => ({
-      id: logIds.get(r.id), recipient_email: r.email,
+      id: logIds.get(r.id), recipient_email: r.email, recipient_customer_id: r.person_id ?? null,
       from_address: ctx.fromEmail, reply_to: ctx.replyTo,
       subject: ctx.subject, provider: provider.providerName, [binding.logSendIdColumn]: ctx.sendId,
       status: 'sent', sent_at: new Date().toISOString(), provider_message_id: result.batchMessageId ?? null,
