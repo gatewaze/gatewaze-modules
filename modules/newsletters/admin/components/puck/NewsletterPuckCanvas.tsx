@@ -113,6 +113,17 @@ interface NewsletterPuckCanvasProps {
    * real send all use the same URL. See utils/view-online-url.ts.
    */
   viewOnlineUrl?: string | null;
+  /**
+   * Hide the newsletter-specific page-actions cluster (download HTML / copy for
+   * Substack + Beehiiv / Test Send / Save Draft / Publish). Non-newsletter
+   * hosts (e.g. broadcasts) that don't publish to git or use those endpoints
+   * set this and supply their own `toolbarActions` instead. Default false
+   * preserves the newsletter toolbar exactly.
+   */
+  hideDefaultActions?: boolean;
+  /** Custom actions rendered in the right of the page-actions row (e.g. a
+   *  broadcast's Save / Send buttons). Shown regardless of hideDefaultActions. */
+  toolbarActions?: ReactNode;
 }
 
 export const NewsletterPuckCanvas: FC<NewsletterPuckCanvasProps> = (props) => {
@@ -140,6 +151,8 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   collectionId,
   wrapperTemplate,
   viewOnlineUrl,
+  hideDefaultActions,
+  toolbarActions,
 }) => {
   // Default false so the Publish button renders enabled when the
   // parent doesn't thread the saving state through.
@@ -762,6 +775,8 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {!hideDefaultActions && (
+          <>
           {/* Output destinations grouped in a single connected segment
               (same visual treatment as the Light/Dark + view toggles)
               because they're all "send the edition somewhere" actions
@@ -850,6 +865,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             <GlobeAltIcon className="w-4 h-4 shrink-0" />
             <span>{publishBusy ? 'Publishing…' : 'Publish'}</span>
           </button>
+          </>
+          )}
+          {toolbarActions}
         </div>
       </div>
 

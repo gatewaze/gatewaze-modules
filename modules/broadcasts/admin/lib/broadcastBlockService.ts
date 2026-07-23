@@ -206,26 +206,67 @@ async function nextSortOrder(broadcastId: string): Promise<number> {
  * empty for a brand-new one. Idempotent: does nothing when blocks already
  * exist. Per spec-broadcasts-blocks.md §4.5.
  */
+const seedInflight = new Map<string, Promise<BroadcastBlock[]>>();
+
 export async function ensureInitialBlock(
   broadcastId: string,
   legacy?: { content_json?: Record<string, unknown> | null; rendered_html?: string | null },
 ): Promise<BroadcastBlock[]> {
-  const existing = await listBlocks(broadcastId);
-  if (existing.length > 0) return existing;
+  // De-dupe concurrent callers (React StrictMode double-invokes mount effects;
+  // without this both invocations see zero blocks and each insert one — the
+  // "two rich-text blocks" bug). Share a single in-flight promise per broadcast.
+  const running = seedInflight.get(broadcastId);
+  if (running) return running;
 
-  const legacyHtml =
-    (legacy?.content_json && typeof legacy.content_json.html === 'string'
-      ? (legacy.content_json.html as string)
-      : null) ?? legacy?.rendered_html ?? null;
+  const run = (async (): Promise<BroadcastBlock[]> => {
+    const existing = await listBlocks(broadcastId);
+    if (existing.length > 0) {
+      // Normalize any legacy bespoke `richtext` blocks (from an earlier build)
+      // to the registry `text` block so the canvas renders/edits them.
+      const stale = existing.filter((b) => b.block_type === 'richtext');
+      if (stale.length > 0) {
+        await Promise.all(
+          stale.map((b) =>
+            supabase
+              .from('broadcast_blocks')
+              .update({
+                block_type: 'text',
+                content: { body: (b.content?.html as string) ?? (b.content?.body as string) ?? '' },
+              })
+              .eq('id', b.id),
+          ),
+        );
+        return listBlocks(broadcastId);
+      }
+      return existing;
+    }
 
-  await addBlock(broadcastId, {
-    templates_block_def_id: null, // core `richtext` def resolved by key at render time
-    block_type: 'richtext',
-    owner_module: null,
-    content: { html: legacyHtml ?? '' },
-    sort_order: 0,
-  });
-  return listBlocks(broadcastId);
+    const legacyHtml =
+      (legacy?.content_json && typeof legacy.content_json.html === 'string'
+        ? (legacy.content_json.html as string)
+        : null) ?? legacy?.rendered_html ?? null;
+
+    // Seed a `text` block — the email-blocks registry's rich-text component
+    // (content field `body`). Using a registry block_type means the Puck canvas
+    // renders/edits it natively and the edition↔blocks adapter doesn't
+    // fail-closed on an unknown type. Empty for a new broadcast; seeded from
+    // legacy HTML for a pre-blocks one (so old broadcasts open with their body).
+    await addBlock(broadcastId, {
+      templates_block_def_id: null, // registry component resolved by block_type
+      block_type: 'text',
+      owner_module: null,
+      content: { body: legacyHtml ?? '' },
+      sort_order: 0,
+    });
+    return listBlocks(broadcastId);
+  })();
+
+  seedInflight.set(broadcastId, run);
+  try {
+    return await run;
+  } finally {
+    seedInflight.delete(broadcastId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +351,73 @@ export function buildContentPointer(blocks: ReadonlyArray<BroadcastBlock>): {
 }
 
 // ---------------------------------------------------------------------------
-// Render + persist
+// Persist canvas edition → broadcast_blocks (diff upsert)
+// ---------------------------------------------------------------------------
+
+/** An edition block as produced by the Puck canvas (structural subset). */
+export interface EditionBlockLike {
+  id: string;
+  block_template?: { id?: string; block_type?: string } | null;
+  content?: Record<string, unknown>;
+  sort_order?: number;
+}
+
+/**
+ * Persist the canvas's edited blocks to `broadcast_blocks` (diff: upsert
+ * present by id, delete removed). Block ids from the canvas are always UUIDs
+ * (edition-puck-adapter's extractStableId), so they map straight onto
+ * broadcast_blocks.id. Registry blocks carry block_template.id='' → stored as a
+ * NULL templates_block_def_id (the block_type resolves the registry component).
+ * Mirrors the newsletters save (handleSave `p_blocks`) minus the RPC.
+ */
+export async function saveBroadcastEditionBlocks(
+  broadcastId: string,
+  blocks: ReadonlyArray<EditionBlockLike>,
+): Promise<void> {
+  const { data: cur, error: curErr } = await supabase
+    .from('broadcast_blocks')
+    .select('id')
+    .eq('broadcast_id', broadcastId);
+  if (curErr) throw curErr;
+  const currentIds = new Set(((cur ?? []) as Array<{ id: string }>).map((r) => r.id));
+
+  const desired = blocks.map((b, i) => ({
+    id: b.id,
+    broadcast_id: broadcastId,
+    templates_block_def_id: b.block_template?.id ? b.block_template.id : null,
+    block_type: b.block_template?.block_type ?? 'text',
+    owner_module: null as string | null,
+    sort_order: typeof b.sort_order === 'number' ? b.sort_order : (i + 1) * 1000,
+    tracking_slug: null as string | null,
+    content: b.content ?? {},
+  }));
+
+  if (desired.length > 0) {
+    const { error } = await supabase.from('broadcast_blocks').upsert(desired, { onConflict: 'id' });
+    if (error) throw error;
+  }
+
+  const desiredIds = new Set(desired.map((d) => d.id));
+  const remove = [...currentIds].filter((id) => !desiredIds.has(id));
+  if (remove.length > 0) {
+    const { error } = await supabase.from('broadcast_blocks').delete().in('id', remove);
+    if (error) throw error;
+  }
+}
+
+/** Persist the final rendered HTML (+ content pointer) on the broadcast. */
+export async function saveRenderedHtml(broadcastId: string, renderedHtml: string): Promise<void> {
+  const blocks = await listBlocks(broadcastId);
+  const { error } = await supabase
+    .from('broadcasts')
+    .update({ rendered_html: renderedHtml, content_json: buildContentPointer(blocks) })
+    .eq('id', broadcastId);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Render + persist (v1 richtext-only path — superseded by the canvas editor,
+// kept for non-canvas callers / the event-content bridge fallback)
 // ---------------------------------------------------------------------------
 
 export interface RenderSaveResult {
