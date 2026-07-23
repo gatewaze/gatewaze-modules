@@ -54,6 +54,12 @@ function formatTimeAgo(dateString: string): string {
   return 'just now';
 }
 
+function formatDate(dateString: string): string {
+  return new Date(dateString).toLocaleDateString('en-US', {
+    year: 'numeric', month: 'short', day: 'numeric',
+  });
+}
+
 interface PersonEventsTabProps {
   person: Person;
   personId: string;
@@ -73,17 +79,26 @@ export default function PersonEventsTab({ person, personId }: PersonEventsTabPro
         .select('id')
         .eq('person_id', personId);
 
+      // A registration/attendance links to a person either directly via
+      // `person_id` or via a `people_profiles` bridge row (`people_profile_id`).
+      // Match BOTH — older code only followed the bridge, so registrations
+      // recorded straight against person_id (and people with no profile row at
+      // all) showed nothing. Speaker submissions only carry the profile link.
       const profileIds = (profileData || []).map((p: any) => p.id);
-      if (profileIds.length === 0) { setLoading(false); return; }
+      const orLinks = [`person_id.eq.${personId}`];
+      if (profileIds.length > 0) {
+        orLinks.push(`people_profile_id.in.(${profileIds.join(',')})`);
+      }
+      const linkFilter = orLinks.join(',');
 
       const [regResult, attendResult, speakerResult] = await Promise.all([
         supabase.from('events_registrations')
           .select('id, event_id, status, registered_at, ticket_type, registration_type')
-          .in('people_profile_id', profileIds)
+          .or(linkFilter)
           .order('registered_at', { ascending: false }),
         supabase.from('events_attendance')
           .select('id, event_id, checked_in_at, checked_out_at')
-          .in('people_profile_id', profileIds)
+          .or(linkFilter)
           .order('checked_in_at', { ascending: false }),
         supabase.from('events_speakers')
           .select('id, event_uuid, status, talk_title, submitted_at')
@@ -168,7 +183,12 @@ export default function PersonEventsTab({ person, personId }: PersonEventsTabPro
                       {reg.status}
                     </Badge>
                     {reg.registered_at && (
-                      <span className="text-xs text-[var(--gray-a8)]">{formatTimeAgo(reg.registered_at)}</span>
+                      <span
+                        className="text-xs text-[var(--gray-a8)] whitespace-nowrap"
+                        title={formatTimeAgo(reg.registered_at)}
+                      >
+                        Registered {formatDate(reg.registered_at)}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -202,8 +222,11 @@ export default function PersonEventsTab({ person, personId }: PersonEventsTabPro
                     )}
                   </div>
                   {att.checked_in_at && (
-                    <span className="text-xs text-[var(--gray-a8)] shrink-0">
-                      Checked in {formatTimeAgo(att.checked_in_at)}
+                    <span
+                      className="text-xs text-[var(--gray-a8)] shrink-0 whitespace-nowrap"
+                      title={formatTimeAgo(att.checked_in_at)}
+                    >
+                      Checked in {formatDate(att.checked_in_at)}
                     </span>
                   )}
                 </div>
