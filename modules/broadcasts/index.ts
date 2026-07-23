@@ -91,6 +91,17 @@ const broadcastsModule: GatewazeModule = {
     // 014 excludes outreach prospects (people.contact_kind='prospect') from
     // preview + fan-out unless the send's include_prospects flag is set.
     'migrations/014_broadcast_prospect_gating.sql',
+    // 015 adds broadcasts.type (metadata: general|event_promo|event_recap|…);
+    // labels/stats/defaults, does NOT restrict the block palette.
+    'migrations/015_broadcast_type.sql',
+    // 016 block-based body: broadcast_blocks (+ broadcast_bricks) referencing
+    // git-managed templates_block_defs (the same system newsletters use).
+    'migrations/016_broadcast_blocks.sql',
+    // 017 per-block link registry (?nlb= tracking-key clone of
+    // newsletters_edition_links) for per-block click attribution.
+    'migrations/017_broadcast_links.sql',
+    // 018 broadcast_block_effectiveness RPC (per-block human clicks per broadcast).
+    'migrations/018_broadcast_block_effectiveness.sql',
   ],
 
   adminRoutes: [
