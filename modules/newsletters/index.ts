@@ -331,6 +331,8 @@ const newslettersModule: GatewazeModule = {
     // schedule date) — already-passed (eastern) recipients send at the schedule
     // time instead of rolling to the next day.
     'migrations/072_fanout_send_at_clamp.sql',
+    // 073 preview RPC for the pre-send per-timezone confirmation.
+    'migrations/073_preview_send_schedule.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
