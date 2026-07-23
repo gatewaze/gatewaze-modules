@@ -114,9 +114,17 @@ export function pickLoc(attrs: Record<string, unknown> | null | undefined): Reci
       : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null;
   let lat = num(a.lat ?? a.latitude);
   let lon = num(a.lon ?? a.longitude);
-  if ((lat === null || lon === null) && typeof a.location === 'string') {
-    const m = a.location.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
-    if (m) { lat = Number(m[1]); lon = Number(m[2]); }
+  // Prefer the person editor's geocoded `coordinates` ("lat,lng", kept in sync
+  // with the edited city/country) over the IP-geo `location` (which can be
+  // stale — e.g. a Toronto IP hit while the person's city says York).
+  if (lat === null || lon === null) {
+    for (const key of ['coordinates', 'location'] as const) {
+      const v = a[key];
+      if (typeof v === 'string') {
+        const m = v.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+        if (m) { lat = Number(m[1]); lon = Number(m[2]); break; }
+      }
+    }
   }
   const city = typeof a.city === 'string' && a.city.trim() ? a.city.trim() : null;
   // Guard against out-of-range coords (dirty data) → treat as no coords.

@@ -12,11 +12,21 @@
  * exists is injected ONCE here (in buildSendContext) so the single batch body
  * carries the tokens.
  *
- * Broadcasts have no weather or per-occurrence link tracking (newsletter-only),
- * so this binding is a strict subset of the newsletter binding.
+ * Per-recipient send-time blocks (weather, local events, virtual events) resolve
+ * exactly as newsletters do — via the SAME shared resolvers — so a recipient
+ * gets their own rendered block or it's omitted entirely (empty substitution).
+ * Per-occurrence block-level link tracking on the worker path is still
+ * newsletter-only (not yet ported here).
  */
 import { createHmac } from 'node:crypto';
 import type { EngineDeps, SendContext, SendEngineBinding, Recipient } from '../../bulk-emailing/worker/send-engine/engine.js';
+// Shared per-recipient send-time block resolution (per spec-broadcasts-blocks §11.4).
+import {
+  LOCAL_TOKEN, VIRTUAL_TOKEN, parseLocalConfig, parseVirtualConfig, stripEventMarkers,
+  pickLoc, areaKey, renderEventsHtml, resolveLocalEvents, resolveVirtualEvents,
+  type LocalConfig, type EventRpcClient,
+} from '../../newsletters/workers/event-personalisation.js';
+import { WEATHER_TOKENS, resolveWeather } from '../../newsletters/workers/weather-personalisation.js';
 
 const MERGE_FIELDS = ['first_name', 'last_name', 'name', 'company', 'job_title'];
 const MERGE_GROUP = MERGE_FIELDS.join('|');
@@ -29,6 +39,12 @@ type BcCtx = SendContext & {
   tokens: string[];                            // exact {{...}} strings in html+subject
   usesMergeFields: boolean;
   attrs: Map<string, Record<string, unknown>>; // email -> attributes
+  // Per-recipient send-time blocks (shared with newsletters).
+  usesWeather: boolean; weatherUnits: 'celsius' | 'fahrenheit';
+  weatherCache: Map<string, Record<string, string>>; // city|country|units -> {weather_* -> value}
+  usesLocalEvents: boolean; localConfig: LocalConfig;
+  localEventsCache: Map<string, string>;             // area key -> rendered events HTML (or '')
+  virtualEventsHtml: string;                         // resolved once per send (global); '' when none/unused
 };
 
 function escapeHtml(s: string): string {
@@ -84,6 +100,28 @@ export const broadcastBinding: SendEngineBinding = {
     }
 
     const metadata = (send.metadata ?? {}) as { portal_base_url?: string };
+    const portalBaseUrl: string | null = metadata.portal_base_url || process.env.SITE_URL || null;
+
+    // Per-recipient send-time blocks: detect the tokens, parse per-block config
+    // from the marker comments, then strip the markers so they don't ship.
+    // Weather + local events resolve per recipient later; virtual events are
+    // global (same for everyone) so resolve them once here.
+    const usesWeather = /\{\{weather_(emoji|temp|summary|location)\}\}/.test(html);
+    const unitMarker = html.match(/<!--gw-weather-units:(celsius|fahrenheit)-->/);
+    const usesLocalEvents = html.includes(LOCAL_TOKEN);
+    const usesVirtualEvents = html.includes(VIRTUAL_TOKEN);
+    const localConfig = parseLocalConfig(html);
+    const virtualConfig = parseVirtualConfig(html);
+    html = stripEventMarkers(html);
+
+    let virtualEventsHtml = '';
+    if (usesVirtualEvents) {
+      try {
+        const events = await resolveVirtualEvents(deps.supabase as unknown as EventRpcClient, virtualConfig, new Date().toISOString());
+        virtualEventsHtml = renderEventsHtml(events, { heading: virtualConfig.heading, intro: virtualConfig.intro, portalBaseUrl });
+      } catch (e) { deps.logger.warn('[send-engine] broadcast virtual events resolve failed', e); }
+    }
+
     const ctx: BcCtx = {
       sendId,
       brand: send.brand || process.env.SEND_ENGINE_DEFAULT_BRAND || 'default',
@@ -97,22 +135,47 @@ export const broadcastBinding: SendEngineBinding = {
       // target. Falls back to the audience list when the audience IS a list.
       listId: send.category_list_id || (send.list_ids || [])[0] || null,
       hmacSecret: process.env.UNSUBSCRIBE_HMAC_SECRET,
-      portalBaseUrl: metadata.portal_base_url || process.env.SITE_URL || null,
+      portalBaseUrl,
       supabaseUrl: process.env.SUPABASE_URL || '',
+      // scan AFTER stripping markers (markers gone; {{tokens}} remain).
       tokens: scanTokens(html, subject),
       usesMergeFields: htmlUsesMergeFields(html) || htmlUsesMergeFields(subject),
       attrs: new Map(),
+      usesWeather, weatherUnits: unitMarker && unitMarker[1] === 'fahrenheit' ? 'fahrenheit' : 'celsius',
+      weatherCache: new Map(),
+      usesLocalEvents, localConfig, localEventsCache: new Map(), virtualEventsHtml,
     };
     return ctx;
   },
 
   async prepareBatch(deps: EngineDeps, ctx: SendContext, recipients: Recipient[]): Promise<void> {
     const c = ctx as BcCtx;
-    if (!c.usesMergeFields) return;
+    // Recipient attributes are needed for merge fields AND for per-recipient
+    // weather / local-events location lookup.
+    if (!c.usesMergeFields && !c.usesWeather && !c.usesLocalEvents) return;
     const emails = recipients.map((r) => r.email).filter(Boolean) as string[];
     for (let i = 0; i < emails.length; i += 500) {
       const { data } = await deps.supabase.from('people').select('email, attributes').in('email', emails.slice(i, i + 500));
       for (const row of data ?? []) c.attrs.set(row.email, row.attributes ?? {});
+    }
+
+    // Local events: resolve once per unique area (recipients in the same metro
+    // share a lookup + rendered HTML). Cache persists across batches on the ctx.
+    if (c.usesLocalEvents) {
+      const afterIso = new Date().toISOString();
+      for (const r of recipients) {
+        const attrs = (r.email && c.attrs.get(r.email)) || {};
+        const key = areaKey(pickLoc(attrs));
+        if (!key || c.localEventsCache.has(key)) continue;
+        try {
+          const loc = pickLoc(attrs);
+          const events = await resolveLocalEvents(deps.supabase as unknown as EventRpcClient, loc, c.localConfig, afterIso);
+          c.localEventsCache.set(key, renderEventsHtml(events, { heading: c.localConfig.heading, intro: c.localConfig.intro, portalBaseUrl: c.portalBaseUrl }));
+        } catch (e) {
+          c.localEventsCache.set(key, ''); // resolve failed → omit the block for this area
+          deps.logger.warn('[send-engine] broadcast local events resolve failed', e);
+        }
+      }
     }
   },
 
@@ -121,6 +184,15 @@ export const broadcastBinding: SendEngineBinding = {
     const attrs = (r.email && c.attrs.get(r.email)) || {};
     const str = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
     const nameVal = () => [str(attrs.first_name), str(attrs.last_name)].filter(Boolean).join(' ');
+
+    // Per-recipient weather (cached by city|country|units).
+    let weather: Record<string, string> | null = null;
+    if (c.usesWeather) {
+      const city = str(attrs.city), country = str(attrs.country);
+      const key = `${city.toLowerCase()}|${country.toLowerCase()}|${c.weatherUnits}`;
+      weather = c.weatherCache.get(key) ?? null;
+      if (!weather) { weather = await resolveWeather(city, country, c.weatherUnits); c.weatherCache.set(key, weather); }
+    }
 
     // List-based unsubscribe URLs + List-Unsubscribe header — shared with
     // newsletters (generic list-unsubscribe + Subscription Centre).
@@ -140,6 +212,16 @@ export const broadcastBinding: SendEngineBinding = {
       const inner = token.slice(2, -2).trim();              // strip {{ }}
       if (inner === 'unsubscribe_url') { subs[token] = unsubUrl; continue; }
       if (inner === 'manage_subscriptions_url') { subs[token] = manageUrl; continue; }
+      if (weather && WEATHER_TOKENS.includes(inner)) { subs[token] = weather[inner] ?? ''; continue; }
+      // Event blocks: substitute the self-contained rendered HTML (raw, not
+      // escaped) or '' — '' omits the block entirely for this recipient. Always
+      // set so SendGrid never leaves the literal {{token}} in a recipient's email.
+      if (inner === 'local_events_block') {
+        const key = c.usesLocalEvents ? areaKey(pickLoc(attrs)) : null;
+        subs[token] = (key && c.localEventsCache.get(key)) || '';
+        continue;
+      }
+      if (inner === 'virtual_events_block') { subs[token] = c.virtualEventsHtml || ''; continue; }
       const m = inner.match(/^([a-z_]+)\s*(?:\|(.*))?$/);
       if (m && MERGE_FIELDS.includes(m[1])) {
         let val = m[1] === 'name' ? nameVal() : str(attrs[m[1]]);
