@@ -578,8 +578,13 @@ export class LumaICalScraper extends BaseScraper {
       // Wait a bit for dynamic content to load
       await new Promise(resolve => setTimeout(resolve, 3000));
 
-      // Extract cover image, page content, virtual event indicator, and __NEXT_DATA__ JSON
-      const pageData = await this.page.evaluate(() => {
+      // Extract cover image, page content, virtual event indicator, and __NEXT_DATA__ JSON.
+      // Wrapped in withTimeout (+ page recycle on timeout in the catch below): on a
+      // CPU-contended worker node a heavy Luma page can leave this evaluate
+      // (Runtime.callFunctionOn) hanging to the default 180s protocolTimeout, blocking
+      // a worker slot for minutes per event and starving every other queued scrape.
+      // Fail fast at 20s and fall back to iCal-only data instead.
+      const pageData = await withTimeout(this.page.evaluate(() => {
         // Find cover image using the class 'cover-image'
         const coverImageElement = document.querySelector('.cover-image img');
         let coverImageUrl = null;
@@ -682,7 +687,7 @@ export class LumaICalScraper extends BaseScraper {
           lumaData,
           lumaPageData // Full page data for database storage
         };
-      });
+      }), 20000, 'evaluate event pageData');
 
       if (pageData.coverImageUrl) {
         console.log(`✅ Cover image found: ${pageData.coverImageUrl.substring(0, 100)}...`);
@@ -709,6 +714,12 @@ export class LumaICalScraper extends BaseScraper {
       // up so the scrape loop aborts instead of saving iCal-only rows.
       if (this.isBrowserDeadError(error)) {
         throw error;
+      }
+      // A timed-out evaluate / protocol hang leaves the renderer stuck on this
+      // page; recycle the page so it doesn't poison the next event's fetch.
+      if (/exceeded \d+ms|protocolTimeout|callFunctionOn/i.test(error.message || '')) {
+        try { await this.page.close(); } catch {}
+        try { this.page = await this.browser.newPage(); } catch (e) { console.warn(`⚠️ page recycle failed: ${e.message}`); }
       }
       return { coverImageUrl: null, pageContent: '', isVirtual: false, lumaData: null, lumaPageData: null };
     }
