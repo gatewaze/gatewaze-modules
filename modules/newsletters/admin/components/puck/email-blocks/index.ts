@@ -39,7 +39,6 @@ import { TextBlock } from './blocks/Text.js';
 import { ButtonBlock } from './blocks/Button.js';
 import { HeaderBlock } from './blocks/Header.js';
 import { ContentSectionBlock } from './blocks/ContentSection.js';
-import { HelixAiContentBlock } from './blocks/HelixAiContent.js';
 import { FooterBlock } from './blocks/Footer.js';
 import { ContainerBlock } from './blocks/Container.js';
 import { SectionBlock } from './blocks/SectionPrimitive.js';
@@ -175,7 +174,6 @@ const ENTRIES: ReadonlyArray<EmailBlockEntry> = [
   BlogPostBlock as unknown as EmailBlockEntry,
   ReadingGroupBlock as unknown as EmailBlockEntry,
   GenericSectionBlock as unknown as EmailBlockEntry,
-  HelixAiContentBlock as unknown as EmailBlockEntry,
   // Content — composites (data-driven via Puck resolveData)
   WeatherBlock as unknown as EmailBlockEntry,
   // Content — location-dependent (resolved per recipient / per send at send time)

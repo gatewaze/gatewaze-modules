@@ -1,4 +1,0 @@
-{
-  "schedule": "* * * * *",
-  "description": "Pull output.md from completed Helix research tasks into newsletter block content"
-}

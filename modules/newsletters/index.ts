@@ -31,16 +31,9 @@ const newslettersModule: GatewazeModule = {
     // email-inbound-parse). Sends FROM the original send address; verifies the
     // caller is an active admin.
     'reply-send',
-    'helix-task-create',
-    'helix-task-embed-url',
-    'newsletter-helix-output-sync',
   ],
 
   workers: [
-    {
-      name: 'newsletters:helix-output-sync',
-      handler: './workers/helix-output-sync.ts',
-    },
     {
       // Re-resolves click interactions stored with a NULL edition_link_id
       // (late-registered links / webhook redeliveries). Idempotent.
@@ -80,12 +73,6 @@ const newslettersModule: GatewazeModule = {
   ],
 
   crons: [
-    {
-      name: 'newsletter-helix-output-sync',
-      queue: 'jobs',
-      schedule: { every: 60_000 },
-      data: { kind: 'newsletters:helix-output-sync' },
-    },
     {
       // Per spec-content-modules-git-architecture §15.4: snapshot editions
       // <snapshot_delay_days> days post-send. Job is idempotent; running
@@ -542,30 +529,6 @@ const newslettersModule: GatewazeModule = {
       type: 'secret',
       required: false,
       description: 'Claude API key for AI-powered Google Doc section mapping during import',
-    },
-    HELIX_URL: {
-      key: 'HELIX_URL',
-      type: 'secret',
-      required: false,
-      description: 'Helix instance URL for AI content research (e.g. https://meta.helix.ml). Marked secret so resolveModuleSecrets syncs it into the Supabase project secrets table — helix-task-create reads it via Deno.env.get() at edge-function runtime.',
-    },
-    HELIX_API_KEY: {
-      key: 'HELIX_API_KEY',
-      type: 'secret',
-      required: false,
-      description: 'Helix API key for creating research tasks',
-    },
-    HELIX_PROJECT_ID: {
-      key: 'HELIX_PROJECT_ID',
-      type: 'secret',
-      required: false,
-      description: 'Helix project ID for research tasks. Marked secret so the edge function can read it via Deno.env.get().',
-    },
-    HELIX_ORG_SLUG: {
-      key: 'HELIX_ORG_SLUG',
-      type: 'secret',
-      required: false,
-      description: 'Helix organization slug for building task URLs (e.g. "helix"). Marked secret so the edge function can read it via Deno.env.get().',
     },
   },
 
