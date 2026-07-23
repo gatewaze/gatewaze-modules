@@ -89,11 +89,33 @@ export class BaseScraper {
       argsCount: browserOptions.args.length
     }));
 
-    try {
-      this.browser = await puppeteer.launch(browserOptions);
-      console.log(`✅ Browser launched successfully`);
-    } catch (launchError) {
-      console.error(`❌ Browser launch failed: ${launchError.message}`);
+    // Launch with a bounded retry. Chromium in a container can fail to launch
+    // transiently — the browser process dies before the DevTools socket is
+    // ready ("Failed to launch the browser process") under CPU/memory pressure
+    // or an occasional crashpad/zygote hiccup on a busy node. A short retry
+    // turns those intermittent failures into a successful run instead of a
+    // failed scrape. A genuinely broken browser (bad binary/libs) still fails
+    // all attempts and throws, so we don't mask real breakage — run
+    // scripts/workers/browser-selftest.js in the worker to distinguish them.
+    const MAX_LAUNCH_ATTEMPTS = 3;
+    let launchError;
+    for (let attempt = 1; attempt <= MAX_LAUNCH_ATTEMPTS; attempt++) {
+      try {
+        this.browser = await puppeteer.launch(browserOptions);
+        console.log(`✅ Browser launched successfully${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+        launchError = null;
+        break;
+      } catch (err) {
+        launchError = err;
+        console.error(`❌ Browser launch failed (attempt ${attempt}/${MAX_LAUNCH_ATTEMPTS}): ${err.message}`);
+        if (attempt < MAX_LAUNCH_ATTEMPTS) {
+          const backoffMs = 2000 * attempt;
+          console.log(`⏳ Retrying browser launch in ${backoffMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        }
+      }
+    }
+    if (launchError) {
       console.error(`Stack: ${launchError.stack}`);
       throw launchError;
     }
