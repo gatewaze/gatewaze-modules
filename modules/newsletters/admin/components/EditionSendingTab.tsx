@@ -105,6 +105,17 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         if (error) throw error;
         return (data as number) ?? 0;
       },
+      async previewSchedule(config: SendComposerConfig) {
+        if (!collection?.list_id || !config.scheduledAt) return [];
+        const { data, error } = await supabase.rpc('newsletter_preview_send_schedule', {
+          p_list_id: collection.list_id,
+          p_scheduled_at: config.scheduledAt,
+          p_target_local: config.targetLocal,
+          p_default_timezone: config.defaultTimezone,
+        });
+        if (error) throw error;
+        return (data as { timezone: string; recipients: number; send_at: string }[]) || [];
+      },
       async createSend(config: SendComposerConfig) {
         const { html, webVersionUrl, portalBaseUrl } = await buildFinalHtml();
         const { data, error } = await supabase.from('newsletter_sends').insert({
