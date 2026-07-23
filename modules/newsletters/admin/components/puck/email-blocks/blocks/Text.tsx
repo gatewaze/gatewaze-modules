@@ -1,51 +1,60 @@
 /**
- * Text email block — wraps `@react-email/components`'s `Text`.
+ * Text email block — a rich-text paragraph.
  *
- * The `body` field is `type: 'textarea'` with `contentEditable: true`.
- * Puck routes that through its inline-text field transform: clicking
- * the rendered paragraph turns it into a contentEditable
- * (plaintext-only) span and edits dispatch back through Puck's
- * setItem path. Multiline allowed (textarea path doesn't have the
- * disableLineBreaks the `text` path enforces).
+ * The `body` field is Puck's native `type: 'richtext'` (inline tiptap in the
+ * editor canvas; stored as an HTML string). Rendered via the shared `RichText`
+ * helper so the stored HTML round-trips through both the editor and the
+ * export/send path (mirrors IntroParagraph and the other rich blocks). This
+ * replaced the earlier plaintext `textarea` field so operators get real
+ * formatting (bold/italic/links/lists) — a backward-compatible upgrade: a
+ * legacy plaintext `body` string still renders unchanged.
  *
- * The component must render the value as children — using
- * `dangerouslySetInnerHTML` bypasses the field transform and leaves
- * the paragraph non-editable.
+ * Styling defaults to a plain email look — Arial, ~10pt, left-aligned — the
+ * zero-config body a broadcast lands on. `align` stays adjustable.
  */
 
-import { Text } from '@react-email/components';
+import { Section } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { RichText } from './_richtext.js';
+import { COLUMN } from './_shared.js';
 
 interface TextProps extends Record<string, unknown> {
   body: string;
-  align: 'left' | 'center' | 'right';
 }
-
-const ALIGN_OPTIONS: Array<{ label: string; value: TextProps['align'] }> = [
-  { label: 'Left', value: 'left' },
-  { label: 'Center', value: 'center' },
-  { label: 'Right', value: 'right' },
-];
 
 export const TextBlock: EmailBlockEntry<TextProps> = {
   componentId: 'text',
   label: 'Text',
   category: 'Content',
+  // No block-level alignment field: alignment is per-paragraph inside the
+  // rich-text editor (tiptap TextAlign on the selected paragraph/heading), so a
+  // single Text block can mix left / centre / right. A whole-block `align`
+  // radio would override that and force one alignment for everything.
   fields: {
-    body: { type: 'textarea', label: 'Body', contentEditable: true },
-    align: { type: 'radio', label: 'Alignment', options: ALIGN_OPTIONS },
+    body: { type: 'richtext', label: 'Body' },
   },
   defaultProps: {
-    body: 'Body text. Click here to edit inline.',
-    align: 'left',
+    body: '',
   },
-  Component: ({ body, align }) => (
-    <Text style={{ textAlign: align, margin: '0 0 16px', lineHeight: 1.6 }}>
-      {body}
-    </Text>
+  Component: ({ body }) => (
+    <Section style={COLUMN}>
+      <RichText
+        value={body}
+        style={{
+          fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif",
+          fontSize: '13px',
+          lineHeight: 1.5,
+          color: '#111111',
+          margin: '0 0 16px',
+          // No per-block padding — keeps the text block consistent with the
+          // other email blocks (uniform body inset belongs on the shell, not
+          // here).
+        }}
+      />
+    </Section>
   ),
   formats: {
-    substack: ({ body }) => <p>{body}</p>,
-    beehiiv: ({ body }) => <p>{body}</p>,
+    substack: ({ body }) => <RichText value={body} />,
+    beehiiv: ({ body }) => <RichText value={body} />,
   },
 };

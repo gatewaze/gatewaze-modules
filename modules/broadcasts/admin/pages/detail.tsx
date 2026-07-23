@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Card, Button, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
-import { RichTextEditor } from '@/components/ui/RichTextEditor';
 import { supabase } from '@/lib/supabase';
 import { SendingPanel } from '@/components/sending';
 import type { SendingAdapter, EmailDetails, SendComposerConfig } from '@/components/sending';
@@ -16,7 +15,7 @@ import { PersonLocationMap } from '@/components/charts/PersonLocationMap';
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
 import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
-import { ensureInitialBlock, updateBlock, addBlock, renderAndSave } from '../lib/broadcastBlockService';
+import { BroadcastContentEditor } from '../components/BroadcastContentEditor';
 import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
 
 const STEPS = [
@@ -204,7 +203,7 @@ export default function BroadcastDetailPage() {
         actions={<div className="flex items-center gap-3">{headerActions}</div>}
       >
         {step === 'audience' && <AudienceStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('content'); }} />}
-        {step === 'content' && <ContentStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('sending'); }} />}
+        {step === 'content' && <ContentStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={setB} onProceedToSending={() => goTo('sending')} />}
         {step === 'sending' && broadcastAdapter && (
           <div className="space-y-4">
             <OutreachToggle b={b} editable={editable} onChanged={setB} />
@@ -527,43 +526,20 @@ function OutreachToggle({ b, editable, onChanged }: { b: Broadcast; editable: bo
 }
 
 // --- Step 2: Content (block-based body) -------------------------------------
-// The body is a list of blocks (spec-broadcasts-blocks). v1 lands on a single
-// auto-seeded core `richtext` block so the user can just start typing; on save
-// we render the blocks → rendered_html + sync per-block link tracking. Legacy
-// rich-text-only broadcasts are converted into the richtext block on open.
-function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: Broadcast) => void }) {
-  const [loading, setLoading] = useState(true);
-  const [html, setHtml] = useState<string>('');
-  const [richtextBlockId, setRichtextBlockId] = useState<string | null>(null);
-  const [otherBlockCount, setOtherBlockCount] = useState(0);
-  const [saving, setSaving] = useState(false);
+// The body is a list of blocks (spec-broadcasts-blocks), edited in the reused
+// newsletters Puck canvas (palette + drag/drop + live email preview). A `text`
+// block is auto-seeded on open so the user can just start typing; legacy
+// rich-text-only broadcasts are converted into a text block. The canvas owns
+// its own Save Draft control; on save we persist the blocks + render
+// rendered_html via the same path the send uses (preview == sent email).
+function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSending }: { b: Broadcast; editable: boolean; setHeaderActions: (n: ReactNode) => void; onSaved: (b: Broadcast) => void; onProceedToSending: () => void }) {
   // Optional linked event (CFP / event promotion) — supplies {{event_*}} vars.
   const [events, setEvents] = useState<EventOption[]>([]);
   const [eventId, setEventId] = useState<string>(b.event_id ?? '');
 
   useEffect(() => { listEventsForLink().then(setEvents).catch(() => setEvents([])); }, []);
-
-  // Seed / load blocks on open: ensures a richtext block exists (new → empty;
-  // legacy → seeded from content_json.html / rendered_html) and binds the
-  // editor to it. Refresh-safe (re-derives from the block table each mount).
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const blocks = await ensureInitialBlock(b.id, { content_json: b.content_json, rendered_html: b.rendered_html });
-        if (cancelled) return;
-        const rt = blocks.find((bl) => bl.block_type === 'richtext') ?? null;
-        setRichtextBlockId(rt?.id ?? null);
-        setHtml(rt && typeof rt.content?.html === 'string' ? (rt.content.html as string) : '');
-        setOtherBlockCount(blocks.filter((bl) => bl.block_type !== 'richtext').length);
-      } catch (err) {
-        if (!cancelled) toast.error(err instanceof Error ? err.message : 'Failed to load content');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [b.id]);
+  // The canvas provides its own save controls; clear any header action.
+  useEffect(() => { setHeaderActions(null); return () => setHeaderActions(null); }, [setHeaderActions]);
 
   async function linkEvent(value: string) {
     setEventId(value);
@@ -574,73 +550,26 @@ function ContentStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast;
     }
   }
 
-  async function saveAndContinue() {
-    if (!html.trim() && otherBlockCount === 0) { toast.error('Add some content'); return; }
-    setSaving(true);
-    try {
-      // Persist the editor HTML onto the richtext block (creating it if a
-      // bridge-built broadcast had only content blocks), then render + track.
-      if (richtextBlockId) {
-        await updateBlock(richtextBlockId, { content: { html } });
-      } else if (html.trim()) {
-        const nb = await addBlock(b.id, { templates_block_def_id: null, block_type: 'richtext', content: { html }, sort_order: 0 });
-        setRichtextBlockId(nb.id);
-      }
-      const { skipped } = await renderAndSave(b.id);
-      const fresh = await getBroadcast(b.id);
-      toast.success('Content saved');
-      if (fresh) onSaved(fresh);
-      if (skipped.length > 0) {
-        toast.message(`${skipped.length} content block${skipped.length === 1 ? '' : 's'} will render in the sent email.`);
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save content');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // Save in the top-right header, like the audience step + newsletter editor.
-  useEffect(() => {
-    if (!editable) { setHeaderActions(null); return () => setHeaderActions(null); }
-    setHeaderActions(
-      <Button variant="solid" onClick={saveAndContinue} disabled={saving || loading}>{saving ? 'Saving…' : 'Save content & continue'}</Button>,
-    );
-    return () => setHeaderActions(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editable, saving, loading, html]);
-
-  if (loading) {
-    return <div className="max-w-3xl"><Card className="p-4"><p className="text-sm text-[var(--gray-10)]">Loading content…</p></Card></div>;
-  }
-
   return (
-    <div className="max-w-3xl space-y-3">
-      <Card className="p-4">
-        {/* Optional event link — for Call-for-Speakers / event promotion to a
-            segment of the whole database. Adds {{event_*}} merge variables. */}
-        <div className="mb-3">
-          <label className="block text-sm font-medium text-[var(--gray-12)] mb-1">Linked event <span className="font-normal text-[var(--gray-10)]">(optional — for CFP / event promotion)</span></label>
-          <select className={inputCls} value={eventId} onChange={(e) => linkEvent(e.target.value)} disabled={!editable}>
-            <option value="">No linked event</option>
-            {events.map((ev) => (
-              <option key={ev.id} value={ev.id}>
-                {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
+    // Inline in the normal content column (NOT full-bleed): the editor panel
+    // lines up with the config row's left edge and the page's right margin, so
+    // it reads as a bordered editor within the page rather than edge-to-edge.
+    <div className="space-y-2">
+      {/* Slim config row (no card): optional event link + merge-field hint. */}
+      <div className="flex flex-wrap items-center gap-2 max-w-3xl">
+        <label className="text-sm font-medium text-[var(--gray-12)] shrink-0">Linked event</label>
+        <select className={`${inputCls} max-w-md`} value={eventId} onChange={(e) => linkEvent(e.target.value)} disabled={!editable}>
+          <option value="">No linked event (optional — for CFP / event promotion)</option>
+          {events.map((ev) => (
+            <option key={ev.id} value={ev.id}>
+              {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="text-xs text-[var(--gray-10)]">Recipient merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.{eventId ? ` Event variables: ${EVENT_VARIABLES.map((v) => v.token).join(' ')}.` : ''}</p>
 
-        <div className="text-sm font-medium text-[var(--gray-12)] mb-2">Message body</div>
-        <p className="text-xs text-[var(--gray-10)] mb-1">Recipient merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.</p>
-        {eventId && (
-          <p className="text-xs text-[var(--gray-10)] mb-3">Event variables: {EVENT_VARIABLES.map((v) => v.token).join(' ')} <span className="text-[var(--gray-9)]">(filled from the linked event when sent)</span></p>
-        )}
-        {otherBlockCount > 0 && (
-          <p className="text-xs text-[var(--gray-10)] mb-3">This broadcast also has {otherBlockCount} content block{otherBlockCount === 1 ? '' : 's'} (e.g. videos, event recaps) that render in the sent email.</p>
-        )}
-        <RichTextEditor content={html} onChange={setHtml} />
-      </Card>
+      <BroadcastContentEditor broadcast={b} editable={editable} onSaved={onSaved} onProceedToSending={onProceedToSending} />
     </div>
   );
 }

@@ -7,7 +7,7 @@
  * kept only so the call site in pages/editions/[id].tsx doesn't churn.
  */
 
-import type { FC } from 'react';
+import type { FC, ReactNode } from 'react';
 import { NewsletterPuckCanvas } from './NewsletterPuckCanvas';
 import type {
   NewsletterEdition,
@@ -39,6 +39,11 @@ interface NewsletterCanvasEditorProps {
    *  spec-builder-evaluation §3.6 (extended). The PuckCanvas layer
    *  uses these to merge registry components into its Config. */
   enabledRegistryComponentIds?: ReadonlyArray<string>;
+  /** Hide the newsletter-specific action cluster (HTML/Substack/Beehiiv/Test
+   *  Send/Save Draft/Publish) — for non-newsletter hosts like broadcasts. */
+  hideDefaultActions?: boolean;
+  /** Custom toolbar actions (e.g. a broadcast's Save / Send buttons). */
+  toolbarActions?: ReactNode;
 }
 
 export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) => (
@@ -54,6 +59,8 @@ export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) =
     {...(props.collectionId ? { collectionId: props.collectionId } : {})}
     {...(props.wrapperTemplate !== undefined ? { wrapperTemplate: props.wrapperTemplate } : {})}
     {...(props.viewOnlineUrl !== undefined ? { viewOnlineUrl: props.viewOnlineUrl } : {})}
+    {...(props.hideDefaultActions !== undefined ? { hideDefaultActions: props.hideDefaultActions } : {})}
+    {...(props.toolbarActions !== undefined ? { toolbarActions: props.toolbarActions } : {})}
   />
 );
 
