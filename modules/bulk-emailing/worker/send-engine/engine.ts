@@ -66,6 +66,22 @@ const SPAM_RATE_TRIP = 0.005;    // >0.5% spam in last 60s -> pause
 
 function chunk<T>(a: T[], n: number): T[][] { const o: T[][] = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; }
 
+// Retain the exact per-recipient HTML only for these send types (newsletters +
+// broadcasts) — the audit-worthy, personalized ones. Bulk/event/transactional
+// are excluded to keep email_send_log from ballooning.
+const CONTENT_HTML_SEND_COLUMNS = new Set(['newsletter_send_id', 'broadcast_send_id']);
+
+// Reproduce, for storage, the substitution SendGrid does at send time: replace
+// each `{{token}}` (the substitution keys) with its value in a single pass (no
+// recursion, matching SendGrid). This yields the exact HTML the recipient got,
+// including per-recipient blocks (e.g. their local-events section).
+function applySubstitutions(html: string, subs: Record<string, string>): string {
+  const keys = Object.keys(subs);
+  if (!html || keys.length === 0) return html;
+  const re = new RegExp(keys.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+  return html.replace(re, (m) => subs[m] ?? '');
+}
+
 export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding): Promise<{ claimed: number; sent: number; failed: number }> {
   const { supabase, logger, config } = deps;
   const start = Date.now();
@@ -162,6 +178,11 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
 
   // Build personalizations, addressed via the channel provider.
   if (binding.prepareBatch) await binding.prepareBatch(deps, ctx, recips);
+  // For newsletters/broadcasts we also materialize the exact per-recipient HTML
+  // (what SendGrid renders from ctx.html + substitutions) to store on the log
+  // row, so the People > Emails tab can show precisely what was sent.
+  const retainHtml = provider.channel === 'email' && CONTENT_HTML_SEND_COLUMNS.has(binding.logSendIdColumn);
+  const renderedById = new Map<string, string>();
   const personalizations = [];
   const addressed: Recipient[] = [];
   for (const r of recips) {
@@ -172,6 +193,7 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
     const substitutions = await binding.buildSubstitutions(ctx, r, headers);
     personalizations.push({ to, headers: Object.keys(headers).length ? headers : undefined, substitutions,
       customArgs: { [binding.logSendIdColumn]: ctx.sendId, recipient_log_id: logIds.get(r.id)! } });
+    if (retainHtml) renderedById.set(r.id, applySubstitutions(ctx.html, substitutions));
     addressed.push(r);
   }
 
@@ -187,11 +209,18 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
     const ids = recips.map((r) => r.id);
     await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'sent', batch_id: batchId, updated_at: new Date().toISOString() });
     const logRows = addressed.map((r) => ({
-      id: logIds.get(r.id), recipient_email: r.email, from_address: ctx.fromEmail, reply_to: ctx.replyTo,
+      id: logIds.get(r.id), recipient_email: r.email, recipient_customer_id: r.person_id ?? null,
+      from_address: ctx.fromEmail, reply_to: ctx.replyTo,
       subject: ctx.subject, provider: provider.providerName, [binding.logSendIdColumn]: ctx.sendId,
       status: 'sent', sent_at: new Date().toISOString(), provider_message_id: result.batchMessageId ?? null,
+      ...(retainHtml ? { content_html: renderedById.get(r.id) ?? null } : {}),
     }));
-    await supabase.from('email_send_log').upsert(logRows, { onConflict: 'id', ignoreDuplicates: true });
+    // With retained HTML the rows are large (~32 KB each) so upsert in small
+    // chunks to bound the request size; otherwise one shot. Idempotent
+    // (onConflict id, ignoreDuplicates) so recovery can safely re-run a batch.
+    for (const part of chunk(logRows, retainHtml ? 50 : logRows.length || 1)) {
+      await supabase.from('email_send_log').upsert(part, { onConflict: 'id', ignoreDuplicates: true });
+    }
     await supabase.from(binding.batchesTable).update({ status: 'accepted', provider_batch_id: result.batchMessageId ?? null, http_status: 200, completed_at: new Date().toISOString() }).eq('id', batchId);
     return { sent: recips.length, failed: 0 };
   }

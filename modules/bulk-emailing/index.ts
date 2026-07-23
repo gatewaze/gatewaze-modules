@@ -102,6 +102,7 @@ const bulkEmailingModule: GatewazeModule = {
     // integer -> uuid. The wrong type meant the column could never hold a
     // people UUID, so it is empty everywhere and the in-place change is safe.
     'migrations/007_recipient_customer_id_uuid.sql',
+    'migrations/020_email_content_html_retention.sql',
   ],
 
   workers: [
@@ -125,6 +126,13 @@ const bulkEmailingModule: GatewazeModule = {
       name: 'bulk-emailing:dispatch-event-reminders',
       handler: './workers/dispatch-event-reminders.ts',
     },
+    {
+      // Retention sweep: null out email_send_log.content_html for newsletter/
+      // broadcast sends past EMAIL_CONTENT_HTML_RETENTION_DAYS (default 180) to
+      // reclaim storage. Tracking columns stay; only the large HTML is dropped.
+      name: 'bulk-emailing:prune-content-html',
+      handler: './workers/prune-content-html.ts',
+    },
   ],
 
   crons: [
@@ -146,6 +154,13 @@ const bulkEmailingModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 600_000 },
       data: { kind: 'bulk-emailing:dispatch-event-reminders' },
+    },
+    {
+      // Hourly content_html retention sweep.
+      name: 'bulk-emailing-prune-content-html',
+      queue: 'jobs',
+      schedule: { pattern: '17 * * * *' },
+      data: { kind: 'bulk-emailing:prune-content-html' },
     },
   ],
 
