@@ -7,7 +7,6 @@
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DropdownMenu } from '@radix-ui/themes';
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -18,7 +17,6 @@ import { toast } from 'sonner';
 import {
   ArrowPathIcon,
   CameraIcon,
-  ChevronDownIcon,
   ClockIcon,
   DocumentDuplicateIcon,
   GlobeAltIcon,
@@ -35,6 +33,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge, Card, Pagination, PaginationFirst, PaginationItems, PaginationLast, PaginationNext, PaginationPrevious } from '@/components/ui';
 import { DataTable } from '@/components/shared/table/DataTable';
 import { RowActions } from '@/components/shared/table/RowActions';
+import { BadgeSelect } from '@/components/shared/table/BadgeSelect';
 import { TerminalOutputModal } from '@/components/shared/TerminalOutputModal';
 import { useListingQuery } from '@/components/listing';
 
@@ -68,6 +67,11 @@ const PUBLISH_STATE_BADGE: Record<string, { color: 'green' | 'amber' | 'gray' | 
   unpublished:      { color: 'gray',  label: 'Unpublished' },
   draft:            { color: 'blue',  label: 'Draft' },
 };
+
+// Options for the inline status-change dropdown in the Status cell.
+const PUBLISH_STATE_OPTIONS = Object.entries(PUBLISH_STATE_BADGE).map(
+  ([value, meta]) => ({ value, label: meta.label, color: meta.color }),
+);
 
 interface DistinctValue {
   value: string;
@@ -597,41 +601,15 @@ export default function EventsPage() {
         cell: ({ row }) => {
           const r = row.original;
           const current = ((r as any).publishState as string | undefined) ?? 'published';
-          const meta = PUBLISH_STATE_BADGE[current]
-            ?? { color: 'gray' as const, label: current };
           const busy = busyRowId === String(r.id);
           return (
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger>
-                <button
-                  type="button"
-                  disabled={busy}
-                  title="Change status"
-                  onClick={(e) => e.stopPropagation()}
-                  onDoubleClick={(e) => e.stopPropagation()}
-                  className="cursor-pointer disabled:opacity-60"
-                >
-                  <Badge color={meta.color} variant="soft" className="cursor-pointer">
-                    {meta.label}
-                    <ChevronDownIcon className="size-3 ml-0.5 opacity-70" />
-                  </Badge>
-                </button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Content align="start" size="1" onClick={(e) => e.stopPropagation()}>
-                {Object.entries(PUBLISH_STATE_BADGE).map(([value, m]) => (
-                  <DropdownMenu.Item
-                    key={value}
-                    disabled={busy || value === current}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      changePublishState(r, value);
-                    }}
-                  >
-                    {m.label}
-                  </DropdownMenu.Item>
-                ))}
-              </DropdownMenu.Content>
-            </DropdownMenu.Root>
+            <BadgeSelect
+              value={current}
+              options={PUBLISH_STATE_OPTIONS}
+              disabled={busy}
+              title="Change status"
+              onChange={(to) => changePublishState(r, to)}
+            />
           );
         },
       }),
