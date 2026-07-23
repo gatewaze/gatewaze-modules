@@ -314,9 +314,12 @@ const EventDetailPage = () => {
 
   const loadAllEvents = async () => {
     try {
-      const result = await EventService.getAllEvents();
+      // Slim fetch (no per-event registration count) — only used to populate
+      // the "Recommended Event" selector. getAllEvents()'s count aggregate
+      // 57014-times out on large accounts (5000+ events).
+      const result = await EventService.getAllEventsLight();
       if (result.success && result.data) {
-        setAllEvents(result.data);
+        setAllEvents(result.data as Event[]);
       }
     } catch (error) {
       console.error('Error loading events for selector:', error);
@@ -2735,12 +2738,15 @@ const EventRegistrationsTab = ({ eventId, eventUuid }: { eventId: string; eventU
       const data = await EventQrService.getEventRegistrations(eventId, { hasDiscountCodes });
       setRegistrations(data);
 
-      // Fetch tracking sessions (only when ad-conversions module is enabled)
-      if (hasAdConversions) {
+      // Fetch tracking sessions (only when ad-conversions module is enabled).
+      // integrations_ad_tracking_sessions.event_id is a UUID FK — filter by
+      // eventUuid, not the short public eventId (which 22P02-errors as
+      // "invalid input syntax for type uuid" → 400).
+      if (hasAdConversions && eventUuid) {
       const trackingResult = await supabase
         .from('integrations_ad_tracking_sessions')
         .select('matched_registration_id, utm_source, utm_medium, utm_campaign, utm_content, utm_term, status, click_ids')
-        .eq('event_id', eventId)
+        .eq('event_id', eventUuid)
         .not('matched_registration_id', 'is', null);
 
       // Build a map of registration ID -> tracking info

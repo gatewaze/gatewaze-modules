@@ -479,6 +479,61 @@ export class EventService {
     }
   }
 
+  /**
+   * Lightweight event list for pickers/selectors: id + title + start + city
+   * only, WITHOUT the events_registrations(count) aggregate. getAllEvents()
+   * pulls that per-event count for every row, which on large accounts (5000+
+   * events) makes the offset pages 57014 statement-timeout. Callers that just
+   * need labels (e.g. the "Recommended Event" dropdown) use this instead.
+   */
+  static async getAllEventsLight(): Promise<EventServiceResponse<Array<Pick<Event, 'id' | 'eventId' | 'eventTitle' | 'eventStart' | 'eventCity'>>>> {
+    try {
+      let allEvents: any[] = [];
+      let page = 0;
+      const pageSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const startRange = page * pageSize;
+        const endRange = startRange + pageSize - 1;
+
+        const { data, error } = await supabase
+          .from('events')
+          .select('id, event_id, event_title, event_start, event_city')
+          .order('event_start', { ascending: true })
+          .range(startRange, endRange);
+
+        if (error) {
+          console.error('Error fetching events (light) page', page, ':', error);
+          return { success: false, error: error.message };
+        }
+
+        if (data && data.length > 0) {
+          allEvents = allEvents.concat(data);
+          hasMore = data.length === pageSize;
+          page++;
+        } else {
+          hasMore = false;
+        }
+
+        if (page > 20) break; // safety
+      }
+
+      const events = allEvents.map((event: any) => ({
+        id: event.id,
+        eventId: event.event_id,
+        eventTitle: event.event_title,
+        eventStart: event.event_start,
+        eventCity: event.event_city,
+      }));
+
+      return { success: true, data: events };
+    } catch (error) {
+      console.error('Error in getAllEventsLight:', error);
+      return { success: false, error: 'Failed to fetch events' };
+    }
+  }
+
 static async createEvent(eventData: Omit<Event, 'id' | 'createdAt' | 'updatedAt'>, userInfo?: { id?: string; email?: string }): Promise<EventServiceResponse<string>> {
     try {
       // Check for duplicate event_link
