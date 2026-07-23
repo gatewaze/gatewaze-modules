@@ -105,7 +105,12 @@ export class LumaICalScraper extends BaseScraper {
 
       // Navigate to the calendar page
       await this.page.goto(calendarUrl, {
-        waitUntil: 'networkidle2',
+        // Luma pages poll/stream and never reach networkidle2, so that
+        // condition always burns the full 30s timeout (×2 attempts = ~60s of
+        // dead wait per event, throttling the whole scrape to a crawl). Use
+        // domcontentloaded — the explicit post-nav wait / waitForSelector below
+        // handles dynamic content. Same fix as the virtual-events scraper.
+        waitUntil: 'domcontentloaded',
         timeout: 30000
       });
 
