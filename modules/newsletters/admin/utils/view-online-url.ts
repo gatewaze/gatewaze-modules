@@ -66,6 +66,11 @@ function derivePortalOrigin(): string | null {
 export function getViewOnlineUrl(
   collection: ViewOnlineCollection | null | undefined,
   edition: ViewOnlineEdition | null | undefined,
+  // Optional portal origin override. Callers on the send path resolve the
+  // brand's CONFIGURED portal domain (platform_settings.domain) and pass it so
+  // www-portal brands get correct links; when omitted we fall back to deriving
+  // from the admin hostname (admin.X -> X apex), preserving prior behaviour.
+  portalOrigin?: string | null,
 ): string | null {
   const date = edition?.edition_date?.slice(0, 10);
   if (!date) return null;
@@ -80,7 +85,7 @@ export function getViewOnlineUrl(
 
   const slug = collection?.slug?.trim();
   if (!slug) return null;
-  const origin = derivePortalOrigin();
+  const origin = portalOrigin ?? derivePortalOrigin();
   if (!origin) return null;
   return `${origin}/newsletters/${slug}/${folder}`;
 }

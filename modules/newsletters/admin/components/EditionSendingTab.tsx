@@ -43,13 +43,30 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
   // (shared by createSend + rerenderContent so both produce identical output).
   const buildFinalHtml = useCallback(async (): Promise<{ html: string | null; webVersionUrl: string; portalBaseUrl: string }> => {
     const portalProtocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
-    const portalHost = typeof window !== 'undefined'
+    // Prefer the brand's CONFIGURED portal domain (platform_settings.domain) so
+    // brands whose portal isn't on the apex (e.g. portal on www.tech.tickets
+    // while admin is admin.tech.tickets) get correct unsubscribe /
+    // manage-preferences + view-online links. Fall back to deriving from the
+    // admin hostname (admin.X -> X apex) for apex-portal brands.
+    const fallbackHost = typeof window !== 'undefined'
       ? window.location.hostname.replace('-admin.', '-app.').replace(/^admin\./, '')
       : 'localhost';
-    const portalBaseUrl = `${portalProtocol}//${portalHost}`;
+    let portalBaseUrl = `${portalProtocol}//${fallbackHost}`;
+    try {
+      const { data } = await supabase.from('platform_settings').select('value').eq('key', 'domain').maybeSingle();
+      const domain = (data?.value as string | null | undefined)?.trim();
+      if (domain) {
+        portalBaseUrl = /^https?:\/\//i.test(domain)
+          ? domain.replace(/\/+$/, '')
+          : `${portalProtocol}//${domain.replace(/\/+$/, '')}`;
+      }
+    } catch {
+      // keep the hostname-derived fallback
+    }
     const webVersionUrl = getViewOnlineUrl(
       { slug: newsletterSlug, view_online_target: collection?.view_online_target, view_online_external_base_url: collection?.view_online_external_base_url },
       { edition_date: editionDate, subject },
+      portalBaseUrl,
     ) ?? `${portalBaseUrl}/newsletters`;
     let html = getRenderedHtml ? await getRenderedHtml() : null;
     if (html) {
