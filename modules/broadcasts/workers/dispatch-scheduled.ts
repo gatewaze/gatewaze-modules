@@ -20,6 +20,7 @@ interface DueSend {
 // fan-out (avoids a redundant full recompute on every send). Mirrors the prior
 // Edge-side fanOutAndStart logic (spec §1.2).
 const SEGMENT_FRESHNESS_MS = 60 * 60 * 1000
+const BROADCAST_FANOUT_BATCH = Number(process.env.BROADCAST_FANOUT_BATCH ?? 5000)
 
 /**
  * Heartbeat that fires due scheduled broadcast sends + drives the per-recipient
@@ -86,12 +87,30 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
         }
       }
 
-      const { error: fanoutErr } = await supabase.rpc(
-        'fanout_broadcast_send_recipients',
-        { p_send_id: send.id },
-      )
-      if (fanoutErr) {
-        const msg = `Broadcast ${send.id}: ${fanoutErr.message}`
+      // Fan out in keyset-paginated batches so no single RPC approaches the ~8s
+      // PostgREST/role statement_timeout (the single-shot fanout of a large
+      // audience was cancelled → send marked failed). Each call is a fast (~1s)
+      // separate statement; idempotent via the email cursor + ON CONFLICT.
+      try {
+        let after: string | null = null
+        let guard = 0
+        for (;;) {
+          const { data, error } = await supabase.rpc('fanout_broadcast_send_recipients_batch', {
+            p_send_id: send.id,
+            p_batch_size: BROADCAST_FANOUT_BATCH,
+            p_after_email: after,
+          })
+          if (error) throw new Error(error.message)
+          const row = (Array.isArray(data) ? data[0] : data) as
+            | { last_email: string | null; remaining: boolean }
+            | null
+          if (!row) break
+          after = row.last_email ?? after
+          if (!row.remaining) break
+          if (++guard > 10_000) throw new Error('fanout batch guard tripped')
+        }
+      } catch (fanoutErr) {
+        const msg = `Broadcast ${send.id}: ${fanoutErr instanceof Error ? fanoutErr.message : 'fanout failed'}`
         console.error('[broadcast:dispatch-scheduled] fanout failed:', msg)
         errors.push(msg)
         await supabase
