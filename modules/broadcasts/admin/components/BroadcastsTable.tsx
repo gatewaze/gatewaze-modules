@@ -4,11 +4,12 @@ import {
   createColumnHelper, getCoreRowModel, getExpandedRowModel, useReactTable,
   type ExpandedState, type Row,
 } from '@tanstack/react-table';
-import { ChevronDownIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
-import { Badge } from '@/components/ui';
+import { ChevronDownIcon, ChevronRightIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { toast } from 'sonner';
+import { Badge, Button } from '@/components/ui';
 import { DataTable } from '@/components/shared/table/DataTable';
 import {
-  broadcastSummary, broadcastEngagement,
+  broadcastSummary, broadcastEngagement, deleteBroadcast,
   type Broadcast, type BroadcastEngagement, type BroadcastStatus,
 } from '../lib/broadcastService';
 
@@ -18,6 +19,7 @@ interface BroadcastRow {
   subject: string | null;
   date: string;
   status: BroadcastStatus;
+  sentCount: number;              // total emails sent across this broadcast's sends
   engagement?: BroadcastEngagement | null;
 }
 
@@ -108,16 +110,19 @@ function EngagementDetail({ engagement }: { engagement?: BroadcastEngagement | n
 
 const columnHelper = createColumnHelper<BroadcastRow>();
 
-export function BroadcastsTable({ broadcasts }: { broadcasts: Broadcast[] }) {
+export function BroadcastsTable({ broadcasts, onDeleted }: { broadcasts: Broadcast[]; onDeleted?: () => void }) {
   const navigate = useNavigate();
   const [rows, setRows] = useState<BroadcastRow[]>([]);
   const [expanded, setExpanded] = useState<ExpandedState>({});
+  const [pendingDelete, setPendingDelete] = useState<BroadcastRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     const base: BroadcastRow[] = broadcasts.map((b) => {
       const { status, latest } = broadcastSummary(b);
       const date = latest?.completed_at || latest?.started_at || latest?.scheduled_at || b.created_at;
-      return { id: b.id, name: b.name, subject: b.subject, date, status };
+      const sentCount = (b.sends || []).reduce((n, s) => n + (s.sent_count || 0), 0);
+      return { id: b.id, name: b.name, subject: b.subject, date, status, sentCount };
     });
     setRows(base);
 
@@ -134,6 +139,22 @@ export function BroadcastsTable({ broadcasts }: { broadcasts: Broadcast[] }) {
         .catch((err) => console.error('broadcast engagement load failed:', err));
     }
   }, [broadcasts]);
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await deleteBroadcast(pendingDelete.id);
+      setRows((prev) => prev.filter((r) => r.id !== pendingDelete.id));
+      toast.success('Broadcast deleted');
+      setPendingDelete(null);
+      onDeleted?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete broadcast');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const columns = useMemo(() => [
     columnHelper.display({
@@ -204,6 +225,21 @@ export function BroadcastsTable({ broadcasts }: { broadcasts: Broadcast[] }) {
         return <MetricCell pctText={(measured ? '' : '~') + pct(e.human_clicks, e.delivered)} count={fmtNum(e.human_clicks)} />;
       },
     }),
+    columnHelper.display({
+      id: 'actions',
+      size: 44,
+      cell: ({ row }) => (
+        <div className="flex justify-end">
+          <button
+            onClick={(e) => { e.stopPropagation(); setPendingDelete(row.original); }}
+            className="p-1 text-[var(--gray-9)] hover:text-[var(--red-9)]"
+            title="Delete broadcast"
+          >
+            <TrashIcon className="w-4 h-4" />
+          </button>
+        </div>
+      ),
+    }),
   ], []);
 
   const table = useReactTable({
@@ -216,12 +252,46 @@ export function BroadcastsTable({ broadcasts }: { broadcasts: Broadcast[] }) {
     getExpandedRowModel: getExpandedRowModel(),
   });
 
+  const sentAlready = !!pendingDelete
+    && (pendingDelete.sentCount > 0
+      || pendingDelete.status === 'sent'
+      || pendingDelete.status === 'sending'
+      || pendingDelete.status === 'cancelling'
+      || pendingDelete.status === 'paused');
+
   return (
-    <DataTable
-      table={table}
-      onRowDoubleClick={(r) => navigate(`/broadcasts/${r.id}`)}
-      renderSubComponent={(row: Row<BroadcastRow>) => <EngagementDetail engagement={row.original.engagement} />}
-    />
+    <>
+      <DataTable
+        table={table}
+        onRowDoubleClick={(r) => navigate(`/broadcasts/${r.id}`)}
+        renderSubComponent={(row: Row<BroadcastRow>) => <EngagementDetail engagement={row.original.engagement} />}
+      />
+
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-black/40" onClick={() => !deleting && setPendingDelete(null)} />
+          <div className="relative z-10 w-full max-w-md rounded-xl bg-[var(--color-surface)] border border-[var(--gray-a5)] shadow-xl p-5">
+            <h2 className="text-base font-semibold text-[var(--gray-12)]">Delete broadcast?</h2>
+            <p className="mt-2 text-sm text-[var(--gray-11)]">
+              <span className="font-medium text-[var(--gray-12)]">{pendingDelete.subject || pendingDelete.name || 'This broadcast'}</span> will be permanently deleted.
+            </p>
+            {sentAlready ? (
+              <div className="mt-3 rounded-md border border-[var(--red-a6)] bg-[var(--red-a2)] px-3 py-2 text-xs text-[var(--red-11)]">
+                This broadcast has already been sent{pendingDelete.sentCount > 0 ? ` to ${pendingDelete.sentCount.toLocaleString()} recipient${pendingDelete.sentCount === 1 ? '' : 's'}` : ''}. Deleting it also removes its send history, replies, and engagement data. This cannot be undone.
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-[var(--gray-9)]">This cannot be undone.</p>
+            )}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button variant="outlined" onClick={() => setPendingDelete(null)} disabled={deleting}>Cancel</Button>
+              <Button variant="solid" color="red" onClick={confirmDelete} disabled={deleting}>
+                {deleting ? 'Deleting…' : 'Delete'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
