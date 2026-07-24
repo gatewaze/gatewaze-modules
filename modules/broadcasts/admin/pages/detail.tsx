@@ -148,6 +148,21 @@ export default function BroadcastDetailPage() {
         if (error) throw error;
         return (data as number) ?? 0;
       },
+      async previewSchedule(config: SendComposerConfig) {
+        const { data, error } = await supabase.rpc('broadcast_preview_send_schedule', {
+          p_audience_type: b.audience_type,
+          p_segment_id: b.audience_type === 'segment' ? b.segment_id : null,
+          p_list_ids: b.audience_type === 'list' ? (b.list_ids ?? []) : null,
+          p_category_list_id: b.category_list_id,
+          p_include_prospects: b.include_prospects ?? false,
+          p_scheduled_at: config.scheduledAt,
+          p_target_local: config.targetLocal,
+          p_default_timezone: config.defaultTimezone,
+          p_suppression_topic: 'broadcasts',
+        });
+        if (error) throw error;
+        return (data as { timezone: string; recipients: number; send_at: string }[]) || [];
+      },
       async createSend(config: SendComposerConfig) {
         return createBroadcastSend(b.id, config);
       },

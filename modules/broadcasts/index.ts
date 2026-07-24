@@ -105,6 +105,8 @@ const broadcastsModule: GatewazeModule = {
     // 019 chunked, indexed fan-out so large audiences don't hit the 8s RPC
     // statement_timeout; also ports the newsletters send_at clamp (072).
     'migrations/019_fanout_batch.sql',
+    // 020 per-timezone preview RPC for the shared pre-send confirmation modal.
+    'migrations/020_preview_send_schedule.sql',
   ],
 
   adminRoutes: [
