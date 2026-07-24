@@ -52,7 +52,7 @@ export default function BroadcastListPage() {
             </Button>
           </div>
         ) : (
-          <BroadcastsTable broadcasts={broadcasts} />
+          <BroadcastsTable broadcasts={broadcasts} onDeleted={load} />
         )}
       </WorkspaceLayout>
     </Page>
