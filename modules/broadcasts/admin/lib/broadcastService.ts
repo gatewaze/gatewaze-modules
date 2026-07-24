@@ -184,6 +184,32 @@ function portalBaseFromAdmin(): string {
   return `${window.location.protocol}//${host}`;
 }
 
+// Resolve the portal base URL for Subscription Centre footer links. Prefer the
+// brand's CONFIGURED portal domain (platform_settings.domain) so brands whose
+// portal is not on the apex — e.g. portal on www.tech.tickets while the admin
+// is admin.tech.tickets — get correct links. Falls back to deriving from the
+// admin hostname (admin.X -> X) for brands where the portal IS the apex
+// (e.g. admin.aaif.live -> aaif.live), preserving the previous behaviour.
+async function resolvePortalBase(): Promise<string> {
+  try {
+    const { data } = await supabase
+      .from('platform_settings')
+      .select('value')
+      .eq('key', 'domain')
+      .maybeSingle();
+    const domain = (data?.value as string | null | undefined)?.trim();
+    if (domain) {
+      const proto = typeof window !== 'undefined' ? window.location.protocol : 'https:';
+      return /^https?:\/\//i.test(domain)
+        ? domain.replace(/\/+$/, '')
+        : `${proto}//${domain.replace(/\/+$/, '')}`;
+    }
+  } catch {
+    // fall through to hostname derivation
+  }
+  return portalBaseFromAdmin();
+}
+
 // ---------------------------------------------------------------------------
 // Parent CRUD
 // ---------------------------------------------------------------------------
@@ -277,6 +303,8 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
   // they're substituted once here; per-recipient merge fields stay for send time.
   let subject = parent.subject;
   let renderedHtml = parent.rendered_html;
+  // Resolve once — used for both the {{portal_base}} event var and send metadata.
+  const portalBase = await resolvePortalBase();
   if (parent.event_id) {
     const { data: ev } = await supabase
       .from('events')
@@ -284,7 +312,7 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
       .eq('id', parent.event_id)
       .maybeSingle();
     if (ev) {
-      const values = eventVarValues(ev as Parameters<typeof eventVarValues>[0], portalBaseFromAdmin());
+      const values = eventVarValues(ev as Parameters<typeof eventVarValues>[0], portalBase);
       if (subject) subject = substituteEventVars(subject, values);
       if (renderedHtml) renderedHtml = substituteEventVars(renderedHtml, values);
     }
@@ -323,7 +351,7 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
       // Portal base for the send's unsubscribe/manage-preferences footer links —
       // like newsletters, so they open the portal Subscription Centre
       // ({portal}/subscriptions?token=…) instead of the raw edge-fn URL.
-      metadata: { portal_base_url: portalBaseFromAdmin() },
+      metadata: { portal_base_url: portalBase },
     })
     .select('id')
     .single();
