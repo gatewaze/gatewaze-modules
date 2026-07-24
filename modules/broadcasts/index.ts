@@ -102,6 +102,9 @@ const broadcastsModule: GatewazeModule = {
     'migrations/017_broadcast_links.sql',
     // 018 broadcast_block_effectiveness RPC (per-block human clicks per broadcast).
     'migrations/018_broadcast_block_effectiveness.sql',
+    // 019 chunked, indexed fan-out so large audiences don't hit the 8s RPC
+    // statement_timeout; also ports the newsletters send_at clamp (072).
+    'migrations/019_fanout_batch.sql',
   ],
 
   adminRoutes: [
