@@ -1,10 +1,8 @@
 /**
  * VENDORED COPY of modules/newsletters/workers/weather-personalisation.ts —
  * kept in sync (edge runtime cannot import across the modules/ tree). Pure /
- * fetch-only, Deno-safe.
- */
-
- * bindings resolve weather identically (per spec-broadcasts-blocks §11.4).
+ * fetch-only, Deno-safe. Bindings resolve weather identically (per
+ * spec-broadcasts-blocks §11.4).
  */
 
 export const WEATHER_TOKENS = ['weather_emoji', 'weather_temp', 'weather_summary', 'weather_location'];
