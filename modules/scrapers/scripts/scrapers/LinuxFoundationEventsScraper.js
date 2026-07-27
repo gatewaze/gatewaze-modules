@@ -54,6 +54,14 @@ const DATE_RE = /<span[^>]*class="[^"]*\bdate\b[^"]*"[^>]*>([\s\S]+?)<\/span>/;
 const COUNTRY_RE = /<span[^>]*class="[^"]*\bcountry\b[^"]*"[^>]*>([\s\S]+?)<\/span>/;
 const DESC_RE = /<div[^>]*class="[^"]*\bevent-description\b[^"]*"[^>]*>([\s\S]+?)<\/div>/;
 const ANCHOR_RE = /<a[^>]*href="([^"]+)"[^>]*>([\s\S]+?)<\/a>/g;
+// Archive layout (/about/calendar/archive/?_sft_...) lists PAST events with a
+// different card template than the upcoming listing: <article id="post-N"
+// class="...callout..."> wrapping an <h5><strong><a> title. The date/country
+// spans and the per-event detail page (JSON-LD) are identical, so only the
+// card + title regexes differ. Used as a fallback when the upcoming-layout
+// CARD_BLOCK_RE matches nothing.
+const ARCHIVE_CARD_RE = /<article id="post-(\d+)"[^>]*class="[^"]*\bcallout\b[^"]*"[^>]*>([\s\S]+?)<\/article>/g;
+const ARCHIVE_TITLE_RE = /<h5[^>]*>\s*<strong>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]+?)<\/a>/;
 
 const ACTION_BUTTON_LABELS = new Set([
   'register', 'sponsor', 'schedule', 'videos', 'speak',
@@ -479,14 +487,30 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
       console.log('💾 Streaming mode: events will be saved as they are parsed');
     }
 
+    // Collect cards from whichever listing layout this page uses: the
+    // upcoming listing (<div ...event>) or, when that matches nothing, the
+    // archive listing (<article ...callout>). Only the card + title regexes
+    // differ; everything downstream (date/country parse + detail-page
+    // enrichment + event build + save) is shared.
+    const cards = [];
     let cardMatch;
     CARD_BLOCK_RE.lastIndex = 0;
     while ((cardMatch = CARD_BLOCK_RE.exec(html)) !== null) {
-      const postId = cardMatch[1];
-      const cardHtml = cardMatch[2];
+      cards.push({ postId: cardMatch[1], cardHtml: cardMatch[2], titleRe: TITLE_RE });
+    }
+    if (cards.length === 0) {
+      ARCHIVE_CARD_RE.lastIndex = 0;
+      while ((cardMatch = ARCHIVE_CARD_RE.exec(html)) !== null) {
+        cards.push({ postId: cardMatch[1], cardHtml: cardMatch[2], titleRe: ARCHIVE_TITLE_RE });
+      }
+      if (cards.length > 0) {
+        console.log(`📚 Archive layout detected: ${cards.length} past-event card(s)`);
+      }
+    }
 
+    for (const { postId, cardHtml, titleRe } of cards) {
       try {
-        const titleMatch = cardHtml.match(TITLE_RE);
+        const titleMatch = cardHtml.match(titleRe);
         if (!titleMatch) {
           this.stats.failed++;
           continue;
