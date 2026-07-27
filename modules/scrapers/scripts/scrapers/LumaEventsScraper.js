@@ -1098,11 +1098,11 @@ export class LumaEventsScraper extends BaseScraper {
     if (hasWorkshopKeywords) {
       return 'workshop';
     } else if (hasMeetupKeywords) {
-      return 'meetup';
+      return 'community-event';
     }
 
-    // Default to meetup if unsure (most Luma events are social gatherings)
-    return 'meetup';
+    // Default to community-event if unsure (most Luma events are social gatherings)
+    return 'community-event';
   }
 
   /**
