@@ -149,6 +149,7 @@ const eventsModule: GatewazeModule = {
   publicApiScopes: [
     { action: 'read', description: 'Read public events, including speakers and sponsors via sub-resources' },
     { action: 'metrics', description: 'Read per-event registration metrics (registrants, check-ins) for published events' },
+    { action: 'self', description: "Read a person's own registrations (trusted internal callers only — the MCP OAuth surface)" },
   ],
 
   publicApiRoutes: async (router, ctx) => {
@@ -199,6 +200,66 @@ const eventsModule: GatewazeModule = {
           ],
           responses: {
             200: { description: 'Events with registrants / checked_in / cancelled counts' },
+            403: { $ref: '#/components/responses/Forbidden' },
+          },
+        },
+      },
+      '/metrics/summary': {
+        get: {
+          summary: 'Platform-wide registration totals + top events by registrants (requires events:metrics)',
+          operationId: 'eventMetricsSummary',
+          parameters: [
+            { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Restrict totals to events matching this title' },
+            { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+            { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 10, maximum: 50 }, description: 'Top-events list size' },
+          ],
+          responses: {
+            200: { description: 'totals {events, registrants, checked_in, cancelled, events_with_checkins} + top_events_by_registrants' },
+            403: { $ref: '#/components/responses/Forbidden' },
+          },
+        },
+      },
+      '/registrant-breakdown': {
+        get: {
+          summary: 'Aggregated registration-form answers per event — no registrant-level rows (requires events:metrics)',
+          operationId: 'eventRegistrantBreakdown',
+          parameters: [
+            { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Filter by event title (partial match)' },
+            { name: 'id', in: 'query', schema: { type: 'string' }, description: 'Event id or slug' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 3, maximum: 5 } },
+          ],
+          responses: {
+            200: { description: 'Per event: each form question with aggregated answer counts' },
+            403: { $ref: '#/components/responses/Forbidden' },
+          },
+        },
+      },
+      '/nearby': {
+        get: {
+          summary: 'Published upcoming events within radius_km of lat/lng, soonest first',
+          operationId: 'listNearbyEvents',
+          parameters: [
+            { name: 'lat', in: 'query', required: true, schema: { type: 'number' } },
+            { name: 'lng', in: 'query', required: true, schema: { type: 'number' } },
+            { name: 'radius_km', in: 'query', schema: { type: 'number', default: 150 } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 10, maximum: 50 } },
+            { name: 'include_past', in: 'query', schema: { type: 'boolean', default: false } },
+          ],
+          responses: {
+            200: { description: 'Nearby events with distance_km' },
+          },
+        },
+      },
+      '/my-registrations': {
+        get: {
+          summary: "A person's own registrations (requires events:self — internal MCP surface)",
+          operationId: 'myRegistrations',
+          parameters: [
+            { name: 'person_id', in: 'query', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          responses: {
+            200: { description: 'counts {total, upcoming, cancelled} + next_event + registrations' },
             403: { $ref: '#/components/responses/Forbidden' },
           },
         },
