@@ -198,6 +198,281 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
     }
   });
 
+  /**
+   * Page through events_registrations for a set of event UUIDs, returning
+   * per-event counts. Used by the aggregate metrics paths below — PostgREST
+   * caps responses at 1000 rows, so this pages explicitly (30k-row ceiling,
+   * plenty above current data volume; staff-only surfaces, no caching).
+   */
+  async function aggregateRegistrations(eventIds: string[]): Promise<Map<string, { registrants: number; checked_in: number; cancelled: number }>> {
+    const agg = new Map<string, { registrants: number; checked_in: number; cancelled: number }>();
+    const CHUNK = 200; // keep the .in() filter within sane URL length
+    for (let c = 0; c < eventIds.length; c += CHUNK) {
+      const chunk = eventIds.slice(c, c + CHUNK);
+      for (let page = 0; page < 30; page++) {
+        const { data, error } = await supabase
+          .from('events_registrations')
+          .select('event_id, status, checked_in')
+          .in('event_id', chunk)
+          .range(page * 1000, page * 1000 + 999);
+        if (error) throw new Error(error.message);
+        for (const r of (data ?? []) as Array<{ event_id: string; status: string | null; checked_in: boolean | null }>) {
+          const a = agg.get(r.event_id) ?? { registrants: 0, checked_in: 0, cancelled: 0 };
+          if (r.status === 'cancelled') a.cancelled++;
+          else {
+            a.registrants++;
+            if (r.checked_in) a.checked_in++;
+          }
+          agg.set(r.event_id, a);
+        }
+        if ((data ?? []).length < 1000) break;
+      }
+    }
+    return agg;
+  }
+
+  // GET /api/v1/events/metrics/summary — platform-wide registration totals
+  // (events:metrics). One call answers "how many people have registered
+  // across all our events": total events, registrations, check-ins,
+  // cancellations, plus how many events actually log attendance — most
+  // don't, so consumers can caveat attendance numbers honestly. Optional
+  // q/from/to filters scope the totals; sort=registrants returns the
+  // top events by registrants (limit, default 10) alongside the totals.
+  router.get('/metrics/summary', ctx.requireScope('metrics'), async (req: Request, res: Response) => {
+    try {
+      let query = supabase
+        .from('events')
+        .select('id, event_id, event_title, event_start, event_city, event_country_code, event_type, publish_state, is_listed')
+        .order('event_start', { ascending: false })
+        .limit(2000);
+      if (req.query.q) query = query.ilike('event_title', `%${req.query.q}%`);
+      if (req.query.from) query = query.gte('event_start', req.query.from);
+      if (req.query.to) query = query.lte('event_start', req.query.to);
+      const { data: events, error } = await query;
+      if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+
+      const rows = (events ?? []) as Array<Record<string, unknown>>;
+      const agg = await aggregateRegistrations(rows.map((e) => e.id as string));
+
+      const totals = { events: rows.length, registrants: 0, checked_in: 0, cancelled: 0, events_with_checkins: 0 };
+      for (const a of agg.values()) {
+        totals.registrants += a.registrants;
+        totals.checked_in += a.checked_in;
+        totals.cancelled += a.cancelled;
+        if (a.checked_in > 0) totals.events_with_checkins++;
+      }
+
+      const limit = Math.min(parseInt(String(req.query.limit)) || 10, 50);
+      const top = rows
+        .map((ev) => ({
+          event_id: ev.event_id,
+          event_title: ev.event_title,
+          event_start: ev.event_start,
+          event_city: ev.event_city,
+          event_country_code: ev.event_country_code,
+          event_type: ev.event_type,
+          is_published: ev.publish_state === 'published' && ev.is_listed === true,
+          registrations: agg.get(ev.id as string) ?? { registrants: 0, checked_in: 0, cancelled: 0 },
+        }))
+        .sort((a, b) => b.registrations.registrants - a.registrations.registrants)
+        .slice(0, limit);
+
+      ctx.setCache(res, { kind: 'no-store' });
+      res.json({
+        data: {
+          totals,
+          attendance_note: `check-ins are logged for only ${totals.events_with_checkins} of ${totals.events} events — attendance totals undercount reality`,
+          top_events_by_registrants: top,
+        },
+        _links: { self: req.originalUrl },
+      });
+    } catch (err) {
+      console.error('[events] public-api metrics summary error:', err);
+      res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    }
+  });
+
+  // GET /api/v1/events/registrant-breakdown — AGGREGATED registration-form
+  // answers per event (events:metrics). Returns each question asked on the
+  // form with answer counts — never registrant-level rows, so no PII leaves
+  // the API. Forms vary per event (Pune asked a combined "company - role"
+  // field), so consumers get the raw aggregation and do their own binning.
+  router.get('/registrant-breakdown', ctx.requireScope('metrics'), async (req: Request, res: Response) => {
+    try {
+      let query = supabase
+        .from('events')
+        .select('id, event_id, event_title, event_start, event_city, event_country_code, publish_state, is_listed')
+        .order('event_start', { ascending: false })
+        .limit(Math.min(parseInt(String(req.query.limit)) || 3, 5));
+      if (req.query.q) query = query.ilike('event_title', `%${req.query.q}%`);
+      if (req.query.id) query = byIdOrSlug(query, String(req.query.id));
+      if (!req.query.q && !req.query.id) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'q or id required' } });
+      }
+      const { data: events, error } = await query;
+      if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+
+      const out = [] as Array<Record<string, unknown>>;
+      for (const ev of (events ?? []) as Array<Record<string, unknown>>) {
+        // question label -> normalized answer -> count
+        const questions = new Map<string, Map<string, number>>();
+        let registrants = 0;
+        let answered = 0;
+        for (let page = 0; page < 30; page++) {
+          const { data, error: regErr } = await supabase
+            .from('events_registrations')
+            .select('registration_metadata, status')
+            .eq('event_id', ev.id as string)
+            .range(page * 1000, page * 1000 + 999);
+          if (regErr) throw new Error(regErr.message);
+          for (const r of (data ?? []) as Array<{ registration_metadata: { registration_answers?: Array<{ label?: string; answer?: string }> } | null; status: string | null }>) {
+            if (r.status === 'cancelled') continue;
+            registrants++;
+            const answers = r.registration_metadata?.registration_answers ?? [];
+            if (answers.length > 0) answered++;
+            for (const a of answers) {
+              const label = (a.label ?? '').trim();
+              const value = (a.answer ?? '').trim().toLowerCase();
+              if (!label || !value) continue;
+              const byAnswer = questions.get(label) ?? new Map<string, number>();
+              byAnswer.set(value, (byAnswer.get(value) ?? 0) + 1);
+              questions.set(label, byAnswer);
+            }
+          }
+          if ((data ?? []).length < 1000) break;
+        }
+        out.push({
+          event_id: ev.event_id,
+          event_title: ev.event_title,
+          event_start: ev.event_start,
+          event_city: ev.event_city,
+          event_country_code: ev.event_country_code,
+          is_published: ev.publish_state === 'published' && ev.is_listed === true,
+          registrants,
+          registrants_with_answers: answered,
+          questions: [...questions.entries()].map(([label, byAnswer]) => {
+            const sorted = [...byAnswer.entries()].sort((a, b) => b[1] - a[1]);
+            return {
+              label,
+              answered: sorted.reduce((s, [, n]) => s + n, 0),
+              answers: sorted.slice(0, 100).map(([value, count]) => ({ value, count })),
+              distinct_answers: sorted.length,
+            };
+          }),
+        });
+      }
+
+      ctx.setCache(res, { kind: 'no-store' });
+      res.json({ data: out, _links: { self: req.originalUrl } });
+    } catch (err) {
+      console.error('[events] public-api registrant-breakdown error:', err);
+      res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    }
+  });
+
+  // GET /api/v1/events/nearby — PUBLISHED upcoming events within radius_km
+  // of lat/lng, sorted soonest-first. Public surface (events:read): only the
+  // published rule's events, coordinates come from event_location.
+  router.get('/nearby', ctx.requireScope('read'), async (req: Request, res: Response) => {
+    try {
+      const lat = parseFloat(String(req.query.lat));
+      const lng = parseFloat(String(req.query.lng));
+      if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'valid lat and lng required' } });
+      }
+      const radiusKm = Math.min(Math.max(parseFloat(String(req.query.radius_km)) || 150, 1), 5000);
+      const limit = Math.min(parseInt(String(req.query.limit)) || 10, 50);
+      const includePast = req.query.include_past === 'true';
+
+      let query = publicOnly(
+        supabase
+          .from('events')
+          .select('id, event_id, event_title, event_start, event_end, event_timezone, event_city, event_region, event_country_code, event_type, event_location, venue_address'),
+      )
+        .not('event_location', 'is', null)
+        .order('event_start', { ascending: true })
+        .limit(1000);
+      if (!includePast) query = query.gte('event_start', new Date().toISOString());
+      const { data, error } = await query;
+      if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const haversineKm = (aLat: number, aLng: number, bLat: number, bLng: number) => {
+        const dLat = toRad(bLat - aLat);
+        const dLng = toRad(bLng - aLng);
+        const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+        return 2 * 6371 * Math.asin(Math.sqrt(h));
+      };
+
+      const rows = ((data ?? []) as Array<Record<string, unknown>>)
+        .map((ev) => {
+          const [evLat, evLng] = String(ev.event_location ?? '').split(',').map((s) => parseFloat(s.trim()));
+          if (!isFinite(evLat) || !isFinite(evLng)) return null;
+          const { event_location: _drop, id: _dropId, ...pub } = ev;
+          return { ...pub, distance_km: Math.round(haversineKm(lat, lng, evLat, evLng)) };
+        })
+        .filter((ev): ev is NonNullable<typeof ev> => ev !== null && (ev.distance_km as number) <= radiusKm)
+        .slice(0, limit);
+
+      ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 300 });
+      res.json({ data: rows, query: { lat, lng, radius_km: radiusKm }, _links: { self: req.originalUrl } });
+    } catch (err) {
+      console.error('[events] public-api nearby error:', err);
+      res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    }
+  });
+
+  // GET /api/v1/events/my-registrations — a PERSON's own registrations,
+  // for the MCP OAuth surface (events:self — held only by trusted internal
+  // callers; the MCP layer always passes the authenticated token's own
+  // person_id, so users only ever see themselves).
+  router.get('/my-registrations', ctx.requireScope('self'), async (req: Request, res: Response) => {
+    try {
+      const personId = String(req.query.person_id ?? '');
+      if (!UUID_RE.test(personId)) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'person_id (uuid) required' } });
+      }
+      const { data, error } = await supabase
+        .from('events_registrations')
+        .select('status, checked_in, registered_at, events!inner(event_id, event_title, event_start, event_end, event_timezone, event_city, event_country_code, event_type)')
+        .eq('person_id', personId)
+        .order('registered_at', { ascending: false })
+        .limit(200);
+      if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+
+      const now = Date.now();
+      type RegRow = Record<string, unknown> & { status: string | null; checked_in: boolean | null; registered_at: string; is_upcoming: boolean };
+      const rows: RegRow[] = ((data ?? []) as Array<{ status: string | null; checked_in: boolean | null; registered_at: string; events: Record<string, unknown> | Record<string, unknown>[] }>)
+        .map((r) => {
+          const ev = ((Array.isArray(r.events) ? r.events[0] : r.events) ?? {}) as Record<string, unknown>;
+          return {
+            ...ev,
+            status: r.status,
+            checked_in: r.checked_in,
+            registered_at: r.registered_at,
+            is_upcoming: ev.event_start ? new Date(String(ev.event_start)).getTime() >= now : false,
+          };
+        });
+      const active = rows.filter((r) => r.status !== 'cancelled');
+      const upcoming = active
+        .filter((r) => r.is_upcoming)
+        .sort((a, b) => String(a.event_start).localeCompare(String(b.event_start)));
+
+      ctx.setCache(res, { kind: 'no-store' });
+      res.json({
+        data: {
+          counts: { total: active.length, upcoming: upcoming.length, cancelled: rows.length - active.length },
+          next_event: upcoming[0] ?? null,
+          registrations: rows,
+        },
+        _links: { self: req.originalUrl },
+      });
+    } catch (err) {
+      console.error('[events] public-api my-registrations error:', err);
+      res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    }
+  });
+
   // GET /api/v1/events/:id
   router.get('/:id', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
