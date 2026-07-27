@@ -254,12 +254,12 @@ export class LumaSearchScraper extends BaseScraper {
 
   // Detect event type from title
   detectEventType(title) {
-    if (!title) return 'meetup';
+    if (!title) return 'community-event';
     const lower = title.toLowerCase();
     if (/webinar|online|virtual/.test(lower)) return 'webinar';
     if (/workshop|hands-on|masterclass/.test(lower)) return 'workshop';
     if (/conference|summit|expo|days/.test(lower)) return 'conference';
-    return 'meetup';
+    return 'community-event';
   }
 
   // Main scrape method

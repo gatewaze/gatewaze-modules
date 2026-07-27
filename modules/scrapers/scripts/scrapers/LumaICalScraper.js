@@ -975,7 +975,7 @@ export class LumaICalScraper extends BaseScraper {
 
   /**
    * Detect event type from title
-   * Must return one of: meetup, webinar, workshop, conference
+   * Must return one of: community-event, webinar, workshop, conference
    */
   detectEventType(title) {
     const titleLower = title.toLowerCase();
@@ -995,8 +995,8 @@ export class LumaICalScraper extends BaseScraper {
       return 'conference';
     }
 
-    // Default to meetup (covers meetup, happy hour, gathering, networking, and generic events)
-    return 'meetup';
+    // Default to community-event (covers meetup, happy hour, gathering, networking, and generic events)
+    return 'community-event';
   }
 
   /**
