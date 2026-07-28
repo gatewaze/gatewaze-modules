@@ -320,6 +320,9 @@ const newslettersModule: GatewazeModule = {
     'migrations/072_fanout_send_at_clamp.sql',
     // 073 preview RPC for the pre-send per-timezone confirmation.
     'migrations/073_preview_send_schedule.sql',
+    // 074 snapshot all-but-last-2 sends per collection (+ young-refresh) so
+    // recent editions are cached, not just ≥30-day-old ones.
+    'migrations/074_snapshot_all_but_last_two.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

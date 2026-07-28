@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import {
   PlusIcon,
@@ -435,17 +435,9 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
           });
       }
 
-      const CHUNK = 10;
-      for (let i = 0; i < editionIds.length; i += CHUNK) {
-        const chunk = editionIds.slice(i, i + CHUNK);
-        supabase
-          .rpc('newsletter_edition_engagement', { p_edition_ids: chunk })
-          .then(({ data: eng }: { data: any[] | null }) => {
-            if (!eng) return;
-            const byId = new Map(eng.map((r: any) => [r.edition_id, r]));
-            setEditions((prev) => prev.map((e) => (byId.has(e.id) ? { ...e, engagement: byId.get(e.id) } : e)));
-          });
-      }
+      // Engagement is loaded lazily, only for the editions on the currently
+      // visible table page (see the per-page effect below) — loading all
+      // 140+ at once is wasteful (and the newest editions compute live).
 
       if (collections) {
         const typesWithCounts = collections.map((c: any) => ({
@@ -942,6 +934,32 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
       },
     },
   });
+
+  // Load engagement metrics lazily — only for the editions on the currently
+  // visible table page (and re-fire when the page, sort, filter, or search
+  // changes). Fetching all 140+ at once was the slow path; per-page keeps it to
+  // ~25 rows, of which only the newest handful ever compute live.
+  const engLoadedRef = useRef<Set<string>>(new Set());
+  const pageIndex = table.getState().pagination.pageIndex;
+  useEffect(() => {
+    const visibleIds = table.getRowModel().rows
+      .map((r) => (r.original as { id: string }).id)
+      .filter((id) => !engLoadedRef.current.has(id));
+    if (visibleIds.length === 0) return;
+    visibleIds.forEach((id) => engLoadedRef.current.add(id));
+    const CHUNK = 10;
+    for (let i = 0; i < visibleIds.length; i += CHUNK) {
+      const chunk = visibleIds.slice(i, i + CHUNK);
+      supabase
+        .rpc('newsletter_edition_engagement', { p_edition_ids: chunk })
+        .then(({ data: eng }: { data: any[] | null }) => {
+          if (!eng) return;
+          const byId = new Map(eng.map((r: any) => [r.edition_id, r]));
+          setEditions((prev) => prev.map((e) => (byId.has(e.id) ? { ...e, engagement: byId.get(e.id) } : e)));
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageIndex, sorting, globalFilter, selectedType, editions.length]);
 
 
   return (
