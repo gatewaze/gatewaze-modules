@@ -138,12 +138,16 @@ function transformPayloadForGradual(payload: UserPayload): GradualUserData {
     return trimmed
   }
 
+  // Gradual's createUser hard-rejects an empty/short/placeholder company or
+  // position (firstName too, but the portal form requires a name). Rather than
+  // drop registrations that lack a company/title, fall back to "--" so the
+  // person still syncs onto the Gradual event (verified: Gradual accepts "--").
   const gradualData: GradualUserData = {
     email: payload.email,
     firstName: getValueOrDefault(payload.first_name),
     lastName: getValueOrDefault(payload.last_name),
-    company: getValueOrDefault(payload.company),
-    position: getValueOrDefault(payload.job_title),
+    company: getValueOrDefault(payload.company) ?? '--',
+    position: getValueOrDefault(payload.job_title) ?? '--',
   }
 
   // LinkedIn is optional - only include if valid
