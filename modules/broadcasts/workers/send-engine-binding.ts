@@ -27,6 +27,12 @@ import {
   type LocalConfig, type EventRpcClient,
 } from '../../newsletters/workers/event-personalisation.js';
 import { WEATHER_TOKENS, resolveWeather } from '../../newsletters/workers/weather-personalisation.js';
+// Per-recipient recap highlights: rank recap talks by each recipient's own topic
+// affinity at send time (spec-plays-audience-intelligence §4.8).
+import {
+  RECAP_TOKEN, RECAP_INNER, parseRecapMarker, stripRecapMarker, rankTalks, buildHighlightsHtml,
+  type TalkBlock,
+} from '../lib/recap-highlights.js';
 
 const MERGE_FIELDS = ['first_name', 'last_name', 'name', 'company', 'job_title'];
 const MERGE_GROUP = MERGE_FIELDS.join('|');
@@ -45,6 +51,12 @@ type BcCtx = SendContext & {
   usesLocalEvents: boolean; localConfig: LocalConfig;
   localEventsCache: Map<string, string>;             // area key -> rendered events HTML (or '')
   virtualEventsHtml: string;                         // resolved once per send (global); '' when none/unused
+  // Per-recipient recap highlights.
+  usesRecapHighlights: boolean;
+  recapCandidates: TalkBlock[];                       // all talk/video blocks of the recap item (loaded once)
+  recapCount: number;                                 // how many highlights per recipient
+  recapEventName: string;
+  recapAffinityByPerson: Map<string, Map<string, number>>; // person_id -> (topic -> weight)
 };
 
 function escapeHtml(s: string): string {
@@ -112,7 +124,11 @@ export const broadcastBinding: SendEngineBinding = {
     const usesVirtualEvents = html.includes(VIRTUAL_TOKEN);
     const localConfig = parseLocalConfig(html);
     const virtualConfig = parseVirtualConfig(html);
+    // Per-recipient recap highlights: parse the marker BEFORE stripping it.
+    const recapCfg = html.includes(RECAP_TOKEN) ? parseRecapMarker(html) : null;
+    const usesRecapHighlights = !!recapCfg;
     html = stripEventMarkers(html);
+    html = stripRecapMarker(html);
 
     let virtualEventsHtml = '';
     if (usesVirtualEvents) {
@@ -120,6 +136,18 @@ export const broadcastBinding: SendEngineBinding = {
         const events = await resolveVirtualEvents(deps.supabase as unknown as EventRpcClient, virtualConfig, new Date().toISOString());
         virtualEventsHtml = renderEventsHtml(events, { heading: virtualConfig.heading, intro: virtualConfig.intro, portalBaseUrl });
       } catch (e) { deps.logger.warn('[send-engine] broadcast virtual events resolve failed', e); }
+    }
+
+    // Recap highlights: load the candidate talks once (ranked per recipient later).
+    let recapCandidates: TalkBlock[] = [];
+    if (usesRecapHighlights && recapCfg) {
+      try {
+        const { data } = await deps.supabase
+          .from('sr_blocks').select('kind,data,sort_order')
+          .eq('item_id', recapCfg.item_id).in('kind', ['talk', 'video'])
+          .order('sort_order', { ascending: true });
+        recapCandidates = (data ?? []) as TalkBlock[];
+      } catch (e) { deps.logger.warn('[send-engine] broadcast recap highlights load failed', e); }
     }
 
     const ctx: BcCtx = {
@@ -144,12 +172,35 @@ export const broadcastBinding: SendEngineBinding = {
       usesWeather, weatherUnits: unitMarker && unitMarker[1] === 'fahrenheit' ? 'fahrenheit' : 'celsius',
       weatherCache: new Map(),
       usesLocalEvents, localConfig, localEventsCache: new Map(), virtualEventsHtml,
+      usesRecapHighlights,
+      recapCandidates,
+      recapCount: recapCfg ? recapCfg.count : 4,
+      recapEventName: recapCfg ? recapCfg.event_name : 'the event',
+      recapAffinityByPerson: new Map(),
     };
     return ctx;
   },
 
   async prepareBatch(deps: EngineDeps, ctx: SendContext, recipients: Recipient[]): Promise<void> {
     const c = ctx as BcCtx;
+
+    // Recap highlights: bulk-load each recipient's topic affinities once per
+    // batch (person_id → topic → weight), so buildSubstitutions ranks per person
+    // without an RPC-per-recipient. Keyed on person_id (populated by fanout).
+    if (c.usesRecapHighlights && c.recapCandidates.length) {
+      const ids = [...new Set(recipients.map((r) => r.person_id).filter(Boolean) as string[])];
+      for (let i = 0; i < ids.length; i += 500) {
+        const { data } = await deps.supabase
+          .from('person_topic_interests').select('person_id, topic, weight')
+          .in('person_id', ids.slice(i, i + 500));
+        for (const row of data ?? []) {
+          let m = c.recapAffinityByPerson.get(row.person_id);
+          if (!m) { m = new Map(); c.recapAffinityByPerson.set(row.person_id, m); }
+          m.set(String(row.topic), Number(row.weight) || 0);
+        }
+      }
+    }
+
     // Recipient attributes are needed for merge fields AND for per-recipient
     // weather / local-events location lookup.
     if (!c.usesMergeFields && !c.usesWeather && !c.usesLocalEvents) return;
@@ -222,6 +273,15 @@ export const broadcastBinding: SendEngineBinding = {
         continue;
       }
       if (inner === 'virtual_events_block') { subs[token] = c.virtualEventsHtml || ''; continue; }
+      // Recap highlights: rank the recap's talks by THIS recipient's own topic
+      // affinity and render their top-N (or '' to omit if there are no talks).
+      // No affinity data → rankTalks falls back to the curated order.
+      if (inner === RECAP_INNER) {
+        const aff = (r.person_id && c.recapAffinityByPerson.get(r.person_id)) || new Map<string, number>();
+        const top = rankTalks(c.recapCandidates, aff, c.recapCount);
+        subs[token] = top.length ? buildHighlightsHtml(c.recapEventName, top) : '';
+        continue;
+      }
       const m = inner.match(/^([a-z_]+)\s*(?:\|(.*))?$/);
       if (m && MERGE_FIELDS.includes(m[1])) {
         let val = m[1] === 'name' ? nameVal() : str(attrs[m[1]]);
