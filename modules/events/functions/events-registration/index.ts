@@ -120,7 +120,7 @@ async function handler(req: Request) {
 
     // Step 1: Verify event exists and get the short event_id (include location for person attributes)
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-    let eventQuery = supabase.from('events').select('id, event_id, event_title, enable_registration, event_city, event_country_code, venue_address')
+    let eventQuery = supabase.from('events').select('id, event_id, event_title, enable_registration, event_city, event_country_code, venue_address, gradual_eventslug')
 
     if (uuidRegex.test(event_id)) {
       eventQuery = eventQuery.eq('id', event_id)
@@ -291,6 +291,35 @@ async function handler(req: Request) {
     }
 
     console.log(`✅ Registration created: ${registration.id}`)
+
+    // Step 6b: If this event is backed by a Gradual event, push the
+    // registration to Gradual in real time (create user + register on the
+    // event slug). Awaited so it completes within the request, but NON-FATAL:
+    // a Gradual failure must never fail the portal registration — the row is
+    // already committed and the admin "Sync to Gradual" button (batch_sync)
+    // re-pushes anything left with a null gradual_synced_at.
+    if (eventRecord.gradual_eventslug) {
+      try {
+        const { data: gradualResult, error: gradualError } = await supabase.functions.invoke(
+          'integrations-gradual-sync',
+          {
+            body: {
+              mode: 'register_single',
+              email: normalizedEmail,
+              event: eventRecord.gradual_eventslug,
+              registrationId: registration.id,
+            },
+          }
+        )
+        if (gradualError) {
+          console.error(`Gradual push failed for registration ${registration.id}:`, gradualError)
+        } else {
+          console.log(`↗️  Pushed registration ${registration.id} to Gradual event ${eventRecord.gradual_eventslug}`, gradualResult)
+        }
+      } catch (gradualErr) {
+        console.error(`Gradual push threw for registration ${registration.id}:`, gradualErr)
+      }
+    }
 
     // Step 7: Notify integration modules about the registration (non-blocking)
     emitIntegrationEvent(supabase, 'event.registered', {
