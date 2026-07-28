@@ -10,6 +10,10 @@ import {
   type LocalConfig, type VirtualConfig, type EventRpcClient,
 } from '../_shared/event-personalisation.ts'
 import { WEATHER_TOKENS, resolveWeather } from '../_shared/weather-personalisation.ts'
+import {
+  RECAP_TOKEN, parseRecapMarker, stripRecapMarker, rankTalks, buildHighlightsHtml,
+  type TalkBlock, type RecapMarker,
+} from '../_shared/recap-highlights.ts'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SB = ReturnType<typeof createClient<any, any, any>>
@@ -118,6 +122,11 @@ interface SendContext {
   virtualConfig: VirtualConfig
   usesWeather: boolean
   weatherUnits: 'celsius' | 'fahrenheit'
+  // Per-recipient recap highlights.
+  usesRecapHighlights: boolean
+  recapCfg: RecapMarker | null
+  recapCandidates: TalkBlock[]
+  personIdByEmail: Map<string, string>
 }
 
 function buildSendContext(send: any): SendContext {
@@ -132,7 +141,9 @@ function buildSendContext(send: any): SendContext {
   const unitMarker = html.match(/<!--gw-weather-units:(celsius|fahrenheit)-->/)
   const localConfig = parseLocalConfig(html)
   const virtualConfig = parseVirtualConfig(html)
+  const recapCfg = html.includes(RECAP_TOKEN) ? parseRecapMarker(html) : null
   html = stripEventMarkers(html)
+  html = stripRecapMarker(html)
   return {
     html,
     subject,
@@ -151,20 +162,37 @@ function buildSendContext(send: any): SendContext {
     virtualConfig,
     usesWeather,
     weatherUnits: unitMarker && unitMarker[1] === 'fahrenheit' ? 'fahrenheit' : 'celsius',
+    usesRecapHighlights: !!recapCfg,
+    recapCfg,
+    recapCandidates: [],
+    personIdByEmail: new Map(),
   }
 }
 
 async function loadRecipientAttributes(supabase: SB, emails: string[], ctx: SendContext): Promise<void> {
-  // Attributes drive merge fields AND per-recipient weather / local-events location.
-  if (!ctx.usesMergeFields && !ctx.usesWeather && !ctx.usesLocalEvents) return
+  // Attributes drive merge fields AND per-recipient weather / local-events
+  // location; person_id drives per-recipient recap-highlight ranking.
+  if (!ctx.usesMergeFields && !ctx.usesWeather && !ctx.usesLocalEvents && !ctx.usesRecapHighlights) return
   const CHUNK = 500
   for (let i = 0; i < emails.length; i += CHUNK) {
     const chunk = emails.slice(i, i + CHUNK)
-    const { data: rows, error } = await supabase.from('people').select('email, attributes').in('email', chunk)
+    const { data: rows, error } = await supabase.from('people').select('id, email, attributes').in('email', chunk)
     if (error) { console.warn('[broadcast-send] people lookup failed:', error.message); break }
     for (const row of rows ?? []) {
-      ctx.attrsByEmail.set((row as { email: string }).email, (row as { attributes?: Record<string, unknown> }).attributes ?? {})
+      const r = row as { id: string; email: string; attributes?: Record<string, unknown> }
+      ctx.attrsByEmail.set(r.email, r.attributes ?? {})
+      if (r.id) ctx.personIdByEmail.set(r.email, r.id)
     }
+  }
+
+  // Recap highlights: load the candidate talks once (ranked per recipient below).
+  if (ctx.usesRecapHighlights && ctx.recapCfg) {
+    const { data, error } = await supabase
+      .from('sr_blocks').select('kind, data, sort_order')
+      .eq('item_id', ctx.recapCfg.item_id).in('kind', ['talk', 'video'])
+      .order('sort_order', { ascending: true })
+    if (error) console.warn('[broadcast-send] recap highlights load failed:', error.message)
+    else ctx.recapCandidates = (data ?? []) as TalkBlock[]
   }
 }
 
@@ -233,6 +261,21 @@ async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx:
       const s = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '')
       const weather = await resolveWeather(s(attrs.city), s(attrs.country), ctx.weatherUnits)
       for (const t of WEATHER_TOKENS) personalizedHtml = personalizedHtml.split(`{{${t}}}`).join(weather[t] ?? '')
+    }
+    // Recap highlights: rank the recap's talks by THIS recipient's own topic
+    // affinity (single-person affinity RPC) and substitute their top-N HTML.
+    if (ctx.usesRecapHighlights && ctx.recapCfg) {
+      const affinity = new Map<string, number>()
+      const personId = ctx.personIdByEmail.get(email)
+      if (personId) {
+        const { data: rows } = await supabase.rpc('topic_affinity_for_people', { p_person_ids: [personId] })
+        for (const row of (rows ?? []) as Array<{ topic: string; weight: number }>) {
+          if (row && row.topic) affinity.set(String(row.topic), Number(row.weight) || 0)
+        }
+      }
+      const top = rankTalks(ctx.recapCandidates, affinity, ctx.recapCfg.count)
+      const blockHtml = top.length ? buildHighlightsHtml(ctx.recapCfg.event_name, top) : ''
+      personalizedHtml = personalizedHtml.split(RECAP_TOKEN).join(blockHtml)
     }
 
     const { data: logEntry } = await supabase.from('email_send_log').insert({

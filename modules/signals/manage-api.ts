@@ -158,4 +158,24 @@ export function registerManageApi(router: any, ctx: any): void {
     if (error) return sendError(res, 500, 'QUERY_ERROR', error.message);
     res.json({ data });
   });
+
+  // ── Audience preview (spec-plays-audience-intelligence.md §4.7) ─────────────
+  // Resolve an audience_rule against the live topic graph WITHOUT snapshotting,
+  // so the Play Workflow Editor can show "≈ N people" before the operator
+  // commits. Returns counts + per-clause notes only — never a person list
+  // (provenance/PII stays server-side; governance §6).
+  router.post('/audience/preview', write, async (req: any, res: any) => {
+    try {
+      const body = req.body ?? {};
+      const rule = body.rule ?? {};
+      if (typeof rule !== 'object' || Array.isArray(rule)) return sendError(res, 400, 'VALIDATION_ERROR', 'rule must be an object');
+      const context = typeof body.context === 'object' && body.context ? body.context : {};
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { resolveAudience } = require('./lib/audience.js');
+      const r = await resolveAudience(supabase, rule, context);
+      res.json({ data: { count: r.count, included_before_exclude: r.includedBeforeExclude, excluded_count: r.excludedCount, notes: r.notes } });
+    } catch (e: any) {
+      sendError(res, 500, 'PREVIEW_ERROR', e?.message ?? 'audience preview failed');
+    }
+  });
 }

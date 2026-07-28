@@ -45,6 +45,12 @@ const broadcastsModule: GatewazeModule = {
       name: 'broadcasts:dispatch-scheduled',
       handler: './workers/dispatch-scheduled.ts',
     },
+    {
+      // plays capability: draft a broadcast from a conference recap (never sends).
+      // Dispatched by the plays engine for a recap-follow-up Play.
+      name: 'broadcasts:draft-from-recap',
+      handler: './workers/draft-from-recap.ts',
+    },
   ],
 
   crons: [

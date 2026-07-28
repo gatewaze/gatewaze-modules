@@ -38,6 +38,8 @@ const segmentsModule: GatewazeModule = {
     // self-contained place geocoder from our own contact/event coordinates.
     'migrations/008_geo_radius.sql',
     'migrations/009_geo_aggregate.sql',
+    // Topic-interest targeting via the governed signals topic graph.
+    'migrations/010_topic_affinity.sql',
   ],
 
   adminRoutes: [

@@ -25,6 +25,33 @@ const signalsModule: GatewazeModule = {
   migrations: [
     'migrations/001_signals.sql',
     'migrations/002_video_play_outcome.sql',
+    'migrations/003_interest_graph.sql',
+    'migrations/004_audiences.sql',
+    'migrations/005_content_ranking.sql',
+  ],
+
+  // Ingest interest signals from every enabled knowledge source into the topic hub
+  // (spec-plays-audience-intelligence.md §4.2). File stem == job-name suffix.
+  workers: [
+    {
+      name: 'signals:interests-sync',
+      handler: './workers/interests-sync.ts',
+      concurrency: 1,
+    },
+    {
+      // Resolve a Play's audience_rule into a snapshotted audience (list_build).
+      name: 'signals:build-audience',
+      handler: './workers/build-audience.ts',
+      concurrency: 2,
+    },
+  ],
+  crons: [
+    {
+      name: 'signals-interests-sync',
+      queue: 'jobs',
+      schedule: { pattern: '*/15 * * * *' }, // every 15 min (first-party freshness SLA)
+      data: { kind: 'signals:interests-sync' },
+    },
   ],
 
   publicApiScopes: [
