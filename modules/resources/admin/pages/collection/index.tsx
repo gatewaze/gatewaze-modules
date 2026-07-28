@@ -28,6 +28,7 @@ import {
   ItemsService,
   SectionsService,
   SectionTemplatesService,
+  SrUtils,
   generateCover,
   uploadCoverImage,
 } from '../../utils/structuredResourcesService';
@@ -155,27 +156,45 @@ export default function CollectionDetailPage() {
 function CategoriesTab({ collectionId, categories, onUpdate }: { collectionId: string; categories: SrCategory[]; onUpdate: () => void }) {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [formData, setFormData] = useState({ name: '', description: '', icon: '' });
+  const [formData, setFormData] = useState({ name: '', slug: '', description: '', icon: '' });
+  // Track whether the user has hand-edited the slug; until they do, the slug
+  // auto-follows the name so new categories get a sensible URL for free.
+  const [slugTouched, setSlugTouched] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const handleAdd = () => {
     setAdding(true);
     setEditingId(null);
-    setFormData({ name: '', description: '', icon: '' });
+    setSlugTouched(false);
+    setFormData({ name: '', slug: '', description: '', icon: '' });
   };
 
   const handleEdit = (cat: SrCategory) => {
     setAdding(false);
     setEditingId(cat.id);
-    setFormData({ name: cat.name, description: cat.description || '', icon: cat.icon || '' });
+    setSlugTouched(true); // existing slug is meaningful — don't silently overwrite it
+    setFormData({ name: cat.name, slug: cat.slug, description: cat.description || '', icon: cat.icon || '' });
+  };
+
+  const handleNameChange = (name: string) => {
+    // Auto-derive the slug from the name only while it hasn't been hand-edited.
+    setFormData((prev) => ({ ...prev, name, slug: slugTouched ? prev.slug : SrUtils.generateSlug(name) }));
   };
 
   const handleSave = async () => {
     if (!formData.name.trim()) { toast.error('Name is required'); return; }
+    // Slugify whatever is in the field; fall back to the name so it's never blank.
+    const slug = SrUtils.generateSlug(formData.slug) || SrUtils.generateSlug(formData.name);
+    if (!slug) { toast.error('Could not derive a URL slug — add letters or numbers to the name/slug'); return; }
     setSaving(true);
     try {
-      const cleaned = { name: formData.name.trim(), description: formData.description.trim() || null, icon: formData.icon.trim() || null };
+      const cleaned = { name: formData.name.trim(), slug, description: formData.description.trim() || null, icon: formData.icon.trim() || null };
       if (editingId) {
+        // Changing a category slug changes its ?category= URL — the caller wants
+        // exactly what they typed, so a collision is a hard error (not silent
+        // suffixing). Uniqueness is scoped to the collection.
+        const unique = await SrUtils.ensureUniqueSlug(slug, 'sr_categories', 'collection_id', collectionId, editingId);
+        if (unique !== slug) { toast.error(`Slug "${slug}" is already used by another category in this collection`); setSaving(false); return; }
         const res = await CategoriesService.update(editingId, cleaned);
         if (!res.success) throw new Error(res.error);
         toast.success('Category updated');
@@ -215,8 +234,13 @@ function CategoriesTab({ collectionId, categories, onUpdate }: { collectionId: s
 
   const renderForm = () => (
     <Card className="p-4 space-y-3">
-      <div className="grid grid-cols-3 gap-3">
-        <Input label="Name" value={formData.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: e.target.value })} />
+      <div className="grid grid-cols-2 gap-3">
+        <Input label="Name" value={formData.name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleNameChange(e.target.value)} />
+        <Input label="URL slug" value={formData.slug}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => { setSlugTouched(true); setFormData({ ...formData, slug: e.target.value }); }}
+          placeholder="e.g. mlops-community" />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
         <Input label="Description" value={formData.description} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, description: e.target.value })} />
         <Input label="Icon" value={formData.icon} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, icon: e.target.value })} placeholder="e.g. shield, zap" />
       </div>
@@ -256,6 +280,7 @@ function CategoriesTab({ collectionId, categories, onUpdate }: { collectionId: s
                   </div>
                   <div className="flex-1">
                     <span className="font-medium text-gray-900 dark:text-white">{cat.name}</span>
+                    <span className="text-xs text-[var(--gray-11)] ml-2 font-mono">/{cat.slug}</span>
                     {cat.description && <span className="text-sm text-[var(--gray-11)] ml-2">{cat.description}</span>}
                   </div>
                   <div className="flex gap-1">
