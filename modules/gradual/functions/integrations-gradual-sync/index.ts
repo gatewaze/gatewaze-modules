@@ -49,6 +49,15 @@ interface EventRegistrationPayload {
   event: string
   registrationId?: string
   mode?: string
+  // Optional inline profile. When the caller already has the registrant's
+  // details (e.g. events-registration at portal-signup time), it passes them
+  // here so we don't depend on events_registrations_with_people having
+  // caught up. Any field omitted falls back to the registrationId lookup.
+  first_name?: string
+  last_name?: string
+  company?: string
+  job_title?: string
+  linkedin_url?: string
 }
 
 interface BatchSyncPayload {
@@ -350,17 +359,22 @@ async function handleEventRegistration(requestData: EventRegistrationPayload): P
     })
   }
 
-  // Step 1: Look up registrant's profile data from the database
+  // Step 1: Assemble the registrant's profile. Prefer inline fields supplied
+  // by the caller (events-registration has them at signup time); for anything
+  // still missing, fall back to the registrations view by id. This avoids
+  // depending on events_registrations_with_people having caught up, which for
+  // a just-created portal registration can still read null.
   let userPayload: UserPayload = {
     email: email,
-    first_name: '',
-    last_name: '',
-    job_title: '',
-    company: '',
-    linkedin_url: '',
+    first_name: (requestData.first_name || '').trim(),
+    last_name: (requestData.last_name || '').trim(),
+    job_title: (requestData.job_title || '').trim(),
+    company: (requestData.company || '').trim(),
+    linkedin_url: (requestData.linkedin_url || '').trim(),
   }
 
-  if (registrationId) {
+  const missingProfile = !userPayload.first_name || !userPayload.company || !userPayload.job_title
+  if (registrationId && missingProfile) {
     const { data: regData } = await supabase
       .from('events_registrations_with_people')
       .select('first_name, last_name, company, job_title, linkedin_url')
@@ -370,15 +384,15 @@ async function handleEventRegistration(requestData: EventRegistrationPayload): P
     if (regData) {
       userPayload = {
         email,
-        first_name: regData.first_name || '',
-        last_name: regData.last_name || '',
-        job_title: regData.job_title || '',
-        company: regData.company || '',
-        linkedin_url: regData.linkedin_url || '',
+        first_name: userPayload.first_name || regData.first_name || '',
+        last_name: userPayload.last_name || regData.last_name || '',
+        job_title: userPayload.job_title || regData.job_title || '',
+        company: userPayload.company || regData.company || '',
+        linkedin_url: userPayload.linkedin_url || regData.linkedin_url || '',
       }
       console.log(`Loaded profile data for registration ${registrationId}: ${userPayload.first_name} ${userPayload.last_name} @ ${userPayload.company}`)
     } else {
-      console.log(`No profile data found for registration ${registrationId}, proceeding with email only`)
+      console.log(`No profile data found for registration ${registrationId}, proceeding with inline/email only`)
     }
   }
 

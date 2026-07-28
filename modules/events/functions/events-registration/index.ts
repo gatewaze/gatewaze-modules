@@ -308,6 +308,14 @@ async function handler(req: Request) {
               email: normalizedEmail,
               event: eventRecord.gradual_eventslug,
               registrationId: registration.id,
+              // Pass the profile inline — the registrations view can still read
+              // null for a just-created row. Gradual requires firstName +
+              // company + position, so these must be present to sync.
+              first_name,
+              last_name,
+              company,
+              job_title,
+              linkedin_url,
             },
           }
         )
