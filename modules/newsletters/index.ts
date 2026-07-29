@@ -323,6 +323,9 @@ const newslettersModule: GatewazeModule = {
     // 074 snapshot all-but-last-2 sends per collection (+ young-refresh) so
     // recent editions are cached, not just ≥30-day-old ones.
     'migrations/074_snapshot_all_but_last_two.sql',
+    // 075 make the send-schedule preview SECURITY DEFINER (bypass per-row RLS
+    // that was tripping the 8s statement_timeout via PostgREST).
+    'migrations/075_preview_security_definer.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
