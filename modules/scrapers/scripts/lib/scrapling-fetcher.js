@@ -135,6 +135,15 @@ async function _post(body, { timeoutMs }) {
  * @param {string|null} [opts.waitFor=null] — only honored when mode='browser'
  * @param {number} [opts.timeoutMs=30000]
  * @param {'auto'|'force'|'never'} [opts.proxy='auto']
+ * @param {boolean} [opts.useResidentialEgress=false] — residential-egress
+ *   toggle (spec-residential-egress-proxy §4.1 Shape A, §6.1). When true it
+ *   forces `proxy: "force"` on the /fetch payload so the service applies its
+ *   configured residential proxy internally (credentials never leave the
+ *   service). Default off → identical behavior to today. The service-side
+ *   per-host allowlist (§8.4, SCRAPLING_EGRESS_HOST_ALLOWLIST) is the backstop:
+ *   a toggle mis-set to a non-allowlisted host is rejected by the service, so
+ *   the consumer side stays simple and cannot silently burn proxy bandwidth on
+ *   an unintended target.
  * @param {string|number|null} [opts.jobId=null] — for retry-budget + bandwidth accounting
  * @param {number|null} [opts.bandwidthCeilingMb=500] — abort if job total exceeds
  * @returns {Promise<{html: string, nextData: object|null, status: number, headers: object, timing: object, mode: string}>}
@@ -146,6 +155,7 @@ export async function fetchPage(url, opts = {}) {
     waitFor = null,
     timeoutMs = 30000,
     proxy = 'auto',
+    useResidentialEgress = false,
     jobId = null,
     bandwidthCeilingMb = 500,
   } = opts;
@@ -168,7 +178,10 @@ export async function fetchPage(url, opts = {}) {
     extract_next_data: extractNextData,
     wait_for: waitFor,
     timeout_ms: timeoutMs,
-    proxy,
+    // Residential egress (Shape A): when the toggle is on we force the
+    // service to route this fetch through its configured residential proxy.
+    // Otherwise the caller-supplied `proxy` (default 'auto') is unchanged.
+    proxy: useResidentialEgress ? 'force' : proxy,
   };
 
   let lastError = null;
@@ -212,6 +225,38 @@ export async function fetchPage(url, opts = {}) {
     }
   }
   throw lastError ?? new Error('scrapling-fetcher: unreachable');
+}
+
+function _envFlag(name) {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === '') return null;
+  return /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
+/**
+ * Resolve the per-scraper residential-egress toggle
+ * (spec-residential-egress-proxy §6.1, §11 step 7).
+ *
+ * Precedence (first defined wins):
+ *   1. Per-scraper config — `scrapers.config.use_residential_egress` (jsonb),
+ *      surfaced on the scraper instance as `config.config.use_residential_egress`.
+ *      Only scrapers whose targets actually IP-gate should set this true.
+ *   2. Env default — `SCRAPERS_RESIDENTIAL_EGRESS` (1/true/yes/on).
+ *   3. Off.
+ *
+ * The returned boolean is passed as `useResidentialEgress` to `fetchPage`,
+ * which maps it to `proxy: "force"`. The service-side per-host allowlist
+ * (§8.4, SCRAPLING_EGRESS_HOST_ALLOWLIST) is the backstop for a mis-set flag.
+ *
+ * @param {{config?: {use_residential_egress?: boolean}}} [scraperConfig]
+ * @returns {boolean}
+ */
+export function resolveResidentialEgress(scraperConfig) {
+  const perScraper = scraperConfig?.config?.use_residential_egress;
+  if (typeof perScraper === 'boolean') return perScraper;
+  const envDefault = _envFlag('SCRAPERS_RESIDENTIAL_EGRESS');
+  if (envDefault != null) return envDefault;
+  return false;
 }
 
 /**

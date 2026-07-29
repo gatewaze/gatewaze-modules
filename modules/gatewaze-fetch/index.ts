@@ -143,6 +143,14 @@ const gatewazeFetchModule: GatewazeModule = {
       description: 'Idempotency-Key replay window (seconds).',
       min: 0,
     },
+    use_residential_egress: {
+      key: 'use_residential_egress',
+      type: 'boolean',
+      required: false,
+      default: 'false',
+      description:
+        'Per-brand default for routing fetches through the residential-egress proxy (maps to proxy:"force" on scrapling-fetcher). Off by default; a fetch can override per call, and the service-side host allowlist backstops mis-set targets.',
+    },
   },
 
   // ----- Admin UI (spec §3.1 + §5/§9 admin pages) ------------------
