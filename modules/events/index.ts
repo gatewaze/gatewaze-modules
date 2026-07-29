@@ -251,6 +251,21 @@ const eventsModule: GatewazeModule = {
           },
         },
       },
+      '/{id}/talks': {
+        get: {
+          summary: 'Talks/agenda for an event — confirmed talks are public; include_pending=true (events:metrics) adds unreviewed submissions and unpublished events',
+          operationId: 'listEventTalks',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Event UUID or short event_id' },
+            { name: 'include_pending', in: 'query', schema: { type: 'boolean', default: false } },
+          ],
+          responses: {
+            200: { description: 'Talks with title, synopsis, session_type, speakers' },
+            403: { $ref: '#/components/responses/Forbidden' },
+            404: { description: 'Event not found' },
+          },
+        },
+      },
       '/my-registrations': {
         get: {
           summary: "A person's own registrations (requires events:self — internal MCP surface)",
