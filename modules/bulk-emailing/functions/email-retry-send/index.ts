@@ -62,10 +62,10 @@ export default async function(req: Request) {
       if (!html && log.template_id) {
         const { data: template } = await supabase
           .from('email_templates')
-          .select('html_body')
+          .select('content_html')
           .eq('id', log.template_id)
           .single()
-        html = template?.html_body || ''
+        html = template?.content_html || ''
         // TODO: apply template_variables if needed
       }
 

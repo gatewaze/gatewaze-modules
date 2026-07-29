@@ -103,6 +103,13 @@ const bulkEmailingModule: GatewazeModule = {
     // people UUID, so it is empty everywhere and the in-place change is safe.
     'migrations/007_recipient_customer_id_uuid.sql',
     'migrations/020_email_content_html_retention.sql',
+    // 021 reconciles email_templates with the admin service schema carried over
+    // from old gatewaze-admin: adds content_html/description/sendgrid_from_key/
+    // available_scopes/created_by_admin_id (none created by any prior migration),
+    // backfilling from html_body/created_by. Fixes PGRST204 on template create
+    // and empty-body sends for saved-template comms. Latently broken since the
+    // module split.
+    'migrations/021_email_templates_service_reconcile.sql',
   ],
 
   workers: [
