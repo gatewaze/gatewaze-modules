@@ -113,6 +113,9 @@ const broadcastsModule: GatewazeModule = {
     'migrations/019_fanout_batch.sql',
     // 020 per-timezone preview RPC for the shared pre-send confirmation modal.
     'migrations/020_preview_send_schedule.sql',
+    // 021 tz_local grace-window send timing (shared gw_tz_local_send_at) —
+    // mirrors newsletters/076; fixes the evening-schedule all-at-once blast.
+    'migrations/021_tz_local_grace_window.sql',
   ],
 
   adminRoutes: [
