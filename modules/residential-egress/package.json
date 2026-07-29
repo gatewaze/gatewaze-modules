@@ -1,0 +1,25 @@
+{
+  "name": "@gatewaze-modules/residential-egress",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Residential egress capability — pick a proxy provider + credentials once; consumers route IP-gated fetches (e.g. YouTube captions) through a residential IP. Spec: gatewaze-environments/specs/spec-residential-egress-proxy.md.",
+  "exports": {
+    ".": "./index.ts",
+    "./lib/egress": "./lib/egress.ts",
+    "./lib/providers": "./lib/providers.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}
