@@ -110,6 +110,13 @@ const bulkEmailingModule: GatewazeModule = {
     // and empty-body sends for saved-template comms. Latently broken since the
     // module split.
     'migrations/021_email_templates_service_reconcile.sql',
+    // 022 adds the competition_* email columns to events_communication_settings.
+    // The shared Comms settings form saves all fields (incl. competition ones) in
+    // one update regardless of whether competitions is installed, but no migration
+    // ever created those columns (003 + competitions/001 both CREATE IF NOT EXISTS,
+    // second no-ops). Saving comms settings threw PGRST204 on competition_entry_
+    // email_cc, blocking every email type's save. Additive + idempotent.
+    'migrations/022_comm_settings_competition_columns.sql',
   ],
 
   workers: [
