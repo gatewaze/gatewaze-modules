@@ -45,6 +45,7 @@ import { BaseScraper } from './BaseScraper.js';
 import {
   fetchPage,
   ScraplingNotConfiguredError,
+  resolveResidentialEgress,
 } from '../lib/scrapling-fetcher.js';
 
 const SITE_ORIGIN = 'https://home.mlops.community';
@@ -129,6 +130,9 @@ export class AaifVirtualEventsScraper extends BaseScraper {
     super(config, globalConfig);
     // Pure HTTP — no browser needed.
     this.config.headless = true;
+    // Residential-egress toggle (spec-residential-egress-proxy §6.1): per-scraper
+    // config `use_residential_egress` → SCRAPERS_RESIDENTIAL_EGRESS env → off.
+    this._useResidentialEgress = resolveResidentialEgress(config);
   }
 
   // BaseScraper.initialize()/cleanup() launch/close Puppeteer; not needed here.
@@ -145,6 +149,7 @@ export class AaifVirtualEventsScraper extends BaseScraper {
         mode: 'fast',
         extractNextData: false,
         timeoutMs: 15000,
+        useResidentialEgress: this._useResidentialEgress,
       });
       if (result.status >= 400) {
         throw new Error(`upstream ${result.status} for ${url}`);

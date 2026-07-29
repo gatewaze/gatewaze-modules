@@ -14,6 +14,7 @@ import { LumaSearchScraper } from './LumaSearchScraper.js';
 import {
   fetchPage,
   ScraplingNotConfiguredError,
+  resolveResidentialEgress,
 } from '../lib/scrapling-fetcher.js';
 import { normalizeServiceResponse } from '../lib/luma-fast-normalize.js';
 
@@ -28,6 +29,9 @@ export class LumaSearchScraperFast extends LumaSearchScraper {
       1,
       Math.min(20, config?.config?.fast_concurrency ?? 5),
     );
+    // Residential-egress toggle (spec-residential-egress-proxy §6.1): per-scraper
+    // config `use_residential_egress` → SCRAPERS_RESIDENTIAL_EGRESS env → off.
+    this._useResidentialEgress = resolveResidentialEgress(config);
     // See LumaICalScraperFast for rationale; the inherited 2s pre-fetch
     // throttle is unnecessary on the HTTP fast path.
     this.pageFetchDelay = 0;
@@ -39,6 +43,7 @@ export class LumaSearchScraperFast extends LumaSearchScraper {
         mode: 'fast',
         extractNextData: true,
         timeoutMs: 15000,
+        useResidentialEgress: this._useResidentialEgress,
       });
       if (result.status >= 400 || !result.nextData) {
         return super.fetchEventPageData(eventLink);

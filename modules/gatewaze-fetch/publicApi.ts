@@ -10,7 +10,7 @@ import type { Router, Request, Response } from 'express';
 import type { PublicApiContext } from '@gatewaze/shared';
 import { z } from 'zod';
 
-import { resolveSettings, resolveUserAgent } from './lib/settings.js';
+import { resolveSettings, resolveUserAgent, resolveResidentialEgress } from './lib/settings.js';
 import { parseAndNormalize, InvalidUrlError } from './lib/normalize.js';
 import { evaluateHost } from './lib/domains.js';
 import { evaluateRobots } from './lib/robots.js';
@@ -69,6 +69,10 @@ const RequestSchema = z.object({
     .nullable()
     .optional(),
   response_storage: z.enum(['inline', 'signed_url', 'signed-url']).default('inline'),
+  // Residential-egress toggle (spec-residential-egress-proxy §4.1 Shape A,
+  // §6.1). Explicit per-fetch override; highest precedence. When omitted the
+  // per-brand module config / env default decides. Maps to proxy:"force".
+  use_residential_egress: z.boolean().optional(),
 });
 
 type ValidatedFetchInput = z.infer<typeof RequestSchema>;
@@ -80,6 +84,12 @@ export async function registerPublicApiRoutes(
 ): Promise<void> {
   const r = router as Router;
   const settings = resolveSettings(ctx.moduleConfig);
+  // Raw per-brand residential-egress config value (undefined when the key is
+  // absent) so precedence can tell "unset" from an explicit false (§6.1).
+  const moduleConfigResidentialEgress =
+    ctx.moduleConfig && typeof ctx.moduleConfig === 'object'
+      ? (ctx.moduleConfig as { use_residential_egress?: boolean }).use_residential_egress
+      : undefined;
 
   // Resolve and freeze the robots UA at module init.
   const instanceHost = process.env.GATEWAZE_INSTANCE_HOST ?? 'localhost';
@@ -388,6 +398,15 @@ export async function registerPublicApiRoutes(
       typeof input.screenshot === 'object' && input.screenshot !== null
         ? (input.screenshot as { full_page?: boolean; clip?: { x: number; y: number; width: number; height: number } | null })
         : null;
+    // Residential-egress toggle (§6.1 precedence): explicit per-fetch arg →
+    // per-brand module config → GATEWAZE_FETCH_RESIDENTIAL_EGRESS env → off.
+    // When on it forces the service-side residential proxy for this fetch;
+    // the service-side per-host allowlist (§8.4) is the backstop for a mis-set
+    // toggle, so credentials/allowlisting stay entirely inside the service.
+    const useResidentialEgress = resolveResidentialEgress(
+      input.use_residential_egress,
+      moduleConfigResidentialEgress,
+    );
     let upstream;
     try {
       upstream = await client.fetch({
@@ -396,7 +415,11 @@ export async function registerPublicApiRoutes(
         extract_next_data: extractKinds.includes('next_data'),
         wait_for: input.wait_for ?? null,
         timeout_ms: input.timeout_ms,
-        proxy: input.mode === 'fast' ? 'never' : 'auto',
+        proxy: useResidentialEgress
+          ? 'force'
+          : input.mode === 'fast'
+            ? 'never'
+            : 'auto',
         user_agent: input.user_agent ?? undefined,
         api_key_id: apiKey.id,
         capture_screenshot: !!wantsScreenshot,

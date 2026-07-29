@@ -13,6 +13,7 @@ import {
   probe,
   releaseJob,
   getJobBandwidth,
+  resolveResidentialEgress,
   ScraplingNotConfiguredError,
   ScraplingTransportError,
   ScraplingBudgetExceeded,
@@ -88,6 +89,27 @@ describe('fetchPage', () => {
     const body = JSON.parse(init.body);
     assert.equal(body.url, 'https://example.com');
     assert.equal(body.mode, 'fast');
+  });
+
+  test('residential egress OFF → proxy stays "auto" (default, unchanged)', async () => {
+    mockFetch(() => makeResponse(200, { status: 200, html: '', next_data: null, headers: {}, timing: {}, mode_used: 'fast' }));
+    await fetchPage('https://example.com');
+    const body = JSON.parse(_calls[0].init.body);
+    assert.equal(body.proxy, 'auto');
+  });
+
+  test('residential egress ON → proxy is "force"', async () => {
+    mockFetch(() => makeResponse(200, { status: 200, html: '', next_data: null, headers: {}, timing: {}, mode_used: 'fast' }));
+    await fetchPage('https://example.com', { useResidentialEgress: true });
+    const body = JSON.parse(_calls[0].init.body);
+    assert.equal(body.proxy, 'force');
+  });
+
+  test('explicit proxy opt is honored when egress off', async () => {
+    mockFetch(() => makeResponse(200, { status: 200, html: '', next_data: null, headers: {}, timing: {}, mode_used: 'fast' }));
+    await fetchPage('https://example.com', { proxy: 'never' });
+    const body = JSON.parse(_calls[0].init.body);
+    assert.equal(body.proxy, 'never');
   });
 
   test('throws ScraplingTransportError on non-transient 4xx with no retry', async () => {
@@ -216,6 +238,34 @@ describe('fetchPage', () => {
   });
 });
 
+
+describe('resolveResidentialEgress (per-scraper toggle, spec §6.1)', () => {
+  afterEach(() => {
+    delete process.env.SCRAPERS_RESIDENTIAL_EGRESS;
+  });
+
+  test('off by default when neither config nor env set', () => {
+    assert.equal(resolveResidentialEgress({}), false);
+    assert.equal(resolveResidentialEgress(undefined), false);
+    assert.equal(resolveResidentialEgress({ config: {} }), false);
+  });
+
+  test('per-scraper config wins over env', () => {
+    process.env.SCRAPERS_RESIDENTIAL_EGRESS = 'false';
+    assert.equal(resolveResidentialEgress({ config: { use_residential_egress: true } }), true);
+    process.env.SCRAPERS_RESIDENTIAL_EGRESS = 'true';
+    assert.equal(resolveResidentialEgress({ config: { use_residential_egress: false } }), false);
+  });
+
+  test('env default applies when config unset', () => {
+    process.env.SCRAPERS_RESIDENTIAL_EGRESS = 'true';
+    assert.equal(resolveResidentialEgress({ config: {} }), true);
+    process.env.SCRAPERS_RESIDENTIAL_EGRESS = '1';
+    assert.equal(resolveResidentialEgress({}), true);
+    process.env.SCRAPERS_RESIDENTIAL_EGRESS = 'off';
+    assert.equal(resolveResidentialEgress({}), false);
+  });
+});
 
 describe('probe', () => {
   test('returns configured=false when URL unset', async () => {

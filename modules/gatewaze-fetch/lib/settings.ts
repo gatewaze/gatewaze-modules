@@ -35,6 +35,7 @@ const DEFAULTS: ModuleSettings = {
   idempotency_ttl_seconds: 300,
   browser_seconds_reservation: 60,
   signed_url_ttl_seconds: 600,
+  use_residential_egress: false,
 };
 
 /**
@@ -44,6 +45,42 @@ export function resolveSettings(moduleConfig: unknown): ModuleSettings {
   if (!moduleConfig || typeof moduleConfig !== 'object') return { ...DEFAULTS };
   const cfg = moduleConfig as Partial<ModuleSettings>;
   return { ...DEFAULTS, ...cfg };
+}
+
+function envFlag(name: string): boolean | null {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === '') return null;
+  return /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
+/**
+ * Resolve the residential-egress toggle for a single fetch
+ * (spec-residential-egress-proxy §4.1 Shape A, §6.1, §11 step 6).
+ *
+ * Precedence (first defined wins):
+ *   1. Explicit per-fetch call argument (`use_residential_egress` in the
+ *      request body) — scopes the spend to the specific IP-gated target.
+ *   2. Per-brand module config (`installed_modules.config.use_residential_egress`),
+ *      so an admin can flip it per brand without a redeploy. Passed as the raw
+ *      config value: `undefined` (key absent) falls through, a boolean wins.
+ *   3. Env default (`GATEWAZE_FETCH_RESIDENTIAL_EGRESS`) for worker-only wiring.
+ *   4. Off.
+ *
+ * A `true` result maps to `proxy: "force"` on the scrapling-fetcher `/fetch`
+ * call; the service applies its residential proxy internally (credentials never
+ * leave the service). The service-side per-host allowlist (§8.4,
+ * SCRAPLING_EGRESS_HOST_ALLOWLIST) is the backstop — a toggle mis-set to a
+ * non-allowlisted host is rejected by the service, so this side stays simple.
+ */
+export function resolveResidentialEgress(
+  explicit: boolean | null | undefined,
+  moduleConfigValue: boolean | null | undefined,
+): boolean {
+  if (typeof explicit === 'boolean') return explicit;
+  if (typeof moduleConfigValue === 'boolean') return moduleConfigValue;
+  const env = envFlag('GATEWAZE_FETCH_RESIDENTIAL_EGRESS');
+  if (env != null) return env;
+  return false;
 }
 
 /**

@@ -23,6 +23,7 @@ import { LumaICalScraper } from './LumaICalScraper.js';
 import {
   fetchPage,
   ScraplingNotConfiguredError,
+  resolveResidentialEgress,
 } from '../lib/scrapling-fetcher.js';
 import { normalizeServiceResponse } from '../lib/luma-fast-normalize.js';
 
@@ -37,6 +38,11 @@ export class LumaICalScraperFast extends LumaICalScraper {
       1,
       Math.min(20, config?.config?.fast_concurrency ?? 5),
     );
+    // Residential-egress toggle (spec-residential-egress-proxy §6.1): per-scraper
+    // config `use_residential_egress` → SCRAPERS_RESIDENTIAL_EGRESS env → off.
+    // When on, fetches force `proxy: "force"` so the service routes them through
+    // its residential proxy (credentials never leave the service).
+    this._useResidentialEgress = resolveResidentialEgress(config);
     // The parent's 2000ms inter-fetch sleep is sized for Puppeteer to
     // dodge per-IP rate limits. The fast path goes through scrapling-
     // fetcher whose service-side per-domain throttle (SCRAPLING_PER_DOMAIN_RPS,
@@ -52,6 +58,7 @@ export class LumaICalScraperFast extends LumaICalScraper {
         mode: 'fast',
         extractNextData: true,
         timeoutMs: 15000,
+        useResidentialEgress: this._useResidentialEgress,
       });
       if (result.status >= 400 || !result.nextData) {
         // Service worked but the page didn't serve us __NEXT_DATA__ — fall

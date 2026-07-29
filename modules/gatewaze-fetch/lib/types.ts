@@ -241,4 +241,10 @@ export interface ModuleSettings {
   idempotency_ttl_seconds: number;
   browser_seconds_reservation: number;
   signed_url_ttl_seconds: number;
+  // Residential-egress toggle (spec-residential-egress-proxy §4.1 Shape A,
+  // §6.1). Per-brand default for whether fetches route through the service's
+  // residential proxy (`proxy: "force"`). Off by default; overridable per
+  // fetch via the request body's `use_residential_egress`, and by the
+  // GATEWAZE_FETCH_RESIDENTIAL_EGRESS env default.
+  use_residential_egress: boolean;
 }

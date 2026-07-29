@@ -43,6 +43,7 @@ import { BaseScraper } from './BaseScraper.js';
 import {
   fetchPage,
   ScraplingNotConfiguredError,
+  resolveResidentialEgress,
 } from '../lib/scrapling-fetcher.js';
 
 
@@ -320,6 +321,9 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
     super(config, globalConfig);
     // No browser — override BaseScraper's headless setting noise.
     this.config.headless = true;
+    // Residential-egress toggle (spec-residential-egress-proxy §6.1): per-scraper
+    // config `use_residential_egress` → SCRAPERS_RESIDENTIAL_EGRESS env → off.
+    this._useResidentialEgress = resolveResidentialEgress(config);
   }
 
   // BaseScraper.initialize() launches Puppeteer; we don't need it.
@@ -347,6 +351,7 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
         mode: 'fast',
         extractNextData: false, // LF doesn't use Next.js
         timeoutMs: 15000,
+        useResidentialEgress: this._useResidentialEgress,
       });
       if (result.status >= 400) {
         throw new Error(`upstream ${result.status} for ${url}`);
