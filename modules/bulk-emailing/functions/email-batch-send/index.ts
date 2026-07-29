@@ -161,8 +161,10 @@ async function fetchCompetitionNonWinnerRecipients(eventId: string, offset: numb
 }
 
 async function fetchSpeakerRecipients(eventUuid: string, speakerStatus: string, includeDirectlyAdded: boolean, offset: number, limit: number): Promise<Recipient[]> {
-  let query = supabase.from('events_speakers_with_details').select('*').eq('event_uuid', eventUuid).eq('status', speakerStatus)
-  if (!includeDirectlyAdded) query = query.not('submitted_at', 'is', null)
+  // Review lifecycle lives on the primary talk (event-speakers mig 010), not the
+  // participation status column. Match by talk-derived status + submitted_at.
+  let query = supabase.from('events_speakers_with_details').select('*').eq('event_uuid', eventUuid).eq('primary_talk_status', speakerStatus)
+  if (!includeDirectlyAdded) query = query.not('primary_talk_submitted_at', 'is', null)
   const { data, error } = await query.order('id', { ascending: true }).range(offset, offset + limit - 1)
   if (error) throw new Error(`Failed to fetch speakers: ${error.message}`)
   if (!data) return []
@@ -278,8 +280,8 @@ async function countRecipients(job: any): Promise<number> {
     return count || 0
   } else {
     const config = job.config || {}
-    let query = supabase.from('events_speakers_with_details').select('*', { count: 'exact', head: true }).eq('event_uuid', config.event_uuid).eq('status', config.speaker_status)
-    if (!config.include_directly_added) query = query.not('submitted_at', 'is', null)
+    let query = supabase.from('events_speakers_with_details').select('*', { count: 'exact', head: true }).eq('event_uuid', config.event_uuid).eq('primary_talk_status', config.speaker_status)
+    if (!config.include_directly_added) query = query.not('primary_talk_submitted_at', 'is', null)
     const { count, error } = await query
     if (error) throw new Error(`Failed to count speakers: ${error.message}`)
     return count || 0

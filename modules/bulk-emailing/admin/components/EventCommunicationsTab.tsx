@@ -328,15 +328,19 @@ function SpeakerEmailConfig({
   const loadSpeakerCount = async () => {
     setLoadingCount(true);
     try {
+      // The speaker review lifecycle (pending/approved/rejected/reserve/confirmed)
+      // lives on the primary TALK, not on events_speakers.status (which is the
+      // participation axis the public portal uses). Filter the talk-derived
+      // columns exposed by events_speakers_with_details (event-speakers mig 010).
       let query = supabase
-        .from('events_speakers')
+        .from('events_speakers_with_details')
         .select('*', { count: 'exact', head: true })
         .eq('event_uuid', eventUuid)
-        .eq('status', speakerStatus);
+        .eq('primary_talk_status', speakerStatus);
 
-      // Filter out directly added speakers (those without submitted_at) if checkbox is not checked
+      // Filter out directly added speakers (those without a talk submitted_at) if checkbox is not checked
       if (!includeDirectlyAdded) {
-        query = query.not('submitted_at', 'is', null);
+        query = query.not('primary_talk_submitted_at', 'is', null);
       }
 
       const { count, error } = await query;
