@@ -20,8 +20,10 @@ const bigqueryProjectId = Deno.env.get('BIGQUERY_PROJECT_ID')
 const bigqueryCredentialsJson = Deno.env.get('BIGQUERY_CREDENTIALS_JSON')
 const bigqueryLocation = Deno.env.get('BIGQUERY_LOCATION') || 'US'
 
-// API key for authenticating requests from the frontend
-const API_BEARER_TOKEN = Deno.env.get('GW_API_BEARER') || 'YYv8gvrl55fVPmJDQAWz8JLmhtpZpWF1MlqOrv8dfs7yPfMHPLHTdAlUeJcDiIUe'
+// Shared bearer secret for authenticating requests from the frontend.
+// Read from env only — no hardcoded fallback (a literal is a real credential;
+// the auth guard below rejects all requests when this is unset).
+const API_BEARER_TOKEN = Deno.env.get('GW_API_BEARER')
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
@@ -622,9 +624,10 @@ Deno.serve(async (req) => {
     )
   }
 
-  // Validate Authorization header
+  // Validate Authorization header. Require the token to be configured — an
+  // unset GW_API_BEARER must reject all requests, never authorize.
   const authHeader = req.headers.get('Authorization')
-  if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.split(' ')[1] !== API_BEARER_TOKEN) {
+  if (!API_BEARER_TOKEN || !authHeader || !authHeader.startsWith('Bearer ') || authHeader.split(' ')[1] !== API_BEARER_TOKEN) {
     return new Response(
       JSON.stringify({ error: 'Unauthorized' }),
       { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
