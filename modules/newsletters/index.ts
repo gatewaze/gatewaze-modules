@@ -326,6 +326,9 @@ const newslettersModule: GatewazeModule = {
     // 075 make the send-schedule preview SECURITY DEFINER (bypass per-row RLS
     // that was tripping the 8s statement_timeout via PostgREST).
     'migrations/075_preview_security_definer.sql',
+    // 076 tz_local grace-window send timing (per-recipient local target, not
+    // default-tz schedule date + hard clamp) — fixes the evening-schedule blast.
+    'migrations/076_tz_local_grace_window.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
