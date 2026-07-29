@@ -35,6 +35,13 @@ const eventSpeakersModule: GatewazeModule = {
     // media/speaker-submissions/ (anon + authenticated). Without it the
     // form's upload silently failed RLS and speakers had no avatar.
     'migrations/009_speaker_submission_uploads.sql',
+    // 010 additively exposes primary_talk_status + primary_talk_submitted_at on
+    // events_speakers_with_details (from the speaker's primary talk via the
+    // events_talk_speakers bridge). The review lifecycle lives on events_talks;
+    // the view's `status` is participation (used by the public portal) and stays
+    // untouched. Event Comms "Send to Existing <status> Speakers" filters the new
+    // talk columns so recipients resolve by talk lifecycle, not participation.
+    'migrations/010_speakers_view_primary_talk_status.sql',
   ],
 
   edgeFunctions: [
