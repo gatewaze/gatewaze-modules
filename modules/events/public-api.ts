@@ -486,6 +486,29 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found' } });
       }
 
+      // include_content=true: the event's page BODY as plain text. This is
+      // what the portal renders publicly (page_content, else the processed
+      // Luma HTML) — often the only place topics/tools/schedule prose lives.
+      if (req.query.include_content === 'true') {
+        const { data: body } = await byIdOrSlug(
+          publicOnly(supabase.from('events').select('page_content, luma_processed_html')),
+          req.params.id,
+        ).maybeSingle();
+        const html = ((body as { page_content?: string | null; luma_processed_html?: string | null } | null)?.page_content
+          ?? (body as { luma_processed_html?: string | null } | null)?.luma_processed_html) ?? '';
+        const text = html
+          .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+          .replace(/<br\s*\/?>|<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/&nbsp;/g, ' ').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"')
+          .replace(/[ \t]+/g, ' ')
+          .replace(/\s*\n\s*/g, '\n')
+          .trim()
+          .slice(0, 20_000);
+        (data as Record<string, unknown>).page_text = text || null;
+      }
+
       ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 600 });
       res.json({
         data,
@@ -493,10 +516,51 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
           self: req.originalUrl,
           speakers: `${req.baseUrl}/${req.params.id}/speakers`,
           sponsors: `${req.baseUrl}/${req.params.id}/sponsors`,
+          talks: `${req.baseUrl}/${req.params.id}/talks`,
         },
       });
     } catch (err) {
       console.error('[events] public-api get error:', err);
+      res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    }
+  });
+
+  // GET /api/v1/events/:id/talks — the event's talk/agenda list. CONFIRMED
+  // talks of published events are public (events:read). Pending submissions
+  // are operational data (unreviewed, may be junk or private notes):
+  // include_pending=true requires events:metrics and also unlocks talks of
+  // unpublished events. confirmation_token/edit_token are NEVER selected.
+  router.get('/:id/talks', ctx.requireScope('read'), async (req: Request, res: Response) => {
+    try {
+      const includePending = req.query.include_pending === 'true';
+      const apiKey = (req as Request & { apiKey?: { scopes: string[] } }).apiKey;
+      if (includePending && !apiKey?.scopes.includes('events:metrics')) {
+        return res.status(403).json({ error: { code: 'INSUFFICIENT_SCOPE', message: 'include_pending requires the events:metrics scope' } });
+      }
+
+      let eventUuid: string | null;
+      if (includePending) {
+        const { data } = await byIdOrSlug(supabase.from('events').select('id'), req.params.id).maybeSingle();
+        eventUuid = (data as { id: string } | null)?.id ?? null;
+      } else {
+        eventUuid = await resolvePublicEventUuid(req.params.id);
+      }
+      if (!eventUuid) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found' } });
+      }
+
+      const { data, error } = await supabase
+        .from('events_talks_with_speakers')
+        .select('id, title, synopsis, duration_minutes, session_type, status, sort_order, is_featured, speakers, sponsor_name')
+        .eq('event_uuid', eventUuid)
+        .in('status', includePending ? ['confirmed', 'pending'] : ['confirmed'])
+        .order('sort_order', { ascending: true });
+      if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+
+      ctx.setCache(res, includePending ? { kind: 'no-store' } : { kind: 'public', maxAge: 60, sMaxAge: 300 });
+      res.json({ data: data ?? [], _links: { self: req.originalUrl } });
+    } catch (err) {
+      console.error('[events] public-api talks error:', err);
       res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
     }
   });
