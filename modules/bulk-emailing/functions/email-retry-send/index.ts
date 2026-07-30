@@ -15,7 +15,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-export default async function(req: Request) {
+// Must use Deno.serve, not `export default` — this project's edge runtime does
+// not invoke the export-default handler (it hangs on first request).
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -135,4 +137,4 @@ export default async function(req: Request) {
       status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }
-}
+})
