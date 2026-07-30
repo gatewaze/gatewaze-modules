@@ -552,7 +552,7 @@ async function sendCompetitionEntryEmail(params: SendCompetitionEntryEmailParams
 
     console.log(`Sending competition entry email to ${email} for event ${eventId}`)
 
-    const sendEmailResponse = await fetch(`${supabaseUrl}/functions/v1/send-email`, {
+    const sendEmailResponse = await fetch(`${supabaseUrl}/functions/v1/email-send`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${supabaseServiceKey}`,

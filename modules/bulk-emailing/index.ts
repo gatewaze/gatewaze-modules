@@ -117,6 +117,13 @@ const bulkEmailingModule: GatewazeModule = {
     // second no-ops). Saving comms settings threw PGRST204 on competition_entry_
     // email_cc, blocking every email type's save. Additive + idempotent.
     'migrations/022_comm_settings_competition_columns.sql',
+    // 023 reconciles email_batch_job_recipients to the canonical 017 shape
+    // (send_id, not job_id) on environments that applied a pre-consolidation 017
+    // and are stuck (017 already recorded → never re-applied). The current
+    // email-batch-send + eventCommsBinding + claim RPC expect send_id, so the
+    // old job_id shape means event/speaker comms enqueue fails and nothing drips.
+    // Table is a transient drip queue (empty on affected envs) → drop+recreate.
+    'migrations/023_reconcile_event_recipients_send_id.sql',
   ],
 
   workers: [

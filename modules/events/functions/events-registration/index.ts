@@ -826,8 +826,8 @@ async function sendRegistrationEmail(params: SendRegistrationEmailParams): Promi
 
     console.log(`📧 Sending registration confirmation email to ${email} for event ${eventId}`)
 
-    // Send email via the send-email edge function
-    const sendEmailResponse = await fetch(`${supabaseUrl}/functions/v1/send-email`, {
+    // Send email via the email-send edge function
+    const sendEmailResponse = await fetch(`${supabaseUrl}/functions/v1/email-send`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${supabaseServiceKey}`,
