@@ -1,5 +1,4 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { jobIdToLockKey } from '../_shared/retry.ts'
 
 // Configuration
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || ''
@@ -383,14 +382,15 @@ async function enqueueAllRecipients(job: any, event: any, config: any): Promise<
 }
 
 // --- Main Handler ---
-
-export default async function(req: Request) {
+// NOTE: must use Deno.serve (not `export default`). This project's edge runtime
+// does not invoke the export-default handler — it hangs on first request. Every
+// working function here uses Deno.serve.
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   let jobId: string | null = null
-  let lockKey: number | null = null
 
   try {
     const body = await req.json()
@@ -401,14 +401,12 @@ export default async function(req: Request) {
       })
     }
 
-    // Acquire advisory lock to prevent concurrent processing
-    lockKey = jobIdToLockKey(jobId)
-    const { data: lockAcquired } = await supabase.rpc('try_advisory_lock', { lock_key: lockKey })
-    if (!lockAcquired) {
-      return new Response(JSON.stringify({ error: 'Job is already being processed by another invocation' }), {
-        status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
+    // Concurrency guard is the job status transition (pending → processing) plus
+    // the idempotent onConflict enqueue below — NOT a session advisory lock.
+    // pg_advisory_lock is unsafe under pgbouncer transaction pooling: it's held
+    // on one pooled connection while the release runs on another, so it leaks —
+    // and releasing it was crashing this edge isolate (500 after a successful
+    // enqueue). Removed.
 
     // Load job
     const { data: job, error: jobError } = await supabase
@@ -513,10 +511,5 @@ export default async function(req: Request) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
-  } finally {
-    // Release advisory lock
-    if (lockKey !== null) {
-      await supabase.rpc('release_advisory_lock', { lock_key: lockKey }).catch(() => {})
-    }
   }
-}
+})
