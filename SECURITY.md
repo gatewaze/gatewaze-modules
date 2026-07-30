@@ -11,7 +11,6 @@ Report privately instead:
    [Security tab](https://github.com/gatewaze/gatewaze-modules/security/advisories/new) and choose
    "Report a vulnerability". This creates a private advisory.
 2. **Email.** Send details to the project security contact.
-   <!-- MAINTAINERS: replace with the confirmed disclosure address. -->
 
 Include the affected component/version or commit, the impact, and steps to
 reproduce or the affected code path.
