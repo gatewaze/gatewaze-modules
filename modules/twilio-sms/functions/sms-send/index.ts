@@ -139,7 +139,7 @@ async function sendSms(
 
 // ---------- Main Handler ----------
 
-export default async function (req: Request) {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -182,4 +182,4 @@ export default async function (req: Request) {
     const message = error instanceof Error ? error.message : 'Internal server error'
     return jsonResponse({ error: 'SEND_FAILED', message }, 500)
   }
-}
+})

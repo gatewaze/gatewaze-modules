@@ -17,7 +17,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey, {
  * 3. Send reminders via each party's delivery channel
  * 4. Log each send
  */
-export default async function (_req: Request) {
+Deno.serve(async (_req: Request) => {
   try {
     console.log('[event-invite-reminders] Starting reminder processing...')
 
@@ -164,4 +164,4 @@ export default async function (_req: Request) {
     console.error('[event-invite-reminders] Fatal error:', error)
     return new Response(JSON.stringify({ error: 'Internal server error' }), { status: 500 })
   }
-}
+})

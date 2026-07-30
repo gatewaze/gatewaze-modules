@@ -111,7 +111,7 @@ async function extractCalendarFromEventPage(eventUrl: string): Promise<LumaCalen
  * - discover: Run Google searches for candidate queries and store discovered calendars
  * - process_query: Process a specific query for calendar discovery
  */
-export default async function(req: Request) {
+Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -391,4 +391,4 @@ export default async function(req: Request) {
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-}
+})

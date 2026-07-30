@@ -794,7 +794,7 @@ async function handleOpenLinkSubmit(body: OpenSubmitBody) {
 
 // ---------- Main Handler ----------
 
-export default async function (req: Request) {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -837,4 +837,4 @@ export default async function (req: Request) {
     console.error('Error processing RSVP request:', error)
     return jsonResponse({ error: 'INTERNAL_ERROR', message: 'Internal server error' }, 500)
   }
-}
+})

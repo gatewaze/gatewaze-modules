@@ -130,7 +130,7 @@ function generateICSFile(event: any, registration: any): string {
   return icsContent;
 }
 
-export default async function(req: Request) {
+Deno.serve(async (req: Request) => {
   // Handle CORS
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -452,4 +452,4 @@ export default async function(req: Request) {
       }
     );
   }
-}
+})
