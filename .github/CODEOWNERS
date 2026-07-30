@@ -1,0 +1,11 @@
+# Required reviewers by path. Enable "Require review from Code Owners" in
+# branch protection to make these blocking. Replace the teams with real ones.
+*                                   @gatewaze/maintainers
+/.github/                           @gatewaze/maintainers @gatewaze/security
+# Edge functions and API handlers carry auth + data-access boundaries.
+/modules/**/functions/              @gatewaze/maintainers @gatewaze/security
+/modules/**/api/                    @gatewaze/maintainers @gatewaze/security
+/modules/**/migrations/             @gatewaze/maintainers @gatewaze/security
+/CLAUDE.md                          @gatewaze/maintainers @gatewaze/security
+/SECURITY.md                        @gatewaze/maintainers @gatewaze/security
+/.gitleaks.toml                     @gatewaze/maintainers @gatewaze/security
