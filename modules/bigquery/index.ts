@@ -10,7 +10,11 @@ const module: GatewazeModule = {
   visibility: 'public',
   group: 'integrations',
   features: ['bigquery', 'bigquery.proxy'],
-  edgeFunctions: ['integrations-bigquery-proxy'],
+  // integrations-bigquery-proxy removed: it authenticated solely via the
+  // legacy GW_API_BEARER secret, which is set in no environment, so the proxy
+  // rejected every request. This module is now vestigial — a candidate for
+  // full removal once confirmed no environment intends to restore the proxy.
+  edgeFunctions: [],
   configSchema: {},
   onInstall: async () => {
     console.log('[bigquery] Module installed');
