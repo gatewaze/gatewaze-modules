@@ -1,0 +1,10 @@
+{
+  "id": "vehicle-video",
+  "name": "Vehicle Video",
+  "description": "Turns a dealer's Auto Trader vehicle listing into a short narrated AI showcase video. Lists the dealer's live stock, curates a shot plan from the gallery, styles the video to the likely buyer (psychographic + market-aware), generates per-shot AI clips (Veo) with human approval, and composes a final MP4 with an AI voiceover.",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "group": "content",
+  "type": "feature",
+  "visibility": "public"
+}
