@@ -10,6 +10,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
+import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
 import { listRunPrs, upsertRunPr } from '../lib/run-state.js';
@@ -75,7 +76,7 @@ async function reconcile(supabase, ctx, run) {
     const seen = run.pr_seen_at ? new Date(run.pr_seen_at).getTime() : 0;
     if (latestActionable > seen) {
       await supabase.from('se_runs').update({ ...patch, status: 'changes_requested', pr_state: 'changes_requested', current_phase: 'revise', pr_seen_at: new Date(latestActionable).toISOString(), pr_url: firstUrl }).eq('id', run.id);
-      await ctx?.enqueueJob?.('jobs', 'software-engineer:revise', { runId: run.id });
+      await enqueuePhase(ctx, run.id, 'revise');
       return { runId: run.id, action: 'revise' };
     }
 

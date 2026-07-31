@@ -7,6 +7,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
+import { enqueuePhase } from '../lib/enqueue.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
@@ -67,7 +68,7 @@ export default async function verify(job, ctx) {
     await writeGate(supabase, run, 'security', 'pass', {});
     await recordPhaseEnd(supabase, run, 'verify', 'passed', 'security review clean');
     await supabase.from('se_runs').update({ current_phase: 'pr' }).eq('id', run.id);
-    await ctx?.enqueueJob?.('jobs', 'software-engineer:pr', { runId: run.id });
+    await enqueuePhase(ctx, run.id, 'pr');
     return { ok: true };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);

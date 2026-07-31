@@ -6,6 +6,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
+import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun } from '../lib/run-state.js';
 
@@ -42,6 +43,6 @@ export default async function intake(job, ctx) {
 
   await recordPhaseEnd(supabase, run, 'intake', 'passed', 'authorized + claimed');
   await supabase.from('se_runs').update({ status: 'running', current_phase: 'spec' }).eq('id', run.id);
-  await ctx?.enqueueJob?.('jobs', 'software-engineer:spec', { runId: run.id });
+  await enqueuePhase(ctx, run.id, 'spec');
   return { ok: true };
 }

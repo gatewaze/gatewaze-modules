@@ -69,6 +69,9 @@ const softwareEngineerModule: GatewazeModule = {
     { name: 'software-engineer:pr-monitor', handler: './workers/pr-monitor.ts' },
     // reflect: fold what a run learned into the project's shared, durable memory (via the AI wiki).
     { name: 'software-engineer:reflect', handler: './workers/reflect.ts' },
+    // recover: crash-resilience reconciler — re-drives runs orphaned by a worker/pod/machine/Redis
+    // death from their saved phase (idempotent). See workers/recover.ts.
+    { name: 'software-engineer:recover', handler: './workers/recover.ts' },
   ],
 
   // Cron heartbeat that polls open PRs and reconciles them (the fallback where GitHub can't reach
@@ -79,6 +82,13 @@ const softwareEngineerModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 3 * 60_000 },
       data: { kind: 'software-engineer:pr-monitor' },
+    },
+    // Crash-resilience: re-drive runs orphaned by infra death from their saved phase (idempotent).
+    {
+      name: 'software-engineer-recover',
+      queue: 'jobs',
+      schedule: { every: 5 * 60_000 },
+      data: { kind: 'software-engineer:recover' },
     },
   ],
 
