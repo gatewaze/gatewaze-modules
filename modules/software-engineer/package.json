@@ -1,0 +1,32 @@
+{
+  "name": "@gatewaze-modules/software-engineer",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Autonomous issue → PR engineering agent: per-brand repos + credentials, in-process Claude Code sessions, live agent monitoring.",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.220"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "express": "*",
+    "react": "*"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.19.19",
+    "express": "^4.21.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}
