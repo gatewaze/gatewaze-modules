@@ -6,6 +6,10 @@
  * 3. Update this file with your module's routes, nav items, etc.
  * 4. Add SQL migrations in migrations/
  * 5. Add admin UI components in admin/
+ *
+ * Code review: `api/`, `functions/`, and `migrations/` paths already require
+ * code-owner review via `.github/CODEOWNERS`. Add a CODEOWNERS line if your
+ * module needs its own owning team.
  */
 
 import type { GatewazeModule } from '@gatewaze/shared';
