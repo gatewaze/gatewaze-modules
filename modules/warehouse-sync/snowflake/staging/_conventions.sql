@@ -1,0 +1,35 @@
+-- =============================================================================
+-- STAGING conventions (§7.2). Read before the per-table models.
+--
+-- STAGING is the ONLY stable contract (§7.1). RAW is connector-owned and its
+-- shape (change tables vs current-state, delete-metadata column names) is
+-- connector-specific. The chosen mechanism is **Airbyte** (Option B): its
+-- Snowflake destination lands typed rows plus CDC metadata columns —
+--
+--     _ab_cdc_deleted_at   TIMESTAMP   -- non-null ⇒ this row is a delete
+--     _ab_cdc_updated_at   TIMESTAMP   -- change-observed timestamp
+--     _ab_cdc_lsn          NUMBER      -- source LSN (ordering)
+--     _airbyte_extracted_at TIMESTAMP  -- when Airbyte read the row
+--
+-- Hard-delete models test `_ab_cdc_deleted_at IS NOT NULL`. The generator
+-- (lib/sql-gen.ts AIRBYTE_RAW_META) is the single place this is configured; a
+-- boolean-flag connector (e.g. Openflow) stays expressible via BOOLEAN_FLAG_RAW_META.
+-- Do NOT special-case per table.
+--
+-- Every STAGING table carries:
+--   • the source PK (deterministic key)
+--   • source columns typed per §7.2 (uuid→STRING, jsonb→VARIANT, arrays→ARRAY)
+--   • all timestamps CONVERT_TIMEZONE('UTC', …)::TIMESTAMP_NTZ  (repo-wide std)
+--   • _synced_at TIMESTAMP_NTZ NOT NULL
+--   • is_deleted BOOLEAN NOT NULL DEFAULT FALSE + deleted_at TIMESTAMP_NTZ
+--   • masking policies bound in masking_policies.sql (PII-1)
+--
+-- Models SELECT explicit columns (never SELECT *) so additive RAW columns are
+-- non-breaking (§7.3), and MERGE idempotently keyed by PK with change detection
+-- on the source updated_at (§7.2). A failed run leaves the prior table intact
+-- (§6): stale but consistent, never partially published.
+--
+-- These committed files are the CANONICAL reference the generator matches.
+-- `pnpm --filter @gatewaze-modules/warehouse-sync generate:sql` emits the
+-- full set (all in-scope tables) into snowflake/staging/generated/.
+-- =============================================================================
