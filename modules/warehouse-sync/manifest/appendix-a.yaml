@@ -1,0 +1,209 @@
+# =============================================================================
+# Appendix A — Table / Column Inventory  (spec §8.1, §17 Appendix A)
+# =============================================================================
+# This manifest is the SINGLE SOURCE OF TRUTH for pipeline scope and PII
+# governance. The SQL generator (lib/sql-gen.ts, scripts/generate-sql.ts)
+# derives, in lockstep, all four §8.1 artifacts from it:
+#   1. the source publication         (migrations/003 / snowflake_cdc)
+#   2. the SELECT grants to the reader (migrations/003)
+#   3. the STAGING transforms          (snowflake/staging/*.sql)
+#   4. the masking policies            (snowflake/operations + terraform)
+#
+# Adding a table to scope = adding it here AND letting the generator/migration
+# propagate. A table not listed here is out of scope by construction.
+#
+# PRODUCTION GATE (§8.1): the pipeline MUST NOT be treated as production until
+# this file is (a) reconciled column-for-column against the LIVE Supabase
+# schema in Phase 2, and (b) merged. Columns below are indicative until then —
+# every `# VERIFY` marks a value to confirm against the real schema.
+#
+# classification values (per column):
+#   none   — not personal data
+#   direct — direct identifier (email, name, phone, postal address)
+#   semi   — semi-PII (IP, user-agent, coarse location)  (§8.2)
+#   quasi  — quasi-identifier (indirectly identifying in combination)
+#
+# masking values (applied in STAGING under PII-1; §8.2):
+#   none        — exposed as-is
+#   null        — NULL for the analyst role (e.g. name)
+#   domain_only — email reduced to its domain
+#   full        — fully masked / redacted string
+#   sha256_join — SHA2(LOWER(TRIM(col)),256) lowercase hex STRING (deterministic join key)
+# =============================================================================
+
+version: 1
+brand: aaif
+# Snowflake landing DB (§9.1). Overridable per brand; generator reads config too.
+snowflake_database: AAIF
+source_schema: public
+# Fixed repo-wide conventions (§7.2, §8.2). Do not vary per table.
+conventions:
+  timestamp: TIMESTAMP_NTZ            # all timestamptz -> CONVERT_TIMEZONE('UTC', col), stored naive
+  uuid: STRING
+  jsonb: VARIANT
+  array: ARRAY
+  join_key_normalisation: "LOWER(TRIM(email))"
+  join_key_encoding: "lowercase-hex SHA2-256, un-salted"
+  # Preferred warehouse join key across datasets (§8.2, §11): the non-PII person UUID.
+  canonical_join_key: people.id
+
+# Retention (§13). Applied by the OPERATIONS tombstone-purge task (§7.2.1).
+retention:
+  raw_change_history_days: 180
+  tombstone_days: 90
+  operations_log_days: 30
+
+tables:
+  # ── People & identity ────────────────────────────────────────────────────
+  - name: people
+    primary_key: id
+    updated_at: updated_at            # change-detection column for the STAGING MERGE
+    delete: { mode: soft, column: deleted_at }   # VERIFY erasure mechanism (§8.3, open Q5)
+    columns:
+      - { name: id,            pg_type: uuid,        classification: none,   masking: none, join_key: true }
+      - { name: email,         pg_type: text,        classification: direct, masking: domain_only }
+      - { name: email_sha256,  derived: sha256_join, source_column: email, classification: none, masking: none, join_key: true }
+      - { name: full_name,     pg_type: text,        classification: direct, masking: null }
+      - { name: first_name,    pg_type: text,        classification: direct, masking: null }
+      - { name: last_name,     pg_type: text,        classification: direct, masking: null }
+      - { name: contact_kind,  pg_type: text,        classification: none,   masking: none }   # lawful-basis (§8)
+      - { name: company,       pg_type: text,        classification: quasi,  masking: none }
+      - { name: title,         pg_type: text,        classification: quasi,  masking: none }
+      - { name: country,       pg_type: text,        classification: quasi,  masking: none }
+      - { name: city,          pg_type: text,        classification: quasi,  masking: none }
+      - { name: attributes,    pg_type: jsonb,       classification: quasi,  masking: none }   # VERIFY no secrets nested
+      - { name: created_at,    pg_type: timestamptz, classification: none,   masking: none }
+      - { name: updated_at,    pg_type: timestamptz, classification: none,   masking: none }
+      - { name: deleted_at,    pg_type: timestamptz, classification: none,   masking: none }
+
+  - name: person_emails
+    primary_key: id
+    updated_at: updated_at
+    delete: { mode: soft, column: deleted_at }
+    columns:
+      - { name: id,           pg_type: uuid,        classification: none,   masking: none }
+      - { name: person_id,    pg_type: uuid,        classification: none,   masking: none, join_key: true }
+      - { name: email,        pg_type: text,        classification: direct, masking: domain_only }
+      - { name: email_sha256, derived: sha256_join, source_column: email, classification: none, masking: none, join_key: true }
+      - { name: is_primary,   pg_type: boolean,     classification: none,   masking: none }
+      - { name: created_at,   pg_type: timestamptz, classification: none,   masking: none }
+      - { name: updated_at,   pg_type: timestamptz, classification: none,   masking: none }
+      - { name: deleted_at,   pg_type: timestamptz, classification: none,   masking: none }
+
+  - name: people_events
+    primary_key: id
+    updated_at: created_at             # append-mostly; VERIFY if an updated_at exists
+    delete: { mode: hard }             # engagement facts hard-delete with the person (§7.2.1 tombstone)
+    columns:
+      - { name: id,          pg_type: uuid,        classification: none, masking: none }
+      - { name: person_id,   pg_type: uuid,        classification: none, masking: none, join_key: true }
+      - { name: event_type,  pg_type: text,        classification: none, masking: none }
+      - { name: occurred_at, pg_type: timestamptz, classification: none, masking: none }
+      - { name: metadata,    pg_type: jsonb,       classification: quasi, masking: none }   # VERIFY no direct PII
+      - { name: created_at,  pg_type: timestamptz, classification: none, masking: none }
+
+  # ── Events ────────────────────────────────────────────────────────────────
+  - name: events
+    primary_key: id
+    updated_at: updated_at
+    delete: { mode: soft, column: deleted_at }
+    columns:
+      - { name: id,          pg_type: uuid,        classification: none,  masking: none, join_key: true }
+      - { name: slug,        pg_type: text,        classification: none,  masking: none }
+      - { name: title,       pg_type: text,        classification: none,  masking: none }
+      - { name: event_type,  pg_type: text,        classification: none,  masking: none }
+      - { name: event_start, pg_type: timestamptz, classification: none,  masking: none }
+      - { name: event_end,   pg_type: timestamptz, classification: none,  masking: none }
+      - { name: calendar_id, pg_type: uuid,        classification: none,  masking: none, join_key: true }
+      - { name: attributes,  pg_type: jsonb,       classification: none,  masking: none }
+      - { name: created_at,  pg_type: timestamptz, classification: none,  masking: none }
+      - { name: updated_at,  pg_type: timestamptz, classification: none,  masking: none }
+      - { name: deleted_at,  pg_type: timestamptz, classification: none,  masking: none }
+
+  - name: event_registrations
+    primary_key: id
+    updated_at: updated_at
+    delete: { mode: soft, column: deleted_at }
+    columns:
+      - { name: id,           pg_type: uuid,        classification: none,   masking: none }
+      - { name: event_id,     pg_type: uuid,        classification: none,   masking: none, join_key: true }
+      - { name: person_id,    pg_type: uuid,        classification: none,   masking: none, join_key: true }
+      - { name: email,        pg_type: text,        classification: direct, masking: domain_only }
+      - { name: email_sha256, derived: sha256_join, source_column: email, classification: none, masking: none, join_key: true }
+      - { name: status,       pg_type: text,        classification: none,   masking: none }
+      - { name: check_in,     pg_type: text,        classification: none,   masking: none }
+      - { name: registered_at, pg_type: timestamptz, classification: none,  masking: none }
+      - { name: created_at,   pg_type: timestamptz, classification: none,   masking: none }
+      - { name: updated_at,   pg_type: timestamptz, classification: none,   masking: none }
+      - { name: deleted_at,   pg_type: timestamptz, classification: none,   masking: none }
+
+  # ── Sending / engagement (send_log dominates volume — §3.1, incremental MERGE §6) ──
+  - name: send_log
+    primary_key: id
+    updated_at: updated_at             # VERIFY: some brands only have created_at + status transitions
+    delete: { mode: hard }
+    large_fact: true                   # generator emits incremental-MERGE STAGING; 30-min cadence
+    columns:
+      - { name: id,             pg_type: uuid,        classification: none,   masking: none }
+      - { name: person_id,      pg_type: uuid,        classification: none,   masking: none, join_key: true }
+      - { name: email,          pg_type: text,        classification: direct, masking: domain_only }
+      - { name: email_sha256,   derived: sha256_join, source_column: email, classification: none, masking: none, join_key: true }
+      - { name: message_id,     pg_type: text,        classification: none,   masking: none }
+      - { name: send_kind,      pg_type: text,        classification: none,   masking: none }   # newsletter|broadcast|…
+      - { name: source_id,      pg_type: uuid,        classification: none,   masking: none }
+      - { name: status,         pg_type: text,        classification: none,   masking: none }
+      - { name: provider,       pg_type: text,        classification: none,   masking: none }
+      - { name: sent_at,        pg_type: timestamptz, classification: none,   masking: none }
+      - { name: created_at,     pg_type: timestamptz, classification: none,   masking: none }
+      - { name: updated_at,     pg_type: timestamptz, classification: none,   masking: none }
+
+  - name: email_interactions
+    primary_key: id
+    updated_at: created_at
+    delete: { mode: hard }
+    large_fact: true
+    columns:
+      - { name: id,              pg_type: uuid,        classification: none, masking: none }
+      - { name: person_id,       pg_type: uuid,        classification: none, masking: none, join_key: true }
+      - { name: send_log_id,     pg_type: uuid,        classification: none, masking: none, join_key: true }
+      - { name: interaction_type, pg_type: text,       classification: none, masking: none }   # open|click|bounce|…
+      - { name: url,             pg_type: text,        classification: none, masking: none }
+      - { name: ip_address,      pg_type: text,        classification: semi, masking: full }    # semi-PII (§8.2)
+      - { name: user_agent,      pg_type: text,        classification: semi, masking: full }
+      - { name: occurred_at,     pg_type: timestamptz, classification: none, masking: none }
+      - { name: created_at,      pg_type: timestamptz, classification: none, masking: none }
+
+  - name: newsletter_sends
+    primary_key: id
+    updated_at: updated_at
+    delete: { mode: soft, column: deleted_at }
+    columns:
+      - { name: id,          pg_type: uuid,        classification: none, masking: none, join_key: true }
+      - { name: edition_id,  pg_type: uuid,        classification: none, masking: none }
+      - { name: segment_id,  pg_type: uuid,        classification: none, masking: none }
+      - { name: status,      pg_type: text,        classification: none, masking: none }
+      - { name: scheduled_at, pg_type: timestamptz, classification: none, masking: none }
+      - { name: sent_at,     pg_type: timestamptz, classification: none, masking: none }
+      - { name: recipient_count, pg_type: integer,  classification: none, masking: none }
+      - { name: created_at,  pg_type: timestamptz, classification: none, masking: none }
+      - { name: updated_at,  pg_type: timestamptz, classification: none, masking: none }
+      - { name: deleted_at,  pg_type: timestamptz, classification: none, masking: none }
+
+  # ── Table families to finalise in Phase 2 (§8.1). Left as explicit TODO so
+  #    they are NOT silently in scope: uncomment + column-verify before adding
+  #    to the publication. The generator ignores commented families. ─────────
+  # - name: broadcasts            # broadcasts*  — one-shot scheduled sends
+  # - name: broadcast_recipients
+  # - name: resources             # resources*   — structured resource items
+  # - name: resource_sections
+  # - name: videos                # videos*      — canonical video objects
+  # - name: subscription_preferences   # subscription / preference state
+
+# =============================================================================
+# NEVER replicate (§8.1). Enforced by omission; documented here so reviewers can
+# see the exclusions were deliberate.
+#   auth.*                       Supabase auth schema
+#   storage.*                    blobs (land pointers only on a specific need)
+#   *unsubscribe_tokens*, *magic_links*, api keys, installed_modules.config  (secrets)
+#   *_import_batch, job queues, dedup/scratch state
+# =============================================================================
