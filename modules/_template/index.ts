@@ -1,3 +1,4 @@
+// Before committing: run a security review of your diff (see CLAUDE.md / /security-review).
 /**
  * Template module — copy this directory to create a new Gatewaze module.
  *
