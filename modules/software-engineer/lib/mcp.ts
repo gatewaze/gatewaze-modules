@@ -21,6 +21,8 @@ import { decryptSecret } from '@gatewaze/shared/modules';
 // any local-exec shape here (and again in the admin validator) — defense in depth.
 const ALLOWED_MCP_TYPES = new Set(['http', 'sse']);
 const LOCAL_EXEC_KEYS = ['command', 'args', 'env'];
+// Server names become object keys — reject prototype-pollution keys before writing them.
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
  * Validate + narrow an MCP servers map to remote (http/sse) entries only. THROWS on anything that
@@ -29,8 +31,9 @@ const LOCAL_EXEC_KEYS = ['command', 'args', 'env'];
  */
 export function assertRemoteMcpServers(servers: unknown): Record<string, unknown> {
   if (!servers || typeof servers !== 'object' || Array.isArray(servers)) throw new Error('mcp servers must be an object');
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = Object.create(null); // no prototype → no pollution sink
   for (const [name, cfg] of Object.entries(servers as Record<string, unknown>)) {
+    if (UNSAFE_KEYS.has(name) || !/^[a-zA-Z0-9._-]{1,64}$/.test(name)) throw new Error(`mcp server name "${name}" is invalid`);
     if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error(`mcp server "${name}" must be an object`);
     const c = cfg as Record<string, unknown>;
     if (!ALLOWED_MCP_TYPES.has(c.type as string)) throw new Error(`mcp server "${name}" type must be one of http, sse`);

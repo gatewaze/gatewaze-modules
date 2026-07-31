@@ -12,6 +12,7 @@ import { githubClient } from '../lib/github.js';
 import { dispatchProject } from '../lib/dispatch.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
+import { rateLimit, clientIp } from '../lib/rate-limit.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -40,6 +41,9 @@ export function mountAdminRoutes(router, deps) {
 
   // Admin gate — runs BEFORE body parsing so unauthorized requests are rejected before we read a body.
   router.use(async (req, res, next) => {
+    if (!rateLimit(`se-admin:${clientIp(req)}`, 240, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') return next(); // parity with platform requireJwt test bypass
     const userId = req.userId ?? req.auth?.userId ?? req.user?.id ?? null;
     if (!userId) return res.status(401).json({ error: { code: 'unauthenticated', message: 'Missing user context' } });

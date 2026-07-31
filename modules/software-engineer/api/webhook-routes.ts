@@ -9,6 +9,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { resolveIssuesRepoProject, getProject } from '../lib/credentials.js';
 import { dispatchProject } from '../lib/dispatch.js';
+import { rateLimit, clientIp } from '../lib/rate-limit.js';
 
 const INSTANCE = () => process.env.SE_INSTANCE_ID || 'default';
 
@@ -28,6 +29,10 @@ export function mountWebhookRoute(router, deps) {
   const { supabase, enqueueJob, webhookSecret, logger } = deps;
 
   router.post('/webhook', async (req, res) => {
+    // Rate-limit by IP before any work — this is the one unauthenticated (HMAC-only) surface.
+    if (!rateLimit(`se-webhook:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ accepted: false, reason: 'rate limited' });
+    }
     const rawBody = Buffer.isBuffer(req.body) ? req.body : (req.rawBody ?? Buffer.from(''));
     const sig = header(req.headers, 'X-Hub-Signature-256');
     if (!webhookSecret || !verifyGitHub(webhookSecret, rawBody, sig)) {
