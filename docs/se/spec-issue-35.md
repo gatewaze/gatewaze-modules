@@ -3,38 +3,53 @@
 ## Goal
 
 In the webhooks admin `secretToReveal` dialog, make the one-time-visible values
-easy to capture with a **Copy** button that writes to the clipboard and shows the
-existing `toast.success(...)` confirmation.
+easy to capture with **Copy** buttons that write to the clipboard via
+`navigator.clipboard.writeText(...)` and show the existing `toast.success(...)`
+confirmation — one for the revealed signing secret and one for the subscriber URL.
 
-Scope is a single component: `modules/webhooks/admin/components/WebhooksTab.tsx`.
-No schema, API, service, or dependency changes.
+Scope is a single component:
+`modules/webhooks/admin/components/WebhooksTab.tsx`.
+No schema, API, service, type, or dependency changes.
 
-## Current state (important — the issue text is partly stale)
+## Current state (verify before writing code)
 
-Reading the target file shows the reveal dialog **already has a Copy button for
-the secret** (`WebhooksTab.tsx:453-466`): a ghost `Button` with
-`ClipboardDocumentIcon` that runs
-`void navigator.clipboard.writeText(secretToReveal.secret)` then
-`toast.success('Copied')`. The required imports (`toast`, `Button`,
-`ClipboardDocumentIcon`) are already present (lines 28, 30, 32).
+Reading the target file shows the requested feature **is already present** on this
+branch. A local `CopyButton` helper exists
+(`WebhooksTab.tsx:493-515`) and is wired into the reveal dialog for both values:
 
-What is **missing** is a Copy affordance for the **URL**, which is currently
-rendered as plain inline text at `WebhooksTab.tsx:468`
-(`For URL <code>{secretToReveal.url}</code>.`).
+- Secret chip — `CopyButton value={secretToReveal.secret} label="secret"
+  iconClassName="text-neutral-100"` on the dark `bg-neutral-900` chip
+  (`WebhooksTab.tsx:453-460`).
+- URL line — `CopyButton value={secretToReveal.url} label="URL"` on the light
+  surface, default icon color (`WebhooksTab.tsx:461-463`).
 
-So the delta this issue actually needs is small: add a Copy button for the URL,
-matched to the existing secret-copy style. As a quality improvement (still inside
-this one component), factor the copy behavior into a tiny local `CopyButton`
-helper so the secret and URL share one implementation instead of duplicating the
-clipboard-and-toast logic.
+The helper runs `void navigator.clipboard.writeText(value)` then
+`toast.success(\`Copied ${label}\`)`, giving `Copied secret` / `Copied URL`
+(`WebhooksTab.tsx:506-509`). Required imports are already in place: `toast`
+(line 30), `Button` (line 32), and `ClipboardDocumentIcon` (line 28).
 
-## Approach
+**Implication:** the issue is effectively satisfied by existing code. The correct
+action for an implementer is to **verify** this matches the acceptance criteria
+rather than re-add duplicate buttons. This spec documents the intended shape so a
+reviewer can confirm the code, and so the change can be re-derived if the code is
+ever reverted.
 
-1. **Add a local `CopyButton` helper** at the bottom of `WebhooksTab.tsx`
-   (alongside `DeliveryStatus` / `Field`), e.g.:
+## Approach (the intended implementation)
+
+1. **A local `CopyButton` helper** at the bottom of `WebhooksTab.tsx` (alongside
+   `DeliveryStatus` / `Field`), accepting `value`, `label`, and an optional
+   `iconClassName` for surface-dependent icon contrast:
 
    ```tsx
-   function CopyButton({ value, label }: { value: string; label: string }) {
+   function CopyButton({
+     value,
+     label,
+     iconClassName,
+   }: {
+     value: string;
+     label: string;
+     iconClassName?: string;
+   }) {
      return (
        <Button
          variant="ghost"
@@ -45,85 +60,78 @@ clipboard-and-toast logic.
          }}
          title={`Copy ${label}`}
        >
-         <ClipboardDocumentIcon className="size-4" />
+         <ClipboardDocumentIcon className={`size-4${iconClassName ? ` ${iconClassName}` : ''}`} />
        </Button>
      );
    }
    ```
 
-   - Keep the toast concise and consistent (`Copied secret` / `Copied URL`), or
-     keep the existing bare `'Copied'` string if we want zero behavioral change to
-     the secret button — decide during implementation; either is acceptable.
-   - Icon color: the secret button currently uses `text-neutral-100` because it
-     sits on the dark `bg-neutral-900` chip. The URL copy sits on the light
-     surface, so it needs the default (dark) icon color. Handle this either with
-     a `className`/`iconClassName` prop on the helper, or by keeping the icon
-     color at the call site. Do **not** hardcode a light color for the URL copy.
+2. **Secret chip** uses `CopyButton` inside the dark chip, passing
+   `iconClassName="text-neutral-100"` so the icon stays visible on
+   `bg-neutral-900`. Chip keeps its `break-all`, flex layout, and right-aligned
+   icon.
 
-2. **Wire the secret chip** to use `CopyButton` (replacing the inline button at
-   453-466), preserving the dark-surface icon color.
+3. **URL line** uses `CopyButton` next to `<code>{secretToReveal.url}</code>` with
+   the **default** (dark) icon color — must not reuse `text-neutral-100`, which
+   would be invisible on the light surface. The surrounding explanatory copy
+   (including the "previous secret remains valid…" note shown when `rotated`) stays
+   intact; the paragraph uses `flex items-center gap-1 flex-wrap` so the inline
+   button wraps cleanly.
 
-3. **Add a Copy button for the URL.** Wrap the current inline URL sentence so the
-   `<code>{secretToReveal.url}</code>` and a `CopyButton value={secretToReveal.url}`
-   sit together, matching the component's existing spacing/typography (small,
-   `text-neutral-500`). Keep the surrounding explanatory copy (the "previous
-   secret remains valid…" note for rotations) intact.
-
-Minimal alternative (if we want the smallest possible diff and skip the helper):
-leave the secret button as-is and only add an inline URL Copy button that mirrors
-lines 455-465 with the default icon color. The helper approach is preferred for
-avoiding duplication, but both satisfy the issue.
+Sharing one helper avoids duplicating the clipboard-and-toast logic between the two
+call sites.
 
 ## Files to change
 
-- `modules/webhooks/admin/components/WebhooksTab.tsx` — only file touched.
+- `modules/webhooks/admin/components/WebhooksTab.tsx` — the only file touched.
   - No new imports required (`toast`, `Button`, `ClipboardDocumentIcon` already
     imported).
-  - No changes to `webhooksService`, types, or migrations.
+  - No changes to `webhooksService`, exported types, or migrations.
 
 ## Test plan
 
-This module has no component test harness for this file (verify: no existing
-`*.test.tsx` beside it). Validation is primarily type-check + manual.
+This file has no component test harness (verify: no `*.test.tsx` beside it), so
+validation is type-check + manual.
 
-1. **Type/lint:** `pnpm -w tsc --noEmit` (or the repo's typecheck script) and the
-   project lint pass — must be clean.
+1. **Type/lint:** run the repo's typecheck and lint scripts — must be clean.
 2. **Manual, create flow:** create a subscription → reveal dialog opens → click
-   Copy on the secret and on the URL → clipboard contains the exact value →
-   `toast.success` appears for each.
+   Copy on the secret and on the URL → clipboard holds the exact value →
+   `toast.success` (`Copied secret` / `Copied URL`) appears for each.
 3. **Manual, rotate flow:** rotate a secret → "Secret rotated" dialog → both Copy
-   buttons work; the rotation warning note still renders.
-4. **Regression:** confirm the secret chip layout (dark chip, right-aligned copy
-   icon, `break-all`) is visually unchanged, and the "I've saved it" dismiss
-   button still closes the modal.
-5. **Edge:** copying does not close or reset the dialog (writeText is
-   fire-and-forget; no state change to `secretToReveal`).
+   buttons work and the rotation warning note still renders.
+4. **Regression:** secret chip layout (dark chip, right-aligned copy icon,
+   `break-all`) is visually unchanged; URL copy icon is visible (dark on light);
+   the "I've saved it" button still dismisses the modal.
+5. **Edge:** copying does not close or reset the dialog — `writeText` is
+   fire-and-forget with no state change to `secretToReveal`.
 
 ## Security review
 
 Per CLAUDE.md, run `/security-review` (or `pragma:security`) on the branch diff
-before commit. Specific points for this change:
+before commit. Points specific to this change:
 
-- **No secret leakage beyond intent.** The secret is already rendered in cleartext
-  in this dialog by design (one-time reveal). Copy only moves the same value the
-  operator already sees to their clipboard on an explicit click — no new exposure
-  surface, no logging, no network call. Do **not** add any `console.log` of the
-  secret.
-- **No credentials, env fallbacks, `req.body`, `.or()` filters, SQL, ICS, or URL
-  construction** are involved — this is a client-only clipboard write.
+- **No new secret exposure.** The secret is already rendered in cleartext in this
+  dialog by design (one-time reveal). Copy only moves the value the operator
+  already sees to their clipboard on an explicit click — no logging, no network
+  call, no persistence. Do **not** `console.log` the secret or URL.
+- **No credentials, `env || 'literal'` fallbacks, `req.body`, PostgREST `.or()`
+  filters, SQL, ICS lines, or constructed URLs** are involved — this is a
+  client-only clipboard write, so the high-frequency boundaries in the working
+  agreement do not apply here.
 - `navigator.clipboard.writeText` requires a secure context; the admin runs over
-  HTTPS, and the existing secret button already relies on it, so no regression.
+  HTTPS and the existing behavior already relies on it — no regression.
 
 ## Risks
 
-- **Low overall** — client-only UI change in one component.
-- **Icon contrast bug** if the URL copy icon reuses `text-neutral-100` on the
-  light surface (would be invisible). Called out above; use default color there.
-- **Clipboard API availability:** in a non-secure/older context `navigator.clipboard`
-  may be undefined and the click would throw. The existing secret button already
-  has this exact exposure, so matching it is consistent; a defensive
-  `navigator.clipboard?.writeText(...)` guard is optional and out of the issue's
-  stated scope — note but don't expand scope without steer.
-- **Toast-string change** for the secret button (`'Copied'` → `'Copied secret'`)
-  is a cosmetic behavioral tweak; keep the original string if we want strictly no
-  change to existing behavior.
+- **Low overall** — client-only UI change confined to one component.
+- **Icon contrast:** reusing `text-neutral-100` for the URL copy on the light
+  surface would render an invisible icon. Keep the default color there (already
+  the case in current code).
+- **Clipboard API availability:** in a non-secure/older context
+  `navigator.clipboard` can be `undefined` and the click would throw. Both copy
+  buttons share this exposure equally; a defensive
+  `navigator.clipboard?.writeText(...)` guard is optional and outside the issue's
+  stated scope — note it, don't expand scope without a steer.
+- **Duplicate-work risk:** because the feature already exists, the main hazard is
+  an implementer re-adding a second set of buttons. Verify first; change nothing if
+  the code already matches this spec.
