@@ -1,0 +1,110 @@
+// @ts-nocheck
+/**
+ * implement phase (§7). Clones the project's code repos into a workspace (writable repos on a fresh
+ * branch), has the agent implement the approved spec across them, then commits + pushes ONLY the
+ * writable repos that actually changed — recording one se_run_prs row per changed repo. Enqueues
+ * verify. If nothing changed, fails.
+ */
+import { createClient } from '@supabase/supabase-js';
+import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credentials.js';
+import { githubClient } from '../lib/github.js';
+import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.js';
+import { runAgentSession } from '../lib/phase-runner.js';
+import { classifyBlastRadius } from '../lib/blast-radius.js';
+import { redactToken } from '../lib/git.js';
+import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, upsertRunPr } from '../lib/run-state.js';
+
+const sb = (ctx) =>
+  ctx?.supabase ??
+  createClient(process.env.SUPABASE_URL ?? '', process.env.SUPABASE_SERVICE_ROLE_KEY ?? '', {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+export default async function implement(job, ctx) {
+  const supabase = sb(ctx);
+  const { data: run } = await supabase.from('se_runs').select('*').eq('id', job?.data?.runId).maybeSingle();
+  if (!run) return { skipped: 'no run' };
+  if (run.status === 'cancelled') return { skipped: 'cancelled' };
+  const project = await getProject(supabase, run.project_id);
+  if (!project?.intakeEnabled) return blockRun(supabase, run, 'implement', 'kill_switch', 'intake disabled');
+  const token = project.githubToken;
+
+  const codeRepos = (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun);
+  await recordPhaseStart(supabase, run, 'implement');
+  let ws;
+  try {
+    const { data: art } = await supabase.from('se_artifacts').select('content').eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    const branch = run.branch_name;
+    const commitId = await resolveCommitIdentity(supabase, project, token);
+    ws = await makeMultiWorkspace(codeRepos, token, branch, commitId);
+
+    const prompt = [
+      `Implement the approved spec below across the WRITABLE repos in your workspace. Change only the`,
+      `repos and files the spec calls for; follow each repo's CLAUDE.md/.claude rules exactly. Make the`,
+      `code changes and any tests. Do NOT push, tag, or open PRs — the system handles that.`,
+      ``,
+      `--- APPROVED SPEC ---`,
+      String(art?.content ?? '').slice(0, 20000),
+      `--- END SPEC ---`,
+    ].join('\n');
+
+    const result = await runAgentSession(supabase, ctx, run, project, 'implement', {
+      cwd: ws.root, prompt, repos: ws.repos,
+      allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
+      systemAppend: 'Implement per the spec + each repo\'s rules. Never use --no-verify or --force. Do not open PRs.',
+    });
+    if (result.error) {
+      const msg = redactToken(result.error, token);
+      await recordPhaseEnd(supabase, run, 'implement', 'failed', msg);
+      await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
+      return { failed: msg };
+    }
+
+    // Commit + push each WRITABLE repo that changed → one se_run_prs row (state=open) per repo.
+    let changed = 0, files = 0, lines = 0;
+    for (const r of ws.repos.filter((x) => x.writable)) {
+      if (!(await hasChanges(r.dir))) continue;
+      changed++;
+      try {
+        await commitAndPush(r.dir, branch, `feat: implement issue #${run.issue_number}`);
+        await upsertRunPr(supabase, run, r.repoOwner, r.repoName, { branch, state: 'open' });
+        try {
+          const cmp = await gitCompareCount(githubClient(token), r.repoOwner, r.repoName, r.baseBranch, branch);
+          files += cmp.files; lines += cmp.lines;
+        } catch { /* aggregate best-effort */ }
+      } catch (e) {
+        await upsertRunPr(supabase, run, r.repoOwner, r.repoName, { branch, state: 'error', error: redactToken(e?.message || String(e), token) });
+      }
+    }
+    if (changed === 0) {
+      await recordPhaseEnd(supabase, run, 'implement', 'failed', 'agent produced no changes in any writable repo');
+      await supabase.from('se_runs').update({ status: 'failed', error: 'implement produced no changes' }).eq('id', run.id);
+      return { failed: 'no changes' };
+    }
+
+    const blast = classifyBlastRadius(Array.from({ length: files }, () => ({ filename: 'x', additions: 0, deletions: 0 })));
+    await writeGate(supabase, run, 'blast_radius', blast.classification === 'safe' ? 'pass' : 'block', { files, lines, repos: changed });
+    await recordPhaseEnd(supabase, run, 'implement', 'passed', `implemented across ${changed} repo(s)`, { model: project.model, input: result.tokensInput, output: result.tokensOutput });
+    await supabase.from('se_runs').update({
+      blast_radius: blast.classification, current_phase: 'verify',
+      tokens_input: (run.tokens_input ?? 0) + result.tokensInput,
+      tokens_output: (run.tokens_output ?? 0) + result.tokensOutput,
+    }).eq('id', run.id);
+    await ctx?.enqueueJob?.('jobs', 'software-engineer:verify', { runId: run.id });
+    return { ok: true, changedRepos: changed };
+  } catch (e) {
+    const msg = redactToken(e?.message || String(e), token);
+    await recordPhaseEnd(supabase, run, 'implement', 'failed', msg);
+    await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
+    return { failed: msg };
+  } finally {
+    try { await ws?.cleanup?.(); } catch { /* ignore */ }
+  }
+}
+
+async function gitCompareCount(gh, owner, name, base, head) {
+  const b = base || (await gh.defaultBranch(owner, name));
+  const cmp = await gh.compare(owner, name, b, head);
+  const fs = cmp?.files ?? [];
+  return { files: fs.length, lines: fs.reduce((n, f) => n + (f.additions ?? 0) + (f.deletions ?? 0), 0) };
+}
