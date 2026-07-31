@@ -14,7 +14,20 @@
  */
 
 import jwt from 'jsonwebtoken';
+import { createClient } from '@supabase/supabase-js';
 import type { Request, Response, NextFunction } from 'express';
+
+// Client used only to verify non-HS256 (cloud ES256) tokens via Supabase Auth — this module gates
+// /api/admin/* itself (the platform does not), so it must verify signatures, not trust the payload.
+let _verifyClient: ReturnType<typeof createClient> | null = null;
+function verifyClient() {
+  if (_verifyClient) return _verifyClient;
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  _verifyClient = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+  return _verifyClient;
+}
 
 interface SupabaseJwtClaims {
   sub?: string;
@@ -44,14 +57,18 @@ function extractToken(req: Request): string | null {
   }
   const cookieHeader = req.headers.cookie;
   if (cookieHeader) {
-    const match = cookieHeader.match(/sb-[^=]+-auth-token=([^;]+)/);
-    if (match) {
+    // Split into individual cookies and match the name with string ops — NOT a backtracking regex
+    // over the whole Cookie header (which CodeQL flags as polynomial ReDoS on untrusted input).
+    for (const part of cookieHeader.split(';')) {
+      const eq = part.indexOf('=');
+      if (eq < 0) continue;
+      const name = part.slice(0, eq).trim();
+      if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
       try {
-        const decoded = decodeURIComponent(match[1]);
-        const parsed = JSON.parse(decoded) as { access_token?: string };
+        const parsed = JSON.parse(decodeURIComponent(part.slice(eq + 1).trim())) as { access_token?: string };
         if (parsed.access_token) return parsed.access_token;
       } catch {
-        // malformed cookie → fall through
+        // malformed cookie → keep scanning
       }
     }
   }
@@ -90,14 +107,28 @@ export function requireJwt() {
         return;
       }
     } else {
-      // ES256/cloud path — we trust the decoded payload here without
-      // re-verifying signatures. The platform's requireJwt does a
-      // round-trip to supabase.auth.getUser() for full verification;
-      // host-media's invocations always sit behind it (admin access
-      // patterns) so the additional round-trip is overkill. If/when
-      // this module gets used in a context where ES256 tokens are
-      // unverified, the platform's requireJwt should run upstream.
-      // For dev (HS256) the path above is the actual gate.
+      // Non-HS256 (ES256 cloud tokens). This module's requireJwt is the SOLE gate for /api/admin/*
+      // (the platform only gates /api/modules/*), so we MUST verify the signature — trusting the
+      // decoded payload is an alg-confusion bypass (alg:none / algorithm substitution). Verify against
+      // Supabase Auth, which validates the ES256 signature, exactly as the platform's requireJwt does.
+      const client = verifyClient();
+      if (!client) {
+        errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
+        return;
+      }
+      try {
+        const { data, error } = await client.auth.getUser(token);
+        if (error || !data?.user?.id) {
+          errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
+          return;
+        }
+        // Trust only the server-verified identity (the whole token was verified above, but prefer the
+        // authoritative fields from getUser over the decoded payload).
+        claims = { ...claims, sub: data.user.id, email: data.user.email ?? claims.email };
+      } catch {
+        errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
+        return;
+      }
     }
 
     if (!claims.sub) {
