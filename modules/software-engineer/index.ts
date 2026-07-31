@@ -89,9 +89,19 @@ const softwareEngineerModule: GatewazeModule = {
     await registerRoutes(app, ctx);
   },
 
-  // Splat route so the dashboard is URL-driven — the Setup page and each run get their own
-  // shareable URL: /software-engineer, /software-engineer/setup, /software-engineer/runs/<id>.
+  // URL-driven dashboard — the Setup page and each run get their own shareable URL
+  // (/software-engineer, /software-engineer/setup, /software-engineer/runs/<id>). This needs BOTH
+  // an index route (exact /software-engineer) AND a splat (sub-paths): moduleRoutes.tsx merges two
+  // entries sharing the top segment into { index } + { path: '*' } children. A lone splat leaves the
+  // index slot empty, so exact /software-engineer renders a blank <Outlet/>. Same component for both;
+  // it reads useLocation to pick the active tab.
   adminRoutes: [
+    {
+      path: 'software-engineer',
+      component: () => import('./admin/components/SoftwareEngineerTab'),
+      requiredFeature: 'software-engineer',
+      guard: 'none',
+    },
     {
       path: 'software-engineer/*',
       component: () => import('./admin/components/SoftwareEngineerTab'),
