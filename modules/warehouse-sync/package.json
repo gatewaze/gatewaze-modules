@@ -1,0 +1,33 @@
+{
+  "name": "@gatewaze-modules/warehouse-sync",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Supabase → data-warehouse relational replication via a central Airbyte (Snowflake first): source-side prerequisites, replication-slot monitoring, medallion warehouse artifacts, PII governance, and operability (spec-supabase-to-snowflake-pipeline.md)",
+  "exports": {
+    ".": "./index.ts",
+    "./lib/*": "./lib/*",
+    "./manifest/*": "./manifest/*",
+    "./migrations/*": "./migrations/*",
+    "./snowflake/*": "./snowflake/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "generate:sql": "tsx scripts/generate-sql.ts"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0",
+    "yaml": "^2.5.1"
+  }
+}
