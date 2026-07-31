@@ -46,6 +46,7 @@ import {
   type AiThread,
 } from '../utils/aiService';
 import ConfiguredPromptBar from './ConfiguredPromptBar';
+import MarkdownView from './MarkdownView';
 import RunDetails from './RunDetails';
 
 const POLL_INTERVAL_MS = 4_000;
@@ -63,6 +64,14 @@ export interface AiChatWidgetProps {
    * to the default text bubble.
    */
   renderAssistantTurn?: (message: AiMessage) => React.ReactNode | null;
+  /**
+   * Opt-in: render the default assistant text bubbles (persisted + live
+   * stream) as Markdown instead of plain pre-wrapped text. Defaults to
+   * `false` so line-oriented output keeps its raw whitespace and hosts
+   * that already handle rendering via `renderAssistantTurn` are unaffected
+   * (that seam takes precedence and is untouched by this flag).
+   */
+  renderMarkdown?: boolean;
   defaultProvider?: AiAutoOrProvider;
   defaultModel?: string;
   /** Show the model picker in the widget header. */
@@ -101,6 +110,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
     hostId,
     threadKey = '',
     renderAssistantTurn,
+    renderMarkdown = false,
     defaultProvider = 'auto',
     defaultModel,
     modelPicker = true,
@@ -645,7 +655,11 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                   <div className="max-w-[90%]">
                     {historyBubbles}
                     <div className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
-                      {m.content}
+                      {renderMarkdown && m.role === 'assistant' ? (
+                        <MarkdownView>{m.content}</MarkdownView>
+                      ) : (
+                        m.content
+                      )}
                     </div>
                     {m.role === 'assistant' && <RunDetails message={m} />}
                   </div>
@@ -657,7 +671,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                 <div className="max-w-[90%] w-full space-y-1">
                   {liveContent.length > 0 && (
                     <div className="rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-sm text-neutral-800 whitespace-pre-wrap">
-                      {liveContent}
+                      {renderMarkdown ? <MarkdownView>{liveContent}</MarkdownView> : liveContent}
                     </div>
                   )}
                   {/*
