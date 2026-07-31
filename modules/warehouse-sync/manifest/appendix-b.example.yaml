@@ -1,0 +1,38 @@
+# =============================================================================
+# Appendix B — Segment → Snowflake Mapping  (spec §11, §17 Appendix B)
+# =============================================================================
+# Produced in Phase 0. Records the ACTUAL Snowflake location of the Segment
+# "Marketing Ops" event tables (created 2026-07-07) and their identity columns,
+# so the relational-replica ↔ event-stream join (§11) is unambiguous.
+#
+# This is an EXAMPLE. Copy to appendix-b.yaml and fill from the live Segment
+# Snowflake destination config; values below are placeholders (# CONFIRM).
+#
+# Join contract (§11, normative):
+#   CAST(segment.<user_id_column> AS STRING) = CAST(staging.people.id AS STRING)
+#   -- Segment userId MUST be the Gatewaze person UUID (blocking Phase-0 check).
+# =============================================================================
+
+version: 1
+segment_workspace: "Marketing Ops"          # created 2026-07-07
+same_account_as_relational_replica: null      # CONFIRM (open Q2): true = same Snowflake account/warehouse as AAIF DB
+
+segment_snowflake:
+  database: SEGMENT_MARKETING_OPS             # CONFIRM
+  schema: AAIF_WEB                            # CONFIRM (Segment source slug)
+  # Identity columns are stable across Segment's Snowflake tables.
+  identity_columns:
+    user_id: USER_ID                          # CONFIRM — MUST resolve to people.id (§11 blocking action)
+    anonymous_id: ANONYMOUS_ID                # CONFIRM — gw_aid cookie, pre-identify
+    timestamp: TIMESTAMP                      # CONFIRM
+  tables:
+    tracks: TRACKS                            # CONFIRM — one row per tracked event
+    pages: PAGES                              # CONFIRM — page views
+    identifies: IDENTIFIES                    # CONFIRM — identify calls
+    # per-event tables Segment materialises (e.g. LINK_CLICKED, RSVP_SUBMITTED):
+    event_tables: []                          # CONFIRM — enumerate as needed
+
+# Phase-0 blocking action item (§11): confirm @gatewaze/tracking emits the
+# person UUID as userId (not email / session id). If not, that is a small
+# tracking-SDK change to land BEFORE analysts start joining.
+tracking_sdk_userid_is_person_uuid: null      # CONFIRM (open Q9): true | false

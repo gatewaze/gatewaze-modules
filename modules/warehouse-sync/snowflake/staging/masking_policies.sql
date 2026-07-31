@@ -1,0 +1,33 @@
+-- STAGING dynamic data masking (§8.2, §9.2). PII-1 only. Canonical reference;
+-- matches lib/sql-gen.ts generateMaskingPolicySql. Only AAIF_PII_BREAKGLASS_ROLE
+-- sees unmasked values; AAIF_ANALYST_ROLE never does (§9.1).
+USE ROLE AAIF_STAGING_ROLE;
+USE DATABASE AAIF;
+USE SCHEMA STAGING;
+
+CREATE MASKING POLICY IF NOT EXISTS AAIF.STAGING.mask_null AS (val STRING) RETURNS STRING ->
+  CASE WHEN CURRENT_ROLE() IN ('AAIF_PII_BREAKGLASS_ROLE') THEN val ELSE NULL END;
+
+CREATE MASKING POLICY IF NOT EXISTS AAIF.STAGING.mask_full AS (val STRING) RETURNS STRING ->
+  CASE WHEN CURRENT_ROLE() IN ('AAIF_PII_BREAKGLASS_ROLE') THEN val ELSE '***MASKED***' END;
+
+CREATE MASKING POLICY IF NOT EXISTS AAIF.STAGING.mask_email_domain AS (val STRING) RETURNS STRING ->
+  CASE WHEN CURRENT_ROLE() IN ('AAIF_PII_BREAKGLASS_ROLE') THEN val
+       WHEN val IS NULL THEN NULL
+       ELSE '***@' || SPLIT_PART(val, '@', 2) END;
+
+-- ── Column bindings (derived from Appendix A masking values) ─────────────────
+-- people
+ALTER TABLE AAIF.STAGING.people MODIFY COLUMN "email"     SET MASKING POLICY AAIF.STAGING.mask_email_domain;
+ALTER TABLE AAIF.STAGING.people MODIFY COLUMN "full_name" SET MASKING POLICY AAIF.STAGING.mask_null;
+ALTER TABLE AAIF.STAGING.people MODIFY COLUMN "first_name" SET MASKING POLICY AAIF.STAGING.mask_null;
+ALTER TABLE AAIF.STAGING.people MODIFY COLUMN "last_name" SET MASKING POLICY AAIF.STAGING.mask_null;
+-- person_emails
+ALTER TABLE AAIF.STAGING.person_emails MODIFY COLUMN "email" SET MASKING POLICY AAIF.STAGING.mask_email_domain;
+-- event_registrations
+ALTER TABLE AAIF.STAGING.event_registrations MODIFY COLUMN "email" SET MASKING POLICY AAIF.STAGING.mask_email_domain;
+-- send_log
+ALTER TABLE AAIF.STAGING.send_log MODIFY COLUMN "email" SET MASKING POLICY AAIF.STAGING.mask_email_domain;
+-- email_interactions (semi-PII)
+ALTER TABLE AAIF.STAGING.email_interactions MODIFY COLUMN "ip_address" SET MASKING POLICY AAIF.STAGING.mask_full;
+ALTER TABLE AAIF.STAGING.email_interactions MODIFY COLUMN "user_agent" SET MASKING POLICY AAIF.STAGING.mask_full;
