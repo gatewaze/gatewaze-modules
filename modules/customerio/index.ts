@@ -20,7 +20,8 @@ const customerioModule: GatewazeModule = {
     'integrations-customerio-webhook',
     'integrations-customerio-sync-person',
     'integrations-customerio-process-events',
-    'integrations-track-event',
+    // integrations-track-event removed: authenticated solely via the legacy
+    // GW_API_BEARER secret (set in no environment) so it rejected all requests.
   ],
 
   configSchema: {

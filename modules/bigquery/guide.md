@@ -2,9 +2,16 @@
 
 Google BigQuery integration for analytics queries, materialized views, and data warehouse operations. This module provides a secure proxy Edge Function that lets the admin application execute BigQuery queries, browse datasets, inspect table schemas, and materialize query results into destination tables.
 
+> **Status: inactive.** The `integrations-bigquery-proxy` Edge Function was
+> removed because it authenticated solely via the legacy `GW_API_BEARER` secret,
+> which is configured in no environment — so the proxy rejected every request.
+> The module is retained as a placeholder pending a decision to remove it
+> entirely or reimplement the proxy with a supported auth mechanism. The
+> description below documents the former behaviour.
+
 ## How It Works
 
-The module deploys a single Supabase Edge Function (`integrations-bigquery-proxy`) that acts as a secure proxy between the Gatewaze application and Google BigQuery. The proxy authenticates requests via a bearer token, handles Google OAuth JWT-based authentication using a GCP service account, and routes requests to five endpoints:
+The module previously deployed a single Supabase Edge Function (`integrations-bigquery-proxy`) that acted as a secure proxy between the Gatewaze application and Google BigQuery. The proxy authenticated requests via a bearer token, handled Google OAuth JWT-based authentication using a GCP service account, and routed requests to five endpoints:
 
 - **`/execute`** (POST) -- Run a SELECT query against BigQuery with optional named parameters. Results are transformed from BigQuery's row format into JSON objects. Query executions are logged to `bigquery_query_logs` with duration, rows returned, and bytes processed.
 
