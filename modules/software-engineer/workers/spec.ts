@@ -7,6 +7,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
+import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
@@ -74,7 +75,7 @@ export default async function spec(job, ctx) {
       tokens_input: (run.tokens_input ?? 0) + result.tokensInput,
       tokens_output: (run.tokens_output ?? 0) + result.tokensOutput,
     }).eq('id', run.id);
-    await ctx?.enqueueJob?.('jobs', 'software-engineer:review', { runId: run.id });
+    await enqueuePhase(ctx, run.id, 'review');
     return { ok: true, branch };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);

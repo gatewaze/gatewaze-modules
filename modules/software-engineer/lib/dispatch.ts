@@ -6,6 +6,7 @@
  * on new-issue intake, on run terminal transitions, and by the pr-monitor cron as a safety net.
  */
 import { getProject } from './credentials.js';
+import { enqueuePhase } from './enqueue.js';
 
 // A concurrency slot is occupied ONLY while an engineer is actively working — executing a phase
 // ('running') or addressing PR feedback ('changes_requested', i.e. the revise loop). Runs that are
@@ -65,7 +66,7 @@ export async function dispatchProject(sb: unknown, ctx: unknown, projectId: stri
       .select('id');
     if (!won || won.length === 0) continue;        // another dispatcher took it; re-evaluate
 
-    await ctx?.enqueueJob?.('jobs', 'software-engineer:intake', { runId: next.id });
+    await enqueuePhase(ctx, next.id, 'intake');
     started++;
   }
   return started;
