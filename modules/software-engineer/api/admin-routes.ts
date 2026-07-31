@@ -29,14 +29,34 @@ const PROJECT_MASKED =
 const sanitize = (v: unknown) =>
   v == null ? null : String(v).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 200) || null;
 
-// SECURITY TODO (prod hardening): these routes use the service-role client and are NOT yet route-level
-// authN/authZ gated (the platform gates the /api/modules/* prefix by JWT; the UI attaches the session
-// Bearer). Before prod: verify the operator JWT + enforce is_admin. Left open for local bring-up.
+// AuthZ. The platform's modulesRouter already verifies the user JWT for this /admin/* prefix and
+// attaches req.userId (a 401 here without a Bearer confirms it runs). On top of that we require the
+// caller to be an ACTIVE admin — these routes hold GitHub PATs, model credentials and MCP configs, so
+// a merely-authenticated user must not reach them. This mirrors the is_admin() SQL predicate RLS uses:
+// an active admin_profiles row with an elevated role. Service-role client can read admin_profiles.
+const ADMIN_ROLES = new Set(['super_admin', 'admin', 'editor']);
 export function mountAdminRoutes(router, deps) {
   const { supabase, getRedis, logger, enqueueJob } = deps;
+
+  // Admin gate — runs BEFORE body parsing so unauthorized requests are rejected before we read a body.
+  router.use(async (req, res, next) => {
+    if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') return next(); // parity with platform requireJwt test bypass
+    const userId = req.userId ?? req.auth?.userId ?? req.user?.id ?? null;
+    if (!userId) return res.status(401).json({ error: { code: 'unauthenticated', message: 'Missing user context' } });
+    try {
+      const { data, error } = await supabase
+        .from('admin_profiles').select('role').eq('user_id', userId).eq('is_active', true).maybeSingle();
+      if (error) return res.status(500).json({ error: { code: 'authz_failed', message: 'Could not verify admin access' } });
+      if (!data || !ADMIN_ROLES.has(data.role)) return res.status(403).json({ error: { code: 'forbidden', message: 'Admin access required' } });
+      next();
+    } catch {
+      return res.status(500).json({ error: { code: 'authz_failed', message: 'Could not verify admin access' } });
+    }
+  });
+
   router.use(express.json({ limit: '256kb' }));
 
-  const authorOf = (req) => req.auth?.userId ?? req.user?.id ?? req.actor?.userId ?? null;
+  const authorOf = (req) => req.userId ?? req.auth?.userId ?? req.user?.id ?? req.actor?.userId ?? null;
   // Freeing a slot (cancel/archive) should promote the next queued run for that project immediately,
   // rather than waiting for the pr-monitor cron safety-net.
   const dispatchFor = async (runId: string) => {
