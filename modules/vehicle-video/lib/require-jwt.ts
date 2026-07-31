@@ -47,14 +47,18 @@ function extractToken(req: Request): string | null {
   }
   const cookieHeader = req.headers.cookie;
   if (cookieHeader) {
-    const match = cookieHeader.match(/sb-[^=]+-auth-token=([^;]+)/);
-    if (match) {
+    // Split into individual cookies and match the name with string ops — NOT a backtracking regex
+    // over the whole header (which CodeQL flags as polynomial ReDoS on the untrusted Cookie header).
+    for (const part of cookieHeader.split(';')) {
+      const eq = part.indexOf('=');
+      if (eq < 0) continue;
+      const name = part.slice(0, eq).trim();
+      if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
       try {
-        const decoded = decodeURIComponent(match[1]);
-        const parsed = JSON.parse(decoded) as { access_token?: string };
+        const parsed = JSON.parse(decodeURIComponent(part.slice(eq + 1).trim())) as { access_token?: string };
         if (parsed.access_token) return parsed.access_token;
       } catch {
-        // malformed cookie → fall through
+        // malformed cookie → keep scanning
       }
     }
   }
@@ -111,8 +115,18 @@ export function requireJwt() {
         errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
         return;
       }
+    } else {
+      // Non-HS256 (e.g. ES256 cloud tokens): this verifier holds only the HS256 shared secret and
+      // cannot check the signature. Do NOT accept blindly — a user-controlled `alg` skipping
+      // verification is an alg-confusion bypass (alg:none / algorithm substitution). Require that the
+      // platform's upstream requireJwt — which gates /api/modules/* and verifies cloud tokens against
+      // the auth service — has already run and set req.userId; reject anything it hasn't vouched for.
+      const upstreamUserId = (req as Request & { userId?: string }).userId;
+      if (!upstreamUserId) {
+        errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
+        return;
+      }
     }
-    // else: ES256/cloud — trusted behind the platform's upstream requireJwt (see docstring).
 
     // Expiry is always enforced when present.
     if (typeof claims.exp === 'number' && claims.exp * 1000 <= Date.now()) {
