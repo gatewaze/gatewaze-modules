@@ -17,3 +17,9 @@ export type { AiChatModelTabsProps } from './components/AiChatModelTabs';
 // thread state, list use-case models, etc., without importing from
 // a deep path.
 export * from './utils/aiService';
+
+// Safe, opt-in Markdown renderer for AI output surfaces (recipe-run
+// final output toggle, chat bubbles when a host opts in). Additive:
+// nothing routes through it unless a surface asks for it.
+export { default as MarkdownView } from './components/MarkdownView';
+export type { MarkdownViewProps } from './components/MarkdownView';

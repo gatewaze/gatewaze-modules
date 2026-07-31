@@ -36,6 +36,7 @@ import {
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Modal, Button, Badge } from '@/components/ui';
 
+import MarkdownView from './MarkdownView';
 import {
   RecipesService,
   type RecipeFull,
@@ -649,6 +650,12 @@ function RunRecipeModal({
 }
 
 function RunResultPanel({ run }: { run: RecipeRun }) {
+  // Final-output view mode. Defaults to the raw <pre> so line-oriented
+  // output (logs, diffs, terminal dumps) is never silently reflowed;
+  // operators opt into Markdown per-run. Only meaningful for string
+  // outputs — object outputs always stay JSON in <pre>.
+  const [outputView, setOutputView] = useState<'raw' | 'markdown'>('raw');
+  const finalIsString = typeof run.final_output === 'string';
   return (
     <div className="space-y-4 text-sm">
       <div className="grid grid-cols-3 gap-3 text-xs">
@@ -726,12 +733,46 @@ function RunResultPanel({ run }: { run: RecipeRun }) {
       </div>
       {run.final_output != null && (
         <div>
-          <div className="text-sm font-medium mb-1">Final output</div>
-          <pre className="rounded-md bg-neutral-50 border px-3 py-2 text-xs overflow-x-auto max-h-72">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-sm font-medium">Final output</div>
+            {finalIsString && (
+              <div className="inline-flex rounded-md border border-neutral-200 overflow-hidden text-xs">
+                <button
+                  type="button"
+                  onClick={() => setOutputView('raw')}
+                  className={`px-2 py-0.5 ${
+                    outputView === 'raw'
+                      ? 'bg-neutral-100 text-neutral-800 font-medium'
+                      : 'bg-white text-neutral-500'
+                  }`}
+                >
+                  Raw
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOutputView('markdown')}
+                  className={`px-2 py-0.5 border-l border-neutral-200 ${
+                    outputView === 'markdown'
+                      ? 'bg-neutral-100 text-neutral-800 font-medium'
+                      : 'bg-white text-neutral-500'
+                  }`}
+                >
+                  Markdown
+                </button>
+              </div>
+            )}
+          </div>
+          {finalIsString && outputView === 'markdown' ? (
+            <div className="rounded-md bg-neutral-50 border px-3 py-2 overflow-x-auto max-h-72">
+              <MarkdownView>{run.final_output as string}</MarkdownView>
+            </div>
+          ) : (
+            <pre className="rounded-md bg-neutral-50 border px-3 py-2 text-xs overflow-x-auto max-h-72">
 {typeof run.final_output === 'string'
   ? run.final_output
   : JSON.stringify(run.final_output, null, 2)}
-          </pre>
+            </pre>
+          )}
         </div>
       )}
     </div>
