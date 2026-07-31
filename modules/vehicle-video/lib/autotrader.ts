@@ -305,9 +305,15 @@ async function probeImage(rawUrl: string): Promise<boolean> {
 const DEALER_BRANDING = (retailerId: string, file: string) =>
   `https://m.atcdn.co.uk/dealer-logo/at2/adbranding/${encodeURIComponent(retailerId)}/images/${file}`;
 const DEALER_LOGO_FILES = ['fpa_logo.gif', 'fpa_logo.png', 'fpa_logo.jpg', 'logo.gif', 'logo.png', 'logo.jpg'];
-const isDealerLogoUrl = (u: string) =>
-  /atcdn\.co\.uk\/dealer-logo\//i.test(u) &&
-  !/service-partner-logo|static\/media\/logos/i.test(u);
+const isDealerLogoUrl = (u: string) => {
+  // Parse + check host and path — an unanchored regex would match e.g.
+  // https://evil.com/atcdn.co.uk/dealer-logo/ and treat an attacker URL as a dealer logo.
+  let host = '', path = '';
+  try { const url = new URL(u); host = url.hostname.toLowerCase(); path = url.pathname; } catch { return false; }
+  if (host !== 'atcdn.co.uk' && !host.endsWith('.atcdn.co.uk')) return false;
+  if (!path.startsWith('/dealer-logo/')) return false;
+  return !/service-partner-logo|static\/media\/logos/i.test(path);
+};
 
 /**
  * Find the DEALER's logo (not Auto Trader's own). Tries the deterministic

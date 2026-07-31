@@ -15,6 +15,7 @@ import { Router, type Express, json, type Request, type Response, type NextFunct
 import { createClient } from '@supabase/supabase-js';
 import { mountAdminRoutes } from './admin-routes.js';
 import { requireJwt } from '../lib/require-jwt.js';
+import { rateLimit, clientIp } from '../lib/rate-limit.js';
 
 interface RegisterCtx {
   enqueueJob?: (queue: string, name: string, data: Record<string, unknown>) => Promise<{ id: string | undefined }>;
@@ -36,6 +37,15 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
   const router = Router();
   // base64 photo chunks can be large; allow a generous JSON body.
   router.use(json({ limit: '64mb' }));
+
+  // Rate-limit by IP before auth so unauthenticated floods are cheap to shed.
+  router.use((req: Request, res: Response, next: NextFunction) => {
+    if (!rateLimit(`vv:${clientIp(req)}`, 240, 60_000)) {
+      res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+      return;
+    }
+    next();
+  });
 
   // Auth gate for the whole router (every route is admin-only). requireJwt
   // verifies the session and sets req.userId; requireAdmin then confirms the
