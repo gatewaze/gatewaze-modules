@@ -452,20 +452,15 @@ export default function WebhooksTab() {
             </p>
             <div className="rounded-md bg-neutral-900 text-neutral-100 p-3 font-mono text-xs break-all flex items-center justify-between gap-2">
               <span>{secretToReveal.secret}</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  void navigator.clipboard.writeText(secretToReveal.secret);
-                  toast.success('Copied');
-                }}
-                title="Copy"
-              >
-                <ClipboardDocumentIcon className="size-4 text-neutral-100" />
-              </Button>
+              <CopyButton
+                value={secretToReveal.secret}
+                label="secret"
+                iconClassName="text-neutral-100"
+              />
             </div>
-            <p className="text-xs text-neutral-500">
+            <p className="text-xs text-neutral-500 flex items-center gap-1 flex-wrap">
               For URL <code>{secretToReveal.url}</code>.
+              <CopyButton value={secretToReveal.url} label="URL" />
               {secretToReveal.rotated && (
                 <>
                   {' '}The previous secret remains valid until the next rotate
@@ -492,6 +487,30 @@ export default function WebhooksTab() {
         confirmColor="red"
       />
     </div>
+  );
+}
+
+function CopyButton({
+  value,
+  label,
+  iconClassName,
+}: {
+  value: string;
+  label: string;
+  iconClassName?: string;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => {
+        void navigator.clipboard.writeText(value);
+        toast.success(`Copied ${label}`);
+      }}
+      title={`Copy ${label}`}
+    >
+      <ClipboardDocumentIcon className={`size-4${iconClassName ? ` ${iconClassName}` : ''}`} />
+    </Button>
   );
 }
 

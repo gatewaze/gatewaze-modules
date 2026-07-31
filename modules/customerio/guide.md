@@ -11,7 +11,6 @@ Edge functions deployed:
 - `integrations-customerio-webhook` -- Inbound webhook receiver
 - `integrations-customerio-sync-person` -- Single-person sync
 - `integrations-customerio-process-events` -- Event processing pipeline
-- `integrations-track-event` -- Outbound event tracking
 
 ## Configuration
 

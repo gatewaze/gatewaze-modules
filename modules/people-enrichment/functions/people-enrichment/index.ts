@@ -5,9 +5,6 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const enrichlayerApiKey = Deno.env.get('ENRICHLAYER_API_KEY')!
 
-// API key for authenticating requests from the frontend
-const API_BEARER_TOKEN = Deno.env.get('GW_API_BEARER') || 'YYv8gvrl55fVPmJDQAWz8JLmhtpZpWF1MlqOrv8dfs7yPfMHPLHTdAlUeJcDiIUe'
-
 const supabase = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     autoRefreshToken: false,
@@ -604,7 +601,9 @@ async function handler(req: Request) {
     })
   }
 
-  // Validate Authorization header — accept API bearer token OR valid Supabase JWT
+  // Validate Authorization header — require a valid Supabase JWT.
+  // (The legacy GW_API_BEARER service-to-service path was removed: it was
+  // configured in no environment and had no working caller.)
   const authHeader = req.headers.get('Authorization')
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return new Response(JSON.stringify({ status: { age: 'Error' }, message: 'Unauthorized' }), {
@@ -614,20 +613,8 @@ async function handler(req: Request) {
   }
 
   const token = authHeader.split(' ')[1]
-  let isAuthorized = false
-
-  // Check API bearer token first (backend/webhook calls)
-  if (token === API_BEARER_TOKEN) {
-    isAuthorized = true
-  } else {
-    // Try validating as a Supabase JWT (frontend calls via supabase.functions.invoke)
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-    if (!error && user) {
-      isAuthorized = true
-    }
-  }
-
-  if (!isAuthorized) {
+  const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+  if (authError || !user) {
     return new Response(JSON.stringify({ status: { age: 'Error' }, message: 'Unauthorized' }), {
       status: 401,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
