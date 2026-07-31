@@ -5,9 +5,10 @@
  * mediaAdapter + supabase + the route handlers, mounts on the
  * platform's express app under /api/admin/<hostKind>/...
  *
- * Auth: requireJwt() runs upstream via the platform's
- * /api/modules mount (modulesRouter applies it on entry). req.userId
- * is populated by the time our handlers run.
+ * Auth: this router mounts at /api/admin, which the platform does NOT
+ * gate (the platform's modulesRouter only gates /api/modules/*). So the
+ * local `adminRouter.use(requireJwt())` below is the SOLE auth gate for
+ * these routes — do not remove it. It sets req.userId for the handlers.
  *
  * Per spec-host-media-module §4.1 (multer mount) + §11.
  */
@@ -164,8 +165,8 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
   const chunkedRoutes = createChunkedRoutes({ supabase, storageBucket: STORAGE_BUCKET, logger });
   mountChunkedRoutes(adminRouter, chunkedRoutes);
 
-  // Mount on the express app at /api/admin. requireJwt() runs upstream
-  // via /api/modules.
+  // Mount at /api/admin, which the platform does not gate — the local
+  // requireJwt() above is the sole auth gate for these routes.
   app.use('/api/admin', adminRouter);
 
   void context;
