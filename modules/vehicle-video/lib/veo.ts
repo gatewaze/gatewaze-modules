@@ -128,7 +128,8 @@ export async function downloadClip(videoUri: string): Promise<Buffer> {
       return '';
     }
   })();
-  if (!host.endsWith('generativelanguage.googleapis.com')) {
+  if (host !== 'generativelanguage.googleapis.com' && !host.endsWith('.generativelanguage.googleapis.com')) {
+    // dot-anchored: bare endsWith would also accept e.g. "xgenerativelanguage.googleapis.com".
     throw new VehicleVideoError('VEO_SUBMIT_FAILED', 'clip', `refusing to download non-Google video URI host: ${host}`);
   }
   const sep = videoUri.includes('?') ? '&' : '?';

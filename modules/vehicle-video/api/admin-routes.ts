@@ -203,8 +203,15 @@ export function mountAdminRoutes(router: Router, deps: AdminDeps): void {
     let sourceUrl: string | null = null;
     if (typeof body.listing_id === 'string' && /^\d{6,}$/.test(body.listing_id)) {
       sourceUrl = `https://www.autotrader.co.uk/car-details/${body.listing_id}`;
-    } else if (typeof body.source_url === 'string' && /autotrader\.co\.uk\/car-details\/\d{6,}/.test(body.source_url)) {
-      sourceUrl = body.source_url;
+    } else if (typeof body.source_url === 'string') {
+      // Parse + validate host and path exactly — an unanchored regex would accept
+      // https://evil.com/autotrader.co.uk/car-details/123456 and drive a fetch there (SSRF).
+      try {
+        const u = new URL(body.source_url);
+        if ((u.hostname === 'www.autotrader.co.uk' || u.hostname === 'autotrader.co.uk') && /^\/car-details\/\d{6,}$/.test(u.pathname)) {
+          sourceUrl = `https://www.autotrader.co.uk${u.pathname}`; // canonical — drop attacker query/fragment
+        }
+      } catch { /* not a valid URL → rejected below */ }
     }
     if (!sourceUrl) {
       return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'provide a listing_id or an Auto Trader car-details source_url' } });
