@@ -15,6 +15,8 @@ import { resolveCommitIdentity } from './credentials.js';
 import { recallMemory } from './memory.js';
 import { resolveMcpServers, mcpSecretValues } from './mcp.js';
 import { redactSecrets } from './git.js';
+import { downloadIssueAttachments, ATTACH_DIRNAME } from './attachments.js';
+import { githubClient } from './github.js';
 
 /**
  * Multi-repo agent session (§7). The WORKER owns the workspace lifecycle (makeMultiWorkspace +
@@ -48,10 +50,28 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     let memory = '';
     try { memory = await recallMemory(run.project_id); } catch { /* soft */ }
 
+    // Reporter attachments (screenshots) → the agent's eyes. Best-effort: fetch the issue body and
+    // download its images into the workspace so the agent can Read them (rendered visually, like a
+    // pasted image in a Claude Code session). Skipped silently when there are none. Disable with
+    // spec.attachments === false.
+    let attachNote = '';
+    if (spec.attachments !== false) {
+      try {
+        const issue = await githubClient(project.githubToken).getIssue(run.repo_owner, run.repo_name, run.issue_number);
+        const dl = await downloadIssueAttachments(String(issue?.body ?? ''), project.githubToken, spec.cwd);
+        if (dl.count > 0) {
+          attachNote =
+            `\n--- REPORTER ATTACHMENTS ---\nThe person who filed this issue attached ${dl.count} screenshot(s), saved in ./${ATTACH_DIRNAME}/ (${dl.names.join(', ')}). ` +
+            `Use the Read tool on each BEFORE you start — they are visual context (bug screenshots, mockups) for this task.`;
+        }
+      } catch { /* no attachments / offline — soft */ }
+    }
+
     const layout = (spec.repos ?? []).map((r) => `- ./${r.repoName}/  (${r.writable ? 'WRITABLE — you may change this' : 'read-only — context only'})`).join('\n');
     const systemAppend =
       (spec.systemAppend ? spec.systemAppend + '\n\n' : '') +
       `--- WORKSPACE ---\nYou are in a multi-repo workspace; each repository is a subdirectory:\n${layout}\nMake code changes ONLY in WRITABLE repos; read any repo for context.\n` +
+      attachNote +
       (contracts ? `\n--- REPO WORKING AGREEMENTS (follow each repo's own exactly) ---${contracts}\n` : '') +
       (memory ? `\n--- PROJECT MEMORY (what past runs learned; trust, but verify against current code) ---\n${memory.slice(0, 16000)}` : '');
 

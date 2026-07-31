@@ -256,6 +256,7 @@ function IssuesView() {
   const [err, setErr] = useState<string | null>(null);
   const [form, setForm] = useState<any>({ project_id: '', title: '', body: '', assign: true });
   const [creating, setCreating] = useState(false);
+  const [atts, setAtts] = useState<any[]>([]);   // pasted/dropped screenshots → uploaded to `media`
 
   const load = useCallback(async () => {
     try { setIssues((await api(`/issues${filter ? `?project=${filter}` : ''}`)).issues ?? []); setErr(null); }
@@ -264,10 +265,42 @@ function IssuesView() {
   useEffect(() => { api('/projects').then((d) => { setProjects(d.projects ?? []); setForm((f: any) => ({ ...f, project_id: f.project_id || d.projects?.[0]?.id || '' })); }).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Upload one image to the public `media` bucket and track it; GitHub renders its public URL inline.
+  const uploadImage = async (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > 15 * 1024 * 1024) { setErr('image too large (max 15MB)'); return; }
+    const key = crypto.randomUUID();
+    const ext = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
+    const path = `se-issues/${form.project_id || 'unknown'}/${key}.${ext}`;
+    setAtts((a) => [...a, { key, name: file.name || `${key}.${ext}`, url: '', uploading: true }]);
+    try {
+      const { error } = await supabase.storage.from('media').upload(path, file, { upsert: false, cacheControl: '3600', contentType: file.type });
+      if (error) throw error;
+      const { data } = supabase.storage.from('media').getPublicUrl(path);
+      setAtts((a) => a.map((x) => (x.key === key ? { ...x, uploading: false, url: data.publicUrl } : x)));
+    } catch (e: any) { setErr(`image upload failed: ${String(e.message ?? e)}`); setAtts((a) => a.filter((x) => x.key !== key)); }
+  };
+  const onPaste = (e: React.ClipboardEvent) => {
+    const imgs = Array.from(e.clipboardData?.items ?? []).filter((it) => it.type.startsWith('image/'));
+    if (!imgs.length) return;
+    e.preventDefault();
+    imgs.forEach((it) => { const f = it.getAsFile(); if (f) uploadImage(f); });
+  };
+  const onDrop = (e: React.DragEvent) => { e.preventDefault(); Array.from(e.dataTransfer?.files ?? []).forEach(uploadImage); };
+  const onPick = (e: React.ChangeEvent<HTMLInputElement>) => { Array.from(e.target.files ?? []).forEach(uploadImage); e.target.value = ''; };
+  const removeAtt = (key: string) => setAtts((a) => a.filter((x) => x.key !== key));
+
+  const uploading = atts.some((a) => a.uploading);
   const create = async () => {
-    if (!form.project_id || !form.title.trim()) return;
+    if (!form.project_id || !form.title.trim() || uploading) return;
     setCreating(true);
-    try { await api('/issues', { method: 'POST', body: JSON.stringify({ project_id: form.project_id, title: form.title.trim(), body: form.body, assign_to_agent: form.assign }) }); setForm((f: any) => ({ ...f, title: '', body: '' })); await load(); }
+    try {
+      await api('/issues', { method: 'POST', body: JSON.stringify({
+        project_id: form.project_id, title: form.title.trim(), body: form.body, assign_to_agent: form.assign,
+        attachments: atts.filter((a) => a.url).map((a) => ({ url: a.url })),
+      }) });
+      setForm((f: any) => ({ ...f, title: '', body: '' })); setAtts([]); await load();
+    }
     catch (e: any) { setErr(String(e.message ?? e)); } finally { setCreating(false); }
   };
 
@@ -282,10 +315,27 @@ function IssuesView() {
           </select>
           <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title" className="flex-1 rounded-md border px-3 py-1.5 text-sm" />
         </div>
-        <textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} placeholder="Describe the problem or improvement…" rows={3} className="w-full rounded-md border px-3 py-2 text-sm" />
+        <textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} onPaste={onPaste} onDrop={onDrop} onDragOver={(e) => e.preventDefault()} placeholder="Describe the problem or improvement…  (paste or drop a screenshot to attach)" rows={3} className="w-full rounded-md border px-3 py-2 text-sm" />
+        {atts.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {atts.map((a) => (
+              <div key={a.key} className="relative group">
+                {a.url
+                  ? <img src={a.url} alt={a.name} className="h-16 w-16 rounded border object-cover" />
+                  : <div className="h-16 w-16 rounded border flex items-center justify-center bg-[var(--gray-2)]"><LoadingSpinner /></div>}
+                <button type="button" onClick={() => removeAtt(a.key)} className="absolute -top-1.5 -right-1.5 rounded-full bg-[var(--gray-12)] text-[var(--gray-1)] size-4 leading-none text-[11px] opacity-0 group-hover:opacity-100" aria-label="Remove">×</button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-center justify-between">
-          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={form.assign} onChange={(e) => setForm({ ...form, assign: e.target.checked })} className="size-4" />Hand to a software engineer agent</label>
-          <Button size="sm" onClick={create} disabled={creating || !form.title.trim()}>Create issue</Button>
+          <div className="flex items-center gap-3">
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={form.assign} onChange={(e) => setForm({ ...form, assign: e.target.checked })} className="size-4" />Hand to a software engineer agent</label>
+            <label className="text-xs text-[var(--gray-10)] hover:text-[var(--gray-12)] cursor-pointer underline">
+              Attach image<input type="file" accept="image/*" multiple onChange={onPick} className="hidden" />
+            </label>
+          </div>
+          <Button size="sm" onClick={create} disabled={creating || uploading || !form.title.trim()}>{uploading ? 'Uploading…' : 'Create issue'}</Button>
         </div>
       </section>
 

@@ -11,6 +11,7 @@ import { sealToken, getProject } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
 import { dispatchProject } from '../lib/dispatch.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
+import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -173,7 +174,17 @@ export function mountAdminRoutes(router, deps) {
     if (!UUID.test(projectId) || !title) return res.status(400).json({ error: 'project_id + title required' });
     const proj = await getProject(supabase, projectId);
     if (!proj?.githubToken || !proj.issuesRepoOwner || !proj.issuesRepoName) return res.status(400).json({ error: 'project has no issues repo or token' });
-    const body = req.body?.body != null ? String(req.body.body).slice(0, 60000) : '';
+    let body = req.body?.body != null ? String(req.body.body).slice(0, 60000) : '';
+    // Attachments (pasted screenshots) — already uploaded to the public `media` bucket by the client.
+    // Validate each URL against the host allowlist (defense in depth: the agent's download path
+    // allowlists too) and append them as markdown so GitHub renders them inline in the issue.
+    const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments.slice(0, 8) : [];
+    const validUrls = attachments
+      .map((a: any) => (typeof a === 'string' ? a : a?.url))
+      .filter((u: any) => typeof u === 'string' && isAllowedAttachmentUrl(u));
+    if (validUrls.length) {
+      body += `\n\n### Attachments\n` + validUrls.map((u: string, i: number) => `![screenshot-${i + 1}](${u})`).join('\n');
+    }
     const assign = !!req.body?.assign_to_agent;
     const gh = githubClient(proj.githubToken);
     try {
