@@ -226,6 +226,10 @@ When reporting a bug, please include:
 
 For feature requests, describe the problem you are trying to solve and your proposed solution.
 
+### The `agent:build` label
+
+Maintainers may add the **`agent:build`** label to an issue to hand it to the project's automated coding agent, which attempts an implementation and opens a pull request for review. Adding the label is a maintainer action; a labeled issue still goes through the normal [Pull Request Process](#pull-request-process) -- review and CI must pass before anything merges. If you are not a maintainer, you do not need to add this label to contribute.
+
 ---
 
 Thank you for contributing to Gatewaze Modules! Your work helps build a better platform for everyone.
