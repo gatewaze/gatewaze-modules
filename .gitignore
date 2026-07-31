@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_Store
+
+# Machine-local pragma agent learned-memory (never committed — see CLAUDE.md)
+**/.claude/agent-memory/
