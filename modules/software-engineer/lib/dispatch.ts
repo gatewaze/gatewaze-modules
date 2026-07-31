@@ -7,8 +7,14 @@
  */
 import { getProject } from './credentials.js';
 
-// A slot is "occupied" from dispatch until the issue is done (PR merged/closed) or it dies.
-const ACTIVE = ['running', 'watching', 'changes_requested', 'blocked', 'pr_open'];
+// A concurrency slot is occupied ONLY while an engineer is actively working — executing a phase
+// ('running') or addressing PR feedback ('changes_requested', i.e. the revise loop). Runs that are
+// merely waiting — 'watching' a PR that's in review, 'blocked' on a human decision, or 'pr_open' —
+// are idle: no worker/model is running for them, so they must NOT count against the cap or they'd
+// starve the queue (a project's blocked/in-review runs would permanently hold engineer slots).
+const WORKING = ['running', 'changes_requested'];
+// All non-terminal states — used only to keep ephemeral engineer names distinct across visible runs.
+const LIVE = ['running', 'watching', 'changes_requested', 'blocked', 'pr_open'];
 
 // Friendly names for ephemeral engineers (UI only — never written to git). Enough that a project's
 // concurrent pool rarely collides; falls back to a numbered name if all are taken.
@@ -37,10 +43,11 @@ export async function dispatchProject(sb: unknown, ctx: unknown, projectId: stri
 
   // Bounded loop — never more iterations than the cap.
   for (let i = 0; i < max; i++) {
-    const { data: active } = await sb
-      .from('se_runs').select('engineer_name')
-      .eq('project_id', projectId).is('archived_at', null).in('status', ACTIVE);
-    if ((active?.length ?? 0) >= max) break;
+    const { data: live } = await sb
+      .from('se_runs').select('status, engineer_name')
+      .eq('project_id', projectId).is('archived_at', null).in('status', LIVE);
+    const working = (live ?? []).filter((r) => WORKING.includes(r.status)).length;
+    if (working >= max) break;   // cap counts only actively-working engineers, not idle/blocked runs
 
     const { data: next } = await sb
       .from('se_runs').select('id')
@@ -48,7 +55,7 @@ export async function dispatchProject(sb: unknown, ctx: unknown, projectId: stri
       .order('created_at', { ascending: true }).limit(1).maybeSingle();
     if (!next) break;
 
-    const used = new Set((active ?? []).map((a) => a.engineer_name).filter(Boolean));
+    const used = new Set((live ?? []).map((a) => a.engineer_name).filter(Boolean));
     const name = pickName(used, next.id);
 
     const { data: won } = await sb
