@@ -50,6 +50,7 @@ export interface ProjectSettings {
   intakeEnabled: boolean;
   autonomyMode: 'pr_only' | 'auto_merge_safe';
   maxConcurrentEngineers: number;
+  maxInteractiveEngineers: number;
   perRunTokenCeiling: number | null;
   perRunWallclockMinutes: number | null;
   monthlyTokenBudget: number | null;
@@ -148,6 +149,7 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     intakeEnabled: data.intake_enabled,
     autonomyMode: data.autonomy_mode,
     maxConcurrentEngineers: data.max_concurrent_engineers ?? 2,
+    maxInteractiveEngineers: data.max_interactive_engineers ?? 1,
     perRunTokenCeiling: data.per_run_token_ceiling,
     perRunWallclockMinutes: data.per_run_wallclock_minutes,
     monthlyTokenBudget: data.monthly_token_budget,
