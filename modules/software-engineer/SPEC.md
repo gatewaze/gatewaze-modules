@@ -274,7 +274,12 @@ Hero-header + tab shell (`WorkspaceLayout`). **URL-driven / deep-linkable**:
   cancel/archive). **BUILT.**
 - `/software-engineer/runs/<id>` → a specific run (shareable). **BUILT.**
 - `/software-engineer/issues` → **Issues** — aggregates open issues from each project's issues repo,
-  marks agent-targeted ones + run status, project filter. **TO BUILD.** Also a **"New issue"** button
+  marks agent-targeted ones + run status, project filter. **BUILT.** The list stays live: run-status
+  badges via Supabase realtime on `se_runs` (run data is in Supabase), and the issue list itself via
+  visibility-aware polling of `/issues` (GitHub is the source of truth and can't push here). Creating
+  an issue prepends an **optimistic row** from the POST response (`number`/`url`/`runId`) and then
+  reconciles with a short backoff refetch, because GitHub's list endpoint is eventually consistent so
+  the immediate refetch usually omits the just-created issue. Also a **"New issue"** button
   (project selector) that opens the **triage panel** (§10.5) — the universal, any-project entry
   point. Triage produces a structured ticket and the server writes it to the project's issues repo
   **via the project's PAT** (reporters need no GitHub account; the issue is authored under the
