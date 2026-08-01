@@ -43,6 +43,38 @@ const STATUS_COLOR: Record<string, string> = {
 const phaseColor = (s: string) =>
   s === 'passed' ? 'green' : s === 'failed' || s === 'blocked' ? 'red' : s === 'running' ? 'blue' : 'gray';
 
+// Human prose for the run's current phase — so a live run reads as continuous progress rather than
+// only jumping on turn boundaries. Falls back to the raw phase for any phase not enumerated here.
+const PHASE_PROSE: Record<string, string> = {
+  intake: 'Reading the issue and planning the work',
+  spec: 'Writing the change spec',
+  review: 'Reviewing the spec',
+  implement: 'Writing the code',
+  verify: 'Running checks and tests',
+  revise: 'Revising in response to feedback',
+  pr: 'Opening the pull request',
+  watch: 'Watching the pull request',
+  merge: 'Merging',
+};
+const phaseProse = (p?: string) => (p && PHASE_PROSE[p]) || (p ? `Working (${p})` : 'Working');
+
+// One-line label promoting the latest live event out of the collapsed "Tool activity" block, so the
+// working strip shows what the agent is doing *right now* between turn-boundary transcript messages.
+function eventLabel(ev: any): string {
+  if (!ev) return '';
+  const p = ev.payload ?? {};
+  switch (ev.kind) {
+    case 'tool_use': return `Running ${p.name ?? 'a tool'}`;
+    case 'tool_result': return 'Reading the result';
+    case 'thinking': return p.text ? `Thinking — ${String(p.text).replace(/\s+/g, ' ').slice(0, 120)}` : 'Thinking…';
+    case 'status': return String(p.text ?? p.step ?? 'Working…');
+    case 'assistant': return p.text ? String(p.text).replace(/\s+/g, ' ').slice(0, 120) : 'Writing…';
+    default: return String(ev.kind ?? '');
+  }
+}
+
+const THROTTLE_MS = 500;   // coalesce bursts of realtime events into at most one detail refetch / window
+
 function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null; onSelect: (id: string | null) => void; onGoToSetup: () => void }) {
   const [runs, setRuns] = useState<any[]>([]);
   const [detail, setDetail] = useState<any | null>(null);
@@ -53,6 +85,8 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [projectList, setProjectList] = useState<any[]>([]);
   const [projectFilter, setProjectFilter] = useState('');   // '' = all projects
   const bottom = useRef<HTMLDivElement | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
+  const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
 
   useEffect(() => { api('/projects').then((d) => setProjectList(d.projects ?? [])).catch(() => {}); }, []);
 
@@ -80,18 +114,42 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
 
   useEffect(() => {
     if (!selected) { setDetail(null); return; }
+    lastActivityRef.current = Date.now();
     loadDetail(selected);
-    const reload = () => loadDetail(selected);
+    // Throttle refetches: se_events can burst (one row per tool call), and each realtime signal here
+    // triggers a *full* run refetch. Coalesce to a leading + trailing call per THROTTLE_MS window so a
+    // busy phase doesn't hammer /runs/:id. Any signal also refreshes the freshness clock below.
+    let timer: any = null;
+    let trailing = false;
+    const bump = () => {
+      lastActivityRef.current = Date.now();
+      if (timer) { trailing = true; return; }
+      loadDetail(selected);
+      timer = setTimeout(function fire() {
+        timer = null;
+        if (trailing) { trailing = false; loadDetail(selected); timer = setTimeout(fire, THROTTLE_MS); }
+      }, THROTTLE_MS);
+    };
     const ch = supabase.channel(`se-run-${selected}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_events', filter: `run_id=eq.${selected}` }, reload)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_messages', filter: `run_id=eq.${selected}` }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_phases', filter: `run_id=eq.${selected}` }, reload)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'se_runs', filter: `id=eq.${selected}` }, reload)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_events', filter: `run_id=eq.${selected}` }, bump)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_messages', filter: `run_id=eq.${selected}` }, bump)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_phases', filter: `run_id=eq.${selected}` }, bump)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'se_runs', filter: `id=eq.${selected}` }, bump)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => { if (timer) clearTimeout(timer); supabase.removeChannel(ch); };
   }, [selected, loadDetail]);
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [detail?.messages?.length, detail?.events?.length]);
+
+  const liveStatus = ['queued', 'running', 'changes_requested'].includes(detail?.run?.status);
+
+  // Re-render once a second while live so the "updated Ns ago" freshness clock advances — a wedged run
+  // (no events, no heartbeat) then reads as visibly stale instead of looking identical to a live one.
+  useEffect(() => {
+    if (!liveStatus) return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [liveStatus]);
 
   const send = async () => {
     if (!selected || !draft.trim()) return;
@@ -112,8 +170,6 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     try { await api(`/runs/${id}/${on ? 'archive' : 'unarchive'}`, { method: 'POST' }); await loadRuns(); if (selected === id) await loadDetail(id); }
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
-
-  const liveStatus = ['queued', 'running', 'changes_requested'].includes(detail?.run?.status);
 
   return (
     <div className="flex gap-6 min-h-[60vh]">
@@ -202,6 +258,41 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 ))}
               </div>
             </div>
+
+            {/* Live "working" strip — persistent while the run is live so progress is visible between
+                turn-boundary transcript messages. Distinct queued (waiting) vs running (active) states,
+                the latest live event promoted out of the collapsed block, and a freshness clock so a
+                stalled run doesn't look identical to a healthy one. */}
+            {liveStatus && (() => {
+              const events = detail.events ?? [];
+              const latest = events[events.length - 1];
+              const queued = detail.run.status === 'queued';
+              const ageSec = Math.max(0, Math.round((Date.now() - lastActivityRef.current) / 1000));
+              const stale = !queued && ageSec >= 45;   // past the heartbeat window → possibly wedged
+              return (
+                <div className={`mb-3 rounded-md border px-3 py-2 flex items-center gap-3 ${
+                  stale ? 'border-amber-300 bg-amber-50' : 'border-[var(--gray-6)] bg-[var(--gray-2)]'
+                }`}>
+                  <span className="relative flex size-2.5 shrink-0">
+                    {!queued && !stale && <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping" />}
+                    <span className={`relative inline-flex rounded-full size-2.5 ${queued ? 'bg-[var(--gray-8)]' : stale ? 'bg-amber-500' : 'bg-blue-500'}`} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-[var(--gray-12)]">
+                      {queued ? 'Waiting for a worker to pick this up…' : phaseProse(detail.run.current_phase)}
+                    </div>
+                    {!queued && latest && (
+                      <div className="text-xs text-[var(--gray-11)] truncate">{eventLabel(latest)}</div>
+                    )}
+                  </div>
+                  {!queued && (
+                    <span className={`shrink-0 text-[11px] tabular-nums ${stale ? 'text-amber-700 font-medium' : 'text-[var(--gray-10)]'}`}>
+                      {stale ? `no activity for ${ageSec}s` : `updated ${ageSec}s ago`}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Transcript */}
             <div className="flex-1 overflow-y-auto pr-2 text-sm space-y-2">
