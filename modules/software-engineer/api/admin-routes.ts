@@ -170,6 +170,9 @@ export function mountAdminRoutes(router, deps) {
   // closed here as a robust fallback so the slot frees even if the worker is already gone. Idempotent
   // with the worker's own close (both set 'closed'). Only valid for kind='interactive'.
   router.post('/runs/:id/close', async (req, res) => {
+    if (!rateLimit(`se-admin:close:${clientIp(req)}`, 60, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
     const { data: run } = await supabase.from('se_runs').select('id, site_id, kind, status').eq('id', id).maybeSingle();
@@ -215,6 +218,9 @@ export function mountAdminRoutes(router, deps) {
   // it is closed (explicitly, or by an idle / wall-clock cap). Bounded by a per-project cap that is
   // separate from the issue pipeline pool. The admin then chats via the normal /runs/:id/message path.
   router.post('/engineers/interactive', async (req, res) => {
+    if (!rateLimit(`se-admin:interactive:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     const projectId = String(req.body?.project_id ?? '');
     if (!UUID.test(projectId)) return res.status(400).json({ error: 'project_id required' });
     const proj = await getProject(supabase, projectId);
