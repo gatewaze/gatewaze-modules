@@ -15,7 +15,7 @@ import { enqueuePhase } from '../lib/enqueue.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
-import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory } from '../lib/memory.js';
+import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -93,6 +93,42 @@ export function mountAdminRoutes(router, deps) {
     if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
     await rejectMemory(supabase, projectId, project.name);
     return res.json({ rejected: true });
+  });
+
+  // Linked memory sources (§9): other projects whose APPROVED memory this project also recalls.
+  // Directional and opt-in; backed by wiki grants. Only same-tenant projects may be linked.
+  router.get('/projects/:id/memory/sources', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const ids = await listMemorySources(supabase, projectId);
+    let sources: Array<{ projectId: string; name: string }> = [];
+    if (ids.length) {
+      const { data } = await supabase.from('se_projects').select('id, name').in('id', ids);
+      sources = (data ?? []).map((p) => ({ projectId: p.id, name: p.name }));
+    }
+    return res.json({ sources });
+  });
+  router.put('/projects/:id/memory/sources', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const raw = Array.isArray(req.body?.source_project_ids) ? req.body.source_project_ids : null;
+    if (!raw) return res.status(400).json({ error: { code: 'invalid_input', message: 'source_project_ids array required' } });
+    // Allowlist: valid UUIDs, not self, and belonging to THIS tenant (site) — never link an arbitrary
+    // project/use_case (that would leak another tenant's memory into this project's runs).
+    const wanted = [...new Set(raw.map((x: unknown) => String(x)))].filter((x) => UUID.test(x) && x !== projectId);
+    let valid: string[] = [];
+    if (wanted.length) {
+      const { data } = await supabase.from('se_projects').select('id').in('id', wanted).eq('site_id', project.siteId);
+      valid = (data ?? []).map((p) => p.id);
+    }
+    const current = await listMemorySources(supabase, projectId);
+    const toLink = valid.filter((id) => !current.includes(id));
+    const toUnlink = current.filter((id) => !valid.includes(id));
+    for (const id of toLink) await linkMemorySource(supabase, projectId, id);
+    for (const id of toUnlink) await unlinkMemorySource(supabase, projectId, id);
+    return res.json({ sources: valid, linked: toLink.length, unlinked: toUnlink.length });
   });
   // Freeing a slot (cancel/archive) should promote the next queued run for that project immediately,
   // rather than waiting for the pr-monitor cron safety-net.

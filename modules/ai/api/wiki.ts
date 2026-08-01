@@ -349,12 +349,15 @@ export function mountWikiRoutes(router: Router, deps: MountDeps): void {
 
   router.post('/internal/wiki/upsert', async (req: Request, res: Response): Promise<void> => {
     if (!internalAuth(req, res)) return;
-    const b = req.body as { use_case?: string; slug?: string; title?: string; body?: string; summary?: string; category?: string; metadata?: Record<string, unknown>; message_id?: string };
+    const b = req.body as { use_case?: string; slug?: string; title?: string; body?: string; summary?: string; category?: string; metadata?: Record<string, unknown>; source?: string; message_id?: string };
     if (!b?.use_case || !b?.slug || typeof b.title !== 'string') return sendError(res, 400, 'invalid_input', 'use_case, slug, title required');
+    // Provenance: 'model' (agent write, default) | 'human' (git pull) | 'import' (bulk import of an
+    // external corpus). Validated against the allowed set; anything else falls back to 'model'.
+    const source = b.source === 'import' || b.source === 'human' ? b.source : 'model';
     const r = await upsertPage(deps.supabase, {
       useCase: b.use_case, slug: b.slug, title: b.title, body: String(b.body ?? ''),
       summary: b.summary ?? null, category: b.category ?? null, metadata: b.metadata ?? {},
-      source: 'model', messageId: b.message_id ?? null,
+      source, messageId: b.message_id ?? null,
     }, embed);
     if (!r.ok) return sendError(res, r.error?.startsWith('invalid_slug') ? 400 : 500, r.error?.startsWith('invalid_slug') ? 'invalid_input' : 'internal_error', r.error ?? 'upsert failed');
     res.status(200).json({ ok: true, slug: r.slug, version: r.version, ...(r.warning ? { warning: r.warning } : {}) });

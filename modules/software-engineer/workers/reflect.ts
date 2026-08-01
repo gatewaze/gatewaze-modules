@@ -8,7 +8,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
 import { InProcessRunner } from '../lib/agent-session.js';
-import { recallMemory, writeMemoryPending } from '../lib/memory.js';
+import { readLiveMemory, writeMemoryPending } from '../lib/memory.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -23,7 +23,7 @@ export default async function reflect(job, ctx) {
   const project = await getProject(supabase, run.project_id);
   if (!project?.modelCred) return { skipped: 'no model cred' };
 
-  const current = await recallMemory(run.project_id);
+  const current = await readLiveMemory(run.project_id);
   const { data: art } = await supabase.from('se_artifacts').select('content')
     .eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
 
