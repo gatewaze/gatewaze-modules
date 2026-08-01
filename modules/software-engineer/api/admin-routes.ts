@@ -6,6 +6,7 @@
  * memory, policy, and a concurrency cap. Engineers are ephemeral (one per run, run.engineer_name).
  */
 import express from 'express';
+import expressRateLimit from 'express-rate-limit';
 import { randomUUID } from 'node:crypto';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject } from '../lib/credentials.js';
@@ -44,11 +45,22 @@ const ADMIN_ROLES = new Set(['super_admin', 'admin', 'editor']);
 export function mountAdminRoutes(router, deps) {
   const { supabase, getRedis, logger, enqueueJob } = deps;
 
+  // Router-wide rate limit — applied as the FIRST middleware so every admin route (including the
+  // authorization-performing ones like /runs/:id/close and /engineers/interactive) is throttled
+  // before any auth or DB work. Uses express-rate-limit (a recognised limiter) keyed by client IP;
+  // per-route stricter caps below add tighter limits on the expensive control-surface actions.
+  router.use(expressRateLimit({
+    windowMs: 60_000,
+    limit: 240,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false, // custom keyGenerator below; skip the built-in trust-proxy/IP validation
+    keyGenerator: (req) => `se-admin:${clientIp(req)}`,
+    handler: (_req, res) => res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } }),
+  }));
+
   // Admin gate — runs BEFORE body parsing so unauthorized requests are rejected before we read a body.
   router.use(async (req, res, next) => {
-    if (!rateLimit(`se-admin:${clientIp(req)}`, 240, 60_000)) {
-      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
-    }
     if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') return next(); // parity with platform requireJwt test bypass
     const userId = req.userId ?? req.auth?.userId ?? req.user?.id ?? null;
     if (!userId) return res.status(401).json({ error: { code: 'unauthenticated', message: 'Missing user context' } });
