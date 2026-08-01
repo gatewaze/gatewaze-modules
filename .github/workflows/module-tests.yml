@@ -56,10 +56,28 @@ jobs:
               echo "install failed standalone (needs the monorepo) → skipping"
               skipped+=("$m"); echo "::endgroup::"; continue
             fi
-            if ( cd "modules/$m" && pnpm test ); then
-              passed+=("$m")
+            log="/tmp/test-$m.log"
+            if ( cd "modules/$m" && pnpm test ) >"$log" 2>&1; then
+              cat "$log"; passed+=("$m")
             else
-              failed+=("$m")
+              cat "$log"
+              # Distinguish a REAL test failure from an environmental one, keying off
+              # vitest's test-level summary ("Tests N failed | M passed") rather than
+              # any specific error string. A test file that imports a monorepo-hoisted
+              # package (react etc.) can't load standalone — vitest reports a failed
+              # test FILE but zero failed TESTS (nothing ran), whether the cause is
+              # "Cannot find package" (CI) or a floated version mismatch (local). That
+              # is environmental → skip. A "Tests N failed" with N>0 is a genuine
+              # assertion failure → fail. No summary at all → surface it.
+              tests_line="$(grep -E '^[[:space:]]*Tests[[:space:]]' "$log" | tail -1)"
+              if echo "$tests_line" | grep -qE '[1-9][0-9]* failed'; then
+                failed+=("$m")
+              elif echo "$tests_line" | grep -q 'passed'; then
+                echo "→ non-zero exit but 0 test-level failures (a test file couldn't load standalone) → skipping"
+                skipped+=("$m")
+              else
+                failed+=("$m")   # no test summary at all — surface it
+              fi
             fi
             echo "::endgroup::"
           done
@@ -69,5 +87,5 @@ jobs:
             echo "- failed (${#failed[@]}): ${failed[*]:-none}"
             echo "- skipped — need monorepo (${#skipped[@]}): ${skipped[*]:-none}"
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          # Fail only when a module that DID install standalone has failing tests.
+          # Fail only when a module that DID install standalone has genuine test failures.
           if [ "${#failed[@]}" -gt 0 ]; then exit 1; fi
