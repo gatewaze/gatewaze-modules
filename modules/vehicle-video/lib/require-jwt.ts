@@ -9,15 +9,32 @@
  * `jsonwebtoken` — the module dir isn't guaranteed to have that dep linked.
  *
  * Behaviour: same contract as the platform's requireJwt — sets `req.userId`,
- * returns 401 on missing/invalid/expired tokens. For the dev / self-host HS256
- * path we verify the HMAC signature + expiry ourselves (the real gate). ES256
- * (cloud) tokens are decoded and trusted here without a signature round-trip —
- * those invocations sit behind the platform's own requireJwt, and the
- * router-level admin_profiles check in register-routes is the authorisation gate.
+ * returns 401 on missing/invalid/expired tokens. The platform does NOT gate
+ * dynamic module routes, so THIS is the sole authentication gate and it must
+ * verify signatures — never trust an unverified payload (alg-confusion bypass):
+ *   - HS256 (dev / self-host): verify the HMAC signature + expiry with Node's
+ *     built-in crypto (the real gate).
+ *   - Non-HS256 (ES256 cloud tokens): verify server-side via Supabase Auth
+ *     (`auth.getUser`), which checks the ES256 signature — exactly as the
+ *     platform's own requireJwt does. (Previously this path required an
+ *     "upstream" userId that never exists for module routes, so it rejected
+ *     every cloud admin — a lockout, not a bypass; now it verifies properly.)
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createClient } from '@supabase/supabase-js';
 import type { Request, Response, NextFunction } from 'express';
+
+// Client used only to verify non-HS256 (cloud ES256) tokens via Supabase Auth.
+let _verifyClient: ReturnType<typeof createClient> | null = null;
+function verifyClient() {
+  if (_verifyClient) return _verifyClient;
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  _verifyClient = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+  return _verifyClient;
+}
 
 interface SupabaseJwtClaims {
   sub?: string;
@@ -86,7 +103,7 @@ function verifyHs256(signingInput: string, signatureB64url: string, secret: stri
 }
 
 export function requireJwt() {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') {
       (req as Request & { userId?: string }).userId = '00000000-0000-0000-0000-000000000001';
       next();
@@ -104,7 +121,7 @@ export function requireJwt() {
     }
     const [headerB64, payloadB64, signatureB64] = parts;
     const header = b64urlToJson<{ alg?: string }>(headerB64);
-    const claims = b64urlToJson<SupabaseJwtClaims>(payloadB64);
+    let claims = b64urlToJson<SupabaseJwtClaims>(payloadB64);
     if (!header || !claims) {
       errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
       return;
@@ -116,13 +133,25 @@ export function requireJwt() {
         return;
       }
     } else {
-      // Non-HS256 (e.g. ES256 cloud tokens): this verifier holds only the HS256 shared secret and
-      // cannot check the signature. Do NOT accept blindly — a user-controlled `alg` skipping
-      // verification is an alg-confusion bypass (alg:none / algorithm substitution). Require that the
-      // platform's upstream requireJwt — which gates /api/modules/* and verifies cloud tokens against
-      // the auth service — has already run and set req.userId; reject anything it hasn't vouched for.
-      const upstreamUserId = (req as Request & { userId?: string }).userId;
-      if (!upstreamUserId) {
+      // Non-HS256 (ES256 cloud tokens): we hold only the HS256 shared secret and
+      // cannot check the signature locally. Verify server-side via Supabase Auth
+      // (which validates the ES256 signature) — never trust the decoded payload
+      // (that would be an alg-confusion bypass). There is NO upstream gate on
+      // module routes, so this is the only place cloud tokens get verified.
+      const client = verifyClient();
+      if (!client) {
+        errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
+        return;
+      }
+      try {
+        const { data, error } = await client.auth.getUser(token);
+        if (error || !data?.user?.id) {
+          errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
+          return;
+        }
+        // Trust only the server-verified identity.
+        claims = { ...claims, sub: data.user.id, email: data.user.email ?? claims.email };
+      } catch {
         errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
         return;
       }
