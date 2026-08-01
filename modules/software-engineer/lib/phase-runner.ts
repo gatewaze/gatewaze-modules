@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { makeWorkspace, cloneBranch, cloneNewBranch } from './worktree.js';
 import { subscribeInput } from './input-channel.js';
 import { InProcessRunner } from './agent-session.js';
-import { writeEvent, writeMessage } from './run-state.js';
+import { writeEvent, writeMessage, touchRun } from './run-state.js';
 import { resolveCommitIdentity } from './credentials.js';
 import { recallMemory } from './memory.js';
 import { resolveMcpServers, mcpSecretValues } from './mcp.js';
@@ -65,6 +65,12 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
 
     const { count } = await supabase.from('se_events').select('*', { count: 'exact', head: true }).eq('run_id', run.id);
     let seq = count ?? 0;
+    // Coarse status markers fill the silent gaps before the model's first token (cloning, context
+    // assembly, cold model start) so the Runs tab shows motion the whole time, not just on turns.
+    const status = async (text: string, step: string) => {
+      try { await writeEvent(supabase, run, phase, seq++, 'status', { text, step }); } catch { /* best-effort */ }
+    };
+    await status('Gathering repo context and project memory', 'prepare');
 
     let contracts = '';
     for (const r of spec.repos ?? []) {
@@ -111,19 +117,28 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     let mcpServers = {};
     try { mcpServers = resolveMcpServers(project); } catch { /* no tools */ }
 
+    await status(`Starting the agent (${phase})`, 'start');
+    // Heartbeat: while the agent works, bump se_runs.updated_at every 20s so a live-but-quiet run stays
+    // distinguishable from a wedged one in the Runs tab. Cleared in finally so the interval never leaks.
+    const heartbeat = setInterval(() => { touchRun(supabase, run).catch(() => {}); }, 20000);
     const runner = new InProcessRunner();
-    const result = await runner.runPhase({
-      cwd: spec.cwd,
-      prompt: spec.prompt,
-      model: project.model,
-      credential: { kind: project.modelCredKind, value: project.modelCred },
-      allowedTools: spec.allowedTools,
-      systemAppend,
-      mcpServers,
-      inputSource: inputCh ? withChatImages(inputCh[Symbol.asyncIterator](), spec.cwd, project.githubToken) : undefined,
-      onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
-      onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
-    });
+    let result;
+    try {
+      result = await runner.runPhase({
+        cwd: spec.cwd,
+        prompt: spec.prompt,
+        model: project.model,
+        credential: { kind: project.modelCredKind, value: project.modelCred },
+        allowedTools: spec.allowedTools,
+        systemAppend,
+        mcpServers,
+        inputSource: inputCh ? withChatImages(inputCh[Symbol.asyncIterator](), spec.cwd, project.githubToken) : undefined,
+        onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
+        onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
     try { inputCh?.close?.(); } catch { /* ignore */ }
     // Scrub EVERY run secret from the SDK's raw stderr before it reaches se_phases/se_runs/UI — the
     // GitHub PAT, the model credential, and any MCP bearer token (not just the PAT). Belt-and-braces
@@ -160,6 +175,10 @@ export async function runAgentPhase(supabase, ctx, run, settings, phase, spec) {
     // Continue the run's event sequence so lanes interleave correctly in the UI.
     const { count } = await supabase.from('se_events').select('*', { count: 'exact', head: true }).eq('run_id', run.id);
     let seq = count ?? 0;
+    const status = async (text: string, step: string) => {
+      try { await writeEvent(supabase, run, phase, seq++, 'status', { text, step }); } catch { /* best-effort */ }
+    };
+    await status('Repository ready — gathering context', 'prepare');
 
     // Inject the repo's agent contract (CLAUDE.md + .claude/rules) into the system prompt — the SDK
     // can't load them via settingSources without also loading the repo's plugin marketplace, which
@@ -184,18 +203,25 @@ export async function runAgentPhase(supabase, ctx, run, settings, phase, spec) {
       (contract ? `--- THIS REPOSITORY'S WORKING AGREEMENT — follow it exactly ---\n${contract.slice(0, 40000)}\n\n` : '') +
       (memory ? `--- PROJECT MEMORY (what past runs learned about this project's repos — trust, but verify against current code) ---\n${memory.slice(0, 16000)}` : '');
 
+    await status(`Starting the agent (${phase})`, 'start');
+    const heartbeat = setInterval(() => { touchRun(supabase, run).catch(() => {}); }, 20000);
     const runner = new InProcessRunner();
-    const result = await runner.runPhase({
-      cwd: ws.repoDir,
-      prompt: spec.prompt,
-      model: settings.model,
-      credential: { kind: settings.modelCredKind, value: settings.modelCred },
-      allowedTools: spec.allowedTools,
-      systemAppend,
-      inputSource: inputCh ? withChatImages(inputCh[Symbol.asyncIterator](), ws.repoDir, token) : undefined,
-      onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
-      onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
-    });
+    let result;
+    try {
+      result = await runner.runPhase({
+        cwd: ws.repoDir,
+        prompt: spec.prompt,
+        model: settings.model,
+        credential: { kind: settings.modelCredKind, value: settings.modelCred },
+        allowedTools: spec.allowedTools,
+        systemAppend,
+        inputSource: inputCh ? withChatImages(inputCh[Symbol.asyncIterator](), ws.repoDir, token) : undefined,
+        onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
+        onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
 
     return {
       result,

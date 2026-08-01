@@ -161,6 +161,11 @@ export class InProcessRunner implements Runner {
               await input.onEvent?.({ kind: 'assistant', payload: { text: b.text, agent: msg.parent_tool_use_id ?? null } });
             } else if (b?.type === 'tool_use') {
               await input.onEvent?.({ kind: 'tool_use', payload: { name: b.name, input: b.input, agent: msg.parent_tool_use_id ?? null } });
+            } else if (b?.type === 'thinking' && b.thinking) {
+              // Forward extended-thinking so a long reasoning gap between tool calls still shows motion
+              // in the Runs tab. Cap the length (bounds the se_events payload) and never forward
+              // redacted_thinking (opaque encrypted bytes — no display value, just noise).
+              await input.onEvent?.({ kind: 'thinking', payload: { text: String(b.thinking).slice(0, 2000), agent: msg.parent_tool_use_id ?? null } });
             }
           }
         } else if (msg?.type === 'user') {
