@@ -18,6 +18,7 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
 
 import { Router, type Express } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import { requireJwt } from '../lib/require-jwt.js';
 
 function logger() {
   return {
@@ -39,6 +40,33 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
   );
 
   const r = Router();
+
+  // AUTH GATE — the platform does NOT gate dynamic module routes, so these
+  // endpoints (enumerate Airbyte connections, trigger syncs) are otherwise
+  // unauthenticated. Require a verified session (requireJwt) AND an active
+  // admin/editor role, mirroring vehicle-video. The service-role `supabase`
+  // client below bypasses RLS, so without this any caller reaching the network
+  // prefix could enumerate connections and drive sync spend.
+  r.use(requireJwt());
+  const requireAdmin = async (req, res, next): Promise<void> => {
+    const userId = (req as { userId?: string }).userId;
+    if (!userId) {
+      res.status(401).json({ error: { code: 'unauthenticated', message: 'No session' } });
+      return;
+    }
+    const { data } = await supabase
+      .from('admin_profiles')
+      .select('role, is_active')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const ok = !!data && data.is_active && ['super_admin', 'admin', 'editor'].includes(data.role);
+    if (!ok) {
+      res.status(403).json({ error: { code: 'forbidden', message: 'Admin access required' } });
+      return;
+    }
+    next();
+  };
+  r.use(requireAdmin);
 
   // Latest Airbyte sync state (from the local table the worker maintains).
   r.get('/airbyte/connections', async (_req, res) => {
