@@ -63,6 +63,8 @@ export default async function implement(job, ctx) {
 
     // Commit + push each WRITABLE repo that changed → one se_run_prs row (state=open) per repo.
     let changed = 0, files = 0, lines = 0;
+    const allFiles = []; // real changed-file objects across every writable repo (for blast-radius)
+    let compareUnknown = false; // a diff fetch failed → we cannot assess blast radius → fail safe
     for (const r of ws.repos.filter((x) => x.writable)) {
       if (!(await hasChanges(r.dir))) continue;
       changed++;
@@ -71,8 +73,8 @@ export default async function implement(job, ctx) {
         await upsertRunPr(supabase, run, r.repoOwner, r.repoName, { branch, state: 'open' });
         try {
           const cmp = await gitCompareCount(githubClient(token), r.repoOwner, r.repoName, r.baseBranch, branch);
-          files += cmp.files; lines += cmp.lines;
-        } catch { /* aggregate best-effort */ }
+          files += cmp.files; lines += cmp.lines; allFiles.push(...cmp.fileList);
+        } catch { compareUnknown = true; /* can't diff this repo → don't let it pass as 'safe' */ }
       } catch (e) {
         await upsertRunPr(supabase, run, r.repoOwner, r.repoName, { branch, state: 'error', error: redactToken(e?.message || String(e), token) });
       }
@@ -83,7 +85,14 @@ export default async function implement(job, ctx) {
       return { failed: 'no changes' };
     }
 
-    const blast = classifyBlastRadius(Array.from({ length: files }, () => ({ filename: 'x', additions: 0, deletions: 0 })));
+    // Classify the REAL changed files (path, line-delta, status). Passing a
+    // count-only placeholder made the sensitive-path regex, line-count, and
+    // deletion checks all dead — so a run touching CI, migrations, auth, or the
+    // module's own guardrails across <=15 files was still scored 'safe', which
+    // is exactly what gates auto-merge under autonomy_mode 'auto_merge_safe'.
+    const blast = compareUnknown
+      ? { classification: 'needs_human', reasons: ['diff unavailable for one or more changed repos — cannot assess blast radius'] }
+      : classifyBlastRadius(allFiles);
     await writeGate(supabase, run, 'blast_radius', blast.classification === 'safe' ? 'pass' : 'block', { files, lines, repos: changed });
     await recordPhaseEnd(supabase, run, 'implement', 'passed', `implemented across ${changed} repo(s)`, { model: project.model, input: result.tokensInput, output: result.tokensOutput });
     await supabase.from('se_runs').update({
@@ -107,5 +116,7 @@ async function gitCompareCount(gh, owner, name, base, head) {
   const b = base || (await gh.defaultBranch(owner, name));
   const cmp = await gh.compare(owner, name, b, head);
   const fs = cmp?.files ?? [];
-  return { files: fs.length, lines: fs.reduce((n, f) => n + (f.additions ?? 0) + (f.deletions ?? 0), 0) };
+  // fileList carries the REAL per-file objects ({ filename, status, additions,
+  // deletions }) — the blast-radius classifier needs these, not just counts.
+  return { files: fs.length, lines: fs.reduce((n, f) => n + (f.additions ?? 0) + (f.deletions ?? 0), 0), fileList: fs };
 }
