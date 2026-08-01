@@ -153,6 +153,136 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
   }
 }
 
+const CAP_SENTINEL = Symbol('cap');
+
+/**
+ * Wrap an admin-input stream with an idle timeout + a wall-clock cap so an abandoned interactive
+ * session can't hold a runner worker forever. Yields messages straight through; when no message
+ * arrives within `idleMs`, or total elapsed exceeds `wallclockMs`, it invokes `onCap(reason)` and
+ * ENDS (returns) — which ends the streaming generator and therefore the session. With neither cap
+ * configured it is a transparent passthrough.
+ */
+async function* withCaps(source, opts) {
+  const idleMs = opts?.idleMs ?? Infinity;
+  const wallclockMs = opts?.wallclockMs ?? Infinity;
+  const onCap = opts?.onCap;
+  const it = source[Symbol.asyncIterator]();
+  const start = Date.now();
+  while (true) {
+    const wallRemaining = wallclockMs === Infinity ? Infinity : Math.max(0, wallclockMs - (Date.now() - start));
+    if (wallRemaining <= 0) { try { await onCap?.('wallclock'); } catch {} try { await it.return?.(); } catch {} return; }
+    const waitMs = Math.min(idleMs, wallRemaining);
+    if (waitMs === Infinity) {
+      const r = await it.next();
+      if (r.done) return;
+      yield r.value;
+      continue;
+    }
+    let timer;
+    const timeoutP = new Promise((res) => { timer = setTimeout(() => res(CAP_SENTINEL), waitMs); });
+    let r;
+    try { r = await Promise.race([it.next(), timeoutP]); }
+    finally { if (timer) clearTimeout(timer); }
+    if (r === CAP_SENTINEL) {
+      const reason = idleMs <= wallRemaining ? 'idle' : 'wallclock';
+      try { await onCap?.(reason); } catch {}
+      try { await it.return?.(); } catch {}
+      return;
+    }
+    if (r.done) return;
+    yield r.value;
+  }
+}
+
+/**
+ * Interactive (pair-programming) session. Same multi-repo context assembly + live admin↔agent bridge
+ * as runAgentSession, but runs ONE persistent streaming session (kickoff turn, then every admin chat
+ * is a turn) until the admin closes it or an idle/wall-clock cap fires. The WORKER owns the workspace
+ * lifecycle (makeMultiWorkspace + cleanup); this only runs the agent inside it and streams
+ * events/messages. spec: { cwd, kickoff, repos, allowedTools?, systemAppend?, idleMs?, wallclockMs? }.
+ */
+export async function runInteractiveSession(supabase, ctx, run, project, spec) {
+  const phase = 'interactive';
+  let redis;
+  try { redis = ctx?.getRedisConnection?.(); } catch { /* no redis */ }
+  const inputCh = redis ? subscribeInput(redis, run.id) : null;
+  try {
+    const { count } = await supabase.from('se_events').select('*', { count: 'exact', head: true }).eq('run_id', run.id);
+    let seq = count ?? 0;
+    const status = async (text: string, step: string) => {
+      try { await writeEvent(supabase, run, phase, seq++, 'status', { text, step }); } catch { /* best-effort */ }
+    };
+    await status('Opening the workspace and gathering repo context', 'prepare');
+
+    let contracts = '';
+    for (const r of spec.repos ?? []) {
+      try {
+        const claude = await readFile(join(r.dir, 'CLAUDE.md'), 'utf8');
+        contracts += `\n\n### Repo \`${r.repoName}\` (${r.writable ? 'WRITABLE' : 'read-only'}) at ./${r.repoName}/\n${claude.slice(0, 16000)}`;
+        try {
+          const rulesDir = join(r.dir, '.claude', 'rules');
+          for (const f of (await readdir(rulesDir)).filter((n) => n.endsWith('.md'))) {
+            contracts += `\n\n#### ${r.repoName}/.claude/rules/${f}\n` + (await readFile(join(rulesDir, f), 'utf8')).slice(0, 8000);
+          }
+        } catch { /* no rules */ }
+      } catch { /* no CLAUDE.md */ }
+    }
+    let memory = '';
+    try { memory = await recallMemory(run.project_id); } catch { /* soft */ }
+
+    const layout = (spec.repos ?? []).map((r) => `- ./${r.repoName}/  (${r.writable ? 'WRITABLE — you may change this' : 'read-only — context only'})`).join('\n');
+    const systemAppend =
+      (spec.systemAppend ? spec.systemAppend + '\n\n' : '') +
+      `--- WORKSPACE ---\nYou are in a multi-repo workspace; each repository is a subdirectory:\n${layout || '- (no code repos configured)'}\nMake code changes ONLY in WRITABLE repos; read any repo for context.\n` +
+      (contracts ? `\n--- REPO WORKING AGREEMENTS (follow each repo's own exactly) ---${contracts}\n` : '') +
+      (memory ? `\n--- PROJECT MEMORY (what past runs learned; trust, but verify against current code) ---\n${memory.slice(0, 16000)}` : '');
+
+    let mcpServers = {};
+    try { mcpServers = resolveMcpServers(project); } catch { /* no tools */ }
+
+    // Idle + wall-clock caps so an abandoned session frees its runner worker. A cap fires a system
+    // note into the transcript, then ends the input stream (→ ends the session). The worker sets the
+    // run 'closed' + cleans up in its finally.
+    const onCap = async (reason: string) => {
+      const text = reason === 'idle'
+        ? 'Session ended automatically after a period of inactivity.'
+        : 'Session ended automatically after reaching its maximum duration.';
+      try { await writeMessage(supabase, run, 'system', text); } catch { /* best-effort */ }
+      try { await writeEvent(supabase, run, phase, seq++, 'status', { text, step: `cap:${reason}` }); } catch { /* best-effort */ }
+    };
+    const inputSource = inputCh
+      ? withCaps(withChatImages(inputCh[Symbol.asyncIterator](), spec.cwd, project.githubToken), { idleMs: spec.idleMs, wallclockMs: spec.wallclockMs, onCap })
+      : (async function* () {})();
+
+    await status('Starting the interactive session', 'start');
+    const heartbeat = setInterval(() => { touchRun(supabase, run).catch(() => {}); }, 20000);
+    const runner = new InProcessRunner();
+    let result;
+    try {
+      result = await runner.runInteractive({
+        cwd: spec.cwd,
+        kickoff: spec.kickoff,
+        model: project.model,
+        credential: { kind: project.modelCredKind, value: project.modelCred },
+        allowedTools: spec.allowedTools,
+        systemAppend,
+        mcpServers,
+        inputSource,
+        onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
+        onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
+    if (result?.error) {
+      try { result.error = redactSecrets(result.error, [project.githubToken, project.modelCred, ...mcpSecretValues(mcpServers)]); } catch { /* best-effort */ }
+    }
+    return result;
+  } finally {
+    try { inputCh?.close?.(); } catch { /* ignore */ }
+  }
+}
+
 export async function runAgentPhase(supabase, ctx, run, settings, phase, spec) {
   // spec: { branch?, createBranch?: {from,name}, prompt, allowedTools?, systemAppend? }
   const token = settings.githubToken;
