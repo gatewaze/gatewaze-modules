@@ -17,7 +17,7 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   CommandLineIcon, Cog6ToothIcon, ArrowPathIcon, ArrowUturnLeftIcon,
   XCircleIcon, PaperAirplaneIcon, ArrowTopRightOnSquareIcon, ArchiveBoxIcon, ClipboardDocumentListIcon,
-  ChartBarIcon,
+  ChartBarIcon, PlayCircleIcon, StopCircleIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
@@ -63,6 +63,13 @@ const PHASE_PROSE: Record<string, string> = {
 };
 const phaseProse = (p?: string) => (p && PHASE_PROSE[p]) || (p ? `Working (${p})` : 'Working');
 
+// A run's headline label. Interactive (pair-programming) sessions have no issue, so they read as a
+// session on their project rather than "owner/repo #n".
+const runLabel = (r: any): string =>
+  r?.kind === 'interactive'
+    ? `Interactive session${r.project?.name ? ` · ${r.project.name}` : ''}`
+    : `${r?.repo_owner}/${r?.repo_name} #${r?.issue_number}`;
+
 // One-line label promoting the latest live event out of the collapsed "Tool activity" block, so the
 // working strip shows what the agent is doing *right now* between turn-boundary transcript messages.
 function eventLabel(ev: any): string {
@@ -90,12 +97,14 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [showArchived, setShowArchived] = useState(false);
   const [projectList, setProjectList] = useState<any[]>([]);
   const [projectFilter, setProjectFilter] = useState('');   // '' = all projects
+  const [startProject, setStartProject] = useState('');     // project for a new interactive session
+  const [starting, setStarting] = useState(false);
   const bottom = useRef<HTMLDivElement | null>(null);
   const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
   const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
   const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
 
-  useEffect(() => { api('/projects').then((d) => setProjectList(d.projects ?? [])).catch(() => {}); }, []);
+  useEffect(() => { api('/projects').then((d) => { const list = d.projects ?? []; setProjectList(list); setStartProject((v) => v || list[0]?.id || ''); }).catch(() => {}); }, []);
 
   const loadRuns = useCallback(async () => {
     try {
@@ -215,6 +224,24 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     try { await api(`/runs/${id}/${on ? 'archive' : 'unarchive'}`, { method: 'POST' }); await loadRuns(); if (selected === id) await loadDetail(id); }
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
+  // Manually start a blank interactive engineer on a project, then open it to chat live.
+  const startInteractive = async () => {
+    const pid = startProject || projectFilter || projectList[0]?.id;
+    if (!pid) { setErr('Add a project in Setup first.'); return; }
+    setStarting(true); setErr(null);
+    try {
+      const r = await api('/engineers/interactive', { method: 'POST', body: JSON.stringify({ project_id: pid }) });
+      await loadRuns();
+      if (r?.runId) onSelect(r.runId);
+    } catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setStarting(false); }
+  };
+  // Explicitly end an interactive session (nothing closes it on its own).
+  const closeSession = async () => {
+    if (!selected || !window.confirm('End this interactive session? Its scratch workspace is discarded.')) return;
+    try { await api(`/runs/${selected}/close`, { method: 'POST' }); await loadRuns(); await loadDetail(selected); }
+    catch (e: any) { setErr(String(e.message ?? e)); }
+  };
 
   return (
     <div className="flex gap-6 h-[calc(100dvh-var(--se-runs-chrome,240px))] overflow-hidden">
@@ -229,6 +256,23 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             <option value="">All projects</option>
             {projectList.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
           </select>
+        )}
+        {!showArchived && projectList.length > 0 && (
+          <div className="mb-2 flex gap-2">
+            {projectList.length > 1 && (
+              <select
+                value={startProject}
+                onChange={(e) => setStartProject(e.target.value)}
+                className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 py-1.5 text-sm"
+                aria-label="Project for a new interactive engineer"
+              >
+                {projectList.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
+              </select>
+            )}
+            <Button variant="soft" size="sm" onClick={startInteractive} disabled={starting} className={projectList.length > 1 ? 'shrink-0' : 'w-full'}>
+              <PlayCircleIcon className="size-4 mr-1" />{starting ? 'Starting…' : 'Start engineer'}
+            </Button>
+          </div>
         )}
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">{showArchived ? 'Archive' : 'Runs'}</div>
@@ -257,8 +301,8 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               selected === r.id ? 'border-[var(--gray-6)] bg-[var(--gray-3)]' : 'border-transparent hover:bg-[var(--gray-2)]'
             }`}
           >
-            <div className="text-sm font-medium truncate text-[var(--gray-12)]">{r.repo_owner}/{r.repo_name} #{r.issue_number}</div>
-            {r.title && <div className="text-xs text-[var(--gray-11)] truncate">{r.title}</div>}
+            <div className="text-sm font-medium truncate text-[var(--gray-12)]">{runLabel(r)}</div>
+            {r.title && r.kind !== 'interactive' && <div className="text-xs text-[var(--gray-11)] truncate">{r.title}</div>}
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <Badge color={STATUS_COLOR[r.status] ?? 'gray'} size="1">{r.status}</Badge>
               <span className="text-xs text-[var(--gray-10)]">{r.current_phase}</span>
@@ -276,7 +320,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
           <>
             <div className="pb-3 border-b border-[var(--gray-5)] mb-3">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-medium text-[var(--gray-12)]">{detail.run.repo_owner}/{detail.run.repo_name} #{detail.run.issue_number}</span>
+                <span className="font-medium text-[var(--gray-12)]">{runLabel(detail.run)}</span>
                 <Badge color={STATUS_COLOR[detail.run.status] ?? 'gray'}>{detail.run.status}</Badge>
                 {detail.run.pr_state && detail.run.pr_state !== detail.run.status && (
                   <Badge color={STATUS_COLOR[detail.run.pr_state] ?? 'gray'} variant="soft" size="1">PR: {detail.run.pr_state}</Badge>
@@ -290,8 +334,13 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   </a>
                 )}
                 <span className="ml-auto flex items-center gap-2">
+                  {detail.run.kind === 'interactive' && detail.run.status === 'running' && (
+                    <Button variant="soft" color="red" size="xs" onClick={closeSession}><StopCircleIcon className="size-3.5 mr-1" />End session</Button>
+                  )}
                   <Button variant="soft" size="xs" onClick={override} disabled={!liveStatus}><ArrowUturnLeftIcon className="size-3.5 mr-1" />Override</Button>
-                  <Button variant="soft" color="red" size="xs" onClick={cancel} disabled={!liveStatus}><XCircleIcon className="size-3.5 mr-1" />Cancel</Button>
+                  {detail.run.kind !== 'interactive' && (
+                    <Button variant="soft" color="red" size="xs" onClick={cancel} disabled={!liveStatus}><XCircleIcon className="size-3.5 mr-1" />Cancel</Button>
+                  )}
                   {detail.run.archived_at
                     ? <Button variant="soft" size="xs" onClick={() => archive(detail.run.id, false)}>Unarchive</Button>
                     : <Button variant="soft" size="xs" onClick={() => archive(detail.run.id, true)}><ArchiveBoxIcon className="size-3.5 mr-1" />Archive</Button>}
