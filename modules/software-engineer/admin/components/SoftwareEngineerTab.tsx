@@ -56,7 +56,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [showArchived, setShowArchived] = useState(false);
   const [projectList, setProjectList] = useState<any[]>([]);
   const [projectFilter, setProjectFilter] = useState('');   // '' = all projects
-  const bottom = useRef<HTMLDivElement | null>(null);
+  const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
 
   useEffect(() => { api('/projects').then((d) => setProjectList(d.projects ?? [])).catch(() => {}); }, []);
 
@@ -95,7 +95,15 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     return () => { supabase.removeChannel(ch); };
   }, [selected, loadDetail]);
 
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [detail?.messages?.length, detail?.events?.length]);
+  // Keep the transcript pinned to the newest message by scrolling ONLY the transcript container —
+  // never the document (scrollIntoView would move every scrollable ancestor, incl. the page). Skip
+  // when the user has scrolled up to read scrollback so live events don't yank them to the bottom.
+  useEffect(() => {
+    const el = transcript.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [detail?.messages?.length, detail?.events?.length]);
 
   const send = async () => {
     if (!selected || !draft.trim()) return;
@@ -120,7 +128,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const liveStatus = ['queued', 'running', 'changes_requested'].includes(detail?.run?.status);
 
   return (
-    <div className="flex gap-6 min-h-[60vh]">
+    <div className="flex gap-6 h-[calc(100dvh-var(--se-runs-chrome,240px))] overflow-hidden">
       {/* Runs board */}
       <div className="w-80 shrink-0 overflow-y-auto pr-1">
         {projectList.length > 1 && (
@@ -172,7 +180,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
       </div>
 
       {/* Live agent view */}
-      <div className="flex-1 min-w-0 flex flex-col border-l border-[var(--gray-5)] pl-6">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col border-l border-[var(--gray-5)] pl-6">
         {!detail ? (
           <div className="m-auto text-[var(--gray-10)] text-sm">Select a run to watch the agent.</div>
         ) : (
@@ -208,7 +216,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             </div>
 
             {/* Transcript */}
-            <div className="flex-1 overflow-y-auto pr-2 text-sm space-y-2">
+            <div ref={transcript} className="flex-1 min-h-0 overflow-y-auto pr-2 text-sm space-y-2">
               {(detail.messages ?? []).map((m: any) => (
                 <div key={`m${m.id}`} className={`rounded-md px-3 py-2 border-l-2 bg-[var(--gray-2)] ${
                   m.role === 'admin' ? 'border-l-blue-400' : m.role === 'system' ? 'border-l-amber-400' : 'border-l-[var(--gray-6)]'
@@ -228,7 +236,6 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   ))}
                 </div>
               </details>
-              <div ref={bottom} />
             </div>
 
             {/* Chat into the running agent */}
