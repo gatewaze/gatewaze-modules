@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { Badge, Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { CommandLineIcon, KeyIcon, ShieldCheckIcon, PlusIcon, TrashIcon, FolderPlusIcon } from '@heroicons/react/24/outline';
+import MemoryReviewSection from './MemoryReviewSection';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -241,6 +242,8 @@ export default function SetupPanel() {
               <div className="flex justify-end border-t border-[var(--gray-5)] pt-4">
                 <Button onClick={save}>Save project</Button>
               </div>
+
+              <MemoryReviewSection projectId={pid} onMessage={setMsg} />
 
               <section className="rounded-lg border p-4">
                 <div className="font-medium mb-1">Code repos</div>
