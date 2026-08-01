@@ -74,6 +74,10 @@ export default async function pr(job, ctx) {
 
     await recordPhaseEnd(supabase, run, 'pr', 'passed', `opened ${links.length} PR(s); watching for review`);
     await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch', pr_state: 'open' }).eq('id', run.id);
+    // Fold what this run learned into the project's memory (§9). reflect proposes to a PENDING slug;
+    // an admin approves it before it reaches any future run. Best-effort, non-fatal — a dropped
+    // reflect never blocks the PR. Idempotent jobId so a re-drive can't double-propose.
+    await ctx?.enqueueJob?.('jobs', 'software-engineer:reflect', { runId: run.id }, { jobId: `se-run-${run.id}-reflect`, removeOnComplete: true });
     await ctx?.enqueueJob?.('jobs', 'software-engineer:pr-monitor', { runId: run.id });
     return { ok: true, prs: links.length };
   } catch (e) {
