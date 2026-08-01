@@ -44,8 +44,14 @@ jobs:
           node-version: 22
       - name: Run standalone module test suites
         shell: bash
+        env:
+          NO_COLOR: '1'      # plain (un-ANSI'd) vitest output so the summary-line parsing is reliable
+          FORCE_COLOR: '0'
         run: |
-          set -uo pipefail
+          # GitHub's default bash runs with -e (errexit); disable it — this script
+          # inspects non-zero exit codes explicitly (a failing grep is expected flow,
+          # not a fatal error), so errexit/pipefail would abort mid-loop.
+          set +e +o pipefail
           passed=(); failed=(); skipped=()
           for pj in modules/*/package.json; do
             m=$(basename "$(dirname "$pj")")
@@ -69,7 +75,9 @@ jobs:
               # "Cannot find package" (CI) or a floated version mismatch (local). That
               # is environmental → skip. A "Tests N failed" with N>0 is a genuine
               # assertion failure → fail. No summary at all → surface it.
-              tests_line="$(grep -E '^[[:space:]]*Tests[[:space:]]' "$log" | tail -1)"
+              # Strip any residual ANSI, then match the "Tests …" summary anywhere on
+              # the line (vitest indents it) — not anchored at column 0.
+              tests_line="$(sed -E 's/\x1b\[[0-9;]*m//g' "$log" | grep -aE 'Tests[[:space:]]+[0-9]+ (passed|failed)' | tail -1)"
               if echo "$tests_line" | grep -qE '[1-9][0-9]* failed'; then
                 failed+=("$m")
               elif echo "$tests_line" | grep -q 'passed'; then
