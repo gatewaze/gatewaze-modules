@@ -1,13 +1,21 @@
 name: Module tests
 
-# Runs each module's own vitest suite (`pnpm -r --if-present test`). Before this,
-# gatewaze-modules CI was only gitleaks + CodeQL, so module unit tests never ran
-# — warehouse-sync's sql-gen suite sat broken (a stale import + a fixture gap)
-# unnoticed. This surfaces those regressions.
+# Runs each module's own vitest suite as a standalone unit-test smoke signal.
+# Before this, gatewaze-modules CI was only gitleaks + CodeQL, so module unit
+# tests never ran — warehouse-sync's sql-gen suite sat broken (a stale import +
+# a fixture gap) unnoticed. This surfaces those regressions.
 #
-# NON-BLOCKING for now (continue-on-error): a few modules' suites still need
-# their dev deps sorted in a clean CI install before the whole set is reliably
-# green. Once `pnpm -r --if-present test` passes end-to-end here, drop the
+# Why per-module `--ignore-workspace` and not a root `pnpm install`: this repo is
+# published standalone and does NOT contain the platform's `@gatewaze/shared`
+# workspace package. A root install resolves every module's `workspace:*`
+# specifier and hard-fails on the first module that needs a platform package
+# (e.g. accounts → `@gatewaze/shared@workspace:*`). Installing each test-bearing
+# module in isolation sidesteps that: modules whose deps resolve standalone get
+# their tests run; modules that need the full monorepo are logged as SKIPPED
+# rather than failing the whole run. Real test failures still fail the job.
+#
+# NON-BLOCKING for now (continue-on-error): kept off the required-checks list
+# until the standalone-testable set is proven stable. Once it is, drop the
 # continue-on-error and add "Module tests" to the branch's required checks.
 on:
   push:
@@ -34,8 +42,32 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
-      - name: Install
-        run: pnpm install --no-frozen-lockfile
-      - name: Run module test suites
-        run: pnpm -r --if-present test
+      - name: Run standalone module test suites
+        shell: bash
+        run: |
+          set -uo pipefail
+          passed=(); failed=(); skipped=()
+          for pj in modules/*/package.json; do
+            m=$(basename "$(dirname "$pj")")
+            # only modules that declare a `test` script
+            node -e "process.exit(require('./$pj').scripts?.test ? 0 : 1)" || continue
+            echo "::group::$m"
+            if ! ( cd "modules/$m" && pnpm install --ignore-workspace --no-frozen-lockfile ); then
+              echo "install failed standalone (needs the monorepo) → skipping"
+              skipped+=("$m"); echo "::endgroup::"; continue
+            fi
+            if ( cd "modules/$m" && pnpm test ); then
+              passed+=("$m")
+            else
+              failed+=("$m")
+            fi
+            echo "::endgroup::"
+          done
+          {
+            echo "## Module tests"
+            echo "- passed (${#passed[@]}): ${passed[*]:-none}"
+            echo "- failed (${#failed[@]}): ${failed[*]:-none}"
+            echo "- skipped — need monorepo (${#skipped[@]}): ${skipped[*]:-none}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # Fail only when a module that DID install standalone has failing tests.
+          if [ "${#failed[@]}" -gt 0 ]; then exit 1; fi
