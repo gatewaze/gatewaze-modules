@@ -39,6 +39,7 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/004_projects_and_ephemeral_engineers.sql',
     'migrations/005_issues_repo_and_multirepo.sql',
     'migrations/006_mcp_config.sql',
+    'migrations/007_overview_metrics.sql',
   ],
 
   // Dedicated queue — NOT the shared `jobs` queue. Agent phases run in a separate
@@ -99,9 +100,9 @@ const softwareEngineerModule: GatewazeModule = {
     await registerRoutes(app, ctx);
   },
 
-  // URL-driven dashboard — the Setup page and each run get their own shareable URL
-  // (/software-engineer, /software-engineer/setup, /software-engineer/runs/<id>). This needs BOTH
-  // an index route (exact /software-engineer) AND a splat (sub-paths): moduleRoutes.tsx merges two
+  // URL-driven dashboard — each tab and run get their own shareable URL (/software-engineer =
+  // Overview, /software-engineer/runs, /software-engineer/runs/<id>, /software-engineer/setup).
+  // This needs BOTH an index route (exact /software-engineer) AND a splat (sub-paths): moduleRoutes.tsx merges two
   // entries sharing the top segment into { index } + { path: '*' } children. A lone splat leaves the
   // index slot empty, so exact /software-engineer renders a blank <Outlet/>. Same component for both;
   // it reads useLocation to pick the active tab.
