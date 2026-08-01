@@ -42,6 +42,11 @@ export default async function pr(job, ctx) {
       return { failed: 'no prs' };
     }
 
+    // Title the PR by the real GitHub issue, not run.title (which can be a placeholder from the
+    // triggering webhook payload). Falls back to run.title if the fetch fails.
+    let issueTitle = run.title;
+    try { issueTitle = (await gh.getIssue(run.repo_owner, run.repo_name, run.issue_number))?.title || run.title; } catch { /* keep run.title */ }
+
     const links = [];
     for (const p of prs) {
       if (p.pr_number) { links.push(`- ${p.repo_owner}/${p.repo_name}: ${p.pr_url}`); continue; }
@@ -55,7 +60,7 @@ export default async function pr(job, ctx) {
         ``, `### Spec`, (art?.content ?? '_(spec unavailable)_').slice(0, 18000),
       ].join('\n');
       try {
-        const prData = await gh.createPullRequest(p.repo_owner, p.repo_name, { title: run.title || `Resolve #${run.issue_number}`, head: p.branch, base, body });
+        const prData = await gh.createPullRequest(p.repo_owner, p.repo_name, { title: issueTitle || `Resolve #${run.issue_number}`, head: p.branch, base, body });
         await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { pr_number: prData.number, pr_url: prData.html_url, state: 'open' });
         links.push(`- ${p.repo_owner}/${p.repo_name}: ${prData.html_url}`);
       } catch (e) {
