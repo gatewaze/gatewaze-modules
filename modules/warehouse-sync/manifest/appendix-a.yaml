@@ -63,15 +63,15 @@ tables:
       - { name: id,            pg_type: uuid,        classification: none,   masking: none, join_key: true }
       - { name: email,         pg_type: text,        classification: direct, masking: domain_only }
       - { name: email_sha256,  derived: sha256_join, source_column: email, classification: none, masking: none, join_key: true }
-      - { name: full_name,     pg_type: text,        classification: direct, masking: null }
-      - { name: first_name,    pg_type: text,        classification: direct, masking: null }
-      - { name: last_name,     pg_type: text,        classification: direct, masking: null }
+      - { name: full_name,     pg_type: text,        classification: direct, masking: "null" }
+      - { name: first_name,    pg_type: text,        classification: direct, masking: "null" }
+      - { name: last_name,     pg_type: text,        classification: direct, masking: "null" }
       - { name: contact_kind,  pg_type: text,        classification: none,   masking: none }   # lawful-basis (§8)
       - { name: company,       pg_type: text,        classification: quasi,  masking: none }
       - { name: title,         pg_type: text,        classification: quasi,  masking: none }
       - { name: country,       pg_type: text,        classification: quasi,  masking: none }
       - { name: city,          pg_type: text,        classification: quasi,  masking: none }
-      - { name: attributes,    pg_type: jsonb,       classification: quasi,  masking: none }   # VERIFY no secrets nested
+      - { name: attributes,    pg_type: jsonb,       classification: quasi,  masking: full }   # masked pending secret-nesting audit — flip to none once verified clean (breakglass sees raw)
       - { name: created_at,    pg_type: timestamptz, classification: none,   masking: none }
       - { name: updated_at,    pg_type: timestamptz, classification: none,   masking: none }
       - { name: deleted_at,    pg_type: timestamptz, classification: none,   masking: none }
@@ -99,7 +99,7 @@ tables:
       - { name: person_id,   pg_type: uuid,        classification: none, masking: none, join_key: true }
       - { name: event_type,  pg_type: text,        classification: none, masking: none }
       - { name: occurred_at, pg_type: timestamptz, classification: none, masking: none }
-      - { name: metadata,    pg_type: jsonb,       classification: quasi, masking: none }   # VERIFY no direct PII
+      - { name: metadata,    pg_type: jsonb,       classification: quasi, masking: full }   # masked pending PII/secret audit — flip to none once verified clean (breakglass sees raw)
       - { name: created_at,  pg_type: timestamptz, classification: none, masking: none }
 
   # ── Events ────────────────────────────────────────────────────────────────
