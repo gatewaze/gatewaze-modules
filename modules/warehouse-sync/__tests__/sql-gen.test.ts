@@ -11,6 +11,7 @@ import {
   generateStagingModelSql,
   generateMaskingPolicySql,
   snowflakeType,
+  BOOLEAN_FLAG_RAW_META,
 } from '../lib/sql-gen';
 import type { Manifest } from '../lib/types';
 
@@ -54,6 +55,9 @@ const base: Manifest = {
       columns: [
         { name: 'id', pg_type: 'uuid', classification: 'none', masking: 'none' },
         { name: 'email', pg_type: 'text', classification: 'direct', masking: 'domain_only' },
+        // derived join key on a hard-delete table — the erasure test asserts it
+        // is nulled alongside the raw identifier on the tombstone.
+        { name: 'email_sha256', derived: 'sha256_join', source_column: 'email', classification: 'none', masking: 'none', join_key: true },
         { name: 'updated_at', pg_type: 'timestamptz', classification: 'none', masking: 'none' },
       ],
     },
@@ -121,7 +125,6 @@ describe('sql generation', () => {
   });
 
   it('boolean-flag connector remains expressible (swappability)', () => {
-    const { BOOLEAN_FLAG_RAW_META } = require('../lib/sql-gen');
     const sql = generateStagingModelSql(base, base.tables[1], BOOLEAN_FLAG_RAW_META);
     expect(sql).toContain('COALESCE(src."_SNOWFLAKE_DELETED", FALSE) AS "is_deleted"');
   });
