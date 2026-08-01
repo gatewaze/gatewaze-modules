@@ -71,7 +71,7 @@ tables:
       - { name: title,         pg_type: text,        classification: quasi,  masking: none }
       - { name: country,       pg_type: text,        classification: quasi,  masking: none }
       - { name: city,          pg_type: text,        classification: quasi,  masking: none }
-      - { name: attributes,    pg_type: jsonb,       classification: quasi,  masking: full }   # masked pending secret-nesting audit — flip to none once verified clean (breakglass sees raw)
+      - { name: attributes,    pg_type: jsonb,       classification: quasi,  masking: full }   # AUDITED (161k rows): nests DIRECT PII (email, phone, name, linkedin_url, address, postal_code, ip, coordinates) AND web-push subscription keys (web_push_auth/p256dh/endpoint) — MUST stay masked. Do not flip to none.
       - { name: created_at,    pg_type: timestamptz, classification: none,   masking: none }
       - { name: updated_at,    pg_type: timestamptz, classification: none,   masking: none }
       - { name: deleted_at,    pg_type: timestamptz, classification: none,   masking: none }
@@ -99,7 +99,7 @@ tables:
       - { name: person_id,   pg_type: uuid,        classification: none, masking: none, join_key: true }
       - { name: event_type,  pg_type: text,        classification: none, masking: none }
       - { name: occurred_at, pg_type: timestamptz, classification: none, masking: none }
-      - { name: metadata,    pg_type: jsonb,       classification: quasi, masking: full }   # masked pending PII/secret audit — flip to none once verified clean (breakglass sees raw)
+      - { name: metadata,    pg_type: jsonb,       classification: quasi, masking: full }   # keep masked — analogous free-form engagement metadata (people.attributes audit found PII+secrets nested). NB: source table `people_events` doesn't exist in live schema (real table is `engagement_events`) — Phase-2 reconcile.
       - { name: created_at,  pg_type: timestamptz, classification: none, masking: none }
 
   # ── Events ────────────────────────────────────────────────────────────────
