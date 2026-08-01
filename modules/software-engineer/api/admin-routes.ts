@@ -15,6 +15,7 @@ import { enqueuePhase } from '../lib/enqueue.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
+import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory } from '../lib/memory.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -66,6 +67,33 @@ export function mountAdminRoutes(router, deps) {
   router.use(express.json({ limit: '256kb' }));
 
   const authorOf = (req) => req.userId ?? req.auth?.userId ?? req.user?.id ?? req.actor?.userId ?? null;
+
+  // ── Project memory: review + human approval (memory-poisoning gate) ────────
+  // reflect writes proposed memory to a pending slot; it is NOT injected into
+  // any run until an admin approves it here. All three routes are admin-gated
+  // by the router.use above.
+  router.get('/projects/:id/memory', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const [live, pending] = await Promise.all([readLiveMemory(projectId), readPendingMemory(projectId)]);
+    return res.json({ live, pending, hasPending: !!pending });
+  });
+  router.post('/projects/:id/memory/approve', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const ok = await approveMemory(supabase, projectId, project.name);
+    if (!ok) return res.status(409).json({ error: { code: 'no_pending', message: 'No pending memory to approve' } });
+    return res.json({ approved: true });
+  });
+  router.post('/projects/:id/memory/reject', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    await rejectMemory(supabase, projectId, project.name);
+    return res.json({ rejected: true });
+  });
   // Freeing a slot (cancel/archive) should promote the next queued run for that project immediately,
   // rather than waiting for the pr-monitor cron safety-net.
   const dispatchFor = async (runId: string) => {

@@ -8,7 +8,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
 import { InProcessRunner } from '../lib/agent-session.js';
-import { recallMemory, writeMemory } from '../lib/memory.js';
+import { recallMemory, writeMemoryPending } from '../lib/memory.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -56,8 +56,11 @@ export default async function reflect(job, ctx) {
       allowedTools: [],
     });
     if (result?.text?.trim()) {
-      const ok = await writeMemory(supabase, run.project_id, project.name, result.text.trim());
-      return { ok, wrote: ok };
+      // Write the PROPOSAL to pending — it is not injected into any future run
+      // until an admin approves it (memory content derives from the
+      // attacker-influenceable issue/spec; approveMemory is the human gate).
+      const ok = await writeMemoryPending(supabase, run.project_id, project.name, result.text.trim());
+      return { ok, proposed: ok, pendingApproval: ok };
     }
     return { skipped: 'no output' };
   } catch (e) {
