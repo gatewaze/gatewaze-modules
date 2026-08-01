@@ -6,7 +6,8 @@
   "description": "Open-source modules for Gatewaze",
   "scripts": {
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r --if-present test"
   },
   "devDependencies": {
     "typescript": "^5.7.0"

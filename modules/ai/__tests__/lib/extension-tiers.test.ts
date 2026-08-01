@@ -28,12 +28,15 @@ describe('classifyExtension — Tier 1 (honoured natively)', () => {
 });
 
 describe('classifyExtension — Tier 2 (persisted as metadata)', () => {
-  it.each(['memory', 'chatrecall', 'todo', 'tom'])(
+  it.each(['memory', 'chatrecall', 'todo', 'tom', 'computercontroller'])(
     'builtin %s → Tier-2',
     (name) => {
       expect(classifyExtension({ type: 'builtin', name }).tier).toBe(2);
     },
   );
+  // computercontroller is recognised as Tier-2 (not refused): the executor's
+  // substituteComputercontroller strips it on Gatewaze spawns and force-attaches
+  // gatewaze-web-tools in its place, so recipes declaring it parse cleanly.
 
   it('platform summon without uses → Tier-2', () => {
     expect(classifyExtension({ type: 'platform', name: 'summon' }).tier).toBe(2);
@@ -85,7 +88,7 @@ describe('classifyExtension — Tier 3 (refused)', () => {
     expect(c.refusalFeature).toBe('frontend-extension');
   });
 
-  it.each(['autovisualiser', 'computercontroller', 'peekaboo', 'tutorial'])(
+  it.each(['autovisualiser', 'peekaboo', 'tutorial'])(
     'desktop builtin %s → desktop-extension',
     (name) => {
       const c = classifyExtension({ type: 'builtin', name });
