@@ -258,12 +258,16 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
           </select>
         )}
         {!showArchived && projectList.length > 0 && (
-          <div className="mb-2 flex gap-2">
+          // items-stretch: the auto-height select conforms to the fixed-height
+          // Button so both controls line up regardless of the kit's sm height.
+          <div className="mb-2 flex items-stretch gap-2">
             {projectList.length > 1 && (
               <select
                 value={startProject}
                 onChange={(e) => setStartProject(e.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 py-1.5 text-sm"
+                // No vertical padding: keep the select's intrinsic height below the
+                // Button's fixed height so flex stretch grows it to match the Button.
+                className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 text-sm"
                 aria-label="Project for a new interactive engineer"
               >
                 {projectList.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
