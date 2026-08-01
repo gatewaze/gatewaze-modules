@@ -20,6 +20,7 @@ import {
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
+import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 
 const API = '/api/modules/software-engineer/admin';
@@ -84,6 +85,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [detail, setDetail] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
+  const [chatAtts, setChatAtts] = useState<any[]>([]);   // pasted/dropped screenshots → uploaded to `media`
   const [err, setErr] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [projectList, setProjectList] = useState<any[]>([]);
@@ -118,6 +120,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   }, [loadRuns]);
 
   useEffect(() => {
+    setChatAtts([]);   // don't carry a pending upload from one run into another
     if (!selected) { setDetail(null); return; }
     lastActivityRef.current = Date.now();
     loadDetail(selected);
@@ -164,10 +167,39 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     return () => clearInterval(t);
   }, [liveStatus]);
 
+  // Paste/drop a screenshot into the live chat → upload to the public `media` bucket, then send its
+  // URL with the message so the agent downloads + Reads it (same path as issue attachments).
+  const uploadChatImage = async (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > 15 * 1024 * 1024) { setErr('image too large (max 15MB)'); return; }
+    const key = crypto.randomUUID();
+    const ext = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
+    const path = `se-runs/${selected || 'unknown'}/${key}.${ext}`;
+    setChatAtts((a) => [...a, { key, name: file.name || `${key}.${ext}`, url: '', uploading: true }]);
+    try {
+      const { error } = await supabase.storage.from('media').upload(path, file, { upsert: false, cacheControl: '3600', contentType: file.type });
+      if (error) throw error;
+      const { data } = supabase.storage.from('media').getPublicUrl(path);
+      setChatAtts((a) => a.map((x) => (x.key === key ? { ...x, uploading: false, url: data.publicUrl } : x)));
+    } catch (e: any) { setErr(`image upload failed: ${String(e.message ?? e)}`); setChatAtts((a) => a.filter((x) => x.key !== key)); }
+  };
+  const onChatPaste = (e: React.ClipboardEvent) => {
+    const imgs = Array.from(e.clipboardData?.items ?? []).filter((it) => it.type.startsWith('image/'));
+    if (!imgs.length) return;
+    e.preventDefault();
+    imgs.forEach((it) => { const f = it.getAsFile(); if (f) uploadChatImage(f); });
+  };
+  const onChatDrop = (e: React.DragEvent) => { e.preventDefault(); Array.from(e.dataTransfer?.files ?? []).forEach(uploadChatImage); };
+  const onChatPick = (e: React.ChangeEvent<HTMLInputElement>) => { Array.from(e.target.files ?? []).forEach(uploadChatImage); e.target.value = ''; };
+  const removeChatAtt = (key: string) => setChatAtts((a) => a.filter((x) => x.key !== key));
+  const chatUploading = chatAtts.some((a) => a.uploading);
+
   const send = async () => {
-    if (!selected || !draft.trim()) return;
-    const content = draft; setDraft('');
-    try { await api(`/runs/${selected}/message`, { method: 'POST', body: JSON.stringify({ content }) }); await loadDetail(selected); }
+    const content = draft;
+    const images = chatAtts.filter((a) => a.url).map((a) => a.url);
+    if (!selected || chatUploading || (!content.trim() && !images.length)) return;
+    setDraft(''); setChatAtts([]);
+    try { await api(`/runs/${selected}/message`, { method: 'POST', body: JSON.stringify({ content, images }) }); await loadDetail(selected); }
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
   const override = async () => {
@@ -331,18 +363,36 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             </div>
 
             {/* Chat into the running agent */}
-            <div className="flex gap-2 mt-3 pt-3 border-t border-[var(--gray-5)]">
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
-                placeholder={liveStatus ? 'Message the agent…' : 'Run is not live'}
-                disabled={!liveStatus}
-                className="flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-3 py-2 text-sm disabled:opacity-50"
-              />
-              <Button onClick={send} size="sm" disabled={!liveStatus || !draft.trim()}>
-                <PaperAirplaneIcon className="size-4" />
-              </Button>
+            <div className="mt-3 pt-3 border-t border-[var(--gray-5)]" onDrop={liveStatus ? onChatDrop : undefined} onDragOver={(e) => e.preventDefault()}>
+              {chatAtts.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {chatAtts.map((a) => (
+                    <div key={a.key} className="relative group">
+                      {a.url
+                        ? <img src={a.url} alt={a.name} className="h-14 w-14 rounded border object-cover" />
+                        : <div className="h-14 w-14 rounded border flex items-center justify-center bg-[var(--gray-2)]"><LoadingSpinner /></div>}
+                      <button type="button" onClick={() => removeChatAtt(a.key)} className="absolute -top-1.5 -right-1.5 rounded-full bg-[var(--gray-12)] text-[var(--gray-1)] size-4 leading-none text-[11px] opacity-0 group-hover:opacity-100" aria-label="Remove">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2 items-center">
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+                  onPaste={liveStatus ? onChatPaste : undefined}
+                  placeholder={liveStatus ? 'Message the agent…  (paste or drop a screenshot)' : 'Run is not live'}
+                  disabled={!liveStatus}
+                  className="flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-3 py-2 text-sm disabled:opacity-50"
+                />
+                <label className={`text-xs whitespace-nowrap ${liveStatus ? 'text-[var(--gray-10)] hover:text-[var(--gray-12)] cursor-pointer underline' : 'text-[var(--gray-8)] cursor-not-allowed'}`}>
+                  Attach<input type="file" accept="image/*" multiple onChange={onChatPick} disabled={!liveStatus} className="hidden" />
+                </label>
+                <Button onClick={send} size="sm" disabled={!liveStatus || chatUploading || (!draft.trim() && !chatAtts.some((a) => a.url))}>
+                  <PaperAirplaneIcon className="size-4" />
+                </Button>
+              </div>
             </div>
           </>
         )}
@@ -360,6 +410,10 @@ function IssuesView() {
   const [form, setForm] = useState<any>({ project_id: '', title: '', body: '', assign: true });
   const [creating, setCreating] = useState(false);
   const [atts, setAtts] = useState<any[]>([]);   // pasted/dropped screenshots → uploaded to `media`
+  // Optimistic rows for just-created issues. GitHub's list endpoint is eventually consistent, so the
+  // POST-response issue often isn't in the next `/issues` fetch yet — we render it immediately and
+  // reconcile (drop it once the real fetch surfaces it, keyed by project+number).
+  const [optimistic, setOptimistic] = useState<any[]>([]);
 
   const load = useCallback(async () => {
     try { setIssues((await api(`/issues${filter ? `?project=${filter}` : ''}`)).issues ?? []); setErr(null); }
@@ -367,6 +421,38 @@ function IssuesView() {
   }, [filter]);
   useEffect(() => { api('/projects').then((d) => { setProjects(d.projects ?? []); setForm((f: any) => ({ ...f, project_id: f.project_id || d.projects?.[0]?.id || '' })); }).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Live run-status badges: se_runs is in Supabase, so realtime keeps them current (mirrors RunsView).
+  useEffect(() => {
+    const ch = supabase.channel('se-issues-runs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => load())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [load]);
+
+  // The issue list itself lives on GitHub (no push to this client), so poll it — but only while the
+  // tab is visible, and refetch immediately on re-focus so a hidden tab doesn't go stale.
+  useEffect(() => {
+    const tick = () => { if (typeof document === 'undefined' || !document.hidden) load(); };
+    const id = setInterval(tick, 20000);
+    const onVis = () => { if (typeof document !== 'undefined' && !document.hidden) load(); };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis); };
+  }, [load]);
+
+  // Drop optimistic rows once the real (GitHub-backed) fetch surfaces them.
+  useEffect(() => {
+    if (!optimistic.length) return;
+    setOptimistic((o) => pendingOptimistic(o, issues));
+  }, [issues]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reconcile after a create: refetch a few times with backoff to absorb GitHub's propagation lag.
+  const reconcile = useCallback(async () => {
+    for (const delay of [800, 1500, 2500, 4000]) {
+      await new Promise((r) => setTimeout(r, delay));
+      await load();
+    }
+  }, [load]);
 
   // Upload one image to the public `media` bucket and track it; GitHub renders its public URL inline.
   const uploadImage = async (file: File) => {
@@ -397,15 +483,38 @@ function IssuesView() {
   const create = async () => {
     if (!form.project_id || !form.title.trim() || uploading) return;
     setCreating(true);
+    const title = form.title.trim();
+    const projectId = form.project_id;
+    const assign = form.assign;
     try {
-      await api('/issues', { method: 'POST', body: JSON.stringify({
-        project_id: form.project_id, title: form.title.trim(), body: form.body, assign_to_agent: form.assign,
+      const res = await api('/issues', { method: 'POST', body: JSON.stringify({
+        project_id: projectId, title, body: form.body, assign_to_agent: assign,
         attachments: atts.filter((a) => a.url).map((a) => ({ url: a.url })),
       }) });
-      setForm((f: any) => ({ ...f, title: '', body: '' })); setAtts([]); await load();
+      // Prepend an optimistic row from the server-returned identifiers (number/url/runId) so the new
+      // issue shows instantly; hrefs come from the server, never from user input.
+      if (res?.number) {
+        const proj = projects.find((p) => p.id === projectId);
+        setOptimistic((o) => [
+          {
+            project: { id: projectId, name: proj?.name, avatar_emoji: proj?.avatar_emoji },
+            repo: '', number: res.number, title, url: res.url, labels: [], agent: assign,
+            updated_at: new Date().toISOString(),
+            run: res.runId ? { id: res.runId, status: 'queued' } : null,
+            _optimistic: true,
+          },
+          ...o.filter((x) => !(x.number === res.number && x.project?.id === projectId)),
+        ]);
+      }
+      setForm((f: any) => ({ ...f, title: '', body: '' })); setAtts([]);
+      await load();
+      reconcile();
     }
     catch (e: any) { setErr(String(e.message ?? e)); } finally { setCreating(false); }
   };
+
+  // Render pending optimistic rows (not yet in the GitHub-backed list) above the real ones.
+  const merged = mergeIssues(optimistic, issues);
 
   return (
     <div className="max-w-4xl space-y-4">
@@ -449,11 +558,11 @@ function IssuesView() {
         </select>
       )}
       {loading ? <div className="p-8 flex justify-center"><LoadingSpinner /></div>
-        : issues.length === 0 ? <div className="text-sm text-[var(--gray-11)] p-6 text-center">No open issues.</div>
+        : merged.length === 0 ? <div className="text-sm text-[var(--gray-11)] p-6 text-center">No open issues.</div>
         : (
           <div className="space-y-1.5">
-            {issues.map((i) => (
-              <div key={`${i.repo}#${i.number}`} className="flex items-center justify-between rounded-md border p-2.5 gap-2">
+            {merged.map((i) => (
+              <div key={issueKey(i)} className="flex items-center justify-between rounded-md border p-2.5 gap-2">
                 <div className="min-w-0">
                   <a href={i.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-[var(--gray-12)] hover:underline block truncate">{i.title}</a>
                   <div className="text-[11px] text-[var(--gray-10)] truncate">{i.project?.avatar_emoji || '📁'} {i.project?.name} · {i.repo}#{i.number}</div>

@@ -126,12 +126,24 @@ export function mountAdminRoutes(router, deps) {
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
     const content = String(req.body?.content ?? '').slice(0, 8000);
-    if (!content.trim()) return res.status(400).json({ error: 'empty' });
+    // Chat image attachments (pasted screenshots) — already uploaded to the public `media` bucket by
+    // the client. Validate each URL against the host allowlist (defense in depth: the runner's
+    // download path allowlists again) and cap the count, exactly like the issue-create path.
+    const images = (Array.isArray(req.body?.images) ? req.body.images : [])
+      .map((u: any) => (typeof u === 'string' ? u : u?.url))
+      .filter((u: any) => typeof u === 'string' && isAllowedAttachmentUrl(u))
+      .slice(0, 8);
+    if (!content.trim() && !images.length) return res.status(400).json({ error: 'empty' });
     const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
     if (!['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
-    await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'admin', author: authorOf(req), content });
-    try { await publishInput(getRedis?.(), id, { kind: 'chat', content }); }
+    // Persist the images as markdown appended to the stored message so the transcript renders them
+    // inline — the same `![](url)` convention se_messages already carries for issue attachments.
+    const stored = images.length
+      ? `${content}${content && '\n\n'}` + images.map((u: string, i: number) => `![screenshot-${i + 1}](${u})`).join('\n')
+      : content;
+    await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'admin', author: authorOf(req), content: stored });
+    try { await publishInput(getRedis?.(), id, { kind: 'chat', content, images }); }
     catch (e) { logger?.warn?.('se: publish chat failed', { error: String(e) }); }
     res.status(202).json({ accepted: true });
   });

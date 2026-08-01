@@ -112,17 +112,27 @@ function sniffImage(buf: Buffer): string | null {
 }
 
 /**
- * Download the issue body's images into `<destRoot>/.se-attachments/`. Best-effort — returns the
- * number written and the dir (null if none). `token` is the project PAT, used only for GitHub-hosted
- * private-repo attachments.
+ * Download a pre-extracted list of image URLs into `<destRoot>/.se-attachments/`. Best-effort —
+ * returns the number written and the dir (null if none). Each fetch is SSRF-safe (allowlisted entry
+ * host + per-hop re-validation via safeFetch) and validated by magic bytes, capped at MAX_FILES /
+ * MAX_BYTES. `token` is the project PAT and is attached ONLY for GitHub-hosted assets — it is never
+ * sent to any other host (e.g. the public `media` bucket for chat pastes). `opts.prefix` prepends a
+ * caller-supplied label to each filename so distinct batches (issue screenshots vs. per-message chat
+ * pastes) don't overwrite one another in the shared dir.
  */
-export async function downloadIssueAttachments(body: string, token: string | null, destRoot: string): Promise<{ count: number; dir: string | null; names: string[] }> {
-  const urls = extractImageUrls(body).slice(0, MAX_FILES);
-  if (!urls.length) return { count: 0, dir: null, names: [] };
+export async function downloadAttachmentUrls(
+  urls: string[],
+  token: string | null,
+  destRoot: string,
+  opts: { prefix?: string } = {},
+): Promise<{ count: number; dir: string | null; names: string[] }> {
+  const list = (urls ?? []).filter((u): u is string => typeof u === 'string' && !!u).slice(0, MAX_FILES);
+  if (!list.length) return { count: 0, dir: null, names: [] };
+  const prefix = (opts.prefix ?? '').replace(/[^a-z0-9-]/gi, '');   // keep filenames path-safe
   const dir = join(destRoot, ATTACH_DIRNAME);
   await mkdir(dir, { recursive: true });
   const names: string[] = [];
-  for (const raw of urls) {
+  for (const raw of list) {
     try {
       const u = new URL(raw);
       const headers: Record<string, string> = {};
@@ -139,10 +149,19 @@ export async function downloadIssueAttachments(body: string, token: string | nul
       if (buf.length > MAX_BYTES) continue;      // backstop for chunked/lying responses
       const ext = sniffImage(buf);       // validate by content, not header
       if (!ext) continue;
-      const name = `screenshot-${names.length + 1}.${ext}`;
+      const name = `${prefix}screenshot-${names.length + 1}.${ext}`;
       await writeFile(join(dir, name), buf);
       names.push(name);
     } catch { /* skip this attachment */ }
   }
   return { count: names.length, dir: names.length ? dir : null, names };
+}
+
+/**
+ * Download the issue body's images into `<destRoot>/.se-attachments/`. Best-effort — returns the
+ * number written and the dir (null if none). `token` is the project PAT, used only for GitHub-hosted
+ * private-repo attachments.
+ */
+export async function downloadIssueAttachments(body: string, token: string | null, destRoot: string): Promise<{ count: number; dir: string | null; names: string[] }> {
+  return downloadAttachmentUrls(extractImageUrls(body), token, destRoot);
 }
