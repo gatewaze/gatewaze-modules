@@ -40,6 +40,7 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/005_issues_repo_and_multirepo.sql',
     'migrations/006_mcp_config.sql',
     'migrations/007_overview_metrics.sql',
+    'migrations/008_interactive_engineers.sql',
   ],
 
   // Dedicated queue — NOT the shared `jobs` queue. Agent phases run in a separate
@@ -73,6 +74,10 @@ const softwareEngineerModule: GatewazeModule = {
     // recover: crash-resilience reconciler — re-drives runs orphaned by a worker/pod/machine/Redis
     // death from their saved phase (idempotent). See workers/recover.ts.
     { name: 'software-engineer:recover', handler: './workers/recover.ts' },
+    // interactive: a manually-started, long-lived pair-programming session on a project (no issue, no
+    // pipeline). One worker holds the session for its whole lifetime; explicit close + idle/wall-clock
+    // caps free it. See workers/interactive.ts.
+    { name: 'software-engineer:interactive', handler: './workers/interactive.ts' },
   ],
 
   // Cron heartbeat that polls open PRs and reconciles them (the fallback where GitHub can't reach

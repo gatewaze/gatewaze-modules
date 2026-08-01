@@ -103,6 +103,7 @@ export default function SetupPanel() {
       commit_author_name: s.commit_author_name?.trim() || null, commit_author_email: s.commit_author_email?.trim() || null,
       autonomy_mode: s.autonomy_mode, intake_enabled: !!s.intake_enabled,
       max_concurrent_engineers: s.max_concurrent_engineers ? Number(s.max_concurrent_engineers) : 2,
+      max_interactive_engineers: s.max_interactive_engineers ? Number(s.max_interactive_engineers) : 1,
       allowed_labellers: (typeof s.allowed_labellers === 'string' ? s.allowed_labellers.split(',').map((x: string) => x.trim()).filter(Boolean) : s.allowed_labellers) ?? [],
       monthly_token_budget: s.monthly_token_budget ? Number(s.monthly_token_budget) : null,
       per_run_token_ceiling: s.per_run_token_ceiling ? Number(s.per_run_token_ceiling) : null,
@@ -210,6 +211,7 @@ export default function SetupPanel() {
 
               <Section icon={<ShieldCheckIcon className="size-4" />} title="Behaviour + concurrency">
                 <Field label="Max concurrent engineers"><input type="number" min="1" value={s.max_concurrent_engineers ?? 2} onChange={set('max_concurrent_engineers')} className={inputCls} /></Field>
+                <Field label="Max interactive sessions"><input type="number" min="1" value={s.max_interactive_engineers ?? 1} onChange={set('max_interactive_engineers')} className={inputCls} /></Field>
                 <Field label="Autonomy">
                   <select value={s.autonomy_mode ?? 'pr_only'} onChange={set('autonomy_mode')} className={inputCls}>
                     <option value="pr_only">PR only (never auto-merge)</option>

@@ -36,6 +36,7 @@ export default async function recover(job, ctx) {
   const { data: candidates } = await supabase
     .from('se_runs')
     .select('id, current_phase, updated_at, engineer_name')
+    .eq('kind', 'issue')   // interactive sessions are live REPLs with no resumable step — never re-drive
     .in('status', ['running', 'changes_requested'])
     .is('archived_at', null)
     .in('current_phase', RECOVERABLE_PHASES)
