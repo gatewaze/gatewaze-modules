@@ -70,6 +70,24 @@ export function mountAdminRoutes(router, deps) {
     } catch { /* best-effort */ }
   };
 
+  // ── Overview — one pre-aggregated metrics blob for the dashboard's Overview tab ───────────
+  // All aggregation happens in the se_overview() SQL function (read-only), so the client renders
+  // KPI tiles + rollups from a single JSON payload instead of pulling every run row. Optional
+  // ?project=<uuid> scopes every metric to one project.
+  router.get('/overview', async (req, res) => {
+    let project: string | null = null;
+    if (req.query.project !== undefined) {
+      project = String(req.query.project);
+      if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
+    }
+    const { data, error } = await supabase.rpc('se_overview', { p_project: project });
+    if (error) {
+      logger?.warn?.('se: overview failed', { error: String(error?.message ?? error) });
+      return res.status(500).json({ error: 'overview failed' });
+    }
+    res.json(data ?? {});
+  });
+
   // ── Runs ────────────────────────────────────────────────────────────────
   router.get('/runs', async (req, res) => {
     let q = supabase

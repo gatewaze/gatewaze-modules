@@ -1,8 +1,10 @@
 // @ts-nocheck
 /**
  * Software Engineer dashboard (spec §14 / §14.1). Standard admin dashboard shell: Page + hero
- * header + Tabs, matching the other dashboards (e.g. Emails). Two tabs:
+ * header + Tabs, matching the other dashboards (e.g. Emails). Tabs:
+ *   - Overview — read-only KPI tiles + status/phase/project rollups (default landing).
  *   - Runs  — runs board + live "watch the agent" view (streamed events, chat/steer, override).
+ *   - Issues — report/triage issues across projects.
  *   - Setup — per-brand credentials + repos (SetupPanel).
  * Admin design system (Tailwind + @/components/ui, Radix gray vars). No @radix-ui/themes import.
  */
@@ -15,8 +17,10 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   CommandLineIcon, Cog6ToothIcon, ArrowPathIcon, ArrowUturnLeftIcon,
   XCircleIcon, PaperAirplaneIcon, ArrowTopRightOnSquareIcon, ArchiveBoxIcon, ClipboardDocumentListIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
+import OverviewView from './OverviewView';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -380,16 +384,19 @@ export default function SoftwareEngineerTab() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  // URL-driven so the Setup page + each run have their own shareable URL:
-  //   /software-engineer                → Runs
-  //   /software-engineer/setup          → Setup
+  // URL-driven so each tab + run have their own shareable URL:
+  //   /software-engineer                → Overview (default landing)
+  //   /software-engineer/runs           → Runs board
   //   /software-engineer/runs/<id>      → a specific run (deep-linkable)
-  const m = pathname.match(/^\/software-engineer(?:\/(setup|runs|issues)(?:\/([^/]+))?)?/);
+  //   /software-engineer/issues         → Issues
+  //   /software-engineer/setup          → Setup
+  const m = pathname.match(/^\/software-engineer(?:\/(overview|setup|runs|issues)(?:\/([^/]+))?)?/);
   const section = m?.[1];
-  const activeTab: 'runs' | 'issues' | 'setup' = section === 'setup' ? 'setup' : section === 'issues' ? 'issues' : 'runs';
+  const activeTab: 'overview' | 'runs' | 'issues' | 'setup' =
+    section === 'runs' ? 'runs' : section === 'issues' ? 'issues' : section === 'setup' ? 'setup' : 'overview';
   const selectedRun = section === 'runs' ? (m?.[2] ?? null) : null;
 
-  const onTabChange = (t: string) => navigate(t === 'runs' ? BASE : `${BASE}/${t}`);
+  const onTabChange = (t: string) => navigate(t === 'overview' ? BASE : `${BASE}/${t}`);
   const onSelectRun = (id: string | null) => navigate(id ? `${BASE}/runs/${id}` : `${BASE}/runs`);
 
   return (
@@ -397,6 +404,7 @@ export default function SoftwareEngineerTab() {
       <WorkspaceLayout
         title="Software Engineer"
         tabs={[
+          { id: 'overview', label: 'Overview', icon: <ChartBarIcon className="size-4" /> },
           { id: 'runs', label: 'Runs', icon: <CommandLineIcon className="size-4" /> },
           { id: 'issues', label: 'Issues', icon: <ClipboardDocumentListIcon className="size-4" /> },
           { id: 'setup', label: 'Setup', icon: <Cog6ToothIcon className="size-4" /> },
@@ -405,6 +413,7 @@ export default function SoftwareEngineerTab() {
         onTabChange={onTabChange}
       >
         <div className="py-6">
+          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'runs' && <RunsView selected={selectedRun} onSelect={onSelectRun} onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'issues' && <IssuesView />}
           {activeTab === 'setup' && <SetupPanel />}
