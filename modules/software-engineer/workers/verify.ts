@@ -10,6 +10,7 @@ import { getProject, getCodeRepos } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
+import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, listRunPrs } from '../lib/run-state.js';
 
@@ -39,12 +40,38 @@ export default async function verify(job, ctx) {
       .map((r) => ({ ...r, writeMode: 'read_only', baseBranch: run.branch_name }));
     ws = codeRepos.length ? await makeMultiWorkspace(codeRepos, token, run.branch_name) : { repos: [], root: '/tmp', cleanup: async () => {} };
 
+    // Compute the ACTUAL diff (base...run-branch) per changed repo and hand it to the reviewer. The
+    // reviewer only has Read/Grep/Glob (no git), so without this it greps the whole checked-out repo
+    // and blocks on PRE-EXISTING codebase debt unrelated to this run. Scope the review to the diff.
+    const gh = githubClient(token);
+    const rawRepos = await getCodeRepos(supabase, run.project_id);
+    let diffContext = '';
+    for (const r of rawRepos.filter((r) => changedRepos.some((p) => p.repo_owner === r.repoOwner && p.repo_name === r.repoName))) {
+      try {
+        const base = r.baseBranch || (await gh.defaultBranch(r.repoOwner, r.repoName));
+        const cmp = await gh.compare(r.repoOwner, r.repoName, base, run.branch_name);
+        const files = cmp?.files ?? [];
+        diffContext += `\n\n### ${r.repoOwner}/${r.repoName} — ${files.length} changed file(s) vs ${base}:`;
+        for (const f of files.slice(0, 40)) {
+          diffContext += `\n\n--- ${f.filename} (${f.status}, +${f.additions}/-${f.deletions}) ---\n${(f.patch ?? '(binary or too large — Read it in the workspace)').slice(0, 4000)}`;
+        }
+      } catch { /* skip repo; reviewer falls back to conservative workspace review */ }
+    }
+
     const prompt = [
-      `Security review of this run's changes (branch ${run.branch_name}) across the repos in your`,
-      `workspace. Look for the boundaries in each repo's .claude/rules/security-boundaries: injection`,
-      `into PostgREST .or()/SQL/ICS/URLs, mass assignment via req.body, missing enum validation,`,
-      `service-role null-guards, unsafe shell, hardcoded secrets, missing rate limits. Respond with a`,
-      `final line exactly "VERDICT: PASS" if clean, or "VERDICT: BLOCK: <reasons>" if not.`,
+      `Security-review ONLY the changes THIS run introduced on branch ${run.branch_name}. The exact diff`,
+      `is below. Judge the ADDED/CHANGED lines against each repo's .claude/rules/security-boundaries:`,
+      `injection into PostgREST .or()/SQL/ICS/URLs, mass assignment via req.body, missing enum`,
+      `validation, service-role null-guards, unsafe shell, hardcoded secrets, missing rate limits.`,
+      ``,
+      `CRITICAL SCOPING: flag a problem ONLY if THIS DIFF introduces or worsens it. Pre-existing issues`,
+      `in code this branch did NOT change are OUT OF SCOPE — do NOT block on them (you may Read the`,
+      `workspace for context, but the verdict is about the diff below, not the wider codebase).`,
+      ``,
+      `--- DIFF ---${diffContext || '\n(no diff computed — review the workspace conservatively)'}`,
+      ``,
+      `Final line EXACTLY "VERDICT: PASS" if the diff is clean, or "VERDICT: BLOCK: <reasons>" if the`,
+      `diff introduces a real vulnerability.`,
     ].join('\n');
     const result = await runAgentSession(supabase, ctx, run, project, 'verify', {
       cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob'],
