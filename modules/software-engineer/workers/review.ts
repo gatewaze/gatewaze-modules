@@ -7,6 +7,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
+import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
@@ -83,14 +84,14 @@ export default async function review(job, ctx) {
     if (verdict === 'pass') {
       await recordPhaseEnd(supabase, run, 'review', 'passed', 'spec approved by skeptic', { model: project.model, input: result.tokensInput, output: result.tokensOutput });
       await supabase.from('se_runs').update({ current_phase: 'implement' }).eq('id', run.id);
-      await ctx?.enqueueJob?.('jobs', 'software-engineer:implement', { runId: run.id });
+      await enqueuePhase(ctx, run.id, 'implement');
       return { ok: true, verdict };
     }
 
     await recordPhaseEnd(supabase, run, 'review', 'blocked', `skeptic blocked: ${objections.slice(0, 3).join('; ')}`);
     if ((run.retry_count ?? 0) < MAX_REVIEW_RETRIES) {
       await supabase.from('se_runs').update({ retry_count: (run.retry_count ?? 0) + 1, current_phase: 'spec' }).eq('id', run.id);
-      await ctx?.enqueueJob?.('jobs', 'software-engineer:spec', { runId: run.id, objections });
+      await enqueuePhase(ctx, run.id, 'spec', { objections });
       return { ok: true, verdict, retry: true };
     }
     try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:blocked'); } catch { /* best-effort */ }
