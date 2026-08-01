@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Badge, Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
+import { toast } from 'sonner';
 import { CommandLineIcon, KeyIcon, ShieldCheckIcon, PlusIcon, TrashIcon, FolderPlusIcon } from '@heroicons/react/24/outline';
 import MemoryReviewSection from './MemoryReviewSection';
 
@@ -115,8 +116,8 @@ export default function SetupPanel() {
     if (modelCred.trim()) body.model_cred = modelCred.trim();
     // MCP config: send only when the operator typed something. A literal "clear" empties it.
     if (mcpConfig.trim()) body.mcp_config = mcpConfig.trim() === 'clear' ? null : mcpConfig.trim();
-    try { await api(`/projects/${pid}`, { method: 'PUT', body: JSON.stringify(body) }); setMsg({ ok: true, text: 'Saved.' }); await loadProjects(); await loadProject(pid); }
-    catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
+    try { await api(`/projects/${pid}`, { method: 'PUT', body: JSON.stringify(body) }); toast.success('Project saved'); await loadProjects(); await loadProject(pid); }
+    catch (e: any) { toast.error(String(e.message ?? e)); }
   };
   const addRepo = async () => {
     if (!newRepo.owner.trim() || !newRepo.name.trim() || !pid) return;
