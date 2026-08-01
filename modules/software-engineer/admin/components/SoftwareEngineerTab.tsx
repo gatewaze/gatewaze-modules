@@ -244,9 +244,11 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   };
 
   return (
-    <div className="flex gap-6 h-[calc(100dvh-var(--se-runs-chrome,240px))] overflow-hidden">
-      {/* Runs board */}
-      <div className="w-80 shrink-0 overflow-y-auto pr-1">
+    // Stack on phones (flex-col), two-pane from lg up. The fixed 100dvh height + overflow trap is
+    // gated to lg so mobile scrolls the page normally instead of fighting the browser address bar.
+    <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100dvh-var(--se-runs-chrome,240px))] lg:overflow-hidden">
+      {/* Runs board — full width on mobile; hidden once a run is selected so the detail pane takes over. */}
+      <div className={`w-full lg:w-80 shrink-0 lg:overflow-y-auto pr-1 ${selected ? 'hidden lg:block' : 'block'}`}>
         {projectList.length > 1 && (
           <select
             value={projectFilter}
@@ -316,8 +318,17 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
         ))}
       </div>
 
-      {/* Live agent view */}
-      <div className="flex-1 min-w-0 min-h-0 flex flex-col border-l border-[var(--gray-5)] pl-6">
+      {/* Live agent view — hidden on mobile until a run is selected, then it takes the full width. */}
+      <div className={`flex-1 min-w-0 min-h-0 flex-col lg:border-l border-[var(--gray-5)] lg:pl-6 ${selected ? 'flex' : 'hidden lg:flex'}`}>
+        {/* Mobile-only back control: reuses the URL-driven selection (onSelect(null) → /runs). */}
+        {selected && (
+          <button
+            onClick={() => onSelect(null)}
+            className="lg:hidden mb-3 inline-flex items-center gap-1 self-start text-sm text-[var(--gray-11)] hover:text-[var(--gray-12)]"
+          >
+            <ArrowUturnLeftIcon className="size-4" />Back to runs
+          </button>
+        )}
         {!detail ? (
           <div className="m-auto text-[var(--gray-10)] text-sm">Select a run to watch the agent.</div>
         ) : (
@@ -337,7 +348,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                     PR <ArrowTopRightOnSquareIcon className="size-3" />
                   </a>
                 )}
-                <span className="ml-auto flex items-center gap-2">
+                <span className="ml-auto flex items-center gap-2 flex-wrap">
                   {detail.run.kind === 'interactive' && detail.run.status === 'running' && (
                     <Button variant="soft" color="red" size="xs" onClick={closeSession}><StopCircleIcon className="size-3.5 mr-1" />End session</Button>
                   )}
@@ -437,7 +448,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   onPaste={liveStatus ? onChatPaste : undefined}
                   placeholder={liveStatus ? 'Message the agent…  (paste or drop a screenshot)' : 'Run is not live'}
                   disabled={!liveStatus}
-                  className="flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-3 py-2 text-sm disabled:opacity-50"
+                  className="flex-1 min-w-0 rounded-md border border-[var(--gray-6)] bg-transparent px-3 py-2 text-sm disabled:opacity-50"
                 />
                 <label className={`text-xs whitespace-nowrap ${liveStatus ? 'text-[var(--gray-10)] hover:text-[var(--gray-12)] cursor-pointer underline' : 'text-[var(--gray-8)] cursor-not-allowed'}`}>
                   Attach<input type="file" accept="image/*" multiple onChange={onChatPick} disabled={!liveStatus} className="hidden" />
@@ -574,11 +585,11 @@ function IssuesView() {
       {err && <div className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-800">{err}</div>}
       <section className="rounded-lg border p-4 space-y-2">
         <div className="font-medium">Report an issue</div>
-        <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
           <select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })} className="rounded-md border px-2 py-1.5 text-sm">
             {projects.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
           </select>
-          <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title" className="flex-1 rounded-md border px-3 py-1.5 text-sm" />
+          <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title" className="flex-1 min-w-0 rounded-md border px-3 py-1.5 text-sm" />
         </div>
         <textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} onPaste={onPaste} onDrop={onDrop} onDragOver={(e) => e.preventDefault()} placeholder="Describe the problem or improvement…  (paste or drop a screenshot to attach)" rows={3} className="w-full rounded-md border px-3 py-2 text-sm" />
         {atts.length > 0 && (

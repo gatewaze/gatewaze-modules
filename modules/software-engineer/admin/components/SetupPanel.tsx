@@ -27,7 +27,8 @@ async function api(path: string, init?: RequestInit) {
 
 const inputCls = 'w-full rounded-md border px-3 py-2 text-sm';
 const Field = ({ label, children }: { label: React.ReactNode; children: React.ReactNode }) => (
-  <div className="grid grid-cols-[200px_1fr] items-center gap-3 py-1.5">
+  // Label stacks above the input on phones; fixed-label two-column grid from sm up.
+  <div className="grid grid-cols-1 sm:grid-cols-[200px_1fr] sm:items-center gap-1 sm:gap-3 py-1.5">
     <span className="text-sm text-[var(--gray-11)]">{label}</span>{children}
   </div>
 );
@@ -136,8 +137,8 @@ export default function SetupPanel() {
     <div className="max-w-4xl space-y-5">
       {msg && <div className={`rounded-md border p-2 text-sm ${msg.ok ? 'border-green-300 bg-green-50 text-green-800' : 'border-red-300 bg-red-50 text-red-800'}`}>{msg.text}</div>}
 
-      <div className="flex gap-5">
-        <div className="w-64 shrink-0 space-y-2">
+      <div className="flex flex-col lg:flex-row gap-5">
+        <div className="w-full lg:w-64 shrink-0 space-y-2">
           <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">Projects</div>
           {projects.length === 0 && <div className="text-sm text-[var(--gray-11)]">No projects yet.</div>}
           {projects.map((p) => (
@@ -251,9 +252,9 @@ export default function SetupPanel() {
                 {repos.length === 0 && <div className="text-sm text-neutral-400 mb-3">No repos yet.</div>}
                 <div className="space-y-1.5">
                   {repos.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between border-b py-1.5 last:border-0 gap-2">
+                    <div key={r.id} className="flex flex-wrap items-center justify-between border-b py-1.5 last:border-0 gap-2">
                       <span className="font-mono text-sm truncate">{r.repo_owner}/{r.repo_name}</span>
-                      <span className="flex items-center gap-2 text-xs shrink-0">
+                      <span className="flex flex-wrap items-center justify-end gap-2 text-xs shrink-0">
                         <select value={r.write_mode ?? 'writable'} onChange={(e) => patchRepo(r, { write_mode: e.target.value })} className="rounded border px-1 py-0.5 text-xs">
                           <option value="writable">writable</option>
                           <option value="read_only">read-only</option>
@@ -265,10 +266,10 @@ export default function SetupPanel() {
                     </div>
                   ))}
                 </div>
-                <div className="flex items-center gap-2 mt-3">
-                  <input placeholder="owner" value={newRepo.owner} onChange={(e) => setNewRepo({ ...newRepo, owner: e.target.value })} className="w-40 rounded-md border px-3 py-2 text-sm" />
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <input placeholder="owner" value={newRepo.owner} onChange={(e) => setNewRepo({ ...newRepo, owner: e.target.value })} className="flex-1 min-w-[7rem] sm:flex-none sm:w-40 rounded-md border px-3 py-2 text-sm" />
                   <span className="text-neutral-400">/</span>
-                  <input placeholder="repo" value={newRepo.name} onChange={(e) => setNewRepo({ ...newRepo, name: e.target.value })} className="w-52 rounded-md border px-3 py-2 text-sm" />
+                  <input placeholder="repo" value={newRepo.name} onChange={(e) => setNewRepo({ ...newRepo, name: e.target.value })} className="flex-1 min-w-[7rem] sm:flex-none sm:w-52 rounded-md border px-3 py-2 text-sm" />
                   <Button variant="soft" size="sm" onClick={addRepo}><PlusIcon className="size-4 mr-1" />Add repo</Button>
                 </div>
               </section>
