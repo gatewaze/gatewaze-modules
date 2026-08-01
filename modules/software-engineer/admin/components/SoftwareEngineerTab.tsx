@@ -53,6 +53,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [detail, setDetail] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
+  const [chatAtts, setChatAtts] = useState<any[]>([]);   // pasted/dropped screenshots → uploaded to `media`
   const [err, setErr] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [projectList, setProjectList] = useState<any[]>([]);
@@ -84,6 +85,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   }, [loadRuns]);
 
   useEffect(() => {
+    setChatAtts([]);   // don't carry a pending upload from one run into another
     if (!selected) { setDetail(null); return; }
     loadDetail(selected);
     const reload = () => loadDetail(selected);
@@ -106,10 +108,39 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [detail?.messages?.length, detail?.events?.length]);
 
+  // Paste/drop a screenshot into the live chat → upload to the public `media` bucket, then send its
+  // URL with the message so the agent downloads + Reads it (same path as issue attachments).
+  const uploadChatImage = async (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > 15 * 1024 * 1024) { setErr('image too large (max 15MB)'); return; }
+    const key = crypto.randomUUID();
+    const ext = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
+    const path = `se-runs/${selected || 'unknown'}/${key}.${ext}`;
+    setChatAtts((a) => [...a, { key, name: file.name || `${key}.${ext}`, url: '', uploading: true }]);
+    try {
+      const { error } = await supabase.storage.from('media').upload(path, file, { upsert: false, cacheControl: '3600', contentType: file.type });
+      if (error) throw error;
+      const { data } = supabase.storage.from('media').getPublicUrl(path);
+      setChatAtts((a) => a.map((x) => (x.key === key ? { ...x, uploading: false, url: data.publicUrl } : x)));
+    } catch (e: any) { setErr(`image upload failed: ${String(e.message ?? e)}`); setChatAtts((a) => a.filter((x) => x.key !== key)); }
+  };
+  const onChatPaste = (e: React.ClipboardEvent) => {
+    const imgs = Array.from(e.clipboardData?.items ?? []).filter((it) => it.type.startsWith('image/'));
+    if (!imgs.length) return;
+    e.preventDefault();
+    imgs.forEach((it) => { const f = it.getAsFile(); if (f) uploadChatImage(f); });
+  };
+  const onChatDrop = (e: React.DragEvent) => { e.preventDefault(); Array.from(e.dataTransfer?.files ?? []).forEach(uploadChatImage); };
+  const onChatPick = (e: React.ChangeEvent<HTMLInputElement>) => { Array.from(e.target.files ?? []).forEach(uploadChatImage); e.target.value = ''; };
+  const removeChatAtt = (key: string) => setChatAtts((a) => a.filter((x) => x.key !== key));
+  const chatUploading = chatAtts.some((a) => a.uploading);
+
   const send = async () => {
-    if (!selected || !draft.trim()) return;
-    const content = draft; setDraft('');
-    try { await api(`/runs/${selected}/message`, { method: 'POST', body: JSON.stringify({ content }) }); await loadDetail(selected); }
+    const content = draft;
+    const images = chatAtts.filter((a) => a.url).map((a) => a.url);
+    if (!selected || chatUploading || (!content.trim() && !images.length)) return;
+    setDraft(''); setChatAtts([]);
+    try { await api(`/runs/${selected}/message`, { method: 'POST', body: JSON.stringify({ content, images }) }); await loadDetail(selected); }
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
   const override = async () => {
@@ -240,18 +271,36 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             </div>
 
             {/* Chat into the running agent */}
-            <div className="flex gap-2 mt-3 pt-3 border-t border-[var(--gray-5)]">
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
-                placeholder={liveStatus ? 'Message the agent…' : 'Run is not live'}
-                disabled={!liveStatus}
-                className="flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-3 py-2 text-sm disabled:opacity-50"
-              />
-              <Button onClick={send} size="sm" disabled={!liveStatus || !draft.trim()}>
-                <PaperAirplaneIcon className="size-4" />
-              </Button>
+            <div className="mt-3 pt-3 border-t border-[var(--gray-5)]" onDrop={liveStatus ? onChatDrop : undefined} onDragOver={(e) => e.preventDefault()}>
+              {chatAtts.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {chatAtts.map((a) => (
+                    <div key={a.key} className="relative group">
+                      {a.url
+                        ? <img src={a.url} alt={a.name} className="h-14 w-14 rounded border object-cover" />
+                        : <div className="h-14 w-14 rounded border flex items-center justify-center bg-[var(--gray-2)]"><LoadingSpinner /></div>}
+                      <button type="button" onClick={() => removeChatAtt(a.key)} className="absolute -top-1.5 -right-1.5 rounded-full bg-[var(--gray-12)] text-[var(--gray-1)] size-4 leading-none text-[11px] opacity-0 group-hover:opacity-100" aria-label="Remove">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2 items-center">
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+                  onPaste={liveStatus ? onChatPaste : undefined}
+                  placeholder={liveStatus ? 'Message the agent…  (paste or drop a screenshot)' : 'Run is not live'}
+                  disabled={!liveStatus}
+                  className="flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-3 py-2 text-sm disabled:opacity-50"
+                />
+                <label className={`text-xs whitespace-nowrap ${liveStatus ? 'text-[var(--gray-10)] hover:text-[var(--gray-12)] cursor-pointer underline' : 'text-[var(--gray-8)] cursor-not-allowed'}`}>
+                  Attach<input type="file" accept="image/*" multiple onChange={onChatPick} disabled={!liveStatus} className="hidden" />
+                </label>
+                <Button onClick={send} size="sm" disabled={!liveStatus || chatUploading || (!draft.trim() && !chatAtts.some((a) => a.url))}>
+                  <PaperAirplaneIcon className="size-4" />
+                </Button>
+              </div>
             </div>
           </>
         )}
