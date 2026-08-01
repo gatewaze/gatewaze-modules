@@ -20,6 +20,7 @@ import {
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
+import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 
 const API = '/api/modules/software-engineer/admin';
@@ -268,6 +269,10 @@ function IssuesView() {
   const [form, setForm] = useState<any>({ project_id: '', title: '', body: '', assign: true });
   const [creating, setCreating] = useState(false);
   const [atts, setAtts] = useState<any[]>([]);   // pasted/dropped screenshots → uploaded to `media`
+  // Optimistic rows for just-created issues. GitHub's list endpoint is eventually consistent, so the
+  // POST-response issue often isn't in the next `/issues` fetch yet — we render it immediately and
+  // reconcile (drop it once the real fetch surfaces it, keyed by project+number).
+  const [optimistic, setOptimistic] = useState<any[]>([]);
 
   const load = useCallback(async () => {
     try { setIssues((await api(`/issues${filter ? `?project=${filter}` : ''}`)).issues ?? []); setErr(null); }
@@ -275,6 +280,38 @@ function IssuesView() {
   }, [filter]);
   useEffect(() => { api('/projects').then((d) => { setProjects(d.projects ?? []); setForm((f: any) => ({ ...f, project_id: f.project_id || d.projects?.[0]?.id || '' })); }).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Live run-status badges: se_runs is in Supabase, so realtime keeps them current (mirrors RunsView).
+  useEffect(() => {
+    const ch = supabase.channel('se-issues-runs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => load())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [load]);
+
+  // The issue list itself lives on GitHub (no push to this client), so poll it — but only while the
+  // tab is visible, and refetch immediately on re-focus so a hidden tab doesn't go stale.
+  useEffect(() => {
+    const tick = () => { if (typeof document === 'undefined' || !document.hidden) load(); };
+    const id = setInterval(tick, 20000);
+    const onVis = () => { if (typeof document !== 'undefined' && !document.hidden) load(); };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis); };
+  }, [load]);
+
+  // Drop optimistic rows once the real (GitHub-backed) fetch surfaces them.
+  useEffect(() => {
+    if (!optimistic.length) return;
+    setOptimistic((o) => pendingOptimistic(o, issues));
+  }, [issues]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reconcile after a create: refetch a few times with backoff to absorb GitHub's propagation lag.
+  const reconcile = useCallback(async () => {
+    for (const delay of [800, 1500, 2500, 4000]) {
+      await new Promise((r) => setTimeout(r, delay));
+      await load();
+    }
+  }, [load]);
 
   // Upload one image to the public `media` bucket and track it; GitHub renders its public URL inline.
   const uploadImage = async (file: File) => {
@@ -305,15 +342,38 @@ function IssuesView() {
   const create = async () => {
     if (!form.project_id || !form.title.trim() || uploading) return;
     setCreating(true);
+    const title = form.title.trim();
+    const projectId = form.project_id;
+    const assign = form.assign;
     try {
-      await api('/issues', { method: 'POST', body: JSON.stringify({
-        project_id: form.project_id, title: form.title.trim(), body: form.body, assign_to_agent: form.assign,
+      const res = await api('/issues', { method: 'POST', body: JSON.stringify({
+        project_id: projectId, title, body: form.body, assign_to_agent: assign,
         attachments: atts.filter((a) => a.url).map((a) => ({ url: a.url })),
       }) });
-      setForm((f: any) => ({ ...f, title: '', body: '' })); setAtts([]); await load();
+      // Prepend an optimistic row from the server-returned identifiers (number/url/runId) so the new
+      // issue shows instantly; hrefs come from the server, never from user input.
+      if (res?.number) {
+        const proj = projects.find((p) => p.id === projectId);
+        setOptimistic((o) => [
+          {
+            project: { id: projectId, name: proj?.name, avatar_emoji: proj?.avatar_emoji },
+            repo: '', number: res.number, title, url: res.url, labels: [], agent: assign,
+            updated_at: new Date().toISOString(),
+            run: res.runId ? { id: res.runId, status: 'queued' } : null,
+            _optimistic: true,
+          },
+          ...o.filter((x) => !(x.number === res.number && x.project?.id === projectId)),
+        ]);
+      }
+      setForm((f: any) => ({ ...f, title: '', body: '' })); setAtts([]);
+      await load();
+      reconcile();
     }
     catch (e: any) { setErr(String(e.message ?? e)); } finally { setCreating(false); }
   };
+
+  // Render pending optimistic rows (not yet in the GitHub-backed list) above the real ones.
+  const merged = mergeIssues(optimistic, issues);
 
   return (
     <div className="max-w-4xl space-y-4">
@@ -357,11 +417,11 @@ function IssuesView() {
         </select>
       )}
       {loading ? <div className="p-8 flex justify-center"><LoadingSpinner /></div>
-        : issues.length === 0 ? <div className="text-sm text-[var(--gray-11)] p-6 text-center">No open issues.</div>
+        : merged.length === 0 ? <div className="text-sm text-[var(--gray-11)] p-6 text-center">No open issues.</div>
         : (
           <div className="space-y-1.5">
-            {issues.map((i) => (
-              <div key={`${i.repo}#${i.number}`} className="flex items-center justify-between rounded-md border p-2.5 gap-2">
+            {merged.map((i) => (
+              <div key={issueKey(i)} className="flex items-center justify-between rounded-md border p-2.5 gap-2">
                 <div className="min-w-0">
                   <a href={i.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-[var(--gray-12)] hover:underline block truncate">{i.title}</a>
                   <div className="text-[11px] text-[var(--gray-10)] truncate">{i.project?.avatar_emoji || '📁'} {i.project?.name} · {i.repo}#{i.number}</div>
