@@ -15,8 +15,40 @@ import { resolveCommitIdentity } from './credentials.js';
 import { recallMemory } from './memory.js';
 import { resolveMcpServers, mcpSecretValues } from './mcp.js';
 import { redactSecrets } from './git.js';
-import { downloadIssueAttachments, ATTACH_DIRNAME } from './attachments.js';
+import { downloadIssueAttachments, downloadAttachmentUrls, ATTACH_DIRNAME } from './attachments.js';
 import { githubClient } from './github.js';
+
+/**
+ * Wrap the admin→agent input iterator so a chat message that carries pasted screenshots (`images`)
+ * has them downloaded into the live phase workspace before it reaches the Agent SDK — the same
+ * download-and-Read path issue attachments use, so the agent SEES the image the way a Claude Code
+ * session sees a paste. The image URLs are dropped from the forwarded message (they'd be noise to
+ * streamInput) and replaced with a note telling the agent to Read the saved files. Best-effort:
+ * a failed download just forwards the original text. Each message's files get a unique `chatN-`
+ * prefix so successive pastes never overwrite one another in the shared `.se-attachments/` dir.
+ * Non-chat / image-less messages pass straight through, keeping agent-session's secret seam untouched.
+ */
+async function* withChatImages(source, destRoot: string, token: string | null) {
+  let batch = 0;
+  for await (const m of source) {
+    if (m?.kind === 'chat' && Array.isArray(m.images) && m.images.length) {
+      batch += 1;
+      let note = '';
+      try {
+        const dl = await downloadAttachmentUrls(m.images, token, destRoot, { prefix: `chat${batch}-` });
+        if (dl.count > 0) {
+          note =
+            `\n\n--- ATTACHED IMAGES ---\nI attached ${dl.count} image(s), saved in ./${ATTACH_DIRNAME}/ (${dl.names.join(', ')}). ` +
+            `Use the Read tool on each now — they are visual context for what I just said.`;
+        }
+      } catch { /* best-effort — forward the text without the image note */ }
+      const content = `${m.content ?? ''}${note}`.trim() || 'See the attached image(s).';
+      yield { ...m, content, images: undefined };
+      continue;
+    }
+    yield m;
+  }
+}
 
 /**
  * Multi-repo agent session (§7). The WORKER owns the workspace lifecycle (makeMultiWorkspace +
@@ -100,7 +132,7 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
         allowedTools: spec.allowedTools,
         systemAppend,
         mcpServers,
-        inputSource: inputCh ? inputCh[Symbol.asyncIterator]() : undefined,
+        inputSource: inputCh ? withChatImages(inputCh[Symbol.asyncIterator](), spec.cwd, project.githubToken) : undefined,
         onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
         onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
       });
@@ -183,7 +215,7 @@ export async function runAgentPhase(supabase, ctx, run, settings, phase, spec) {
         credential: { kind: settings.modelCredKind, value: settings.modelCred },
         allowedTools: spec.allowedTools,
         systemAppend,
-        inputSource: inputCh ? inputCh[Symbol.asyncIterator]() : undefined,
+        inputSource: inputCh ? withChatImages(inputCh[Symbol.asyncIterator](), ws.repoDir, token) : undefined,
         onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
         onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
       });
