@@ -1,0 +1,30 @@
+name: Module auth check
+
+# Guards against drift in the per-module auth gates (each module that exposes an
+# /api/modules/<id>/* route ships its own lib/require-jwt.ts, since the platform
+# doesn't gate module routes and modules can't share a runtime helper). Fails if
+# any module's require-jwt trusts a non-HS256 token without server-side
+# verification (alg-confusion bypass) or uses jwt.verify without pinning the
+# algorithm. See scripts/check-module-require-jwt.mjs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  module-auth-check:
+    name: Module auth check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Check module require-jwt gates
+        run: node scripts/check-module-require-jwt.mjs
