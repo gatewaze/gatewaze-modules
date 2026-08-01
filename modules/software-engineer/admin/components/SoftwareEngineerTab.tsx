@@ -1,8 +1,10 @@
 // @ts-nocheck
 /**
  * Software Engineer dashboard (spec §14 / §14.1). Standard admin dashboard shell: Page + hero
- * header + Tabs, matching the other dashboards (e.g. Emails). Two tabs:
+ * header + Tabs, matching the other dashboards (e.g. Emails). Tabs:
+ *   - Overview — read-only KPI tiles + status/phase/project rollups (default landing).
  *   - Runs  — runs board + live "watch the agent" view (streamed events, chat/steer, override).
+ *   - Issues — report/triage issues across projects.
  *   - Setup — per-brand credentials + repos (SetupPanel).
  * Admin design system (Tailwind + @/components/ui, Radix gray vars). No @radix-ui/themes import.
  */
@@ -15,8 +17,10 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   CommandLineIcon, Cog6ToothIcon, ArrowPathIcon, ArrowUturnLeftIcon,
   XCircleIcon, PaperAirplaneIcon, ArrowTopRightOnSquareIcon, ArchiveBoxIcon, ClipboardDocumentListIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
+import OverviewView from './OverviewView';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -87,6 +91,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const bottom = useRef<HTMLDivElement | null>(null);
   const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
   const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
+  const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
 
   useEffect(() => { api('/projects').then((d) => setProjectList(d.projects ?? [])).catch(() => {}); }, []);
 
@@ -139,7 +144,15 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     return () => { if (timer) clearTimeout(timer); supabase.removeChannel(ch); };
   }, [selected, loadDetail]);
 
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [detail?.messages?.length, detail?.events?.length]);
+  // Keep the transcript pinned to the newest message by scrolling ONLY the transcript container —
+  // never the document (scrollIntoView would move every scrollable ancestor, incl. the page). Skip
+  // when the user has scrolled up to read scrollback so live events don't yank them to the bottom.
+  useEffect(() => {
+    const el = transcript.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [detail?.messages?.length, detail?.events?.length]);
 
   const liveStatus = ['queued', 'running', 'changes_requested'].includes(detail?.run?.status);
 
@@ -172,7 +185,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   };
 
   return (
-    <div className="flex gap-6 min-h-[60vh]">
+    <div className="flex gap-6 h-[calc(100dvh-var(--se-runs-chrome,240px))] overflow-hidden">
       {/* Runs board */}
       <div className="w-80 shrink-0 overflow-y-auto pr-1">
         {projectList.length > 1 && (
@@ -224,7 +237,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
       </div>
 
       {/* Live agent view */}
-      <div className="flex-1 min-w-0 flex flex-col border-l border-[var(--gray-5)] pl-6">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col border-l border-[var(--gray-5)] pl-6">
         {!detail ? (
           <div className="m-auto text-[var(--gray-10)] text-sm">Select a run to watch the agent.</div>
         ) : (
@@ -295,7 +308,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             })()}
 
             {/* Transcript */}
-            <div className="flex-1 overflow-y-auto pr-2 text-sm space-y-2">
+            <div ref={transcript} className="flex-1 min-h-0 overflow-y-auto pr-2 text-sm space-y-2">
               {(detail.messages ?? []).map((m: any) => (
                 <div key={`m${m.id}`} className={`rounded-md px-3 py-2 border-l-2 bg-[var(--gray-2)] ${
                   m.role === 'admin' ? 'border-l-blue-400' : m.role === 'system' ? 'border-l-amber-400' : 'border-l-[var(--gray-6)]'
@@ -315,7 +328,6 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   ))}
                 </div>
               </details>
-              <div ref={bottom} />
             </div>
 
             {/* Chat into the running agent */}
@@ -464,16 +476,19 @@ export default function SoftwareEngineerTab() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  // URL-driven so the Setup page + each run have their own shareable URL:
-  //   /software-engineer                → Runs
-  //   /software-engineer/setup          → Setup
+  // URL-driven so each tab + run have their own shareable URL:
+  //   /software-engineer                → Overview (default landing)
+  //   /software-engineer/runs           → Runs board
   //   /software-engineer/runs/<id>      → a specific run (deep-linkable)
-  const m = pathname.match(/^\/software-engineer(?:\/(setup|runs|issues)(?:\/([^/]+))?)?/);
+  //   /software-engineer/issues         → Issues
+  //   /software-engineer/setup          → Setup
+  const m = pathname.match(/^\/software-engineer(?:\/(overview|setup|runs|issues)(?:\/([^/]+))?)?/);
   const section = m?.[1];
-  const activeTab: 'runs' | 'issues' | 'setup' = section === 'setup' ? 'setup' : section === 'issues' ? 'issues' : 'runs';
+  const activeTab: 'overview' | 'runs' | 'issues' | 'setup' =
+    section === 'runs' ? 'runs' : section === 'issues' ? 'issues' : section === 'setup' ? 'setup' : 'overview';
   const selectedRun = section === 'runs' ? (m?.[2] ?? null) : null;
 
-  const onTabChange = (t: string) => navigate(t === 'runs' ? BASE : `${BASE}/${t}`);
+  const onTabChange = (t: string) => navigate(t === 'overview' ? BASE : `${BASE}/${t}`);
   const onSelectRun = (id: string | null) => navigate(id ? `${BASE}/runs/${id}` : `${BASE}/runs`);
 
   return (
@@ -481,6 +496,7 @@ export default function SoftwareEngineerTab() {
       <WorkspaceLayout
         title="Software Engineer"
         tabs={[
+          { id: 'overview', label: 'Overview', icon: <ChartBarIcon className="size-4" /> },
           { id: 'runs', label: 'Runs', icon: <CommandLineIcon className="size-4" /> },
           { id: 'issues', label: 'Issues', icon: <ClipboardDocumentListIcon className="size-4" /> },
           { id: 'setup', label: 'Setup', icon: <Cog6ToothIcon className="size-4" /> },
@@ -489,6 +505,7 @@ export default function SoftwareEngineerTab() {
         onTabChange={onTabChange}
       >
         <div className="py-6">
+          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'runs' && <RunsView selected={selectedRun} onSelect={onSelectRun} onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'issues' && <IssuesView />}
           {activeTab === 'setup' && <SetupPanel />}
