@@ -223,7 +223,15 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     const images = chatAtts.filter((a) => a.url).map((a) => a.url);
     if (!selected || chatUploading || (!content.trim() && !images.length)) return;
     setDraft(''); setChatAtts([]);
-    try { await api(`/runs/${selected}/message`, { method: 'POST', body: JSON.stringify({ content, images }) }); await loadDetail(selected); }
+    try {
+      const res = await api(`/runs/${selected}/message`, { method: 'POST', body: JSON.stringify({ content, images }) });
+      // The server drops any image URL its SSRF allowlist rejects (e.g. an http://…localhost storage
+      // URL in dev). Surface that instead of a silent success — expected on localhost, works in prod.
+      if (res?.attachmentsDropped > 0) {
+        setErr(`${res.attachmentsDropped} image(s) couldn't be attached — the storage URL isn't publicly reachable over https (expected on localhost; works in staging/production).`);
+      }
+      await loadDetail(selected);
+    }
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
   const override = async () => {
@@ -568,6 +576,14 @@ function IssuesView() {
         project_id: projectId, title, body: form.body, assign_to_agent: assign,
         attachments: atts.filter((a) => a.url).map((a) => ({ url: a.url })),
       }) });
+      // The server strips any attachment URL that isn't reachable over https by GitHub's image proxy
+      // (the SSRF allowlist). On localhost the storage URL is http://…localhost, so it's dropped — warn
+      // rather than showing a silent success. This is expected on localhost; it works in staging/prod.
+      if (res?.attachmentsDropped > 0) {
+        setErr(`${res.attachmentsDropped} image(s) couldn't be attached — the storage URL isn't publicly reachable over https (expected on localhost; works in staging/production).`);
+      } else {
+        setErr(null);
+      }
       // Prepend an optimistic row from the server-returned identifiers (number/url/runId) so the new
       // issue shows instantly; hrefs come from the server, never from user input.
       if (res?.number) {

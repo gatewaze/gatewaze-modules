@@ -352,6 +352,38 @@ agents produce still passes the same review gates. **Open item:** the admin rout
 service-role client and are not yet route-level authZ-gated beyond the platform JWT — harden before
 any shared/prod deployment.
 
+### 13.1 Image attachments (issues + chat)
+
+Pasted/dropped screenshots on the Issues tab and in run chat are uploaded by the client to the public
+`media` Supabase bucket, then their URL is POSTed (`attachments[]` / `images[]`) and appended to the
+GitHub issue body / stored message as `![](url)` markdown. The runner later re-downloads them so the
+agent can *see* them (`lib/attachments.ts`). Both the append and the download are gated by the same
+**SSRF allowlist** (`isAllowedAttachmentUrl` → `hostAllowed`): **https only**, origin equal to the
+server's `SUPABASE_URL` (or a GitHub attachment host, or a host listed in `SE_ATTACHMENT_HOST_ALLOW`),
+and no private/loopback/link-local address on any redirect hop. A URL that fails is **dropped**, never
+fetched — this is deliberate and must not be weakened.
+
+For an attachment to actually render + reach the agent, a deployment needs all of:
+
+- the browser's public-storage origin served over **https**,
+- the `media` bucket **public** (it is, `public: true`),
+- that browser origin **equal to the server `SUPABASE_URL` origin** (or listed in
+  `SE_ATTACHMENT_HOST_ALLOW`).
+
+**Localhost is a known limitation, not a bug.** On a `*.localhost` dev deployment the public storage
+URL is `http://supabase.gatewaze.localhost/...` — http and a `.localhost` host — so the allowlist drops
+it *and* GitHub's image proxy could never fetch a localhost URL anyway (same reason webhooks can't
+reach localhost, §12.5). The image is simply unavailable on localhost; it works unchanged in
+staging/production.
+
+To make dropping **honest** rather than silent, `POST /issues` and `POST /runs/:id/message` return
+`attachmentsAttached` / `attachmentsDropped` counts, and the client warns when `attachmentsDropped > 0`
+("expected on localhost; works in staging/production") instead of showing a successful upload with no
+attached image. Self-hosted operators whose browser storage origin differs from the server
+`SUPABASE_URL` origin (split-horizon) will now *see* the drop and can add the origin to
+`SE_ATTACHMENT_HOST_ALLOW` (https only). Rendering pasted images on a localhost GitHub issue is out of
+scope — physically impossible.
+
 ## 14. Build status
 
 - **DONE + verified:** projects + all-creds-on-project; ephemeral engineer pool + concurrency;
