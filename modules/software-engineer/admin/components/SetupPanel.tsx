@@ -39,7 +39,9 @@ const Section = ({ icon, title, children }: any) => (
   </section>
 );
 
-export default function SetupPanel() {
+export default function SetupPanel(
+  { routeProjectId, onSelectProject }: { routeProjectId?: string | null; onSelectProject?: (id: string | null) => void } = {},
+) {
   const [brands, setBrands] = useState<any[]>([]);
   const [site, setSite] = useState('');
   const [projects, setProjects] = useState<any[]>([]);
@@ -65,10 +67,23 @@ export default function SetupPanel() {
       const d = await api('/projects');
       const list = d.projects ?? [];
       setProjects(list);
-      setPid(selectId ?? (list.find((x: any) => x.id === pid)?.id) ?? list[0]?.id ?? '');
+      // Selection priority: explicit selectId, then the /setup/<projectId> URL, then the
+      // currently-selected project, then the first project.
+      setPid(selectId ?? routeProjectId ?? (list.find((x: any) => x.id === pid)?.id) ?? list[0]?.id ?? '');
     } catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
-  }, [pid]);
+  }, [pid, routeProjectId]);
   useEffect(() => { loadProjects(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The URL (/software-engineer/setup/<projectId>) is the source of truth for which project is
+  // selected, so a per-project setup page is deep-linkable and shareable.
+  useEffect(() => { if (routeProjectId && routeProjectId !== pid) setPid(routeProjectId); }, [routeProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Select a project by navigating (URL-driven) when the router wiring is present; otherwise fall
+  // back to local state so the panel still works if mounted standalone.
+  const selectProject = useCallback((id: string | null) => {
+    if (onSelectProject) onSelectProject(id);
+    else setPid(id ?? '');
+  }, [onSelectProject]);
 
   const loadProject = useCallback(async (id: string) => {
     if (!id) { setS({}); setRepos([]); return; }
@@ -85,12 +100,12 @@ export default function SetupPanel() {
     if (!newProj.name.trim() || !site) return;
     try {
       const d = await api('/projects', { method: 'POST', body: JSON.stringify({ site_id: site, name: newProj.name.trim(), avatar_emoji: newProj.emoji.trim() || null }) });
-      setNewProj({ name: '', emoji: '' }); await loadProjects(d.id);
+      setNewProj({ name: '', emoji: '' }); await loadProjects(d.id); selectProject(d.id);
     } catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
   };
   const deleteProject = async () => {
     if (!pid || !window.confirm(`Delete project "${s.name}"? Its repos + credentials are removed; runs detach.`)) return;
-    try { await api(`/projects/${pid}`, { method: 'DELETE' }); setPid(''); await loadProjects(); }
+    try { await api(`/projects/${pid}`, { method: 'DELETE' }); setPid(''); await loadProjects(); selectProject(null); }
     catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
   };
 
@@ -143,7 +158,7 @@ export default function SetupPanel() {
           <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">Projects</div>
           {projects.length === 0 && <div className="text-sm text-[var(--gray-11)]">No projects yet.</div>}
           {projects.map((p) => (
-            <button key={p.id} onClick={() => setPid(p.id)}
+            <button key={p.id} onClick={() => selectProject(p.id)}
               className={`block w-full text-left rounded-md px-3 py-2 border transition-colors ${pid === p.id ? 'border-[var(--gray-6)] bg-[var(--gray-3)]' : 'border-transparent hover:bg-[var(--gray-2)]'}`}>
               <div className="text-sm font-medium text-[var(--gray-12)] flex items-center gap-2"><span>{p.avatar_emoji || '📁'}</span>{p.name}</div>
               <div className="mt-0.5 flex items-center gap-1.5">
@@ -179,7 +194,11 @@ export default function SetupPanel() {
                   </select>
                 </Field>
                 <Field label={<>Token {s.github_token_last4 ? <span className="text-neutral-400">(••••{s.github_token_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
-                  <input type="password" placeholder="paste to replace" value={ghToken} onChange={(e) => setGhToken(e.target.value)} className={inputCls} />
+                  {/* Suppress browser/password-manager autofill: a manager filling this field would
+                      silently overwrite the pasted PAT with an unrelated stored credential. */}
+                  <input type="password" placeholder="paste to replace" value={ghToken} onChange={(e) => setGhToken(e.target.value)} className={inputCls}
+                    autoComplete="new-password" name="se-github-token" spellCheck={false}
+                    data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
                 </Field>
                 <Field label="Health"><Badge color={s.github_health === 'ok' ? 'green' : s.github_health === 'failing' ? 'red' : 'gray'} variant="soft">{s.github_health ?? 'unknown'}</Badge></Field>
                 <Field label="Commits authored as"><span className="text-sm text-[var(--gray-12)]">{commitsAs}</span></Field>
@@ -198,7 +217,10 @@ export default function SetupPanel() {
                   </select>
                 </Field>
                 <Field label={<>Credential {s.model_cred_last4 ? <span className="text-neutral-400">(••••{s.model_cred_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
-                  <input type="password" placeholder="paste to replace" value={modelCred} onChange={(e) => setModelCred(e.target.value)} className={inputCls} />
+                  {/* Suppress browser/password-manager autofill (see the GitHub token field above). */}
+                  <input type="password" placeholder="paste to replace" value={modelCred} onChange={(e) => setModelCred(e.target.value)} className={inputCls}
+                    autoComplete="new-password" name="se-model-cred" spellCheck={false}
+                    data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
                 </Field>
                 <Field label="Model"><input value={s.model ?? 'claude-opus-4-8'} onChange={set('model')} className={inputCls} /></Field>
               </Section>
