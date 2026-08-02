@@ -172,6 +172,22 @@ export async function writeMemory(sb: unknown, projectId: string, projectName: s
   return upsertMemoryPage(sb, projectId, projectName, MEMORY_SLUG, liveTitle(projectName), body);
 }
 
+/** Log a run's SPEC into the project's memory as `specs/issue-<n>` so future runs find prior
+ *  specs via RAG recall + the wiki_search/wiki_read tools (and, via grants, linked projects'
+ *  runs too). Overwrites on review-loop revisions — the page always holds the latest spec;
+ *  the issues-repo commit history (spec.ts putFile) is the full revision log. Best-effort. */
+export async function writeSpecMemory(
+  sb: unknown, projectId: string, projectName: string, issueNumber: number, issueTitle: string, body: string,
+): Promise<boolean> {
+  if (!projectId || !issueNumber || !body?.trim()) return false;
+  return upsertMemoryPage(
+    sb, projectId, projectName,
+    `specs/issue-${issueNumber}`,
+    `Spec — issue #${issueNumber}: ${String(issueTitle ?? '').slice(0, 140)}`,
+    body,
+  );
+}
+
 // ── Linked memory sources (native wiki grants) ────────────────────────────────────────────────
 // Project L "links" source project S so L's runs also recall S's approved memory. Implemented as a
 // read grant grantor(se-<S>) → grantee(se-<L>); recall/search with scope='shared' then include S.
