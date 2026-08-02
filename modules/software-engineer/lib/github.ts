@@ -74,6 +74,21 @@ export function githubClient(token: string) {
       const r = await fetch(`${BASE}/repos/${owner}/${name}/contents/${path}${q}`, { headers });
       return r.ok;
     },
+    /** Create or update a single file via the contents API (no clone). Fetches the current sha so
+     *  an existing file is updated in place — the repo's git history is the revision log. */
+    async putFile(owner: string, name: string, path: string, content: string, message: string) {
+      let sha: string | undefined;
+      const cur = await fetch(`${BASE}/repos/${owner}/${name}/contents/${path}`, { headers });
+      if (cur.ok) sha = (await cur.json())?.sha;
+      return j(`/repos/${owner}/${name}/contents/${path}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          message,
+          content: Buffer.from(content, 'utf8').toString('base64'),
+          ...(sha ? { sha } : {}),
+        }),
+      });
+    },
     async defaultBranch(owner: string, name: string): Promise<string> {
       const repo = await j(`/repos/${owner}/${name}`);
       return repo.default_branch;
