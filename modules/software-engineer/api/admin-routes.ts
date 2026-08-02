@@ -19,6 +19,13 @@ import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listMem
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Allowlist of valid se_runs.status values (mirrors the CHECK constraint in migration 003). The
+// /runs board accepts a comma-separated status set from the Overview KPI tiles; every value is
+// validated against this set so a caller can't smuggle an arbitrary string into the filter.
+const RUN_STATUSES = new Set([
+  'queued', 'running', 'blocked', 'failed', 'pr_open', 'watching', 'changes_requested', 'merged', 'closed', 'cancelled',
+]);
+
 const PROJECT_MASKED =
   'id, site_id, name, description, avatar_emoji,' +
   ' issues_repo_owner, issues_repo_name, trigger_label, primary_instance_id, max_code_repos_per_run,' +
@@ -166,7 +173,16 @@ export function mountAdminRoutes(router, deps) {
       .limit(200);
     if (String(req.query.archived) === '1') q = q.not('archived_at', 'is', null);
     else q = q.is('archived_at', null);
-    if (req.query.status) q = q.eq('status', String(req.query.status));
+    if (req.query.status !== undefined) {
+      // Accept a comma-separated status set (KPI-tile deep links) or a single status. Only
+      // allowlisted values are kept: a single value → .eq() (backward compatible), a set → .in().
+      // A non-empty filter of only-invalid values collapses to .in([]) so it returns no rows rather
+      // than silently dropping the filter and dumping the whole board.
+      const wanted = [...new Set(String(req.query.status).split(',').map((s) => s.trim()).filter(Boolean))];
+      const valid = wanted.filter((s) => RUN_STATUSES.has(s));
+      if (wanted.length === 1) q = q.eq('status', valid[0] ?? '__none__');
+      else if (wanted.length > 1) q = q.in('status', valid);
+    }
     if (req.query.repo) q = q.eq('repo_name', String(req.query.repo));
     if (req.query.project && UUID.test(String(req.query.project))) q = q.eq('project_id', String(req.query.project));
     const { data } = await q;

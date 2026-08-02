@@ -17,6 +17,7 @@ import {
   CommandLineIcon, CheckCircleIcon, ArrowTopRightOnSquareIcon,
   ExclamationTriangleIcon, CpuChipIcon, ClockIcon, Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
+import { CARD_FILTERS, statusesToParam } from './overview-filters';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -58,17 +59,38 @@ function fmtDuration(seconds: number | null | undefined): string {
   return rh ? `${d}d ${rh}h` : `${d}d`;
 }
 
-function Tile({ icon, label, value, sub, tone }: {
+// A KPI tile. When `onClick` is supplied the tile renders as an accessible <button> that opens the
+// Runs board filtered to this metric's runs; otherwise it's a static <div> (Tokens, Avg-to-merge —
+// no natural run subset). Colour is never the only signal: every tile carries its icon + text label.
+function Tile({ icon, label, value, sub, tone, onClick }: {
   icon: React.ReactNode; label: string; value: React.ReactNode; sub?: string; tone?: 'default' | 'danger' | 'good';
+  onClick?: () => void;
 }) {
   const valueColor = tone === 'danger' ? 'text-red-600' : tone === 'good' ? 'text-green-600' : 'text-[var(--gray-12)]';
-  return (
-    <div className="rounded-lg border border-[var(--gray-5)] p-4 flex flex-col gap-1">
+  const body = (
+    <>
       <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-[var(--gray-10)]">
         {icon}{label}
       </div>
       <div className={`text-2xl font-semibold tabular-nums ${valueColor}`}>{value}</div>
       {sub && <div className="text-xs text-[var(--gray-10)]">{sub}</div>}
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={`${label} — view matching runs`}
+        className="rounded-lg border border-[var(--gray-5)] p-4 flex flex-col gap-1 text-left transition-colors cursor-pointer hover:border-[var(--gray-8)] hover:bg-[var(--gray-2)] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-[var(--gray-5)] p-4 flex flex-col gap-1">
+      {body}
     </div>
   );
 }
@@ -87,7 +109,12 @@ function BarRow({ label, count, max, barClass }: { label: React.ReactNode; count
   );
 }
 
-export default function OverviewView({ onGoToSetup }: { onGoToSetup?: () => void }) {
+export default function OverviewView({ onGoToSetup, onOpenRuns }: {
+  onGoToSetup?: () => void;
+  // Open the Runs board filtered to a status set (comma-separated `?status=` param), carrying the
+  // Overview's current project scope. When absent, the count tiles render non-interactive.
+  onOpenRuns?: (statusParam: string, project?: string) => void;
+}) {
   const [projects, setProjects] = useState<any[]>([]);
   const [projectFilter, setProjectFilter] = useState('');   // '' = all projects
   const [data, setData] = useState<any | null>(null);
@@ -119,6 +146,12 @@ export default function OverviewView({ onGoToSetup }: { onGoToSetup?: () => void
   const statusMax = byStatus.reduce((m, r) => Math.max(m, r.count), 0);
   const phaseMax = byPhase.reduce((m, r) => Math.max(m, r.count), 0);
   const showProjectFilter = projects.length > 1;
+
+  // Open the Runs board scoped to a KPI card's status set + the current project filter. Undefined
+  // when no navigation handler is wired, which leaves the count tiles non-interactive.
+  const openRuns = onOpenRuns
+    ? (statuses: readonly string[]) => onOpenRuns(statusesToParam(statuses), projectFilter || undefined)
+    : undefined;
 
   return (
     <div className="space-y-6">
@@ -153,10 +186,10 @@ export default function OverviewView({ onGoToSetup }: { onGoToSetup?: () => void
         <>
           {/* KPI tiles */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <Tile icon={<CommandLineIcon className="size-3.5" />} label="Active" value={nf.format(totals.active ?? 0)} sub="in flight" />
-            <Tile icon={<CheckCircleIcon className="size-3.5" />} label="Merged" value={nf.format(totals.merged_30d ?? 0)} sub="last 30 days" tone={(totals.merged_30d ?? 0) > 0 ? 'good' : 'default'} />
-            <Tile icon={<ArrowTopRightOnSquareIcon className="size-3.5" />} label="Open PRs" value={nf.format(totals.open_prs ?? 0)} sub="awaiting review/merge" />
-            <Tile icon={<ExclamationTriangleIcon className="size-3.5" />} label="Failed / blocked" value={nf.format(totals.failed_blocked ?? 0)} tone={(totals.failed_blocked ?? 0) > 0 ? 'danger' : 'default'} sub="need attention" />
+            <Tile icon={<CommandLineIcon className="size-3.5" />} label="Active" value={nf.format(totals.active ?? 0)} sub="in flight" onClick={openRuns && (() => openRuns(CARD_FILTERS.active.statuses))} />
+            <Tile icon={<CheckCircleIcon className="size-3.5" />} label="Merged" value={nf.format(totals.merged_30d ?? 0)} sub="last 30 days" tone={(totals.merged_30d ?? 0) > 0 ? 'good' : 'default'} onClick={openRuns && (() => openRuns(CARD_FILTERS.merged.statuses))} />
+            <Tile icon={<ArrowTopRightOnSquareIcon className="size-3.5" />} label="Open PRs" value={nf.format(totals.open_prs ?? 0)} sub="awaiting review/merge" onClick={openRuns && (() => openRuns(CARD_FILTERS.open_prs.statuses))} />
+            <Tile icon={<ExclamationTriangleIcon className="size-3.5" />} label="Failed / blocked" value={nf.format(totals.failed_blocked ?? 0)} tone={(totals.failed_blocked ?? 0) > 0 ? 'danger' : 'default'} sub="need attention" onClick={openRuns && (() => openRuns(CARD_FILTERS.failed_blocked.statuses))} />
             <Tile icon={<CpuChipIcon className="size-3.5" />} label="Tokens" value={fmtTokens((totals.tokens_input ?? 0) + (totals.tokens_output ?? 0))} sub={`${fmtTokens(totals.tokens_input ?? 0)} in · ${fmtTokens(totals.tokens_output ?? 0)} out`} />
             <Tile icon={<ClockIcon className="size-3.5" />} label="Avg to merge" value={fmtDuration(totals.avg_time_to_merge_seconds)} sub="merged, 30 days" />
           </div>
