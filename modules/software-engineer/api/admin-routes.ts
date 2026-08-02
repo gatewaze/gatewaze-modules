@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
+import { mergeRunPrs } from '../lib/merge-prs.js';
 import { dispatchProject } from '../lib/dispatch.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
@@ -279,6 +280,44 @@ export function mountAdminRoutes(router, deps) {
     if (error) return res.status(500).json({ error: 'update failed' });
     await dispatchFor(id);   // freed a slot → promote the next queued run
     res.json({ status: 'cancelled' });
+  });
+
+  // Manually merge a run's open, mergeable PR(s) from the Runs dashboard — the human counterpart to the
+  // autonomous workers/merge.ts. It deliberately BYPASSES the autonomy/blast gate (an admin is explicitly
+  // asking, which is the whole point for pr_only projects and needs_human runs) but keeps every other
+  // safety property: mergeRunPrs only merges PRs GitHub reports mergeable_state 'clean', and the project's
+  // non-bypass token means a red/required-checks-failing PR still can't be forced — it's held, not merged.
+  router.post('/runs/:id/merge', async (req, res) => {
+    if (!rateLimit(`se-admin:merge:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: run } = await supabase.from('se_runs')
+      .select('id, site_id, status, kind, project_id, archived_at, repo_owner, repo_name, issue_number')
+      .eq('id', id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'not found' });
+    if (run.kind === 'interactive') return res.status(409).json({ error: 'interactive sessions have no PR to merge' });
+    if (run.archived_at) return res.status(409).json({ error: 'run is archived' });
+    if (['merged', 'closed', 'cancelled'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
+    // A PR only exists once the run has reached one of these states; anything earlier has nothing to merge.
+    if (!['pr_open', 'watching', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: 'no open PR to merge' });
+    const project = await getProject(supabase, run.project_id);
+    if (!project?.githubToken) return res.status(400).json({ error: 'project has no GitHub credential' });
+    let result;
+    try {
+      result = await mergeRunPrs(supabase, run, project);
+    } catch (e) {
+      logger?.warn?.('se: manual merge failed', { error: String(e) });
+      return res.status(500).json({ error: 'merge failed' });
+    }
+    // Finalize exactly as the auto path: pr-monitor closes the issue / archives the run / frees the next
+    // slot once all PRs are merged. Only worth a nudge when something actually merged.
+    if (result.merged >= 1) {
+      try { await enqueueJob?.('jobs', 'software-engineer:pr-monitor', { runId: run.id }); }
+      catch (e) { logger?.warn?.('se: enqueue pr-monitor failed', { error: String(e) }); }
+    }
+    res.json({ merged: result.merged, held: result.held, results: result.results });
   });
 
   router.post('/runs/:id/archive', async (req, res) => {
