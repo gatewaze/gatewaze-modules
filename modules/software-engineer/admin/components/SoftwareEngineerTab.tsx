@@ -8,7 +8,7 @@
  *   - Setup — per-brand credentials + repos (SetupPanel).
  * Admin design system (Tailwind + @/components/ui, Radix gray vars). No @radix-ui/themes import.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { Badge, Button, WorkspaceLayout } from '@/components/ui';
@@ -20,6 +20,7 @@ import {
   ChartBarIcon, PlayCircleIcon, StopCircleIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
+import TranscriptMarkdown from './TranscriptMarkdown';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 
@@ -243,6 +244,23 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
 
+  // Live "in-progress" bubble: completed turns are persisted to se_messages only
+  // on the SDK `result` event, while in-flight agent text streams as se_events
+  // (kind:'assistant'). Assemble the trailing assistant events that are newer
+  // than the last completed agent message into one bubble so the operator sees a
+  // sensibly-formatted message mid-turn rather than raw fragments in "Tool
+  // activity". Events arrive ordered by seq from the API.
+  const liveBubble = useMemo(() => {
+    if (!liveStatus) return '';
+    const agentMsgs = (detail?.messages ?? []).filter((m: any) => m.role === 'agent');
+    const boundary = agentMsgs.length ? agentMsgs[agentMsgs.length - 1].created_at : null;
+    const text = (detail?.events ?? [])
+      .filter((e: any) => e.kind === 'assistant' && (!boundary || (e.created_at ?? '') > boundary))
+      .map((e: any) => e.payload?.text ?? '')
+      .join('');
+    return text.trim();
+  }, [detail?.events, detail?.messages, liveStatus]);
+
   return (
     // Stack on phones (flex-col), two-pane from lg up. The fixed 100dvh height + overflow trap is
     // gated to lg so mobile scrolls the page normally instead of fighting the browser address bar.
@@ -410,9 +428,19 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   m.role === 'admin' ? 'border-l-blue-400' : m.role === 'system' ? 'border-l-amber-400' : 'border-l-[var(--gray-6)]'
                 }`}>
                   <div className="text-[11px] uppercase tracking-wide text-[var(--gray-10)]">{m.role}{m.sub_session_id ? ` · ${m.sub_session_id}` : ''}</div>
-                  <div className="whitespace-pre-wrap text-[var(--gray-12)]">{m.content}</div>
+                  <TranscriptMarkdown>{m.content}</TranscriptMarkdown>
                 </div>
               ))}
+              {liveBubble && (
+                <div className="rounded-md px-3 py-2 border-l-2 bg-[var(--gray-2)] border-l-[var(--gray-6)]">
+                  <div className="text-[11px] uppercase tracking-wide text-[var(--gray-10)] flex items-center gap-1.5">
+                    agent
+                    <span className="inline-block size-1.5 rounded-full bg-blue-400 animate-pulse" aria-hidden />
+                    <span className="normal-case tracking-normal text-[var(--gray-9)]">typing…</span>
+                  </div>
+                  <TranscriptMarkdown streaming>{liveBubble}</TranscriptMarkdown>
+                </div>
+              )}
               <details className="text-xs text-[var(--gray-11)]">
                 <summary className="cursor-pointer select-none py-1">Tool activity ({(detail.events ?? []).length})</summary>
                 <div className="space-y-0.5 mt-1">
