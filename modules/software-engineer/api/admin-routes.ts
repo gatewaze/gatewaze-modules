@@ -6,13 +6,16 @@
  * memory, policy, and a concurrency cap. Engineers are ephemeral (one per run, run.engineer_name).
  */
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
 import { dispatchProject } from '../lib/dispatch.js';
+import { enqueuePhase } from '../lib/enqueue.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
+import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -23,12 +26,15 @@ const PROJECT_MASKED =
   ' github_user_login, github_user_id, github_user_name,' +
   ' model_cred_last4, model_cred_kind, model, model_health, model_checked_at,' +
   ' commit_author_name, commit_author_email,' +
-  ' allowed_labellers, intake_enabled, autonomy_mode, max_concurrent_engineers,' +
+  ' allowed_labellers, intake_enabled, autonomy_mode, max_concurrent_engineers, max_interactive_engineers,' +
   ' has_mcp_config,' +
   ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, created_at, updated_at';
 
 const sanitize = (v: unknown) =>
   v == null ? null : String(v).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 200) || null;
+
+// Friendly display names for interactive sessions (UI only, mirrors the ephemeral engineer names).
+const INTERACTIVE_NAMES = ['Ada', 'Max', 'Iris', 'Reed', 'Nova', 'Cleo', 'Rex', 'Milo', 'Juno', 'Otto', 'Vera', 'Kai'];
 
 // AuthZ. The platform's modulesRouter already verifies the user JWT for this /admin/* prefix and
 // attaches req.userId (a 401 here without a Bearer confirms it runs). On top of that we require the
@@ -61,6 +67,69 @@ export function mountAdminRoutes(router, deps) {
   router.use(express.json({ limit: '256kb' }));
 
   const authorOf = (req) => req.userId ?? req.auth?.userId ?? req.user?.id ?? req.actor?.userId ?? null;
+
+  // ── Project memory: review + human approval (memory-poisoning gate) ────────
+  // reflect writes proposed memory to a pending slot; it is NOT injected into
+  // any run until an admin approves it here. All three routes are admin-gated
+  // by the router.use above.
+  router.get('/projects/:id/memory', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const [live, pending] = await Promise.all([readLiveMemory(projectId), readPendingMemory(projectId)]);
+    return res.json({ live, pending, hasPending: !!pending });
+  });
+  router.post('/projects/:id/memory/approve', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const ok = await approveMemory(supabase, projectId, project.name);
+    if (!ok) return res.status(409).json({ error: { code: 'no_pending', message: 'No pending memory to approve' } });
+    return res.json({ approved: true });
+  });
+  router.post('/projects/:id/memory/reject', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    await rejectMemory(supabase, projectId, project.name);
+    return res.json({ rejected: true });
+  });
+
+  // Linked memory sources (§9): other projects whose APPROVED memory this project also recalls.
+  // Directional and opt-in; backed by wiki grants. Only same-tenant projects may be linked.
+  router.get('/projects/:id/memory/sources', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const ids = await listMemorySources(supabase, projectId);
+    let sources: Array<{ projectId: string; name: string }> = [];
+    if (ids.length) {
+      const { data } = await supabase.from('se_projects').select('id, name').in('id', ids);
+      sources = (data ?? []).map((p) => ({ projectId: p.id, name: p.name }));
+    }
+    return res.json({ sources });
+  });
+  router.put('/projects/:id/memory/sources', async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const raw = Array.isArray(req.body?.source_project_ids) ? req.body.source_project_ids : null;
+    if (!raw) return res.status(400).json({ error: { code: 'invalid_input', message: 'source_project_ids array required' } });
+    // Allowlist: valid UUIDs, not self, and belonging to THIS tenant (site) — never link an arbitrary
+    // project/use_case (that would leak another tenant's memory into this project's runs).
+    const wanted = [...new Set(raw.map((x: unknown) => String(x)))].filter((x) => UUID.test(x) && x !== projectId);
+    let valid: string[] = [];
+    if (wanted.length) {
+      const { data } = await supabase.from('se_projects').select('id').in('id', wanted).eq('site_id', project.siteId);
+      valid = (data ?? []).map((p) => p.id);
+    }
+    const current = await listMemorySources(supabase, projectId);
+    const toLink = valid.filter((id) => !current.includes(id));
+    const toUnlink = current.filter((id) => !valid.includes(id));
+    for (const id of toLink) await linkMemorySource(supabase, projectId, id);
+    for (const id of toUnlink) await unlinkMemorySource(supabase, projectId, id);
+    return res.json({ sources: valid, linked: toLink.length, unlinked: toUnlink.length });
+  });
   // Freeing a slot (cancel/archive) should promote the next queued run for that project immediately,
   // rather than waiting for the pr-monitor cron safety-net.
   const dispatchFor = async (runId: string) => {
@@ -69,6 +138,24 @@ export function mountAdminRoutes(router, deps) {
       if (data?.project_id) await dispatchProject(supabase, { enqueueJob }, data.project_id);
     } catch { /* best-effort */ }
   };
+
+  // ── Overview — one pre-aggregated metrics blob for the dashboard's Overview tab ───────────
+  // All aggregation happens in the se_overview() SQL function (read-only), so the client renders
+  // KPI tiles + rollups from a single JSON payload instead of pulling every run row. Optional
+  // ?project=<uuid> scopes every metric to one project.
+  router.get('/overview', async (req, res) => {
+    let project: string | null = null;
+    if (req.query.project !== undefined) {
+      project = String(req.query.project);
+      if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
+    }
+    const { data, error } = await supabase.rpc('se_overview', { p_project: project });
+    if (error) {
+      logger?.warn?.('se: overview failed', { error: String(error?.message ?? error) });
+      return res.status(500).json({ error: 'overview failed' });
+    }
+    res.json(data ?? {});
+  });
 
   // ── Runs ────────────────────────────────────────────────────────────────
   router.get('/runs', async (req, res) => {
@@ -108,12 +195,24 @@ export function mountAdminRoutes(router, deps) {
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
     const content = String(req.body?.content ?? '').slice(0, 8000);
-    if (!content.trim()) return res.status(400).json({ error: 'empty' });
+    // Chat image attachments (pasted screenshots) — already uploaded to the public `media` bucket by
+    // the client. Validate each URL against the host allowlist (defense in depth: the runner's
+    // download path allowlists again) and cap the count, exactly like the issue-create path.
+    const images = (Array.isArray(req.body?.images) ? req.body.images : [])
+      .map((u: any) => (typeof u === 'string' ? u : u?.url))
+      .filter((u: any) => typeof u === 'string' && isAllowedAttachmentUrl(u))
+      .slice(0, 8);
+    if (!content.trim() && !images.length) return res.status(400).json({ error: 'empty' });
     const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
     if (!['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
-    await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'admin', author: authorOf(req), content });
-    try { await publishInput(getRedis?.(), id, { kind: 'chat', content }); }
+    // Persist the images as markdown appended to the stored message so the transcript renders them
+    // inline — the same `![](url)` convention se_messages already carries for issue attachments.
+    const stored = images.length
+      ? `${content}${content && '\n\n'}` + images.map((u: string, i: number) => `![screenshot-${i + 1}](${u})`).join('\n')
+      : content;
+    await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'admin', author: authorOf(req), content: stored });
+    try { await publishInput(getRedis?.(), id, { kind: 'chat', content, images }); }
     catch (e) { logger?.warn?.('se: publish chat failed', { error: String(e) }); }
     res.status(202).json({ accepted: true });
   });
@@ -128,6 +227,26 @@ export function mountAdminRoutes(router, deps) {
     try { await publishInput(getRedis?.(), id, { kind: 'interrupt', content }); }
     catch (e) { logger?.warn?.('se: publish interrupt failed', { error: String(e) }); }
     res.status(202).json({ accepted: true });
+  });
+
+  // End an interactive (pair-programming) session. Publishes a `close` so the live session ends
+  // gracefully (the worker cleans up its workspace and marks the run 'closed'), and also marks it
+  // closed here as a robust fallback so the slot frees even if the worker is already gone. Idempotent
+  // with the worker's own close (both set 'closed'). Only valid for kind='interactive'.
+  router.post('/runs/:id/close', async (req, res) => {
+    if (!rateLimit(`se-admin:close:${clientIp(req)}`, 60, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: run } = await supabase.from('se_runs').select('id, site_id, kind, status').eq('id', id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'not found' });
+    if (run.kind !== 'interactive') return res.status(400).json({ error: 'not an interactive session' });
+    try { await publishInput(getRedis?.(), id, { kind: 'close' }); }
+    catch (e) { logger?.warn?.('se: publish close failed', { error: String(e) }); }
+    await supabase.from('se_runs').update({ status: 'closed' }).eq('id', id).eq('kind', 'interactive').in('status', ['running']);
+    try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: 'Session closed by admin.' }); } catch { /* best-effort */ }
+    res.json({ status: 'closed' });
   });
 
   router.post('/runs/:id/cancel', async (req, res) => {
@@ -155,6 +274,46 @@ export function mountAdminRoutes(router, deps) {
     const { error } = await supabase.from('se_runs').update({ archived_at: null }).eq('id', id);
     if (error) return res.status(500).json({ error: 'unarchive failed' });
     res.json({ ok: true });
+  });
+
+  // ── Interactive engineers — manually start a live pair-programming session on a project ─────
+  // Creates a kind='interactive' run (no issue, no pipeline) directly as 'running' and dispatches the
+  // interactive worker, which opens the project's workspace and runs one persistent chat session until
+  // it is closed (explicitly, or by an idle / wall-clock cap). Bounded by a per-project cap that is
+  // separate from the issue pipeline pool. The admin then chats via the normal /runs/:id/message path.
+  router.post('/engineers/interactive', async (req, res) => {
+    if (!rateLimit(`se-admin:interactive:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const projectId = String(req.body?.project_id ?? '');
+    if (!UUID.test(projectId)) return res.status(400).json({ error: 'project_id required' });
+    const proj = await getProject(supabase, projectId);
+    if (!proj) return res.status(404).json({ error: 'project not found' });
+    if (!proj.intakeEnabled) return res.status(409).json({ error: 'project is disabled (kill switch)' });
+    if (!proj.githubToken) return res.status(400).json({ error: 'project has no GitHub credential' });
+
+    const cap = Math.max(1, proj.maxInteractiveEngineers ?? 1);
+    const { count } = await supabase.from('se_runs').select('*', { count: 'exact', head: true })
+      .eq('project_id', projectId).eq('kind', 'interactive').is('archived_at', null).eq('status', 'running');
+    if ((count ?? 0) >= cap) return res.status(409).json({ error: `interactive session limit reached (${cap})` });
+
+    const branch = `agent/interactive-${randomUUID().slice(0, 8)}`;
+    const name = INTERACTIVE_NAMES[Math.floor((count ?? 0)) % INTERACTIVE_NAMES.length];
+    const { data: run, error } = await supabase.from('se_runs').insert({
+      site_id: proj.siteId, project_id: projectId, kind: 'interactive',
+      instance_id: process.env.SE_INSTANCE_ID || 'default',
+      repo_owner: proj.issuesRepoOwner || 'interactive', repo_name: proj.issuesRepoName || 'session',
+      issue_number: null, title: 'Interactive session',
+      labeller: authorOf(req), status: 'running', current_phase: 'interactive',
+      branch_name: branch, engineer_name: name,
+    }).select('id').single();
+    if (error || !run) {
+      logger?.warn?.('se: start interactive failed', { error: String(error?.message ?? error) });
+      return res.status(500).json({ error: 'create failed' });
+    }
+    try { await enqueuePhase({ enqueueJob }, run.id, 'interactive'); }
+    catch (e) { logger?.warn?.('se: enqueue interactive failed', { error: String(e) }); }
+    res.status(201).json({ runId: run.id });
   });
 
   // ── Issues — aggregate open issues from each project's issues repo + correlate with runs ───
@@ -269,7 +428,7 @@ export function mountAdminRoutes(router, deps) {
     const patch: any = {};
     for (const k of [
       'github_token_kind', 'github_app_installation_id', 'model_cred_kind', 'model', 'autonomy_mode',
-      'intake_enabled', 'max_concurrent_engineers', 'max_code_repos_per_run',
+      'intake_enabled', 'max_concurrent_engineers', 'max_interactive_engineers', 'max_code_repos_per_run',
       'monthly_token_budget', 'per_run_token_ceiling', 'per_run_wallclock_minutes',
     ]) {
       if (b[k] !== undefined) patch[k] = b[k];

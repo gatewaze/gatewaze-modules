@@ -1,8 +1,10 @@
 // @ts-nocheck
 /**
  * Software Engineer dashboard (spec §14 / §14.1). Standard admin dashboard shell: Page + hero
- * header + Tabs, matching the other dashboards (e.g. Emails). Two tabs:
+ * header + Tabs, matching the other dashboards (e.g. Emails). Tabs:
+ *   - Overview — read-only KPI tiles + status/phase/project rollups (default landing).
  *   - Runs  — runs board + live "watch the agent" view (streamed events, chat/steer, override).
+ *   - Issues — report/triage issues across projects.
  *   - Setup — per-brand credentials + repos (SetupPanel).
  * Admin design system (Tailwind + @/components/ui, Radix gray vars). No @radix-ui/themes import.
  */
@@ -15,9 +17,12 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   CommandLineIcon, Cog6ToothIcon, ArrowPathIcon, ArrowUturnLeftIcon,
   XCircleIcon, PaperAirplaneIcon, ArrowTopRightOnSquareIcon, ArchiveBoxIcon, ClipboardDocumentListIcon,
+  ChartBarIcon, PlayCircleIcon, StopCircleIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
 import TranscriptMarkdown from './TranscriptMarkdown';
+import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
+import OverviewView from './OverviewView';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -44,18 +49,63 @@ const STATUS_COLOR: Record<string, string> = {
 const phaseColor = (s: string) =>
   s === 'passed' ? 'green' : s === 'failed' || s === 'blocked' ? 'red' : s === 'running' ? 'blue' : 'gray';
 
+// Human prose for the run's current phase — so a live run reads as continuous progress rather than
+// only jumping on turn boundaries. Falls back to the raw phase for any phase not enumerated here.
+const PHASE_PROSE: Record<string, string> = {
+  intake: 'Reading the issue and planning the work',
+  spec: 'Writing the change spec',
+  review: 'Reviewing the spec',
+  implement: 'Writing the code',
+  verify: 'Running checks and tests',
+  revise: 'Revising in response to feedback',
+  pr: 'Opening the pull request',
+  watch: 'Watching the pull request',
+  merge: 'Merging',
+};
+const phaseProse = (p?: string) => (p && PHASE_PROSE[p]) || (p ? `Working (${p})` : 'Working');
+
+// A run's headline label. Interactive (pair-programming) sessions have no issue, so they read as a
+// session on their project rather than "owner/repo #n".
+const runLabel = (r: any): string =>
+  r?.kind === 'interactive'
+    ? `Interactive session${r.project?.name ? ` · ${r.project.name}` : ''}`
+    : `${r?.repo_owner}/${r?.repo_name} #${r?.issue_number}`;
+
+// One-line label promoting the latest live event out of the collapsed "Tool activity" block, so the
+// working strip shows what the agent is doing *right now* between turn-boundary transcript messages.
+function eventLabel(ev: any): string {
+  if (!ev) return '';
+  const p = ev.payload ?? {};
+  switch (ev.kind) {
+    case 'tool_use': return `Running ${p.name ?? 'a tool'}`;
+    case 'tool_result': return 'Reading the result';
+    case 'thinking': return p.text ? `Thinking — ${String(p.text).replace(/\s+/g, ' ').slice(0, 120)}` : 'Thinking…';
+    case 'status': return String(p.text ?? p.step ?? 'Working…');
+    case 'assistant': return p.text ? String(p.text).replace(/\s+/g, ' ').slice(0, 120) : 'Writing…';
+    default: return String(ev.kind ?? '');
+  }
+}
+
+const THROTTLE_MS = 500;   // coalesce bursts of realtime events into at most one detail refetch / window
+
 function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null; onSelect: (id: string | null) => void; onGoToSetup: () => void }) {
   const [runs, setRuns] = useState<any[]>([]);
   const [detail, setDetail] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
+  const [chatAtts, setChatAtts] = useState<any[]>([]);   // pasted/dropped screenshots → uploaded to `media`
   const [err, setErr] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [projectList, setProjectList] = useState<any[]>([]);
   const [projectFilter, setProjectFilter] = useState('');   // '' = all projects
+  const [startProject, setStartProject] = useState('');     // project for a new interactive session
+  const [starting, setStarting] = useState(false);
   const bottom = useRef<HTMLDivElement | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
+  const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
+  const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
 
-  useEffect(() => { api('/projects').then((d) => setProjectList(d.projects ?? [])).catch(() => {}); }, []);
+  useEffect(() => { api('/projects').then((d) => { const list = d.projects ?? []; setProjectList(list); setStartProject((v) => v || list[0]?.id || ''); }).catch(() => {}); }, []);
 
   const loadRuns = useCallback(async () => {
     try {
@@ -80,24 +130,86 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   }, [loadRuns]);
 
   useEffect(() => {
+    setChatAtts([]);   // don't carry a pending upload from one run into another
     if (!selected) { setDetail(null); return; }
+    lastActivityRef.current = Date.now();
     loadDetail(selected);
-    const reload = () => loadDetail(selected);
+    // Throttle refetches: se_events can burst (one row per tool call), and each realtime signal here
+    // triggers a *full* run refetch. Coalesce to a leading + trailing call per THROTTLE_MS window so a
+    // busy phase doesn't hammer /runs/:id. Any signal also refreshes the freshness clock below.
+    let timer: any = null;
+    let trailing = false;
+    const bump = () => {
+      lastActivityRef.current = Date.now();
+      if (timer) { trailing = true; return; }
+      loadDetail(selected);
+      timer = setTimeout(function fire() {
+        timer = null;
+        if (trailing) { trailing = false; loadDetail(selected); timer = setTimeout(fire, THROTTLE_MS); }
+      }, THROTTLE_MS);
+    };
     const ch = supabase.channel(`se-run-${selected}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_events', filter: `run_id=eq.${selected}` }, reload)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_messages', filter: `run_id=eq.${selected}` }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_phases', filter: `run_id=eq.${selected}` }, reload)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'se_runs', filter: `id=eq.${selected}` }, reload)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_events', filter: `run_id=eq.${selected}` }, bump)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_messages', filter: `run_id=eq.${selected}` }, bump)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_phases', filter: `run_id=eq.${selected}` }, bump)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'se_runs', filter: `id=eq.${selected}` }, bump)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => { if (timer) clearTimeout(timer); supabase.removeChannel(ch); };
   }, [selected, loadDetail]);
 
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }); }, [detail?.messages?.length, detail?.events?.length]);
+  // Keep the transcript pinned to the newest message by scrolling ONLY the transcript container —
+  // never the document (scrollIntoView would move every scrollable ancestor, incl. the page). Skip
+  // when the user has scrolled up to read scrollback so live events don't yank them to the bottom.
+  useEffect(() => {
+    const el = transcript.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [detail?.messages?.length, detail?.events?.length]);
+
+  const liveStatus = ['queued', 'running', 'changes_requested'].includes(detail?.run?.status);
+
+  // Re-render once a second while live so the "updated Ns ago" freshness clock advances — a wedged run
+  // (no events, no heartbeat) then reads as visibly stale instead of looking identical to a live one.
+  useEffect(() => {
+    if (!liveStatus) return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [liveStatus]);
+
+  // Paste/drop a screenshot into the live chat → upload to the public `media` bucket, then send its
+  // URL with the message so the agent downloads + Reads it (same path as issue attachments).
+  const uploadChatImage = async (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > 15 * 1024 * 1024) { setErr('image too large (max 15MB)'); return; }
+    const key = crypto.randomUUID();
+    const ext = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
+    const path = `se-runs/${selected || 'unknown'}/${key}.${ext}`;
+    setChatAtts((a) => [...a, { key, name: file.name || `${key}.${ext}`, url: '', uploading: true }]);
+    try {
+      const { error } = await supabase.storage.from('media').upload(path, file, { upsert: false, cacheControl: '3600', contentType: file.type });
+      if (error) throw error;
+      const { data } = supabase.storage.from('media').getPublicUrl(path);
+      setChatAtts((a) => a.map((x) => (x.key === key ? { ...x, uploading: false, url: data.publicUrl } : x)));
+    } catch (e: any) { setErr(`image upload failed: ${String(e.message ?? e)}`); setChatAtts((a) => a.filter((x) => x.key !== key)); }
+  };
+  const onChatPaste = (e: React.ClipboardEvent) => {
+    const imgs = Array.from(e.clipboardData?.items ?? []).filter((it) => it.type.startsWith('image/'));
+    if (!imgs.length) return;
+    e.preventDefault();
+    imgs.forEach((it) => { const f = it.getAsFile(); if (f) uploadChatImage(f); });
+  };
+  const onChatDrop = (e: React.DragEvent) => { e.preventDefault(); Array.from(e.dataTransfer?.files ?? []).forEach(uploadChatImage); };
+  const onChatPick = (e: React.ChangeEvent<HTMLInputElement>) => { Array.from(e.target.files ?? []).forEach(uploadChatImage); e.target.value = ''; };
+  const removeChatAtt = (key: string) => setChatAtts((a) => a.filter((x) => x.key !== key));
+  const chatUploading = chatAtts.some((a) => a.uploading);
 
   const send = async () => {
-    if (!selected || !draft.trim()) return;
-    const content = draft; setDraft('');
-    try { await api(`/runs/${selected}/message`, { method: 'POST', body: JSON.stringify({ content }) }); await loadDetail(selected); }
+    const content = draft;
+    const images = chatAtts.filter((a) => a.url).map((a) => a.url);
+    if (!selected || chatUploading || (!content.trim() && !images.length)) return;
+    setDraft(''); setChatAtts([]);
+    try { await api(`/runs/${selected}/message`, { method: 'POST', body: JSON.stringify({ content, images }) }); await loadDetail(selected); }
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
   const override = async () => {
@@ -113,8 +225,24 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     try { await api(`/runs/${id}/${on ? 'archive' : 'unarchive'}`, { method: 'POST' }); await loadRuns(); if (selected === id) await loadDetail(id); }
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
-
-  const liveStatus = ['queued', 'running', 'changes_requested'].includes(detail?.run?.status);
+  // Manually start a blank interactive engineer on a project, then open it to chat live.
+  const startInteractive = async () => {
+    const pid = startProject || projectFilter || projectList[0]?.id;
+    if (!pid) { setErr('Add a project in Setup first.'); return; }
+    setStarting(true); setErr(null);
+    try {
+      const r = await api('/engineers/interactive', { method: 'POST', body: JSON.stringify({ project_id: pid }) });
+      await loadRuns();
+      if (r?.runId) onSelect(r.runId);
+    } catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setStarting(false); }
+  };
+  // Explicitly end an interactive session (nothing closes it on its own).
+  const closeSession = async () => {
+    if (!selected || !window.confirm('End this interactive session? Its scratch workspace is discarded.')) return;
+    try { await api(`/runs/${selected}/close`, { method: 'POST' }); await loadRuns(); await loadDetail(selected); }
+    catch (e: any) { setErr(String(e.message ?? e)); }
+  };
 
   // Live "in-progress" bubble: completed turns are persisted to se_messages only
   // on the SDK `result` event, while in-flight agent text streams as se_events
@@ -134,9 +262,11 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   }, [detail?.events, detail?.messages, liveStatus]);
 
   return (
-    <div className="flex gap-6 min-h-[60vh]">
-      {/* Runs board */}
-      <div className="w-80 shrink-0 overflow-y-auto pr-1">
+    // Stack on phones (flex-col), two-pane from lg up. The fixed 100dvh height + overflow trap is
+    // gated to lg so mobile scrolls the page normally instead of fighting the browser address bar.
+    <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100dvh-var(--se-runs-chrome,240px))] lg:overflow-hidden">
+      {/* Runs board — full width on mobile; hidden once a run is selected so the detail pane takes over. */}
+      <div className={`w-full lg:w-80 shrink-0 lg:overflow-y-auto pr-1 ${selected ? 'hidden lg:block' : 'block'}`}>
         {projectList.length > 1 && (
           <select
             value={projectFilter}
@@ -146,6 +276,27 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             <option value="">All projects</option>
             {projectList.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
           </select>
+        )}
+        {!showArchived && projectList.length > 0 && (
+          // items-stretch: the auto-height select conforms to the fixed-height
+          // Button so both controls line up regardless of the kit's sm height.
+          <div className="mb-2 flex items-stretch gap-2">
+            {projectList.length > 1 && (
+              <select
+                value={startProject}
+                onChange={(e) => setStartProject(e.target.value)}
+                // No vertical padding: keep the select's intrinsic height below the
+                // Button's fixed height so flex stretch grows it to match the Button.
+                className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 text-sm"
+                aria-label="Project for a new interactive engineer"
+              >
+                {projectList.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
+              </select>
+            )}
+            <Button variant="soft" size="sm" onClick={startInteractive} disabled={starting} className={projectList.length > 1 ? 'shrink-0' : 'w-full'}>
+              <PlayCircleIcon className="size-4 mr-1" />{starting ? 'Starting…' : 'Start engineer'}
+            </Button>
+          </div>
         )}
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">{showArchived ? 'Archive' : 'Runs'}</div>
@@ -174,8 +325,8 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               selected === r.id ? 'border-[var(--gray-6)] bg-[var(--gray-3)]' : 'border-transparent hover:bg-[var(--gray-2)]'
             }`}
           >
-            <div className="text-sm font-medium truncate text-[var(--gray-12)]">{r.repo_owner}/{r.repo_name} #{r.issue_number}</div>
-            {r.title && <div className="text-xs text-[var(--gray-11)] truncate">{r.title}</div>}
+            <div className="text-sm font-medium truncate text-[var(--gray-12)]">{runLabel(r)}</div>
+            {r.title && r.kind !== 'interactive' && <div className="text-xs text-[var(--gray-11)] truncate">{r.title}</div>}
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <Badge color={STATUS_COLOR[r.status] ?? 'gray'} size="1">{r.status}</Badge>
               <span className="text-xs text-[var(--gray-10)]">{r.current_phase}</span>
@@ -185,15 +336,24 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
         ))}
       </div>
 
-      {/* Live agent view */}
-      <div className="flex-1 min-w-0 flex flex-col border-l border-[var(--gray-5)] pl-6">
+      {/* Live agent view — hidden on mobile until a run is selected, then it takes the full width. */}
+      <div className={`flex-1 min-w-0 min-h-0 flex-col lg:border-l border-[var(--gray-5)] lg:pl-6 ${selected ? 'flex' : 'hidden lg:flex'}`}>
+        {/* Mobile-only back control: reuses the URL-driven selection (onSelect(null) → /runs). */}
+        {selected && (
+          <button
+            onClick={() => onSelect(null)}
+            className="lg:hidden mb-3 inline-flex items-center gap-1 self-start text-sm text-[var(--gray-11)] hover:text-[var(--gray-12)]"
+          >
+            <ArrowUturnLeftIcon className="size-4" />Back to runs
+          </button>
+        )}
         {!detail ? (
           <div className="m-auto text-[var(--gray-10)] text-sm">Select a run to watch the agent.</div>
         ) : (
           <>
             <div className="pb-3 border-b border-[var(--gray-5)] mb-3">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-medium text-[var(--gray-12)]">{detail.run.repo_owner}/{detail.run.repo_name} #{detail.run.issue_number}</span>
+                <span className="font-medium text-[var(--gray-12)]">{runLabel(detail.run)}</span>
                 <Badge color={STATUS_COLOR[detail.run.status] ?? 'gray'}>{detail.run.status}</Badge>
                 {detail.run.pr_state && detail.run.pr_state !== detail.run.status && (
                   <Badge color={STATUS_COLOR[detail.run.pr_state] ?? 'gray'} variant="soft" size="1">PR: {detail.run.pr_state}</Badge>
@@ -206,9 +366,14 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                     PR <ArrowTopRightOnSquareIcon className="size-3" />
                   </a>
                 )}
-                <span className="ml-auto flex items-center gap-2">
+                <span className="ml-auto flex items-center gap-2 flex-wrap">
+                  {detail.run.kind === 'interactive' && detail.run.status === 'running' && (
+                    <Button variant="soft" color="red" size="xs" onClick={closeSession}><StopCircleIcon className="size-3.5 mr-1" />End session</Button>
+                  )}
                   <Button variant="soft" size="xs" onClick={override} disabled={!liveStatus}><ArrowUturnLeftIcon className="size-3.5 mr-1" />Override</Button>
-                  <Button variant="soft" color="red" size="xs" onClick={cancel} disabled={!liveStatus}><XCircleIcon className="size-3.5 mr-1" />Cancel</Button>
+                  {detail.run.kind !== 'interactive' && (
+                    <Button variant="soft" color="red" size="xs" onClick={cancel} disabled={!liveStatus}><XCircleIcon className="size-3.5 mr-1" />Cancel</Button>
+                  )}
                   {detail.run.archived_at
                     ? <Button variant="soft" size="xs" onClick={() => archive(detail.run.id, false)}>Unarchive</Button>
                     : <Button variant="soft" size="xs" onClick={() => archive(detail.run.id, true)}><ArchiveBoxIcon className="size-3.5 mr-1" />Archive</Button>}
@@ -221,8 +386,43 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               </div>
             </div>
 
+            {/* Live "working" strip — persistent while the run is live so progress is visible between
+                turn-boundary transcript messages. Distinct queued (waiting) vs running (active) states,
+                the latest live event promoted out of the collapsed block, and a freshness clock so a
+                stalled run doesn't look identical to a healthy one. */}
+            {liveStatus && (() => {
+              const events = detail.events ?? [];
+              const latest = events[events.length - 1];
+              const queued = detail.run.status === 'queued';
+              const ageSec = Math.max(0, Math.round((Date.now() - lastActivityRef.current) / 1000));
+              const stale = !queued && ageSec >= 45;   // past the heartbeat window → possibly wedged
+              return (
+                <div className={`mb-3 rounded-md border px-3 py-2 flex items-center gap-3 ${
+                  stale ? 'border-amber-300 bg-amber-50' : 'border-[var(--gray-6)] bg-[var(--gray-2)]'
+                }`}>
+                  <span className="relative flex size-2.5 shrink-0">
+                    {!queued && !stale && <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping" />}
+                    <span className={`relative inline-flex rounded-full size-2.5 ${queued ? 'bg-[var(--gray-8)]' : stale ? 'bg-amber-500' : 'bg-blue-500'}`} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-[var(--gray-12)]">
+                      {queued ? 'Waiting for a worker to pick this up…' : phaseProse(detail.run.current_phase)}
+                    </div>
+                    {!queued && latest && (
+                      <div className="text-xs text-[var(--gray-11)] truncate">{eventLabel(latest)}</div>
+                    )}
+                  </div>
+                  {!queued && (
+                    <span className={`shrink-0 text-[11px] tabular-nums ${stale ? 'text-amber-700 font-medium' : 'text-[var(--gray-10)]'}`}>
+                      {stale ? `no activity for ${ageSec}s` : `updated ${ageSec}s ago`}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Transcript */}
-            <div className="flex-1 overflow-y-auto pr-2 text-sm space-y-2">
+            <div ref={transcript} className="flex-1 min-h-0 overflow-y-auto pr-2 text-sm space-y-2">
               {(detail.messages ?? []).map((m: any) => (
                 <div key={`m${m.id}`} className={`rounded-md px-3 py-2 border-l-2 bg-[var(--gray-2)] ${
                   m.role === 'admin' ? 'border-l-blue-400' : m.role === 'system' ? 'border-l-amber-400' : 'border-l-[var(--gray-6)]'
@@ -252,22 +452,39 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   ))}
                 </div>
               </details>
-              <div ref={bottom} />
             </div>
 
             {/* Chat into the running agent */}
-            <div className="flex gap-2 mt-3 pt-3 border-t border-[var(--gray-5)]">
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
-                placeholder={liveStatus ? 'Message the agent…' : 'Run is not live'}
-                disabled={!liveStatus}
-                className="flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-3 py-2 text-sm disabled:opacity-50"
-              />
-              <Button onClick={send} size="sm" disabled={!liveStatus || !draft.trim()}>
-                <PaperAirplaneIcon className="size-4" />
-              </Button>
+            <div className="mt-3 pt-3 border-t border-[var(--gray-5)]" onDrop={liveStatus ? onChatDrop : undefined} onDragOver={(e) => e.preventDefault()}>
+              {chatAtts.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {chatAtts.map((a) => (
+                    <div key={a.key} className="relative group">
+                      {a.url
+                        ? <img src={a.url} alt={a.name} className="h-14 w-14 rounded border object-cover" />
+                        : <div className="h-14 w-14 rounded border flex items-center justify-center bg-[var(--gray-2)]"><LoadingSpinner /></div>}
+                      <button type="button" onClick={() => removeChatAtt(a.key)} className="absolute -top-1.5 -right-1.5 rounded-full bg-[var(--gray-12)] text-[var(--gray-1)] size-4 leading-none text-[11px] opacity-0 group-hover:opacity-100" aria-label="Remove">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2 items-center">
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+                  onPaste={liveStatus ? onChatPaste : undefined}
+                  placeholder={liveStatus ? 'Message the agent…  (paste or drop a screenshot)' : 'Run is not live'}
+                  disabled={!liveStatus}
+                  className="flex-1 min-w-0 rounded-md border border-[var(--gray-6)] bg-transparent px-3 py-2 text-sm disabled:opacity-50"
+                />
+                <label className={`text-xs whitespace-nowrap ${liveStatus ? 'text-[var(--gray-10)] hover:text-[var(--gray-12)] cursor-pointer underline' : 'text-[var(--gray-8)] cursor-not-allowed'}`}>
+                  Attach<input type="file" accept="image/*" multiple onChange={onChatPick} disabled={!liveStatus} className="hidden" />
+                </label>
+                <Button onClick={send} size="sm" disabled={!liveStatus || chatUploading || (!draft.trim() && !chatAtts.some((a) => a.url))}>
+                  <PaperAirplaneIcon className="size-4" />
+                </Button>
+              </div>
             </div>
           </>
         )}
@@ -285,6 +502,10 @@ function IssuesView() {
   const [form, setForm] = useState<any>({ project_id: '', title: '', body: '', assign: true });
   const [creating, setCreating] = useState(false);
   const [atts, setAtts] = useState<any[]>([]);   // pasted/dropped screenshots → uploaded to `media`
+  // Optimistic rows for just-created issues. GitHub's list endpoint is eventually consistent, so the
+  // POST-response issue often isn't in the next `/issues` fetch yet — we render it immediately and
+  // reconcile (drop it once the real fetch surfaces it, keyed by project+number).
+  const [optimistic, setOptimistic] = useState<any[]>([]);
 
   const load = useCallback(async () => {
     try { setIssues((await api(`/issues${filter ? `?project=${filter}` : ''}`)).issues ?? []); setErr(null); }
@@ -292,6 +513,38 @@ function IssuesView() {
   }, [filter]);
   useEffect(() => { api('/projects').then((d) => { setProjects(d.projects ?? []); setForm((f: any) => ({ ...f, project_id: f.project_id || d.projects?.[0]?.id || '' })); }).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Live run-status badges: se_runs is in Supabase, so realtime keeps them current (mirrors RunsView).
+  useEffect(() => {
+    const ch = supabase.channel('se-issues-runs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => load())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [load]);
+
+  // The issue list itself lives on GitHub (no push to this client), so poll it — but only while the
+  // tab is visible, and refetch immediately on re-focus so a hidden tab doesn't go stale.
+  useEffect(() => {
+    const tick = () => { if (typeof document === 'undefined' || !document.hidden) load(); };
+    const id = setInterval(tick, 20000);
+    const onVis = () => { if (typeof document !== 'undefined' && !document.hidden) load(); };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis); };
+  }, [load]);
+
+  // Drop optimistic rows once the real (GitHub-backed) fetch surfaces them.
+  useEffect(() => {
+    if (!optimistic.length) return;
+    setOptimistic((o) => pendingOptimistic(o, issues));
+  }, [issues]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reconcile after a create: refetch a few times with backoff to absorb GitHub's propagation lag.
+  const reconcile = useCallback(async () => {
+    for (const delay of [800, 1500, 2500, 4000]) {
+      await new Promise((r) => setTimeout(r, delay));
+      await load();
+    }
+  }, [load]);
 
   // Upload one image to the public `media` bucket and track it; GitHub renders its public URL inline.
   const uploadImage = async (file: File) => {
@@ -322,26 +575,49 @@ function IssuesView() {
   const create = async () => {
     if (!form.project_id || !form.title.trim() || uploading) return;
     setCreating(true);
+    const title = form.title.trim();
+    const projectId = form.project_id;
+    const assign = form.assign;
     try {
-      await api('/issues', { method: 'POST', body: JSON.stringify({
-        project_id: form.project_id, title: form.title.trim(), body: form.body, assign_to_agent: form.assign,
+      const res = await api('/issues', { method: 'POST', body: JSON.stringify({
+        project_id: projectId, title, body: form.body, assign_to_agent: assign,
         attachments: atts.filter((a) => a.url).map((a) => ({ url: a.url })),
       }) });
-      setForm((f: any) => ({ ...f, title: '', body: '' })); setAtts([]); await load();
+      // Prepend an optimistic row from the server-returned identifiers (number/url/runId) so the new
+      // issue shows instantly; hrefs come from the server, never from user input.
+      if (res?.number) {
+        const proj = projects.find((p) => p.id === projectId);
+        setOptimistic((o) => [
+          {
+            project: { id: projectId, name: proj?.name, avatar_emoji: proj?.avatar_emoji },
+            repo: '', number: res.number, title, url: res.url, labels: [], agent: assign,
+            updated_at: new Date().toISOString(),
+            run: res.runId ? { id: res.runId, status: 'queued' } : null,
+            _optimistic: true,
+          },
+          ...o.filter((x) => !(x.number === res.number && x.project?.id === projectId)),
+        ]);
+      }
+      setForm((f: any) => ({ ...f, title: '', body: '' })); setAtts([]);
+      await load();
+      reconcile();
     }
     catch (e: any) { setErr(String(e.message ?? e)); } finally { setCreating(false); }
   };
+
+  // Render pending optimistic rows (not yet in the GitHub-backed list) above the real ones.
+  const merged = mergeIssues(optimistic, issues);
 
   return (
     <div className="max-w-4xl space-y-4">
       {err && <div className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-800">{err}</div>}
       <section className="rounded-lg border p-4 space-y-2">
         <div className="font-medium">Report an issue</div>
-        <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
           <select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })} className="rounded-md border px-2 py-1.5 text-sm">
             {projects.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
           </select>
-          <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title" className="flex-1 rounded-md border px-3 py-1.5 text-sm" />
+          <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title" className="flex-1 min-w-0 rounded-md border px-3 py-1.5 text-sm" />
         </div>
         <textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} onPaste={onPaste} onDrop={onDrop} onDragOver={(e) => e.preventDefault()} placeholder="Describe the problem or improvement…  (paste or drop a screenshot to attach)" rows={3} className="w-full rounded-md border px-3 py-2 text-sm" />
         {atts.length > 0 && (
@@ -374,11 +650,11 @@ function IssuesView() {
         </select>
       )}
       {loading ? <div className="p-8 flex justify-center"><LoadingSpinner /></div>
-        : issues.length === 0 ? <div className="text-sm text-[var(--gray-11)] p-6 text-center">No open issues.</div>
+        : merged.length === 0 ? <div className="text-sm text-[var(--gray-11)] p-6 text-center">No open issues.</div>
         : (
           <div className="space-y-1.5">
-            {issues.map((i) => (
-              <div key={`${i.repo}#${i.number}`} className="flex items-center justify-between rounded-md border p-2.5 gap-2">
+            {merged.map((i) => (
+              <div key={issueKey(i)} className="flex items-center justify-between rounded-md border p-2.5 gap-2">
                 <div className="min-w-0">
                   <a href={i.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-[var(--gray-12)] hover:underline block truncate">{i.title}</a>
                   <div className="text-[11px] text-[var(--gray-10)] truncate">{i.project?.avatar_emoji || '📁'} {i.project?.name} · {i.repo}#{i.number}</div>
@@ -401,16 +677,19 @@ export default function SoftwareEngineerTab() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  // URL-driven so the Setup page + each run have their own shareable URL:
-  //   /software-engineer                → Runs
-  //   /software-engineer/setup          → Setup
+  // URL-driven so each tab + run have their own shareable URL:
+  //   /software-engineer                → Overview (default landing)
+  //   /software-engineer/runs           → Runs board
   //   /software-engineer/runs/<id>      → a specific run (deep-linkable)
-  const m = pathname.match(/^\/software-engineer(?:\/(setup|runs|issues)(?:\/([^/]+))?)?/);
+  //   /software-engineer/issues         → Issues
+  //   /software-engineer/setup          → Setup
+  const m = pathname.match(/^\/software-engineer(?:\/(overview|setup|runs|issues)(?:\/([^/]+))?)?/);
   const section = m?.[1];
-  const activeTab: 'runs' | 'issues' | 'setup' = section === 'setup' ? 'setup' : section === 'issues' ? 'issues' : 'runs';
+  const activeTab: 'overview' | 'runs' | 'issues' | 'setup' =
+    section === 'runs' ? 'runs' : section === 'issues' ? 'issues' : section === 'setup' ? 'setup' : 'overview';
   const selectedRun = section === 'runs' ? (m?.[2] ?? null) : null;
 
-  const onTabChange = (t: string) => navigate(t === 'runs' ? BASE : `${BASE}/${t}`);
+  const onTabChange = (t: string) => navigate(t === 'overview' ? BASE : `${BASE}/${t}`);
   const onSelectRun = (id: string | null) => navigate(id ? `${BASE}/runs/${id}` : `${BASE}/runs`);
 
   return (
@@ -418,6 +697,7 @@ export default function SoftwareEngineerTab() {
       <WorkspaceLayout
         title="Software Engineer"
         tabs={[
+          { id: 'overview', label: 'Overview', icon: <ChartBarIcon className="size-4" /> },
           { id: 'runs', label: 'Runs', icon: <CommandLineIcon className="size-4" /> },
           { id: 'issues', label: 'Issues', icon: <ClipboardDocumentListIcon className="size-4" /> },
           { id: 'setup', label: 'Setup', icon: <Cog6ToothIcon className="size-4" /> },
@@ -426,6 +706,7 @@ export default function SoftwareEngineerTab() {
         onTabChange={onTabChange}
       >
         <div className="py-6">
+          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'runs' && <RunsView selected={selectedRun} onSelect={onSelectRun} onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'issues' && <IssuesView />}
           {activeTab === 'setup' && <SetupPanel />}

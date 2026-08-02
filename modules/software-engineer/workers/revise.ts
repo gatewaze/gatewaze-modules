@@ -13,6 +13,7 @@ import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.j
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, listRunPrs } from '../lib/run-state.js';
+import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -45,8 +46,12 @@ export default async function revise(job, ctx) {
         gh.listReviewComments(p.repo_owner, p.repo_name, p.pr_number).catch(() => []),
       ]);
       const lines = [];
-      for (const r of reviews ?? []) if (['CHANGES_REQUESTED', 'COMMENTED'].includes(r.state) && (r.body ?? '').trim()) lines.push(`- (${r.state}) @${r.user?.login ?? '?'}: ${r.body.trim()}`);
-      for (const c of inline ?? []) if ((c.body ?? '').trim()) lines.push(`- ${c.path}:${c.line ?? c.original_line ?? '?'} — ${c.body.trim()}`);
+      // Only fold in feedback from a TRUSTED author (allow-listed labeller or the
+      // run initiator). This text goes verbatim into a Bash-capable agent's
+      // prompt and drives a push, so untrusted PR reviews/comments must not reach
+      // it — on a public repo anyone can submit them.
+      for (const r of reviews ?? []) if (['CHANGES_REQUESTED', 'COMMENTED'].includes(r.state) && (r.body ?? '').trim() && isTrustedFeedbackAuthor(r.user?.login, project, run)) lines.push(`- (${r.state}) @${r.user?.login ?? '?'}: ${r.body.trim()}`);
+      for (const c of inline ?? []) if ((c.body ?? '').trim() && isTrustedFeedbackAuthor(c.user?.login, project, run)) lines.push(`- ${c.path}:${c.line ?? c.original_line ?? '?'} — ${c.body.trim()}`);
       if (lines.length) feedbackByRepo[p.repo_name] = lines.join('\n');
     }
     const feedback = Object.entries(feedbackByRepo).map(([repo, f]) => `### ${repo}\n${f}`).join('\n\n').slice(0, 12000);
@@ -89,7 +94,15 @@ export default async function revise(job, ctx) {
     }
     const round = (run.revise_count ?? 0) + 1;
     await recordPhaseEnd(supabase, run, 'revise', pushed ? 'passed' : 'skipped', pushed ? `addressed feedback (round ${round}, ${pushed} repo(s))` : 'no code change produced', { model: project.model, input: result.tokensInput, output: result.tokensOutput });
-    await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch', revise_count: round, pr_state: 'open' }).eq('id', run.id);
+    // If revise pushed new code, the blast_radius computed back in `implement`
+    // no longer describes what's on the branch. Downgrade to 'needs_human' so
+    // pr-monitor's auto-merge (which gates on blast_radius === 'safe') can't
+    // merge the revised, unclassified diff without a human — the feedback author
+    // is already engaged and can approve/merge deliberately.
+    await supabase.from('se_runs').update({
+      status: 'watching', current_phase: 'watch', revise_count: round, pr_state: 'open',
+      ...(pushed ? { blast_radius: 'needs_human' } : {}),
+    }).eq('id', run.id);
     try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, pushed ? `Pushed changes addressing the latest review feedback (${pushed} repo(s)).` : 'Reviewed the latest feedback; no code change was needed.'); } catch { /* best-effort */ }
     return { ok: true, round, pushed };
   } catch (e) {

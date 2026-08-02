@@ -42,6 +42,11 @@ export default async function pr(job, ctx) {
       return { failed: 'no prs' };
     }
 
+    // Title the PR by the real GitHub issue, not run.title (which can be a placeholder from the
+    // triggering webhook payload). Falls back to run.title if the fetch fails.
+    let issueTitle = run.title;
+    try { issueTitle = (await gh.getIssue(run.repo_owner, run.repo_name, run.issue_number))?.title || run.title; } catch { /* keep run.title */ }
+
     const links = [];
     for (const p of prs) {
       if (p.pr_number) { links.push(`- ${p.repo_owner}/${p.repo_name}: ${p.pr_url}`); continue; }
@@ -55,7 +60,7 @@ export default async function pr(job, ctx) {
         ``, `### Spec`, (art?.content ?? '_(spec unavailable)_').slice(0, 18000),
       ].join('\n');
       try {
-        const prData = await gh.createPullRequest(p.repo_owner, p.repo_name, { title: run.title || `Resolve #${run.issue_number}`, head: p.branch, base, body });
+        const prData = await gh.createPullRequest(p.repo_owner, p.repo_name, { title: issueTitle || `Resolve #${run.issue_number}`, head: p.branch, base, body });
         await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { pr_number: prData.number, pr_url: prData.html_url, state: 'open' });
         links.push(`- ${p.repo_owner}/${p.repo_name}: ${prData.html_url}`);
       } catch (e) {
@@ -69,6 +74,10 @@ export default async function pr(job, ctx) {
 
     await recordPhaseEnd(supabase, run, 'pr', 'passed', `opened ${links.length} PR(s); watching for review`);
     await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch', pr_state: 'open' }).eq('id', run.id);
+    // Fold what this run learned into the project's memory (§9). reflect proposes to a PENDING slug;
+    // an admin approves it before it reaches any future run. Best-effort, non-fatal — a dropped
+    // reflect never blocks the PR. Idempotent jobId so a re-drive can't double-propose.
+    await ctx?.enqueueJob?.('jobs', 'software-engineer:reflect', { runId: run.id }, { jobId: `se-run-${run.id}-reflect`, removeOnComplete: true });
     await ctx?.enqueueJob?.('jobs', 'software-engineer:pr-monitor', { runId: run.id });
     return { ok: true, prs: links.length };
   } catch (e) {
