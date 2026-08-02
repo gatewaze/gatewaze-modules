@@ -110,12 +110,39 @@ export function githubClient(token: string) {
     updateBranch(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/pulls/${number}/update-branch`, { method: 'PUT' });
     },
-    /** Every open PR AUTHORED by the token owner, across all repos the token can see (`author:@me`).
-     * This is what lets the Overview PR board show work done outside Gatewaze too — any PR the
-     * project's PAT user opened, agent-driven or not. Capped at `perPage` most recently updated. */
-    searchAuthoredOpenPRs(perPage = 50) {
-      const q = encodeURIComponent('is:pr is:open author:@me archived:false');
-      return j(`/search/issues?q=${q}&sort=updated&order=desc&per_page=${Math.min(Math.max(perPage, 1), 100)}`);
+    /** Open PRs AUTHORED by the token owner (`author:@me`), restricted to the given `owner/name`
+     * repos — the project's CONNECTED code repos, never the token's whole visible universe (a
+     * personal PAT would otherwise drag every unrelated personal/org PR onto the Overview board).
+     * `repos` empty → no results. GitHub caps a search query at 256 chars, so the repo qualifiers
+     * are chunked across multiple searches and merged, newest-updated first, capped at `perPage`. */
+    async searchAuthoredOpenPRs(perPage = 50, repos: string[] = []) {
+      // Defensive: qualifiers are interpolated into the search string — only well-formed
+      // owner/name slugs may pass (values come from se_repos, but belt-and-braces).
+      const safe = repos.filter((r) => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(r));
+      if (safe.length === 0) return { items: [] };
+      const BASE_Q = 'is:pr is:open author:@me archived:false';
+      const MAX_Q = 256;
+      const chunks: string[][] = [[]];
+      let len = BASE_Q.length;
+      for (const r of safe) {
+        const add = ` repo:${r}`.length;
+        if (len + add > MAX_Q && chunks[chunks.length - 1].length > 0) { chunks.push([]); len = BASE_Q.length; }
+        chunks[chunks.length - 1].push(r);
+        len += add;
+      }
+      const cap = Math.min(Math.max(perPage, 1), 100);
+      const seen = new Set<string>();
+      const items: Record<string, unknown>[] = [];
+      for (const chunk of chunks) {
+        const q = encodeURIComponent(`${BASE_Q} ${chunk.map((r) => `repo:${r}`).join(' ')}`);
+        const res = await j(`/search/issues?q=${q}&sort=updated&order=desc&per_page=${cap}`);
+        for (const it of res?.items ?? []) {
+          const key = `${it.repository_url}#${it.number}`;
+          if (!seen.has(key)) { seen.add(key); items.push(it); }
+        }
+      }
+      items.sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
+      return { items: items.slice(0, cap) };
     },
     /** Check-run rollup for a commit (GitHub Actions + apps). Drives the CI part of PR status. */
     listCheckRuns(owner: string, name: string, ref: string) {
