@@ -8,7 +8,7 @@
  *   - Setup — per-brand credentials + repos (SetupPanel).
  * Admin design system (Tailwind + @/components/ui, Radix gray vars). No @radix-ui/themes import.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { Badge, Button, WorkspaceLayout } from '@/components/ui';
@@ -20,7 +20,7 @@ import {
   ChartBarIcon, PlayCircleIcon, StopCircleIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
-import TranscriptMarkdown from './TranscriptMarkdown';
+import RunTimeline from './RunTimeline';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 
@@ -244,23 +244,6 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
 
-  // Live "in-progress" bubble: completed turns are persisted to se_messages only
-  // on the SDK `result` event, while in-flight agent text streams as se_events
-  // (kind:'assistant'). Assemble the trailing assistant events that are newer
-  // than the last completed agent message into one bubble so the operator sees a
-  // sensibly-formatted message mid-turn rather than raw fragments in "Tool
-  // activity". Events arrive ordered by seq from the API.
-  const liveBubble = useMemo(() => {
-    if (!liveStatus) return '';
-    const agentMsgs = (detail?.messages ?? []).filter((m: any) => m.role === 'agent');
-    const boundary = agentMsgs.length ? agentMsgs[agentMsgs.length - 1].created_at : null;
-    const text = (detail?.events ?? [])
-      .filter((e: any) => e.kind === 'assistant' && (!boundary || (e.created_at ?? '') > boundary))
-      .map((e: any) => e.payload?.text ?? '')
-      .join('');
-    return text.trim();
-  }, [detail?.events, detail?.messages, liveStatus]);
-
   return (
     // Stack on phones (flex-col), two-pane from lg up. The fixed 100dvh height + overflow trap is
     // gated to lg so mobile scrolls the page normally instead of fighting the browser address bar.
@@ -421,37 +404,11 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               );
             })()}
 
-            {/* Transcript */}
-            <div ref={transcript} className="flex-1 min-h-0 overflow-y-auto pr-2 text-sm space-y-2">
-              {(detail.messages ?? []).map((m: any) => (
-                <div key={`m${m.id}`} className={`rounded-md px-3 py-2 border-l-2 bg-[var(--gray-2)] ${
-                  m.role === 'admin' ? 'border-l-blue-400' : m.role === 'system' ? 'border-l-amber-400' : 'border-l-[var(--gray-6)]'
-                }`}>
-                  <div className="text-[11px] uppercase tracking-wide text-[var(--gray-10)]">{m.role}{m.sub_session_id ? ` · ${m.sub_session_id}` : ''}</div>
-                  <TranscriptMarkdown>{m.content}</TranscriptMarkdown>
-                </div>
-              ))}
-              {liveBubble && (
-                <div className="rounded-md px-3 py-2 border-l-2 bg-[var(--gray-2)] border-l-[var(--gray-6)]">
-                  <div className="text-[11px] uppercase tracking-wide text-[var(--gray-10)] flex items-center gap-1.5">
-                    agent
-                    <span className="inline-block size-1.5 rounded-full bg-blue-400 animate-pulse" aria-hidden />
-                    <span className="normal-case tracking-normal text-[var(--gray-9)]">typing…</span>
-                  </div>
-                  <TranscriptMarkdown streaming>{liveBubble}</TranscriptMarkdown>
-                </div>
-              )}
-              <details className="text-xs text-[var(--gray-11)]">
-                <summary className="cursor-pointer select-none py-1">Tool activity ({(detail.events ?? []).length})</summary>
-                <div className="space-y-0.5 mt-1">
-                  {(detail.events ?? []).map((ev: any) => (
-                    <div key={`e${ev.id}`} className="font-mono text-[11px] text-[var(--gray-10)]">
-                      <span className="text-[var(--gray-9)]">{ev.kind}</span>{' '}
-                      {ev.payload?.name ?? ev.payload?.summary ?? (ev.payload?.text ? String(ev.payload.text).slice(0, 140) : '')}
-                    </div>
-                  ))}
-                </div>
-              </details>
+            {/* Transcript — one interactive, chronological timeline of the run (se_events + se_messages):
+                agent prose (Markdown), tool steps, and file writes/edits as expandable document cards
+                with diffs + Markdown preview, plus a live activity ticker. Scrolls only this container. */}
+            <div ref={transcript} className="flex-1 min-h-0 overflow-y-auto">
+              <RunTimeline detail={detail} live={liveStatus} />
             </div>
 
             {/* Chat into the running agent */}
