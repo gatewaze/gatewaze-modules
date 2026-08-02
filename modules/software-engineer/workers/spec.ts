@@ -13,6 +13,7 @@ import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
+import { writeSpecMemory } from '../lib/memory.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -50,6 +51,9 @@ export default async function spec(job, ctx) {
       `the code lives in the repos in your workspace. Explore them read-only, decide which WRITABLE`,
       `repo(s) the change belongs in, and write a clear spec: goal, approach, the repo(s) + files to`,
       `change, test plan, risks. Do NOT implement. Follow each repo's CLAUDE.md/.claude rules.`,
+      `FIRST: use the wiki_search tool to look for existing related specs in project memory (pages`,
+      `under specs/ — every past run's spec is logged there). If a prior spec covers overlapping`,
+      `ground, build on it and note the relationship; do not contradict it silently.`,
       truncated ? `NOTE: the project has more code repos than the ${project.maxCodeReposPerRun}-repo cap; only those in your workspace are available — do not spec against repos not present.` : '',
       ``,
       `Issue #${run.issue_number}: ${issue.title ?? ''}`,
@@ -68,7 +72,30 @@ export default async function spec(job, ctx) {
       return { failed: msg };
     }
 
-    await supabase.from('se_artifacts').insert({ run_id: run.id, site_id: run.site_id, phase: 'spec', kind: 'spec', content: (result.text ?? '').slice(0, 200000) });
+    const specText = (result.text ?? '').slice(0, 200000);
+    await supabase.from('se_artifacts').insert({ run_id: run.id, site_id: run.site_id, phase: 'spec', kind: 'spec', content: specText });
+
+    // Spec log (best-effort, never blocks the pipeline):
+    // 1. Commit the spec to the ISSUES repo at specs/issue-<n>.md — one file per issue, updated in
+    //    place on review-loop revisions, so the repo's commit history is the full revision log.
+    // 2. Mirror it into project memory as specs/issue-<n> so future runs (and linked projects'
+    //    runs) find prior specs via RAG recall + wiki_search.
+    const specDoc = [
+      `# Spec — issue #${run.issue_number}: ${issue.title ?? ''}`,
+      ``,
+      `> Issue: https://github.com/${run.repo_owner}/${run.repo_name}/issues/${run.issue_number}`,
+      `> Run: ${run.id} · generated ${new Date().toISOString()}`,
+      ``,
+      specText,
+    ].join('\n');
+    try {
+      await gh.putFile(
+        run.repo_owner, run.repo_name, `specs/issue-${run.issue_number}.md`, specDoc,
+        `spec: issue #${run.issue_number} — ${String(issue.title ?? '').slice(0, 60)}`,
+      );
+    } catch { /* best-effort — e.g. token lacks contents:write on the issues repo */ }
+    try { await writeSpecMemory(supabase, run.project_id, project.name, run.issue_number, issue.title ?? '', specText); }
+    catch { /* best-effort */ }
     await recordPhaseEnd(supabase, run, 'spec', 'passed', 'spec drafted', { model: project.model, input: result.tokensInput, output: result.tokensOutput });
     await supabase.from('se_runs').update({
       branch_name: branch, current_phase: 'review',
