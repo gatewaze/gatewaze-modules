@@ -43,41 +43,45 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/008_interactive_engineers.sql',
   ],
 
-  // Dedicated queue — NOT the shared `jobs` queue. Agent phases run in a separate
-  // "SE runner" deployment (a specialist image with the Agent SDK + git + the pinned
-  // CLAUDE_CONFIG_DIR, carrying ONLY software-engineer secrets). That runner consumes
-  // this queue; the main worker sets WORKER_CONCURRENCY_SOFTWARE_ENGINEER_SOFTWARE_ENGINEER=0
-  // so it never picks up SE jobs. See spec §7.5 / §17.
+  // Dedicated `se` queue — NOT the shared `jobs` queue (spec §7.5 / §17, now live). Agent phases run
+  // in the "SE runner" deployment (WORKER_MODULES=software-engineer, WORKER_BUILTIN_QUEUES="") which
+  // is the only process that consumes this queue; the standard worker sets
+  // WORKER_MODULES_EXCLUDE=software-engineer so it never loads these handlers at all. The API
+  // registers module-declared queues as producers, so the webhook/admin routes can enqueue here.
   //
-  // attempts:1 — the pipeline does its OWN bounded, gated retries (state machine);
-  // BullMQ must not blindly re-run a half-completed phase.
-  // NOTE (revised): phases run on the SHARED `jobs` queue via workers[]. The API only registers
-  // built-in queue producers (jobs/email/image) — it does NOT register module-owned queues — so a
-  // module-owned queue can be consumed by the worker but NOT enqueued to from the API/webhook.
-  // The dedicated-queue "SE runner pool" isolation (spec §7.5) is a follow-up that needs a
-  // platform change (register module-queue producers on the API). For now, the shared queue works
-  // end to end (this is what marketing-os etc. do).
-  workers: [
-    { name: 'software-engineer:intake', handler: './workers/intake.ts' },
-    { name: 'software-engineer:spec', handler: './workers/spec.ts' },
-    { name: 'software-engineer:review', handler: './workers/review.ts' },
-    { name: 'software-engineer:implement', handler: './workers/implement.ts' },
-    { name: 'software-engineer:verify', handler: './workers/verify.ts' },
-    { name: 'software-engineer:pr', handler: './workers/pr.ts' },
-    { name: 'software-engineer:merge', handler: './workers/merge.ts' },
-    // PR-watch loop: revise addresses review feedback; pr-monitor reconciles the PR (merge/close →
-    // archive, changes-requested → revise, approved → merge) on a cron + on webhook nudges.
-    { name: 'software-engineer:revise', handler: './workers/revise.ts' },
-    { name: 'software-engineer:pr-monitor', handler: './workers/pr-monitor.ts' },
-    // reflect: fold what a run learned into the project's shared, durable memory (via the AI wiki).
-    { name: 'software-engineer:reflect', handler: './workers/reflect.ts' },
-    // recover: crash-resilience reconciler — re-drives runs orphaned by a worker/pod/machine/Redis
-    // death from their saved phase (idempotent). See workers/recover.ts.
-    { name: 'software-engineer:recover', handler: './workers/recover.ts' },
-    // interactive: a manually-started, long-lived pair-programming session on a project (no issue, no
-    // pipeline). One worker holds the session for its whole lifetime; explicit close + idle/wall-clock
-    // caps free it. See workers/interactive.ts.
-    { name: 'software-engineer:interactive', handler: './workers/interactive.ts' },
+  // attempts:1 — the pipeline does its OWN bounded, gated retries (state machine) and the recover
+  // reconciler re-drives orphaned phases idempotently; BullMQ must not blindly re-run a
+  // half-completed agent phase.
+  // Concurrency: 2 by default (same as the shared queue it moved off); override per-deployment with
+  // WORKER_CONCURRENCY_SOFTWARE_ENGINEER_SE.
+  queues: [
+    {
+      name: 'se',
+      defaultConcurrency: 2,
+      defaultJobOptions: { attempts: 1 },
+      handlers: [
+        { name: 'software-engineer:intake', handler: './workers/intake.ts' },
+        { name: 'software-engineer:spec', handler: './workers/spec.ts' },
+        { name: 'software-engineer:review', handler: './workers/review.ts' },
+        { name: 'software-engineer:implement', handler: './workers/implement.ts' },
+        { name: 'software-engineer:verify', handler: './workers/verify.ts' },
+        { name: 'software-engineer:pr', handler: './workers/pr.ts' },
+        { name: 'software-engineer:merge', handler: './workers/merge.ts' },
+        // PR-watch loop: revise addresses review feedback; pr-monitor reconciles the PR (merge/close →
+        // archive, changes-requested → revise, approved → merge) on a cron + on webhook nudges.
+        { name: 'software-engineer:revise', handler: './workers/revise.ts' },
+        { name: 'software-engineer:pr-monitor', handler: './workers/pr-monitor.ts' },
+        // reflect: fold what a run learned into the project's shared, durable memory (via the AI wiki).
+        { name: 'software-engineer:reflect', handler: './workers/reflect.ts' },
+        // recover: crash-resilience reconciler — re-drives runs orphaned by a worker/pod/machine/Redis
+        // death from their saved phase (idempotent). See workers/recover.ts.
+        { name: 'software-engineer:recover', handler: './workers/recover.ts' },
+        // interactive: a manually-started, long-lived pair-programming session on a project (no issue, no
+        // pipeline). One worker holds the session for its whole lifetime; explicit close + idle/wall-clock
+        // caps free it. See workers/interactive.ts.
+        { name: 'software-engineer:interactive', handler: './workers/interactive.ts' },
+      ],
+    },
   ],
 
   // Cron heartbeat that polls open PRs and reconciles them (the fallback where GitHub can't reach
@@ -85,14 +89,14 @@ const softwareEngineerModule: GatewazeModule = {
   crons: [
     {
       name: 'software-engineer-pr-monitor',
-      queue: 'jobs',
+      queue: 'se',
       schedule: { every: 3 * 60_000 },
       data: { kind: 'software-engineer:pr-monitor' },
     },
     // Crash-resilience: re-drive runs orphaned by infra death from their saved phase (idempotent).
     {
       name: 'software-engineer-recover',
-      queue: 'jobs',
+      queue: 'se',
       schedule: { every: 5 * 60_000 },
       data: { kind: 'software-engineer:recover' },
     },

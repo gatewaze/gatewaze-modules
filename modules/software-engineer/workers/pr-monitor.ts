@@ -90,7 +90,7 @@ async function reconcile(supabase, ctx, run) {
     // Auto-merge safe changes without human review when the project allows it (merge.ts only merges
     // PRs GitHub reports mergeable_state=clean; idempotent, so re-enqueuing each tick is fine).
     if (project.autonomyMode === 'auto_merge_safe' && run.blast_radius === 'safe') {
-      await ctx?.enqueueJob?.('jobs', 'software-engineer:merge', { runId: run.id });
+      await ctx?.enqueueJob?.('se', 'software-engineer:merge', { runId: run.id });
     }
     return { runId: run.id, action: 'watch' };
   } catch (e) {

@@ -77,8 +77,8 @@ export default async function pr(job, ctx) {
     // Fold what this run learned into the project's memory (§9). reflect proposes to a PENDING slug;
     // an admin approves it before it reaches any future run. Best-effort, non-fatal — a dropped
     // reflect never blocks the PR. Idempotent jobId so a re-drive can't double-propose.
-    await ctx?.enqueueJob?.('jobs', 'software-engineer:reflect', { runId: run.id }, { jobId: `se-run-${run.id}-reflect`, removeOnComplete: true });
-    await ctx?.enqueueJob?.('jobs', 'software-engineer:pr-monitor', { runId: run.id });
+    await ctx?.enqueueJob?.('se', 'software-engineer:reflect', { runId: run.id }, { jobId: `se-run-${run.id}-reflect`, removeOnComplete: true });
+    await ctx?.enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: run.id });
     return { ok: true, prs: links.length };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);

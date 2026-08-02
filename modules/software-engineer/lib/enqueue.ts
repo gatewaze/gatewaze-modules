@@ -13,7 +13,7 @@
 export async function enqueuePhase(ctx: unknown, runId: string, phase: string, data: Record<string, unknown> = {}) {
   if (!runId || !phase) return { id: undefined };
   return (ctx as { enqueueJob?: (...a: unknown[]) => Promise<{ id?: string }> })?.enqueueJob?.(
-    'jobs',
+    'se',
     `software-engineer:${phase}`,
     { runId, ...data },
     { jobId: `se-run-${runId}-${phase}`, removeOnComplete: true },

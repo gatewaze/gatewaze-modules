@@ -36,7 +36,7 @@ export default async function merge(job, ctx) {
     const { merged, held } = await mergeRunPrs(supabase, run, project);
     await recordPhaseEnd(supabase, run, 'merge', 'passed', `merged ${merged} PR(s); ${held} held`);
     // pr-monitor finalizes (all merged → close issue + archive; else stay watching).
-    await ctx?.enqueueJob?.('jobs', 'software-engineer:pr-monitor', { runId: run.id });
+    await ctx?.enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: run.id });
     return { ok: true, merged, held };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);
