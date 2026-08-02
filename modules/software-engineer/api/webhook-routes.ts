@@ -52,7 +52,7 @@ export function mountWebhookRoute(router, deps) {
       if (owner && name && prNum) {
         const { data: prRow } = await supabase.from('se_run_prs').select('run_id')
           .eq('repo_owner', owner).eq('repo_name', name).eq('pr_number', prNum).maybeSingle();
-        if (prRow?.run_id) { await enqueueJob?.('jobs', 'software-engineer:pr-monitor', { runId: prRow.run_id }); return res.status(202).json({ accepted: true, runId: prRow.run_id, monitor: true }); }
+        if (prRow?.run_id) { await enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: prRow.run_id }); return res.status(202).json({ accepted: true, runId: prRow.run_id, monitor: true }); }
       }
       return res.status(200).json({ accepted: false, reason: 'no matching run' });
     }
