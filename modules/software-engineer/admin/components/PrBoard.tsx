@@ -10,6 +10,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { isGatewayError, StartingBanner } from './starting';
 import {
   ArrowPathIcon, ArrowTopRightOnSquareIcon, UserIcon, CpuChipIcon, BoltIcon, MinusCircleIcon,
 } from '@heroicons/react/24/outline';
@@ -23,7 +24,11 @@ async function api(path: string, init?: RequestInit) {
     ...init, credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
   });
-  if (!r.ok) throw new Error(`${init?.method ?? 'GET'} ${path} → ${r.status}`);
+  if (!r.ok) {
+    const e = new Error(`${init?.method ?? 'GET'} ${path} → ${r.status}`) as Error & { status?: number };
+    e.status = r.status;
+    throw e;
+  }
   return r.status === 204 ? null : r.json();
 }
 
@@ -97,6 +102,7 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async (force = false) => {
@@ -105,8 +111,12 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
       if (projectFilter) params.set('project', projectFilter);
       if (force) params.set('refresh', '1');
       const qs = params.toString() ? `?${params.toString()}` : '';
-      setData(await api(`/overview/prs${qs}`)); setErr(null);
-    } catch (e: any) { setErr(String(e.message ?? e)); }
+      setData(await api(`/overview/prs${qs}`)); setErr(null); setStarting(false);
+    } catch (e: any) {
+      // Stack restarts briefly 502 every request — show "starting up" + retry, not a raw error.
+      if (isGatewayError(e)) { setStarting(true); setErr(null); }
+      else { setErr(String(e.message ?? e)); setStarting(false); }
+    }
     finally { setLoading(false); setRefreshing(false); }
   }, [projectFilter]);
 
@@ -117,6 +127,13 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
     timer.current = setInterval(() => load(), 60_000);
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [load]);
+
+  // While the stack is coming up, poll faster than the 60s TTL so the board recovers promptly.
+  useEffect(() => {
+    if (!starting) return;
+    const t = setInterval(() => load(), 3000);
+    return () => clearInterval(t);
+  }, [starting, load]);
 
   const prs: any[] = data?.prs ?? [];
   const projectErrors = data?.project_errors ?? {};
@@ -138,6 +155,7 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
         </button>
       </div>
 
+      {starting && <StartingBanner label="The platform is starting up — reconnecting…" />}
       {err && <div className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-800">{err}</div>}
       {Object.entries(projectErrors).map(([name, msg]) => (
         <div key={name} className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">{name}: {String(msg)}</div>

@@ -19,6 +19,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { CARD_FILTERS, statusesToParam } from './overview-filters';
 import PrBoard from './PrBoard';
+import { isGatewayError, StartingBanner } from './starting';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -29,9 +30,14 @@ async function api(path: string, init?: RequestInit) {
     ...init, credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
   });
-  if (!r.ok) throw new Error(`${init?.method ?? 'GET'} ${path} → ${r.status}`);
+  if (!r.ok) {
+    const e = new Error(`${init?.method ?? 'GET'} ${path} → ${r.status}`) as Error & { status?: number };
+    e.status = r.status;
+    throw e;
+  }
   return r.status === 204 ? null : r.json();
 }
+
 
 // Reserved status palette (matches the Runs board). Bars ship this colour WITH a text label.
 const STATUS_BAR: Record<string, string> = {
@@ -121,14 +127,20 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => { api('/projects').then((d) => setProjects(d.projects ?? [])).catch(() => {}); }, []);
 
   const load = useCallback(async () => {
     try {
       const qs = projectFilter ? `?project=${encodeURIComponent(projectFilter)}` : '';
-      setData(await api(`/overview${qs}`)); setErr(null);
-    } catch (e: any) { setErr(String(e.message ?? e)); }
+      setData(await api(`/overview${qs}`)); setErr(null); setStarting(false);
+    } catch (e: any) {
+      // A restarting stack briefly 502s every request; surface that as "starting up" (with the
+      // retry effect below re-polling) instead of a raw error the operator can't act on.
+      if (isGatewayError(e)) { setStarting(true); setErr(null); }
+      else { setErr(String(e.message ?? e)); setStarting(false); }
+    }
     finally { setLoading(false); }
   }, [projectFilter]);
 
@@ -139,6 +151,13 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [load]);
+
+  // While the stack is coming up, poll until the API answers again.
+  useEffect(() => {
+    if (!starting) return;
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+  }, [starting, load]);
 
   const totals = data?.totals ?? {};
   const byStatus: any[] = data?.by_status ?? [];
@@ -167,6 +186,7 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
         </select>
       )}
 
+      {starting && <StartingBanner label="The platform is starting up — reconnecting…" />}
       {err && <div className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-800">{err}</div>}
 
       {loading && !data ? (
@@ -184,7 +204,7 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
           )}
           {/* PR board scope: only PRs authored by each project's PAT user on that project's
               CONNECTED code repos — never the token's wider visible universe. */}
-          <div className="text-left"><PrBoard projectFilter={projectFilter} /></div>
+          <div className="text-left pt-6"><PrBoard projectFilter={projectFilter} /></div>
         </div>
       ) : (
         <>
