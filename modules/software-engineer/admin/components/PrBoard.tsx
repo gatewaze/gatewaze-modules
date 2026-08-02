@@ -12,7 +12,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { isGatewayError, StartingBanner } from './starting';
 import {
-  ArrowPathIcon, ArrowTopRightOnSquareIcon, UserIcon, CpuChipIcon, BoltIcon, MinusCircleIcon,
+  ArrowPathIcon, ArrowTopRightOnSquareIcon, UserIcon, UsersIcon, CpuChipIcon, BoltIcon,
+  MinusCircleIcon, BellAlertIcon,
 } from '@heroicons/react/24/outline';
 
 const API = '/api/modules/software-engineer/admin';
@@ -49,11 +50,24 @@ const STATUS_CHIP: Record<string, string> = {
 };
 
 const GROUPS: Array<{ actor: string; title: string; icon: React.ReactNode; hint: string }> = [
-  { actor: 'you', title: 'Needs you', icon: <UserIcon className="size-4" />, hint: 'A human must review, merge, or unblock these.' },
+  { actor: 'you', title: 'Needs you', icon: <UserIcon className="size-4" />, hint: 'You can act on these: address changes on your PR, fix CI, or merge (where you have write access).' },
+  { actor: 'reviewers', title: 'Awaiting reviewers', icon: <UsersIcon className="size-4" />, hint: 'On your own PRs — waiting on a required review or a maintainer to merge. You can nudge them.' },
   { actor: 'agent', title: 'Agent working', icon: <CpuChipIcon className="size-4" />, hint: 'An active run owns the next step.' },
   { actor: 'auto', title: 'Automatic', icon: <BoltIcon className="size-4" />, hint: 'The platform progresses these unaided.' },
   { actor: 'none', title: 'Other', icon: <MinusCircleIcon className="size-4" />, hint: 'Nothing to do right now.' },
 ];
+
+// Red / amber / green left-edge accent by CI state, so health is visible at a glance without reading
+// the checks text. Colour reinforces the always-present textual chip + checks count, never replaces it.
+function checkAccent(pr: any): string {
+  const c = pr.checks;
+  if (pr.status === 'merged') return 'border-l-green-500';
+  if (pr.status === 'closed') return 'border-l-[var(--gray-6)]';
+  if (!c || !c.total) return 'border-l-[var(--gray-5)]';   // no checks reported
+  if (c.failing > 0) return 'border-l-red-500';
+  if (c.pending > 0) return 'border-l-amber-500';
+  return 'border-l-green-500';                              // all checks green
+}
 
 function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -63,8 +77,28 @@ function timeAgo(iso: string): string {
 }
 
 function PrRow({ pr }: { pr: any }) {
+  const [notify, setNotify] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+  const [notifyMsg, setNotifyMsg] = useState('');
+  const reviewers: string[] = Array.isArray(pr.reviewers) ? pr.reviewers : [];
+  const canNotify = pr.actor === 'reviewers' && !!pr.project_id;
+
+  const doNotify = async () => {
+    if (notify === 'sending') return;
+    const [owner, name] = String(pr.repo).split('/');
+    setNotify('sending'); setNotifyMsg('');
+    try {
+      const q = new URLSearchParams({ project: String(pr.project_id), owner, name, number: String(pr.number) });
+      const r = await api(`/prs/notify-reviewers?${q.toString()}`, { method: 'POST' });
+      const n = (r?.reviewers?.length ?? 0) + (r?.teams?.length ?? 0);
+      setNotify('done'); setNotifyMsg(`Pinged ${n} reviewer${n === 1 ? '' : 's'} on the PR.`);
+    } catch (e: any) {
+      setNotify('error');
+      setNotifyMsg(e?.status === 409 ? 'No reviewers requested on this PR yet — request one on GitHub first.' : 'Could not post the reminder.');
+    }
+  };
+
   return (
-    <div className="flex flex-col gap-1 rounded-md border border-[var(--gray-4)] px-3 py-2 hover:border-[var(--gray-7)] transition-colors">
+    <div className={`flex flex-col gap-1 rounded-md border border-l-4 border-[var(--gray-4)] ${checkAccent(pr)} px-3 py-2 hover:border-[var(--gray-7)] transition-colors`}>
       <div className="flex items-center gap-2 min-w-0">
         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_CHIP[pr.status] ?? STATUS_CHIP.unknown}`}>
           {pr.label}
@@ -90,9 +124,31 @@ function PrRow({ pr }: { pr: any }) {
             {pr.checks.failing > 0 && <span className="text-red-600"> ({pr.checks.failing} failing)</span>}
           </span>
         )}
+        {reviewers.length > 0 && (
+          <span className="inline-flex flex-wrap items-center gap-1">
+            <span className="text-[var(--gray-9)]">reviewers</span>
+            {reviewers.slice(0, 4).map((r) => (
+              <span key={r} className="rounded bg-[var(--gray-3)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--gray-11)]">@{r}</span>
+            ))}
+            {reviewers.length > 4 && <span className="text-[var(--gray-9)]">+{reviewers.length - 4}</span>}
+          </span>
+        )}
         <span>updated {timeAgo(pr.updated_at)} ago</span>
       </div>
-      <div className="text-xs text-[var(--gray-11)]">{pr.detail}</div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-xs text-[var(--gray-11)]">{pr.detail}</div>
+        {canNotify && (
+          <button
+            type="button" onClick={doNotify} disabled={notify === 'sending' || notify === 'done'}
+            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-[var(--gray-6)] px-2 py-1 text-xs text-[var(--gray-11)] hover:bg-[var(--gray-3)] disabled:opacity-50"
+            title="Post a comment on the PR @-mentioning its requested reviewers"
+          >
+            <BellAlertIcon className="size-3.5" />
+            {notify === 'sending' ? 'Notifying…' : notify === 'done' ? 'Notified ✓' : 'Notify reviewers'}
+          </button>
+        )}
+      </div>
+      {notifyMsg && <div className={`text-[11px] ${notify === 'error' ? 'text-red-600' : 'text-[var(--gray-10)]'}`}>{notifyMsg}</div>}
     </div>
   );
 }

@@ -115,8 +115,13 @@ describe('classifyPr — merge-state disambiguation', () => {
     expect(classifyPr(base({ mergeableState: 'behind', run: safeRun })).actor).toBe('auto');
     expect(classifyPr(base({ mergeableState: 'behind' })).actor).toBe('you');
   });
-  it('blocked + green checks + no approval → awaiting human review', () => {
+  it('blocked + green + no approval → awaiting_review; default (not a requested reviewer) → reviewers', () => {
     const d = classifyPr(base({ mergeableState: 'blocked' }));
+    expect(d.status).toBe('awaiting_review');
+    expect(d.actor).toBe('reviewers');
+  });
+  it('awaiting_review + you ARE the requested reviewer → yours to action', () => {
+    const d = classifyPr(base({ mergeableState: 'blocked', viewerIsRequestedReviewer: true }));
     expect(d.status).toBe('awaiting_review');
     expect(d.actor).toBe('you');
   });
@@ -131,5 +136,32 @@ describe('classifyPr — merge-state disambiguation', () => {
     const d = classifyPr(base({ mergeableState: 'unknown' }));
     expect(d.status).toBe('unknown');
     expect(d.actor).toBe('none');
+  });
+});
+
+describe('classifyPr — viewer role (author / merge access / requested reviewer)', () => {
+  it('your own green PR you CAN merge → yours', () => {
+    const d = classifyPr(base({ viewerIsAuthor: true, viewerCanMerge: true }));
+    expect(d.status).toBe('awaiting_merge');
+    expect(d.actor).toBe('you');
+  });
+  it('your own green PR you CANNOT merge → awaiting a maintainer', () => {
+    const d = classifyPr(base({ viewerIsAuthor: true, viewerCanMerge: false }));
+    expect(d.status).toBe('awaiting_merge');
+    expect(d.actor).toBe('reviewers');
+  });
+  it('approved + blocked but you cannot merge → reviewers (a maintainer must)', () => {
+    const d = classifyPr(base({ mergeableState: 'blocked', reviews: APPROVED, viewerCanMerge: false }));
+    expect(d.status).toBe('blocked');
+    expect(d.actor).toBe('reviewers');
+  });
+  it('unstable but you cannot merge → reviewers', () => {
+    expect(classifyPr(base({ mergeableState: 'unstable', viewerCanMerge: false })).actor).toBe('reviewers');
+  });
+  it("someone else's PR with changes requested → not yours (reviewers, awaiting the author)", () => {
+    const cr = { approved: false, changesRequested: true, reviewers: 1 };
+    const d = classifyPr(base({ reviews: cr, viewerIsAuthor: false }));
+    expect(d.status).toBe('changes_requested');
+    expect(d.actor).toBe('reviewers');
   });
 });

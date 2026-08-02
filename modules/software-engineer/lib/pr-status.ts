@@ -6,10 +6,13 @@
  * exists to answer: "where is this PR, and WHO acts next?" — without opening the PR.
  *
  * actor semantics:
- *   'you'    — a human must do something (review, merge, resolve, unblock)
- *   'agent'  — an active SE run owns the next step (revising, fixing CI)
- *   'auto'   — the platform will progress it unaided (auto-merge, branch self-heal, CI running)
- *   'none'   — terminal (merged/closed) or nothing to do
+ *   'you'       — YOU (the board's PAT user) must do something you're able to: address changes on
+ *                 your own PR, fix CI, resolve conflicts, or merge (when you have write access)
+ *   'reviewers' — waiting on SOMEONE ELSE: a required review, or a maintainer to merge, on a PR you
+ *                 authored (you can't review/merge your own). These are NOT "yours" to action alone.
+ *   'agent'     — an active SE run owns the next step (revising, fixing CI)
+ *   'auto'      — the platform will progress it unaided (auto-merge, branch self-heal, CI running)
+ *   'none'      — terminal (merged/closed) or nothing to do
  */
 
 export type PrDerivedStatus =
@@ -86,11 +89,21 @@ export interface ClassifyInput {
     blastRadius: string;           // safe | needs_human | unknown
     autonomyMode: string;          // pr_only | auto_merge_safe
   } | null;
+  /** The board's PAT user authored this PR (default false). GitHub forbids reviewing your own PR,
+   *  so an author's "needs review" is waiting on OTHERS, never on you. The Overview board is an
+   *  author:@me search, so it passes true. */
+  viewerIsAuthor?: boolean;
+  /** The board's PAT user has write/merge access on the repo (default true → preserves prior
+   *  behaviour). When false, a green/approved PR is "waiting on a maintainer to merge", not you. */
+  viewerCanMerge?: boolean;
+  /** The board's PAT user is a REQUESTED reviewer on this PR (default false). This is what makes a
+   *  "needs review" PR actually yours to action; otherwise it's awaiting whoever IS requested. */
+  viewerIsRequestedReviewer?: boolean;
 }
 
 export interface DerivedPrStatus {
   status: PrDerivedStatus;
-  actor: 'you' | 'agent' | 'auto' | 'none';
+  actor: 'you' | 'reviewers' | 'agent' | 'auto' | 'none';
   label: string;                   // short chip text
   detail: string;                  // one-line explanation of what's happening / needed
 }
@@ -129,17 +142,27 @@ export function classifyPr(i: ClassifyInput): DerivedPrStatus {
     if (runActive) {
       return { status: 'agent_revising', actor: 'agent', label: 'Agent revising', detail: 'A reviewer requested changes — the agent is addressing the feedback.' };
     }
-    return { status: 'changes_requested', actor: 'you', label: 'Changes requested', detail: 'A reviewer requested changes — awaiting the author.' };
+    // The author addresses changes. If that's not you (someone else's PR on the board), it's not
+    // yours to action. `viewerIsAuthor` defaults undefined → treated as "yours" to preserve the
+    // single-author (author:@me) behaviour the tests pin.
+    return i.viewerIsAuthor === false
+      ? { status: 'changes_requested', actor: 'reviewers', label: 'Changes requested', detail: 'A reviewer requested changes — waiting on the author.' }
+      : { status: 'changes_requested', actor: 'you', label: 'Changes requested', detail: 'A reviewer requested changes — awaiting the author.' };
   }
   if (i.mergeableState === 'clean') {
     if (autoMerge && runActive) {
       return { status: 'auto_merge_pending', actor: 'auto', label: 'Auto-merge', detail: 'Green and rated safe — auto-merge will land it on the next tick.' };
     }
+    // Green + mergeable. Whether it's YOURS to merge depends on write access — a PR you authored on a
+    // repo you can't push to is waiting on a maintainer, not on you.
+    const canMerge = i.viewerCanMerge !== false;
     return {
       status: 'awaiting_merge',
-      actor: 'you',
-      label: 'Ready to merge',
-      detail: i.reviews.approved ? 'Approved and green — waiting on a human to merge.' : 'Green and mergeable — waiting on a human to merge.',
+      actor: canMerge ? 'you' : 'reviewers',
+      label: canMerge ? 'Ready to merge' : 'Ready — needs a maintainer',
+      detail: canMerge
+        ? (i.reviews.approved ? 'Approved and green — waiting on a human to merge.' : 'Green and mergeable — waiting on a human to merge.')
+        : (i.reviews.approved ? 'Approved and green — waiting on a maintainer with merge access.' : 'Green and mergeable — waiting on a maintainer with merge access.'),
     };
   }
   if (i.mergeableState === 'behind') {
@@ -150,12 +173,27 @@ export function classifyPr(i: ClassifyInput): DerivedPrStatus {
   }
   if (i.mergeableState === 'blocked') {
     if (i.reviews.approved) {
-      return { status: 'blocked', actor: 'you', label: 'Blocked', detail: 'Approved and checks green, but branch protection still blocks the merge (e.g. a code-scanning alert or merge queue).' };
+      // Approved + green but branch protection still blocks (code-scanning, merge queue, required
+      // reviewers rule). If you can't merge here, it's on a maintainer; otherwise it's on you.
+      const canMerge = i.viewerCanMerge !== false;
+      return { status: 'blocked', actor: canMerge ? 'you' : 'reviewers', label: 'Blocked',
+        detail: canMerge
+          ? 'Approved and checks green, but branch protection still blocks the merge (e.g. a code-scanning alert or merge queue).'
+          : 'Approved and green, but branch protection blocks the merge — waiting on a maintainer / required reviewer.' };
     }
-    return { status: 'awaiting_review', actor: 'you', label: 'Needs review', detail: 'Checks green — waiting on a required human review.' };
+    // Needs a human review. It's YOURS to action only if you're a requested reviewer — you can't
+    // review your own PR, and a teammate's PR you're not on isn't yours either. Otherwise it's
+    // awaiting whoever IS requested.
+    return i.viewerIsRequestedReviewer
+      ? { status: 'awaiting_review', actor: 'you', label: 'Your review requested', detail: 'Checks green — your review is requested.' }
+      : { status: 'awaiting_review', actor: 'reviewers', label: 'Awaiting review', detail: 'Checks green — waiting on the required reviewer(s).' };
   }
   if (i.mergeableState === 'unstable') {
-    return { status: 'awaiting_merge', actor: 'you', label: 'Mergeable (unstable)', detail: 'Mergeable, but a non-required check is failing — merge is allowed.' };
+    const canMerge = i.viewerCanMerge !== false;
+    return { status: 'awaiting_merge', actor: canMerge ? 'you' : 'reviewers', label: 'Mergeable (unstable)',
+      detail: canMerge
+        ? 'Mergeable, but a non-required check is failing — merge is allowed.'
+        : 'Mergeable (a non-required check is failing) — waiting on a maintainer to merge.' };
   }
   return { status: 'unknown', actor: 'none', label: 'Computing…', detail: 'GitHub is still computing this PR’s merge state.' };
 }
