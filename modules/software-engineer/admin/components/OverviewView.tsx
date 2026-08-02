@@ -20,6 +20,7 @@ import {
 import { CARD_FILTERS, statusesToParam } from './overview-filters';
 import PrBoard from './PrBoard';
 import { isGatewayError, StartingBanner } from './starting';
+import PendingApprovals from './PendingApprovals';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -188,6 +189,10 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
 
       {starting && <StartingBanner label="The platform is starting up — reconnecting…" />}
       {err && <div className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-800">{err}</div>}
+
+      {/* Human approvals (pending reflect memory + unmerged-run specs) — surfaced here because this
+          is the page operators watch; renders nothing when there is nothing to review. */}
+      <PendingApprovals projects={projects} />
 
       {loading && !data ? (
         <div className="flex justify-center p-12"><LoadingSpinner /></div>

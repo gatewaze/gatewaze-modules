@@ -62,8 +62,16 @@ export async function ensureMemoryUseCase(sb: unknown, projectId: string, projec
   }
 }
 
-/** True for the live/imported pages recall may surface — i.e. NOT any project's pending proposal. */
-const isRecallable = (slug: string): boolean => String(slug ?? '') !== PENDING_SLUG;
+/** Slug prefix for spec pages awaiting human approval (see writeSpecMemory / approveSpec). */
+const SPEC_PENDING_PREFIX = 'specs-pending/';
+
+/** True for the live/imported pages recall may surface — i.e. NOT any project's pending
+ *  reflect proposal and NOT a spec still awaiting approval. Exported as the SINGLE source of
+ *  truth for the pending-content gate — memory-tools.ts imports it for wiki_search/wiki_read. */
+export const isRecallable = (slug: string): boolean => {
+  const s = String(slug ?? '');
+  return s !== PENDING_SLUG && !s.startsWith(SPEC_PENDING_PREFIX);
+};
 
 /**
  * RAG recall — hybrid-search the project's memory (and any GRANTED source projects, via scope=granted)
@@ -172,20 +180,69 @@ export async function writeMemory(sb: unknown, projectId: string, projectName: s
   return upsertMemoryPage(sb, projectId, projectName, MEMORY_SLUG, liveTitle(projectName), body);
 }
 
-/** Log a run's SPEC into the project's memory as `specs/issue-<n>` so future runs find prior
- *  specs via RAG recall + the wiki_search/wiki_read tools (and, via grants, linked projects'
- *  runs too). Overwrites on review-loop revisions — the page always holds the latest spec;
- *  the issues-repo commit history (spec.ts putFile) is the full revision log. Best-effort. */
+/** Log a run's SPEC into the project's memory — PENDING first (`specs-pending/issue-<n>`), never
+ *  directly recallable. It reaches future runs' recall/wiki_search only after approval to
+ *  `specs/issue-<n>`: automatically when a human MERGES the run's PR (pr-monitor calls
+ *  approveSpec — the merge is the human judgment), or manually via the review panel for runs
+ *  that never merge. Same memory-poisoning gate as reflect. Overwrites on review-loop
+ *  revisions; the issues-repo commit history (spec.ts putFile) is the full revision log. */
 export async function writeSpecMemory(
   sb: unknown, projectId: string, projectName: string, issueNumber: number, issueTitle: string, body: string,
 ): Promise<boolean> {
   if (!projectId || !issueNumber || !body?.trim()) return false;
   return upsertMemoryPage(
     sb, projectId, projectName,
-    `specs/issue-${issueNumber}`,
-    `Spec — issue #${issueNumber}: ${String(issueTitle ?? '').slice(0, 140)}`,
+    `${SPEC_PENDING_PREFIX}issue-${issueNumber}`,
+    `Spec — issue #${issueNumber}: ${String(issueTitle ?? '').slice(0, 120)} (PENDING APPROVAL)`,
     body,
   );
+}
+
+/** Pending (unapproved) specs for the review panel: [{issue, title, body}]. Cleared entries
+ *  (empty body — the approve/reject convention, same as memory-pending) are filtered out. */
+export async function listPendingSpecs(projectId: string): Promise<Array<{ issue: number; title: string; body: string }>> {
+  if (!projectId) return [];
+  try {
+    const uc = useCaseFor(projectId);
+    const l = await wiki(`/internal/wiki/list?use_case=${encodeURIComponent(uc)}&prefix=${encodeURIComponent(SPEC_PENDING_PREFIX)}&limit=50`);
+    const out: Array<{ issue: number; title: string; body: string }> = [];
+    for (const p of l?.pages ?? []) {
+      const m = /^specs-pending\/issue-(\d+)$/.exec(String(p.slug ?? ''));
+      if (!m) continue;
+      const body = await readPage(projectId, String(p.slug));
+      if (!body.trim()) continue; // cleared → not pending
+      out.push({ issue: Number(m[1]), title: String(p.title ?? '').replace(/ \(PENDING APPROVAL\)$/, ''), body });
+    }
+    return out.sort((a, b) => a.issue - b.issue);
+  } catch {
+    return [];
+  }
+}
+
+/** Promote a pending spec to the recallable `specs/issue-<n>` page, then clear pending.
+ *  Called automatically by pr-monitor when the run's PR merges, or manually from the review
+ *  panel. No-op (false) when nothing is pending for the issue. */
+export async function approveSpec(sb: unknown, projectId: string, projectName: string, issueNumber: number): Promise<boolean> {
+  const pendingSlug = `${SPEC_PENDING_PREFIX}issue-${issueNumber}`;
+  let title = `Spec — issue #${issueNumber}`;
+  let body = '';
+  try {
+    const d = await wiki(`/internal/wiki/read?use_case=${encodeURIComponent(useCaseFor(projectId))}&slug=${encodeURIComponent(pendingSlug)}`);
+    if (d?.found) {
+      body = String(d.page?.body ?? '');
+      title = String(d.page?.title ?? title).replace(/ \(PENDING APPROVAL\)$/, '') || title;
+    }
+  } catch { return false; }
+  if (!body.trim()) return false;
+  const ok = await upsertMemoryPage(sb, projectId, projectName, `specs/issue-${issueNumber}`, title, body);
+  if (ok) await upsertMemoryPage(sb, projectId, projectName, pendingSlug, `${title} (PENDING APPROVAL)`, '');
+  return ok;
+}
+
+/** Discard a pending spec without promoting it. */
+export async function rejectSpec(sb: unknown, projectId: string, projectName: string, issueNumber: number): Promise<boolean> {
+  const pendingSlug = `${SPEC_PENDING_PREFIX}issue-${issueNumber}`;
+  return upsertMemoryPage(sb, projectId, projectName, pendingSlug, `Spec — issue #${issueNumber} (PENDING APPROVAL)`, '');
 }
 
 // ── Linked memory sources (native wiki grants) ────────────────────────────────────────────────
