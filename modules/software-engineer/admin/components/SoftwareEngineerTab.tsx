@@ -9,7 +9,7 @@
  * Admin design system (Tailwind + @/components/ui, Radix gray vars). No @radix-ui/themes import.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { Badge, Button, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
@@ -23,6 +23,7 @@ import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
+import { filterLabelForParam } from './overview-filters';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -97,7 +98,19 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [err, setErr] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [projectList, setProjectList] = useState<any[]>([]);
-  const [projectFilter, setProjectFilter] = useState('');   // '' = all projects
+  // Project + status filters live in the URL so a filtered board is shareable and the Overview tiles
+  // can deep-link into it. '' = all. `status` is a comma-separated set from a fixed allowlist.
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const projectFilter = searchParams.get('project') ?? '';   // '' = all projects
+  const statusFilter = searchParams.get('status') ?? '';     // '' = no status filter
+  // Navigate to the runs board (deselecting any open run) with the search params mutated in place.
+  const goRuns = useCallback((mutate: (p: URLSearchParams) => void) => {
+    const p = new URLSearchParams(searchParams);
+    mutate(p);
+    const qs = p.toString();
+    navigate(`${BASE}/runs${qs ? `?${qs}` : ''}`);
+  }, [navigate, searchParams]);
   const [startProject, setStartProject] = useState('');     // project for a new interactive session
   const [starting, setStarting] = useState(false);
   const bottom = useRef<HTMLDivElement | null>(null);
@@ -112,11 +125,12 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
       const p = new URLSearchParams();
       if (showArchived) p.set('archived', '1');
       if (projectFilter) p.set('project', projectFilter);
+      if (statusFilter) p.set('status', statusFilter);
       const qs = p.toString();
       setRuns((await api(`/runs${qs ? `?${qs}` : ''}`)).runs ?? []); setErr(null);
     } catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setLoading(false); }
-  }, [showArchived, projectFilter]);
+  }, [showArchived, projectFilter, statusFilter]);
   const loadDetail = useCallback(async (id: string) => {
     try { setDetail(await api(`/runs/${id}`)); } catch (e: any) { setErr(String(e.message ?? e)); }
   }, []);
@@ -261,12 +275,26 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
         {projectList.length > 1 && (
           <select
             value={projectFilter}
-            onChange={(e) => { onSelect(null); setDetail(null); setProjectFilter(e.target.value); }}
+            onChange={(e) => { const v = e.target.value; setDetail(null); goRuns((p) => { if (v) p.set('project', v); else p.delete('project'); }); }}
             className="w-full mb-2 rounded-md border border-[var(--gray-6)] bg-transparent px-2 py-1.5 text-sm"
           >
             <option value="">All projects</option>
             {projectList.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
           </select>
+        )}
+        {statusFilter && (
+          // Dismissible chip reflecting a status filter deep-linked from an Overview KPI tile.
+          <div className="mb-2 flex items-center gap-2 rounded-md border border-[var(--gray-6)] bg-[var(--gray-2)] px-2 py-1 text-xs">
+            <span className="min-w-0 truncate text-[var(--gray-11)]">Filtered: <span className="font-medium text-[var(--gray-12)]">{filterLabelForParam(statusFilter)}</span></span>
+            <button
+              type="button"
+              onClick={() => goRuns((p) => p.delete('status'))}
+              className="ml-auto shrink-0 text-[var(--gray-10)] hover:text-[var(--gray-12)]"
+              aria-label="Clear status filter"
+            >
+              ✕
+            </button>
+          </div>
         )}
         {!showArchived && projectList.length > 0 && (
           // items-stretch: the auto-height select conforms to the fixed-height
@@ -648,7 +676,8 @@ const BASE = '/software-engineer';
 
 export default function SoftwareEngineerTab() {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const { pathname } = location;
 
   // URL-driven so each tab + run have their own shareable URL:
   //   /software-engineer                → Overview (default landing)
@@ -663,7 +692,20 @@ export default function SoftwareEngineerTab() {
   const selectedRun = section === 'runs' ? (m?.[2] ?? null) : null;
 
   const onTabChange = (t: string) => navigate(t === 'overview' ? BASE : `${BASE}/${t}`);
-  const onSelectRun = (id: string | null) => navigate(id ? `${BASE}/runs/${id}` : `${BASE}/runs`);
+  // Preserve the query string (status / project filter) when selecting or deselecting a run so the
+  // board's active filter survives opening a run and coming back.
+  const onSelectRun = (id: string | null) =>
+    navigate({ pathname: id ? `${BASE}/runs/${id}` : `${BASE}/runs`, search: location.search });
+  // From an Overview KPI tile: open the Runs board filtered to a status set, carrying the tile's
+  // project scope. Both values are our own (status from a fixed allowlist, project a UUID) — no user
+  // free-text reaches the URL here.
+  const onOpenRuns = (statusParam: string, project?: string) => {
+    const p = new URLSearchParams();
+    if (statusParam) p.set('status', statusParam);
+    if (project) p.set('project', project);
+    const qs = p.toString();
+    navigate(`${BASE}/runs${qs ? `?${qs}` : ''}`);
+  };
 
   return (
     <Page title="Software Engineer">
@@ -679,7 +721,7 @@ export default function SoftwareEngineerTab() {
         onTabChange={onTabChange}
       >
         <div className="py-6">
-          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} />}
+          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} onOpenRuns={onOpenRuns} />}
           {activeTab === 'runs' && <RunsView selected={selectedRun} onSelect={onSelectRun} onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'issues' && <IssuesView />}
           {activeTab === 'setup' && <SetupPanel />}
