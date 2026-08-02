@@ -16,7 +16,7 @@ import { assertRemoteMcpServers } from '../lib/mcp.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
-import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
+import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -89,8 +89,31 @@ export function mountAdminRoutes(router, deps) {
     const projectId = String(req.params.id);
     const project = await getProject(supabase, projectId);
     if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
-    const [live, pending] = await Promise.all([readLiveMemory(projectId), readPendingMemory(projectId)]);
-    return res.json({ live, pending, hasPending: !!pending });
+    const [live, pending, pendingSpecs] = await Promise.all([
+      readLiveMemory(projectId), readPendingMemory(projectId), listPendingSpecs(projectId),
+    ]);
+    return res.json({ live, pending, hasPending: !!pending, pending_specs: pendingSpecs });
+  });
+  // Spec approval gate: a run's spec sits at specs-pending/ (never recallable) until approved —
+  // automatically when its PR merges (pr-monitor), or here for runs that never merged.
+  router.post('/projects/:id/specs/:issue/approve', async (req, res) => {
+    const projectId = String(req.params.id);
+    const issue = Number.parseInt(String(req.params.issue), 10);
+    if (!Number.isInteger(issue) || issue <= 0) return res.status(400).json({ error: { code: 'invalid_input', message: 'Bad issue number' } });
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    const ok = await approveSpec(supabase, projectId, project.name, issue);
+    if (!ok) return res.status(409).json({ error: { code: 'no_pending', message: 'No pending spec for that issue' } });
+    return res.json({ approved: true });
+  });
+  router.post('/projects/:id/specs/:issue/reject', async (req, res) => {
+    const projectId = String(req.params.id);
+    const issue = Number.parseInt(String(req.params.issue), 10);
+    if (!Number.isInteger(issue) || issue <= 0) return res.status(400).json({ error: { code: 'invalid_input', message: 'Bad issue number' } });
+    const project = await getProject(supabase, projectId);
+    if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
+    await rejectSpec(supabase, projectId, project.name, issue);
+    return res.json({ rejected: true });
   });
   router.post('/projects/:id/memory/approve', async (req, res) => {
     const projectId = String(req.params.id);
