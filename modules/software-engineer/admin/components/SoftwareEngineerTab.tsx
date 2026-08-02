@@ -17,7 +17,7 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   CommandLineIcon, Cog6ToothIcon, ArrowPathIcon, ArrowUturnLeftIcon,
   XCircleIcon, PaperAirplaneIcon, ArrowTopRightOnSquareIcon, ArchiveBoxIcon, ClipboardDocumentListIcon,
-  ChartBarIcon, PlayCircleIcon, StopCircleIcon, ArrowDownIcon,
+  ChartBarIcon, PlayCircleIcon, StopCircleIcon, ArrowDownIcon, ArrowsRightLeftIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
@@ -114,6 +114,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   }, [navigate, searchParams]);
   const [startProject, setStartProject] = useState('');     // project for a new interactive session
   const [starting, setStarting] = useState(false);
+  const [merging, setMerging] = useState(false);            // guard against a double manual-merge submit
   const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
   const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
   const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
@@ -281,6 +282,25 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     try { await api(`/runs/${id}/${on ? 'archive' : 'unarchive'}`, { method: 'POST' }); await loadRuns(); if (selected === id) await loadDetail(id); }
     catch (e: any) { setErr(String(e.message ?? e)); }
   };
+  // Manually merge the run's open, mergeable PR(s). The server only merges PRs whose required checks are
+  // green (a non-bypass token), so a "held" result is expected, not an error — surface why so a no-op
+  // merge isn't a silent success.
+  const merge = async () => {
+    if (!selected || !window.confirm('Merge this run’s open pull request(s)? Only PRs whose required checks are green will merge.')) return;
+    setMerging(true); setErr(null);
+    try {
+      const r = await api(`/runs/${selected}/merge`, { method: 'POST' });
+      if (r && r.merged === 0) {
+        const reasons = (r.results ?? [])
+          .filter((x: any) => x.outcome === 'held')
+          .map((x: any) => `${x.repo}: ${x.reason ?? 'not mergeable'}`)
+          .join('; ');
+        setErr(`No PRs merged — ${r.held ?? 0} held${reasons ? ` (${reasons})` : ''}. A PR merges only once its required checks are green.`);
+      }
+      await loadRuns(); await loadDetail(selected);
+    } catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setMerging(false); }
+  };
   // Manually start a blank interactive engineer on a project, then open it to chat live.
   const startInteractive = async () => {
     const pid = startProject || projectFilter || projectList[0]?.id;
@@ -420,6 +440,11 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   </a>
                 )}
                 <span className="ml-auto flex items-center gap-2 flex-wrap">
+                  {detail.run.kind !== 'interactive' && ['pr_open', 'watching', 'changes_requested'].includes(detail.run.status) && (
+                    <Button variant="solid" color="green" size="xs" onClick={merge} disabled={merging}>
+                      <ArrowsRightLeftIcon className="size-3.5 mr-1" />{merging ? 'Merging…' : 'Merge'}
+                    </Button>
+                  )}
                   {detail.run.kind === 'interactive' && detail.run.status === 'running' && (
                     <Button variant="soft" color="red" size="xs" onClick={closeSession}><StopCircleIcon className="size-3.5 mr-1" />End session</Button>
                   )}
