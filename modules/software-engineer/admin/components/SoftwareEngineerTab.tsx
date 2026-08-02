@@ -8,7 +8,7 @@
  *   - Setup — per-brand credentials + repos (SetupPanel).
  * Admin design system (Tailwind + @/components/ui, Radix gray vars). No @radix-ui/themes import.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { Badge, Button, WorkspaceLayout } from '@/components/ui';
@@ -17,13 +17,14 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   CommandLineIcon, Cog6ToothIcon, ArrowPathIcon, ArrowUturnLeftIcon,
   XCircleIcon, PaperAirplaneIcon, ArrowTopRightOnSquareIcon, ArchiveBoxIcon, ClipboardDocumentListIcon,
-  ChartBarIcon, PlayCircleIcon, StopCircleIcon,
+  ChartBarIcon, PlayCircleIcon, StopCircleIcon, ArrowDownIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 import { filterLabelForParam } from './overview-filters';
+import { isNearBottom } from './autoscroll';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -113,10 +114,16 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   }, [navigate, searchParams]);
   const [startProject, setStartProject] = useState('');     // project for a new interactive session
   const [starting, setStarting] = useState(false);
-  const bottom = useRef<HTMLDivElement | null>(null);
   const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
   const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
   const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
+  const content = useRef<HTMLDivElement | null>(null);      // the growing content inside it (observed for height changes)
+  // "Tail the live stream" intent. True = keep pinned to the newest content; flips to false the moment
+  // the user scrolls up to read scrollback, so a burst of events doesn't yank them back down. A ref
+  // mirror lets the ResizeObserver callback read the latest value without being torn down on each flip.
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const stickRef = useRef(true);
+  stickRef.current = stickToBottom;
 
   useEffect(() => { api('/projects').then((d) => { const list = d.projects ?? []; setProjectList(list); setStartProject((v) => v || list[0]?.id || ''); }).catch(() => {}); }, []);
 
@@ -171,15 +178,42 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     return () => { if (timer) clearTimeout(timer); supabase.removeChannel(ch); };
   }, [selected, loadDetail]);
 
-  // Keep the transcript pinned to the newest message by scrolling ONLY the transcript container —
-  // never the document (scrollIntoView would move every scrollable ancestor, incl. the page). Skip
-  // when the user has scrolled up to read scrollback so live events don't yank them to the bottom.
+  // Opening a run (or switching to another) starts tailing the latest activity rather than the top.
+  useEffect(() => { setStickToBottom(true); }, [selected]);
+
+  // Update the tail intent from the user's own scrolling: near the bottom re-arms tailing; scrolling
+  // up to read scrollback disarms it. This is the single source of "did the user scroll away?".
+  const onTranscriptScroll = useCallback(() => {
+    const el = transcript.current;
+    if (el) setStickToBottom(isNearBottom(el));
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    const el = transcript.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setStickToBottom(true);
+  }, []);
+
+  // Pin to the newest content while tailing, by scrolling ONLY the transcript container — never the
+  // document (scrollIntoView would move every scrollable ancestor, incl. the page). useLayoutEffect
+  // runs BEFORE paint so a large streamed step doesn't flash at the wrong offset; the count-based deps
+  // catch new steps/events on each throttled refetch.
+  useLayoutEffect(() => {
+    const el = transcript.current;
+    if (el && stickToBottom) el.scrollTop = el.scrollHeight;
+  }, [detail?.messages?.length, detail?.events?.length, stickToBottom, selected]);
+
+  // Content can also grow WITHOUT a count change — a markdown image finishing load, a "Show more"
+  // expansion, or an in-place update of the last row. Observe the content box and re-pin on any height
+  // change while tailing, so the view never drifts off the bottom. (CSR-only; guarded for the node env.)
   useEffect(() => {
     const el = transcript.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
-  }, [detail?.messages?.length, detail?.events?.length]);
+    const inner = content.current;
+    if (!el || !inner || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => { if (stickRef.current) el.scrollTop = el.scrollHeight; });
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [selected]);
 
   const liveStatus = ['queued', 'running', 'changes_requested'].includes(detail?.run?.status);
 
@@ -443,8 +477,22 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             {/* Transcript — one interactive, chronological timeline of the run (se_events + se_messages):
                 agent prose (Markdown), tool steps, and file writes/edits as expandable document cards
                 with diffs + Markdown preview, plus a live activity ticker. Scrolls only this container. */}
-            <div ref={transcript} className="flex-1 min-h-0 overflow-y-auto">
-              <RunTimeline detail={detail} live={liveStatus} />
+            <div className="relative flex flex-col flex-1 min-h-0">
+              <div ref={transcript} onScroll={onTranscriptScroll} className="flex-1 min-h-0 overflow-y-auto">
+                <div ref={content}>
+                  <RunTimeline detail={detail} live={liveStatus} />
+                </div>
+              </div>
+              {/* Return-to-live affordance — only while the user has scrolled away from the bottom. */}
+              {!stickToBottom && (
+                <button
+                  type="button"
+                  onClick={jumpToLatest}
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1 rounded-full border border-[var(--gray-6)] bg-[var(--gray-1)] px-3 py-1.5 text-xs font-medium text-[var(--gray-12)] shadow-md hover:bg-[var(--gray-3)]"
+                >
+                  <ArrowDownIcon className="size-3.5" />Jump to latest
+                </button>
+              )}
             </div>
 
             {/* Chat into the running agent */}
