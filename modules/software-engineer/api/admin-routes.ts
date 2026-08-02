@@ -5,7 +5,6 @@
  * PROJECTS — each project holds ALL credentials (git PAT + Claude model cred), its repos, shared
  * memory, policy, and a concurrency cap. Engineers are ephemeral (one per run, run.engineer_name).
  */
-import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
@@ -73,7 +72,12 @@ export function mountAdminRoutes(router, deps) {
     }
   });
 
-  router.use(express.json({ limit: '256kb' }));
+  // NOTE: do NOT add a body parser here. The platform applies a global
+  // express.json() (packages/api/src/server.ts) that consumes the request stream
+  // before any module router runs, so req.body is already populated. A second
+  // express.json() on this router re-reads the now-consumed stream and throws
+  // "stream is not readable" (Express default 500) on every PUT/POST with a body —
+  // which broke saving project credentials. Rely on the global parser.
 
   const authorOf = (req) => req.userId ?? req.auth?.userId ?? req.user?.id ?? req.actor?.userId ?? null;
 
