@@ -18,6 +18,7 @@ import {
   ExclamationTriangleIcon, CpuChipIcon, ClockIcon, Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import { CARD_FILTERS, statusesToParam } from './overview-filters';
+import PrBoard from './PrBoard';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -181,6 +182,8 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
           {onGoToSetup && (
             <Button variant="solid" size="sm" onClick={onGoToSetup}><Cog6ToothIcon className="size-4 mr-1" />Go to Setup</Button>
           )}
+          {/* PRs can exist before any run does — the PAT user's external PRs show regardless. */}
+          <div className="text-left"><PrBoard projectFilter={projectFilter} /></div>
         </div>
       ) : (
         <>
@@ -193,6 +196,9 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
             <Tile icon={<CpuChipIcon className="size-3.5" />} label="Tokens" value={fmtTokens((totals.tokens_input ?? 0) + (totals.tokens_output ?? 0))} sub={`${fmtTokens(totals.tokens_input ?? 0)} in · ${fmtTokens(totals.tokens_output ?? 0)} out`} />
             <Tile icon={<ClockIcon className="size-3.5" />} label="Avg to merge" value={fmtDuration(totals.avg_time_to_merge_seconds)} sub="merged, 30 days" />
           </div>
+
+          {/* PR board — the live "where is every PR + who acts next" view */}
+          <PrBoard projectFilter={projectFilter} />
 
           {/* Status + phase breakdowns */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

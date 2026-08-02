@@ -110,5 +110,16 @@ export function githubClient(token: string) {
     updateBranch(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/pulls/${number}/update-branch`, { method: 'PUT' });
     },
+    /** Every open PR AUTHORED by the token owner, across all repos the token can see (`author:@me`).
+     * This is what lets the Overview PR board show work done outside Gatewaze too — any PR the
+     * project's PAT user opened, agent-driven or not. Capped at `perPage` most recently updated. */
+    searchAuthoredOpenPRs(perPage = 50) {
+      const q = encodeURIComponent('is:pr is:open author:@me archived:false');
+      return j(`/search/issues?q=${q}&sort=updated&order=desc&per_page=${Math.min(Math.max(perPage, 1), 100)}`);
+    },
+    /** Check-run rollup for a commit (GitHub Actions + apps). Drives the CI part of PR status. */
+    listCheckRuns(owner: string, name: string, ref: string) {
+      return j(`/repos/${owner}/${name}/commits/${encodeURIComponent(ref)}/check-runs?per_page=100`);
+    },
   };
 }
