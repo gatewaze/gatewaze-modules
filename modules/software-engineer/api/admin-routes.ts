@@ -8,7 +8,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { publishInput } from '../lib/input-channel.js';
-import { sealToken, getProject } from '../lib/credentials.js';
+import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
 import { mergeRunPrs } from '../lib/merge-prs.js';
 import { dispatchProject } from '../lib/dispatch.js';
@@ -212,11 +212,22 @@ export function mountAdminRoutes(router, deps) {
     for (const p of projRows ?? []) {
       const proj = await getProject(supabase, p.id);
       if (!proj?.githubToken) continue;
+      // Board scope: ONLY the project's connected (enabled) code repos, and only PRs authored by
+      // the project's PAT user (author:@me on the project token). A personal PAT's unrelated
+      // personal/org PRs must never appear here.
+      const codeRepos = await getCodeRepos(supabase, p.id);
+      const connected = new Set(codeRepos.map((r) => `${r.repoOwner}/${r.repoName}`.toLowerCase()));
+      if (connected.size === 0) continue;
       const gh = githubClient(proj.githubToken);
       let items: Record<string, unknown>[] = [];
       try {
-        const search = await gh.searchAuthoredOpenPRs(50);
-        items = search?.items ?? [];
+        const search = await gh.searchAuthoredOpenPRs(50, [...connected]);
+        // Second gate on the results themselves (search-qualifier quirks, forks, renames):
+        // anything not in the connected set is dropped.
+        items = (search?.items ?? []).filter((item: Record<string, unknown>) => {
+          const m = /\/repos\/([^/]+)\/([^/]+)$/.exec(String(item.repository_url ?? ''));
+          return m ? connected.has(`${m[1]}/${m[2]}`.toLowerCase()) : false;
+        });
       } catch (e) {
         projectErrors[p.name] = 'GitHub search failed — token may lack scopes or be rate-limited';
         logger?.warn?.('se: pr-board search failed', { project: p.id, error: String((e as Error)?.message ?? e) });

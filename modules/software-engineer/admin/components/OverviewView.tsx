@@ -182,7 +182,8 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
           {onGoToSetup && (
             <Button variant="solid" size="sm" onClick={onGoToSetup}><Cog6ToothIcon className="size-4 mr-1" />Go to Setup</Button>
           )}
-          {/* PRs can exist before any run does — the PAT user's external PRs show regardless. */}
+          {/* PR board scope: only PRs authored by each project's PAT user on that project's
+              CONNECTED code repos — never the token's wider visible universe. */}
           <div className="text-left"><PrBoard projectFilter={projectFilter} /></div>
         </div>
       ) : (
