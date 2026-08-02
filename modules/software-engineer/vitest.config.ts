@@ -7,7 +7,9 @@ const __dirname = dirname(__filename);
 
 export default defineConfig({
   test: {
-    include: ['{lib,api,admin,workers}/**/__tests__/**/*.test.ts'],
+    // Cover both the co-located suites ({lib,api,admin,workers}/**/__tests__) and the top-level
+    // __tests__/ tree (e.g. the transcript-markdown component test from issue #10).
+    include: ['__tests__/**/*.test.ts', '{lib,api,admin,workers}/**/__tests__/**/*.test.ts'],
     environment: 'node',
     globals: false,
   },
