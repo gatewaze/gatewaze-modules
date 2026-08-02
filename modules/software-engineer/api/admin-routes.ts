@@ -16,6 +16,7 @@ import { enqueuePhase } from '../lib/enqueue.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
+import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -163,6 +164,127 @@ export function mountAdminRoutes(router, deps) {
       return res.status(500).json({ error: 'overview failed' });
     }
     res.json(data ?? {});
+  });
+
+  // ── Overview PR board — every open PR AUTHORED by each project's PAT user ─────────────────
+  // Live GitHub view (not just se_run_prs): `author:@me` search per project token, so PRs the
+  // user opened OUTSIDE Gatewaze appear too. Each PR is enriched (merge state, latest reviews,
+  // check-run rollup), correlated with its SE run when one exists, and classified into a derived
+  // "who acts next" status (lib/pr-status.ts) so the dashboard answers it without opening the PR.
+  // ~3 GitHub calls per PR → cached per scope for PR_BOARD_TTL_MS; ?refresh=1 busts the cache.
+  const prBoardCache = new Map<string, { at: number; payload: unknown }>();
+  const PR_BOARD_TTL_MS = 60_000;
+
+  router.get('/overview/prs', async (req, res) => {
+    let project: string | null = null;
+    if (req.query.project !== undefined && req.query.project !== '') {
+      project = String(req.query.project);
+      if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
+    }
+    const cacheKey = project ?? 'all';
+    const cached = prBoardCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < PR_BOARD_TTL_MS && req.query.refresh !== '1') {
+      return res.json({ ...(cached.payload as Record<string, unknown>), cached: true });
+    }
+
+    // Cap the per-request fan-out: each project costs up to ~150 live GitHub calls (50 PRs × 3),
+    // so bound the number of projects one uncached request may process (security-review advisory).
+    let pq = supabase.from('se_projects').select('id, name, avatar_emoji, autonomy_mode').order('name').limit(10);
+    if (project) pq = pq.eq('id', project);
+    const { data: projRows } = await pq;
+
+    // SE-run linkage: open PR rows → their runs, keyed owner/name#number.
+    const { data: linkRows } = await supabase
+      .from('se_run_prs')
+      .select('repo_owner, repo_name, pr_number, se_runs(id, project_id, status, blast_radius, issue_number, engineer_name)')
+      .not('pr_number', 'is', null)
+      .eq('state', 'open');
+    const runByPr = new Map<string, Record<string, unknown>>();
+    for (const row of linkRows ?? []) {
+      const run = Array.isArray(row.se_runs) ? row.se_runs[0] : row.se_runs;
+      if (run) runByPr.set(`${row.repo_owner}/${row.repo_name}#${row.pr_number}`, run);
+    }
+
+    const prs: Record<string, unknown>[] = [];
+    const seen = new Map<string, number>();   // dedupe when projects share a PAT user
+    const projectErrors: Record<string, string> = {};
+
+    for (const p of projRows ?? []) {
+      const proj = await getProject(supabase, p.id);
+      if (!proj?.githubToken) continue;
+      const gh = githubClient(proj.githubToken);
+      let items: Record<string, unknown>[] = [];
+      try {
+        const search = await gh.searchAuthoredOpenPRs(50);
+        items = search?.items ?? [];
+      } catch (e) {
+        projectErrors[p.name] = 'GitHub search failed — token may lack scopes or be rate-limited';
+        logger?.warn?.('se: pr-board search failed', { project: p.id, error: String((e as Error)?.message ?? e) });
+        continue;
+      }
+
+      // Enrich in small batches — 3 calls per PR against the project PAT.
+      const BATCH = 5;
+      for (let b = 0; b < items.length; b += BATCH) {
+        await Promise.all(items.slice(b, b + BATCH).map(async (item) => {
+          const m = /\/repos\/([^/]+)\/([^/]+)$/.exec(String(item.repository_url ?? ''));
+          if (!m) return;
+          const [, owner, name] = m;
+          const number = Number(item.number);
+          const key = `${owner}/${name}#${number}`;
+          const dup = seen.get(key);
+          if (dup !== undefined) {
+            (prs[dup].projects as string[]).push(p.name);
+            return;
+          }
+          const base: Record<string, unknown> = {
+            repo: `${owner}/${name}`, number, title: String(item.title ?? ''), url: item.html_url,
+            author: item.user?.login ?? null, created_at: item.created_at, updated_at: item.updated_at,
+            projects: [p.name], run: null,
+          };
+          try {
+            const pull = await gh.getPullRequest(owner, name, number);
+            const [reviews, checksResp] = await Promise.all([
+              gh.listReviews(owner, name, number).catch(() => []),
+              pull?.head?.sha ? gh.listCheckRuns(owner, name, pull.head.sha).catch(() => null) : null,
+            ]);
+            const checks = summarizeChecks(checksResp?.check_runs);
+            const reviewsSum = summarizeReviews(reviews);
+            const link = runByPr.get(key);
+            const derived = classifyPr({
+              state: pull.state, merged: !!pull.merged, draft: !!pull.draft,
+              mergeableState: String(pull.mergeable_state ?? 'unknown'),
+              checks, reviews: reviewsSum,
+              run: link ? { status: String(link.status), blastRadius: String(link.blast_radius), autonomyMode: String(p.autonomy_mode ?? 'pr_only') } : null,
+            });
+            seen.set(key, prs.length);
+            prs.push({
+              ...base, ...derived,
+              draft: !!pull.draft, mergeable_state: pull.mergeable_state, base_ref: pull.base?.ref,
+              additions: pull.additions, deletions: pull.deletions, changed_files: pull.changed_files,
+              checks, reviews: reviewsSum,
+              run: link ? { issue_number: link.issue_number, status: link.status, blast_radius: link.blast_radius, engineer_name: link.engineer_name, project_id: link.project_id } : null,
+            });
+          } catch {
+            // Enrichment failed (permissions, deleted repo, rate limit) — still show the PR.
+            seen.set(key, prs.length);
+            prs.push({ ...base, status: 'unknown', actor: 'none', label: 'Unavailable', detail: 'Could not load PR details with this project’s token.' });
+          }
+        }));
+      }
+    }
+
+    // "Who acts next" first: you → agent → auto → none; newest activity first within a group.
+    const actorRank: Record<string, number> = { you: 0, agent: 1, auto: 2, none: 3 };
+    prs.sort((a, b) =>
+      (actorRank[String(a.actor)] ?? 9) - (actorRank[String(b.actor)] ?? 9)
+      || String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
+    const counts: Record<string, number> = {};
+    for (const pr of prs) counts[String(pr.status)] = (counts[String(pr.status)] ?? 0) + 1;
+
+    const payload = { prs, counts, project_errors: projectErrors, generated_at: new Date().toISOString() };
+    prBoardCache.set(cacheKey, { at: Date.now(), payload });
+    res.json(payload);
   });
 
   // ── Runs ────────────────────────────────────────────────────────────────
