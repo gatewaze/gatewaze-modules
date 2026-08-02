@@ -9,9 +9,9 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
-import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
-import { recordPhaseStart, recordPhaseEnd, blockRun, listRunPrs, upsertRunPr } from '../lib/run-state.js';
+import { mergeRunPrs } from '../lib/merge-prs.js';
+import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -32,28 +32,8 @@ export default async function merge(job, ctx) {
   const token = project.githubToken;
 
   await recordPhaseStart(supabase, run, 'merge');
-  const gh = githubClient(token);
   try {
-    const openPrs = (await listRunPrs(supabase, run.id)).filter((p) => p.pr_number && p.state === 'open');
-    let merged = 0, held = 0;
-    for (const p of openPrs) {
-      try {
-        const info = await gh.getPullRequest(p.repo_owner, p.repo_name, p.pr_number);
-        if (info.merged || info.merged_at) { await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { state: 'merged' }); merged++; continue; }
-        if (info.mergeable_state !== 'clean') {
-          // 'behind' just means the branch is out of date with base (strict branch protection). Self-heal:
-          // update it so required checks re-run against latest base; a later merge-tick lands it once clean.
-          // Other non-clean states (blocked/unstable/dirty/pending) need real attention → just hold.
-          if (info.mergeable_state === 'behind') {
-            try { await gh.updateBranch(p.repo_owner, p.repo_name, p.pr_number); } catch { /* already up to date / race — best-effort */ }
-          }
-          held++; continue;
-        }
-        await gh.mergePullRequest(p.repo_owner, p.repo_name, p.pr_number, 'squash');
-        await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { state: 'merged' });
-        merged++;
-      } catch { held++; /* protection / race — leave open */ }
-    }
+    const { merged, held } = await mergeRunPrs(supabase, run, project);
     await recordPhaseEnd(supabase, run, 'merge', 'passed', `merged ${merged} PR(s); ${held} held`);
     // pr-monitor finalizes (all merged → close issue + archive; else stay watching).
     await ctx?.enqueueJob?.('jobs', 'software-engineer:pr-monitor', { runId: run.id });
