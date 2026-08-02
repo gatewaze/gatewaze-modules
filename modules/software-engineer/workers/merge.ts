@@ -3,6 +3,8 @@
  * merge phase (§7/§10, multi-repo). Auto-merges the run's PRs only when the project allows it
  * (auto_merge_safe + blast safe) AND GitHub reports each PR mergeable_state 'clean' (required checks
  * green). The token is non-bypass, so a red PR simply can't be merged: unmergeable PRs are left open.
+ * A PR that is only 'behind' (out of date with base, under strict protection) is self-healed by an
+ * "update branch" so a later tick can merge it once checks re-run clean.
  * The pr-monitor finalizes (all merged → close the issue + archive).
  */
 import { createClient } from '@supabase/supabase-js';
@@ -38,7 +40,15 @@ export default async function merge(job, ctx) {
       try {
         const info = await gh.getPullRequest(p.repo_owner, p.repo_name, p.pr_number);
         if (info.merged || info.merged_at) { await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { state: 'merged' }); merged++; continue; }
-        if (info.mergeable_state !== 'clean') { held++; continue; } // required checks pending/failing/behind
+        if (info.mergeable_state !== 'clean') {
+          // 'behind' just means the branch is out of date with base (strict branch protection). Self-heal:
+          // update it so required checks re-run against latest base; a later merge-tick lands it once clean.
+          // Other non-clean states (blocked/unstable/dirty/pending) need real attention → just hold.
+          if (info.mergeable_state === 'behind') {
+            try { await gh.updateBranch(p.repo_owner, p.repo_name, p.pr_number); } catch { /* already up to date / race — best-effort */ }
+          }
+          held++; continue;
+        }
         await gh.mergePullRequest(p.repo_owner, p.repo_name, p.pr_number, 'squash');
         await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { state: 'merged' });
         merged++;
