@@ -757,14 +757,18 @@ export default function SoftwareEngineerTab() {
   //   /software-engineer/runs           → Runs board
   //   /software-engineer/runs/<id>      → a specific run (deep-linkable)
   //   /software-engineer/issues         → Issues
-  //   /software-engineer/setup          → Setup
+  //   /software-engineer/setup          → Setup (first / current project)
+  //   /software-engineer/setup/<id>     → Setup scoped to a specific project (deep-linkable)
   const m = pathname.match(/^\/software-engineer(?:\/(overview|setup|runs|issues)(?:\/([^/]+))?)?/);
   const section = m?.[1];
   const activeTab: 'overview' | 'runs' | 'issues' | 'setup' =
     section === 'runs' ? 'runs' : section === 'issues' ? 'issues' : section === 'setup' ? 'setup' : 'overview';
   const selectedRun = section === 'runs' ? (m?.[2] ?? null) : null;
+  const selectedProject = section === 'setup' ? (m?.[2] ?? null) : null;
 
   const onTabChange = (t: string) => navigate(t === 'overview' ? BASE : `${BASE}/${t}`);
+  // Setup's selected project lives in the path so each project has its own shareable URL.
+  const onSelectProject = (id: string | null) => navigate(id ? `${BASE}/setup/${id}` : `${BASE}/setup`);
   // Preserve the query string (status / project filter) when selecting or deselecting a run so the
   // board's active filter survives opening a run and coming back.
   const onSelectRun = (id: string | null) =>
@@ -797,7 +801,7 @@ export default function SoftwareEngineerTab() {
           {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} onOpenRuns={onOpenRuns} />}
           {activeTab === 'runs' && <RunsView selected={selectedRun} onSelect={onSelectRun} onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'issues' && <IssuesView />}
-          {activeTab === 'setup' && <SetupPanel />}
+          {activeTab === 'setup' && <SetupPanel routeProjectId={selectedProject} onSelectProject={onSelectProject} />}
         </div>
       </WorkspaceLayout>
     </Page>
