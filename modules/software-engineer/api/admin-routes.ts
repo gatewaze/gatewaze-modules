@@ -198,10 +198,15 @@ export function mountAdminRoutes(router, deps) {
     // Chat image attachments (pasted screenshots) — already uploaded to the public `media` bucket by
     // the client. Validate each URL against the host allowlist (defense in depth: the runner's
     // download path allowlists again) and cap the count, exactly like the issue-create path.
-    const images = (Array.isArray(req.body?.images) ? req.body.images : [])
+    // We keep the candidate count so the response can report how many were DROPPED by the allowlist —
+    // otherwise a non-allowlisted URL (e.g. an http `.localhost` storage URL in dev, or a split-horizon
+    // storage origin in a self-hosted prod) is silently stripped and the caller believes it attached.
+    const candidateImages = (Array.isArray(req.body?.images) ? req.body.images : [])
       .map((u: any) => (typeof u === 'string' ? u : u?.url))
-      .filter((u: any) => typeof u === 'string' && isAllowedAttachmentUrl(u))
+      .filter((u: any) => typeof u === 'string' && u.length > 0)
       .slice(0, 8);
+    const images = candidateImages.filter((u: string) => isAllowedAttachmentUrl(u));
+    const imagesDropped = candidateImages.length - images.length;
     if (!content.trim() && !images.length) return res.status(400).json({ error: 'empty' });
     const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
@@ -214,7 +219,7 @@ export function mountAdminRoutes(router, deps) {
     await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'admin', author: authorOf(req), content: stored });
     try { await publishInput(getRedis?.(), id, { kind: 'chat', content, images }); }
     catch (e) { logger?.warn?.('se: publish chat failed', { error: String(e) }); }
-    res.status(202).json({ accepted: true });
+    res.status(202).json({ accepted: true, attachmentsAttached: images.length, attachmentsDropped: imagesDropped });
   });
 
   router.post('/runs/:id/interrupt', async (req, res) => {
@@ -361,10 +366,16 @@ export function mountAdminRoutes(router, deps) {
     // Attachments (pasted screenshots) — already uploaded to the public `media` bucket by the client.
     // Validate each URL against the host allowlist (defense in depth: the agent's download path
     // allowlists too) and append them as markdown so GitHub renders them inline in the issue.
+    // Keep the candidate count separately from the allowlisted set so the response can report how many
+    // attachments were DROPPED. On a `*.localhost` dev deployment the client's public storage URL is
+    // `http://…` (rejected by the https-only SSRF allowlist), so it never reaches the issue body; the
+    // count lets the client warn instead of showing a silent success. See lib/attachments.ts.
     const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments.slice(0, 8) : [];
-    const validUrls = attachments
+    const candidateUrls = attachments
       .map((a: any) => (typeof a === 'string' ? a : a?.url))
-      .filter((u: any) => typeof u === 'string' && isAllowedAttachmentUrl(u));
+      .filter((u: any) => typeof u === 'string' && u.length > 0);
+    const validUrls = candidateUrls.filter((u: string) => isAllowedAttachmentUrl(u));
+    const attachmentsDropped = candidateUrls.length - validUrls.length;
     if (validUrls.length) {
       body += `\n\n### Attachments\n` + validUrls.map((u: string, i: number) => `![screenshot-${i + 1}](${u})`).join('\n');
     }
@@ -382,7 +393,7 @@ export function mountAdminRoutes(router, deps) {
         runId = run?.id ?? null;
         await dispatchProject(supabase, { enqueueJob }, projectId);
       }
-      res.status(201).json({ number: created.number, url: created.html_url, runId });
+      res.status(201).json({ number: created.number, url: created.html_url, runId, attachmentsAttached: validUrls.length, attachmentsDropped });
     } catch (e) {
       logger?.warn?.('se: create issue failed', { error: String(e) });
       res.status(500).json({ error: 'create failed' });
