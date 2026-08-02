@@ -4,12 +4,19 @@
  * override messages to a Redis channel keyed by run id; the SE runner pod subscribes and
  * feeds them into the live Agent SDK session via streamInput()/interrupt().
  *
- * Message shape: { kind: 'chat' | 'interrupt', content?: string, author?: string }
+ * Message shape: { kind: 'chat' | 'interrupt' | 'close', content?: string, images?: string[], author?: string }
+ *
+ * `close` is used only by interactive (pair-programming) sessions: it ends the persistent streaming
+ * session gracefully (the input generator returns → the Agent SDK session completes → the worker
+ * cleans up its workspace). Issue-pipeline runs never see it.
  */
 
 export interface InputMessage {
-  kind: 'chat' | 'interrupt';
+  kind: 'chat' | 'interrupt' | 'close';
   content?: string;
+  /** Chat-pasted screenshot URLs (already uploaded to the public `media` bucket, host-allowlisted by
+   *  the API). The runner downloads these into the phase workspace so the agent can Read them. */
+  images?: string[];
   author?: string;
 }
 

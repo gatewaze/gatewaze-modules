@@ -10,10 +10,12 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
+import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
 import { listRunPrs, upsertRunPr } from '../lib/run-state.js';
 import { dispatchProject, dispatchAll } from '../lib/dispatch.js';
+import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -51,8 +53,11 @@ async function reconcile(supabase, ctx, run) {
             gh.listReviews(p.repo_owner, p.repo_name, p.pr_number).catch(() => []),
             gh.listReviewComments(p.repo_owner, p.repo_name, p.pr_number).catch(() => []),
           ]);
-          for (const r of reviews ?? []) if (r.state === 'CHANGES_REQUESTED' && r.submitted_at) latestActionable = Math.max(latestActionable, new Date(r.submitted_at).getTime());
-          for (const c of inline ?? []) if (c.created_at) latestActionable = Math.max(latestActionable, new Date(c.created_at).getTime());
+          // Only feedback from a TRUSTED author is actionable. Anyone with a
+          // GitHub account can review/comment a public PR; treating that as a
+          // trigger would feed unauthenticated text into the revise agent.
+          for (const r of reviews ?? []) if (r.state === 'CHANGES_REQUESTED' && r.submitted_at && isTrustedFeedbackAuthor(r.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(r.submitted_at).getTime());
+          for (const c of inline ?? []) if (c.created_at && isTrustedFeedbackAuthor(c.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(c.created_at).getTime());
         }
       } catch { allMerged = false; }
     }
@@ -75,7 +80,7 @@ async function reconcile(supabase, ctx, run) {
     const seen = run.pr_seen_at ? new Date(run.pr_seen_at).getTime() : 0;
     if (latestActionable > seen) {
       await supabase.from('se_runs').update({ ...patch, status: 'changes_requested', pr_state: 'changes_requested', current_phase: 'revise', pr_seen_at: new Date(latestActionable).toISOString(), pr_url: firstUrl }).eq('id', run.id);
-      await ctx?.enqueueJob?.('jobs', 'software-engineer:revise', { runId: run.id });
+      await enqueuePhase(ctx, run.id, 'revise');
       return { runId: run.id, action: 'revise' };
     }
 

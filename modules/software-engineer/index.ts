@@ -39,6 +39,8 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/004_projects_and_ephemeral_engineers.sql',
     'migrations/005_issues_repo_and_multirepo.sql',
     'migrations/006_mcp_config.sql',
+    'migrations/007_overview_metrics.sql',
+    'migrations/008_interactive_engineers.sql',
   ],
 
   // Dedicated queue — NOT the shared `jobs` queue. Agent phases run in a separate
@@ -69,6 +71,13 @@ const softwareEngineerModule: GatewazeModule = {
     { name: 'software-engineer:pr-monitor', handler: './workers/pr-monitor.ts' },
     // reflect: fold what a run learned into the project's shared, durable memory (via the AI wiki).
     { name: 'software-engineer:reflect', handler: './workers/reflect.ts' },
+    // recover: crash-resilience reconciler — re-drives runs orphaned by a worker/pod/machine/Redis
+    // death from their saved phase (idempotent). See workers/recover.ts.
+    { name: 'software-engineer:recover', handler: './workers/recover.ts' },
+    // interactive: a manually-started, long-lived pair-programming session on a project (no issue, no
+    // pipeline). One worker holds the session for its whole lifetime; explicit close + idle/wall-clock
+    // caps free it. See workers/interactive.ts.
+    { name: 'software-engineer:interactive', handler: './workers/interactive.ts' },
   ],
 
   // Cron heartbeat that polls open PRs and reconciles them (the fallback where GitHub can't reach
@@ -80,6 +89,13 @@ const softwareEngineerModule: GatewazeModule = {
       schedule: { every: 3 * 60_000 },
       data: { kind: 'software-engineer:pr-monitor' },
     },
+    // Crash-resilience: re-drive runs orphaned by infra death from their saved phase (idempotent).
+    {
+      name: 'software-engineer-recover',
+      queue: 'jobs',
+      schedule: { every: 5 * 60_000 },
+      data: { kind: 'software-engineer:recover' },
+    },
   ],
 
   // Mounts the GitHub webhook (JWT-exempt, HMAC-authenticated) + the admin API
@@ -89,9 +105,9 @@ const softwareEngineerModule: GatewazeModule = {
     await registerRoutes(app, ctx);
   },
 
-  // URL-driven dashboard — the Setup page and each run get their own shareable URL
-  // (/software-engineer, /software-engineer/setup, /software-engineer/runs/<id>). This needs BOTH
-  // an index route (exact /software-engineer) AND a splat (sub-paths): moduleRoutes.tsx merges two
+  // URL-driven dashboard — each tab and run get their own shareable URL (/software-engineer =
+  // Overview, /software-engineer/runs, /software-engineer/runs/<id>, /software-engineer/setup).
+  // This needs BOTH an index route (exact /software-engineer) AND a splat (sub-paths): moduleRoutes.tsx merges two
   // entries sharing the top segment into { index } + { path: '*' } children. A lone splat leaves the
   // index slot empty, so exact /software-engineer renders a blank <Outlet/>. Same component for both;
   // it reads useLocation to pick the active tab.

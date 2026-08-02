@@ -23,5 +23,9 @@ export function rateLimit(key: string, max: number, windowMs: number): boolean {
 export function clientIp(req: unknown): string {
   const r = req as { headers?: Record<string, string>; ip?: string; socket?: { remoteAddress?: string } };
   const fwd = r?.headers?.['x-forwarded-for'];
-  return (typeof fwd === 'string' && fwd.split(',')[0]?.trim()) || r?.ip || r?.socket?.remoteAddress || 'unknown';
+  // Prefer req.ip: the platform sets Express `trust proxy`, so req.ip is the
+  // real client (a public-client-forged X-Forwarded-For is ignored). Raw XFF is
+  // only a fallback for non-Express contexts, and is spoofable — never trust it
+  // ahead of req.ip, or rate limits can be bypassed by rotating the header.
+  return r?.ip || (typeof fwd === 'string' && fwd.split(',')[0]?.trim()) || r?.socket?.remoteAddress || 'unknown';
 }

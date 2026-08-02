@@ -108,6 +108,16 @@ export async function writeMessage(
   });
 }
 
+/**
+ * Coarse liveness heartbeat: bump se_runs.updated_at so the Runs tab can tell a live-but-quiet run
+ * (long single tool call, model thinking) from a wedged one. Prefer this over inserting se_events
+ * rows on a timer — it emits the same realtime signal without growing the event log. The
+ * set_updated_at trigger stamps the real time; the value here is only to force a row version.
+ */
+export async function touchRun(sb: unknown, run: any) {
+  await sb.from('se_runs').update({ updated_at: now() }).eq('id', run.id);
+}
+
 /** Upsert a per-repo PR row for a multi-repo run (§7). */
 export async function upsertRunPr(
   sb: unknown, run: any, repoOwner: string, repoName: string,

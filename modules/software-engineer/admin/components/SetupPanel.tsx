@@ -9,7 +9,9 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Badge, Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
+import { toast } from 'sonner';
 import { CommandLineIcon, KeyIcon, ShieldCheckIcon, PlusIcon, TrashIcon, FolderPlusIcon } from '@heroicons/react/24/outline';
+import MemoryReviewSection from './MemoryReviewSection';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -26,7 +28,8 @@ async function api(path: string, init?: RequestInit) {
 
 const inputCls = 'w-full rounded-md border px-3 py-2 text-sm';
 const Field = ({ label, children }: { label: React.ReactNode; children: React.ReactNode }) => (
-  <div className="grid grid-cols-[200px_1fr] items-center gap-3 py-1.5">
+  // Label stacks above the input on phones; fixed-label two-column grid from sm up.
+  <div className="grid grid-cols-1 sm:grid-cols-[200px_1fr] sm:items-center gap-1 sm:gap-3 py-1.5">
     <span className="text-sm text-[var(--gray-11)]">{label}</span>{children}
   </div>
 );
@@ -103,6 +106,7 @@ export default function SetupPanel() {
       commit_author_name: s.commit_author_name?.trim() || null, commit_author_email: s.commit_author_email?.trim() || null,
       autonomy_mode: s.autonomy_mode, intake_enabled: !!s.intake_enabled,
       max_concurrent_engineers: s.max_concurrent_engineers ? Number(s.max_concurrent_engineers) : 2,
+      max_interactive_engineers: s.max_interactive_engineers ? Number(s.max_interactive_engineers) : 1,
       allowed_labellers: (typeof s.allowed_labellers === 'string' ? s.allowed_labellers.split(',').map((x: string) => x.trim()).filter(Boolean) : s.allowed_labellers) ?? [],
       monthly_token_budget: s.monthly_token_budget ? Number(s.monthly_token_budget) : null,
       per_run_token_ceiling: s.per_run_token_ceiling ? Number(s.per_run_token_ceiling) : null,
@@ -112,8 +116,8 @@ export default function SetupPanel() {
     if (modelCred.trim()) body.model_cred = modelCred.trim();
     // MCP config: send only when the operator typed something. A literal "clear" empties it.
     if (mcpConfig.trim()) body.mcp_config = mcpConfig.trim() === 'clear' ? null : mcpConfig.trim();
-    try { await api(`/projects/${pid}`, { method: 'PUT', body: JSON.stringify(body) }); setMsg({ ok: true, text: 'Saved.' }); await loadProjects(); await loadProject(pid); }
-    catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
+    try { await api(`/projects/${pid}`, { method: 'PUT', body: JSON.stringify(body) }); toast.success('Project saved'); await loadProjects(); await loadProject(pid); }
+    catch (e: any) { toast.error(String(e.message ?? e)); }
   };
   const addRepo = async () => {
     if (!newRepo.owner.trim() || !newRepo.name.trim() || !pid) return;
@@ -134,8 +138,8 @@ export default function SetupPanel() {
     <div className="max-w-4xl space-y-5">
       {msg && <div className={`rounded-md border p-2 text-sm ${msg.ok ? 'border-green-300 bg-green-50 text-green-800' : 'border-red-300 bg-red-50 text-red-800'}`}>{msg.text}</div>}
 
-      <div className="flex gap-5">
-        <div className="w-64 shrink-0 space-y-2">
+      <div className="flex flex-col lg:flex-row gap-5">
+        <div className="w-full lg:w-64 shrink-0 space-y-2">
           <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">Projects</div>
           {projects.length === 0 && <div className="text-sm text-[var(--gray-11)]">No projects yet.</div>}
           {projects.map((p) => (
@@ -210,6 +214,7 @@ export default function SetupPanel() {
 
               <Section icon={<ShieldCheckIcon className="size-4" />} title="Behaviour + concurrency">
                 <Field label="Max concurrent engineers"><input type="number" min="1" value={s.max_concurrent_engineers ?? 2} onChange={set('max_concurrent_engineers')} className={inputCls} /></Field>
+                <Field label="Max interactive sessions"><input type="number" min="1" value={s.max_interactive_engineers ?? 1} onChange={set('max_interactive_engineers')} className={inputCls} /></Field>
                 <Field label="Autonomy">
                   <select value={s.autonomy_mode ?? 'pr_only'} onChange={set('autonomy_mode')} className={inputCls}>
                     <option value="pr_only">PR only (never auto-merge)</option>
@@ -240,15 +245,17 @@ export default function SetupPanel() {
                 <Button onClick={save}>Save project</Button>
               </div>
 
+              <MemoryReviewSection projectId={pid} onMessage={setMsg} />
+
               <section className="rounded-lg border p-4">
                 <div className="font-medium mb-1">Code repos</div>
                 <p className="text-xs text-neutral-500 mb-3">The repos the agent works in (writable = it may change + open a PR; read-only = context only). Runs are triggered from the <em>issues repo</em> above, not here.</p>
                 {repos.length === 0 && <div className="text-sm text-neutral-400 mb-3">No repos yet.</div>}
                 <div className="space-y-1.5">
                   {repos.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between border-b py-1.5 last:border-0 gap-2">
+                    <div key={r.id} className="flex flex-wrap items-center justify-between border-b py-1.5 last:border-0 gap-2">
                       <span className="font-mono text-sm truncate">{r.repo_owner}/{r.repo_name}</span>
-                      <span className="flex items-center gap-2 text-xs shrink-0">
+                      <span className="flex flex-wrap items-center justify-end gap-2 text-xs shrink-0">
                         <select value={r.write_mode ?? 'writable'} onChange={(e) => patchRepo(r, { write_mode: e.target.value })} className="rounded border px-1 py-0.5 text-xs">
                           <option value="writable">writable</option>
                           <option value="read_only">read-only</option>
@@ -260,10 +267,10 @@ export default function SetupPanel() {
                     </div>
                   ))}
                 </div>
-                <div className="flex items-center gap-2 mt-3">
-                  <input placeholder="owner" value={newRepo.owner} onChange={(e) => setNewRepo({ ...newRepo, owner: e.target.value })} className="w-40 rounded-md border px-3 py-2 text-sm" />
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <input placeholder="owner" value={newRepo.owner} onChange={(e) => setNewRepo({ ...newRepo, owner: e.target.value })} className="flex-1 min-w-[7rem] sm:flex-none sm:w-40 rounded-md border px-3 py-2 text-sm" />
                   <span className="text-neutral-400">/</span>
-                  <input placeholder="repo" value={newRepo.name} onChange={(e) => setNewRepo({ ...newRepo, name: e.target.value })} className="w-52 rounded-md border px-3 py-2 text-sm" />
+                  <input placeholder="repo" value={newRepo.name} onChange={(e) => setNewRepo({ ...newRepo, name: e.target.value })} className="flex-1 min-w-[7rem] sm:flex-none sm:w-52 rounded-md border px-3 py-2 text-sm" />
                   <Button variant="soft" size="sm" onClick={addRepo}><PlusIcon className="size-4 mr-1" />Add repo</Button>
                 </div>
               </section>

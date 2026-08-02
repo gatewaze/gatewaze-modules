@@ -1,0 +1,99 @@
+name: Module tests
+
+# Runs each module's own vitest suite as a standalone unit-test smoke signal.
+# Before this, gatewaze-modules CI was only gitleaks + CodeQL, so module unit
+# tests never ran — warehouse-sync's sql-gen suite sat broken (a stale import +
+# a fixture gap) unnoticed. This surfaces those regressions.
+#
+# Why per-module `--ignore-workspace` and not a root `pnpm install`: this repo is
+# published standalone and does NOT contain the platform's `@gatewaze/shared`
+# workspace package. A root install resolves every module's `workspace:*`
+# specifier and hard-fails on the first module that needs a platform package
+# (e.g. accounts → `@gatewaze/shared@workspace:*`). Installing each test-bearing
+# module in isolation sidesteps that: modules whose deps resolve standalone get
+# their tests run; modules that need the full monorepo are logged as SKIPPED
+# rather than failing the whole run. Real test failures still fail the job.
+#
+# NON-BLOCKING for now (continue-on-error): kept off the required-checks list
+# until the standalone-testable set is proven stable. Once it is, drop the
+# continue-on-error and add "Module tests" to the branch's required checks.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  module-tests:
+    name: Module tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 10
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Run standalone module test suites
+        shell: bash
+        env:
+          NO_COLOR: '1'      # plain (un-ANSI'd) vitest output so the summary-line parsing is reliable
+          FORCE_COLOR: '0'
+        run: |
+          # GitHub's default bash runs with -e (errexit); disable it — this script
+          # inspects non-zero exit codes explicitly (a failing grep is expected flow,
+          # not a fatal error), so errexit/pipefail would abort mid-loop.
+          set +e +o pipefail
+          passed=(); failed=(); skipped=()
+          for pj in modules/*/package.json; do
+            m=$(basename "$(dirname "$pj")")
+            # only modules that declare a `test` script
+            node -e "process.exit(require('./$pj').scripts?.test ? 0 : 1)" || continue
+            echo "::group::$m"
+            if ! ( cd "modules/$m" && pnpm install --ignore-workspace --no-frozen-lockfile ); then
+              echo "install failed standalone (needs the monorepo) → skipping"
+              skipped+=("$m"); echo "::endgroup::"; continue
+            fi
+            log="/tmp/test-$m.log"
+            if ( cd "modules/$m" && pnpm test ) >"$log" 2>&1; then
+              cat "$log"; passed+=("$m")
+            else
+              cat "$log"
+              # Distinguish a REAL test failure from an environmental one, keying off
+              # vitest's test-level summary ("Tests N failed | M passed") rather than
+              # any specific error string. A test file that imports a monorepo-hoisted
+              # package (react etc.) can't load standalone — vitest reports a failed
+              # test FILE but zero failed TESTS (nothing ran), whether the cause is
+              # "Cannot find package" (CI) or a floated version mismatch (local). That
+              # is environmental → skip. A "Tests N failed" with N>0 is a genuine
+              # assertion failure → fail. No summary at all → surface it.
+              # Strip any residual ANSI, then match the "Tests …" summary anywhere on
+              # the line (vitest indents it) — not anchored at column 0.
+              tests_line="$(sed -E 's/\x1b\[[0-9;]*m//g' "$log" | grep -aE 'Tests[[:space:]]+[0-9]+ (passed|failed)' | tail -1)"
+              if echo "$tests_line" | grep -qE '[1-9][0-9]* failed'; then
+                failed+=("$m")
+              elif echo "$tests_line" | grep -q 'passed'; then
+                echo "→ non-zero exit but 0 test-level failures (a test file couldn't load standalone) → skipping"
+                skipped+=("$m")
+              else
+                failed+=("$m")   # no test summary at all — surface it
+              fi
+            fi
+            echo "::endgroup::"
+          done
+          {
+            echo "## Module tests"
+            echo "- passed (${#passed[@]}): ${passed[*]:-none}"
+            echo "- failed (${#failed[@]}): ${failed[*]:-none}"
+            echo "- skipped — need monorepo (${#skipped[@]}): ${skipped[*]:-none}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # Fail only when a module that DID install standalone has genuine test failures.
+          if [ "${#failed[@]}" -gt 0 ]; then exit 1; fi

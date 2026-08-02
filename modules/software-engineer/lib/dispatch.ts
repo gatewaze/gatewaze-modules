@@ -4,8 +4,13 @@
  * max_concurrent_engineers at once; extra issues stay 'queued'. dispatchProject() promotes queued
  * runs to 'running' (assigning a friendly ephemeral engineer name) whenever a slot is free — called
  * on new-issue intake, on run terminal transitions, and by the pr-monitor cron as a safety net.
+ *
+ * This governs ONLY issue-driven runs (kind='issue'). Interactive pair-programming sessions
+ * (kind='interactive') are started directly as 'running' and bounded by their own per-project cap
+ * (max_interactive_engineers), so every query here filters kind='issue' to keep the two pools apart.
  */
 import { getProject } from './credentials.js';
+import { enqueuePhase } from './enqueue.js';
 
 // A concurrency slot is occupied ONLY while an engineer is actively working — executing a phase
 // ('running') or addressing PR feedback ('changes_requested', i.e. the revise loop). Runs that are
@@ -45,13 +50,13 @@ export async function dispatchProject(sb: unknown, ctx: unknown, projectId: stri
   for (let i = 0; i < max; i++) {
     const { data: live } = await sb
       .from('se_runs').select('status, engineer_name')
-      .eq('project_id', projectId).is('archived_at', null).in('status', LIVE);
+      .eq('project_id', projectId).eq('kind', 'issue').is('archived_at', null).in('status', LIVE);
     const working = (live ?? []).filter((r) => WORKING.includes(r.status)).length;
     if (working >= max) break;   // cap counts only actively-working engineers, not idle/blocked runs
 
     const { data: next } = await sb
       .from('se_runs').select('id')
-      .eq('project_id', projectId).eq('status', 'queued').is('archived_at', null)
+      .eq('project_id', projectId).eq('kind', 'issue').eq('status', 'queued').is('archived_at', null)
       .order('created_at', { ascending: true }).limit(1).maybeSingle();
     if (!next) break;
 
@@ -65,7 +70,7 @@ export async function dispatchProject(sb: unknown, ctx: unknown, projectId: stri
       .select('id');
     if (!won || won.length === 0) continue;        // another dispatcher took it; re-evaluate
 
-    await ctx?.enqueueJob?.('jobs', 'software-engineer:intake', { runId: next.id });
+    await enqueuePhase(ctx, next.id, 'intake');
     started++;
   }
   return started;
@@ -75,7 +80,7 @@ export async function dispatchProject(sb: unknown, ctx: unknown, projectId: stri
 export async function dispatchAll(sb: unknown, ctx: unknown): Promise<void> {
   const { data } = await sb
     .from('se_runs').select('project_id')
-    .eq('status', 'queued').is('archived_at', null);
+    .eq('kind', 'issue').eq('status', 'queued').is('archived_at', null);
   const projectIds = [...new Set((data ?? []).map((r) => r.project_id).filter(Boolean))];
   for (const pid of projectIds) await dispatchProject(sb, ctx, pid);
 }

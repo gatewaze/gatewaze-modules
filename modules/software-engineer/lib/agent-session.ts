@@ -16,7 +16,7 @@ export interface RunnerEvent {
   kind: 'assistant' | 'tool_use' | 'tool_result' | 'thinking' | 'status';
   payload: Record<string, unknown>;
 }
-export interface AdminInput { kind: 'chat' | 'interrupt'; content?: string }
+export interface AdminInput { kind: 'chat' | 'interrupt' | 'close'; content?: string }
 export interface RunnerInput {
   cwd: string;
   prompt: string;
@@ -36,6 +36,24 @@ export interface RunnerResult {
   costUSD: number;
   interrupted: boolean;
   error?: string;
+}
+/**
+ * Interactive (pair-programming) session input. Same seams as RunnerInput, but instead of a one-shot
+ * task `prompt` it carries a `kickoff` (the opening user turn) and stays open across turns until the
+ * admin closes it — so `inputSource` is REQUIRED (it is the REPL). The session ends when the input
+ * stream yields a `close` (or completes / errors).
+ */
+export interface InteractiveInput {
+  cwd: string;
+  kickoff: string;
+  model: string;
+  credential: PhaseCredential;
+  allowedTools?: string[];
+  systemAppend?: string;
+  inputSource: AsyncIterable<AdminInput>;    // admin → agent bridge; drives every turn after kickoff
+  mcpServers?: Record<string, unknown>;
+  onEvent?: (ev: RunnerEvent) => void | Promise<void>;
+  onAgentMessage?: (text: string) => void | Promise<void>;
 }
 export interface Runner {
   runPhase(input: RunnerInput): Promise<RunnerResult>;
@@ -161,6 +179,11 @@ export class InProcessRunner implements Runner {
               await input.onEvent?.({ kind: 'assistant', payload: { text: b.text, agent: msg.parent_tool_use_id ?? null } });
             } else if (b?.type === 'tool_use') {
               await input.onEvent?.({ kind: 'tool_use', payload: { name: b.name, input: b.input, agent: msg.parent_tool_use_id ?? null } });
+            } else if (b?.type === 'thinking' && b.thinking) {
+              // Forward extended-thinking so a long reasoning gap between tool calls still shows motion
+              // in the Runs tab. Cap the length (bounds the se_events payload) and never forward
+              // redacted_thinking (opaque encrypted bytes — no display value, just noise).
+              await input.onEvent?.({ kind: 'thinking', payload: { text: String(b.thinking).slice(0, 2000), agent: msg.parent_tool_use_id ?? null } });
             }
           }
         } else if (msg?.type === 'user') {
@@ -182,6 +205,129 @@ export class InProcessRunner implements Runner {
     }
     void controller;
     // Prefer the subprocess's real stderr over the SDK's opaque "Operation aborted".
+    if (out.error && stderrBuf.trim()) {
+      out.error = `${out.error} :: ${stderrBuf.trim().slice(-1500)}`;
+    }
+    out.text = out.text.trim();
+    return out;
+  }
+
+  /**
+   * Long-lived interactive session (pair-programming). Unlike runPhase — which runs a plain STRING
+   * prompt and ends after one task — this drives the SDK in STREAMING-INPUT mode: the `prompt` is an
+   * async generator whose first yield is the kickoff (yielded SYNCHRONOUSLY so turn 1 starts — a
+   * generator that awaits input before its first yield deadlocks: the session waits on the generator
+   * that is itself waiting on the admin), and each subsequent admin `chat` becomes another turn. The
+   * generator RETURNS on `close` (or when the input stream completes / the idle+wall-clock wrapper
+   * ends it), which ends the SDK session cleanly. `interrupt` maps to q.interrupt() without ending it.
+   *
+   * Same secret-scoped env, tool-approval, and Bash guard as runPhase.
+   */
+  async runInteractive(input: InteractiveInput): Promise<RunnerResult> {
+    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, costUSD: 0, interrupted: false };
+    const env = scopedEnv(input.credential);
+    let stderrBuf = '';
+
+    if (!input.kickoff || !input.kickoff.trim()) {
+      out.error = 'empty kickoff — refusing to start interactive session';
+      return out;
+    }
+
+    let q: any;
+    // The streaming-input generator IS the prompt. `q` is referenced only inside the loop body (for
+    // interrupt), which runs after query() has assigned it, so the forward reference is safe.
+    async function* promptStream() {
+      yield { type: 'user', message: { role: 'user', content: input.kickoff } };
+      try {
+        for await (const m of input.inputSource) {
+          if (m?.kind === 'close') return;                       // graceful end → session completes
+          if (m?.kind === 'interrupt') {
+            out.interrupted = true;
+            try { await q?.interrupt?.(); } catch { /* best-effort */ }
+            continue;
+          }
+          if (m?.kind === 'chat' && m.content) {
+            yield { type: 'user', message: { role: 'user', content: String(m.content) } };
+          }
+        }
+      } catch { /* input stream error → let the generator return and end the session */ }
+    }
+
+    try {
+      q = query({
+        prompt: promptStream(),
+        options: {
+          cwd: input.cwd,
+          model: input.model,
+          env,
+          stderr: (data: string) => { stderrBuf += data; },
+          settingSources: [],
+          ...(input.mcpServers && Object.keys(input.mcpServers).length ? { mcpServers: input.mcpServers } : {}),
+          systemPrompt: { type: 'preset', preset: 'claude_code', append: input.systemAppend ?? '' },
+          canUseTool: async (_name: string, toolInput: Record<string, unknown>) => ({
+            behavior: 'allow' as const,
+            updatedInput: toolInput,
+          }),
+          allowedTools: input.allowedTools ?? ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
+          hooks: {
+            PreToolUse: [{
+              matcher: 'Bash',
+              hooks: [async (i: any) => {
+                const cmd = i?.tool_input?.command ?? '';
+                if (/--no-verify|--force|rm\s+-rf\s+\//.test(cmd)) {
+                  return {
+                    hookSpecificOutput: {
+                      hookEventName: 'PreToolUse',
+                      permissionDecision: 'deny',
+                      permissionDecisionReason: 'forbidden git/destructive flag (software-engineer guard)',
+                    },
+                  };
+                }
+                return {};
+              }],
+            }],
+          },
+        },
+      });
+    } catch (e: any) {
+      out.error = e?.message || String(e);
+      return out;
+    }
+
+    let turnText = '';
+    try {
+      for await (const msg of q) {
+        if (msg?.type === 'assistant') {
+          for (const b of msg.message?.content ?? []) {
+            if (b?.type === 'text') {
+              out.text += b.text;
+              turnText += b.text;
+              await input.onEvent?.({ kind: 'assistant', payload: { text: b.text, agent: msg.parent_tool_use_id ?? null } });
+            } else if (b?.type === 'tool_use') {
+              await input.onEvent?.({ kind: 'tool_use', payload: { name: b.name, input: b.input, agent: msg.parent_tool_use_id ?? null } });
+            } else if (b?.type === 'thinking' && b.thinking) {
+              await input.onEvent?.({ kind: 'thinking', payload: { text: String(b.thinking).slice(0, 2000), agent: msg.parent_tool_use_id ?? null } });
+            }
+          }
+        } else if (msg?.type === 'user') {
+          for (const b of msg.message?.content ?? []) {
+            if (b?.type === 'tool_result') {
+              const c = typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? '');
+              await input.onEvent?.({ kind: 'tool_result', payload: { summary: String(c).slice(0, 600) } });
+            }
+          }
+        } else if (msg?.type === 'result') {
+          out.costUSD = msg.total_cost_usd ?? out.costUSD;
+          out.tokensInput += msg.usage?.input_tokens ?? 0;
+          out.tokensOutput += msg.usage?.output_tokens ?? 0;
+          // Each result closes one turn — flush that turn's text as an agent chat message so the
+          // transcript renders it exactly like an issue run's per-turn replies.
+          if (turnText.trim()) { await input.onAgentMessage?.(turnText.trim()); turnText = ''; }
+        }
+      }
+    } catch (e: any) {
+      out.error = e?.message || String(e);
+    }
     if (out.error && stderrBuf.trim()) {
       out.error = `${out.error} :: ${stderrBuf.trim().slice(-1500)}`;
     }
