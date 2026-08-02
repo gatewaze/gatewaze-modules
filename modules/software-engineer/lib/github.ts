@@ -103,5 +103,12 @@ export function githubClient(token: string) {
         body: JSON.stringify({ merge_method: method }),
       });
     },
+    /** Update a PR branch by merging its base into it (the "Update branch" button). Clears a PR held
+     * at mergeable_state 'behind' under strict branch protection: required checks re-run against the
+     * latest base and a later merge-tick lands it once clean. Throws 422 when the branch is already
+     * up to date — callers treat this best-effort. */
+    updateBranch(owner: string, name: string, number: number) {
+      return j(`/repos/${owner}/${name}/pulls/${number}/update-branch`, { method: 'PUT' });
+    },
   };
 }
