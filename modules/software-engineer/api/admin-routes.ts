@@ -314,7 +314,7 @@ export function mountAdminRoutes(router, deps) {
     // Finalize exactly as the auto path: pr-monitor closes the issue / archives the run / frees the next
     // slot once all PRs are merged. Only worth a nudge when something actually merged.
     if (result.merged >= 1) {
-      try { await enqueueJob?.('jobs', 'software-engineer:pr-monitor', { runId: run.id }); }
+      try { await enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: run.id }); }
       catch (e) { logger?.warn?.('se: enqueue pr-monitor failed', { error: String(e) }); }
     }
     res.json({ merged: result.merged, held: result.held, results: result.results });
