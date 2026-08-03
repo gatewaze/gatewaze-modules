@@ -13,7 +13,7 @@ import { supabase } from '@/lib/supabase';
 import { isGatewayError, StartingBanner } from './starting';
 import {
   ArrowPathIcon, ArrowTopRightOnSquareIcon, UserIcon, UsersIcon, CpuChipIcon, BoltIcon,
-  MinusCircleIcon, BellAlertIcon,
+  MinusCircleIcon, BellAlertIcon, LinkIcon,
 } from '@heroicons/react/24/outline';
 
 const API = '/api/modules/software-engineer/admin';
@@ -76,11 +76,31 @@ function timeAgo(iso: string): string {
   return `${Math.round(s / 86400)}d`;
 }
 
-function PrRow({ pr }: { pr: any }) {
+function PrRow({ pr, onChanged }: { pr: any; onChanged?: () => void }) {
   const [notify, setNotify] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
   const [notifyMsg, setNotifyMsg] = useState('');
+  const [connect, setConnect] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+  const [connectMsg, setConnectMsg] = useState('');
   const reviewers: string[] = Array.isArray(pr.reviewers) ? pr.reviewers : [];
   const canNotify = pr.actor === 'reviewers' && !!pr.project_id;
+  // An external PR (no linked run) that's still open can be CONNECTED to a watching run: the agent
+  // then tracks it and auto-revises on trusted review feedback (a human still merges).
+  const canConnect = !pr.run && !!pr.project_id && pr.status !== 'merged' && pr.status !== 'closed' && connect !== 'done';
+
+  const doConnect = async () => {
+    if (connect === 'sending') return;
+    const [owner, name] = String(pr.repo).split('/');
+    setConnect('sending'); setConnectMsg('');
+    try {
+      const q = new URLSearchParams({ project: String(pr.project_id), owner, name, number: String(pr.number) });
+      await api(`/prs/connect?${q.toString()}`, { method: 'POST' });
+      setConnect('done'); setConnectMsg('Connected — a runner is now watching this PR for reviews.');
+      onChanged?.();
+    } catch (e: any) {
+      setConnect('error');
+      setConnectMsg(e?.status === 409 ? 'This PR is closed or already connected.' : 'Could not connect this PR.');
+    }
+  };
 
   const doNotify = async () => {
     if (notify === 'sending') return;
@@ -137,17 +157,31 @@ function PrRow({ pr }: { pr: any }) {
       </div>
       <div className="flex items-start justify-between gap-2">
         <div className="text-xs text-[var(--gray-11)]">{pr.detail}</div>
-        {canNotify && (
-          <button
-            type="button" onClick={doNotify} disabled={notify === 'sending' || notify === 'done'}
-            className="shrink-0 inline-flex items-center gap-1 rounded-md border border-[var(--gray-6)] px-2 py-1 text-xs text-[var(--gray-11)] hover:bg-[var(--gray-3)] disabled:opacity-50"
-            title="Post a comment on the PR @-mentioning its requested reviewers"
-          >
-            <BellAlertIcon className="size-3.5" />
-            {notify === 'sending' ? 'Notifying…' : notify === 'done' ? 'Notified ✓' : 'Notify reviewers'}
-          </button>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {canConnect && (
+            <button
+              type="button" onClick={doConnect} disabled={connect === 'sending'}
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--gray-6)] px-2 py-1 text-xs text-[var(--gray-11)] hover:bg-[var(--gray-3)] disabled:opacity-50"
+              title="Have a runner watch this externally-opened PR and auto-address review feedback (a human still merges)"
+            >
+              <LinkIcon className="size-3.5" />
+              {connect === 'sending' ? 'Connecting…' : 'Connect'}
+            </button>
+          )}
+          {connect === 'done' && <span className="inline-flex items-center gap-1 text-xs text-[var(--gray-10)]"><CpuChipIcon className="size-3.5" />Watching</span>}
+          {canNotify && (
+            <button
+              type="button" onClick={doNotify} disabled={notify === 'sending' || notify === 'done'}
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--gray-6)] px-2 py-1 text-xs text-[var(--gray-11)] hover:bg-[var(--gray-3)] disabled:opacity-50"
+              title="Post a comment on the PR @-mentioning its requested reviewers"
+            >
+              <BellAlertIcon className="size-3.5" />
+              {notify === 'sending' ? 'Notifying…' : notify === 'done' ? 'Notified ✓' : 'Notify reviewers'}
+            </button>
+          )}
+        </div>
       </div>
+      {connectMsg && <div className={`text-[11px] ${connect === 'error' ? 'text-red-600' : 'text-[var(--gray-10)]'}`}>{connectMsg}</div>}
       {notifyMsg && <div className={`text-[11px] ${notify === 'error' ? 'text-red-600' : 'text-[var(--gray-10)]'}`}>{notifyMsg}</div>}
     </div>
   );
@@ -232,7 +266,7 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
                   {g.icon}{g.title}
                   <span className="tabular-nums text-[var(--gray-9)]">({rows.length})</span>
                 </div>
-                {rows.map((pr) => <PrRow key={`${pr.repo}#${pr.number}`} pr={pr} />)}
+                {rows.map((pr) => <PrRow key={`${pr.repo}#${pr.number}`} pr={pr} onChanged={() => load(true)} />)}
               </div>
             );
           })}

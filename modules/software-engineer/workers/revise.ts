@@ -70,7 +70,7 @@ export default async function revise(job, ctx) {
     ws = await makeMultiWorkspace(codeRepos, token, run.branch_name, commitId, true);
 
     const prompt = [
-      `A reviewer left feedback on your open pull request(s) for issue #${run.issue_number}. Address`,
+      `A reviewer left feedback on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''}. Address`,
       `EVERY point below by editing the code in the relevant WRITABLE repo(s) in your workspace. Follow`,
       `each repo's CLAUDE.md/.claude rules. Do NOT push, merge, or open PRs — the system handles that.`,
       ``, `--- REVIEW FEEDBACK (per repo) ---`, feedback, `--- END FEEDBACK ---`,
