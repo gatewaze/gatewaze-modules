@@ -50,7 +50,7 @@ export const TITLE: CSSProperties = {
 };
 
 /** Body / rich-text container. */
-export const BODY: CSSProperties = { fontSize: '16px', color: '#555', lineHeight: 1.5 };
+export const BODY: CSSProperties = { fontSize: '16px', color: '#000', lineHeight: 1.5 };
 
 /** Brand-blue underlined link. */
 export const LINK: CSSProperties = { textDecoration: 'underline', color: '#4086c6' };
