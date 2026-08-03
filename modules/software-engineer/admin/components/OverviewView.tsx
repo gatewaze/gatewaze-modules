@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * Software Engineer — Overview tab (SPEC.md §14). Read-only, at-a-glance health of the agent fleet:
- * KPI tiles (active work, merged throughput, open PRs, failures, token spend, time-to-merge) plus
+ * KPI tiles (active work, merged throughput, open PRs, failures, token spend) plus
  * status / pipeline-phase / per-project rollups. One aggregated payload from GET /overview (the
  * se_overview() SQL function), refreshed live when se_runs changes. Optional project filter.
  *
@@ -15,7 +15,7 @@ import { Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   CommandLineIcon, CheckCircleIcon, ArrowTopRightOnSquareIcon,
-  ExclamationTriangleIcon, CpuChipIcon, ClockIcon, Cog6ToothIcon,
+  ExclamationTriangleIcon, CpuChipIcon, Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import { CARD_FILTERS, statusesToParam } from './overview-filters';
 import PrBoard from './PrBoard';
@@ -55,21 +55,10 @@ function fmtTokens(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
   return nf.format(n);
 }
-function fmtDuration(seconds: number | null | undefined): string {
-  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—';
-  const s = Math.round(seconds);
-  if (s < 60) return `${s}s`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60), rm = m % 60;
-  if (h < 24) return rm ? `${h}h ${rm}m` : `${h}h`;
-  const d = Math.floor(h / 24), rh = h % 24;
-  return rh ? `${d}d ${rh}h` : `${d}d`;
-}
 
 // A KPI tile. When `onClick` is supplied the tile renders as an accessible <button> that opens the
-// Runs board filtered to this metric's runs; otherwise it's a static <div> (Tokens, Avg-to-merge —
-// no natural run subset). Colour is never the only signal: every tile carries its icon + text label.
+// Runs board filtered to this metric's runs; otherwise it's a static <div> (Tokens — no natural
+// run subset). Colour is never the only signal: every tile carries its icon + text label.
 function Tile({ icon, label, value, sub, tone, onClick }: {
   icon: React.ReactNode; label: string; value: React.ReactNode; sub?: string; tone?: 'default' | 'danger' | 'good';
   onClick?: () => void;
@@ -214,13 +203,12 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
       ) : (
         <>
           {/* KPI tiles */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             <Tile icon={<CommandLineIcon className="size-3.5" />} label="Active" value={nf.format(totals.active ?? 0)} sub="in flight" onClick={openRuns && (() => openRuns(CARD_FILTERS.active.statuses))} />
             <Tile icon={<CheckCircleIcon className="size-3.5" />} label="Merged" value={nf.format(totals.merged_30d ?? 0)} sub="last 30 days" tone={(totals.merged_30d ?? 0) > 0 ? 'good' : 'default'} onClick={openRuns && (() => openRuns(CARD_FILTERS.merged.statuses))} />
             <Tile icon={<ArrowTopRightOnSquareIcon className="size-3.5" />} label="Open PRs" value={nf.format(totals.open_prs ?? 0)} sub="awaiting review/merge" onClick={openRuns && (() => openRuns(CARD_FILTERS.open_prs.statuses))} />
             <Tile icon={<ExclamationTriangleIcon className="size-3.5" />} label="Failed / blocked" value={nf.format(totals.failed_blocked ?? 0)} tone={(totals.failed_blocked ?? 0) > 0 ? 'danger' : 'default'} sub="need attention" onClick={openRuns && (() => openRuns(CARD_FILTERS.failed_blocked.statuses))} />
             <Tile icon={<CpuChipIcon className="size-3.5" />} label="Tokens" value={fmtTokens((totals.tokens_input ?? 0) + (totals.tokens_output ?? 0))} sub={`${fmtTokens(totals.tokens_input ?? 0)} in · ${fmtTokens(totals.tokens_output ?? 0)} out`} />
-            <Tile icon={<ClockIcon className="size-3.5" />} label="Avg to merge" value={fmtDuration(totals.avg_time_to_merge_seconds)} sub="merged, 30 days" />
           </div>
 
           {/* PR board — the live "where is every PR + who acts next" view */}
