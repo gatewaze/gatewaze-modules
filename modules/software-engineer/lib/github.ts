@@ -110,6 +110,12 @@ export function githubClient(token: string) {
     getPullRequest(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/pulls/${number}`);
     },
+    /** Repo metadata for the AUTHENTICATED token — `permissions.push` (or higher) means the token
+     *  owner can merge PRs here. Used by the PR board to tell "you can merge" from "waiting on a
+     *  maintainer". */
+    getRepo(owner: string, name: string) {
+      return j(`/repos/${owner}/${name}`);
+    },
     /** Merge a PR. Fails (throws) if branch-protection required checks aren't satisfied — which is
      * exactly the desired backstop: a non-bypass token cannot force a red merge. */
     mergePullRequest(owner: string, name: string, number: number, method: 'merge' | 'squash' | 'rebase' = 'squash') {
@@ -125,17 +131,18 @@ export function githubClient(token: string) {
     updateBranch(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/pulls/${number}/update-branch`, { method: 'PUT' });
     },
-    /** Open PRs AUTHORED by the token owner (`author:@me`), restricted to the given `owner/name`
-     * repos — the project's CONNECTED code repos, never the token's whole visible universe (a
-     * personal PAT would otherwise drag every unrelated personal/org PR onto the Overview board).
+    /** Open PRs in the given `owner/name` repos — the project's CONNECTED code repos, never the
+     * token's whole visible universe. `authoredByViewer` scopes to the token owner's own PRs
+     * (`author:@me`); false returns EVERY open PR in those repos (the team's PRs too), which the
+     * Overview board wants since the connected-repo set is already the relevance boundary.
      * `repos` empty → no results. GitHub caps a search query at 256 chars, so the repo qualifiers
      * are chunked across multiple searches and merged, newest-updated first, capped at `perPage`. */
-    async searchAuthoredOpenPRs(perPage = 50, repos: string[] = []) {
+    async searchAuthoredOpenPRs(perPage = 50, repos: string[] = [], authoredByViewer = true) {
       // Defensive: qualifiers are interpolated into the search string — only well-formed
       // owner/name slugs may pass (values come from se_repos, but belt-and-braces).
       const safe = repos.filter((r) => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(r));
       if (safe.length === 0) return { items: [] };
-      const BASE_Q = 'is:pr is:open author:@me archived:false';
+      const BASE_Q = authoredByViewer ? 'is:pr is:open author:@me archived:false' : 'is:pr is:open archived:false';
       const MAX_Q = 256;
       const chunks: string[][] = [[]];
       let len = BASE_Q.length;
