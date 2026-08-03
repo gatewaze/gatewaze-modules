@@ -213,7 +213,11 @@ export function mountAdminRoutes(router, deps) {
       project = String(req.query.project);
       if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
     }
-    const cacheKey = project ?? 'all';
+    // Default scope: only PRs authored by the project's PAT user (author:@me) — far fewer GitHub
+    // calls, and "who acts next" is really about your own PRs. ?all=1 widens to every open PR in
+    // the connected repos. Cache the two scopes separately so they don't clobber each other.
+    const showAll = req.query.all === '1';
+    const cacheKey = `${project ?? 'all'}:${showAll ? 'all' : 'mine'}`;
     const cached = prBoardCache.get(cacheKey);
     if (cached && Date.now() - cached.at < PR_BOARD_TTL_MS && req.query.refresh !== '1') {
       return res.json({ ...(cached.payload as Record<string, unknown>), cached: true });
@@ -260,17 +264,16 @@ export function mountAdminRoutes(router, deps) {
     for (const p of projRows ?? []) {
       const proj = await getProject(supabase, p.id);
       if (!proj?.githubToken) continue;
-      // Board scope: ONLY the project's connected (enabled) code repos — that set IS the relevance
-      // boundary, so we show EVERY open PR in them (the whole team's, not just the PAT user's), which
-      // is what "everything the project has open" means. The connected-repo filter (not author) is
-      // what keeps a personal PAT's unrelated personal/org PRs off the board.
+      // Always bounded to the project's connected (enabled) code repos — that keeps a personal PAT's
+      // unrelated org/personal PRs off the board. Within them, default to the PAT user's OWN PRs
+      // (author:@me); ?all=1 widens to everyone's open PRs in those repos.
       const codeRepos = await getCodeRepos(supabase, p.id);
       const connected = new Set(codeRepos.map((r) => `${r.repoOwner}/${r.repoName}`.toLowerCase()));
       if (connected.size === 0) continue;
       const gh = githubClient(proj.githubToken);
       let items: Record<string, unknown>[] = [];
       try {
-        const search = await gh.searchAuthoredOpenPRs(50, [...connected], false);
+        const search = await gh.searchAuthoredOpenPRs(50, [...connected], !showAll);
         // Second gate on the results themselves (search-qualifier quirks, forks, renames):
         // anything not in the connected set is dropped.
         items = (search?.items ?? []).filter((item: Record<string, unknown>) => {
