@@ -16,6 +16,7 @@ import { redactToken } from '../lib/git.js';
 import { listRunPrs, upsertRunPr } from '../lib/run-state.js';
 import { dispatchProject, dispatchAll } from '../lib/dispatch.js';
 import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
+import { approveSpec } from '../lib/memory.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -67,6 +68,10 @@ async function reconcile(supabase, ctx, run) {
       try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, null); } catch { /* */ }
       try { await gh.closeIssue(run.repo_owner, run.repo_name, run.issue_number); } catch { /* */ }
       try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, 'All PRs merged — done. ✅'); } catch { /* */ }
+      // A human merging the PR IS the human judgment on this run's work — auto-promote its
+      // pending spec into recallable memory (specs/issue-<n>). Runs that never merge leave
+      // their spec pending for the manual review panel. Best-effort.
+      try { await approveSpec(supabase, run.project_id, project.name, run.issue_number); } catch { /* */ }
       await supabase.from('se_runs').update({ ...patch, status: 'merged', pr_state: 'merged', pr_url: firstUrl, archived_at: nowISO() }).eq('id', run.id);
       await dispatchProject(supabase, ctx, run.project_id);
       return { runId: run.id, action: 'merged' };
