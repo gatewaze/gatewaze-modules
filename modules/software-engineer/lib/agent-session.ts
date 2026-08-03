@@ -28,6 +28,7 @@ export interface RunnerInput {
   systemAppend?: string;
   inputSource?: AsyncIterable<AdminInput>;   // admin → agent bridge (Redis-backed), best-effort
   mcpServers?: Record<string, unknown>;      // §10: connected tools (Gatewaze MCP + per-project servers)
+  plugins?: Array<{ type: 'local'; path: string; skipMcpDiscovery?: boolean }>;  // §7.5a: per-project local skills
   onEvent?: (ev: RunnerEvent) => void | Promise<void>;
   onAgentMessage?: (text: string) => void | Promise<void>;
 }
@@ -56,6 +57,7 @@ export interface InteractiveInput {
   systemAppend?: string;
   inputSource: AsyncIterable<AdminInput>;    // admin → agent bridge; drives every turn after kickoff
   mcpServers?: Record<string, unknown>;
+  plugins?: Array<{ type: 'local'; path: string; skipMcpDiscovery?: boolean }>;  // §7.5a: per-project local skills
   onEvent?: (ev: RunnerEvent) => void | Promise<void>;
   onAgentMessage?: (text: string) => void | Promise<void>;
 }
@@ -114,11 +116,14 @@ export class InProcessRunner implements Runner {
           // [] — do NOT load the repo's .claude/settings.json: it references a plugin marketplace
           // (@gatewaze-skills) that can't load in the runner container and aborts the session.
           // Instead the repo's CLAUDE.md + .claude/rules are injected into systemAppend by the
-          // phase-runner (the documented §5.1 fallback).
+          // phase-runner (the documented §5.1 fallback), and any per-project skills come in as LOCAL
+          // plugins (below) — a path, not a marketplace, so no network fetch at session start.
           settingSources: [],
           // §10: connected tools. Only pass when non-empty — an empty object is a no-op but we keep
           // the option absent so the SDK path is identical to before when no servers are configured.
           ...(input.mcpServers && Object.keys(input.mcpServers).length ? { mcpServers: input.mcpServers } : {}),
+          // §7.5a: per-project skills, resolved to local plugin dirs by phase-runner. Absent when none.
+          ...(input.plugins && input.plugins.length ? { plugins: input.plugins } : {}),
           systemPrompt: { type: 'preset', preset: 'claude_code', append: input.systemAppend ?? '' },
           // NOT 'bypassPermissions' — that maps to --dangerously-skip-permissions, which the claude
           // binary refuses under root/sudo (the runner container runs as root). Instead we approve
@@ -273,6 +278,8 @@ export class InProcessRunner implements Runner {
           stderr: (data: string) => { stderrBuf += data; },
           settingSources: [],
           ...(input.mcpServers && Object.keys(input.mcpServers).length ? { mcpServers: input.mcpServers } : {}),
+          // §7.5a: per-project skills as local plugins (no marketplace fetch). Absent when none.
+          ...(input.plugins && input.plugins.length ? { plugins: input.plugins } : {}),
           systemPrompt: { type: 'preset', preset: 'claude_code', append: input.systemAppend ?? '' },
           canUseTool: async (_name: string, toolInput: Record<string, unknown>) => ({
             behavior: 'allow' as const,
