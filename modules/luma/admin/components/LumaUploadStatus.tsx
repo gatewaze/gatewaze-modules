@@ -1,9 +1,28 @@
 import { useState, useEffect } from 'react';
 import { ArrowPathIcon, CheckCircleIcon, XCircleIcon, ChevronDownIcon, ChevronUpIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { LumaUploadService, LumaCsvUpload } from '../utils/lumaUploadService';
-import { formatDistanceToNow } from 'date-fns';
 import { cancelImport } from '../utils/cancelStuckImports';
 import { toast } from 'sonner';
+
+// date-fns is not part of the admin app's dependency set (module admin
+// components can only rely on deps the admin bundle ships), so a
+// date-fns import here gets stubbed and fails the production build.
+function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '';
+  const sec = Math.floor((Date.now() - then) / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} minute${min === 1 ? '' : 's'} ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
+  const mo = Math.floor(day / 30);
+  if (mo < 12) return `${mo} month${mo === 1 ? '' : 's'} ago`;
+  const yr = Math.floor(day / 365);
+  return `${yr} year${yr === 1 ? '' : 's'} ago`;
+}
 
 interface LumaUploadStatusProps {
   brandId: string;
@@ -185,7 +204,7 @@ const UploadRow = ({ upload }: { upload: LumaCsvUpload }) => {
           <p className="text-xs text-gray-500 dark:text-gray-400">
             {upload.csv_type === 'event_guests' ? 'Event Guests' : upload.csv_type === 'calendar_members_import' ? 'Calendar Members Import' : 'Luma Calendar Members'}
             {' · '}
-            {formatDistanceToNow(new Date(upload.uploaded_at), { addSuffix: true })}
+            {timeAgo(upload.uploaded_at)}
           </p>
         </div>
       </div>
