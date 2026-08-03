@@ -43,7 +43,7 @@ function mount(supabase: unknown) {
 }
 
 const SAMPLE = {
-  totals: { runs: 3, active: 1, merged_30d: 2, open_prs: 1, failed_blocked: 0, tokens_input: 100, tokens_output: 50, avg_time_to_merge_seconds: 3600 },
+  totals: { runs: 3, active: 1, merged_30d: 2, open_prs: 1, failed_blocked: 0, tokens_input: 100, tokens_output: 50 },
   by_status: [{ status: 'merged', count: 2 }, { status: 'running', count: 1 }],
   by_phase: [{ phase: 'implement', count: 1 }],
   by_project: [],

@@ -53,7 +53,7 @@ export default async function reflect(job, ctx) {
     const result = await runner.runPhase({
       cwd: '/tmp', prompt, model: project.model,
       credential: { kind: project.modelCredKind, value: project.modelCred },
-      allowedTools: [],
+      noTools: true,
     });
     if (result?.text?.trim()) {
       // Write the PROPOSAL to pending — it is not injected into any future run

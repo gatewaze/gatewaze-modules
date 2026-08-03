@@ -21,6 +21,7 @@ import {
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
+import TriageCopilot from './TriageCopilot';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 import { filterLabelForParam } from './overview-filters';
@@ -572,6 +573,7 @@ function IssuesView() {
   // POST-response issue often isn't in the next `/issues` fetch yet — we render it immediately and
   // reconcile (drop it once the real fetch surfaces it, keyed by project+number).
   const [optimistic, setOptimistic] = useState<any[]>([]);
+  const [showTriage, setShowTriage] = useState(false);
 
   const load = useCallback(async () => {
     try { setIssues((await api(`/issues${filter ? `?project=${filter}` : ''}`)).issues ?? []); setErr(null); }
@@ -686,7 +688,23 @@ function IssuesView() {
     <div className="max-w-4xl space-y-4">
       {err && <div className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-800">{err}</div>}
       <section className="rounded-lg border p-4 space-y-2">
-        <div className="font-medium">Report an issue</div>
+        <div className="flex items-center gap-2">
+          <span className="font-medium">Report an issue</span>
+          <button
+            onClick={() => setShowTriage((v) => !v)}
+            className={`ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${showTriage ? 'border-blue-400 text-blue-600' : 'border-[var(--gray-6)] text-[var(--gray-11)] hover:text-[var(--gray-12)]'}`}
+          >
+            ✨ AI triage
+          </button>
+        </div>
+        {/* §10.5 triage copilot: converses, then prefills the form below — the human still reviews
+            and presses Create (the copilot itself can't create issues). */}
+        {showTriage && (
+          <TriageCopilot
+            projectId={form.project_id}
+            onDraft={(d) => setForm((f: any) => ({ ...f, title: d.title, body: d.body, assign: d.assign_to_agent }))}
+          />
+        )}
         <div className="flex flex-col sm:flex-row gap-2">
           <select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })} className="rounded-md border px-2 py-1.5 text-sm">
             {projects.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
