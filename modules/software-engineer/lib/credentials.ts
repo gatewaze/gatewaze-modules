@@ -45,6 +45,8 @@ export interface ProjectSettings {
   // §10: connected tools (MCP). Encrypted SDK-shaped config `{ servers: { name: {...} } }`; may
   // carry per-project bearer tokens, so it is sealed like any other credential. '' → no servers.
   mcpConfigCiphertext: string | null;
+  // Dedicated memory git-sync repo (owner/name); the module pushes approved memory here. Null = off.
+  memoryRepo: string | null;
   // Policy + concurrency.
   allowedLabellers: string[];
   intakeEnabled: boolean;
@@ -145,6 +147,7 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     primaryInstanceId: data.primary_instance_id ?? null,
     maxCodeReposPerRun: data.max_code_repos_per_run ?? 3,
     mcpConfigCiphertext: data.mcp_config_ciphertext ?? null,
+    memoryRepo: data.memory_repo ?? null,
     allowedLabellers: data.allowed_labellers ?? [],
     intakeEnabled: data.intake_enabled,
     autonomyMode: data.autonomy_mode,
