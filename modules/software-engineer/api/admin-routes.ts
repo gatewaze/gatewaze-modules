@@ -235,20 +235,37 @@ export function mountAdminRoutes(router, deps) {
     const prs: Record<string, unknown>[] = [];
     const seen = new Map<string, number>();   // dedupe when projects share a PAT user
     const projectErrors: Record<string, string> = {};
+    // Per-request cache: does the project token owner have write/merge access on a repo? One extra
+    // GitHub call per unique repo (not per PR). Distinguishes "you can merge" from "waiting on a
+    // maintainer" so an author's own green PR on a repo they can't push to isn't mislabelled "you".
+    const repoCanMerge = new Map<string, boolean>();
+    const canMergeRepo = async (gh: ReturnType<typeof githubClient>, owner: string, name: string): Promise<boolean> => {
+      const k = `${owner}/${name}`.toLowerCase();
+      if (repoCanMerge.has(k)) return repoCanMerge.get(k) as boolean;
+      let can = true;   // unknown → assume actionable (don't silently hide), corrected when the call succeeds
+      try {
+        const repo = await gh.getRepo(owner, name);
+        const perm = (repo?.permissions ?? {}) as Record<string, boolean>;
+        can = !!(perm.admin || perm.maintain || perm.push);
+      } catch { /* keep the safe default */ }
+      repoCanMerge.set(k, can);
+      return can;
+    };
 
     for (const p of projRows ?? []) {
       const proj = await getProject(supabase, p.id);
       if (!proj?.githubToken) continue;
-      // Board scope: ONLY the project's connected (enabled) code repos, and only PRs authored by
-      // the project's PAT user (author:@me on the project token). A personal PAT's unrelated
-      // personal/org PRs must never appear here.
+      // Board scope: ONLY the project's connected (enabled) code repos — that set IS the relevance
+      // boundary, so we show EVERY open PR in them (the whole team's, not just the PAT user's), which
+      // is what "everything the project has open" means. The connected-repo filter (not author) is
+      // what keeps a personal PAT's unrelated personal/org PRs off the board.
       const codeRepos = await getCodeRepos(supabase, p.id);
       const connected = new Set(codeRepos.map((r) => `${r.repoOwner}/${r.repoName}`.toLowerCase()));
       if (connected.size === 0) continue;
       const gh = githubClient(proj.githubToken);
       let items: Record<string, unknown>[] = [];
       try {
-        const search = await gh.searchAuthoredOpenPRs(50, [...connected]);
+        const search = await gh.searchAuthoredOpenPRs(50, [...connected], false);
         // Second gate on the results themselves (search-qualifier quirks, forks, renames):
         // anything not in the connected set is dropped.
         items = (search?.items ?? []).filter((item: Record<string, unknown>) => {
@@ -278,7 +295,7 @@ export function mountAdminRoutes(router, deps) {
           const base: Record<string, unknown> = {
             repo: `${owner}/${name}`, number, title: String(item.title ?? ''), url: item.html_url,
             author: item.user?.login ?? null, created_at: item.created_at, updated_at: item.updated_at,
-            projects: [p.name], run: null,
+            projects: [p.name], project_id: p.id, run: null,   // project_id: whose token found it (for notify)
           };
           try {
             const pull = await gh.getPullRequest(owner, name, number);
@@ -289,10 +306,22 @@ export function mountAdminRoutes(router, deps) {
             const checks = summarizeChecks(checksResp?.check_runs);
             const reviewsSum = summarizeReviews(reviews);
             const link = runByPr.get(key);
+            // The board is an author:@me search, so the token owner authored these — they can't review
+            // or approve their own PR. Surface who GitHub is actually waiting on, and whether the owner
+            // can merge, so "needs review / ready to merge" lands on reviewers, not falsely on "you".
+            const viewerLogin = String(proj.githubUserLogin ?? '').toLowerCase();
+            const viewerIsAuthor = !!viewerLogin && String(item.user?.login ?? '').toLowerCase() === viewerLogin;
+            const rawReviewers = (pull.requested_reviewers ?? []) as Array<Record<string, unknown>>;
+            const viewerIsRequestedReviewer = !!viewerLogin && rawReviewers.some((u) => String(u?.login ?? '').toLowerCase() === viewerLogin);
+            const requestedReviewers = [
+              ...rawReviewers.map((u) => String(u?.login ?? '')).filter(Boolean),
+              ...((pull.requested_teams ?? []) as Array<Record<string, unknown>>).map((t) => (t?.slug ? `${t.slug} (team)` : '')).filter(Boolean),
+            ];
+            const viewerCanMerge = await canMergeRepo(gh, owner, name);
             const derived = classifyPr({
               state: pull.state, merged: !!pull.merged, draft: !!pull.draft,
               mergeableState: String(pull.mergeable_state ?? 'unknown'),
-              checks, reviews: reviewsSum,
+              checks, reviews: reviewsSum, viewerIsAuthor, viewerCanMerge, viewerIsRequestedReviewer,
               run: link ? { status: String(link.status), blastRadius: String(link.blast_radius), autonomyMode: String(p.autonomy_mode ?? 'pr_only') } : null,
             });
             seen.set(key, prs.length);
@@ -300,7 +329,7 @@ export function mountAdminRoutes(router, deps) {
               ...base, ...derived,
               draft: !!pull.draft, mergeable_state: pull.mergeable_state, base_ref: pull.base?.ref,
               additions: pull.additions, deletions: pull.deletions, changed_files: pull.changed_files,
-              checks, reviews: reviewsSum,
+              checks, reviews: reviewsSum, reviewers: requestedReviewers, viewer_can_merge: viewerCanMerge,
               run: link ? { issue_number: link.issue_number, status: link.status, blast_radius: link.blast_radius, engineer_name: link.engineer_name, project_id: link.project_id } : null,
             });
           } catch {
@@ -313,7 +342,7 @@ export function mountAdminRoutes(router, deps) {
     }
 
     // "Who acts next" first: you → agent → auto → none; newest activity first within a group.
-    const actorRank: Record<string, number> = { you: 0, agent: 1, auto: 2, none: 3 };
+    const actorRank: Record<string, number> = { you: 0, reviewers: 1, agent: 2, auto: 3, none: 4 };
     prs.sort((a, b) =>
       (actorRank[String(a.actor)] ?? 9) - (actorRank[String(b.actor)] ?? 9)
       || String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
@@ -323,6 +352,48 @@ export function mountAdminRoutes(router, deps) {
     const payload = { prs, counts, project_errors: projectErrors, generated_at: new Date().toISOString() };
     prBoardCache.set(cacheKey, { at: Date.now(), payload });
     res.json(payload);
+  });
+
+  // Nudge the required reviewers on a PR the board is waiting on (the "Awaiting reviewers" group).
+  // Params ride the query string (not a JSON body) on purpose: the platform's global parser already
+  // consumed the request stream, so a body here can't be re-read. Posts one comment @-mentioning the
+  // PR's currently-requested reviewers, via the PROJECT token, and ONLY on a repo connected to the
+  // project — the token must never be used to comment on an arbitrary repository.
+  router.post('/prs/notify-reviewers', async (req, res) => {
+    if (!rateLimit(`se-admin:notify:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const projectId = String(req.query.project ?? '');
+    const owner = String(req.query.owner ?? '').trim();
+    const name = String(req.query.name ?? '').trim();
+    const number = Number(req.query.number);
+    if (!UUID.test(projectId)) return res.status(400).json({ error: 'project required' });
+    if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(name) || !Number.isInteger(number) || number <= 0) {
+      return res.status(400).json({ error: 'bad repo or PR number' });
+    }
+    const proj = await getProject(supabase, projectId);
+    if (!proj?.githubToken) return res.status(400).json({ error: 'project has no GitHub token' });
+    const codeRepos = await getCodeRepos(supabase, projectId);
+    const connected = new Set(codeRepos.map((r) => `${r.repoOwner}/${r.repoName}`.toLowerCase()));
+    if (!connected.has(`${owner}/${name}`.toLowerCase())) return res.status(403).json({ error: 'repo is not connected to this project' });
+
+    const gh = githubClient(proj.githubToken);
+    try {
+      const pull = await gh.getPullRequest(owner, name, number);
+      if (!pull || pull.state !== 'open') return res.status(409).json({ error: 'PR is not open' });
+      const users = ((pull.requested_reviewers ?? []) as Array<Record<string, unknown>>).map((u) => String(u?.login ?? '')).filter((s) => /^[A-Za-z0-9-]+$/.test(s));
+      const teams = ((pull.requested_teams ?? []) as Array<Record<string, unknown>>).map((t) => String(t?.slug ?? '')).filter((s) => /^[A-Za-z0-9-]+$/.test(s));
+      if (users.length === 0 && teams.length === 0) {
+        return res.status(409).json({ error: { code: 'no_reviewers', message: 'No reviewers are requested on this PR yet — request one on GitHub first.' } });
+      }
+      const mentions = [...users.map((u) => `@${u}`), ...teams.map((t) => `@${owner}/${t}`)].join(' ');
+      const body = `👋 This PR is ready for your review — checks are green and it's waiting on a required review. ${mentions}`;
+      await gh.postComment(owner, name, number, body);
+      res.json({ notified: true, reviewers: users, teams });
+    } catch (e) {
+      logger?.warn?.('se: notify-reviewers failed', { project: projectId, error: String((e as Error)?.message ?? e) });
+      res.status(500).json({ error: 'notify failed' });
+    }
   });
 
   // ── Runs ────────────────────────────────────────────────────────────────
