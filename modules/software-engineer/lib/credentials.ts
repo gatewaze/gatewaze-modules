@@ -47,6 +47,9 @@ export interface ProjectSettings {
   mcpConfigCiphertext: string | null;
   // Dedicated memory git-sync repo (owner/name); the module pushes approved memory here. Null = off.
   memoryRepo: string | null;
+  // §7.5a: per-project skills. Each entry names a git repo + plugin sub-path the runner clones and
+  // loads as a LOCAL Claude plugin (skills/hooks) into every agent session. Admin-only. [] = none.
+  skills: Array<{ repo: string; path: string; ref: string }>;
   // Policy + concurrency.
   allowedLabellers: string[];
   intakeEnabled: boolean;
@@ -148,6 +151,7 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     maxCodeReposPerRun: data.max_code_repos_per_run ?? 3,
     mcpConfigCiphertext: data.mcp_config_ciphertext ?? null,
     memoryRepo: data.memory_repo ?? null,
+    skills: Array.isArray(data.skills) ? data.skills : [],
     allowedLabellers: data.allowed_labellers ?? [],
     intakeEnabled: data.intake_enabled,
     autonomyMode: data.autonomy_mode,
