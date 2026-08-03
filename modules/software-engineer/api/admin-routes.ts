@@ -6,6 +6,7 @@
  * memory, policy, and a concurrency cap. Engineers are ephemeral (one per run, run.engineer_name).
  */
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
@@ -84,6 +85,48 @@ export function mountAdminRoutes(router, deps) {
   // which broke saving project credentials. Rely on the global parser.
 
   const authorOf = (req) => req.userId ?? req.auth?.userId ?? req.user?.id ?? req.actor?.userId ?? null;
+
+  // ── Staging self-update (§staging box) ─────────────────────────────────────
+  // Deployment-optional: enabled only where the operator bind-mounts a
+  // /staging-control dir into the api container (the staging compose overlay).
+  // POST drops request.json; a HOST-side agent (staging-updater.sh, outside
+  // this container — it needs git + docker on the host) watches the dir, runs
+  // a drain-aware update cycle (SE queue drains between agent phases; no run
+  // is killed), and streams status.json back for GET to serve. SUPER-ADMIN
+  // only — stricter than the router-level admin gate — because pressing it
+  // restarts every service in the deployment.
+  const STAGING_CONTROL = '/staging-control';
+  const stagingStatus = () => {
+    let status = null;
+    try { status = JSON.parse(readFileSync(`${STAGING_CONTROL}/status.json`, 'utf8')); } catch { /* none yet */ }
+    const pending = existsSync(`${STAGING_CONTROL}/request.json`) || existsSync(`${STAGING_CONTROL}/request.processing`);
+    return { available: true, pending, status };
+  };
+
+  router.get('/staging-update/status', async (_req, res) => {
+    if (!existsSync(STAGING_CONTROL)) return res.json({ available: false });
+    res.json(stagingStatus());
+  });
+
+  router.post('/staging-update', async (req, res) => {
+    if (!existsSync(STAGING_CONTROL)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no staging-update channel' } });
+    }
+    // Escalate beyond the router-level gate: super_admin only.
+    const userId = authorOf(req);
+    const { data: prof } = await supabase
+      .from('admin_profiles').select('role').eq('user_id', userId).eq('is_active', true).maybeSingle();
+    if (prof?.role !== 'super_admin') {
+      return res.status(403).json({ error: { code: 'forbidden', message: 'Super-admin access required' } });
+    }
+    const cur = stagingStatus();
+    if (cur.pending || ['pulling', 'restarting-services', 'draining-se', 'restarting-se-runner', 'rebuilding-admin'].includes(cur.status?.state)) {
+      return res.status(409).json({ error: { code: 'update_in_progress', message: 'An update is already in progress' }, ...cur });
+    }
+    writeFileSync(`${STAGING_CONTROL}/request.json`, JSON.stringify({ requested_at: new Date().toISOString(), requested_by: userId }));
+    logger?.info?.('se: staging update requested', { userId });
+    res.status(202).json(stagingStatus());
+  });
 
   // ── Project memory: review + human approval (memory-poisoning gate) ────────
   // reflect writes proposed memory to a pending slot; it is NOT injected into
