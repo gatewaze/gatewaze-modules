@@ -134,6 +134,11 @@ function PrRow({ pr, onChanged }: { pr: any; onChanged?: () => void }) {
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-[var(--gray-10)]">
         <span className="font-mono">{pr.repo}#{pr.number}</span>
+        {pr.author && (
+          <a href={`https://github.com/${pr.author}`} target="_blank" rel="noreferrer" className="hover:underline" title={`Opened by @${pr.author}`}>
+            by <span className="font-medium text-[var(--gray-11)]">@{pr.author}</span>
+          </a>
+        )}
         {pr.run
           ? <span>issue #{pr.run.issue_number}{pr.run.engineer_name ? ` · ${pr.run.engineer_name}` : ''} · blast {pr.run.blast_radius}</span>
           : <span className="text-[var(--gray-9)]">external</span>}
@@ -193,12 +198,16 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  // Default: only the PAT user's own PRs (fewer GitHub calls; "who acts next" is really your work).
+  // Toggle to show everyone's open PRs in the connected repos.
+  const [showAll, setShowAll] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async (force = false) => {
     try {
       const params = new URLSearchParams();
       if (projectFilter) params.set('project', projectFilter);
+      if (showAll) params.set('all', '1');
       if (force) params.set('refresh', '1');
       const qs = params.toString() ? `?${params.toString()}` : '';
       setData(await api(`/overview/prs${qs}`)); setErr(null); setStarting(false);
@@ -208,7 +217,7 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
       else { setErr(String(e.message ?? e)); setStarting(false); }
     }
     finally { setLoading(false); setRefreshing(false); }
-  }, [projectFilter]);
+  }, [projectFilter, showAll]);
 
   useEffect(() => {
     setLoading(true);
@@ -232,17 +241,32 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
     <section className="rounded-lg border border-[var(--gray-5)] p-4 space-y-3">
       <div className="flex items-center justify-between">
         <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">
-          Pull requests — everything the project users have open
+          Pull requests — {showAll ? 'everyone’s, in the connected repos' : 'yours'}
         </div>
-        <button
-          type="button"
-          onClick={() => { setRefreshing(true); load(true); }}
-          className="flex items-center gap-1 text-xs text-[var(--gray-10)] hover:text-[var(--gray-12)]"
-          aria-label="Refresh pull requests from GitHub"
-        >
-          <ArrowPathIcon className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-          {data?.generated_at ? `as of ${timeAgo(data.generated_at)} ago` : 'refresh'}
-        </button>
+        <div className="flex items-center gap-3">
+          {/* Scope toggle: your PRs (default) ↔ everyone's open PRs in the connected repos. */}
+          <div className="inline-flex rounded-md border border-[var(--gray-6)] overflow-hidden text-xs">
+            <button
+              type="button" onClick={() => setShowAll(false)}
+              className={`px-2 py-0.5 ${!showAll ? 'bg-[var(--gray-4)] text-[var(--gray-12)] font-medium' : 'text-[var(--gray-10)] hover:bg-[var(--gray-3)]'}`}
+              title="Only PRs you (the PAT user) opened"
+            >Mine</button>
+            <button
+              type="button" onClick={() => setShowAll(true)}
+              className={`px-2 py-0.5 border-l border-[var(--gray-6)] ${showAll ? 'bg-[var(--gray-4)] text-[var(--gray-12)] font-medium' : 'text-[var(--gray-10)] hover:bg-[var(--gray-3)]'}`}
+              title="Every open PR in the connected repos (more GitHub calls)"
+            >All</button>
+          </div>
+          <button
+            type="button"
+            onClick={() => { setRefreshing(true); load(true); }}
+            className="flex items-center gap-1 text-xs text-[var(--gray-10)] hover:text-[var(--gray-12)]"
+            aria-label="Refresh pull requests from GitHub"
+          >
+            <ArrowPathIcon className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            {data?.generated_at ? `as of ${timeAgo(data.generated_at)} ago` : 'refresh'}
+          </button>
+        </div>
       </div>
 
       {starting && <StartingBanner label="The platform is starting up — reconnecting…" />}
