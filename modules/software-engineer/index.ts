@@ -41,6 +41,7 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/006_mcp_config.sql',
     'migrations/007_overview_metrics.sql',
     'migrations/008_interactive_engineers.sql',
+    'migrations/010_overview_drop_avg_time_to_merge.sql',
   ],
 
   // Dedicated `se` queue — NOT the shared `jobs` queue (spec §7.5 / §17, now live). Agent phases run
