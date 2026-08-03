@@ -17,6 +17,8 @@ import { assertRemoteMcpServers } from '../lib/mcp.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
+import { runTriageTurn } from '../lib/triage.js';
+import { redactToken } from '../lib/git.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
 
@@ -760,6 +762,39 @@ export function mountAdminRoutes(router, deps) {
     } catch (e) {
       logger?.warn?.('se: create issue failed', { error: String(e) });
       res.status(500).json({ error: 'create failed' });
+    }
+  });
+
+  // Triage copilot (SPEC §10.5): one conversational turn — rough feedback in, either a clarifying
+  // question or a structured DRAFT ticket out. Read-only: creating the issue is a separate,
+  // human-confirmed call to POST /issues above. page_context (route/feature) comes from the
+  // in-page widget entry point. Model calls are costly → own tighter rate bucket on top of the
+  // router-wide limiter.
+  router.post('/issues/triage', async (req, res) => {
+    // Keyed by ADMIN (falling back to IP pre-auth-context) so one account can't starve others
+    // behind a shared egress IP. NOTE: in-process bucket — adequate single-instance; move to Redis
+    // + project token-budget accounting before horizontal scale (review follow-up).
+    if (!rateLimit(`se-triage:${authorOf(req) ?? clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many triage requests' } });
+    }
+    const projectId = String(req.body?.project_id ?? '');
+    if (!UUID.test(projectId)) return res.status(400).json({ error: 'project_id required' });
+    const proj = await getProject(supabase, projectId);
+    if (!proj) return res.status(404).json({ error: 'project not found' });
+    if (!proj.modelCred) return res.status(400).json({ error: 'project has no model credential' });
+    const pageContext = req.body?.page_context && typeof req.body.page_context === 'object'
+      ? { route: typeof req.body.page_context.route === 'string' ? req.body.page_context.route : undefined,
+          feature: typeof req.body.page_context.feature === 'string' ? req.body.page_context.feature : undefined }
+      : null;
+    try {
+      const result = await Promise.race([
+        runTriageTurn(proj, req.body?.messages, pageContext),
+        new Promise((resolve) => setTimeout(() => resolve({ type: 'error', message: 'triage timed out' }), 90_000)),
+      ]);
+      res.json(result);
+    } catch (e) {
+      logger?.warn?.('se: triage failed', { error: redactToken(String(e?.message ?? e), proj.modelCred).slice(0, 300) });
+      res.status(500).json({ error: 'triage failed' });
     }
   });
 
