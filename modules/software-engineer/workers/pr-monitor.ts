@@ -63,21 +63,26 @@ async function reconcile(supabase, ctx, run) {
       } catch { allMerged = false; }
     }
 
+    // External PRs (Connect) have no triggering issue — skip all issue-label / spec bookkeeping for
+    // them; only the PR-state reconciliation + revise-on-feedback applies.
+    const managesIssue = run.kind !== 'external_pr' && !!run.issue_number;
     // §1a terminal rules.
     if (allMerged) {
-      try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, null); } catch { /* */ }
-      try { await gh.closeIssue(run.repo_owner, run.repo_name, run.issue_number); } catch { /* */ }
-      try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, 'All PRs merged — done. ✅'); } catch { /* */ }
-      // A human merging the PR IS the human judgment on this run's work — auto-promote its
-      // pending spec into recallable memory (specs/issue-<n>). Runs that never merge leave
-      // their spec pending for the manual review panel. Best-effort.
-      try { await approveSpec(supabase, run.project_id, project.name, run.issue_number); } catch { /* */ }
+      if (managesIssue) {
+        try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, null); } catch { /* */ }
+        try { await gh.closeIssue(run.repo_owner, run.repo_name, run.issue_number); } catch { /* */ }
+        try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, 'All PRs merged — done. ✅'); } catch { /* */ }
+        // A human merging the PR IS the human judgment on this run's work — auto-promote its
+        // pending spec into recallable memory (specs/issue-<n>). Runs that never merge leave
+        // their spec pending for the manual review panel. Best-effort. (No spec for external PRs.)
+        try { await approveSpec(supabase, run.project_id, project.name, run.issue_number); } catch { /* */ }
+      }
       await supabase.from('se_runs').update({ ...patch, status: 'merged', pr_state: 'merged', pr_url: firstUrl, archived_at: nowISO() }).eq('id', run.id);
       await dispatchProject(supabase, ctx, run.project_id);
       return { runId: run.id, action: 'merged' };
     }
     if (anyClosedUnmerged) {
-      try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:blocked'); } catch { /* */ }
+      if (managesIssue) { try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:blocked'); } catch { /* */ } }
       await supabase.from('se_runs').update({ ...patch, status: 'blocked', pr_state: 'changes_requested', pr_url: firstUrl, error: 'a PR was closed unmerged — partial; needs a human decision' }).eq('id', run.id);
       return { runId: run.id, action: 'blocked-partial' };
     }
@@ -90,11 +95,12 @@ async function reconcile(supabase, ctx, run) {
     }
 
     // Still open, no new changes → watching; re-assert the single status label (§1a drift-correct).
-    try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:in-review'); } catch { /* */ }
+    if (managesIssue) { try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:in-review'); } catch { /* */ } }
     await supabase.from('se_runs').update({ ...patch, status: 'watching', pr_state: 'open', pr_url: firstUrl }).eq('id', run.id);
     // Auto-merge safe changes without human review when the project allows it (merge.ts only merges
     // PRs GitHub reports mergeable_state=clean; idempotent, so re-enqueuing each tick is fine).
-    if (project.autonomyMode === 'auto_merge_safe' && run.blast_radius === 'safe') {
+    // NEVER for external PRs (Connect) — the platform watches + revises them but a human always merges.
+    if (run.kind !== 'external_pr' && project.autonomyMode === 'auto_merge_safe' && run.blast_radius === 'safe') {
       await ctx?.enqueueJob?.('se', 'software-engineer:merge', { runId: run.id });
     }
     return { runId: run.id, action: 'watch' };
