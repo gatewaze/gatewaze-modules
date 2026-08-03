@@ -10,8 +10,10 @@
  * create anything itself).
  */
 import React, { useEffect, useState } from 'react';
+import { ChatBubbleLeftRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { supabase } from '@/lib/supabase';
 import TriageCopilot from './TriageCopilot';
+import { projectOptionLabel } from './projectAvatar';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -63,7 +65,7 @@ export default function ReportFeedbackWidget() {
             Report feedback
             {projects.length > 1 && (
               <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="ml-auto rounded-md border px-1.5 py-0.5 text-xs">
-                {projects.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
+                {projects.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
               </select>
             )}
           </div>
@@ -106,7 +108,7 @@ export default function ReportFeedbackWidget() {
         aria-label={open ? 'Close feedback' : 'Report feedback'}
         aria-expanded={open}
       >
-        {open ? '×' : '💬'}
+        {open ? <XMarkIcon className="size-6" aria-hidden /> : <ChatBubbleLeftRightIcon className="size-6" aria-hidden />}
       </button>
     </div>
   );
