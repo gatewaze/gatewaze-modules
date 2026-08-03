@@ -17,6 +17,7 @@ import { listRunPrs, upsertRunPr } from '../lib/run-state.js';
 import { dispatchProject, dispatchAll } from '../lib/dispatch.js';
 import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
 import { approveSpec } from '../lib/memory.js';
+import { syncMemoryToRepo } from '../lib/memory-git.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -76,6 +77,8 @@ async function reconcile(supabase, ctx, run) {
         // pending spec into recallable memory (specs/issue-<n>). Runs that never merge leave
         // their spec pending for the manual review panel. Best-effort. (No spec for external PRs.)
         try { await approveSpec(supabase, run.project_id, project.name, run.issue_number); } catch { /* */ }
+        // Spec committed to memory → git-sync the project's memory repo (best-effort, non-blocking).
+        void syncMemoryToRepo(supabase, run.project_id, ctx?.logger).catch(() => {});
       }
       await supabase.from('se_runs').update({ ...patch, status: 'merged', pr_state: 'merged', pr_url: firstUrl, archived_at: nowISO() }).eq('id', run.id);
       await dispatchProject(supabase, ctx, run.project_id);
