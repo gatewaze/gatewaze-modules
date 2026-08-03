@@ -51,6 +51,7 @@ export default function SetupPanel(
   const [ghToken, setGhToken] = useState('');
   const [modelCred, setModelCred] = useState('');
   const [mcpConfig, setMcpConfig] = useState('');
+  const [skills, setSkills] = useState('');
   const [newProj, setNewProj] = useState({ name: '', emoji: '' });
   const [newRepo, setNewRepo] = useState({ owner: '', name: '' });
   const [msg, setMsg] = useState<{ ok?: boolean; text: string } | null>(null);
@@ -90,6 +91,7 @@ export default function SetupPanel(
     try {
       const [d, rp] = await Promise.all([api(`/projects/${id}`), api(`/projects/${id}/repos`)]);
       setS(d.project ?? {}); setRepos(rp.repos ?? []); setGhToken(''); setModelCred(''); setMcpConfig('');
+      setSkills(Array.isArray(d.project?.skills) && d.project.skills.length ? JSON.stringify(d.project.skills, null, 2) : '');
     } catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
   }, []);
   useEffect(() => { loadProject(pid); }, [pid, loadProject]);
@@ -131,6 +133,15 @@ export default function SetupPanel(
     if (modelCred.trim()) body.model_cred = modelCred.trim();
     // MCP config: send only when the operator typed something. A literal "clear" empties it.
     if (mcpConfig.trim()) body.mcp_config = mcpConfig.trim() === 'clear' ? null : mcpConfig.trim();
+    // Skills: a JSON array of { repo, path, ref }. Blank = clear. Parse client-side to catch typos
+    // early; the server re-validates every entry through parseSkillsConfig before persisting.
+    if (skills.trim() === '') { body.skills = []; }
+    else {
+      let parsed: unknown;
+      try { parsed = JSON.parse(skills); } catch { toast.error('Skills must be valid JSON (an array of { repo, path, ref }).'); return; }
+      if (!Array.isArray(parsed)) { toast.error('Skills must be a JSON array.'); return; }
+      body.skills = parsed;
+    }
     try { await api(`/projects/${pid}`, { method: 'PUT', body: JSON.stringify(body) }); toast.success('Project saved'); await loadProjects(); await loadProject(pid); }
     catch (e: any) { toast.error(String(e.message ?? e)); }
   };
@@ -261,6 +272,19 @@ export default function SetupPanel(
                   />
                 </Field>
                 <p className="text-xs text-[var(--gray-10)] pt-1">SDK-shaped <code className="font-mono text-[11px]">{'{ servers: { name: { type, url, headers } } }'}</code>, sealed on save (it carries bearer tokens). Exposed to every engineer on this project alongside the default Gatewaze MCP (<code className="font-mono text-[11px]">SE_DEFAULT_MCP_URL</code>). Type <code className="font-mono text-[11px]">clear</code> then Save to remove. Leave blank to keep the current config.</p>
+              </Section>
+
+              <Section icon={<CommandLineIcon className="size-4" />} title="Skills">
+                <Field label={<>Skill sources {Array.isArray(s.skills) && s.skills.length ? <span className="text-[var(--green-11)]">({s.skills.length} configured)</span> : <span className="text-neutral-400">(none)</span>}</>}>
+                  <textarea
+                    rows={5}
+                    placeholder={'[\n  { "repo": "gatewaze/gatewaze-skills", "path": "plugins/gatewaze-skills", "ref": "main" }\n]'}
+                    value={skills}
+                    onChange={(e) => setSkills(e.target.value)}
+                    className={inputCls + ' font-mono text-[11px]'}
+                  />
+                </Field>
+                <p className="text-xs text-[var(--gray-10)] pt-1">JSON array of <code className="font-mono text-[11px]">{'{ repo, path, ref }'}</code>. Each is a git repo the runner clones (with this project's PAT) and loads as a local Claude plugin — its skills/hooks become available to every engineer on this project. <code className="font-mono text-[11px]">path</code> points at the plugin dir inside the repo (default: repo root); <code className="font-mono text-[11px]">ref</code> defaults to <code className="font-mono text-[11px]">main</code>. Leave blank for none.</p>
               </Section>
 
               <div className="flex justify-end border-t border-[var(--gray-5)] pt-4">
