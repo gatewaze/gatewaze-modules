@@ -36,6 +36,14 @@ const PATH_RE = /^[A-Za-z0-9_./-]+$/;
 const REF_RE = /^[A-Za-z0-9_./-]+$/;
 
 const safeSlug = (s: string): string => String(s ?? '').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 100);
+// Strip leading/trailing '/' with a linear scan (no `\/+$`-style regex, which is polynomial-ReDoS-prone
+// on a string of many slashes). 47 = '/'.
+const stripSlashes = (s: string): string => {
+  let i = 0, j = s.length;
+  while (i < j && s.charCodeAt(i) === 47) i++;
+  while (j > i && s.charCodeAt(j - 1) === 47) j--;
+  return s.slice(i, j);
+};
 
 /**
  * Validate + normalise a project's `skills` config into clean {repo, path, ref} entries. Anything
@@ -48,7 +56,7 @@ export function parseSkillsConfig(raw: unknown): Array<{ repo: string; path: str
   for (const e of raw) {
     if (!e || typeof e !== 'object') continue;
     const repo = String((e as any).repo ?? '').trim();
-    const path = String((e as any).path ?? '').trim().replace(/^\/+|\/+$/g, '');
+    const path = stripSlashes(String((e as any).path ?? '').trim());
     const ref = (String((e as any).ref ?? '').trim() || 'main');
     if (!REPO_RE.test(repo) || repo.includes('..')) continue;
     if (path && (!PATH_RE.test(path) || path.split('/').includes('..'))) continue;
