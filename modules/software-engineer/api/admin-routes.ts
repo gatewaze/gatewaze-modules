@@ -112,6 +112,14 @@ export function mountAdminRoutes(router, deps) {
     if (!existsSync(STAGING_CONTROL)) {
       return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no staging-update channel' } });
     }
+    // CSRF hardening (security review): the platform's requireJwt accepts a
+    // Supabase auth COOKIE as a fallback, and a cross-site form POST sends
+    // cookies without CORS stopping it. This route restarts the entire
+    // deployment, so require the explicit Bearer header — the admin SPA
+    // always sends it; only cookie-only (potentially forged) requests lose.
+    if (!String(req.headers.authorization ?? '').startsWith('Bearer ')) {
+      return res.status(403).json({ error: { code: 'bearer_required', message: 'Explicit Authorization header required for this action' } });
+    }
     // Escalate beyond the router-level gate: super_admin only.
     const userId = authorOf(req);
     const { data: prof } = await supabase
