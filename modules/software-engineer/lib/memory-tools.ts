@@ -11,11 +11,13 @@
  */
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { useCaseFor } from './memory.js';
+import { useCaseFor, isRecallable } from './memory.js';
 
 const BASE = () => process.env.GATEWAZE_INTERNAL_API_URL || 'http://api:3002';
 const KEY = () => process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const PENDING_SLUG = 'memory-pending';
+// Unapproved content (reflect proposal + pending specs) must never reach an agent via these
+// tools. Single source of truth: the same predicate recall uses (lib/memory.ts isRecallable).
+const isHidden = (slug: string) => !isRecallable(slug);
 
 async function wiki(path: string) {
   const r = await fetch(`${BASE()}/api/modules/ai${path}`, {
@@ -50,7 +52,7 @@ export function buildMemoryMcpServer(projectId: string, linkedSourceProjectIds: 
       try {
         const r = await wiki(`/internal/wiki/search?use_case=${encodeURIComponent(ownUseCase)}&q=${encodeURIComponent(q)}&k=${k}&scope=granted`);
         const hits = (r?.results ?? [])
-          .filter((h: Record<string, unknown>) => String(h.slug) !== PENDING_SLUG && allowed.has(String(h.use_case ?? ownUseCase)));
+          .filter((h: Record<string, unknown>) => !isHidden(String(h.slug)) && allowed.has(String(h.use_case ?? ownUseCase)));
         if (!hits.length) return textResult('No matching memory.');
         const lines = hits.map((h: Record<string, unknown>) => {
           const uc = String(h.use_case ?? ownUseCase);
@@ -72,7 +74,7 @@ export function buildMemoryMcpServer(projectId: string, linkedSourceProjectIds: 
       const slug = String(args?.slug ?? '').trim().slice(0, 400);
       const uc = String(args?.use_case ?? ownUseCase).trim();
       if (!slug) return textResult('(slug required)');
-      if (slug === PENDING_SLUG) return textResult('(that page is not readable)');
+      if (isHidden(slug)) return textResult('(that page is not readable)');
       if (!allowed.has(uc)) return textResult('(not permitted to read that use_case)');
       try {
         const d = await wiki(`/internal/wiki/read?use_case=${encodeURIComponent(uc)}&slug=${encodeURIComponent(slug)}`);
