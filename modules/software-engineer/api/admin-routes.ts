@@ -18,6 +18,7 @@ import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
+import { syncMemoryToRepo } from '../lib/memory-git.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -122,6 +123,9 @@ export function mountAdminRoutes(router, deps) {
     if (!project) return res.status(404).json({ error: { code: 'not_found', message: 'Project not found' } });
     const ok = await approveMemory(supabase, projectId, project.name);
     if (!ok) return res.status(409).json({ error: { code: 'no_pending', message: 'No pending memory to approve' } });
+    // New information committed to memory → git-sync it to the project's memory repo. Fire-and-forget:
+    // the git push must not block (or fail) the admin response.
+    void syncMemoryToRepo(supabase, projectId, logger).catch(() => {});
     return res.json({ approved: true });
   });
   router.post('/projects/:id/memory/reject', async (req, res) => {
@@ -804,7 +808,7 @@ export function mountAdminRoutes(router, deps) {
       if (b[k] !== undefined) patch[k] = b[k];
     }
     for (const k of ['name', 'description', 'avatar_emoji', 'commit_author_name', 'commit_author_email',
-      'issues_repo_owner', 'issues_repo_name', 'trigger_label', 'primary_instance_id']) {
+      'issues_repo_owner', 'issues_repo_name', 'trigger_label', 'primary_instance_id', 'memory_repo']) {
       if (b[k] !== undefined) patch[k] = sanitize(b[k]);
     }
     if (b.name !== undefined && !patch.name) return res.status(400).json({ error: 'name cannot be empty' });
