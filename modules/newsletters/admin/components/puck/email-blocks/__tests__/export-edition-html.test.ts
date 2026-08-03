@@ -104,6 +104,40 @@ describe('exportEditionHtml — email format', () => {
   });
 });
 
+describe('exportEditionHtml — body text default colour (issue #22)', () => {
+  // Regression guard: rich-text/body content blocks default to black (#000),
+  // not grey (#555). Pasted/typed text with no explicit colour mark inherits
+  // the block container's colour, so the container default must be black.
+  const introEdition: NewsletterEdition = {
+    ...baseEdition,
+    blocks: [
+      {
+        id: 'b-intro',
+        block_template: {
+          id: 'tpl-intro',
+          name: 'Intro Paragraph',
+          block_type: 'intro_paragraph',
+          content: { html_template: '' },
+        },
+        content: { text: 'Pasted body text.' },
+        sort_order: 1000,
+        bricks: [],
+      },
+    ],
+  };
+  const introMeta = new Map<string, BlockRenderMeta>([
+    ['b-intro', { render_kind: 'react-email', component_id: 'intro_paragraph' }],
+  ]);
+
+  it('renders the rich-text container default as black, never grey', async () => {
+    const html = await exportEditionHtml({ edition: introEdition, format: 'email', blockMeta: introMeta });
+    expect(html).toContain('Pasted body text.');
+    // Default body colour is black; the old grey default must not reappear.
+    expect(html).toMatch(/color:\s*#000/i);
+    expect(html).not.toMatch(/color:\s*#555/i);
+  });
+});
+
 describe('exportEditionHtml — substack format', () => {
   it('still produces a complete document', async () => {
     const html = await exportEditionHtml({ edition: baseEdition, format: 'substack', blockMeta: meta });

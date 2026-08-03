@@ -46,7 +46,7 @@ export const SponsoredAdBlock: EmailBlockEntry<SponsoredAdProps> = {
     <Card>
       <Text style={{ ...EYEBROW, textTransform: 'uppercase' }}>PRESENTED BY {sponsor_name}</Text>
       {headline ? (
-        <Heading as="h2" style={{ margin: '0 0 10px', fontSize: '23px', fontWeight: 'bold', color: '#555', lineHeight: 1.2 }}>
+        <Heading as="h2" style={{ margin: '0 0 10px', fontSize: '23px', fontWeight: 'bold', color: '#000', lineHeight: 1.2 }}>
           {headline}
         </Heading>
       ) : null}
