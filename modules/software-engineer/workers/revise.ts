@@ -14,6 +14,7 @@ import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, listRunPrs } from '../lib/run-state.js';
 import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
+import { distillReviewLearnings } from '../lib/review-kb.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -31,6 +32,8 @@ export default async function revise(job, ctx) {
   const token = project.githubToken;
   if (!token || !project.modelCred) return { skipped: 'no creds' };
 
+  // 'ci' = pr-monitor triggered a bounded CI-fix pass (no new review feedback, CI settled-red).
+  const reason = job?.data?.reason;
   const openPrs = (await listRunPrs(supabase, run.id)).filter((p) => p.pr_number && p.state === 'open');
   if (openPrs.length === 0) { await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch' }).eq('id', run.id); return { skipped: 'no open prs' }; }
 
@@ -55,7 +58,10 @@ export default async function revise(job, ctx) {
       if (lines.length) feedbackByRepo[p.repo_name] = lines.join('\n');
     }
     const feedback = Object.entries(feedbackByRepo).map(([repo, f]) => `### ${repo}\n${f}`).join('\n\n').slice(0, 12000);
-    if (!feedback.trim()) {
+    // No trusted review feedback normally means nothing to do — EXCEPT a CI-fix pass, where the
+    // trigger is failing CI, not a comment. In ci mode we proceed with a CI-repair prompt instead.
+    const ciMode = reason === 'ci' && !feedback.trim();
+    if (!feedback.trim() && !ciMode) {
       await recordPhaseEnd(supabase, run, 'revise', 'skipped', 'no actionable feedback');
       await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch' }).eq('id', run.id);
       return { skipped: 'no feedback' };
@@ -69,12 +75,21 @@ export default async function revise(job, ctx) {
     const commitId = await resolveCommitIdentity(supabase, project, token);
     ws = await makeMultiWorkspace(codeRepos, token, run.branch_name, commitId, true);
 
-    const prompt = [
-      `A reviewer left feedback on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''}. Address`,
-      `EVERY point below by editing the code in the relevant WRITABLE repo(s) in your workspace. Follow`,
-      `each repo's CLAUDE.md/.claude rules. Do NOT push, merge, or open PRs — the system handles that.`,
-      ``, `--- REVIEW FEEDBACK (per repo) ---`, feedback, `--- END FEEDBACK ---`,
-    ].join('\n');
+    const prompt = ciMode
+      ? [
+          `The CI checks on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''} are FAILING.`,
+          `Reproduce and fix them by editing the code in the relevant WRITABLE repo(s) in your workspace.`,
+          `Run the repo's own checks (typecheck, lint, tests, security review) exactly as its CLAUDE.md`,
+          `and .claude rules describe, find why they fail, and fix the root cause — do not disable, skip,`,
+          `or weaken a check to make it pass. If a failure is genuinely unrelated to this branch's changes`,
+          `and cannot be fixed here, make no change. Do NOT push, merge, or open PRs — the system does that.`,
+        ].join('\n')
+      : [
+          `A reviewer left feedback on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''}. Address`,
+          `EVERY point below by editing the code in the relevant WRITABLE repo(s) in your workspace. Follow`,
+          `each repo's CLAUDE.md/.claude rules. Do NOT push, merge, or open PRs — the system handles that.`,
+          ``, `--- REVIEW FEEDBACK (per repo) ---`, feedback, `--- END FEEDBACK ---`,
+        ].join('\n');
     const result = await runAgentSession(supabase, ctx, run, project, 'revise', {
       cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
       systemAppend: 'Address the review feedback per each repo\'s rules. Never use --no-verify or --force.',
@@ -89,7 +104,10 @@ export default async function revise(job, ctx) {
     let pushed = 0;
     for (const r of ws.repos.filter((x) => x.writable)) {
       if (!(await hasChanges(r.dir))) continue;
-      try { await commitAndPush(r.dir, run.branch_name, `fix: address review feedback on #${run.issue_number}`); pushed++; }
+      const subject = ciMode
+        ? `fix(ci): repair failing checks${run.issue_number ? ` on #${run.issue_number}` : ''}`
+        : `fix: address review feedback${run.issue_number ? ` on #${run.issue_number}` : ''}`;
+      try { await commitAndPush(r.dir, run.branch_name, subject); pushed++; }
       catch { /* leave that PR as-is */ }
     }
     const round = (run.revise_count ?? 0) + 1;
@@ -103,7 +121,12 @@ export default async function revise(job, ctx) {
       status: 'watching', current_phase: 'watch', revise_count: round, pr_state: 'open',
       ...(pushed ? { blast_radius: 'needs_human' } : {}),
     }).eq('id', run.id);
-    try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, pushed ? `Pushed changes addressing the latest review feedback (${pushed} repo(s)).` : 'Reviewed the latest feedback; no code change was needed.'); } catch { /* best-effort */ }
+    const comment = ciMode
+      ? (pushed ? `Pushed changes to repair failing CI (${pushed} repo(s)).` : 'Investigated the failing CI; no code change was produced.')
+      : (pushed ? `Pushed changes addressing the latest review feedback (${pushed} repo(s)).` : 'Reviewed the latest feedback; no code change was needed.');
+    try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number ?? run.pr_number, comment); } catch { /* best-effort */ }
+    // Fold this round's TRUSTED feedback into the review-learnings KB (pending until the PR merges).
+    try { await distillReviewLearnings(supabase, project, run, feedback, ctx?.logger); } catch { /* best-effort, never blocks revise */ }
     return { ok: true, round, pushed };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);
