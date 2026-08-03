@@ -28,7 +28,7 @@ export const IntroParagraphBlock: EmailBlockEntry<IntroParagraphProps> = {
           fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif",
           fontSize: '20px',
           lineHeight: 1.5,
-          color: '#555',
+          color: '#000',
           padding: '20px 15px',
         }}
       />

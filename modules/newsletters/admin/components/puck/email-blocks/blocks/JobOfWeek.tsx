@@ -101,7 +101,7 @@ export const JobOfWeekBlock: EmailBlockEntry<JobOfWeekProps> = {
 
         {list.map((job, i) => (
           <Section key={i}>
-            <Text style={{ margin: 0, padding: '20px 15px 0 20px', fontSize: '16px', color: '#555', lineHeight: 1.5 }}>
+            <Text style={{ margin: 0, padding: '20px 15px 0 20px', fontSize: '16px', color: '#000', lineHeight: 1.5 }}>
               <strong>
                 <Link href={job.apply_link} style={LINK}>
                   {job.job_title}
@@ -114,7 +114,7 @@ export const JobOfWeekBlock: EmailBlockEntry<JobOfWeekProps> = {
             {job.description ? (
               <RichText
                 value={job.description}
-                style={{ padding: '8px 15px 0 20px', fontSize: '16px', color: '#555', lineHeight: 1.5 }}
+                style={{ padding: '8px 15px 0 20px', fontSize: '16px', color: '#000', lineHeight: 1.5 }}
               />
             ) : null}
             {i < list.length - 1 ? <Hr style={DIVIDER_STYLE} /> : null}
@@ -123,7 +123,7 @@ export const JobOfWeekBlock: EmailBlockEntry<JobOfWeekProps> = {
 
         <Hr style={DIVIDER_STYLE} />
 
-        <Text style={{ margin: 0, padding: '10px 15px 10px 20px', fontSize: '16px', color: '#555', lineHeight: 1.5 }}>
+        <Text style={{ margin: 0, padding: '10px 15px 10px 20px', fontSize: '16px', color: '#000', lineHeight: 1.5 }}>
           {'Find more roles on our new '}
           <strong>
             <Link href={jobs_board_url} style={LINK}>
