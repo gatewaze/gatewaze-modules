@@ -23,6 +23,8 @@ export interface RunnerInput {
   model: string;
   credential: PhaseCredential;
   allowedTools?: string[];
+  /** Pure model turn: hard-disable ALL tools (tools:[] + deny-all approval) and cap at one turn. */
+  noTools?: boolean;
   systemAppend?: string;
   inputSource?: AsyncIterable<AdminInput>;   // admin → agent bridge (Redis-backed), best-effort
   mcpServers?: Record<string, unknown>;      // §10: connected tools (Gatewaze MCP + per-project servers)
@@ -49,6 +51,8 @@ export interface InteractiveInput {
   model: string;
   credential: PhaseCredential;
   allowedTools?: string[];
+  /** Pure model turn: hard-disable ALL tools (tools:[] + deny-all approval) and cap at one turn. */
+  noTools?: boolean;
   systemAppend?: string;
   inputSource: AsyncIterable<AdminInput>;    // admin → agent bridge; drives every turn after kickoff
   mcpServers?: Record<string, unknown>;
@@ -121,11 +125,17 @@ export class InProcessRunner implements Runner {
           // via canUseTool: bare allowedTools entries auto-approve, and anything else falls through
           // to the callback below (which allows it). No dangerous flag → works as root. The Bash
           // PreToolUse hook still enforces the forbidden-flag guard regardless of approval mode.
-          canUseTool: async (_name: string, toolInput: Record<string, unknown>) => ({
-            behavior: 'allow' as const,
-            updatedInput: toolInput,
-          }),
-          allowedTools: input.allowedTools ?? ['Read', 'Grep', 'Glob', 'Write', 'Edit'],
+          // noTools (triage etc.): a PURE model turn. `allowedTools` alone only controls
+          // auto-approval, NOT availability — so hard-disable the whole built-in tool set via
+          // `tools: []` AND fail-closed in canUseTool (belt and braces: even if a tool slips
+          // through availability, approval denies it). maxTurns bounds the session to a single
+          // response so a timed-out caller can't leave an unbounded subprocess behind.
+          ...(input.noTools ? { tools: [], maxTurns: 1 } : {}),
+          canUseTool: async (_name: string, toolInput: Record<string, unknown>) =>
+            input.noTools
+              ? { behavior: 'deny' as const, message: 'tools are disabled for this session' }
+              : { behavior: 'allow' as const, updatedInput: toolInput },
+          allowedTools: input.noTools ? [] : (input.allowedTools ?? ['Read', 'Grep', 'Glob', 'Write', 'Edit']),
           hooks: {
             PreToolUse: [{
               matcher: 'Bash',
