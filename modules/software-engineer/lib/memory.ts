@@ -64,13 +64,18 @@ export async function ensureMemoryUseCase(sb: unknown, projectId: string, projec
 
 /** Slug prefix for spec pages awaiting human approval (see writeSpecMemory / approveSpec). */
 const SPEC_PENDING_PREFIX = 'specs-pending/';
+/** Review-learnings KB: patterns distilled from a run's TRUSTED review feedback. Pending until the
+ *  run's PR merges (the human's validation), then promoted to the recallable `review-kb/` prefix —
+ *  same merge-gated approval as specs. See lib/review-kb.ts. */
+const REVIEW_KB_PENDING_PREFIX = 'review-kb-pending/';
+const REVIEW_KB_PREFIX = 'review-kb/';
 
 /** True for the live/imported pages recall may surface — i.e. NOT any project's pending
  *  reflect proposal and NOT a spec still awaiting approval. Exported as the SINGLE source of
  *  truth for the pending-content gate — memory-tools.ts imports it for wiki_search/wiki_read. */
 export const isRecallable = (slug: string): boolean => {
   const s = String(slug ?? '');
-  return s !== PENDING_SLUG && !s.startsWith(SPEC_PENDING_PREFIX);
+  return s !== PENDING_SLUG && !s.startsWith(SPEC_PENDING_PREFIX) && !s.startsWith(REVIEW_KB_PENDING_PREFIX);
 };
 
 /**
@@ -243,6 +248,61 @@ export async function approveSpec(sb: unknown, projectId: string, projectName: s
 export async function rejectSpec(sb: unknown, projectId: string, projectName: string, issueNumber: number): Promise<boolean> {
   const pendingSlug = `${SPEC_PENDING_PREFIX}issue-${issueNumber}`;
   return upsertMemoryPage(sb, projectId, projectName, pendingSlug, `Spec — issue #${issueNumber} (PENDING APPROVAL)`, '');
+}
+
+// ── Review-learnings KB ───────────────────────────────────────────────────────────────────────
+// Patterns distilled from a run's TRUSTED review feedback (see lib/review-kb.ts). Written PENDING,
+// promoted to the recallable `review-kb/` prefix ONLY when the run's PR merges — the same merge =
+// human-validation gate as specs. Once live they're recallable via RAG (so future runs learn from
+// what reviewers caught) and git-synced to the memory repo like any approved page.
+const safeKbSlug = (slug: string): string =>
+  String(slug ?? '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+
+/** Write a run's distilled review-learnings to PENDING (`review-kb-pending/<runId>/<slug>`), one page
+ *  per pattern. Not recallable until the run's PR merges. Returns how many were written. Best-effort. */
+export async function writeReviewLearningsPending(
+  sb: unknown, projectId: string, projectName: string, runId: string,
+  entries: Array<{ slug: string; title: string; body: string }>,
+): Promise<number> {
+  if (!projectId || !runId || !Array.isArray(entries) || entries.length === 0) return 0;
+  let n = 0;
+  for (const e of entries) {
+    const slug = safeKbSlug(e?.slug);
+    if (!slug || !String(e?.body ?? '').trim()) continue;
+    const ok = await upsertMemoryPage(
+      sb, projectId, projectName,
+      `${REVIEW_KB_PENDING_PREFIX}${runId}/${slug}`,
+      `Review pattern — ${String(e?.title ?? slug).slice(0, 120)} (PENDING APPROVAL)`,
+      String(e.body),
+    );
+    if (ok) n++;
+  }
+  return n;
+}
+
+/** Promote a run's pending review-learnings to the recallable `review-kb/<slug>` prefix, then clear
+ *  the run's pending pages. Called when the run's PR merges (pr-monitor). Best-effort. */
+export async function approveRunReviewLearnings(sb: unknown, projectId: string, projectName: string, runId: string): Promise<number> {
+  if (!projectId || !runId) return 0;
+  const prefix = `${REVIEW_KB_PENDING_PREFIX}${runId}/`;
+  let pages: Array<{ slug: string; title?: string }> = [];
+  try {
+    const l = await wiki(`/internal/wiki/list?use_case=${encodeURIComponent(useCaseFor(projectId))}&prefix=${encodeURIComponent(prefix)}&limit=100`);
+    pages = l?.pages ?? [];
+  } catch { return 0; }
+  let n = 0;
+  for (const p of pages) {
+    const s = String(p.slug ?? '');
+    if (!s.startsWith(prefix)) continue;
+    const kbSlug = safeKbSlug(s.slice(prefix.length));
+    if (!kbSlug) continue;
+    const body = await readPage(projectId, s);
+    if (!body.trim()) continue; // already cleared
+    const title = String(p.title ?? kbSlug).replace(/ \(PENDING APPROVAL\)$/, '');
+    const ok = await upsertMemoryPage(sb, projectId, projectName, `${REVIEW_KB_PREFIX}${kbSlug}`, title, body);
+    if (ok) { await upsertMemoryPage(sb, projectId, projectName, s, title, ''); n++; } // clear pending
+  }
+  return n;
 }
 
 // ── Linked memory sources (native wiki grants) ────────────────────────────────────────────────

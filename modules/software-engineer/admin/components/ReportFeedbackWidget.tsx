@@ -102,10 +102,11 @@ export default function ReportFeedbackWidget() {
       )}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-blue-700"
-        aria-label="Report feedback"
+        className="flex h-12 w-12 items-center justify-center rounded-full bg-purple-600 text-xl leading-none text-white shadow-lg hover:bg-purple-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-2"
+        aria-label={open ? 'Close feedback' : 'Report feedback'}
+        aria-expanded={open}
       >
-        {open ? '×' : '💬 Report feedback'}
+        {open ? '×' : '💬'}
       </button>
     </div>
   );

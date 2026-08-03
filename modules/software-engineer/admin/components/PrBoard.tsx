@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { isGatewayError, StartingBanner } from './starting';
+import { timeAgo, formatSubmittedDate } from '../lib/pr-format';
 import {
   ArrowPathIcon, ArrowTopRightOnSquareIcon, UserIcon, UsersIcon, CpuChipIcon, BoltIcon,
   MinusCircleIcon, BellAlertIcon, LinkIcon,
@@ -67,13 +68,6 @@ function checkAccent(pr: any): string {
   if (c.failing > 0) return 'border-l-red-500';
   if (c.pending > 0) return 'border-l-amber-500';
   return 'border-l-green-500';                              // all checks green
-}
-
-function timeAgo(iso: string): string {
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m`;
-  if (s < 86400) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86400)}d`;
 }
 
 function PrRow({ pr, onChanged }: { pr: any; onChanged?: () => void }) {
@@ -156,6 +150,11 @@ function PrRow({ pr, onChanged }: { pr: any; onChanged?: () => void }) {
               <span key={r} className="rounded bg-[var(--gray-3)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--gray-11)]">@{r}</span>
             ))}
             {reviewers.length > 4 && <span className="text-[var(--gray-9)]">+{reviewers.length - 4}</span>}
+          </span>
+        )}
+        {pr.created_at && formatSubmittedDate(pr.created_at) && (
+          <span title={`Originally submitted ${formatSubmittedDate(pr.created_at)}`}>
+            Submitted on {formatSubmittedDate(pr.created_at)} ({timeAgo(pr.created_at)} ago)
           </span>
         )}
         <span>updated {timeAgo(pr.updated_at)} ago</span>

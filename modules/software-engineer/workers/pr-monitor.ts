@@ -16,8 +16,9 @@ import { redactToken } from '../lib/git.js';
 import { listRunPrs, upsertRunPr } from '../lib/run-state.js';
 import { dispatchProject, dispatchAll } from '../lib/dispatch.js';
 import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
-import { approveSpec } from '../lib/memory.js';
+import { approveSpec, approveRunReviewLearnings } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
+import { summarizeChecks } from '../lib/pr-status.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -40,6 +41,7 @@ async function reconcile(supabase, ctx, run) {
     // Refresh each PR's terminal/open state + collect reviews on open PRs.
     let allMerged = true, anyClosedUnmerged = false, firstUrl = null;
     let latestActionable = 0;
+    let anyFailingCi = false;   // any open PR whose checks have SETTLED red (→ candidate for a CI-fix pass)
     for (const p of prs) {
       firstUrl = firstUrl || p.pr_url;
       try {
@@ -60,6 +62,11 @@ async function reconcile(supabase, ctx, run) {
           // trigger would feed unauthenticated text into the revise agent.
           for (const r of reviews ?? []) if (r.state === 'CHANGES_REQUESTED' && r.submitted_at && isTrustedFeedbackAuthor(r.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(r.submitted_at).getTime());
           for (const c of inline ?? []) if (c.created_at && isTrustedFeedbackAuthor(c.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(c.created_at).getTime());
+          // CI health — settled-red counts (still-running does not, to avoid churn).
+          if (pr.head?.sha) {
+            const checks = summarizeChecks((await gh.listCheckRuns(p.repo_owner, p.repo_name, pr.head.sha).catch(() => null))?.check_runs);
+            if (checks.failing > 0 && checks.pending === 0) anyFailingCi = true;
+          }
         }
       } catch { allMerged = false; }
     }
@@ -77,9 +84,12 @@ async function reconcile(supabase, ctx, run) {
         // pending spec into recallable memory (specs/issue-<n>). Runs that never merge leave
         // their spec pending for the manual review panel. Best-effort. (No spec for external PRs.)
         try { await approveSpec(supabase, run.project_id, project.name, run.issue_number); } catch { /* */ }
-        // Spec committed to memory → git-sync the project's memory repo (best-effort, non-blocking).
-        void syncMemoryToRepo(supabase, run.project_id, ctx?.logger).catch(() => {});
       }
+      // Merge = the human's validation → promote this run's pending review-learnings (distilled from
+      // its trusted review feedback) to the recallable review-kb/. Fires for issue AND external PRs.
+      try { await approveRunReviewLearnings(supabase, run.project_id, project.name, run.id); } catch { /* */ }
+      // Memory changed (spec and/or review-KB) → git-sync the project's memory repo (non-blocking).
+      void syncMemoryToRepo(supabase, run.project_id, ctx?.logger).catch(() => {});
       await supabase.from('se_runs').update({ ...patch, status: 'merged', pr_state: 'merged', pr_url: firstUrl, archived_at: nowISO() }).eq('id', run.id);
       await dispatchProject(supabase, ctx, run.project_id);
       return { runId: run.id, action: 'merged' };
@@ -95,6 +105,22 @@ async function reconcile(supabase, ctx, run) {
       await supabase.from('se_runs').update({ ...patch, status: 'changes_requested', pr_state: 'changes_requested', current_phase: 'revise', pr_seen_at: new Date(latestActionable).toISOString(), pr_url: firstUrl }).eq('id', run.id);
       await enqueuePhase(ctx, run.id, 'revise');
       return { runId: run.id, action: 'revise' };
+    }
+
+    // No new review feedback, but CI is settled-red → run a BOUNDED CI-fix pass: revise clones the
+    // branch, runs the repo's checks, fixes what it can, and pushes. Capped by ci_fix_attempts so an
+    // unfixable failure can't loop forever — after the cap a human takes over. (A fix that lands green
+    // stops it naturally; each push that flips CI green removes the trigger.)
+    // NEVER for external PRs (Connect): that branch is attacker-authored code and its CI result is
+    // fully controlled by the untrusted PR author — letting a red check auto-invoke a Bash-capable
+    // agent over their code (with the project token in-env, push access to their branch) would be an
+    // unauthenticated code-execution trigger. A human drives any fix on external PRs. (Same kind-gate
+    // as auto-merge below.)
+    const CI_FIX_CAP = 3;
+    if (run.kind !== 'external_pr' && anyFailingCi && (run.ci_fix_attempts ?? 0) < CI_FIX_CAP) {
+      await supabase.from('se_runs').update({ ...patch, status: 'changes_requested', pr_state: 'open', current_phase: 'revise', ci_fix_attempts: (run.ci_fix_attempts ?? 0) + 1, pr_url: firstUrl }).eq('id', run.id);
+      await enqueuePhase(ctx, run.id, 'revise', { reason: 'ci' });
+      return { runId: run.id, action: 'ci-fix' };
     }
 
     // Still open, no new changes → watching; re-assert the single status label (§1a drift-correct).
