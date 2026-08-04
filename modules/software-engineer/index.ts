@@ -81,6 +81,9 @@ const softwareEngineerModule: GatewazeModule = {
         // pipeline). One worker holds the session for its whole lifetime; explicit close + idle/wall-clock
         // caps free it. See workers/interactive.ts.
         { name: 'software-engineer:interactive', handler: './workers/interactive.ts' },
+        // intake-poll: PULL fallback for issue discovery — NAT'd instances (no webhook) and the
+        // cross-instance flow (prod files issues, the owning instance runs them). See workers/intake-poll.ts.
+        { name: 'software-engineer:intake-poll', handler: './workers/intake-poll.ts' },
       ],
     },
   ],
@@ -100,6 +103,14 @@ const softwareEngineerModule: GatewazeModule = {
       queue: 'se',
       schedule: { every: 5 * 60_000 },
       data: { kind: 'software-engineer:recover' },
+    },
+    // PULL fallback for issue discovery (no-webhook instances + cross-instance intake). On the 'se'
+    // queue, so it only ever executes where a runner exists.
+    {
+      name: 'software-engineer-intake-poll',
+      queue: 'se',
+      schedule: { every: 2 * 60_000 },
+      data: { kind: 'software-engineer:intake-poll' },
     },
   ],
 

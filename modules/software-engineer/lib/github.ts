@@ -28,9 +28,17 @@ export function githubClient(token: string) {
     getIssue(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/issues/${number}`);
     },
-    /** Open issues on a repo (GitHub returns PRs here too — caller filters on `pull_request`). */
-    listIssues(owner: string, name: string, state: 'open' | 'all' = 'open') {
-      return j(`/repos/${owner}/${name}/issues?state=${state}&per_page=50&sort=updated`);
+    /** Open issues on a repo (GitHub returns PRs here too — caller filters on `pull_request`).
+     * Optional `labels` narrows server-side to issues carrying ALL the given label names. */
+    listIssues(owner: string, name: string, state: 'open' | 'all' = 'open', labels?: string[]) {
+      const lq = labels?.length ? `&labels=${labels.map((l) => encodeURIComponent(l)).join(',')}` : '';
+      return j(`/repos/${owner}/${name}/issues?state=${state}&per_page=50&sort=updated${lq}`);
+    },
+    /** Issue events (labeled/unlabeled/…), chronological. Used to resolve WHO applied a label —
+     * the actor GitHub itself gated on triage/write — for poll-path authorization parity with the
+     * webhook's `sender`. */
+    listIssueEvents(owner: string, name: string, number: number) {
+      return j(`/repos/${owner}/${name}/issues/${number}/events?per_page=100`);
     },
     /** Reviews on a PR (APPROVED / CHANGES_REQUESTED / COMMENTED), newest-relevant last. */
     listReviews(owner: string, name: string, number: number) {
