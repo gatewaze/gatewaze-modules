@@ -19,7 +19,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { CARD_FILTERS, statusesToParam } from './overview-filters';
 import { ProjectAvatar } from './ProjectAvatar';
-import { projectOptionLabel } from './projectAvatar';
+import { projectOptionLabel } from './projectAvatarUtils';
 import PrBoard from './PrBoard';
 import { isGatewayError, StartingBanner } from './starting';
 import PendingApprovals from './PendingApprovals';

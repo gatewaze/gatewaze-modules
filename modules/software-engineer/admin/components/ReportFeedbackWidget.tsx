@@ -13,7 +13,7 @@ import React, { useEffect, useState } from 'react';
 import { ChatBubbleLeftRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { supabase } from '@/lib/supabase';
 import TriageCopilot from './TriageCopilot';
-import { projectOptionLabel } from './projectAvatar';
+import { projectOptionLabel } from './projectAvatarUtils';
 import {
   attachmentsPayload, droppedAttachmentsWarning, extFromMime, feedbackImagePath, validateImageFile,
 } from './feedback-attachments';

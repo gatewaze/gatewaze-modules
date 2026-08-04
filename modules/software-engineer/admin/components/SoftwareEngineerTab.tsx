@@ -24,7 +24,7 @@ import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
 import TriageCopilot from './TriageCopilot';
 import { ProjectAvatar } from './ProjectAvatar';
-import { projectOptionLabel } from './projectAvatar';
+import { projectOptionLabel } from './projectAvatarUtils';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 import { filterLabelForParam } from './overview-filters';
