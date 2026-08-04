@@ -1,71 +1,69 @@
-import { lazy, Suspense, useCallback, useMemo } from 'react';
+import { lazy, Suspense, useCallback, useMemo, type ComponentType } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Page } from '@/components/shared/Page';
-import { Tabs } from '@/components/ui';
-import { useModuleSlots, type ResolvedSlot } from '@/hooks/useModuleSlots';
+import { WorkspaceLayout } from '@/components/ui';
+import { useModuleSlots } from '@/hooks/useModuleSlots';
+import {
+  buildEventsTabs,
+  eventsTabPath,
+  extractTabDescriptors,
+  resolveActiveTabId,
+} from './eventsTabs';
 
 /**
  * Events dashboard shell. The default tab is the events list. Other modules
  * (e.g. scrapers → Hosts, event-speakers → Speakers) contribute additional
  * tabs via the `events:tab` adminSlot.
  *
- * The shell owns the page title, outer padding, and tab strip so every tab
- * renders with identical chrome. Each tab's component should return inner
- * content only (no <Page>, no outer p-6, no top-level <h1>).
+ * The shell wraps every tab in the shared <WorkspaceLayout> hero + tab strip
+ * so the Events dashboard matches the house style used by Podcasts, Blog,
+ * Newsletters, etc. Each tab's component should return inner content only
+ * (no <Page>, no outer p-6, no top-level <h1> — the hero owns the title).
+ *
+ * The slot-filtering, tab-assembly, and URL <-> tab-id mapping live in the
+ * pure `./eventsTabs` helper so they can be unit-tested without React.
  */
 
 const EventsList = lazy(() => import('./EventsPage'));
 
-interface SlotMeta { tabId?: string; label?: string; icon?: string; }
-
-function tabsFromSlots(slots: ResolvedSlot[]) {
-  return slots
-    .filter(s => (s.registration.meta as SlotMeta)?.tabId && (s.registration.meta as SlotMeta)?.label)
-    .map(s => {
-      const meta = s.registration.meta as SlotMeta;
-      return {
-        id: meta.tabId!,
-        label: meta.label!,
-        order: s.registration.order ?? 100,
-        component: lazy(s.registration.component as () => Promise<{ default: React.ComponentType }>),
-      };
-    })
-    .sort((a, b) => a.order - b.order);
-}
+type ComponentImport = () => Promise<{ default: ComponentType }>;
 
 export default function EventsShell() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
-  const extraTabs = tabsFromSlots(useModuleSlots('events:tab'));
-  const allTabs = useMemo(
-    () => [{ id: 'events', label: 'Events' }, ...extraTabs.map(t => ({ id: t.id, label: t.label }))],
-    [extraTabs],
+  const slots = useModuleSlots('events:tab');
+  const extraTabs = useMemo(() => extractTabDescriptors(slots), [slots]);
+  const allTabs = useMemo(() => buildEventsTabs(extraTabs), [extraTabs]);
+
+  const tabId = useMemo(
+    () => resolveActiveTabId(pathname, allTabs.map((t) => t.id)),
+    [pathname, allTabs],
   );
 
-  const tabId = useMemo(() => {
-    const match = pathname.match(/^\/events\/([^/]+)$/);
-    if (!match) return 'events';
-    const candidate = match[1];
-    return allTabs.some(t => t.id === candidate) ? candidate : 'events';
-  }, [pathname, allTabs]);
-
   const onChange = useCallback((id: string) => {
-    if (id === 'events') navigate('/events');
-    else navigate(`/events/${id}`);
+    navigate(eventsTabPath(id));
   }, [navigate]);
 
-  const ActiveExtra = extraTabs.find(t => t.id === tabId)?.component;
+  // Wrap only the active contributed tab in lazy(), memoised on its id so the
+  // component isn't re-created (and thus remounted) on every render.
+  const ActiveExtra = useMemo(() => {
+    const found = extraTabs.find((t) => t.id === tabId);
+    return found ? lazy(found.component as ComponentImport) : null;
+  }, [extraTabs, tabId]);
 
   return (
     <Page title="Events">
-      <div className="p-6 space-y-4">
-        <h1 className="text-2xl font-semibold text-[var(--gray-12)]">Events</h1>
-        <Tabs value={tabId} onChange={onChange} tabs={allTabs} />
-        <Suspense fallback={<div className="p-8 text-sm text-[var(--gray-11)]">Loading…</div>}>
+      <WorkspaceLayout
+        title="Events"
+        tabs={allTabs}
+        activeTabId={tabId}
+        onTabChange={onChange}
+      >
+        <Suspense fallback={<div className="py-8 text-sm text-[var(--gray-11)]">Loading…</div>}>
           {tabId === 'events' ? <EventsList /> : ActiveExtra ? <ActiveExtra /> : null}
         </Suspense>
-      </div>
+      </WorkspaceLayout>
     </Page>
   );
 }
