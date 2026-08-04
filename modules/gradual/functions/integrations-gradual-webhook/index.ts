@@ -926,13 +926,13 @@ async function handleUserRegistersForEvent(payload: UserRegistersForEventPayload
         const { data: existingReg } = await supabase
           .from('events_registrations')
           .select('id')
-          .eq('event_id', event.event_id)
+          .eq('event_id', event.id)
           .eq('people_profile_id', memberProfile.id)
           .limit(1)
           .maybeSingle()
 
         if (existingReg) {
-          console.log(`Registration already exists for ${payload.userEmail} on event ${event.event_id} (reg: ${existingReg.id}) — skipping (loop prevention)`)
+          console.log(`Registration already exists for ${payload.userEmail} on event ${event.id} (reg: ${existingReg.id}) — skipping (loop prevention)`)
 
           return new Response(
             JSON.stringify({
@@ -1011,9 +1011,12 @@ async function handleUserRegistersForEvent(payload: UserRegistersForEventPayload
     source: 'gradual_webhook',
   }
 
-  // Build event data
+  // Build event data. createFullRegistration writes eventId straight into
+  // events_registrations.event_id, which is the events.id UUID — pass event.id,
+  // NOT event.event_id (the short public slug, e.g. "c9wc6r"), or the insert
+  // 22P02s ("invalid input syntax for type uuid").
   const eventData: EventData = {
-    eventId: event.event_id,
+    eventId: event.id,
     eventCity: event.event_city,
     eventCountryCode: event.event_country_code,
     venueAddress: event.venue_address,
@@ -1114,7 +1117,7 @@ async function handleUserCancelsEventRegistration(payload: UserCancelsEventRegis
   }
 
   // Cancel registration using shared utilities
-  const result = await cancelRegistration(supabase, payload.userEmail, event.event_id)
+  const result = await cancelRegistration(supabase, payload.userEmail, event.id)
 
   if (!result.success) {
     console.error('Failed to cancel registration:', result.error)
@@ -1239,7 +1242,7 @@ async function handleUserCheckin(
   }
 
   // Create or update attendance record
-  const attendance = await createEventAttendance(event.event_id, memberProfileId, checkinDate)
+  const attendance = await createEventAttendance(event.id, memberProfileId, checkinDate)
 
   await trackEventInCustomerIO(email, eventName, {
     event_name: payload.eventName,
@@ -1340,7 +1343,7 @@ async function handleUserAttendsEvent(payload: UserAttendsEventPayload): Promise
   }
 
   // Create or update attendance record
-  const attendance = await createEventAttendance(event.event_id, memberProfileId, payload.dateOfAttendance)
+  const attendance = await createEventAttendance(event.id, memberProfileId, payload.dateOfAttendance)
 
   await trackEventInCustomerIO(email, 'gradual_event_attendance', {
     event_name: payload.eventName,
@@ -1431,7 +1434,7 @@ async function handleUserUnChecksIn(payload: UserUnChecksInToEventPayload): Prom
   }
 
   // Remove attendance (set checked_out_at)
-  const success = await removeEventAttendance(event.event_id, memberProfileId, payload.dateOfUnCheckIn)
+  const success = await removeEventAttendance(event.id, memberProfileId, payload.dateOfUnCheckIn)
 
   await trackEventInCustomerIO(email, 'gradual_event_uncheckin', {
     event_name: payload.eventName,
