@@ -297,7 +297,7 @@ async function handleGuestRegistered(data: LumaGuestData): Promise<Response> {
     const { data: commSettings } = await supabase
       .from('events_communication_settings')
       .select('registrant_marketing_consent')
-      .eq('event_id', event.event_id)
+      .eq('event_id', event.id)
       .maybeSingle()
     registrantMarketingConsent = commSettings?.registrant_marketing_consent === true
   }
@@ -344,7 +344,9 @@ async function handleGuestRegistered(data: LumaGuestData): Promise<Response> {
   }
 
   const eventData: EventData = {
-    eventId: event.event_id,
+    // events_registrations.event_id is the events.id UUID — pass event.id, not
+    // the short public event_id, or createFullRegistration 22P02s.
+    eventId: event.id,
     eventCity: event.event_city,
     eventCountryCode: event.event_country_code,
     venueAddress: event.venue_address,
@@ -476,7 +478,7 @@ async function handleGuestUpdated(data: LumaGuestData): Promise<Response> {
 
   // Handle based on the new status
   if (newStatus === 'cancelled') {
-    const result = await cancelRegistration(supabase, data.user_email, event.event_id)
+    const result = await cancelRegistration(supabase, data.user_email, event.id)
 
     if (!result.success) {
       // If no registration found, it might not have been created yet
@@ -525,7 +527,7 @@ async function handleGuestUpdated(data: LumaGuestData): Promise<Response> {
   const result = await updateRegistrationStatus(
     supabase,
     data.user_email,
-    event.event_id,
+    event.id,
     newStatus
   )
 
