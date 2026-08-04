@@ -40,6 +40,9 @@ const segmentsModule: GatewazeModule = {
     'migrations/009_geo_aggregate.sql',
     // Topic-interest targeting via the governed signals topic graph.
     'migrations/010_topic_affinity.sql',
+    // event_registration: vocab returns the event UUID (not the short code) and
+    // the predicate resolves either form — fixes audiences silently going to 0.
+    'migrations/011_event_registration_uuid_fix.sql',
   ],
 
   adminRoutes: [
