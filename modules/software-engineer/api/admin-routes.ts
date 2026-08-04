@@ -104,12 +104,21 @@ export function mountAdminRoutes(router, deps) {
     return { available: true, pending, status };
   };
 
-  router.get('/staging-update/status', async (_req, res) => {
+  router.get('/staging-update/status', async (req, res) => {
+    if (!rateLimit(`se-admin:staging-status:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     if (!existsSync(STAGING_CONTROL)) return res.json({ available: false });
     res.json(stagingStatus());
   });
 
   router.post('/staging-update', async (req, res) => {
+    // Tight per-IP limit: this route writes a control file that restarts every
+    // service in the deployment, so cap it hard (defense in depth on top of the
+    // super-admin gate + the in-progress 409 guard below).
+    if (!rateLimit(`se-admin:staging-update:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     if (!existsSync(STAGING_CONTROL)) {
       return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no staging-update channel' } });
     }
