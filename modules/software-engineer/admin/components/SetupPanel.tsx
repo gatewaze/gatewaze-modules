@@ -11,6 +11,7 @@ import { Badge, Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { toast } from 'sonner';
 import { CommandLineIcon, KeyIcon, ShieldCheckIcon, PlusIcon, TrashIcon, FolderPlusIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { ProjectAvatar } from './ProjectAvatar';
 import MemoryReviewSection from './MemoryReviewSection';
 
 const API = '/api/modules/software-engineer/admin';
@@ -224,7 +225,7 @@ export default function SetupPanel(
           {projects.map((p) => (
             <button key={p.id} onClick={() => selectProject(p.id)}
               className={`block w-full text-left rounded-md px-3 py-2 border transition-colors ${pid === p.id ? 'border-[var(--gray-6)] bg-[var(--gray-3)]' : 'border-transparent hover:bg-[var(--gray-2)]'}`}>
-              <div className="text-sm font-medium text-[var(--gray-12)] flex items-center gap-2"><span>{p.avatar_emoji || '📁'}</span>{p.name}</div>
+              <div className="text-sm font-medium text-[var(--gray-12)] flex items-center gap-2"><ProjectAvatar emoji={p.avatar_emoji} className="size-4" />{p.name}</div>
               <div className="mt-0.5 flex items-center gap-1.5">
                 <Badge color={p.intake_enabled ? 'green' : 'gray'} variant="soft" size="1">{p.intake_enabled ? 'active' : 'off'}</Badge>
                 <span className="text-[11px] text-[var(--gray-10)]">max {p.max_concurrent_engineers ?? 2}{p.github_user_login ? ` · @${p.github_user_login}` : ''}</span>
