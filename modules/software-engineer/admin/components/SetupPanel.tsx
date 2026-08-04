@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { Badge, Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { toast } from 'sonner';
-import { CommandLineIcon, KeyIcon, ShieldCheckIcon, PlusIcon, TrashIcon, FolderPlusIcon } from '@heroicons/react/24/outline';
+import { CommandLineIcon, KeyIcon, ShieldCheckIcon, PlusIcon, TrashIcon, FolderPlusIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { ProjectAvatar } from './ProjectAvatar';
 import MemoryReviewSection from './MemoryReviewSection';
 
@@ -39,6 +39,59 @@ const Section = ({ icon, title, children }: any) => (
     <div className="flex items-center gap-2 font-medium mb-2">{icon}{title}</div>{children}
   </section>
 );
+
+// "Update staging" — deployment-optional (renders only where the operator
+// wired a /staging-control channel; see api/admin-routes.ts). Triggers the
+// host-side drain-aware update cycle: module repos fast-forward, services
+// restart, and the SE runner restarts only once its queue is idle — active
+// runs pause between phases, they are never killed. Super-admin only
+// (server-enforced).
+const ACTIVE_STATES = new Set(['pulling', 'restarting-services', 'draining-se', 'restarting-se-runner', 'rebuilding-admin']);
+function StagingUpdateSection() {
+  const [info, setInfo] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api('/staging-update/status').then(setInfo).catch(() => setInfo(null));
+  }, []);
+  const active = !!info && (info.pending || ACTIVE_STATES.has(info.status?.state));
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [active, load]);
+  if (!info?.available) return null;
+  const trigger = async () => {
+    setBusy(true);
+    try {
+      await api('/staging-update', { method: 'POST' });
+      toast.success('Staging update requested — SE runner restarts once its queue drains');
+      load();
+    } catch (e: any) {
+      toast.error(/403/.test(String(e?.message)) ? 'Super-admin access required' : `Update request failed: ${e?.message ?? e}`);
+    } finally { setBusy(false); }
+  };
+  const st = info.status;
+  return (
+    <Section icon={<ArrowPathIcon className="size-5" />} title="Staging deployment">
+      <p className="text-xs text-neutral-500 mb-2">
+        Pulls the latest merged module code onto this instance and restarts services.
+        Active SE runs are never killed — the runner restarts only between agent phases, once its queue is idle.
+      </p>
+      {st && (
+        <div className="text-sm mb-2 flex items-center gap-2">
+          <Badge color={st.state === 'done' ? 'green' : st.state === 'error' ? 'red' : 'blue'}>{info.pending && !ACTIVE_STATES.has(st.state) ? 'queued' : st.state}</Badge>
+          <span className="text-neutral-500 text-xs">{st.detail}</span>
+        </div>
+      )}
+      {!st && info.pending && <div className="text-sm mb-2"><Badge color="blue">queued</Badge></div>}
+      <Button size="sm" onClick={trigger} disabled={busy || active}>
+        <ArrowPathIcon className={`size-4 mr-1 ${active ? 'animate-spin' : ''}`} />
+        {active ? 'Update in progress…' : 'Update staging'}
+      </Button>
+    </Section>
+  );
+}
 
 export default function SetupPanel(
   { routeProjectId, onSelectProject }: { routeProjectId?: string | null; onSelectProject?: (id: string | null) => void } = {},
@@ -293,6 +346,8 @@ export default function SetupPanel(
               </div>
 
               <MemoryReviewSection projectId={pid} onMessage={setMsg} />
+
+              <StagingUpdateSection />
 
               <section className="rounded-lg border p-4">
                 <div className="font-medium mb-1">Code repos</div>
