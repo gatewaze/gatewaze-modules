@@ -30,7 +30,8 @@ import OverviewView from './OverviewView';
 import { filterLabelForParam } from './overview-filters';
 import { isNearBottom } from './autoscroll';
 
-const API = '/api/modules/software-engineer/admin';
+// Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
+const API = `${(import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
 
 async function api(path: string, init?: RequestInit) {
   const { data } = await supabase.auth.getSession();
