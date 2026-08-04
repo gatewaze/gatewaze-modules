@@ -13,7 +13,7 @@ import MemoryReviewSection from './MemoryReviewSection';
 import { ProjectAvatar } from './ProjectAvatar';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
-const API = `${(import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
+const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
 
 async function api(path: string) {
   const { data } = await supabase.auth.getSession();
