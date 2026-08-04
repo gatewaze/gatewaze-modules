@@ -122,7 +122,12 @@ END $$;
 CREATE TABLE IF NOT EXISTS public.events_talk_speakers (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   talk_id     uuid NOT NULL REFERENCES public.events_talks(id) ON DELETE CASCADE,
-  speaker_id  uuid NOT NULL REFERENCES public.events_speakers(id) ON DELETE CASCADE,
+  -- speaker_id is the cross-event speaker IDENTITY (events_speaker_profiles) —
+  -- the same id events_speakers.speaker_id carries. The submission fn, the
+  -- 008/010 views, and createSpeaker all rely on this. (Fresh DBs built before
+  -- this line was corrected point at events_speakers(id); migration 011
+  -- reconciles them.)
+  speaker_id  uuid NOT NULL REFERENCES public.events_speaker_profiles(id) ON DELETE CASCADE,
   role        text DEFAULT 'presenter'
     CHECK (role IN ('presenter', 'panelist', 'moderator', 'co_presenter', 'host')),
   is_primary  boolean DEFAULT true,
