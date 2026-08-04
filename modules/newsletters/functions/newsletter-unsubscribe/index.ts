@@ -79,6 +79,43 @@ interface SubscriptionListView {
   subscribed: boolean;
 }
 
+/**
+ * Best-effort audit trail for unsubscribe attempts. POSTs whose token passed
+ * HMAC verification (the paths that carry real user intent — RFC 8058
+ * one-click, the confirmation form, the Subscription Centre) leave an
+ * email_events row: 'unsubscribed' on success, 'unsubscribe_failed' with a
+ * failure_reason otherwise. Before this existed, a failed one-click (e.g.
+ * Gmail's unsubscribe button hitting a 500) left no trace anywhere, making
+ * "I unsubscribed several times" reports impossible to verify.
+ *
+ * ONLY call this with an HMAC-verified email/list_id. Pre-verification
+ * failures (missing/malformed token, signature mismatch) must NOT reach the
+ * DB: the email inside an unverified token is attacker-chosen, so logging it
+ * would let an unauthenticated caller poison the audit trail and grow the
+ * table without bound. Those branches console.warn instead (visible in
+ * function logs). Never throws — logging must not break the unsubscribe.
+ */
+async function logUnsubAttempt(
+  entry: { email: string; listId: string | null; ok: boolean; path: string; reason?: string },
+): Promise<void> {
+  try {
+    const sb = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    )
+    await sb.from('email_events').insert({
+      email: entry.email,
+      event_type: entry.ok ? 'unsubscribed' : 'unsubscribe_failed',
+      event_timestamp: new Date().toISOString(),
+      failure_reason: entry.ok ? null : (entry.reason ?? 'unknown'),
+      raw_payload: { origin: 'newsletter-unsubscribe', path: entry.path, list_id: entry.listId },
+      source: 'gatewaze',
+    })
+  } catch (err) {
+    console.error('Unsubscribe attempt logging failed:', err)
+  }
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
@@ -169,6 +206,14 @@ async function handler(req: Request) {
     )
   }
 
+  // Audit context for the outer catch — set as soon as the token decodes so
+  // even an unexpected 500 on a POST leaves an attributable trail.
+  let auditEmail: string | null = null
+  let auditListId: string | null = null
+  let auditPath = 'post'
+  // Guards the outer catch from double-logging a failure already recorded.
+  let audited = false
+
   try {
     let email: string
     let listId: string
@@ -252,8 +297,15 @@ async function handler(req: Request) {
         // Mark confirm=true implicitly — the mailbox provider's POST IS the user's intent.
         body.confirm = '1'
       }
+      auditPath = isRfc8058 ? 'rfc8058-one-click'
+        : body.action ? `subscription-centre:${String(body.action)}`
+        : 'confirm-form'
 
+      // Pre-verification rejections are console-logged only — an unverified
+      // token's contents are attacker-chosen, so they never reach the DB
+      // audit trail (see logUnsubAttempt).
       if (!body.token) {
+        console.warn(`Unsubscribe POST rejected (${auditPath}): missing token`)
         return new Response(
           JSON.stringify({ success: false, error: 'Token required' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -263,6 +315,7 @@ async function handler(req: Request) {
       const tokenStr = String(body.token)
       const decoded = decodeToken(tokenStr)
       if (!decoded) {
+        console.warn(`Unsubscribe POST rejected (${auditPath}): malformed token`)
         return new Response(
           JSON.stringify({ success: false, error: 'Invalid token' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -271,11 +324,15 @@ async function handler(req: Request) {
 
       const valid = await hmacVerify(decoded.payloadStr, decoded.signature, hmacSecret)
       if (!valid) {
+        console.warn(`Unsubscribe POST rejected (${auditPath}): hmac signature mismatch`)
         return new Response(
           JSON.stringify({ success: false, error: 'Invalid token signature' }),
           { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
+      // Token verified — decoded.* is now trustworthy for the audit trail.
+      auditEmail = decoded.email
+      auditListId = decoded.listId
 
       // Subscription Centre actions. A verified token authorises managing ANY
       // of that email's lists (not just the one the token was minted for).
@@ -292,7 +349,7 @@ async function handler(req: Request) {
           let unsubscribedListId: string | null = null
           if (body.unsubscribe === true) {
             const nowIso = new Date().toISOString()
-            await sb.from('list_subscriptions').upsert(
+            const { error: prefErr } = await sb.from('list_subscriptions').upsert(
               {
                 email: decoded.email,
                 list_id: decoded.listId,
@@ -302,6 +359,17 @@ async function handler(req: Request) {
               },
               { onConflict: 'list_id,email' }
             )
+            await logUnsubAttempt({
+              email: decoded.email, listId: decoded.listId, ok: !prefErr,
+              path: auditPath, reason: prefErr ? `db error: ${prefErr.message}` : undefined,
+            })
+            if (prefErr) {
+              console.error('Subscription-centre unsubscribe error:', prefErr)
+              return new Response(
+                JSON.stringify({ success: false, error: 'Failed to process unsubscribe' }),
+                { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              )
+            }
             unsubscribedListId = decoded.listId
           }
           const lists = await loadSubscriptionLists(sb, decoded.email)
@@ -329,6 +397,14 @@ async function handler(req: Request) {
           },
           { onConflict: 'list_id,email' }
         )
+        // Audit only unsubscribes — a 'set' to subscribed=true is a re-subscribe,
+        // which isn't part of this trail.
+        if (body.subscribed === false) {
+          await logUnsubAttempt({
+            email: decoded.email, listId: body.list_id, ok: !setErr,
+            path: auditPath, reason: setErr ? `db error: ${setErr.message}` : undefined,
+          })
+        }
         if (setErr) {
           console.error('Subscription set error:', setErr)
           return new Response(
@@ -382,6 +458,12 @@ async function handler(req: Request) {
         { onConflict: 'list_id,email' }
       )
 
+    await logUnsubAttempt({
+      email, listId, ok: !error,
+      path: auditPath, reason: error ? `db error: ${error.message}` : undefined,
+    })
+    audited = true
+
     if (error) {
       console.error('Unsubscribe error:', error)
       throw new Error('Failed to process unsubscribe')
@@ -406,6 +488,16 @@ async function handler(req: Request) {
 
   } catch (error) {
     console.error('Unsubscribe handler error:', error)
+
+    // A POST that blew up unexpectedly is still a user's unsubscribe attempt —
+    // record it, but only when the token verified (auditEmail set) and the
+    // failing step didn't already log it.
+    if (req.method === 'POST' && auditEmail && !audited) {
+      await logUnsubAttempt({
+        email: auditEmail, listId: auditListId, ok: false, path: auditPath,
+        reason: `internal error: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    }
 
     const acceptsHtml = (req.headers.get('accept') ?? '').includes('text/html')
     if (acceptsHtml) {
