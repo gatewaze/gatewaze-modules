@@ -639,7 +639,7 @@ async function matchPendingRegistrations(brandId: string): Promise<number> {
 
     const { data: event } = await supabase
       .from('events')
-      .select('event_id')
+      .select('id, event_id')
       .eq('luma_event_id', pending.luma_event_id)
       .maybeSingle()
 
@@ -677,14 +677,15 @@ async function matchPendingRegistrations(brandId: string): Promise<number> {
     }
 
     const eventData: EventData = {
-      eventId: event.event_id,
+      // events_registrations.event_id is the events.id UUID, not the short slug.
+      eventId: event.id,
     }
 
     // Look up per-event marketing consent setting for this event
     const { data: pendingCommSettings } = await supabase
       .from('events_communication_settings')
       .select('registrant_marketing_consent')
-      .eq('event_id', event.event_id)
+      .eq('event_id', event.id)
       .maybeSingle()
     const pendingMarketingConsent = pendingCommSettings?.registrant_marketing_consent === true
 
