@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveProjectAvatar, projectOptionLabel } from '../components/projectAvatar';
+import { resolveProjectAvatar, projectOptionLabel } from '../components/projectAvatarUtils';
 
 // Issue #27 — the SE admin UI standardised on outline SVG icons; the project "folder" mark now
 // falls back to <FolderIcon> instead of a coloured `📁` emoji. The single behavioural invariant is
