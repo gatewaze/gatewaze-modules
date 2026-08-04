@@ -128,9 +128,9 @@ describe('POST /engineers/interactive', () => {
     const insert = supa.__calls.inserts.find((c) => c.table === 'se_runs');
     expect(insert.row).toMatchObject({ kind: 'interactive', status: 'running', current_phase: 'interactive', issue_number: null });
     expect(insert.row.branch_name).toMatch(/^agent\/interactive-/);
-    // enqueued to the shared jobs queue as software-engineer:interactive with the run id.
+    // enqueued to the dedicated `se` queue as software-engineer:interactive with the run id.
     expect(enqueued).toHaveLength(1);
-    expect(enqueued[0][0]).toBe('jobs');
+    expect(enqueued[0][0]).toBe('se');
     expect(enqueued[0][1]).toBe('software-engineer:interactive');
     expect(enqueued[0][2]).toMatchObject({ runId: 'run-9' });
   });
