@@ -15,6 +15,7 @@ import { mergeRunPrs } from '../lib/merge-prs.js';
 import { dispatchProject } from '../lib/dispatch.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
+import { parseSkillsConfig } from '../lib/skills.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
@@ -40,7 +41,7 @@ const PROJECT_MASKED =
   ' model_cred_last4, model_cred_kind, model, model_health, model_checked_at,' +
   ' commit_author_name, commit_author_email,' +
   ' allowed_labellers, intake_enabled, autonomy_mode, max_concurrent_engineers, max_interactive_engineers,' +
-  ' has_mcp_config,' +
+  ' has_mcp_config, skills,' +
   ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, created_at, updated_at';
 
 const sanitize = (v: unknown) =>
@@ -902,6 +903,11 @@ export function mountAdminRoutes(router, deps) {
     }
     if (b.name !== undefined && !patch.name) return res.status(400).json({ error: 'name cannot be empty' });
     if (Array.isArray(b.allowed_labellers)) patch.allowed_labellers = b.allowed_labellers.map(String);
+    // §7.5a: per-project skills. Validate + normalise through the SAME guard the runner uses
+    // (parseSkillsConfig) so an unsafe repo/path/ref can never be persisted; an explicit non-array
+    // clears it to []. This is an admin-only route, but the skills feed a Bash-capable session, so
+    // the shape is enforced here too, not just trusted from the client.
+    if (b.skills !== undefined) patch.skills = parseSkillsConfig(b.skills);
     if (b.github_token) {
       const s = sealToken(String(b.github_token));
       patch.github_token_ciphertext = s.ciphertext; patch.github_token_last4 = s.last4; patch.github_health = 'unknown';

@@ -15,6 +15,7 @@ import { resolveCommitIdentity } from './credentials.js';
 import { recallMemory, listMemorySources } from './memory.js';
 import { buildMemoryMcpServer } from './memory-tools.js';
 import { resolveMcpServers, mcpSecretValues } from './mcp.js';
+import { resolveProjectSkills } from './skills.js';
 import { redactSecrets } from './git.js';
 import { downloadIssueAttachments, downloadAttachmentUrls, ATTACH_DIRNAME } from './attachments.js';
 import { githubClient } from './github.js';
@@ -126,6 +127,11 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     // On-demand project-memory tools (wiki_search / wiki_read), scoped to this project + its linked
     // sources. canUseTool auto-approves; isolation is enforced inside the tools by use_case allowlist.
     try { const mem = buildMemoryMcpServer(run.project_id, memorySources); if (mem) mcpServers = { ...mcpServers, 'se-memory': mem }; } catch { /* no memory tools */ }
+    // §7.5a: per-project skills → local plugin dirs (admin-configured repos, cloned into an ephemeral
+    // per-run temp dir). Soft: []. cleanupSkills removes that dir in finally (see skills.ts isolation).
+    let plugins = [];
+    let cleanupSkills = async () => {};
+    try { const sk = await resolveProjectSkills(project, project.githubToken, ctx?.logger); plugins = sk.plugins; cleanupSkills = sk.cleanup; } catch { /* no skills */ }
 
     await status(`Starting the agent (${phase})`, 'start');
     // Heartbeat: while the agent works, bump se_runs.updated_at every 20s so a live-but-quiet run stays
@@ -142,12 +148,14 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
         allowedTools: spec.allowedTools,
         systemAppend,
         mcpServers,
+        plugins,
         inputSource: inputCh ? withChatImages(inputCh[Symbol.asyncIterator](), spec.cwd, project.githubToken) : undefined,
         onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
         onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
       });
     } finally {
       clearInterval(heartbeat);
+      try { await cleanupSkills(); } catch { /* ignore */ }
     }
     try { inputCh?.close?.(); } catch { /* ignore */ }
     // Scrub EVERY run secret from the SDK's raw stderr before it reaches se_phases/se_runs/UI — the
@@ -254,6 +262,11 @@ export async function runInteractiveSession(supabase, ctx, run, project, spec) {
     try { mcpServers = resolveMcpServers(project); } catch { /* no tools */ }
     // On-demand project-memory tools, scoped to this project + its linked sources.
     try { const mem = buildMemoryMcpServer(run.project_id, memorySources); if (mem) mcpServers = { ...mcpServers, 'se-memory': mem }; } catch { /* no memory tools */ }
+    // §7.5a: per-project skills as local plugins (admin-configured, cloned into an ephemeral per-run
+    // temp dir; cleanupSkills removes it in the outer finally). Soft: [].
+    let plugins = [];
+    let cleanupSkills = async () => {};
+    try { const sk = await resolveProjectSkills(project, project.githubToken, ctx?.logger); plugins = sk.plugins; cleanupSkills = sk.cleanup; } catch { /* no skills */ }
 
     // Idle + wall-clock caps so an abandoned session frees its runner worker. A cap fires a system
     // note into the transcript, then ends the input stream (→ ends the session). The worker sets the
@@ -282,12 +295,14 @@ export async function runInteractiveSession(supabase, ctx, run, project, spec) {
         allowedTools: spec.allowedTools,
         systemAppend,
         mcpServers,
+        plugins,
         inputSource,
         onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
         onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
       });
     } finally {
       clearInterval(heartbeat);
+      try { await cleanupSkills(); } catch { /* ignore */ }
     }
     if (result?.error) {
       try { result.error = redactSecrets(result.error, [project.githubToken, project.modelCred, ...mcpSecretValues(mcpServers)]); } catch { /* best-effort */ }
@@ -347,6 +362,11 @@ export async function runAgentPhase(supabase, ctx, run, settings, phase, spec) {
     try { memorySources = await listMemorySources(supabase, run.project_id); } catch { /* soft */ }
     let mcpServers = {};
     try { const mem = buildMemoryMcpServer(run.project_id, memorySources); if (mem) mcpServers = { 'se-memory': mem }; } catch { /* no memory tools */ }
+    // §7.5a: per-project skills as local plugins (admin-configured, cloned into an ephemeral per-run
+    // temp dir; cleanupSkills removes it in the inner finally — skills aren't needed after runPhase). Soft: [].
+    let plugins = [];
+    let cleanupSkills = async () => {};
+    try { const sk = await resolveProjectSkills(settings, token, ctx?.logger); plugins = sk.plugins; cleanupSkills = sk.cleanup; } catch { /* no skills */ }
 
     const systemAppend =
       (spec.systemAppend ? spec.systemAppend + '\n\n' : '') +
@@ -366,12 +386,14 @@ export async function runAgentPhase(supabase, ctx, run, settings, phase, spec) {
         allowedTools: spec.allowedTools,
         systemAppend,
         mcpServers,
+        plugins,
         inputSource: inputCh ? withChatImages(inputCh[Symbol.asyncIterator](), ws.repoDir, token) : undefined,
         onEvent: async (ev) => { try { await writeEvent(supabase, run, phase, seq++, ev.kind, ev.payload); } catch { /* best-effort */ } },
         onAgentMessage: async (t) => { try { await writeMessage(supabase, run, 'agent', t, { subSessionId: phase }); } catch { /* best-effort */ } },
       });
     } finally {
       clearInterval(heartbeat);
+      try { await cleanupSkills(); } catch { /* ignore */ }
     }
 
     return {
