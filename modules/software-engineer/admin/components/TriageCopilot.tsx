@@ -12,8 +12,8 @@
  */
 import React, { useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Button } from '@/components/ui';
 import { SparklesIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
+import { TRIAGE_SEND_BUTTON_CLASS } from './triageButtonStyles';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -107,9 +107,18 @@ export default function TriageCopilot({
           disabled={busy}
           className="flex-1 min-w-0 rounded-md border px-3 py-2 text-sm"
         />
-        <Button size="sm" onClick={send} disabled={busy || !input.trim() || !projectId} aria-label="Send">
+        {/* Native <button> (not the Radix <Button>): this component also renders inside the
+            "Report feedback" widget's detached root, outside the app's <Theme> — a Radix button
+            there has no CSS theme vars and collapses to an unstyled grey box (issue #31). */}
+        <button
+          type="button"
+          onClick={send}
+          disabled={busy || !input.trim() || !projectId}
+          aria-label="Send"
+          className={TRIAGE_SEND_BUTTON_CLASS}
+        >
           <PaperAirplaneIcon className="size-4" />
-        </Button>
+        </button>
       </div>
     </div>
   );
