@@ -134,7 +134,7 @@ describe('POST /runs/:id/merge', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ merged: 1, held: 0, results: [{ repo: 'acme/app', pr_number: 7, outcome: 'merged' }] });
     expect(mp.calls).toHaveLength(1);
-    expect(enqueued).toEqual([['jobs', 'software-engineer:pr-monitor', { runId: RID }]]);
+    expect(enqueued).toEqual([['se', 'software-engineer:pr-monitor', { runId: RID }]]);
   });
 
   it('returns held results without nudging pr-monitor when nothing merged', async () => {
@@ -153,6 +153,6 @@ describe('POST /runs/:id/merge', () => {
     const res = mockRes();
     await router.handler('POST /runs/:id/merge')({ params: { id: RID } }, res);
     expect(res.statusCode).toBe(200);
-    expect(enqueued).toEqual([['jobs', 'software-engineer:pr-monitor', { runId: RID }]]);
+    expect(enqueued).toEqual([['se', 'software-engineer:pr-monitor', { runId: RID }]]);
   });
 });
