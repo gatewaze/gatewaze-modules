@@ -10,6 +10,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import MemoryReviewSection from './MemoryReviewSection';
+import { ProjectAvatar } from './ProjectAvatar';
 
 const API = '/api/modules/software-engineer/admin';
 
@@ -48,7 +49,7 @@ export default function PendingApprovals({ projects }: { projects: Array<{ id: s
         return (
           <div key={id} className="space-y-1">
             {(projects ?? []).length > 1 && (
-              <div className="text-xs font-medium text-[var(--gray-11)]">{p?.avatar_emoji || '📁'} {p?.name ?? id}</div>
+              <div className="text-xs font-medium text-[var(--gray-11)] flex items-center gap-1"><ProjectAvatar emoji={p?.avatar_emoji} className="size-3.5" /> {p?.name ?? id}</div>
             )}
             <MemoryReviewSection projectId={id} onChanged={scan} />
           </div>

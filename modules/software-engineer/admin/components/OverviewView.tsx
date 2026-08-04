@@ -18,6 +18,8 @@ import {
   ExclamationTriangleIcon, CpuChipIcon, Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import { CARD_FILTERS, statusesToParam } from './overview-filters';
+import { ProjectAvatar } from './ProjectAvatar';
+import { projectOptionLabel } from './projectAvatar';
 import PrBoard from './PrBoard';
 import { isGatewayError, StartingBanner } from './starting';
 import PendingApprovals from './PendingApprovals';
@@ -172,7 +174,7 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
           className="rounded-md border border-[var(--gray-6)] bg-transparent px-2 py-1.5 text-sm"
         >
           <option value="">All projects</option>
-          {projects.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
+          {projects.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
         </select>
       )}
 
@@ -252,7 +254,7 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
                   <tbody>
                     {byProject.map((p) => (
                       <tr key={p.project_id} className="border-b border-[var(--gray-3)] last:border-0">
-                        <td className="py-1.5 pr-3 text-[var(--gray-12)] truncate">{p.avatar_emoji || '📁'} {p.name ?? '—'}</td>
+                        <td className="py-1.5 pr-3 text-[var(--gray-12)] truncate"><span className="inline-flex items-center gap-1"><ProjectAvatar emoji={p.avatar_emoji} className="size-4" /> {p.name ?? '—'}</span></td>
                         <td className="py-1.5 px-3 text-right tabular-nums text-[var(--gray-12)]">{nf.format(p.total ?? 0)}</td>
                         <td className="py-1.5 px-3 text-right tabular-nums text-[var(--gray-11)]">{nf.format(p.active ?? 0)}</td>
                         <td className="py-1.5 px-3 text-right tabular-nums text-green-600">{nf.format(p.merged ?? 0)}</td>
