@@ -18,10 +18,13 @@ import {
   CommandLineIcon, Cog6ToothIcon, ArrowPathIcon, ArrowUturnLeftIcon,
   XCircleIcon, PaperAirplaneIcon, ArrowTopRightOnSquareIcon, ArchiveBoxIcon, ClipboardDocumentListIcon,
   ChartBarIcon, PlayCircleIcon, StopCircleIcon, ArrowDownIcon, ArrowsRightLeftIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
 import TriageCopilot from './TriageCopilot';
+import { ProjectAvatar } from './ProjectAvatar';
+import { projectOptionLabel } from './projectAvatar';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 import { filterLabelForParam } from './overview-filters';
@@ -334,7 +337,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             className="w-full mb-2 rounded-md border border-[var(--gray-6)] bg-transparent px-2 py-1.5 text-sm"
           >
             <option value="">All projects</option>
-            {projectList.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
+            {projectList.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
           </select>
         )}
         {statusFilter && (
@@ -364,7 +367,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 text-sm"
                 aria-label="Project for a new interactive engineer"
               >
-                {projectList.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
+                {projectList.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
               </select>
             )}
             <Button variant="soft" size="sm" onClick={startInteractive} disabled={starting} className={projectList.length > 1 ? 'shrink-0' : 'w-full'}>
@@ -404,7 +407,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <Badge color={STATUS_COLOR[r.status] ?? 'gray'} size="1">{r.status}</Badge>
               <span className="text-xs text-[var(--gray-10)]">{r.current_phase}</span>
-              {r.project?.name && <span className="text-[11px] text-[var(--gray-10)] ml-auto">{r.project.avatar_emoji || '📁'} {r.project.name}{r.engineer_name ? ` · ${r.engineer_name}` : ''}</span>}
+              {r.project?.name && <span className="text-[11px] text-[var(--gray-10)] ml-auto inline-flex items-center gap-1"><ProjectAvatar emoji={r.project.avatar_emoji} className="size-3.5" /> {r.project.name}{r.engineer_name ? ` · ${r.engineer_name}` : ''}</span>}
             </div>
           </button>
         ))}
@@ -432,7 +435,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 {detail.run.pr_state && detail.run.pr_state !== detail.run.status && (
                   <Badge color={STATUS_COLOR[detail.run.pr_state] ?? 'gray'} variant="soft" size="1">PR: {detail.run.pr_state}</Badge>
                 )}
-                {detail.run.project?.name && <span className="text-xs text-[var(--gray-10)]">{detail.run.project.avatar_emoji || '📁'} {detail.run.project.name}</span>}
+                {detail.run.project?.name && <span className="text-xs text-[var(--gray-10)] inline-flex items-center gap-1"><ProjectAvatar emoji={detail.run.project.avatar_emoji} className="size-4" /> {detail.run.project.name}</span>}
                 {detail.run.engineer_name && <span className="text-xs text-[var(--gray-10)]">🧑‍💻 {detail.run.engineer_name}</span>}
                 {detail.run.revise_count > 0 && <span className="text-xs text-[var(--gray-10)]">· {detail.run.revise_count} revision{detail.run.revise_count > 1 ? 's' : ''}</span>}
                 {detail.run.pr_url && (
@@ -694,7 +697,7 @@ function IssuesView() {
             onClick={() => setShowTriage((v) => !v)}
             className={`ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${showTriage ? 'border-blue-400 text-blue-600' : 'border-[var(--gray-6)] text-[var(--gray-11)] hover:text-[var(--gray-12)]'}`}
           >
-            ✨ AI triage
+            <SparklesIcon className="size-4" aria-hidden /> AI triage
           </button>
         </div>
         {/* §10.5 triage copilot: converses, then prefills the form below — the human still reviews
@@ -707,7 +710,7 @@ function IssuesView() {
         )}
         <div className="flex flex-col sm:flex-row gap-2">
           <select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })} className="rounded-md border px-2 py-1.5 text-sm">
-            {projects.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
+            {projects.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
           </select>
           <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Title" className="flex-1 min-w-0 rounded-md border px-3 py-1.5 text-sm" />
         </div>
@@ -738,7 +741,7 @@ function IssuesView() {
       {projects.length > 1 && (
         <select value={filter} onChange={(e) => setFilter(e.target.value)} className="rounded-md border px-2 py-1.5 text-sm">
           <option value="">All projects</option>
-          {projects.map((p) => <option key={p.id} value={p.id}>{p.avatar_emoji || '📁'} {p.name}</option>)}
+          {projects.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
         </select>
       )}
       {loading ? <div className="p-8 flex justify-center"><LoadingSpinner /></div>
@@ -749,7 +752,7 @@ function IssuesView() {
               <div key={issueKey(i)} className="flex items-center justify-between rounded-md border p-2.5 gap-2">
                 <div className="min-w-0">
                   <a href={i.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-[var(--gray-12)] hover:underline block truncate">{i.title}</a>
-                  <div className="text-[11px] text-[var(--gray-10)] truncate">{i.project?.avatar_emoji || '📁'} {i.project?.name} · {i.repo}#{i.number}</div>
+                  <div className="text-[11px] text-[var(--gray-10)] truncate flex items-center gap-1"><ProjectAvatar emoji={i.project?.avatar_emoji} className="size-3.5" /><span className="truncate">{i.project?.name} · {i.repo}#{i.number}</span></div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {i.run && <Badge color={STATUS_COLOR[i.run.status] ?? 'gray'} variant="soft" size="1">{i.run.status}{i.run.engineer_name ? ` · ${i.run.engineer_name}` : ''}</Badge>}
