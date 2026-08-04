@@ -17,12 +17,10 @@
 -- portal keeps using the untouched `status`. Correlated subqueries pick the talk
 -- where this speaker is the primary presenter (events_talk_speakers.is_primary).
 --
--- Join key: events_talk_speakers.speaker_id FKs to events_speakers(id) (migration
--- 001; the createSpeaker path inserts the bridge with the participation row's id).
--- So we join ts.speaker_id = es.id — the same key migration 008's
--- events_talks_with_speakers view uses. (events_speakers.speaker_id is the
--- separate, often-NULL events_speaker_profiles FK; joining on it silently returns
--- no talk for people-path speakers.)
+-- Join key: BOTH events_talk_speakers.speaker_id and events_speakers.speaker_id
+-- FK to events_speaker_profiles(id) (the cross-event speaker identity), so we
+-- join ts.speaker_id = es.speaker_id. Migration 011 reconciles any environment
+-- whose bridge FK still points at events_speakers(id) so this holds everywhere.
 --
 -- CREATE OR REPLACE (columns only appended at the end) — preserves grants and
 -- the existing column contract for portal / slack / speaker-tab consumers.
@@ -57,11 +55,11 @@ DO $$ BEGIN
         espon.sponsor_name, espon.sponsor_logo_url, espon.tier AS sponsor_tier,
         (SELECT t.status FROM public.events_talk_speakers ts
            JOIN public.events_talks t ON t.id = ts.talk_id
-          WHERE ts.speaker_id = es.id AND t.event_uuid = es.event_uuid AND ts.is_primary = true
+          WHERE ts.speaker_id = es.speaker_id AND t.event_uuid = es.event_uuid AND ts.is_primary = true
           ORDER BY ts.sort_order NULLS LAST LIMIT 1) AS primary_talk_status,
         (SELECT t.submitted_at FROM public.events_talk_speakers ts
            JOIN public.events_talks t ON t.id = ts.talk_id
-          WHERE ts.speaker_id = es.id AND t.event_uuid = es.event_uuid AND ts.is_primary = true
+          WHERE ts.speaker_id = es.speaker_id AND t.event_uuid = es.event_uuid AND ts.is_primary = true
           ORDER BY ts.sort_order NULLS LAST LIMIT 1) AS primary_talk_submitted_at
       FROM public.events_speakers es
       LEFT JOIN public.events_speaker_profiles sp ON sp.id = es.speaker_id
@@ -98,11 +96,11 @@ DO $$ BEGIN
         NULL::text AS sponsor_tier,
         (SELECT t.status FROM public.events_talk_speakers ts
            JOIN public.events_talks t ON t.id = ts.talk_id
-          WHERE ts.speaker_id = es.id AND t.event_uuid = es.event_uuid AND ts.is_primary = true
+          WHERE ts.speaker_id = es.speaker_id AND t.event_uuid = es.event_uuid AND ts.is_primary = true
           ORDER BY ts.sort_order NULLS LAST LIMIT 1) AS primary_talk_status,
         (SELECT t.submitted_at FROM public.events_talk_speakers ts
            JOIN public.events_talks t ON t.id = ts.talk_id
-          WHERE ts.speaker_id = es.id AND t.event_uuid = es.event_uuid AND ts.is_primary = true
+          WHERE ts.speaker_id = es.speaker_id AND t.event_uuid = es.event_uuid AND ts.is_primary = true
           ORDER BY ts.sort_order NULLS LAST LIMIT 1) AS primary_talk_submitted_at
       FROM public.events_speakers es
       LEFT JOIN public.events_speaker_profiles sp ON sp.id = es.speaker_id

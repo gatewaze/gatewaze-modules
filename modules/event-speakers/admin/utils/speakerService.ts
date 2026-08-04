@@ -156,12 +156,70 @@ export class SpeakerService {
     return data;
   }
 
+  /**
+   * Find or create the cross-event speaker identity (events_speaker_profiles) for
+   * the person behind a people_profile, returning its id. This is the id that
+   * events_speakers.speaker_id AND the events_talk_speakers bridge both FK to —
+   * without it the speaker renders as "Unknown Speaker" and drops out of the
+   * By-Speaker view. Deduped by person_id, matching events-speaker-submission.
+   */
+  private static async resolveSpeakerProfileId(input: CreateEventSpeakerInput): Promise<string> {
+    const { data: pprofile, error: ppErr } = await supabase
+      .from('people_profiles')
+      .select('person_id')
+      .eq('id', input.people_profile_id)
+      .single();
+    if (ppErr || !pprofile?.person_id) {
+      throw ppErr ?? new Error('Cannot resolve person for speaker profile');
+    }
+    const personId = pprofile.person_id as string;
+
+    const { data: existing } = await supabase
+      .from('events_speaker_profiles')
+      .select('id')
+      .eq('person_id', personId)
+      .maybeSingle();
+    if (existing?.id) return existing.id as string;
+
+    const { data: person } = await supabase
+      .from('people')
+      .select('email, attributes')
+      .eq('id', personId)
+      .single();
+    const attrs = (person?.attributes ?? {}) as Record<string, string | undefined>;
+    const fullName = [attrs.first_name, attrs.last_name].filter(Boolean).join(' ').trim();
+
+    const { data: created, error: profErr } = await supabase
+      .from('events_speaker_profiles')
+      .insert({
+        person_id: personId,
+        name: fullName || person?.email || 'Unknown',
+        email: person?.email ?? null,
+        title: input.speaker_title || attrs.job_title || null,
+        company: attrs.company || null,
+        bio: input.speaker_bio || null,
+        linkedin_url: attrs.linkedin_url || null,
+        is_active: true,
+      })
+      .select('id')
+      .single();
+    if (profErr || !created?.id) {
+      throw profErr ?? new Error('Failed to create speaker profile');
+    }
+    return created.id as string;
+  }
+
   static async createSpeaker(input: CreateEventSpeakerInput): Promise<EventSpeaker> {
+    // Resolve the cross-event speaker identity first; the participation row and
+    // the talk bridge below both reference it.
+    const speakerProfileId = await SpeakerService.resolveSpeakerProfileId(input);
+
     // Create the speaker record (speaker-specific fields only)
     const { data: speaker, error: speakerError } = await supabase
       .from('events_speakers')
       .insert([{
         event_uuid: input.event_uuid,
+        speaker_id: speakerProfileId,
         people_profile_id: input.people_profile_id,
         speaker_title: input.speaker_title,
         speaker_bio: input.speaker_bio,
@@ -204,12 +262,15 @@ export class SpeakerService {
         throw talkError;
       }
 
-      // Link the speaker to the talk
+      // Link the talk to the cross-event speaker identity. The bridge FK targets
+      // events_speaker_profiles(id) (= es.speaker_id), NOT the participation
+      // row's id — using speaker.id here is what left admin-added speakers as
+      // "Unknown Speaker" with no By-Speaker entry.
       const { error: linkError } = await supabase
         .from('events_talk_speakers')
         .insert([{
           talk_id: talk.id,
-          speaker_id: speaker.id,
+          speaker_id: speakerProfileId,
           role: 'presenter',
           is_primary: true,
           sort_order: 0,
