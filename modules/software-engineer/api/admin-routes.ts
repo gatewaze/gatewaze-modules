@@ -813,16 +813,24 @@ export function mountAdminRoutes(router, deps) {
     try {
       const created = await gh.createIssue(proj.issuesRepoOwner, proj.issuesRepoName, { title, body, labels: assign ? [proj.triggerLabel] : [] });
       let runId = null;
-      if (assign) {
+      let delegated = null;
+      const inst = process.env.SE_INSTANCE_ID || 'default';
+      if (assign && proj.primaryInstanceId && proj.primaryInstanceId !== inst) {
+        // Cross-instance intake (§2.2): THIS instance is intake-only for the project (e.g. prod files
+        // feedback; staging runs the agents). The trigger label is on the issue — the OWNING instance
+        // discovers it via its webhook or the intake-poll cron. Never create/dispatch a local run
+        // here: with no runner on this instance the job would strand on an unconsumed queue.
+        delegated = proj.primaryInstanceId;
+      } else if (assign) {
         const { data: run } = await supabase.from('se_runs').insert({
-          site_id: proj.siteId, project_id: projectId, instance_id: process.env.SE_INSTANCE_ID || 'default',
+          site_id: proj.siteId, project_id: projectId, instance_id: inst,
           repo_owner: proj.issuesRepoOwner, repo_name: proj.issuesRepoName, issue_number: created.number,
           title, labeller: authorOf(req), status: 'queued', current_phase: 'intake',
         }).select('id').single();
         runId = run?.id ?? null;
         await dispatchProject(supabase, { enqueueJob }, projectId);
       }
-      res.status(201).json({ number: created.number, url: created.html_url, runId, attachmentsAttached: validUrls.length, attachmentsDropped });
+      res.status(201).json({ number: created.number, url: created.html_url, runId, delegated, attachmentsAttached: validUrls.length, attachmentsDropped });
     } catch (e) {
       logger?.warn?.('se: create issue failed', { error: String(e) });
       res.status(500).json({ error: 'create failed' });
