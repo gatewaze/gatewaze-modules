@@ -14,6 +14,8 @@ export interface RegistrationData {
   firstName?: string
   lastName?: string
   fullName?: string
+  company?: string
+  jobTitle?: string
   phone?: string
   lumaUserId?: string
   lumaGuestId?: string
@@ -204,6 +206,8 @@ export async function createFullRegistration(
       if (!attrs.phone && registration.phone) updates.phone = registration.phone
       if (!attrs.first_name && firstName) updates.first_name = firstName
       if (!attrs.last_name && lastName) updates.last_name = lastName
+      if (!attrs.company && registration.company) updates.company = registration.company
+      if (!attrs.job_title && registration.jobTitle) updates.job_title = registration.jobTitle
       // Only upgrade marketing_consent from false/undefined to true, never downgrade
       if (registrantMarketingConsent === true && attrs.marketing_consent !== true) {
         updates.marketing_consent = true
@@ -278,6 +282,8 @@ export async function createFullRegistration(
         if (registration.lumaUserId) attributes.luma_user_id = registration.lumaUserId
         if (registration.gradualUserId) attributes.gradual_user_id = registration.gradualUserId
         if (registration.phone) attributes.phone = registration.phone
+        if (registration.company) attributes.company = registration.company
+        if (registration.jobTitle) attributes.job_title = registration.jobTitle
 
         fetch(`https://track.customer.io/api/v1/customers/${encodeURIComponent(email)}`, {
           method: 'PUT',
@@ -310,6 +316,8 @@ export async function createFullRegistration(
       if (registration.lumaUserId) personAttributes.luma_user_id = registration.lumaUserId
       if (registration.gradualUserId) personAttributes.gradual_user_id = registration.gradualUserId
       if (registration.phone) personAttributes.phone = registration.phone
+      if (registration.company) personAttributes.company = registration.company
+      if (registration.jobTitle) personAttributes.job_title = registration.jobTitle
 
       const { data: newPerson, error: createError } = await supabase
         .from('people')

@@ -1005,6 +1005,8 @@ async function handleUserRegistersForEvent(payload: UserRegistersForEventPayload
     email: payload.userEmail || '',
     firstName: payload.userFirstName,
     lastName: payload.userLastName,
+    company: payload.userCompany,
+    jobTitle: payload.userTitle,
     gradualUserId: payload.userId,
     registrationAnswers,
     registeredAt: payload.dateOfRegistration,
