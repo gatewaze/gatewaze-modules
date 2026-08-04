@@ -8,7 +8,7 @@
  */
 import React from 'react';
 import { FolderIcon } from '@heroicons/react/24/outline';
-import { resolveProjectAvatar } from './projectAvatar';
+import { resolveProjectAvatar } from './projectAvatarUtils';
 
 export function ProjectAvatar({
   emoji,
