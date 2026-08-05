@@ -24,6 +24,32 @@ export const FAILED_STATUSES = ['failed', 'blocked'] as const;
 // there), so the chip reads just "Merged". Documented nuance, not a bug.
 export const MERGED_STATUSES = ['merged'] as const;
 
+// The full se_runs.status domain (migration 003, widened by 015/awaiting_architecture and
+// 016/architecture_in_review). Backs the Runs-board status filter chips — every chip the user can
+// toggle, not just the four rolled up into a KPI tile. Kept in lockstep with the CHECK constraint
+// (and the API's own RUN_STATUSES allowlist in admin-routes.ts) by overview-filters.test.ts.
+export const ALL_RUN_STATUSES = [
+  'queued', 'running', 'blocked', 'failed', 'pr_open', 'watching', 'changes_requested', 'merged', 'closed', 'cancelled',
+  'awaiting_architecture', 'architecture_in_review',
+] as const;
+
+// Human labels for the filter chips. Falls back to the raw status string (see STATUS_LABELS usage)
+// for anything not listed here, though every ALL_RUN_STATUSES entry has one.
+export const STATUS_LABELS: Record<string, string> = {
+  queued: 'Queued',
+  running: 'Running',
+  blocked: 'Blocked',
+  failed: 'Failed',
+  pr_open: 'PR open',
+  watching: 'Watching',
+  changes_requested: 'Changes requested',
+  merged: 'Merged',
+  closed: 'Closed',
+  cancelled: 'Cancelled',
+  awaiting_architecture: 'Awaiting architecture',
+  architecture_in_review: 'Architecture in review',
+};
+
 export type OverviewCardKey = 'active' | 'merged' | 'open_prs' | 'failed_blocked';
 
 export interface OverviewCardFilter {
@@ -43,6 +69,17 @@ export const CARD_FILTERS: Record<OverviewCardKey, OverviewCardFilter> = {
 /** Serialise a status set into the `?status=` query param the /runs endpoint accepts. */
 export function statusesToParam(statuses: readonly string[]): string {
   return statuses.join(',');
+}
+
+/**
+ * Toggle a single status in/out of a `?status=` param's set, for the Runs-board filter chips.
+ * Order-preserving on the remaining entries (toggling off doesn't reshuffle the rest). Returns ''
+ * when the last status is toggled off, so callers can `p.delete('status')` on an empty result.
+ */
+export function toggleStatusInParam(statusParam: string, status: string): string {
+  const cur = statusParam.split(',').map((s) => s.trim()).filter(Boolean);
+  const next = cur.includes(status) ? cur.filter((s) => s !== status) : [...cur, status];
+  return next.join(',');
 }
 
 /**

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   CARD_FILTERS, ACTIVE_STATUSES, OPEN_PR_STATUSES, FAILED_STATUSES, MERGED_STATUSES,
-  statusesToParam, filterLabelForParam, fmtCost,
+  ALL_RUN_STATUSES, STATUS_LABELS,
+  statusesToParam, filterLabelForParam, toggleStatusInParam, fmtCost,
 } from '../components/overview-filters';
 
 // These sets MUST stay in lockstep with se_overview() (migration 007_overview_metrics.sql). If a
@@ -22,13 +23,44 @@ describe('card → status mapping matches se_overview() SQL', () => {
   it('Merged = merged status (30-day window is not reproduced on the board)', () => {
     expect([...MERGED_STATUSES]).toEqual(['merged']);
   });
-  it('every mapped status is a real se_runs.status (migration 003 CHECK constraint)', () => {
+  it('every mapped status is a real se_runs.status (migration 003 CHECK constraint, widened by 015/016)', () => {
     const RUN_STATUSES = new Set([
       'queued', 'running', 'blocked', 'failed', 'pr_open', 'watching', 'changes_requested', 'merged', 'closed', 'cancelled',
+      'awaiting_architecture', 'architecture_in_review',
     ]);
     for (const card of Object.values(CARD_FILTERS)) {
       for (const s of card.statuses) expect(RUN_STATUSES.has(s)).toBe(true);
     }
+  });
+});
+
+describe('ALL_RUN_STATUSES / STATUS_LABELS', () => {
+  it('lists all 12 se_runs.status values (migration 003, widened by 015 and 016)', () => {
+    expect([...ALL_RUN_STATUSES].sort()).toEqual([
+      'architecture_in_review', 'awaiting_architecture', 'blocked', 'cancelled', 'changes_requested',
+      'closed', 'failed', 'merged', 'pr_open', 'queued', 'running', 'watching',
+    ]);
+  });
+  it('has a human label for every status', () => {
+    for (const s of ALL_RUN_STATUSES) expect(STATUS_LABELS[s]).toBeTruthy();
+  });
+});
+
+describe('toggleStatusInParam', () => {
+  it('adds a status to an empty param', () => {
+    expect(toggleStatusInParam('', 'merged')).toBe('merged');
+  });
+  it('adds a status to an existing set', () => {
+    expect(toggleStatusInParam('merged', 'failed')).toBe('merged,failed');
+  });
+  it('removes a status already in the set', () => {
+    expect(toggleStatusInParam('merged,failed', 'merged')).toBe('failed');
+  });
+  it('removing the only status yields an empty string', () => {
+    expect(toggleStatusInParam('merged', 'merged')).toBe('');
+  });
+  it('tolerates stray whitespace in the input param', () => {
+    expect(toggleStatusInParam(' merged , failed ', 'blocked')).toBe('merged,failed,blocked');
   });
 });
 
