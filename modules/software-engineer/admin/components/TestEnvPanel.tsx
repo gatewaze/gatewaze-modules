@@ -12,11 +12,34 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Badge, Button } from '@/components/ui';
 import { toast } from 'sonner';
-import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, PlusIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
 
 const API = '/api/modules/software-engineer/admin';
 const DEPLOYABLE = ['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules'];
 const ACTIVE = new Set(['preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down']);
+
+// Deploy-cycle progress model. Percentages are hand-weighted by observed step
+// duration (building dominates); "tearing-down" appears only when replacing a
+// previous env, so it maps to the same early band as queued.
+const STEPS: { state: string; label: string; pct: number }[] = [
+  { state: 'queued', label: 'Queued', pct: 3 },
+  { state: 'tearing-down', label: 'Replacing previous env', pct: 6 },
+  { state: 'preparing-worktrees', label: 'Checking out PRs', pct: 12 },
+  { state: 'cloning-db', label: 'Cloning database', pct: 30 },
+  { state: 'cloning-storage', label: 'Cloning storage', pct: 42 },
+  { state: 'building', label: 'Building images', pct: 70 },
+  { state: 'starting', label: 'Starting services', pct: 90 },
+  { state: 'ready', label: 'Live', pct: 100 },
+];
+const stepPct = (state?: string, pending?: boolean) => {
+  if (!state || state === 'torn-down' || state === 'error') return pending ? 3 : 0;
+  return STEPS.find((s) => s.state === state)?.pct ?? 0;
+};
+// Normalize urls: the agent emits [{label,url,launch}]; tolerate legacy strings.
+const normUrls = (urls: any): { label: string; url: string; launch: boolean }[] =>
+  (urls ?? []).map((u: any) => typeof u === 'string'
+    ? { label: u.replace('https://', '').split('.')[0], url: u, launch: true }
+    : { label: u.label, url: u.url, launch: !!u.launch });
 
 async function api(path: string, init?: RequestInit) {
   const { data } = await supabase.auth.getSession();
@@ -89,6 +112,11 @@ export default function TestEnvPanel({ prs }: { prs: any[] }) {
 
   const st = info.status;
   const ready = st?.state === 'ready';
+  const urls = normUrls(st?.urls);
+  const launchUrls = urls.filter((u) => u.launch);
+  const pct = stepPct(info.pending && !ACTIVE.has(st?.state) ? 'queued' : st?.state, info.pending);
+  const stepAgeSec = st?.updated_at ? Math.max(0, Math.round((Date.now() - new Date(st.updated_at).getTime()) / 1000)) : 0;
+  const launch = () => { for (const u of launchUrls) window.open(u.url, '_blank', 'noopener'); };
   return (
     <div className="mb-3 rounded-md border border-[var(--gray-6)] px-3 py-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -101,9 +129,14 @@ export default function TestEnvPanel({ prs }: { prs: any[] }) {
         )}
         <span className="text-xs text-[var(--gray-11)] truncate">{st?.detail}</span>
         <span className="ml-auto flex items-center gap-2">
-          {ready && (st?.urls ?? []).map((u: string) => (
-            <a key={u} href={u} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-0.5">
-              {u.replace('https://', '').split('.')[0]} <ArrowTopRightOnSquareIcon className="size-3" />
+          {ready && (
+            <Button variant="solid" color="green" size="xs" onClick={launch}>
+              <RocketLaunchIcon className="size-3.5 mr-1" />Launch
+            </Button>
+          )}
+          {ready && urls.filter((u) => !u.launch).map((u) => (
+            <a key={u.url} href={u.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-0.5">
+              {u.label} <ArrowTopRightOnSquareIcon className="size-3" />
             </a>
           ))}
           {(ready || st?.state === 'error') && (
@@ -113,6 +146,24 @@ export default function TestEnvPanel({ prs }: { prs: any[] }) {
           )}
         </span>
       </div>
+      {(active || info.pending) && (
+        <div className="mt-2">
+          <div className="h-1.5 rounded-full bg-[var(--gray-4)] overflow-hidden">
+            <div className="h-full rounded-full bg-blue-500 transition-all duration-700" style={{ width: `${pct}%` }} />
+          </div>
+          <div className="mt-1 flex items-center justify-between text-[11px] text-[var(--gray-10)]">
+            <span>
+              {STEPS.filter((s) => !['queued', 'tearing-down', 'ready'].includes(s.state)).map((s, i, arr) => (
+                <span key={s.state}>
+                  <span className={s.state === st?.state ? 'text-blue-500 font-medium' : ''}>{s.label}</span>
+                  {i < arr.length - 1 ? ' → ' : ''}
+                </span>
+              ))}
+            </span>
+            <span>{pct}%{stepAgeSec > 5 ? ` · ${stepAgeSec}s in this step` : ''}</span>
+          </div>
+        </div>
+      )}
       <div className="mt-2 flex items-center gap-3 flex-wrap text-xs">
         {runPrs.length === 0 && <span className="text-[var(--gray-10)]">No deployable PRs on this run yet — deploy runs everything at main.</span>}
         {runPrs.map((p) => {
