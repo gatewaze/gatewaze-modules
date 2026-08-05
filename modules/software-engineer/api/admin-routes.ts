@@ -43,7 +43,7 @@ const PROJECT_MASKED =
   ' model_cred_last4, model_cred_kind, model, model_health, model_checked_at,' +
   ' phase_models, escalation_model, openai_cred_last4,' +
   ' commit_author_name, commit_author_email,' +
-  ' allowed_labellers, intake_enabled, autonomy_mode, max_concurrent_engineers, max_interactive_engineers,' +
+  ' allowed_labellers, intake_enabled, autonomy_mode, pr_submit_mode, max_concurrent_engineers, max_interactive_engineers,' +
   ' has_mcp_config, skills,' +
   ' process_repo, process_path, process_ref, architecture_repo, architecture_ref, tracker_url_template,' +
   ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, per_run_cost_ceiling_usd, created_at, updated_at';
@@ -554,7 +554,23 @@ export function mountAdminRoutes(router, deps) {
     const counts: Record<string, number> = {};
     for (const pr of prs) counts[String(pr.status)] = (counts[String(pr.status)] ?? 0) + 1;
 
-    const payload = { prs, counts, project_errors: projectErrors, generated_at: new Date().toISOString() };
+    // "Needs submitting": runs whose code is complete but whose PR is human-gated (pr_submit_mode='manual').
+    // They have no GitHub PR yet, so they are DB-driven (a cheap query, no GitHub calls) and shown as a
+    // separate section on the board.
+    let nsq = supabase.from('se_runs')
+      .select('id, project_id, issue_number, title, repo_owner, repo_name, engineer_name, blast_radius, updated_at')
+      .eq('status', 'ready_to_submit').is('archived_at', null)
+      .order('updated_at', { ascending: false }).limit(50);
+    if (project) nsq = nsq.eq('project_id', project);
+    const { data: nsRows } = await nsq;
+    const projName = new Map((projRows ?? []).map((p: Record<string, unknown>) => [p.id, p.name]));
+    const needs_submitting = (nsRows ?? []).map((r: Record<string, unknown>) => ({
+      run_id: r.id, project_id: r.project_id, project_name: projName.get(r.project_id) ?? null,
+      issue_number: r.issue_number, title: r.title, repo: `${r.repo_owner}/${r.repo_name}`,
+      engineer_name: r.engineer_name, blast_radius: r.blast_radius, updated_at: r.updated_at,
+    }));
+
+    const payload = { prs, counts, needs_submitting, project_errors: projectErrors, generated_at: new Date().toISOString() };
     prBoardCache.set(cacheKey, { at: Date.now(), payload });
     res.json(payload);
   });
@@ -853,6 +869,9 @@ export function mountAdminRoutes(router, deps) {
   };
 
   router.get('/runs/:id/architecture', async (req, res) => {
+    if (!rateLimit(`se-admin:arch-get:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
     const { data: run } = await supabase.from('se_runs')
@@ -919,6 +938,22 @@ export function mountAdminRoutes(router, deps) {
       if (project?.githubToken) { try { await githubClient(project.githubToken).postComment(run.repo_owner, run.repo_name, run.issue_number, 'Architecture approved — resuming implementation.'); } catch { /* */ } }
     }
     res.json({ approved: true, resuming: true });
+  });
+
+  // Submit the pull request for a run whose code is complete but whose submission is human-gated
+  // (pr_submit_mode='manual'). Re-enqueues the pr phase with submitApproved=true, which opens the PR(s).
+  router.post('/runs/:id/submit-pr', async (req, res) => {
+    if (!rateLimit(`se-admin:submit-pr:${clientIp(req)}`, 30, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'not found' });
+    if (run.status !== 'ready_to_submit') return res.status(409).json({ error: 'run is not ready to submit' });
+    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'pr' }).eq('id', id).eq('status', 'ready_to_submit');
+    if (error) return res.status(500).json({ error: 'update failed' });
+    try { await enqueuePhase({ enqueueJob }, id, 'pr', { submitApproved: true }); } catch (e) { logger?.warn?.('se: enqueue pr (submit) failed', { error: String(e) }); }
+    try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: 'Submitting the pull request.' }); } catch { /* */ }
+    res.json({ submitting: true });
   });
 
   router.post('/runs/:id/archive', async (req, res) => {
@@ -1135,7 +1170,7 @@ export function mountAdminRoutes(router, deps) {
     const b = req.body ?? {};
     const patch: any = {};
     for (const k of [
-      'github_token_kind', 'github_app_installation_id', 'model_cred_kind', 'model', 'autonomy_mode',
+      'github_token_kind', 'github_app_installation_id', 'model_cred_kind', 'model', 'autonomy_mode', 'pr_submit_mode',
       'intake_enabled', 'max_concurrent_engineers', 'max_interactive_engineers', 'max_code_repos_per_run',
       'monthly_token_budget', 'per_run_token_ceiling', 'per_run_wallclock_minutes',
     ]) {
