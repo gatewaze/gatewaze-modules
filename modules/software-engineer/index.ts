@@ -50,6 +50,8 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/013_engines_and_routing.sql',
     'migrations/013_se_repos_per_project_unique.sql',
     'migrations/014_per_run_cost_ceiling.sql',
+    'migrations/015_arch_phase_constraints.sql',
+    'migrations/016_arch_review_flow.sql',
   ],
 
   // Dedicated `se` queue — NOT the shared `jobs` queue (spec §7.5 / §17, now live). Agent phases run
@@ -73,8 +75,13 @@ const softwareEngineerModule: GatewazeModule = {
         { name: 'software-engineer:spec', handler: './workers/spec.ts' },
         { name: 'software-engineer:review', handler: './workers/review.ts' },
         // architecture: §7.6 arch-review gate (only when a project sets architecture_repo). Runs after
-        // review; classifies arch-impact and, if impacting, opens a proposal PR + blocks the run.
+        // review; classifies arch-impact and, if impacting, writes a DRAFT proposal + blocks the run at
+        // `awaiting_architecture` (no PR — the proposal is committed to the arch repo's main on finalize).
         { name: 'software-engineer:architecture', handler: './workers/architecture.ts' },
+        // architecture-refine: a short re-runnable job that applies the human's chat feedback to the
+        // draft/committed proposal (rewrites the artifact; re-commits to main once finalized). Enqueued
+        // by the admin message route while a run is parked at the architecture gate.
+        { name: 'software-engineer:architecture-refine', handler: './workers/architecture-refine.ts' },
         { name: 'software-engineer:implement', handler: './workers/implement.ts' },
         { name: 'software-engineer:verify', handler: './workers/verify.ts' },
         { name: 'software-engineer:pr', handler: './workers/pr.ts' },

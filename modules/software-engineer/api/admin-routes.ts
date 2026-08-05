@@ -45,7 +45,7 @@ const PROJECT_MASKED =
   ' commit_author_name, commit_author_email,' +
   ' allowed_labellers, intake_enabled, autonomy_mode, max_concurrent_engineers, max_interactive_engineers,' +
   ' has_mcp_config, skills,' +
-  ' process_repo, process_path, process_ref, architecture_repo, architecture_ref,' +
+  ' process_repo, process_path, process_ref, architecture_repo, architecture_ref, tracker_url_template,' +
   ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, per_run_cost_ceiling_usd, created_at, updated_at';
 
 const sanitize = (v: unknown) =>
@@ -737,15 +737,26 @@ export function mountAdminRoutes(router, deps) {
     if (!content.trim() && !images.length) return res.status(400).json({ error: 'empty' });
     const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
-    if (!['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
+    // A run parked at the architecture gate is not a live session — a message is feedback on the proposal
+    // draft, handled asynchronously by the refine job rather than streamed into a live agent.
+    const archState = ['awaiting_architecture', 'architecture_in_review'].includes(run.status);
+    if (!archState && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
     // Persist the images as markdown appended to the stored message so the transcript renders them
     // inline — the same `![](url)` convention se_messages already carries for issue attachments.
     const stored = images.length
       ? `${content}${content && '\n\n'}` + images.map((u: string, i: number) => `![screenshot-${i + 1}](${u})`).join('\n')
       : content;
     await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'admin', author: authorOf(req), content: stored });
-    try { await publishInput(getRedis?.(), id, { kind: 'chat', content, images }); }
-    catch (e) { logger?.warn?.('se: publish chat failed', { error: String(e) }); }
+    if (archState) {
+      // The stored message stays undelivered (delivered_at=null) = a mailbox. Enqueue the short refine job
+      // (deterministic jobId dedups a rapid double-send); it drains ALL pending feedback, edits the draft,
+      // saves a new version, and (once committed) re-commits the README to the arch repo's main.
+      try { await enqueueJob?.('se', 'software-engineer:architecture-refine', { runId: id }, { jobId: `se-arch-refine-${id}`, removeOnComplete: true }); }
+      catch (e) { logger?.warn?.('se: enqueue architecture-refine failed', { error: String(e) }); }
+    } else {
+      try { await publishInput(getRedis?.(), id, { kind: 'chat', content, images }); }
+      catch (e) { logger?.warn?.('se: publish chat failed', { error: String(e) }); }
+    }
     res.status(202).json({ accepted: true, attachmentsAttached: images.length, attachmentsDropped: imagesDropped });
   });
 
@@ -830,99 +841,84 @@ export function mountAdminRoutes(router, deps) {
     res.json({ merged: result.merged, held: result.held, results: result.results });
   });
 
-  // §7.6: the architecture-review gate. A run parked at `awaiting_architecture` has opened a proposal
-  // PR in its project's architecture repo. These let the UI show the plan + PR, merge it (which
-  // resumes the run to implement), and request the architecture team's review.
+  // §7.6: the architecture-review gate (commit-to-main flow). A run parked at `awaiting_architecture`
+  // has a DRAFT proposal stored as an se_artifacts row (kind='architecture'). The human refines it by
+  // chatting (→ architecture-refine), FINALIZES it (commit the folder to the arch repo's main, no PR),
+  // and APPROVES it (resume to implement). These endpoints back that flow.
   const ARCH_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-  const b64 = (s: string) => { try { return Buffer.from(String(s ?? ''), 'base64').toString('utf8'); } catch { return ''; } };
+  const ARCH_STATES = ['awaiting_architecture', 'architecture_in_review'];
+  const latestArchDraft = async (runId: string): Promise<string> => {
+    const { data } = await supabase.from('se_artifacts').select('content').eq('run_id', runId).eq('kind', 'architecture').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    return String(data?.content ?? '');
+  };
 
   router.get('/runs/:id/architecture', async (req, res) => {
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
     const { data: run } = await supabase.from('se_runs')
-      .select('id, project_id, issue_number, status, architecture_repo, architecture_pr_number, architecture_pr_url')
+      .select('id, project_id, issue_number, status, architecture_repo, architecture_folder, architecture_path, architecture_commit_url')
       .eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
-    if (!run.architecture_repo || !run.architecture_pr_number || !ARCH_REPO_RE.test(run.architecture_repo)) {
-      return res.status(404).json({ error: 'no architecture proposal for this run' });
-    }
-    const project = await getProject(supabase, run.project_id);
-    if (!project?.githubToken) return res.status(400).json({ error: 'project has no GitHub credential' });
-    const [owner, name] = run.architecture_repo.split('/');
-    const gh = githubClient(project.githubToken);
-    try {
-      const pr = await gh.getPullRequest(owner, name, run.architecture_pr_number);
-      // The proposal doc is the markdown file the run added — fetch its content to render the plan.
-      let plan: { path: string; markdown: string } | null = null;
-      try {
-        const files = await gh.listPullFiles(owner, name, run.architecture_pr_number);
-        const md = (Array.isArray(files) ? files : []).find((f: Record<string, unknown>) => String(f?.filename ?? '').toLowerCase().endsWith('.md'));
-        if (md?.filename) {
-          const c = await gh.getContent(owner, name, String(md.filename), pr.head?.ref);
-          plan = { path: String(md.filename), markdown: c?.content ? b64(c.content) : '' };
-        }
-      } catch { /* plan is best-effort; the PR link always works */ }
-      const reviewers = ((pr.requested_reviewers ?? []) as Array<Record<string, unknown>>).map((u) => String(u?.login ?? '')).filter(Boolean);
-      const teams = ((pr.requested_teams ?? []) as Array<Record<string, unknown>>).map((t) => String(t?.slug ?? '')).filter(Boolean);
-      res.json({
-        repo: run.architecture_repo, number: run.architecture_pr_number, url: pr.html_url ?? run.architecture_pr_url,
-        title: pr.title, body: pr.body, state: pr.state, merged: !!(pr.merged || pr.merged_at), mergeable: pr.mergeable,
-        issueNumber: run.issue_number, plan, reviewers, teams,
-      });
-    } catch (e) {
-      logger?.warn?.('se: architecture proposal fetch failed', { run: id, error: String((e as Error)?.message ?? e) });
-      res.status(502).json({ error: 'could not fetch the proposal PR' });
-    }
+    if (!ARCH_STATES.includes(run.status)) return res.status(404).json({ error: 'run is not at the architecture gate' });
+    // The draft proposal is the latest kind='architecture' artifact — render it whether or not it has
+    // been committed yet. Once finalized, architecture_commit_url points at the file on the arch repo's main.
+    const markdown = await latestArchDraft(run.id);
+    res.json({
+      repo: run.architecture_repo, folder: run.architecture_folder, path: run.architecture_path,
+      status: run.status, committed: run.status === 'architecture_in_review',
+      commitUrl: run.architecture_commit_url, issueNumber: run.issue_number,
+      plan: markdown ? { path: run.architecture_path, markdown } : null,
+    });
   });
 
-  router.post('/runs/:id/architecture/merge', async (req, res) => {
-    if (!rateLimit(`se-admin:arch-merge:${clientIp(req)}`, 30, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+  // Finalize: commit the current draft to the architecture repo's main (no PR), matching that repo's
+  // convention, and move the run to `architecture_in_review` (external review pending + approve gate).
+  router.post('/runs/:id/architecture/finalize', async (req, res) => {
+    if (!rateLimit(`se-admin:arch-finalize:${clientIp(req)}`, 30, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
-    const { data: run } = await supabase.from('se_runs').select('id, project_id, status, architecture_repo, architecture_pr_number').eq('id', id).maybeSingle();
+    const { data: run } = await supabase.from('se_runs').select('id, site_id, project_id, status, architecture_repo, architecture_folder, architecture_path').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
-    if (run.status !== 'awaiting_architecture' || !run.architecture_repo || !run.architecture_pr_number || !ARCH_REPO_RE.test(run.architecture_repo)) {
-      return res.status(409).json({ error: 'run is not awaiting architecture review' });
+    if (run.status !== 'awaiting_architecture' || !run.architecture_repo || !run.architecture_path || !ARCH_REPO_RE.test(run.architecture_repo)) {
+      return res.status(409).json({ error: 'run is not a finalizable architecture draft' });
     }
+    const content = await latestArchDraft(run.id);
+    if (content.trim().length < 200) return res.status(409).json({ error: 'no draft proposal to finalize' });
     const project = await getProject(supabase, run.project_id);
     if (!project?.githubToken) return res.status(400).json({ error: 'project has no GitHub credential' });
     const [owner, name] = run.architecture_repo.split('/');
+    let url: string | null = null;
     try {
-      await githubClient(project.githubToken).mergePullRequest(owner, name, run.architecture_pr_number, 'squash');
+      const result = await githubClient(project.githubToken).putFile(owner, name, run.architecture_path, content, `Add architecture proposal: ${run.architecture_folder ?? run.architecture_path}`);
+      url = result?.content?.html_url ?? null;
     } catch (e) {
-      return res.status(409).json({ error: { code: 'merge_failed', message: 'GitHub refused the merge (branch protection, conflicts, or already merged?)' } });
+      logger?.warn?.('se: architecture finalize (commit) failed', { run: id, error: String((e as Error)?.message ?? e) });
+      return res.status(502).json({ error: { code: 'commit_failed', message: 'Could not commit the proposal to the architecture repo.' } });
     }
-    // Nudge pr-monitor → reconcileArchitecture sees the merge → resumes the run to implement.
-    try { await enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: run.id }); } catch (e) { logger?.warn?.('se: enqueue pr-monitor (arch) failed', { error: String(e) }); }
-    res.json({ merged: true, resuming: true });
+    await supabase.from('se_runs').update({ status: 'architecture_in_review', architecture_commit_url: url }).eq('id', id).eq('status', 'awaiting_architecture');
+    try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: `Proposal committed to ${run.architecture_repo}. Awaiting architectural review.` }); } catch { /* */ }
+    res.json({ committed: true, url, status: 'architecture_in_review' });
   });
 
-  router.post('/runs/:id/architecture/notify', async (req, res) => {
-    if (!rateLimit(`se-admin:arch-notify:${clientIp(req)}`, 30, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+  // Approve: the architectural review is done → resume the run to implementation. Only from the committed
+  // `architecture_in_review` state (the proposal is on the arch repo's main for the record).
+  router.post('/runs/:id/architecture/approve', async (req, res) => {
+    if (!rateLimit(`se-admin:arch-approve:${clientIp(req)}`, 30, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
-    const { data: run } = await supabase.from('se_runs').select('id, project_id, issue_number, architecture_repo, architecture_pr_number').eq('id', id).maybeSingle();
-    if (!run?.architecture_repo || !run.architecture_pr_number || !ARCH_REPO_RE.test(run.architecture_repo)) return res.status(404).json({ error: 'no architecture proposal for this run' });
-    const project = await getProject(supabase, run.project_id);
-    if (!project?.githubToken) return res.status(400).json({ error: 'project has no GitHub credential' });
-    const [owner, name] = run.architecture_repo.split('/');
-    // Reviewers to request come from the client, validated as GitHub team slugs / user logins.
-    const teams = (Array.isArray(req.body?.teams) ? req.body.teams : []).map(String).map((s: string) => s.trim()).filter((s: string) => /^[A-Za-z0-9-]+$/.test(s)).slice(0, 10);
-    const users = (Array.isArray(req.body?.reviewers) ? req.body.reviewers : []).map(String).map((s: string) => s.trim()).filter((s: string) => /^[A-Za-z0-9-]+$/.test(s)).slice(0, 10);
-    const gh = githubClient(project.githubToken);
-    try {
-      if (teams.length || users.length) {
-        // Best-effort: requesting may fail if a team/user isn't a collaborator; we still leave a comment.
-        try { await gh.requestReviewers(owner, name, run.architecture_pr_number, { reviewers: users, team_reviewers: teams }); } catch { /* */ }
-      }
-      const mentions = [...users.map((u: string) => `@${u}`), ...teams.map((t: string) => `@${owner}/${t}`)].join(' ');
-      const body = `🏛️ Architecture review requested for issue #${run.issue_number ?? '?'} — please review and **merge** to approve the architecture (the coding run then resumes automatically). ${mentions}`.trim();
-      await gh.postComment(owner, name, run.architecture_pr_number, body);
-      res.json({ notified: true, teams, reviewers: users });
-    } catch (e) {
-      logger?.warn?.('se: architecture notify failed', { run: id, error: String((e as Error)?.message ?? e) });
-      res.status(502).json({ error: 'notify failed' });
+    const { data: run } = await supabase.from('se_runs').select('id, site_id, status, repo_owner, repo_name, issue_number, project_id').eq('id', id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'not found' });
+    if (run.status !== 'architecture_in_review') return res.status(409).json({ error: 'run is not awaiting architecture approval' });
+    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'implement' }).eq('id', id).eq('status', 'architecture_in_review');
+    if (error) return res.status(500).json({ error: 'update failed' });
+    try { await enqueuePhase({ enqueueJob }, id, 'implement'); } catch (e) { logger?.warn?.('se: enqueue implement (arch approve) failed', { error: String(e) }); }
+    try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: 'Architecture approved — resuming implementation.' }); } catch { /* */ }
+    // Best-effort: note it on the internal roadmap issue (private; not LFX-visible).
+    if (run.issue_number) {
+      const project = await getProject(supabase, run.project_id);
+      if (project?.githubToken) { try { await githubClient(project.githubToken).postComment(run.repo_owner, run.repo_name, run.issue_number, 'Architecture approved — resuming implementation.'); } catch { /* */ } }
     }
+    res.json({ approved: true, resuming: true });
   });
 
   router.post('/runs/:id/archive', async (req, res) => {
@@ -1147,7 +1143,7 @@ export function mountAdminRoutes(router, deps) {
     }
     for (const k of ['name', 'description', 'avatar_emoji', 'commit_author_name', 'commit_author_email',
       'issues_repo_owner', 'issues_repo_name', 'trigger_label', 'primary_instance_id', 'memory_repo',
-      'process_repo', 'process_path', 'process_ref', 'architecture_repo', 'architecture_ref']) {
+      'process_repo', 'process_path', 'process_ref', 'architecture_repo', 'architecture_ref', 'tracker_url_template']) {
       if (b[k] !== undefined) patch[k] = sanitize(b[k]);
     }
     if (b.name !== undefined && !patch.name) return res.status(400).json({ error: 'name cannot be empty' });
