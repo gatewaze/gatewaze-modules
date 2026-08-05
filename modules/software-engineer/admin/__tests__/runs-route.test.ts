@@ -106,4 +106,20 @@ describe('GET /runs — status filtering', () => {
     await router.handler('GET /runs')({ query: { status: 'failed,failed,blocked' } }, mockRes());
     expect(statusFilters(supa)).toEqual([{ op: 'in', args: ['status', ['failed', 'blocked']] }]);
   });
+
+  // Migration 016 widened the CHECK constraint to add the architecture-review flow's two statuses;
+  // the allowlist here previously lagged behind, silently returning zero rows for either filter.
+  it('accepts awaiting_architecture as a single valid status', async () => {
+    const supa = mockSupabase();
+    const router = mount(supa);
+    await router.handler('GET /runs')({ query: { status: 'awaiting_architecture' } }, mockRes());
+    expect(statusFilters(supa)).toEqual([{ op: 'eq', args: ['status', 'awaiting_architecture'] }]);
+  });
+
+  it('accepts architecture_in_review in a status set', async () => {
+    const supa = mockSupabase();
+    const router = mount(supa);
+    await router.handler('GET /runs')({ query: { status: 'architecture_in_review,awaiting_architecture' } }, mockRes());
+    expect(statusFilters(supa)).toEqual([{ op: 'in', args: ['status', ['architecture_in_review', 'awaiting_architecture']] }]);
+  });
 });
