@@ -28,6 +28,11 @@ export function githubClient(token: string) {
     getIssue(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/issues/${number}`);
     },
+    /** Open PRs on a repo whose head is `<headOwner>:<branch>` — the cross-repo
+     * related-PR matcher (agent runs reuse one branch name across repos). */
+    listOpenPullsByHead(owner: string, name: string, headOwner: string, branch: string) {
+      return j(`/repos/${owner}/${name}/pulls?state=open&per_page=10&head=${encodeURIComponent(`${headOwner}:${branch}`)}`);
+    },
     /** Open issues on a repo (GitHub returns PRs here too — caller filters on `pull_request`).
      * Optional `labels` narrows server-side to issues carrying ALL the given label names. */
     listIssues(owner: string, name: string, state: 'open' | 'all' = 'open', labels?: string[]) {

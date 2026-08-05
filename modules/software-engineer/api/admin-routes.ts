@@ -150,6 +150,133 @@ export function mountAdminRoutes(router, deps) {
     res.status(202).json(stagingStatus());
   });
 
+  // ── PR test environment (Phase 1: gatewaze project) ────────────────────────
+  // Same control-channel model as staging-update, but the request CARRIES
+  // CONTENT (a PR set), so both sides validate it: here a strict repo enum +
+  // integer PR numbers; the host agent (staging-test-env.sh) re-validates and
+  // resolves PRs via numeric refs/pull/N/head only — no branch names, no
+  // request string ever reaches a shell. Deploying replaces the single test
+  // env slot; the test stack never runs se-runner.
+  const TEST_ENV_REPOS = new Set(['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules']);
+  const TEST_ENV_ACTIVE = new Set(['preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down']);
+  const testEnvStatus = () => {
+    let status = null;
+    try { status = JSON.parse(readFileSync(`${STAGING_CONTROL}/test-status.json`, 'utf8')); } catch { /* none yet */ }
+    const pending = existsSync(`${STAGING_CONTROL}/test-env-request.json`) || existsSync(`${STAGING_CONTROL}/test-env-request.processing`);
+    return { available: true, pending, status };
+  };
+  const requireSuperAdminBearer = async (req, res) => {
+    if (!String(req.headers.authorization ?? '').startsWith('Bearer ')) {
+      res.status(403).json({ error: { code: 'bearer_required', message: 'Explicit Authorization header required for this action' } });
+      return false;
+    }
+    const userId = authorOf(req);
+    const { data: prof } = await supabase
+      .from('admin_profiles').select('role').eq('user_id', userId).eq('is_active', true).maybeSingle();
+    if (prof?.role !== 'super_admin') {
+      res.status(403).json({ error: { code: 'forbidden', message: 'Super-admin access required' } });
+      return false;
+    }
+    return true;
+  };
+
+  router.get('/test-env/status', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-status:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(STAGING_CONTROL)) return res.json({ available: false });
+    res.json(testEnvStatus());
+  });
+
+  router.post('/test-env/deploy', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(STAGING_CONTROL)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no test-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const raw = Array.isArray(req.body?.prs) ? req.body.prs.slice(0, 6) : [];
+    const prs = [];
+    for (const p of raw) {
+      const repo = String(p?.repo ?? '');
+      const number = Number(p?.number);
+      if (!TEST_ENV_REPOS.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
+        return res.status(422).json({ error: { code: 'invalid_input', message: `Bad PR entry: ${repo}#${p?.number}` } });
+      }
+      if (prs.some((x) => x.repo === repo)) {
+        return res.status(422).json({ error: { code: 'invalid_input', message: `Multiple PRs for ${repo} — one per repo` } });
+      }
+      prs.push({ repo, number });
+    }
+    const cur = testEnvStatus();
+    if (cur.pending || TEST_ENV_ACTIVE.has(cur.status?.state)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A test-env operation is already in progress' }, ...cur });
+    }
+    writeFileSync(`${STAGING_CONTROL}/test-env-request.json`,
+      JSON.stringify({ action: 'deploy', prs, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
+    logger?.info?.('se: test-env deploy requested', { prs });
+    res.status(202).json(testEnvStatus());
+  });
+
+  // Cross-repo related PRs for a deployable PR: agent runs reuse ONE head
+  // branch name across the repos they touch, so "same head branch, open, in
+  // another deployable repo" is the dependency heuristic the deploy UI
+  // pre-selects. Read-only (standard admin gate suffices); uses the project's
+  // PAT like every other GitHub read here.
+  router.get('/test-env/related', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-related:${clientIp(req)}`, 60, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const projectId = String(req.query.project_id ?? '');
+    const repo = String(req.query.repo ?? '');
+    const number = Number(req.query.number);
+    if (!UUID.test(projectId) || !TEST_ENV_REPOS.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'project_id + deployable repo + PR number required' } });
+    }
+    const proj = await getProject(supabase, projectId);
+    if (!proj?.githubToken) return res.status(404).json({ error: { code: 'not_found', message: 'Project or its GitHub credential not found' } });
+    const gh = githubClient(proj.githubToken);
+    try {
+      const pull = await gh.getPullRequest('gatewaze', repo, number);
+      const branch = String(pull?.head?.ref ?? '');
+      const headOwner = String(pull?.head?.repo?.owner?.login ?? 'gatewaze');
+      if (!branch) return res.json({ branch: null, related: [] });
+      const related = [];
+      for (const other of TEST_ENV_REPOS) {
+        if (other === repo) continue;
+        try {
+          const matches = await gh.listOpenPullsByHead('gatewaze', other, headOwner, branch);
+          for (const m of matches ?? []) {
+            related.push({ repo: other, number: m.number, title: m.title, url: m.html_url, branch });
+          }
+        } catch { /* repo unreadable with this PAT — skip */ }
+      }
+      res.json({ branch, related });
+    } catch (e) {
+      logger?.warn?.('se: test-env related lookup failed', { error: String(e) });
+      res.status(502).json({ error: { code: 'github_error', message: 'Could not look up related PRs' } });
+    }
+  });
+
+  router.post('/test-env/teardown', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(STAGING_CONTROL)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no test-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const cur = testEnvStatus();
+    if (cur.pending || TEST_ENV_ACTIVE.has(cur.status?.state)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A test-env operation is already in progress' }, ...cur });
+    }
+    writeFileSync(`${STAGING_CONTROL}/test-env-request.json`,
+      JSON.stringify({ action: 'teardown', requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
+    logger?.info?.('se: test-env teardown requested', {});
+    res.status(202).json(testEnvStatus());
+  });
+
   // ── Project memory: review + human approval (memory-poisoning gate) ────────
   // reflect writes proposed memory to a pending slot; it is NOT injected into
   // any run until an admin approves it here. All three routes are admin-gated
@@ -574,18 +701,20 @@ export function mountAdminRoutes(router, deps) {
   router.get('/runs/:id', async (req, res) => {
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
-    const [run, phases, events, gates, artifacts, messages] = await Promise.all([
+    const [run, phases, events, gates, artifacts, messages, prs] = await Promise.all([
       supabase.from('se_runs').select('*, project:se_projects(name, avatar_emoji)').eq('id', id).maybeSingle(),
       supabase.from('se_phases').select('*').eq('run_id', id).order('started_at', { nullsFirst: true }),
       supabase.from('se_events').select('*').eq('run_id', id).order('seq').limit(2000),
       supabase.from('se_gates').select('*').eq('run_id', id).order('created_at'),
       supabase.from('se_artifacts').select('*').eq('run_id', id).order('created_at'),
       supabase.from('se_messages').select('*').eq('run_id', id).order('id'),
+      supabase.from('se_run_prs').select('repo_owner, repo_name, pr_number, pr_url, state, branch').eq('run_id', id).order('created_at'),
     ]);
     if (!run.data) return res.status(404).json({ error: 'not found' });
     res.json({
       run: run.data, phases: phases.data ?? [], events: events.data ?? [],
       gates: gates.data ?? [], artifacts: artifacts.data ?? [], messages: messages.data ?? [],
+      prs: prs.data ?? [],
     });
   });
 
