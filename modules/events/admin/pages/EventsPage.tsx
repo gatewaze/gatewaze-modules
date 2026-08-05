@@ -30,7 +30,7 @@ import {
 import { EventService, EventIdGenerator, type Event as EventRecord } from '@/utils/eventService';
 
 import { Button } from '@/components/ui/Button';
-import { Badge, Card, Pagination, PaginationFirst, PaginationItems, PaginationLast, PaginationNext, PaginationPrevious } from '@/components/ui';
+import { Badge, Card, Modal, Pagination, PaginationFirst, PaginationItems, PaginationLast, PaginationNext, PaginationPrevious } from '@/components/ui';
 import { DataTable } from '@/components/shared/table/DataTable';
 import { RowActions } from '@/components/shared/table/RowActions';
 import { BadgeSelect } from '@/components/shared/table/BadgeSelect';
@@ -195,6 +195,9 @@ export default function EventsPage() {
 
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
+
+  // Preview-image modal — opened by clicking a row's thumbnail in the Preview column.
+  const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
 
   // Screenshot generation modal state — mirrors the legacy events page UX.
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -447,13 +450,22 @@ export default function EventsPage() {
             );
           }
           return (
-            <img
-              src={src}
-              alt={String(r.eventTitle ?? '')}
-              loading="lazy"
-              className="w-[100px] h-[60px] object-cover rounded-md bg-[var(--gray-a3)]"
-              onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
-            />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setPreviewImage({ src, title: String(r.eventTitle ?? '') });
+              }}
+              className="block rounded-md cursor-pointer transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-8)]"
+            >
+              <img
+                src={src}
+                alt={String(r.eventTitle ?? '')}
+                loading="lazy"
+                className="w-[100px] h-[60px] object-cover rounded-md bg-[var(--gray-a3)]"
+                onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
+              />
+            </button>
           );
         },
       }),
@@ -918,6 +930,22 @@ export default function EventsPage() {
         showScreenshotPreview
         currentEventId={currentEventId}
       />
+
+      {/* Image preview modal — opened by clicking a row's Preview thumbnail. */}
+      <Modal
+        isOpen={!!previewImage}
+        onClose={() => setPreviewImage(null)}
+        title={previewImage?.title}
+        size="lg"
+      >
+        {previewImage && (
+          <img
+            src={previewImage.src}
+            alt={previewImage.title}
+            className="w-full h-auto max-h-[75vh] object-contain rounded-md"
+          />
+        )}
+      </Modal>
     </div>
   );
 }
