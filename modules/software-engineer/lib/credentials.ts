@@ -50,6 +50,13 @@ export interface ProjectSettings {
   // §7.5a: per-project skills. Each entry names a git repo + plugin sub-path the runner clones and
   // loads as a LOCAL Claude plugin (skills/hooks) into every agent session. Admin-only. [] = none.
   skills: Array<{ repo: string; path: string; ref: string }>;
+  // §7.6: development-process rules read at run start (roadmap repo file/dir) + an opt-in
+  // architecture-review gate (proposals written to architectureRepo). All admin-only.
+  processRepo: string | null;       // owner/name of the roadmap repo holding process rules
+  processPath: string | null;       // file/dir within it (default 'PROCESS.md')
+  processRef: string | null;        // branch/tag (default 'main')
+  architectureRepo: string | null;  // owner/name of the arch proposals repo; null = gate off
+  architectureRef: string | null;   // base branch for the proposal PR (default 'main')
   // Policy + concurrency.
   allowedLabellers: string[];
   intakeEnabled: boolean;
@@ -152,6 +159,11 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     mcpConfigCiphertext: data.mcp_config_ciphertext ?? null,
     memoryRepo: data.memory_repo ?? null,
     skills: Array.isArray(data.skills) ? data.skills : [],
+    processRepo: data.process_repo ?? null,
+    processPath: data.process_path ?? null,
+    processRef: data.process_ref ?? null,
+    architectureRepo: data.architecture_repo ?? null,
+    architectureRef: data.architecture_ref ?? null,
     allowedLabellers: data.allowed_labellers ?? [],
     intakeEnabled: data.intake_enabled,
     autonomyMode: data.autonomy_mode,

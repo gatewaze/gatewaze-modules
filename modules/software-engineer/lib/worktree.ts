@@ -9,6 +9,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git, authedRemote } from './git.js';
 
+// A single owner/name segment safe to use as a path component AND in a git remote URL: the same
+// charset github.ts validates owner/name with, but per-segment and with '.'/'..' explicitly rejected
+// (both pass the charset yet are path-traversal).
+const safeSegment = (s: string): boolean =>
+  typeof s === 'string' && /^[A-Za-z0-9_.-]+$/.test(s) && s !== '.' && s !== '..';
+
 export async function makeWorkspace() {
   const root = await mkdtemp(join(tmpdir(), 'se-'));
   return {
@@ -76,16 +82,33 @@ export async function makeMultiWorkspace(
   const repos: WsRepo[] = [];
   try {
     for (const r of codeRepos) {
+      const writable = r.writeMode === 'writable';
+      // repo_owner/repo_name feed a filesystem path (join, below) AND a destructive rm on clone
+      // failure — an unsafe segment ('..', a slash, a shell/URL metachar) must never escape the
+      // workspace root. Validate before building any path or running git. Reject a writable target
+      // outright (the run can't proceed); silently drop an invalid read-only reference repo.
+      if (!safeSegment(r.repoOwner) || !safeSegment(r.repoName)) {
+        if (writable) throw new Error(`unsafe repo identity: ${r.repoOwner}/${r.repoName}`);
+        continue;
+      }
       const dir = join(root, r.repoName);
       const remote = authedRemote(r.repoOwner, r.repoName, token);
-      const writable = r.writeMode === 'writable';
-      if (writable && existing) {
-        await git(['clone', '--depth', '1', '--branch', branch, remote, dir]); // the run branch already exists
-        await identity(dir, id);
-      } else {
-        if (r.baseBranch) await git(['clone', '--depth', '1', '--branch', r.baseBranch, remote, dir]);
-        else await git(['clone', '--depth', '1', remote, dir]);
-        if (writable) { await git(['-C', dir, 'checkout', '-b', branch]); await identity(dir, id); }
+      try {
+        if (writable && existing) {
+          await git(['clone', '--depth', '1', '--branch', branch, remote, dir]); // the run branch already exists
+          await identity(dir, id);
+        } else {
+          if (r.baseBranch) await git(['clone', '--depth', '1', '--branch', r.baseBranch, remote, dir]);
+          else await git(['clone', '--depth', '1', remote, dir]);
+          if (writable) { await git(['-C', dir, 'checkout', '-b', branch]); await identity(dir, id); }
+        }
+      } catch (e) {
+        // A WRITABLE repo is an edit target — if it won't clone the run can't proceed, so fail.
+        if (writable) throw e;
+        // A READ-ONLY repo is reference context (e.g. a private cross-project repo the token may not
+        // reach). Never let it fail the whole run — drop it, keep going without that context.
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+        continue;
       }
       repos.push({ repoOwner: r.repoOwner, repoName: r.repoName, dir, writable, baseBranch: r.baseBranch });
     }

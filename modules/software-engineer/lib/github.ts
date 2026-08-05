@@ -118,6 +118,14 @@ export function githubClient(token: string) {
     getPullRequest(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/pulls/${number}`);
     },
+    /** Contents of a file OR directory. Path segments are encoded individually so nested paths work
+     *  (a file → an object with base64 `content`; a directory → an array of entries). Used to read a
+     *  project's process rules at run start. */
+    getContent(owner: string, name: string, path: string, ref?: string) {
+      const enc = String(path).split('/').filter(Boolean).map(encodeURIComponent).join('/');
+      const q = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+      return j(`/repos/${owner}/${name}/contents/${enc}${q}`);
+    },
     /** Repo metadata for the AUTHENTICATED token — `permissions.push` (or higher) means the token
      *  owner can merge PRs here. Used by the PR board to tell "you can merge" from "waiting on a
      *  maintainer". */

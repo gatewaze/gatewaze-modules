@@ -42,6 +42,7 @@ const PROJECT_MASKED =
   ' commit_author_name, commit_author_email,' +
   ' allowed_labellers, intake_enabled, autonomy_mode, max_concurrent_engineers, max_interactive_engineers,' +
   ' has_mcp_config, skills,' +
+  ' process_repo, process_path, process_ref, architecture_repo, architecture_ref,' +
   ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, created_at, updated_at';
 
 const sanitize = (v: unknown) =>
@@ -915,7 +916,8 @@ export function mountAdminRoutes(router, deps) {
       if (b[k] !== undefined) patch[k] = b[k];
     }
     for (const k of ['name', 'description', 'avatar_emoji', 'commit_author_name', 'commit_author_email',
-      'issues_repo_owner', 'issues_repo_name', 'trigger_label', 'primary_instance_id', 'memory_repo']) {
+      'issues_repo_owner', 'issues_repo_name', 'trigger_label', 'primary_instance_id', 'memory_repo',
+      'process_repo', 'process_path', 'process_ref', 'architecture_repo', 'architecture_ref']) {
       if (b[k] !== undefined) patch[k] = sanitize(b[k]);
     }
     if (b.name !== undefined && !patch.name) return res.status(400).json({ error: 'name cannot be empty' });
