@@ -55,7 +55,7 @@ async function api(path: string, init?: RequestInit) {
 const STATUS_COLOR: Record<string, string> = {
   merged: 'green', pr_open: 'amber', watching: 'blue', changes_requested: 'amber',
   running: 'blue', failed: 'red', blocked: 'red', closed: 'gray', cancelled: 'gray', queued: 'gray',
-  awaiting_architecture: 'amber',
+  awaiting_architecture: 'amber', architecture_in_review: 'amber',
 };
 const phaseColor = (s: string) =>
   s === 'passed' ? 'green' : s === 'failed' || s === 'blocked' ? 'red' : s === 'running' ? 'blue' : 'gray';
@@ -311,39 +311,35 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     } catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setMerging(false); }
   };
-  // §7.6 architecture-review gate: the proposal PR + plan for a run parked at `awaiting_architecture`.
+  // §7.6 architecture-review gate (commit-to-main): the draft/committed proposal for a run parked at the
+  // gate. The human refines it by chatting (each message re-runs the agent on the draft), FINALIZES it
+  // (commit the folder to the arch repo's main, no PR), then APPROVES it to resume implementation.
   const [arch, setArch] = useState<any | null>(null);
-  const [archBusy, setArchBusy] = useState<'' | 'load' | 'merge' | 'notify'>('');
-  const [archTeam, setArchTeam] = useState('');   // team slug / user login to request review from
+  const [archBusy, setArchBusy] = useState<'' | 'load' | 'finalize' | 'approve'>('');
   useEffect(() => {
     setArch(null);
-    if (!selected || detail?.run?.status !== 'awaiting_architecture') return;
+    if (!selected || !['awaiting_architecture', 'architecture_in_review'].includes(detail?.run?.status ?? '')) return;
     let live = true;
     (async () => {
       setArchBusy('load');
       try { const a = await api(`/runs/${selected}/architecture`); if (live) setArch(a); }
-      catch { /* the PR link on the run still works */ }
+      catch { /* the draft may not be readable yet */ }
       finally { if (live) setArchBusy(''); }
     })();
     return () => { live = false; };
   }, [selected, detail?.run?.status]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const mergeArch = async () => {
-    if (!selected || !window.confirm('Merge this architecture proposal? Approving it resumes the run to implementation.')) return;
-    setArchBusy('merge'); setErr(null);
-    try { await api(`/runs/${selected}/architecture/merge`, { method: 'POST' }); toast.success('Architecture approved — resuming implementation'); await loadRuns(); await loadDetail(selected); }
+  const finalizeArch = async () => {
+    if (!selected || !window.confirm('Commit this proposal to the architecture repo’s main branch? It then awaits the architecture team’s review.')) return;
+    setArchBusy('finalize'); setErr(null);
+    try { const r = await api(`/runs/${selected}/architecture/finalize`, { method: 'POST' }); toast.success('Proposal committed — awaiting architectural review'); if (r?.url) window.open(r.url, '_blank'); await loadRuns(); await loadDetail(selected); }
     catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setArchBusy(''); }
   };
-  const notifyArch = async () => {
-    if (!selected) return;
-    const t = archTeam.trim();
-    setArchBusy('notify'); setErr(null);
-    try {
-      // A value with a '/' is an org/team ("linuxfoundation/architecture") → team_reviewers; else a user login.
-      const [teams, reviewers] = t.includes('/') ? [[t.split('/').slice(1).join('/')], []] : [[], t ? [t] : []];
-      await api(`/runs/${selected}/architecture/notify`, { method: 'POST', body: JSON.stringify({ teams, reviewers }) });
-      toast.success('Architecture team notified on the proposal PR');
-    } catch (e: any) { setErr(String(e.message ?? e)); }
+  const approveArch = async () => {
+    if (!selected || !window.confirm('Approve the architecture and start implementation?')) return;
+    setArchBusy('approve'); setErr(null);
+    try { await api(`/runs/${selected}/architecture/approve`, { method: 'POST' }); toast.success('Architecture approved — resuming implementation'); await loadRuns(); await loadDetail(selected); }
+    catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setArchBusy(''); }
   };
   // Manually start a blank interactive engineer on a project, then open it to chat live.
@@ -521,45 +517,66 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               </div>
             </div>
 
-            {/* §7.6 architecture-review gate: proposal PR + plan + approve/notify, shown while a run is
-                parked awaiting architecture review. Merging the proposal resumes the run to implement. */}
-            {detail.run.status === 'awaiting_architecture' && (
-              <div className="mt-3 rounded-lg border border-[var(--amber-6)] bg-[var(--amber-2)] p-3">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-sm font-medium text-[var(--gray-12)]">🏛️ Architecture review required</span>
-                  <a href={arch?.url ?? detail.run.architecture_pr_url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-1">
-                    Proposal PR{arch?.number ? ` #${arch.number}` : ''} <ArrowTopRightOnSquareIcon className="size-3.5" />
-                  </a>
-                </div>
-                <p className="text-xs text-[var(--gray-10)] mt-1">The agent classified this work as architecture-impacting and opened a proposal in <code className="font-mono text-[11px]">{detail.run.architecture_repo}</code>. Review the plan, then <strong>merge</strong> to approve — implementation resumes automatically. Notify the architecture team to request their review.</p>
-                {archBusy === 'load' && !arch ? (
-                  <div className="mt-2 text-xs text-[var(--gray-10)]">Loading the plan…</div>
-                ) : arch?.plan?.markdown ? (
-                  <details className="mt-2" open>
-                    <summary className="text-xs text-[var(--gray-11)] cursor-pointer">{arch.title || 'Architecture proposal'} · <span className="font-mono text-[11px]">{arch.plan.path}</span></summary>
-                    <div className="mt-2 max-h-96 overflow-auto rounded border border-[var(--gray-5)] bg-[var(--gray-1)] p-3 text-sm text-[var(--gray-12)]">
-                      <TranscriptMarkdown>{arch.plan.markdown}</TranscriptMarkdown>
+            {/* §7.6 architecture-review gate (commit-to-main): the draft/committed proposal for a run
+                parked at the gate. Chat to refine it, finalize to commit it to the arch repo's main, then
+                approve to resume implementation. */}
+            {['awaiting_architecture', 'architecture_in_review'].includes(detail.run.status) && (() => {
+              const committed = detail.run.status === 'architecture_in_review';
+              const commitUrl = arch?.commitUrl ?? detail.run.architecture_commit_url;
+              return (
+                <div className="mt-3 rounded-lg border border-[var(--amber-6)] bg-[var(--amber-2)] p-3">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-[var(--gray-12)]">🏛️ {committed ? 'Architecture proposal — under review' : 'Architecture proposal — draft'}</span>
+                    {committed && commitUrl && (
+                      <a href={commitUrl} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-1">
+                        View on {detail.run.architecture_repo} <ArrowTopRightOnSquareIcon className="size-3.5" />
+                      </a>
+                    )}
+                  </div>
+                  <p className="text-xs text-[var(--gray-10)] mt-1">
+                    {committed
+                      ? <>The proposal is committed to <code className="font-mono text-[11px]">{detail.run.architecture_repo}</code> and is awaiting the architecture team’s review. You can still chat below to change it, and each change is re-committed. When the review is done, approve to start implementation.</>
+                      : <>The agent classified this work as architecture-impacting and drafted a proposal. Review it, chat below to refine it, then <strong>finalize</strong> to commit it to <code className="font-mono text-[11px]">{detail.run.architecture_repo}</code> and send it for architectural review.</>}
+                  </p>
+                  {archBusy === 'load' && !arch ? (
+                    <div className="mt-2 text-xs text-[var(--gray-10)]">Loading the proposal…</div>
+                  ) : arch?.plan?.markdown ? (
+                    <details className="mt-2" open>
+                      <summary className="text-xs text-[var(--gray-11)] cursor-pointer">Proposal · <span className="font-mono text-[11px]">{arch.folder ?? arch.plan?.path}</span></summary>
+                      <div className="mt-2 max-h-96 overflow-auto rounded border border-[var(--gray-5)] bg-[var(--gray-1)] p-3 text-sm text-[var(--gray-12)]">
+                        <TranscriptMarkdown>{arch.plan.markdown}</TranscriptMarkdown>
+                      </div>
+                    </details>
+                  ) : (
+                    <div className="mt-2 text-xs text-[var(--gray-10)]">Proposal preview unavailable.</div>
+                  )}
+                  {/* Chat to refine — each message re-runs the agent on the draft (and re-commits once finalized). */}
+                  <div className="mt-3">
+                    <textarea
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      placeholder="Ask the agent to change the proposal, e.g. add a migration and backfill note…"
+                      rows={2}
+                      className="w-full rounded border border-[var(--gray-6)] bg-[var(--gray-1)] px-2 py-1 text-sm text-[var(--gray-12)]"
+                    />
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                      <Button variant="soft" size="xs" onClick={send} disabled={!draft.trim()}>
+                        <PaperAirplaneIcon className="size-3.5 mr-1" />Send to agent
+                      </Button>
+                      {committed ? (
+                        <Button size="xs" onClick={approveArch} disabled={archBusy !== ''}>
+                          <ArrowsRightLeftIcon className="size-3.5 mr-1" />{archBusy === 'approve' ? 'Approving…' : 'Approve & start implementation'}
+                        </Button>
+                      ) : (
+                        <Button size="xs" onClick={finalizeArch} disabled={archBusy !== ''}>
+                          <ArrowsRightLeftIcon className="size-3.5 mr-1" />{archBusy === 'finalize' ? 'Committing…' : 'Finalize & commit to main'}
+                        </Button>
+                      )}
                     </div>
-                  </details>
-                ) : (
-                  <div className="mt-2 text-xs text-[var(--gray-10)]">Plan preview unavailable — open the proposal PR to read it.</div>
-                )}
-                <div className="mt-3 flex items-center gap-2 flex-wrap">
-                  <Button size="xs" onClick={mergeArch} disabled={archBusy !== ''}>
-                    <ArrowsRightLeftIcon className="size-3.5 mr-1" />{archBusy === 'merge' ? 'Merging…' : 'Merge & resume'}
-                  </Button>
-                  <input
-                    value={archTeam}
-                    onChange={(e) => setArchTeam(e.target.value)}
-                    placeholder="team or user (e.g. linuxfoundation/architecture)"
-                    className="rounded border border-[var(--gray-6)] bg-[var(--gray-1)] px-2 py-1 text-xs w-72 text-[var(--gray-12)]"
-                  />
-                  <Button variant="soft" size="xs" onClick={notifyArch} disabled={archBusy !== ''}>
-                    <PaperAirplaneIcon className="size-3.5 mr-1" />{archBusy === 'notify' ? 'Notifying…' : 'Notify architecture team'}
-                  </Button>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             <TestEnvPanel prs={detail.prs ?? []} projectId={detail.run.project_id} projectName={detail.run.project?.name} />
 
