@@ -54,6 +54,7 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/016_arch_review_flow.sql',
     'migrations/017_pr_submit_mode.sql',
     'migrations/018_phase_gates.sql',
+    'migrations/019_credential_model.sql',
   ],
 
   // Dedicated `se` queue — NOT the shared `jobs` queue (spec §7.5 / §17, now live). Agent phases run
