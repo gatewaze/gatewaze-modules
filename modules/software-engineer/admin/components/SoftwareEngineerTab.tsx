@@ -55,7 +55,7 @@ async function api(path: string, init?: RequestInit) {
 const STATUS_COLOR: Record<string, string> = {
   merged: 'green', pr_open: 'amber', watching: 'blue', changes_requested: 'amber',
   running: 'blue', failed: 'red', blocked: 'red', closed: 'gray', cancelled: 'gray', queued: 'gray',
-  awaiting_architecture: 'amber', architecture_in_review: 'amber', ready_to_submit: 'amber',
+  awaiting_architecture: 'amber', architecture_in_review: 'amber', ready_to_submit: 'amber', awaiting_spec: 'amber',
 };
 const phaseColor = (s: string) =>
   s === 'passed' ? 'green' : s === 'failed' || s === 'blocked' ? 'red' : s === 'running' ? 'blue' : 'gray';
@@ -351,6 +351,27 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setArchBusy(''); }
   };
+  // §phase-gates: the SPEC gate. Load the spec for a run parked at `awaiting_spec`; chat refines it,
+  // approve advances it. The chat reuses the same draft + send() as the other gates.
+  const [specGate, setSpecGate] = useState<any | null>(null);
+  const [specBusy, setSpecBusy] = useState(false);
+  useEffect(() => {
+    setSpecGate(null);
+    if (!selected || detail?.run?.status !== 'awaiting_spec') return;
+    let live = true;
+    (async () => {
+      try { const s = await api(`/runs/${selected}/spec`); if (live) setSpecGate(s); }
+      catch { /* the spec may not be readable yet */ }
+    })();
+    return () => { live = false; };
+  }, [selected, detail?.run?.status]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const approveSpec = async () => {
+    if (!selected || !window.confirm('Approve this spec and proceed? This starts the next phase.')) return;
+    setSpecBusy(true); setErr(null);
+    try { const r = await api(`/runs/${selected}/spec/approve`, { method: 'POST' }); toast.success(`Spec approved — proceeding to ${r?.next ?? 'the next phase'}`); await loadRuns(); await loadDetail(selected); }
+    catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setSpecBusy(false); }
+  };
   // Manually start a blank interactive engineer on a project, then open it to chat live.
   const startInteractive = async () => {
     const pid = startProject || projectFilter || projectList[0]?.id;
@@ -558,6 +579,47 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 ))}
               </div>
             </div>
+
+            {/* §phase-gates: the SPEC gate. Render the self-reviewed spec; chat to refine it; approve to
+                proceed to the next phase. This is before any implementation, so a change here is cheap. */}
+            {detail.run.status === 'awaiting_spec' && (
+              <div className="mt-3 rounded-lg border border-[var(--amber-6)] bg-[var(--amber-2)] p-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-[var(--gray-12)]">📝 Spec review</span>
+                  {specGate?.budget?.max != null && (
+                    <span className="text-xs text-[var(--gray-10)]">refine {specGate.budget.used}/{specGate.budget.max}</span>
+                  )}
+                </div>
+                <p className="text-xs text-[var(--gray-10)] mt-1">The agent wrote and self-reviewed a spec. Read it, chat below to refine it, then <strong>approve</strong> to start the next phase.</p>
+                {specGate?.markdown ? (
+                  <details className="mt-2" open>
+                    <summary className="text-xs text-[var(--gray-11)] cursor-pointer">Spec</summary>
+                    <div className="mt-2 max-h-96 overflow-auto rounded border border-[var(--gray-5)] bg-[var(--gray-1)] p-3 text-sm text-[var(--gray-12)]">
+                      <TranscriptMarkdown>{specGate.markdown}</TranscriptMarkdown>
+                    </div>
+                  </details>
+                ) : (
+                  <div className="mt-2 text-xs text-[var(--gray-10)]">Loading the spec…</div>
+                )}
+                <div className="mt-3">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    placeholder="Ask the agent to change the spec, e.g. narrow the scope or fix an assumption…"
+                    rows={2}
+                    className="w-full rounded border border-[var(--gray-6)] bg-[var(--gray-1)] px-2 py-1 text-sm text-[var(--gray-12)]"
+                  />
+                  <div className="mt-2 flex items-center gap-2 flex-wrap">
+                    <Button variant="soft" size="xs" onClick={send} disabled={!draft.trim()}>
+                      <PaperAirplaneIcon className="size-3.5 mr-1" />Send to agent
+                    </Button>
+                    <Button size="xs" onClick={approveSpec} disabled={specBusy}>
+                      <ArrowsRightLeftIcon className="size-3.5 mr-1" />{specBusy ? 'Approving…' : 'Approve spec'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* §7.6 architecture-review gate (commit-to-main): the draft/committed proposal for a run
                 parked at the gate. Chat to refine it, finalize to commit it to the arch repo's main, then
