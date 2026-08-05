@@ -68,6 +68,7 @@ export interface ProjectSettings {
   allowedLabellers: string[];
   intakeEnabled: boolean;
   autonomyMode: 'pr_only' | 'auto_merge_safe';
+  prSubmitMode: 'auto' | 'manual';  // manual = stop at ready_to_submit for a human to open the PR
   maxConcurrentEngineers: number;
   maxInteractiveEngineers: number;
   perRunTokenCeiling: number | null;
@@ -181,6 +182,7 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     allowedLabellers: data.allowed_labellers ?? [],
     intakeEnabled: data.intake_enabled,
     autonomyMode: data.autonomy_mode,
+    prSubmitMode: data.pr_submit_mode === 'manual' ? 'manual' : 'auto',
     maxConcurrentEngineers: data.max_concurrent_engineers ?? 2,
     maxInteractiveEngineers: data.max_interactive_engineers ?? 1,
     perRunTokenCeiling: data.per_run_token_ceiling,
