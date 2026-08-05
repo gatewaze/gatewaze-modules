@@ -46,6 +46,18 @@ export function statusesToParam(statuses: readonly string[]): string {
 }
 
 /**
+ * Model spend for a run or rollup, priced from the ai module's price book at phase end
+ * (se_runs.cost_usd, migration 012). Null/0/negative → '' so pre-012 rows and non-model runs
+ * render nothing (never "$0.00"). Shared between SoftwareEngineerTab (runs list/detail) and
+ * OverviewView (the spend KPI tile + per-project breakdown) so the format never drifts between them.
+ */
+export function fmtCost(c: unknown): string {
+  const n = Number(c);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return n < 0.01 ? '<$0.01' : `$${n.toFixed(2)}`;
+}
+
+/**
  * Reverse a `?status=` param back to a human label for the Runs-board chip. If the set matches a
  * known card exactly, use that card's label; otherwise fall back to the comma-joined statuses.
  */

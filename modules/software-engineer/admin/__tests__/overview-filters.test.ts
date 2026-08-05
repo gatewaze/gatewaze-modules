@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CARD_FILTERS, ACTIVE_STATUSES, OPEN_PR_STATUSES, FAILED_STATUSES, MERGED_STATUSES,
-  statusesToParam, filterLabelForParam,
+  statusesToParam, filterLabelForParam, fmtCost,
 } from '../components/overview-filters';
 
 // These sets MUST stay in lockstep with se_overview() (migration 007_overview_metrics.sql). If a
@@ -52,5 +52,22 @@ describe('filterLabelForParam', () => {
   it('tolerates stray whitespace and empty entries', () => {
     expect(filterLabelForParam(' failed , blocked ')).toBe('Failed / blocked');
     expect(filterLabelForParam('')).toBe('');
+  });
+});
+
+describe('fmtCost', () => {
+  it('renders nothing for null, undefined, zero, or negative values', () => {
+    expect(fmtCost(null)).toBe('');
+    expect(fmtCost(undefined)).toBe('');
+    expect(fmtCost(0)).toBe('');
+    expect(fmtCost(-1.5)).toBe('');
+    expect(fmtCost('not-a-number')).toBe('');
+  });
+  it('renders sub-cent spend as "<$0.01"', () => {
+    expect(fmtCost(0.004)).toBe('<$0.01');
+  });
+  it('renders larger spend to two decimal places', () => {
+    expect(fmtCost(12.5)).toBe('$12.50');
+    expect(fmtCost('3.2')).toBe('$3.20');
   });
 });

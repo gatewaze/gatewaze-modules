@@ -24,6 +24,7 @@ import { runTriageTurn } from '../lib/triage.js';
 import { redactToken } from '../lib/git.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
+import { computeSpendOverview } from '../lib/cost.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -256,12 +257,15 @@ export function mountAdminRoutes(router, deps) {
       project = String(req.query.project);
       if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
     }
-    const { data, error } = await supabase.rpc('se_overview', { p_project: project });
+    const [{ data, error }, spend] = await Promise.all([
+      supabase.rpc('se_overview', { p_project: project }),
+      computeSpendOverview(supabase, project),
+    ]);
     if (error) {
       logger?.warn?.('se: overview failed', { error: String(error?.message ?? error) });
       return res.status(500).json({ error: 'overview failed' });
     }
-    res.json(data ?? {});
+    res.json({ ...(data ?? {}), ...(spend ? { spend } : {}) });
   });
 
   // ── Overview PR board — every open PR AUTHORED by each project's PAT user ─────────────────
