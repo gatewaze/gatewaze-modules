@@ -55,7 +55,7 @@ async function api(path: string, init?: RequestInit) {
 const STATUS_COLOR: Record<string, string> = {
   merged: 'green', pr_open: 'amber', watching: 'blue', changes_requested: 'amber',
   running: 'blue', failed: 'red', blocked: 'red', closed: 'gray', cancelled: 'gray', queued: 'gray',
-  awaiting_architecture: 'amber', architecture_in_review: 'amber',
+  awaiting_architecture: 'amber', architecture_in_review: 'amber', ready_to_submit: 'amber',
 };
 const phaseColor = (s: string) =>
   s === 'passed' ? 'green' : s === 'failed' || s === 'blocked' ? 'red' : s === 'running' ? 'blue' : 'gray';
@@ -125,6 +125,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [startProject, setStartProject] = useState('');     // project for a new interactive session
   const [starting, setStarting] = useState(false);
   const [merging, setMerging] = useState(false);            // guard against a double manual-merge submit
+  const [submitting, setSubmitting] = useState(false);      // guard against a double PR-submit click
   const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
   const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
   const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
@@ -311,6 +312,14 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     } catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setMerging(false); }
   };
+  // Submit a human-gated PR (status ready_to_submit): opens the pull request(s) the agent prepared.
+  const submitPr = async () => {
+    if (!selected || !window.confirm('Submit the pull request now? This opens it on the code repository.')) return;
+    setSubmitting(true); setErr(null);
+    try { await api(`/runs/${selected}/submit-pr`, { method: 'POST' }); toast.success('Submitting the pull request…'); await loadRuns(); await loadDetail(selected); }
+    catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setSubmitting(false); }
+  };
   // §7.6 architecture-review gate (commit-to-main): the draft/committed proposal for a run parked at the
   // gate. The human refines it by chatting (each message re-runs the agent on the draft), FINALIZES it
   // (commit the folder to the arch repo's main, no PR), then APPROVES it to resume implementation.
@@ -496,6 +505,11 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   {detail.run.kind !== 'interactive' && ['pr_open', 'watching', 'changes_requested'].includes(detail.run.status) && (
                     <Button variant="solid" color="green" size="xs" onClick={merge} disabled={merging}>
                       <ArrowsRightLeftIcon className="size-3.5 mr-1" />{merging ? 'Merging…' : 'Merge'}
+                    </Button>
+                  )}
+                  {detail.run.kind !== 'interactive' && detail.run.status === 'ready_to_submit' && (
+                    <Button variant="solid" color="blue" size="xs" onClick={submitPr} disabled={submitting}>
+                      <PaperAirplaneIcon className="size-3.5 mr-1" />{submitting ? 'Submitting…' : 'Submit PR'}
                     </Button>
                   )}
                   {detail.run.kind === 'interactive' && detail.run.status === 'running' && (
