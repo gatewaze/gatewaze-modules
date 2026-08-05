@@ -14,7 +14,7 @@ import { isGatewayError, StartingBanner } from './starting';
 import { timeAgo, formatSubmittedDate } from '../lib/pr-format';
 import {
   ArrowPathIcon, ArrowTopRightOnSquareIcon, UserIcon, UsersIcon, CpuChipIcon, BoltIcon,
-  MinusCircleIcon, BellAlertIcon, LinkIcon, BeakerIcon,
+  MinusCircleIcon, BellAlertIcon, LinkIcon, BeakerIcon, PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
 import { DEPLOYABLE, deployTestEnv, fetchRelated, useTestEnvStatus } from './testEnv';
 
@@ -233,6 +233,49 @@ function PrRow({ pr, onChanged, testEnvAvailable }: { pr: any; onChanged?: () =>
   );
 }
 
+// A run whose code is complete but whose PR submission is human-gated (pr_submit_mode='manual'). It has
+// no GitHub PR yet, so it renders from the DB with a Submit action that opens the pull request.
+function NeedsSubmitRow({ run, onSubmitted }: { run: any; onSubmitted?: () => void }) {
+  const [state, setState] = useState<'idle' | 'sending' | 'error'>('idle');
+  const [msg, setMsg] = useState('');
+  const doSubmit = async () => {
+    if (state === 'sending') return;
+    if (!window.confirm('Submit the pull request now? This opens it on the code repository.')) return;
+    setState('sending'); setMsg('');
+    try {
+      await api(`/runs/${run.run_id}/submit-pr`, { method: 'POST' });
+      setMsg('Submitting the pull request…'); onSubmitted?.();
+    } catch (e: any) {
+      setState('error');
+      setMsg(e?.status === 409 ? 'This run is no longer ready to submit.' : 'Could not submit the pull request.');
+    }
+  };
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-l-4 border-[var(--gray-4)] border-l-amber-500 px-3 py-2">
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-[var(--gray-12)]">{run.title || `Issue #${run.issue_number}`}</div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-[var(--gray-10)]">
+            <span className="font-mono">{run.repo}</span>
+            {run.issue_number != null && <span>issue #{run.issue_number}</span>}
+            {run.project_name && <span>{run.project_name}</span>}
+            {run.blast_radius && <span>blast {run.blast_radius}</span>}
+            {run.updated_at && <span>updated {timeAgo(run.updated_at)} ago</span>}
+          </div>
+        </div>
+        <button
+          type="button" onClick={doSubmit} disabled={state === 'sending'}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[var(--gray-6)] px-2 py-1 text-xs text-[var(--gray-11)] hover:bg-[var(--gray-3)] disabled:opacity-50"
+          title="Open the pull request the agent prepared"
+        >
+          <PaperAirplaneIcon className="size-3.5" />{state === 'sending' ? 'Submitting…' : 'Submit PR'}
+        </button>
+      </div>
+      {msg && <div className={`text-[11px] ${state === 'error' ? 'text-red-600' : 'text-[var(--gray-10)]'}`}>{msg}</div>}
+    </div>
+  );
+}
+
 export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
   // One status probe for the whole board — rows only render "Deploy to test"
   // where the deployment actually has a test-env channel.
@@ -279,6 +322,7 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
   }, [starting, load]);
 
   const prs: any[] = data?.prs ?? [];
+  const needsSubmitting: any[] = data?.needs_submitting ?? [];
   const projectErrors = data?.project_errors ?? {};
 
   return (
@@ -321,23 +365,35 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
 
       {loading && !data ? (
         <div className="p-6 text-center text-sm text-[var(--gray-10)]">Loading pull requests from GitHub…</div>
-      ) : prs.length === 0 ? (
-        <div className="p-6 text-center text-sm text-[var(--gray-10)]">No open PRs authored by the project users.</div>
       ) : (
         <div className="space-y-4">
-          {GROUPS.map((g) => {
-            const rows = prs.filter((pr) => pr.actor === g.actor);
-            if (rows.length === 0) return null;
-            return (
-              <div key={g.actor} className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--gray-11)]" title={g.hint}>
-                  {g.icon}{g.title}
-                  <span className="tabular-nums text-[var(--gray-9)]">({rows.length})</span>
-                </div>
-                {rows.map((pr) => <PrRow key={`${pr.repo}#${pr.number}`} pr={pr} onChanged={() => load(true)} testEnvAvailable={!!testEnvInfo?.available} />)}
+          {/* Needs submitting: code complete, PR held for a human to open (pr_submit_mode='manual'). */}
+          {needsSubmitting.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--gray-11)]" title="Code is complete and the branch is pushed. Submit to open the pull request.">
+                <PaperAirplaneIcon className="size-4" />Needs submitting
+                <span className="tabular-nums text-[var(--gray-9)]">({needsSubmitting.length})</span>
               </div>
-            );
-          })}
+              {needsSubmitting.map((r) => <NeedsSubmitRow key={r.run_id} run={r} onSubmitted={() => load(true)} />)}
+            </div>
+          )}
+          {prs.length === 0 && needsSubmitting.length === 0 ? (
+            <div className="p-6 text-center text-sm text-[var(--gray-10)]">No open PRs authored by the project users.</div>
+          ) : (
+            GROUPS.map((g) => {
+              const rows = prs.filter((pr) => pr.actor === g.actor);
+              if (rows.length === 0) return null;
+              return (
+                <div key={g.actor} className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--gray-11)]" title={g.hint}>
+                    {g.icon}{g.title}
+                    <span className="tabular-nums text-[var(--gray-9)]">({rows.length})</span>
+                  </div>
+                  {rows.map((pr) => <PrRow key={`${pr.repo}#${pr.number}`} pr={pr} onChanged={() => load(true)} testEnvAvailable={!!testEnvInfo?.available} />)}
+                </div>
+              );
+            })
+          )}
         </div>
       )}
     </section>

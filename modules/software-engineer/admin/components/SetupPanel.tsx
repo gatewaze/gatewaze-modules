@@ -177,7 +177,7 @@ export default function SetupPanel(
       max_code_repos_per_run: s.max_code_repos_per_run ? Number(s.max_code_repos_per_run) : 3,
       github_token_kind: s.github_token_kind, model_cred_kind: s.model_cred_kind, model: s.model,
       commit_author_name: s.commit_author_name?.trim() || null, commit_author_email: s.commit_author_email?.trim() || null,
-      autonomy_mode: s.autonomy_mode, intake_enabled: !!s.intake_enabled,
+      autonomy_mode: s.autonomy_mode, pr_submit_mode: s.pr_submit_mode ?? 'auto', intake_enabled: !!s.intake_enabled,
       max_concurrent_engineers: s.max_concurrent_engineers ? Number(s.max_concurrent_engineers) : 2,
       max_interactive_engineers: s.max_interactive_engineers ? Number(s.max_interactive_engineers) : 1,
       allowed_labellers: (typeof s.allowed_labellers === 'string' ? s.allowed_labellers.split(',').map((x: string) => x.trim()).filter(Boolean) : s.allowed_labellers) ?? [],
@@ -354,6 +354,12 @@ export default function SetupPanel(
                   <select value={s.autonomy_mode ?? 'pr_only'} onChange={set('autonomy_mode')} className={inputCls}>
                     <option value="pr_only">PR only (never auto-merge)</option>
                     <option value="auto_merge_safe">Auto-merge safe changes</option>
+                  </select>
+                </Field>
+                <Field label="PR submission">
+                  <select value={s.pr_submit_mode ?? 'auto'} onChange={set('pr_submit_mode')} className={inputCls}>
+                    <option value="auto">Auto-submit PRs when code is complete</option>
+                    <option value="manual">Human approval (hold at "needs submitting")</option>
                   </select>
                 </Field>
                 <Field label="Allowed labellers"><input placeholder="comma-separated GitHub logins" value={Array.isArray(s.allowed_labellers) ? s.allowed_labellers.join(', ') : (s.allowed_labellers ?? '')} onChange={set('allowed_labellers')} className={inputCls} /></Field>
