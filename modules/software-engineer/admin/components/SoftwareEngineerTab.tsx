@@ -24,6 +24,7 @@ import { toast } from 'sonner';
 import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
 import TranscriptMarkdown from './TranscriptMarkdown';
+import TestEnvPanel from './TestEnvPanel';
 import TriageCopilot from './TriageCopilot';
 import { ProjectAvatar } from './ProjectAvatar';
 import { projectOptionLabel } from './projectAvatarUtils';
@@ -559,6 +560,8 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 </div>
               </div>
             )}
+
+            <TestEnvPanel prs={detail.prs ?? []} projectId={detail.run.project_id} projectName={detail.run.project?.name} />
 
             {/* Live "working" strip — persistent while the run is live so progress is visible between
                 turn-boundary transcript messages. Distinct queued (waiting) vs running (active) states,
