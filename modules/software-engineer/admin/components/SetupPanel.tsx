@@ -178,6 +178,9 @@ export default function SetupPanel(
       github_token_kind: s.github_token_kind, model_cred_kind: s.model_cred_kind, model: s.model,
       commit_author_name: s.commit_author_name?.trim() || null, commit_author_email: s.commit_author_email?.trim() || null,
       autonomy_mode: s.autonomy_mode, pr_submit_mode: s.pr_submit_mode ?? 'auto', intake_enabled: !!s.intake_enabled,
+      gates: { spec: !!(s.gates && s.gates.spec) },
+      approvers: (typeof s.approvers === 'string' ? s.approvers.split(',').map((x: string) => x.trim()).filter(Boolean) : (Array.isArray(s.approvers) ? s.approvers : [])),
+      refine_budget: (s.refine_budget === '' || s.refine_budget == null) ? null : Number(s.refine_budget),
       max_concurrent_engineers: s.max_concurrent_engineers ? Number(s.max_concurrent_engineers) : 2,
       max_interactive_engineers: s.max_interactive_engineers ? Number(s.max_interactive_engineers) : 1,
       allowed_labellers: (typeof s.allowed_labellers === 'string' ? s.allowed_labellers.split(',').map((x: string) => x.trim()).filter(Boolean) : s.allowed_labellers) ?? [],
@@ -362,6 +365,14 @@ export default function SetupPanel(
                     <option value="manual">Human approval (hold at "needs submitting")</option>
                   </select>
                 </Field>
+                <Field label="Spec gate">
+                  <label className="flex items-center gap-2 text-sm text-[var(--gray-11)]">
+                    <input type="checkbox" checked={!!(s.gates && s.gates.spec)} onChange={(e) => setS((p: any) => ({ ...p, gates: { ...(p.gates || {}), spec: e.target.checked } }))} />
+                    Hold at “spec review” for a human before implementing
+                  </label>
+                </Field>
+                <Field label="Approvers (gatewaze user ids)"><input placeholder="comma-separated user ids; empty = any admin can advance" value={Array.isArray(s.approvers) ? s.approvers.join(', ') : (s.approvers ?? '')} onChange={set('approvers')} className={inputCls} /></Field>
+                <Field label="Refine budget (rounds/run)"><input type="number" min="0" value={s.refine_budget ?? ''} onChange={set('refine_budget')} placeholder="(unlimited)" className={inputCls} /></Field>
                 <Field label="Allowed labellers"><input placeholder="comma-separated GitHub logins" value={Array.isArray(s.allowed_labellers) ? s.allowed_labellers.join(', ') : (s.allowed_labellers ?? '')} onChange={set('allowed_labellers')} className={inputCls} /></Field>
                 <Field label="Per-run token ceiling"><input type="number" value={s.per_run_token_ceiling ?? ''} onChange={set('per_run_token_ceiling')} className={inputCls} /></Field>
                 <Field label="Per-run cost ceiling ($)"><input type="number" min="0" step="0.5" value={s.per_run_cost_ceiling_usd ?? ''} onChange={set('per_run_cost_ceiling_usd')} placeholder="(unlimited)" className={inputCls} /></Field>

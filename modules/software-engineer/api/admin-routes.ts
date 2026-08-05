@@ -48,6 +48,7 @@ const PROJECT_MASKED =
   ' allowed_labellers, intake_enabled, autonomy_mode, pr_submit_mode, max_concurrent_engineers, max_interactive_engineers,' +
   ' has_mcp_config, skills,' +
   ' process_repo, process_path, process_ref, architecture_repo, architecture_ref, tracker_url_template,' +
+  ' gates, approvers, refine_budget,' +
   ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, per_run_cost_ceiling_usd, created_at, updated_at';
 
 const sanitize = (v: unknown) =>
@@ -92,6 +93,24 @@ export function mountAdminRoutes(router, deps) {
   // which broke saving project credentials. Rely on the global parser.
 
   const authorOf = (req) => req.userId ?? req.auth?.userId ?? req.user?.id ?? req.actor?.userId ?? null;
+
+  // Advance authorization (§ phase gates). Every action that spends implementation tokens or uses the
+  // PAT's write/push/merge power (approve spec, finalize/approve architecture, submit, merge) is an
+  // Advance action. A project with a NON-EMPTY approver list restricts these to those gatewaze users,
+  // independent of platform admin, so a super-admin who is not on the list is refused. An EMPTY list is
+  // unrestricted (any admin), which preserves the behavior of projects that never configure gating.
+  // Returns true when the request was DENIED (a 403 has been sent); the caller returns immediately.
+  const denyIfNotApprover = async (req, res, run) => {
+    if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') return false;
+    const { data: proj } = await supabase.from('se_projects').select('approvers').eq('id', run.project_id).maybeSingle();
+    const list = Array.isArray(proj?.approvers) ? proj.approvers.map(String) : [];
+    const userId = authorOf(req);
+    if (list.length === 0 || (userId && list.includes(String(userId)))) return false;
+    // Record the refusal for audit (kind='gate' is allowed by se_events' CHECK).
+    try { await supabase.from('se_events').insert({ run_id: run.id, site_id: run.site_id, phase: run.current_phase ?? null, seq: 0, kind: 'gate', payload: { refused: 'advance', route: String(req.path ?? ''), user: userId } }); } catch { /* best-effort */ }
+    res.status(403).json({ error: { code: 'not_approver', message: 'You are not an approver for this project.' } });
+    return true;
+  };
 
   // ── Staging self-update (§staging box) ─────────────────────────────────────
   // Deployment-optional: enabled only where the operator bind-mounts a
@@ -755,22 +774,26 @@ export function mountAdminRoutes(router, deps) {
     if (!content.trim() && !images.length) return res.status(400).json({ error: 'empty' });
     const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
-    // A run parked at the architecture gate is not a live session — a message is feedback on the proposal
-    // draft, handled asynchronously by the refine job rather than streamed into a live agent.
+    // A run parked at a gate (spec, architecture) is not a live session — a message is feedback on the
+    // parked artifact, handled asynchronously by the matching refine job rather than streamed to a live agent.
     const archState = ['awaiting_architecture', 'architecture_in_review'].includes(run.status);
-    if (!archState && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
+    const specState = run.status === 'awaiting_spec';
+    const codeState = run.status === 'ready_to_submit';
+    if (!archState && !specState && !codeState && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
     // Persist the images as markdown appended to the stored message so the transcript renders them
     // inline — the same `![](url)` convention se_messages already carries for issue attachments.
     const stored = images.length
       ? `${content}${content && '\n\n'}` + images.map((u: string, i: number) => `![screenshot-${i + 1}](${u})`).join('\n')
       : content;
     await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'admin', author: authorOf(req), content: stored });
-    if (archState) {
+    if (archState || specState || codeState) {
       // The stored message stays undelivered (delivered_at=null) = a mailbox. Enqueue the short refine job
-      // (deterministic jobId dedups a rapid double-send); it drains ALL pending feedback, edits the draft,
-      // saves a new version, and (once committed) re-commits the README to the arch repo's main.
-      try { await enqueueJob?.('se', 'software-engineer:architecture-refine', { runId: id }, { jobId: `se-arch-refine-${id}`, removeOnComplete: true }); }
-      catch (e) { logger?.warn?.('se: enqueue architecture-refine failed', { error: String(e) }); }
+      // (deterministic jobId dedups a rapid double-send); it drains ALL pending feedback and edits the
+      // parked artifact — the spec, the architecture proposal, or (at the submission gate) the code.
+      const worker = specState ? 'software-engineer:spec-refine' : codeState ? 'software-engineer:code-refine' : 'software-engineer:architecture-refine';
+      const jobId = specState ? `se-spec-refine-${id}` : codeState ? `se-code-refine-${id}` : `se-arch-refine-${id}`;
+      try { await enqueueJob?.('se', worker, { runId: id }, { jobId, removeOnComplete: true }); }
+      catch (e) { logger?.warn?.('se: enqueue refine failed', { error: String(e) }); }
     } else {
       try { await publishInput(getRedis?.(), id, { kind: 'chat', content, images }); }
       catch (e) { logger?.warn?.('se: publish chat failed', { error: String(e) }); }
@@ -841,6 +864,7 @@ export function mountAdminRoutes(router, deps) {
     if (['merged', 'closed', 'cancelled'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
     // A PR only exists once the run has reached one of these states; anything earlier has nothing to merge.
     if (!['pr_open', 'watching', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: 'no open PR to merge' });
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
     const project = await getProject(supabase, run.project_id);
     if (!project?.githubToken) return res.status(400).json({ error: 'project has no GitHub credential' });
     let result;
@@ -903,6 +927,7 @@ export function mountAdminRoutes(router, deps) {
     if (run.status !== 'awaiting_architecture' || !run.architecture_repo || !run.architecture_path || !ARCH_REPO_RE.test(run.architecture_repo)) {
       return res.status(409).json({ error: 'run is not a finalizable architecture draft' });
     }
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
     const content = await latestArchDraft(run.id);
     if (content.trim().length < 200) return res.status(409).json({ error: 'no draft proposal to finalize' });
     const project = await getProject(supabase, run.project_id);
@@ -930,6 +955,7 @@ export function mountAdminRoutes(router, deps) {
     const { data: run } = await supabase.from('se_runs').select('id, site_id, status, repo_owner, repo_name, issue_number, project_id').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
     if (run.status !== 'architecture_in_review') return res.status(409).json({ error: 'run is not awaiting architecture approval' });
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
     const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'implement' }).eq('id', id).eq('status', 'architecture_in_review');
     if (error) return res.status(500).json({ error: 'update failed' });
     try { await enqueuePhase({ enqueueJob }, id, 'implement'); } catch (e) { logger?.warn?.('se: enqueue implement (arch approve) failed', { error: String(e) }); }
@@ -948,14 +974,53 @@ export function mountAdminRoutes(router, deps) {
     if (!rateLimit(`se-admin:submit-pr:${clientIp(req)}`, 30, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
-    const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
+    const { data: run } = await supabase.from('se_runs').select('id, site_id, project_id, status').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
     if (run.status !== 'ready_to_submit') return res.status(409).json({ error: 'run is not ready to submit' });
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
     const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'pr' }).eq('id', id).eq('status', 'ready_to_submit');
     if (error) return res.status(500).json({ error: 'update failed' });
     try { await enqueuePhase({ enqueueJob }, id, 'pr', { submitApproved: true }); } catch (e) { logger?.warn?.('se: enqueue pr (submit) failed', { error: String(e) }); }
     try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: 'Submitting the pull request.' }); } catch { /* */ }
     res.json({ submitting: true });
+  });
+
+  // §phase-gates: the SPEC gate. A run parked at `awaiting_spec` has a self-reviewed spec (se_artifacts
+  // kind='spec'). A reviewer refines it by chatting (→ spec-refine, routed by the message route); an
+  // approver approves it to advance to architecture or implement.
+  const latestSpecArtifact = async (runId: string): Promise<string> => {
+    const { data } = await supabase.from('se_artifacts').select('content').eq('run_id', runId).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    return String(data?.content ?? '');
+  };
+  router.get('/runs/:id/spec', async (req, res) => {
+    if (!rateLimit(`se-admin:spec-get:${clientIp(req)}`, 120, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: run } = await supabase.from('se_runs').select('id, project_id, status, refine_count').eq('id', id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'not found' });
+    if (run.status !== 'awaiting_spec') return res.status(404).json({ error: 'run is not at the spec gate' });
+    const markdown = await latestSpecArtifact(run.id);
+    const project = await getProject(supabase, run.project_id);
+    res.json({ status: run.status, markdown, refineCount: run.refine_count ?? 0, budget: { used: run.refine_count ?? 0, max: project?.refineBudget ?? null } });
+  });
+
+  // Approve the spec (Advance): resume the run to architecture (if this project has an architecture gate)
+  // or straight to implement.
+  router.post('/runs/:id/spec/approve', async (req, res) => {
+    if (!rateLimit(`se-admin:spec-approve:${clientIp(req)}`, 30, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: run } = await supabase.from('se_runs').select('id, site_id, project_id, status, kind, current_phase').eq('id', id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'not found' });
+    if (run.status !== 'awaiting_spec') return res.status(409).json({ error: 'run is not awaiting spec approval' });
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
+    const project = await getProject(supabase, run.project_id);
+    const next = project?.architectureRepo && run.kind !== 'external_pr' ? 'architecture' : 'implement';
+    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: next }).eq('id', id).eq('status', 'awaiting_spec');
+    if (error) return res.status(500).json({ error: 'update failed' });
+    try { await enqueuePhase({ enqueueJob }, id, next); } catch (e) { logger?.warn?.('se: enqueue after spec approve failed', { error: String(e) }); }
+    try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: `Spec approved — proceeding to ${next}.` }); } catch { /* */ }
+    res.json({ approved: true, next });
   });
 
   router.post('/runs/:id/archive', async (req, res) => {
@@ -1185,6 +1250,14 @@ export function mountAdminRoutes(router, deps) {
     }
     if (b.name !== undefined && !patch.name) return res.status(400).json({ error: 'name cannot be empty' });
     if (Array.isArray(b.allowed_labellers)) patch.allowed_labellers = b.allowed_labellers.map(String);
+    // §phase-gates: gate config (which human gates are on), the approver list, and the refine budget.
+    if (b.gates && typeof b.gates === 'object' && !Array.isArray(b.gates)) {
+      const g: Record<string, boolean> = {};
+      for (const k of ['spec', 'architecture', 'submission']) if (typeof b.gates[k] === 'boolean') g[k] = b.gates[k];
+      patch.gates = g;
+    }
+    if (Array.isArray(b.approvers)) patch.approvers = b.approvers.map(String).filter((s: string) => UUID.test(s));
+    if (b.refine_budget !== undefined) patch.refine_budget = (b.refine_budget === null || b.refine_budget === '') ? null : Math.max(0, Number(b.refine_budget) || 0);
     // §7.5a: per-project skills. Validate + normalise through the SAME guard the runner uses
     // (parseSkillsConfig) so an unsafe repo/path/ref can never be persisted; an explicit non-array
     // clears it to []. This is an admin-only route, but the skills feed a Bash-capable session, so
