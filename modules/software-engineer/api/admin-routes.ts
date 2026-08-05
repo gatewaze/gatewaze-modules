@@ -16,6 +16,7 @@ import { dispatchProject } from '../lib/dispatch.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { assertRemoteMcpServers } from '../lib/mcp.js';
 import { parseSkillsConfig } from '../lib/skills.js';
+import { normalizeModel } from '../lib/model-select.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
@@ -39,6 +40,7 @@ const PROJECT_MASKED =
   ' github_token_last4, github_token_kind, github_app_installation_id, github_health, github_checked_at,' +
   ' github_user_login, github_user_id, github_user_name,' +
   ' model_cred_last4, model_cred_kind, model, model_health, model_checked_at,' +
+  ' phase_models, escalation_model, openai_cred_last4,' +
   ' commit_author_name, commit_author_email,' +
   ' allowed_labellers, intake_enabled, autonomy_mode, max_concurrent_engineers, max_interactive_engineers,' +
   ' has_mcp_config, skills,' +
@@ -935,6 +937,40 @@ export function mountAdminRoutes(router, deps) {
     if (b.model_cred) {
       const s = sealToken(String(b.model_cred));
       patch.model_cred_ciphertext = s.ciphertext; patch.model_cred_last4 = s.last4; patch.model_health = 'unknown';
+    }
+    // Routing (migration 013). Validate server-side — these values reach --model flags and engine
+    // dispatch, so only normalised ids/engines are persisted; junk entries are dropped, not stored.
+    if (b.escalation_model !== undefined) {
+      patch.escalation_model = b.escalation_model ? normalizeModel(b.escalation_model) : null;
+      if (b.escalation_model && !patch.escalation_model) return res.status(400).json({ error: 'escalation_model is not a valid model id' });
+    }
+    if (b.phase_models !== undefined) {
+      const KNOWN_PHASES = ['triage', 'spec', 'review', 'implement', 'verify', 'revise', 'reflect', 'review_kb', 'interactive'];
+      let cfg = b.phase_models;
+      try { if (typeof cfg === 'string') cfg = cfg.trim() ? JSON.parse(cfg) : {}; } catch { return res.status(400).json({ error: 'phase_models must be valid JSON' }); }
+      const clean: any = {};
+      if (cfg && typeof cfg === 'object' && !Array.isArray(cfg)) {
+        for (const phase of KNOWN_PHASES) {
+          const v = cfg[phase];
+          if (!v || typeof v !== 'object') continue;
+          const entry: any = {};
+          if (v.engine === 'claude' || v.engine === 'codex') entry.engine = v.engine;
+          if (v.model !== undefined && v.model !== '') {
+            const m = normalizeModel(v.model);
+            if (!m) return res.status(400).json({ error: `phase_models.${phase}.model is not a valid model id` });
+            entry.model = m;
+          }
+          if (Object.keys(entry).length) clean[phase] = entry;
+        }
+      }
+      patch.phase_models = clean;
+    }
+    if (b.openai_cred) {
+      const s = sealToken(String(b.openai_cred));
+      patch.openai_cred_ciphertext = s.ciphertext; patch.openai_cred_last4 = s.last4;
+    }
+    if (b.openai_cred === null || b.openai_cred === '') {
+      patch.openai_cred_ciphertext = null; patch.openai_cred_last4 = null;
     }
     // §10: MCP server config. Accept an object/JSON string → validate shape → seal. '' or null clears.
     if (b.mcp_config !== undefined) {

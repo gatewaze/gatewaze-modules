@@ -36,6 +36,12 @@ export interface ProjectSettings {
   modelCred: string | null;
   modelCredKind: ModelCredKind;
   model: string;
+  // Routing (migration 013): partial per-phase {engine, model} map, escalation-ladder target,
+  // and the OpenAI credential the codex engine runs on. See lib/model-select.ts.
+  phaseModels: Record<string, { engine?: string; model?: string }>;
+  escalationModel: string | null;
+  openaiCred: string | null;
+  openaiCredLast4: string | null;
   // Work source: the (private) issues repo, the trigger label, and multi-instance routing.
   issuesRepoOwner: string | null;
   issuesRepoName: string | null;
@@ -151,6 +157,10 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     modelCred: openToken(data.model_cred_ciphertext),
     modelCredKind: data.model_cred_kind,
     model: data.model,
+    phaseModels: data.phase_models && typeof data.phase_models === 'object' ? data.phase_models : {},
+    escalationModel: data.escalation_model ?? null,
+    openaiCred: openToken(data.openai_cred_ciphertext),
+    openaiCredLast4: data.openai_cred_last4 ?? null,
     issuesRepoOwner: data.issues_repo_owner ?? null,
     issuesRepoName: data.issues_repo_name ?? null,
     triggerLabel: data.trigger_label ?? 'agent:build',

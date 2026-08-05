@@ -11,6 +11,7 @@
  * is the human's validation that the feedback (and the fix) were right. Best-effort + non-fatal.
  */
 import { InProcessRunner } from './agent-session.js';
+import { resolvePhaseModel } from './model-select.js';
 import { writeReviewLearningsPending } from './memory.js';
 
 /** Pull the first JSON array out of a model response (it may be fenced or wrapped in prose). */
@@ -61,7 +62,7 @@ export async function distillReviewLearnings(sb: unknown, project: any, run: any
     const result = await runner.runPhase({
       cwd: '/tmp',
       prompt,
-      model: project.model,
+      model: resolvePhaseModel(project, null, 'review_kb').model,
       credential: { kind: project.modelCredKind, value: project.modelCred },
       allowedTools: [],
     });

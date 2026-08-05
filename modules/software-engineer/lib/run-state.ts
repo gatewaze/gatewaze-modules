@@ -40,6 +40,8 @@ export async function recordPhaseEnd(
     output?: number;
     cacheRead?: number;
     cacheCreation?: number;
+    /** Which harness ran the phase ('claude' | 'codex'); selects the price-book provider. */
+    engine?: string;
     /** Agent SDK total_cost_usd — the fallback when the model has no ai_model_prices row. */
     cost?: number;
   },
@@ -54,7 +56,7 @@ export async function recordPhaseEnd(
         output: tokens.output ?? 0,
         cacheRead: tokens.cacheRead ?? 0,
         cacheCreation: tokens.cacheCreation ?? 0,
-      });
+      }, { provider: tokens.engine === 'codex' ? 'openai' : 'anthropic' });
     } catch { /* pricing is best-effort — never fail the phase for it */ }
     if (costUSD == null && typeof tokens.cost === 'number' && tokens.cost > 0) {
       costUSD = Math.round(tokens.cost * 10000) / 10000;
@@ -68,6 +70,7 @@ export async function recordPhaseEnd(
     tokens_output: tokens?.output ?? 0,
     tokens_cache_read: tokens?.cacheRead ?? 0,
     tokens_cache_creation: tokens?.cacheCreation ?? 0,
+    engine: tokens?.engine ?? (tokens?.model ? 'claude' : null),
     cost_usd: costUSD,
     finished_at: now(),
   };

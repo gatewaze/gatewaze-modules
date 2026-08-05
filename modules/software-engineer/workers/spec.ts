@@ -96,7 +96,7 @@ export default async function spec(job, ctx) {
     } catch { /* best-effort — e.g. token lacks contents:write on the issues repo */ }
     try { await writeSpecMemory(supabase, run.project_id, project.name, run.issue_number, issue.title ?? '', specText); }
     catch { /* best-effort */ }
-    await recordPhaseEnd(supabase, run, 'spec', 'passed', 'spec drafted', { model: project.model, input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
+    await recordPhaseEnd(supabase, run, 'spec', 'passed', 'spec drafted', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
     await supabase.from('se_runs').update({
       branch_name: branch, current_phase: 'review',
       tokens_input: (run.tokens_input ?? 0) + result.tokensInput,

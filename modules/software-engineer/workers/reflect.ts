@@ -8,6 +8,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
 import { InProcessRunner } from '../lib/agent-session.js';
+import { resolvePhaseModel } from '../lib/model-select.js';
 import { readLiveMemory, writeMemoryPending } from '../lib/memory.js';
 
 const sb = (ctx) =>
@@ -51,7 +52,7 @@ export default async function reflect(job, ctx) {
   try {
     const runner = new InProcessRunner();
     const result = await runner.runPhase({
-      cwd: '/tmp', prompt, model: project.model,
+      cwd: '/tmp', prompt, model: resolvePhaseModel(project, null, 'reflect').model,
       credential: { kind: project.modelCredKind, value: project.modelCred },
       noTools: true,
     });

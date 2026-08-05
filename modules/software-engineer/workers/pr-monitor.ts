@@ -119,7 +119,10 @@ async function reconcile(supabase, ctx, run) {
     // as auto-merge below.)
     const CI_FIX_CAP = 3;
     if (run.kind !== 'external_pr' && anyFailingCi && (run.ci_fix_attempts ?? 0) < CI_FIX_CAP) {
-      await supabase.from('se_runs').update({ ...patch, status: 'changes_requested', pr_state: 'open', current_phase: 'revise', ci_fix_attempts: (run.ci_fix_attempts ?? 0) + 1, pr_url: firstUrl }).eq('id', run.id);
+      // Escalation ladder: the first CI-fix ran on the mapped model and CI is still red — latch the
+      // run onto the project's escalation model (when configured) for the remaining code phases.
+      const escalate = (run.ci_fix_attempts ?? 0) >= 1 && !run.model_escalated && !!project.escalationModel;
+      await supabase.from('se_runs').update({ ...patch, status: 'changes_requested', pr_state: 'open', current_phase: 'revise', ci_fix_attempts: (run.ci_fix_attempts ?? 0) + 1, ...(escalate ? { model_escalated: true } : {}), pr_url: firstUrl }).eq('id', run.id);
       await enqueuePhase(ctx, run.id, 'revise', { reason: 'ci' });
       return { runId: run.id, action: 'ci-fix' };
     }

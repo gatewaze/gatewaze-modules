@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { makeWorkspace, cloneBranch, cloneNewBranch } from './worktree.js';
 import { subscribeInput } from './input-channel.js';
 import { InProcessRunner } from './agent-session.js';
+import { CodexRunner } from './codex-runner.js';
+import { resolvePhaseModel } from './model-select.js';
 import { writeEvent, writeMessage, touchRun } from './run-state.js';
 import { resolveCommitIdentity } from './credentials.js';
 import { recallMemory, listMemorySources } from './memory.js';
@@ -152,14 +154,20 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     // Heartbeat: while the agent works, bump se_runs.updated_at every 20s so a live-but-quiet run stays
     // distinguishable from a wedged one in the Runs tab. Cleared in finally so the interval never leaks.
     const heartbeat = setInterval(() => { touchRun(supabase, run).catch(() => {}); }, 20000);
-    const runner = new InProcessRunner();
+    // Routing (migration 013): phase map + run overrides + escalation decide the engine and model.
+    const routed = resolvePhaseModel(project, run, phase);
+    const runner = routed.engine === 'codex' ? new CodexRunner() : new InProcessRunner();
+    const routedCredential = routed.engine === 'codex'
+      ? { kind: 'openai_api_key', value: project.openaiCred }
+      : { kind: project.modelCredKind, value: project.modelCred };
     let result;
     try {
       result = await runner.runPhase({
         cwd: spec.cwd,
         prompt: spec.prompt,
-        model: project.model,
-        credential: { kind: project.modelCredKind, value: project.modelCred },
+        model: routed.model,
+        credential: routedCredential,
+        redactValues: [project.githubToken, project.modelCred, project.openaiCred, ...mcpSecretValues(mcpServers)],
         allowedTools: spec.allowedTools,
         systemAppend,
         mcpServers,
@@ -177,8 +185,9 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     // GitHub PAT, the model credential, and any MCP bearer token (not just the PAT). Belt-and-braces
     // with the per-worker redactToken calls.
     if (result?.error) {
-      try { result.error = redactSecrets(result.error, [project.githubToken, project.modelCred, ...mcpSecretValues(mcpServers)]); } catch { /* best-effort */ }
+      try { result.error = redactSecrets(result.error, [project.githubToken, project.modelCred, project.openaiCred, ...mcpSecretValues(mcpServers)]); } catch { /* best-effort */ }
     }
+    if (result) { result.modelUsed = routed.model; result.engineUsed = routed.engine; }
     return result;
   } catch (e) {
     try { inputCh?.close?.(); } catch { /* ignore */ }
@@ -303,13 +312,16 @@ export async function runInteractiveSession(supabase, ctx, run, project, spec) {
 
     await status('Starting the interactive session', 'start');
     const heartbeat = setInterval(() => { touchRun(supabase, run).catch(() => {}); }, 20000);
+    // Interactive sessions stay on the claude engine (live steering isn't bridged to codex yet)
+    // but respect a per-phase model mapping under the 'interactive' key.
+    const routed = resolvePhaseModel(project, run, 'interactive');
     const runner = new InProcessRunner();
     let result;
     try {
       result = await runner.runInteractive({
         cwd: spec.cwd,
         kickoff: spec.kickoff,
-        model: project.model,
+        model: routed.model,
         credential: { kind: project.modelCredKind, value: project.modelCred },
         allowedTools: spec.allowedTools,
         systemAppend,
@@ -326,6 +338,7 @@ export async function runInteractiveSession(supabase, ctx, run, project, spec) {
     if (result?.error) {
       try { result.error = redactSecrets(result.error, [project.githubToken, project.modelCred, ...mcpSecretValues(mcpServers)]); } catch { /* best-effort */ }
     }
+    if (result) { result.modelUsed = routed.model; result.engineUsed = 'claude'; }
     return result;
   } finally {
     try { inputCh?.close?.(); } catch { /* ignore */ }
