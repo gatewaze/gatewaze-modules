@@ -89,9 +89,13 @@ export default async function review(job, ctx) {
 
     if (verdict === 'pass') {
       await recordPhaseEnd(supabase, run, 'review', 'passed', 'spec approved by skeptic', { model: project.model, input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
-      await supabase.from('se_runs').update({ current_phase: 'implement' }).eq('id', run.id);
-      await enqueuePhase(ctx, run.id, 'implement');
-      return { ok: true, verdict };
+      // §7.6: if this project has an architecture-review gate, route through the `architecture` phase
+      // first (it decides arch-impact and, if impacting, opens a proposal PR + blocks). External-PR
+      // runs (Connect) have no spec to gate — they skip straight to implement. Otherwise → implement.
+      const next = project.architectureRepo && run.kind !== 'external_pr' ? 'architecture' : 'implement';
+      await supabase.from('se_runs').update({ current_phase: next }).eq('id', run.id);
+      await enqueuePhase(ctx, run.id, next);
+      return { ok: true, verdict, next };
     }
 
     await recordPhaseEnd(supabase, run, 'review', 'blocked', `skeptic blocked: ${objections.slice(0, 3).join('; ')}`);

@@ -21,4 +21,4 @@ export async function enqueuePhase(ctx: unknown, runId: string, phase: string, d
 }
 
 /** The agent phases the reconciler can re-drive (each is a long-running job that could be orphaned). */
-export const RECOVERABLE_PHASES = ['intake', 'spec', 'review', 'implement', 'verify', 'pr', 'revise'];
+export const RECOVERABLE_PHASES = ['intake', 'spec', 'review', 'architecture', 'implement', 'verify', 'pr', 'revise'];

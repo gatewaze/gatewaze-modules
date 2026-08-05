@@ -183,6 +183,11 @@ export default function SetupPanel(
       monthly_token_budget: s.monthly_token_budget ? Number(s.monthly_token_budget) : null,
       per_run_token_ceiling: s.per_run_token_ceiling ? Number(s.per_run_token_ceiling) : null,
       per_run_wallclock_minutes: s.per_run_wallclock_minutes ? Number(s.per_run_wallclock_minutes) : null,
+      process_repo: s.process_repo?.trim() || null,
+      process_path: s.process_path?.trim() || null,
+      process_ref: s.process_ref?.trim() || null,
+      architecture_repo: s.architecture_repo?.trim() || null,
+      architecture_ref: s.architecture_ref?.trim() || null,
     };
     if (ghToken.trim()) body.github_token = ghToken.trim();
     if (modelCred.trim()) body.model_cred = modelCred.trim();
@@ -340,6 +345,15 @@ export default function SetupPanel(
                   />
                 </Field>
                 <p className="text-xs text-[var(--gray-10)] pt-1">JSON array of <code className="font-mono text-[11px]">{'{ repo, path, ref }'}</code>. Each is a git repo the runner clones (with this project's PAT) and loads as a local Claude plugin — its skills/hooks become available to every engineer on this project. <code className="font-mono text-[11px]">path</code> points at the plugin dir inside the repo (default: repo root); <code className="font-mono text-[11px]">ref</code> defaults to <code className="font-mono text-[11px]">main</code>. Leave blank for none.</p>
+              </Section>
+
+              <Section icon={<ShieldCheckIcon className="size-4" />} title="Development process + architecture review">
+                <Field label="Process rules repo"><input value={s.process_repo ?? ''} onChange={set('process_repo')} placeholder="owner/name (e.g. linuxfoundation/lfx-roadmap)" className={inputCls} /></Field>
+                <Field label="Process rules path"><input value={s.process_path ?? ''} onChange={set('process_path')} placeholder="file or dir (default: PROCESS.md)" className={inputCls} /></Field>
+                <Field label="Process rules ref"><input value={s.process_ref ?? ''} onChange={set('process_ref')} placeholder="branch/tag (default: main)" className={inputCls} /></Field>
+                <Field label="Architecture proposals repo"><input value={s.architecture_repo ?? ''} onChange={set('architecture_repo')} placeholder="owner/name (e.g. linuxfoundation/lfx-architecture-scratch) — blank = gate off" className={inputCls} /></Field>
+                <Field label="Architecture repo base branch"><input value={s.architecture_ref ?? ''} onChange={set('architecture_ref')} placeholder="default: main" className={inputCls} /></Field>
+                <p className="text-xs text-[var(--gray-10)] pt-1"><strong>Process rules</strong> (file/dir in a roadmap repo) are read at the start of every run and injected as authoritative instructions above the generic flow. <strong>Architecture proposals repo</strong>, when set, enables the review gate: after a spec is approved, if the work is architecture-impacting (per the process rules), the agent writes a proposal PR to this repo and the run pauses until a human merges it — then implementation resumes automatically. Leave the architecture repo blank to disable the gate (default gatewaze behaviour).</p>
               </Section>
 
               <div className="flex justify-end border-t border-[var(--gray-5)] pt-4">
