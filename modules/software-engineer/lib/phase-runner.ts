@@ -150,6 +150,19 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     let cleanupSkills = async () => {};
     try { const sk = await resolveProjectSkills(project, project.githubToken, ctx?.logger); plugins = sk.plugins; cleanupSkills = sk.cleanup; } catch { /* no skills */ }
 
+    // Per-run cost ceiling (migration 014): re-read the accumulated total (the run object in hand
+    // may predate the last phase's cost write) and refuse to start another model phase past it.
+    // The worker surfaces result.error as a failed phase + failed run with this exact message.
+    if (project.perRunCostCeilingUSD != null && project.perRunCostCeilingUSD > 0) {
+      try {
+        const { data: fresh } = await supabase.from('se_runs').select('cost_usd').eq('id', run.id).maybeSingle();
+        const spent = Number(fresh?.cost_usd) || 0;
+        if (spent >= project.perRunCostCeilingUSD) {
+          return { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, interrupted: false,
+            error: `cost ceiling reached: this run has spent $${spent.toFixed(2)} of its $${project.perRunCostCeilingUSD.toFixed(2)} per-run ceiling — raise it in Setup or split the issue` };
+        }
+      } catch { /* ceiling check is best-effort — never block a run on a read blip */ }
+    }
     await status(`Starting the agent (${phase})`, 'start');
     // Heartbeat: while the agent works, bump se_runs.updated_at every 20s so a live-but-quiet run stays
     // distinguishable from a wedged one in the Runs tab. Cleared in finally so the interval never leaks.

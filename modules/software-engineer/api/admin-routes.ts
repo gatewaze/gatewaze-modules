@@ -46,7 +46,7 @@ const PROJECT_MASKED =
   ' allowed_labellers, intake_enabled, autonomy_mode, max_concurrent_engineers, max_interactive_engineers,' +
   ' has_mcp_config, skills,' +
   ' process_repo, process_path, process_ref, architecture_repo, architecture_ref,' +
-  ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, created_at, updated_at';
+  ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, per_run_cost_ceiling_usd, created_at, updated_at';
 
 const sanitize = (v: unknown) =>
   v == null ? null : String(v).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 200) || null;
@@ -941,6 +941,17 @@ export function mountAdminRoutes(router, deps) {
     if (b.model_cred) {
       const s = sealToken(String(b.model_cred));
       patch.model_cred_ciphertext = s.ciphertext; patch.model_cred_last4 = s.last4; patch.model_health = 'unknown';
+    }
+    // Billing control — validate server-side rather than trusting the client's min attr: finite,
+    // non-negative, bounded (numeric(10,2) tops out well above any sane per-run spend). Null/'' clears.
+    if (b.per_run_cost_ceiling_usd !== undefined) {
+      if (b.per_run_cost_ceiling_usd === null || b.per_run_cost_ceiling_usd === '') {
+        patch.per_run_cost_ceiling_usd = null;
+      } else {
+        const v = Number(b.per_run_cost_ceiling_usd);
+        if (!Number.isFinite(v) || v < 0 || v > 100000) return res.status(400).json({ error: 'per_run_cost_ceiling_usd must be a number between 0 and 100000' });
+        patch.per_run_cost_ceiling_usd = Math.round(v * 100) / 100;
+      }
     }
     // Routing (migration 013). Validate server-side — these values reach --model flags and engine
     // dispatch, so only normalised ids/engines are persisted; junk entries are dropped, not stored.

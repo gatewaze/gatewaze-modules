@@ -183,6 +183,7 @@ export default function SetupPanel(
       allowed_labellers: (typeof s.allowed_labellers === 'string' ? s.allowed_labellers.split(',').map((x: string) => x.trim()).filter(Boolean) : s.allowed_labellers) ?? [],
       monthly_token_budget: s.monthly_token_budget ? Number(s.monthly_token_budget) : null,
       per_run_token_ceiling: s.per_run_token_ceiling ? Number(s.per_run_token_ceiling) : null,
+      per_run_cost_ceiling_usd: s.per_run_cost_ceiling_usd ? Number(s.per_run_cost_ceiling_usd) : null,
       per_run_wallclock_minutes: s.per_run_wallclock_minutes ? Number(s.per_run_wallclock_minutes) : null,
       process_repo: s.process_repo?.trim() || null,
       process_path: s.process_path?.trim() || null,
@@ -357,6 +358,7 @@ export default function SetupPanel(
                 </Field>
                 <Field label="Allowed labellers"><input placeholder="comma-separated GitHub logins" value={Array.isArray(s.allowed_labellers) ? s.allowed_labellers.join(', ') : (s.allowed_labellers ?? '')} onChange={set('allowed_labellers')} className={inputCls} /></Field>
                 <Field label="Per-run token ceiling"><input type="number" value={s.per_run_token_ceiling ?? ''} onChange={set('per_run_token_ceiling')} className={inputCls} /></Field>
+                <Field label="Per-run cost ceiling ($)"><input type="number" min="0" step="0.5" value={s.per_run_cost_ceiling_usd ?? ''} onChange={set('per_run_cost_ceiling_usd')} placeholder="(unlimited)" className={inputCls} /></Field>
                 <Field label="Per-run wall-clock (min)"><input type="number" value={s.per_run_wallclock_minutes ?? ''} onChange={set('per_run_wallclock_minutes')} className={inputCls} /></Field>
                 <Field label="Monthly token budget"><input type="number" value={s.monthly_token_budget ?? ''} onChange={set('monthly_token_budget')} className={inputCls} /></Field>
                 <Field label="Intake enabled (kill switch)"><label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={!!s.intake_enabled} onChange={set('intake_enabled')} className="size-4" />{s.intake_enabled ? 'On' : 'Off'}</label></Field>

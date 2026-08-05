@@ -70,6 +70,8 @@ export interface ProjectSettings {
   maxConcurrentEngineers: number;
   maxInteractiveEngineers: number;
   perRunTokenCeiling: number | null;
+  /** USD ceiling per run, enforced at phase start against se_runs.cost_usd; null = off. */
+  perRunCostCeilingUSD: number | null;
   perRunWallclockMinutes: number | null;
   monthlyTokenBudget: number | null;
 }
@@ -180,6 +182,7 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     maxConcurrentEngineers: data.max_concurrent_engineers ?? 2,
     maxInteractiveEngineers: data.max_interactive_engineers ?? 1,
     perRunTokenCeiling: data.per_run_token_ceiling,
+    perRunCostCeilingUSD: data.per_run_cost_ceiling_usd != null ? Number(data.per_run_cost_ceiling_usd) : null,
     perRunWallclockMinutes: data.per_run_wallclock_minutes,
     monthlyTokenBudget: data.monthly_token_budget,
   };

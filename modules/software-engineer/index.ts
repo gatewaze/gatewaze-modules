@@ -49,6 +49,7 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/012_process_rules_arch_gate.sql',
     'migrations/013_engines_and_routing.sql',
     'migrations/013_se_repos_per_project_unique.sql',
+    'migrations/014_per_run_cost_ceiling.sql',
   ],
 
   // Dedicated `se` queue — NOT the shared `jobs` queue (spec §7.5 / §17, now live). Agent phases run
