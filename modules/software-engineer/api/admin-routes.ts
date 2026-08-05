@@ -49,6 +49,7 @@ const PROJECT_MASKED =
   ' has_mcp_config, skills,' +
   ' process_repo, process_path, process_ref, architecture_repo, architecture_ref, tracker_url_template,' +
   ' gates, approvers, refine_budget,' +
+  ' credential_mode, committing_pat_last4, commenting_pat_last4, pull_request_pat_last4, coding_agent_model_last4,' +
   ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, per_run_cost_ceiling_usd, created_at, updated_at';
 
 const sanitize = (v: unknown) =>
@@ -956,7 +957,7 @@ export function mountAdminRoutes(router, deps) {
     if (!run) return res.status(404).json({ error: 'not found' });
     if (run.status !== 'architecture_in_review') return res.status(409).json({ error: 'run is not awaiting architecture approval' });
     if (await denyIfNotApprover(req, res, run)) return;   // Advance action
-    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'implement' }).eq('id', id).eq('status', 'architecture_in_review');
+    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'implement', acting_user_id: authorOf(req) }).eq('id', id).eq('status', 'architecture_in_review');
     if (error) return res.status(500).json({ error: 'update failed' });
     try { await enqueuePhase({ enqueueJob }, id, 'implement'); } catch (e) { logger?.warn?.('se: enqueue implement (arch approve) failed', { error: String(e) }); }
     try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: 'Architecture approved — resuming implementation.' }); } catch { /* */ }
@@ -978,7 +979,7 @@ export function mountAdminRoutes(router, deps) {
     if (!run) return res.status(404).json({ error: 'not found' });
     if (run.status !== 'ready_to_submit') return res.status(409).json({ error: 'run is not ready to submit' });
     if (await denyIfNotApprover(req, res, run)) return;   // Advance action
-    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'pr' }).eq('id', id).eq('status', 'ready_to_submit');
+    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'pr', acting_user_id: authorOf(req) }).eq('id', id).eq('status', 'ready_to_submit');
     if (error) return res.status(500).json({ error: 'update failed' });
     try { await enqueuePhase({ enqueueJob }, id, 'pr', { submitApproved: true }); } catch (e) { logger?.warn?.('se: enqueue pr (submit) failed', { error: String(e) }); }
     try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: 'Submitting the pull request.' }); } catch { /* */ }
@@ -1016,7 +1017,7 @@ export function mountAdminRoutes(router, deps) {
     if (await denyIfNotApprover(req, res, run)) return;   // Advance action
     const project = await getProject(supabase, run.project_id);
     const next = project?.architectureRepo && run.kind !== 'external_pr' ? 'architecture' : 'implement';
-    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: next }).eq('id', id).eq('status', 'awaiting_spec');
+    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: next, acting_user_id: authorOf(req) }).eq('id', id).eq('status', 'awaiting_spec');
     if (error) return res.status(500).json({ error: 'update failed' });
     try { await enqueuePhase({ enqueueJob }, id, next); } catch (e) { logger?.warn?.('se: enqueue after spec approve failed', { error: String(e) }); }
     try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: `Spec approved — proceeding to ${next}.` }); } catch { /* */ }
@@ -1237,7 +1238,7 @@ export function mountAdminRoutes(router, deps) {
     const b = req.body ?? {};
     const patch: any = {};
     for (const k of [
-      'github_token_kind', 'github_app_installation_id', 'model_cred_kind', 'model', 'autonomy_mode', 'pr_submit_mode',
+      'github_token_kind', 'github_app_installation_id', 'model_cred_kind', 'model', 'autonomy_mode', 'pr_submit_mode', 'credential_mode',
       'intake_enabled', 'max_concurrent_engineers', 'max_interactive_engineers', 'max_code_repos_per_run',
       'monthly_token_budget', 'per_run_token_ceiling', 'per_run_wallclock_minutes',
     ]) {
@@ -1271,6 +1272,17 @@ export function mountAdminRoutes(router, deps) {
     if (b.model_cred) {
       const s = sealToken(String(b.model_cred));
       patch.model_cred_ciphertext = s.ciphertext; patch.model_cred_last4 = s.last4; patch.model_health = 'unknown';
+    }
+    // Credential model (§12): role-scoped credentials, sealed like the default PAT. Each is set-only and
+    // returned only as a masked last4. An empty string is ignored (leaves the slot unchanged).
+    for (const [field, col] of [
+      ['committing_pat', 'committing_pat'], ['commenting_pat', 'commenting_pat'],
+      ['pull_request_pat', 'pull_request_pat'], ['coding_agent_model', 'coding_agent_model'],
+    ] as const) {
+      if (b[field]) {
+        const s = sealToken(String(b[field]));
+        patch[`${col}_ciphertext`] = s.ciphertext; patch[`${col}_last4`] = s.last4;
+      }
     }
     // Billing control — validate server-side rather than trusting the client's min attr: finite,
     // non-negative, bounded (numeric(10,2) tops out well above any sane per-run spend). Null/'' clears.
