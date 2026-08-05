@@ -46,3 +46,68 @@ export async function pricePhaseCostUSD(
     Math.round((usage.cacheCreation ?? 0) * (cacheCreationRate ?? 0));
   return Math.round(micros / 100) / 10000; // micro-USD → USD at 4dp (matches cost_usd numeric(10,4))
 }
+
+export interface ProjectSpend {
+  project_id: string;
+  name: string | null;
+  avatar_emoji: string | null;
+  total: number;
+}
+
+export interface SpendOverview {
+  total_30d: number;
+  total_7d: number;
+  by_project: ProjectSpend[];
+}
+
+/**
+ * Best-effort spend rollup for the Overview tab, run alongside (never inside) se_overview(). Costs
+ * are bucketed by se_runs.created_at — a proxy for when the spend actually happened, not per-phase
+ * precision — which is an accepted approximation for a KPI tile.
+ *
+ * Returns null on ANY failure, including a pre-012 instance where se_runs.cost_usd doesn't exist
+ * yet: the whole body is wrapped in try/catch (not just an {error} check) so a client that throws
+ * synchronously (e.g. no .from() at all) degrades exactly like a clean PostgREST error. Callers
+ * omit the `spend` key on null so the rest of the Overview payload is unaffected.
+ */
+export async function computeSpendOverview(sb: unknown, projectId: string | null): Promise<SpendOverview | null> {
+  try {
+    const since30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    const since7 = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+    let q = (sb as any).from('se_runs')
+      .select('cost_usd, created_at, project_id, project:se_projects(name, avatar_emoji)')
+      .not('cost_usd', 'is', null)
+      .gte('created_at', since30);
+    if (projectId) q = q.eq('project_id', projectId);
+    const { data, error } = await q;
+    if (error || !data) return null;
+
+    let total30 = 0;
+    let total7 = 0;
+    const byProject = new Map<string, ProjectSpend>();
+    for (const r of data as any[]) {
+      const cost = Number(r.cost_usd);
+      if (!Number.isFinite(cost)) continue;
+      total30 += cost;
+      if (r.created_at >= since7) total7 += cost;
+      if (r.project_id) {
+        const proj = Array.isArray(r.project) ? r.project[0] : r.project;
+        const cur = byProject.get(r.project_id) ?? {
+          project_id: r.project_id,
+          name: proj?.name ?? null,
+          avatar_emoji: proj?.avatar_emoji ?? null,
+          total: 0,
+        };
+        cur.total += cost;
+        byProject.set(r.project_id, cur);
+      }
+    }
+    return {
+      total_30d: Math.round(total30 * 10000) / 10000,
+      total_7d: Math.round(total7 * 10000) / 10000,
+      by_project: [...byProject.values()].sort((a, b) => b.total - a.total),
+    };
+  } catch {
+    return null;
+  }
+}

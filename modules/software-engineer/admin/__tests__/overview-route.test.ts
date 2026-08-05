@@ -1,7 +1,10 @@
 // @ts-nocheck — vitest harness; the route handlers are @ts-nocheck'd already.
 //
-// Exercises GET /overview: it must validate an optional ?project UUID, delegate all aggregation to
-// the se_overview() RPC (never pull run rows), and pass the payload straight through.
+// Exercises GET /overview: it must validate an optional ?project UUID, delegate all core
+// aggregation to the se_overview() RPC, and merge in a best-effort spend rollup (lib/cost.ts
+// computeSpendOverview) that degrades silently — including on the pre-existing mock doubles below,
+// which have no .from() at all and so exercise the "spend key omitted" path for every case that
+// doesn't opt in via fromResult.
 import { describe, it, expect } from 'vitest';
 import { mountAdminRoutes } from '../../api/admin-routes.js';
 
@@ -27,12 +30,34 @@ function mockRes() {
   return res;
 }
 
-// supabase double whose rpc() records its args and returns a canned overview blob.
-function mockSupabase(rpcResult: { data?: unknown; error?: unknown } = {}) {
+// supabase double whose rpc() records its args and returns a canned overview blob. An optional
+// `fromResult` wires up .from() for the spend rollup query (computeSpendOverview); when omitted,
+// .from() is absent entirely — the same shape as an instance whose client has no such method — so
+// computeSpendOverview's try/catch degrades it to null and the route omits the `spend` key.
+function mockSupabase(rpcResult: { data?: unknown; error?: unknown } = {}, fromResult?: { data?: unknown; error?: unknown }) {
   const calls: { rpc: string; args: unknown }[] = [];
-  return {
+  const fromCalls: unknown[] = [];
+  const base = {
     calls,
+    fromCalls,
     rpc(name: string, args: unknown) { calls.push({ rpc: name, args }); return Promise.resolve({ data: rpcResult.data ?? null, error: rpcResult.error ?? null }); },
+  };
+  if (!fromResult) return base;
+  return {
+    ...base,
+    from(table: string) {
+      fromCalls.push(table);
+      const b: any = {
+        select() { return b; },
+        not() { return b; },
+        gte() { return b; },
+        eq() { return b; },
+        then(resolve: any, reject: any) {
+          return Promise.resolve({ data: fromResult.data ?? null, error: fromResult.error ?? null }).then(resolve, reject);
+        },
+      };
+      return b;
+    },
   };
 }
 
@@ -99,5 +124,43 @@ describe('GET /overview', () => {
     await router.handler('GET /overview')(req, res);
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({});
+  });
+
+  it('merges in a spend rollup when the cost query succeeds', async () => {
+    const rows = [{ cost_usd: 1.5, created_at: new Date().toISOString(), project_id: 'p1', project: { name: 'Alpha', avatar_emoji: '🚀' } }];
+    const supabase = mockSupabase({ data: SAMPLE }, { data: rows });
+    const router = mount(supabase);
+    const req: any = { query: {} };
+    const res = mockRes();
+    await router.handler('GET /overview')(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.spend).toEqual({
+      total_30d: 1.5,
+      total_7d: 1.5,
+      by_project: [{ project_id: 'p1', name: 'Alpha', avatar_emoji: '🚀', total: 1.5 }],
+    });
+    expect(res.body.totals).toEqual(SAMPLE.totals);
+  });
+
+  it('omits the spend key when the cost query errors (e.g. pre-012 instance missing cost_usd)', async () => {
+    const supabase = mockSupabase({ data: SAMPLE }, { error: { message: 'column se_runs.cost_usd does not exist' } });
+    const router = mount(supabase);
+    const req: any = { query: {} };
+    const res = mockRes();
+    await router.handler('GET /overview')(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.spend).toBeUndefined();
+    expect(res.body).toEqual(SAMPLE);
+  });
+
+  it('omits the spend key when the client has no .from() at all', async () => {
+    const supabase = mockSupabase({ data: SAMPLE });
+    const router = mount(supabase);
+    const req: any = { query: {} };
+    const res = mockRes();
+    await router.handler('GET /overview')(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.spend).toBeUndefined();
+    expect(res.body).toEqual(SAMPLE);
   });
 });
