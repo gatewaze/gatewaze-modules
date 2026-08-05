@@ -42,6 +42,18 @@ export default async function pr(job, ctx) {
       return { failed: 'no prs' };
     }
 
+    // Human-gated submission (§ pr_submit_mode). When the project requires manual submission, the code is
+    // complete and the branch is pushed, but we do NOT open the pull request. Stop at ready_to_submit and
+    // wait for a person to submit it from the dashboard. A submit action re-enqueues this phase with
+    // submitApproved=true, which falls through to the normal PR creation below.
+    if (project.prSubmitMode === 'manual' && !job?.data?.submitApproved) {
+      await recordPhaseEnd(supabase, run, 'pr', 'blocked', 'code complete; pull request ready to submit (awaiting a human)');
+      await supabase.from('se_runs').update({ status: 'ready_to_submit', current_phase: 'pr' }).eq('id', run.id);
+      try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:needs-submit'); } catch { /* */ }
+      try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, 'Code is complete and the branch is pushed. The pull request is ready to submit and is waiting for a person to submit it from the dashboard.'); } catch { /* */ }
+      return { ok: true, readyToSubmit: true, prs: prs.length };
+    }
+
     // Title the PR by the real GitHub issue, not run.title (which can be a placeholder from the
     // triggering webhook payload). Falls back to run.title if the fetch fails.
     let issueTitle = run.title;
