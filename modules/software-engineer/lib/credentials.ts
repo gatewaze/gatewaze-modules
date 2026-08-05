@@ -69,6 +69,9 @@ export interface ProjectSettings {
   intakeEnabled: boolean;
   autonomyMode: 'pr_only' | 'auto_merge_safe';
   prSubmitMode: 'auto' | 'manual';  // manual = stop at ready_to_submit for a human to open the PR
+  specGate: boolean;                 // gates.spec: park at awaiting_spec after self-review for human review
+  approvers: string[];               // gatewaze user ids allowed to Advance; empty = unrestricted (any admin)
+  refineBudget: number | null;       // max chat-to-refine rounds per run; null = unlimited
   maxConcurrentEngineers: number;
   maxInteractiveEngineers: number;
   perRunTokenCeiling: number | null;
@@ -183,6 +186,9 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     intakeEnabled: data.intake_enabled,
     autonomyMode: data.autonomy_mode,
     prSubmitMode: data.pr_submit_mode === 'manual' ? 'manual' : 'auto',
+    specGate: !!(data.gates && typeof data.gates === 'object' && data.gates.spec === true),
+    approvers: Array.isArray(data.approvers) ? data.approvers.map(String) : [],
+    refineBudget: data.refine_budget ?? null,
     maxConcurrentEngineers: data.max_concurrent_engineers ?? 2,
     maxInteractiveEngineers: data.max_interactive_engineers ?? 1,
     perRunTokenCeiling: data.per_run_token_ceiling,
