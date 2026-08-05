@@ -23,6 +23,7 @@ import { projectOptionLabel } from './projectAvatarUtils';
 import PrBoard from './PrBoard';
 import { isGatewayError, StartingBanner } from './starting';
 import PendingApprovals from './PendingApprovals';
+import TestEnvStrip from './TestEnvStrip';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -169,6 +170,7 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
 
   return (
     <div className="space-y-6">
+      <TestEnvStrip />
       {showProjectFilter && (
         <select
           value={projectFilter}
