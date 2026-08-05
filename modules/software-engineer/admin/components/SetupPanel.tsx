@@ -110,6 +110,7 @@ export default function SetupPanel(
   const [commentingPat, setCommentingPat] = useState('');
   const [pullRequestPat, setPullRequestPat] = useState('');
   const [codingAgentModel, setCodingAgentModel] = useState('');
+  const [slackWebhook, setSlackWebhook] = useState('');
   const [openaiCred, setOpenaiCred] = useState('');
   const [mcpConfig, setMcpConfig] = useState('');
   const [skills, setSkills] = useState('');
@@ -152,7 +153,7 @@ export default function SetupPanel(
     try {
       const [d, rp] = await Promise.all([api(`/projects/${id}`), api(`/projects/${id}/repos`)]);
       setS(d.project ?? {}); setRepos(rp.repos ?? []); setGhToken(''); setModelCred(''); setOpenaiCred(''); setMcpConfig('');
-      setCommittingPat(''); setCommentingPat(''); setPullRequestPat(''); setCodingAgentModel('');
+      setCommittingPat(''); setCommentingPat(''); setPullRequestPat(''); setCodingAgentModel(''); setSlackWebhook('');
       setSkills(Array.isArray(d.project?.skills) && d.project.skills.length ? JSON.stringify(d.project.skills, null, 2) : '');
     } catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
   }, []);
@@ -207,6 +208,7 @@ export default function SetupPanel(
     if (commentingPat.trim()) body.commenting_pat = commentingPat.trim();
     if (pullRequestPat.trim()) body.pull_request_pat = pullRequestPat.trim();
     if (codingAgentModel.trim()) body.coding_agent_model = codingAgentModel.trim();
+    if (slackWebhook.trim()) body.slack_webhook = slackWebhook.trim();
     if (openaiCred.trim()) body.openai_cred = openaiCred.trim() === 'clear' ? null : openaiCred.trim();
     body.escalation_model = s.escalation_model?.trim() || null;
     // Per-phase routing: send the object as edited; the server drops junk and validates ids.
@@ -335,6 +337,11 @@ export default function SetupPanel(
                 </Field>
                 <Field label={<>Coding-agent model {s.coding_agent_model_last4 ? <span className="text-neutral-400">(••••{s.coding_agent_model_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
                   <input type="password" placeholder="separate model credential for agent sessions (optional)" value={codingAgentModel} onChange={(e) => setCodingAgentModel(e.target.value)} className={inputCls} autoComplete="new-password" name="se-coding-agent-model" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                {/* §8 notifications: a Slack incoming-webhook. When set, gate events (spec/plan ready,
+                    PR ready, submitted) post to that channel. Blank = off. */}
+                <Field label={<>Slack webhook {s.slack_webhook_last4 ? <span className="text-neutral-400">(••••{s.slack_webhook_last4})</span> : <span className="text-neutral-400">(off)</span>}</>}>
+                  <input type="password" placeholder="https://hooks.slack.com/services/… (optional; gate-event posts)" value={slackWebhook} onChange={(e) => setSlackWebhook(e.target.value)} className={inputCls} autoComplete="new-password" name="se-slack-webhook" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
                 </Field>
               </Section>
 

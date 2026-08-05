@@ -9,6 +9,7 @@ import { getProject, getCodeRepos, resolveRunCredentials } from '../lib/credenti
 import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun, listRunPrs, upsertRunPr } from '../lib/run-state.js';
+import { notifyGate } from '../lib/notify.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -55,6 +56,7 @@ export default async function pr(job, ctx) {
       await supabase.from('se_runs').update({ status: 'ready_to_submit', current_phase: 'pr' }).eq('id', run.id);
       try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:needs-submit'); } catch { /* */ }
       try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, 'Code is complete and the branch is pushed. The pull request is ready to submit and is waiting for a person to submit it from the dashboard.'); } catch { /* */ }
+      try { await notifyGate(project, run, 'Pull request ready to submit'); } catch { /* */ }
       return { ok: true, readyToSubmit: true, prs: prs.length };
     }
 

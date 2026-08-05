@@ -49,6 +49,7 @@ export interface ProjectSettings {
   commentingPat: string | null;    // posts comments on issues/PRs
   pullRequestPat: string | null;   // opens pull requests
   codingAgentModel: string | null; // the model credential the agent sessions run on
+  slackWebhook: string | null;     // optional Slack incoming-webhook for gate-event notifications
   // Work source: the (private) issues repo, the trigger label, and multi-instance routing.
   issuesRepoOwner: string | null;
   issuesRepoName: string | null;
@@ -180,6 +181,7 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     commentingPat: openToken(data.commenting_pat_ciphertext) ?? openToken(data.github_token_ciphertext),
     pullRequestPat: openToken(data.pull_request_pat_ciphertext) ?? openToken(data.github_token_ciphertext),
     codingAgentModel: openToken(data.coding_agent_model_ciphertext) ?? openToken(data.model_cred_ciphertext),
+    slackWebhook: openToken(data.slack_webhook_ciphertext),
     issuesRepoOwner: data.issues_repo_owner ?? null,
     issuesRepoName: data.issues_repo_name ?? null,
     triggerLabel: data.trigger_label ?? 'agent:build',

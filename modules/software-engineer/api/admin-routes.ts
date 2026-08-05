@@ -50,6 +50,7 @@ const PROJECT_MASKED =
   ' process_repo, process_path, process_ref, architecture_repo, architecture_ref, tracker_url_template,' +
   ' gates, approvers, refine_budget,' +
   ' credential_mode, committing_pat_last4, commenting_pat_last4, pull_request_pat_last4, coding_agent_model_last4,' +
+  ' slack_webhook_last4,' +
   ' monthly_token_budget, per_run_token_ceiling, per_run_wallclock_minutes, per_run_cost_ceiling_usd, created_at, updated_at';
 
 const sanitize = (v: unknown) =>
@@ -1278,6 +1279,7 @@ export function mountAdminRoutes(router, deps) {
     for (const [field, col] of [
       ['committing_pat', 'committing_pat'], ['commenting_pat', 'commenting_pat'],
       ['pull_request_pat', 'pull_request_pat'], ['coding_agent_model', 'coding_agent_model'],
+      ['slack_webhook', 'slack_webhook'],
     ] as const) {
       if (b[field]) {
         const s = sealToken(String(b[field]));

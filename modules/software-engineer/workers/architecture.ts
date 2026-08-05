@@ -26,6 +26,7 @@ import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
+import { notifyGate } from '../lib/notify.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -158,6 +159,7 @@ export default async function architecture(job, ctx) {
       try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:in-review'); } catch { /* */ }
       try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, `Architecture review required — a draft proposal is ready in the Software Engineer admin. Review and refine it there, then finalize to commit it to \`${archRepo}\` and approve to resume implementation.`); } catch { /* */ }
     }
+    try { await notifyGate(project, run, 'Architecture proposal ready for review'); } catch { /* */ }
     await recordPhaseEnd(supabase, run, 'architecture', 'blocked', 'awaiting architecture review (draft)');
     return { ok: true, gated: true, folder };
   } catch (e) {
