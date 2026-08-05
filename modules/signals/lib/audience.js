@@ -97,12 +97,101 @@ export async function resolveAudience(supabase, rule, context) {
     return set;
   }
 
+  // ── Provenance / eligibility clauses (spec-plays-scheduling-automation §4.5) ──
+  // Attribute/state predicates over people — "who a person is / how they entered".
+  // Security (repo CLAUDE.md — PostgREST boundary): the column selector is built
+  // ONLY from a validated identifier, and value lists go through supabase-js
+  // builder methods (.in/.eq — which encode), NEVER a hand-built .or()/.in()
+  // string. `not_in`/`absent` are computed as the JS complement of the positive
+  // set over people-with-email, so no negative filter string is ever constructed.
+  const IDENT_RE = /^[a-z_][a-z0-9_]*$/i;
+  function selector(column, field) {
+    if (column) { if (!IDENT_RE.test(column)) throw new Error(`invalid column: ${column}`); return column; }
+    if (!field || !IDENT_RE.test(field)) throw new Error(`invalid attribute field: ${field}`);
+    return `attributes->>${field}`;   // safe: field validated to [a-z0-9_]
+  }
+  // The set of people matching a POSITIVE membership (in/eq/exists) on a column.
+  async function positiveSet(sel, op, vals) {
+    const set = new Set();
+    for (let from = 0; ; from += 1000) {
+      let q = supabase.from('people').select('id').range(from, from + 999);
+      if (op === 'exists') q = q.not(sel, 'is', null);
+      else if (op === 'eq') q = q.eq(sel, vals[0]);
+      else q = q.in(sel, vals);          // 'in' (supabase-js encodes the array)
+      const r = await q;
+      const data = (r && r.data) || [];
+      for (const p of data) set.add(p.id);
+      if (data.length < 1000) break;
+    }
+    return set;
+  }
+  async function complementWithEmail(positive) {
+    const set = new Set();
+    for (let from = 0; ; from += 1000) {
+      const r = await supabase.from('people').select('id').not('email', 'is', null).range(from, from + 999);
+      const data = (r && r.data) || [];
+      for (const p of data) if (!positive.has(p.id)) set.add(p.id);
+      if (data.length < 1000) break;
+    }
+    return set;
+  }
+  async function peopleColumnSet({ column, field, op = 'in', values }) {
+    const sel = selector(column, field);
+    const vals = (Array.isArray(values) ? values : [values]).map(String);
+    if (op === 'not_in') return complementWithEmail(await positiveSet(sel, 'in', vals));
+    if (op === 'absent')  return complementWithEmail(await positiveSet(sel, 'exists', vals));
+    return positiveSet(sel, op, vals); // in | eq | exists
+  }
+  const contactKindSet = (c) => peopleColumnSet({ column: 'contact_kind', op: c.op || 'in', values: c.values });
+  const sourceSet = (c) => peopleColumnSet({ field: 'source', op: c.op || 'in', values: c.values });
+  const attributeSet = (c) => peopleColumnSet({ field: c.field, op: c.op || 'exists', values: c.values });
+
+  // ── Behavioral evidence clauses — "what a person has done" ──────────────────
+  // did → the set who performed the activity; did_not → its complement over
+  // people-with-email. Activities: registered_for_context (events_registrations
+  // via RPC); others (read_content/joined_slack) resolve from their evidence
+  // source when present, else the empty set (never a false positive).
+  async function didSet(activity) {
+    if (activity === 'registered_for_context') return registeredSet();
+    // read_content / joined_slack: evidence lives in signals_interests with a
+    // matching source; treat presence of that source as "did".
+    const sourceForActivity = { read_content: 'first_party_activity', joined_slack: 'slack' };
+    const src = sourceForActivity[activity];
+    if (!src) return new Set();
+    const set = new Set();
+    for (let from = 0; ; from += 1000) {
+      const r = await supabase.from('signals_interests').select('person_id').eq('source', src).range(from, from + 999);
+      const data = (r && r.data) || [];
+      for (const x of data) set.add(x.person_id);
+      if (data.length < 1000) break;
+    }
+    return set;
+  }
+  async function didNotSet(activity) {
+    const doers = await didSet(activity);
+    const set = new Set();
+    for (let from = 0; ; from += 1000) {
+      const r = await supabase.from('people').select('id').not('email', 'is', null).range(from, from + 999);
+      const data = (r && r.data) || [];
+      for (const p of data) if (!doers.has(p.id)) set.add(p.id);
+      if (data.length < 1000) break;
+    }
+    return set;
+  }
+
   async function clauseSet(clause) {
     switch (clause.type) {
       case 'topic_affinity': return topicSet(clause);
       case 'registered_for_context': return registeredSet();
       case 'region': return regionSet(clause.region);
       case 'geo_radius': return geoSet(clause);
+      // provenance / eligibility
+      case 'contact_kind': return contactKindSet(clause);
+      case 'source': return sourceSet(clause);
+      case 'attribute': return attributeSet(clause);
+      // behavioral evidence
+      case 'did': return didSet(clause.activity);
+      case 'did_not': return didNotSet(clause.activity);
       default: return null; // segment/other — deferred
     }
   }

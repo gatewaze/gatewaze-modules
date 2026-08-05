@@ -33,7 +33,7 @@ export interface SendContext {
   disableSubscriptionTracking?: boolean;
 }
 export interface SendEngineBinding {
-  domain: 'newsletter' | 'broadcast' | 'bulk' | 'event';
+  domain: 'newsletter' | 'broadcast' | 'bulk' | 'event' | 'play';
   sendsTable: string;
   recipientsTable: string;
   batchesTable: string;
