@@ -15,9 +15,9 @@ import { Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   CommandLineIcon, CheckCircleIcon, ArrowTopRightOnSquareIcon,
-  ExclamationTriangleIcon, CpuChipIcon, Cog6ToothIcon,
+  ExclamationTriangleIcon, CpuChipIcon, Cog6ToothIcon, CurrencyDollarIcon,
 } from '@heroicons/react/24/outline';
-import { CARD_FILTERS, statusesToParam } from './overview-filters';
+import { CARD_FILTERS, statusesToParam, fmtCost } from './overview-filters';
 import { ProjectAvatar } from './ProjectAvatar';
 import { projectOptionLabel } from './projectAvatarUtils';
 import PrBoard from './PrBoard';
@@ -156,6 +156,7 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
   const byStatus: any[] = data?.by_status ?? [];
   const byPhase: any[] = data?.by_phase ?? [];
   const byProject: any[] = data?.by_project ?? [];
+  const spend = data?.spend;
   const statusMax = byStatus.reduce((m, r) => Math.max(m, r.count), 0);
   const phaseMax = byPhase.reduce((m, r) => Math.max(m, r.count), 0);
   const showProjectFilter = projects.length > 1;
@@ -212,6 +213,15 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
             <Tile icon={<ArrowTopRightOnSquareIcon className="size-3.5" />} label="Open PRs" value={nf.format(totals.open_prs ?? 0)} sub="awaiting review/merge" onClick={openRuns && (() => openRuns(CARD_FILTERS.open_prs.statuses))} />
             <Tile icon={<ExclamationTriangleIcon className="size-3.5" />} label="Failed / blocked" value={nf.format(totals.failed_blocked ?? 0)} tone={(totals.failed_blocked ?? 0) > 0 ? 'danger' : 'default'} sub="need attention" onClick={openRuns && (() => openRuns(CARD_FILTERS.failed_blocked.statuses))} />
             <Tile icon={<CpuChipIcon className="size-3.5" />} label="Tokens" value={fmtTokens((totals.tokens_input ?? 0) + (totals.tokens_output ?? 0))} sub={`${fmtTokens(totals.tokens_input ?? 0)} in · ${fmtTokens(totals.tokens_output ?? 0)} out`} />
+            {/* Absent (not $0.00) when there's no costed data — pre-012 instance, or no runs priced yet. */}
+            {fmtCost(spend?.total_30d) && (
+              <Tile
+                icon={<CurrencyDollarIcon className="size-3.5" />}
+                label="Model spend"
+                value={fmtCost(spend.total_30d)}
+                sub={fmtCost(spend.total_7d) ? `${fmtCost(spend.total_7d)} last 7 days` : 'no spend last 7 days'}
+              />
+            )}
           </div>
 
           {/* PR board — the live "where is every PR + who acts next" view */}
@@ -266,6 +276,22 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
                   </tbody>
                 </table>
               </div>
+            </section>
+          )}
+
+          {/* Model spend by project — its own desc-by-spend ordering, computed server-side in
+              computeSpendOverview() (lib/cost.ts), independent of the tokens rollup above. */}
+          {!projectFilter && (spend?.by_project?.length ?? 0) > 1 && (
+            <section className="rounded-lg border border-[var(--gray-5)] p-4 space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">Model spend by project</div>
+              {spend.by_project.map((p: any) => (
+                <div key={p.project_id} className="flex items-center justify-between text-sm">
+                  <span className="inline-flex items-center gap-1.5 text-[var(--gray-12)]">
+                    <ProjectAvatar emoji={p.avatar_emoji} className="size-4" /> {p.name ?? '—'}
+                  </span>
+                  <span className="font-mono text-[var(--gray-11)]">{fmtCost(p.total)}</span>
+                </div>
+              ))}
             </section>
           )}
         </>
