@@ -869,6 +869,9 @@ export function mountAdminRoutes(router, deps) {
   };
 
   router.get('/runs/:id/architecture', async (req, res) => {
+    if (!rateLimit(`se-admin:arch-get:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
     const { data: run } = await supabase.from('se_runs')
