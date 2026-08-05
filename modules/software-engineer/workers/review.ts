@@ -88,7 +88,7 @@ export default async function review(job, ctx) {
     }).eq('id', run.id);
 
     if (verdict === 'pass') {
-      await recordPhaseEnd(supabase, run, 'review', 'passed', 'spec approved by skeptic', { model: project.model, input: result.tokensInput, output: result.tokensOutput });
+      await recordPhaseEnd(supabase, run, 'review', 'passed', 'spec approved by skeptic', { model: project.model, input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
       await supabase.from('se_runs').update({ current_phase: 'implement' }).eq('id', run.id);
       await enqueuePhase(ctx, run.id, 'implement');
       return { ok: true, verdict };

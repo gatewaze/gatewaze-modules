@@ -36,6 +36,10 @@ export interface RunnerResult {
   text: string;
   tokensInput: number;
   tokensOutput: number;
+  /** Prompt-cache token counts — the bulk of billed input in agentic sessions (input_tokens alone
+   *  is only the uncached remainder, which badly under-represents real cost). */
+  tokensCacheRead: number;
+  tokensCacheCreation: number;
   costUSD: number;
   interrupted: boolean;
   error?: string;
@@ -93,7 +97,7 @@ function scopedEnv(c: PhaseCredential): Record<string, string | undefined> {
 
 export class InProcessRunner implements Runner {
   async runPhase(input: RunnerInput): Promise<RunnerResult> {
-    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, costUSD: 0, interrupted: false };
+    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, interrupted: false };
     const env = scopedEnv(input.credential);
     // The SDK collapses any subprocess exit-1 into a generic "Operation aborted"; capture the real
     // stderr so failures are diagnosable (surfaced in out.error / se_phases.error).
@@ -212,6 +216,8 @@ export class InProcessRunner implements Runner {
           out.costUSD = msg.total_cost_usd ?? out.costUSD;
           out.tokensInput += msg.usage?.input_tokens ?? 0;
           out.tokensOutput += msg.usage?.output_tokens ?? 0;
+          out.tokensCacheRead += msg.usage?.cache_read_input_tokens ?? 0;
+          out.tokensCacheCreation += msg.usage?.cache_creation_input_tokens ?? 0;
           if (turnText.trim()) { await input.onAgentMessage?.(turnText.trim()); turnText = ''; }
         }
       }
@@ -239,7 +245,7 @@ export class InProcessRunner implements Runner {
    * Same secret-scoped env, tool-approval, and Bash guard as runPhase.
    */
   async runInteractive(input: InteractiveInput): Promise<RunnerResult> {
-    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, costUSD: 0, interrupted: false };
+    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, interrupted: false };
     const env = scopedEnv(input.credential);
     let stderrBuf = '';
 
@@ -337,6 +343,8 @@ export class InProcessRunner implements Runner {
           out.costUSD = msg.total_cost_usd ?? out.costUSD;
           out.tokensInput += msg.usage?.input_tokens ?? 0;
           out.tokensOutput += msg.usage?.output_tokens ?? 0;
+          out.tokensCacheRead += msg.usage?.cache_read_input_tokens ?? 0;
+          out.tokensCacheCreation += msg.usage?.cache_creation_input_tokens ?? 0;
           // Each result closes one turn — flush that turn's text as an agent chat message so the
           // transcript renders it exactly like an issue run's per-turn replies.
           if (turnText.trim()) { await input.onAgentMessage?.(turnText.trim()); turnText = ''; }
