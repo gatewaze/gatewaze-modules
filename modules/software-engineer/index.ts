@@ -87,6 +87,9 @@ const softwareEngineerModule: GatewazeModule = {
         // spec-refine: apply a reviewer's chat feedback to the draft spec while a run is parked at the
         // spec gate (awaiting_spec). Short, re-runnable, holds no slot. See workers/spec-refine.ts.
         { name: 'software-engineer:spec-refine', handler: './workers/spec-refine.ts' },
+        // code-refine: apply a reviewer's chat feedback to the code while a run is parked at the submission
+        // gate (ready_to_submit), then re-verify. The reject-and-give-feedback loop. See workers/code-refine.ts.
+        { name: 'software-engineer:code-refine', handler: './workers/code-refine.ts' },
         { name: 'software-engineer:implement', handler: './workers/implement.ts' },
         { name: 'software-engineer:verify', handler: './workers/verify.ts' },
         { name: 'software-engineer:pr', handler: './workers/pr.ts' },

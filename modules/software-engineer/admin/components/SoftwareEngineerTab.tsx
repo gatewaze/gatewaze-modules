@@ -682,6 +682,32 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               );
             })()}
 
+            {/* §phase-gates: the SUBMISSION gate. The code is done and pushed; Submit PR (top bar) opens the
+                PR, or chat here to ask for changes first (code-refine makes them, re-verifies, returns here). */}
+            {detail.run.status === 'ready_to_submit' && (
+              <div className="mt-3 rounded-lg border border-[var(--amber-6)] bg-[var(--amber-2)] p-3">
+                <span className="text-sm font-medium text-[var(--gray-12)]">📤 Ready to submit</span>
+                <p className="text-xs text-[var(--gray-10)] mt-1">The code is complete and the branch is pushed. Use <strong>Submit PR</strong> above to open the pull request, or chat below to ask for more changes first — the agent will make them, re-run the checks, and return here.</p>
+                <div className="mt-3">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    placeholder="Ask for changes before submitting, e.g. rename X or add a test…"
+                    rows={2}
+                    className="w-full rounded border border-[var(--gray-6)] bg-[var(--gray-1)] px-2 py-1 text-sm text-[var(--gray-12)]"
+                  />
+                  <div className="mt-2 flex items-center gap-2 flex-wrap">
+                    <Button variant="soft" size="xs" onClick={send} disabled={!draft.trim()}>
+                      <PaperAirplaneIcon className="size-3.5 mr-1" />Send changes to agent
+                    </Button>
+                    <Button size="xs" onClick={submitPr} disabled={submitting}>
+                      <PaperAirplaneIcon className="size-3.5 mr-1" />{submitting ? 'Submitting…' : 'Submit PR'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <TestEnvPanel prs={detail.prs ?? []} projectId={detail.run.project_id} projectName={detail.run.project?.name} />
 
             {/* Live "working" strip — persistent while the run is live so progress is visible between

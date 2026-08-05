@@ -778,19 +778,20 @@ export function mountAdminRoutes(router, deps) {
     // parked artifact, handled asynchronously by the matching refine job rather than streamed to a live agent.
     const archState = ['awaiting_architecture', 'architecture_in_review'].includes(run.status);
     const specState = run.status === 'awaiting_spec';
-    if (!archState && !specState && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
+    const codeState = run.status === 'ready_to_submit';
+    if (!archState && !specState && !codeState && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
     // Persist the images as markdown appended to the stored message so the transcript renders them
     // inline — the same `![](url)` convention se_messages already carries for issue attachments.
     const stored = images.length
       ? `${content}${content && '\n\n'}` + images.map((u: string, i: number) => `![screenshot-${i + 1}](${u})`).join('\n')
       : content;
     await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'admin', author: authorOf(req), content: stored });
-    if (archState || specState) {
+    if (archState || specState || codeState) {
       // The stored message stays undelivered (delivered_at=null) = a mailbox. Enqueue the short refine job
       // (deterministic jobId dedups a rapid double-send); it drains ALL pending feedback and edits the
-      // parked artifact (the spec, or the architecture proposal), then parks the run again.
-      const worker = specState ? 'software-engineer:spec-refine' : 'software-engineer:architecture-refine';
-      const jobId = specState ? `se-spec-refine-${id}` : `se-arch-refine-${id}`;
+      // parked artifact — the spec, the architecture proposal, or (at the submission gate) the code.
+      const worker = specState ? 'software-engineer:spec-refine' : codeState ? 'software-engineer:code-refine' : 'software-engineer:architecture-refine';
+      const jobId = specState ? `se-spec-refine-${id}` : codeState ? `se-code-refine-${id}` : `se-arch-refine-${id}`;
       try { await enqueueJob?.('se', worker, { runId: id }, { jobId, removeOnComplete: true }); }
       catch (e) { logger?.warn?.('se: enqueue refine failed', { error: String(e) }); }
     } else {
