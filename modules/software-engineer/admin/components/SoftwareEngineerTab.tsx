@@ -30,7 +30,7 @@ import { ProjectAvatar } from './ProjectAvatar';
 import { projectOptionLabel } from './projectAvatarUtils';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
-import { filterLabelForParam, fmtCost } from './overview-filters';
+import { ALL_RUN_STATUSES, STATUS_LABELS, toggleStatusInParam, fmtCost } from './overview-filters';
 import { isNearBottom } from './autoscroll';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
@@ -377,20 +377,48 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             {projectList.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
           </select>
         )}
-        {statusFilter && (
-          // Dismissible chip reflecting a status filter deep-linked from an Overview KPI tile.
-          <div className="mb-2 flex items-center gap-2 rounded-md border border-[var(--gray-6)] bg-[var(--gray-2)] px-2 py-1 text-xs">
-            <span className="min-w-0 truncate text-[var(--gray-11)]">Filtered: <span className="font-medium text-[var(--gray-12)]">{filterLabelForParam(statusFilter)}</span></span>
-            <button
-              type="button"
-              onClick={() => goRuns((p) => p.delete('status'))}
-              className="ml-auto shrink-0 text-[var(--gray-10)] hover:text-[var(--gray-12)]"
-              aria-label="Clear status filter"
-            >
-              ✕
-            </button>
-          </div>
-        )}
+        {(() => {
+          const selectedStatuses = new Set(statusFilter.split(',').map((s) => s.trim()).filter(Boolean));
+          // Multi-select toggle chips, one per se_runs.status value — matches the board's own .in()
+          // support (rather than a single-select dropdown) and reuses the KPI-tile deep-link's
+          // comma-separated ?status= param, so a tile click hydrates the same chip set as a manual
+          // multi-toggle. No popover primitive exists in the kit to collapse 12 chips into a menu.
+          const toggle = (status: string) => goRuns((p) => {
+            const next = toggleStatusInParam(statusFilter, status);
+            if (next) p.set('status', next); else p.delete('status');
+          });
+          return (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {ALL_RUN_STATUSES.map((status) => {
+                const active = selectedStatuses.has(status);
+                return (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => toggle(status)}
+                    aria-pressed={active}
+                    className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                      active
+                        ? 'border-[var(--accent-8)] bg-[var(--accent-4)] text-[var(--accent-11)] font-medium'
+                        : 'border-[var(--gray-6)] bg-transparent text-[var(--gray-11)] hover:bg-[var(--gray-3)]'
+                    }`}
+                  >
+                    {STATUS_LABELS[status] ?? status}
+                  </button>
+                );
+              })}
+              {selectedStatuses.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => goRuns((p) => p.delete('status'))}
+                  className="text-xs text-[var(--gray-10)] hover:text-[var(--gray-12)] underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          );
+        })()}
         {!showArchived && projectList.length > 0 && (
           // items-stretch: the auto-height select conforms to the fixed-height
           // Button so both controls line up regardless of the kit's sm height.
