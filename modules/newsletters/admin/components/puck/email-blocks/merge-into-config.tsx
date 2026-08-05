@@ -30,6 +30,12 @@ import { RichtextMenu } from './richtext-menu.js';
 // Required to wire the color picker button in RichtextMenu.
 import { TextStyle } from '@tiptap/extension-text-style';
 import { Color } from '@tiptap/extension-color';
+// ProseMirror Plugin, re-exported by tiptap's own `@tiptap/pm` singleton (a
+// direct dep of @puckeditor/core). Importing it from `@tiptap/pm/state` — NOT
+// `@tiptap/core`, which the admin Vite build stubs (see richtext-image.ts) —
+// keeps us on the same ProseMirror instance the Puck editor uses.
+import { Plugin } from '@tiptap/pm/state';
+import { stripPastedTextColors } from './paste-color.js';
 import { wrapWithSpacing } from './spacing-wrapper.js';
 import { resolveCustomField } from '../../../../../sites/admin/components/canvas/puck/fields/index.js';
 import type { CustomFormat } from '../../../../../sites/admin/components/canvas/puck/json-schema-to-puck-fields.js';
@@ -37,6 +43,35 @@ import type { PuckRenderHost } from '../../../../../sites/admin/components/canva
 
 /** Email-safe Image extension for the richtext fields (block, with align/width). */
 const RICHTEXT_IMAGE = RichtextImage;
+
+/**
+ * `TextStyle` host mark, extended with a ProseMirror paste plugin that strips
+ * inline `color` / `background` from pasted HTML BEFORE TipTap parses it (issue
+ * #34). Without this, colour pasted from external rich text (e.g. Google Docs'
+ * grey `<span style="color:rgb(85,85,85)">`) becomes a `textStyle` colour mark
+ * and renders grey in the editor, mismatching the black rendered preview.
+ *
+ * Paste-scoped by construction:
+ *   - directly-typed text carries no colour mark → editor default (black);
+ *   - the toolbar colour picker applies a mark AFTER paste → still works;
+ *   - previously-saved colours are parsed from the STORED value (never through
+ *     `transformPastedHTML`) → still load.
+ *
+ * We extend the already-imported `TextStyle` rather than creating a standalone
+ * extension because `Extension.create()` lives in the stubbed `@tiptap/core`.
+ */
+const TEXT_STYLE_STRIP_PASTED_COLOR = TextStyle.extend({
+  addProseMirrorPlugins() {
+    return [
+      ...(this.parent?.() ?? []),
+      new Plugin({
+        props: {
+          transformPastedHTML: (html: string) => stripPastedTextColors(html),
+        },
+      }),
+    ];
+  },
+});
 
 type MenuRenderProps = {
   children: ReactNode;
@@ -216,7 +251,7 @@ function applyRichtextDefaults(fields: Record<string, Field>): Record<string, Fi
         // editable tiptap editor inline, exactly like the single-line fields.
         contentEditable: true,
         options: { ...existing, link: { openOnClick: false, ...existingLink } },
-        tiptap: { ...tiptap, extensions: [RICHTEXT_IMAGE, TextStyle, Color, ...(tiptap?.extensions ?? [])] },
+        tiptap: { ...tiptap, extensions: [RICHTEXT_IMAGE, TEXT_STYLE_STRIP_PASTED_COLOR, Color, ...(tiptap?.extensions ?? [])] },
         renderMenu: (props: MenuRenderProps) => <RichtextMenu {...props} />,
         renderInlineMenu: (props: MenuRenderProps) => <RichtextMenu {...props} />,
       } as Field;

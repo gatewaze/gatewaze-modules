@@ -42,6 +42,13 @@ const eventSpeakersModule: GatewazeModule = {
     // untouched. Event Comms "Send to Existing <status> Speakers" filters the new
     // talk columns so recipients resolve by talk lifecycle, not participation.
     'migrations/010_speakers_view_primary_talk_status.sql',
+    // 012 adds the per-speaker event rollup the Speakers directory sorts and
+    // filters on: idx_events_speakers_speaker (the junction's only index leads
+    // with event_uuid, so aggregating per speaker seq-scanned it) plus the
+    // security_invoker view events_speaker_profiles_with_counts, exposing
+    // event_count + event_uuids. Granted to authenticated/service_role only —
+    // anon would otherwise learn unlisted/draft events exist from the count.
+    'migrations/012_speakers_event_count.sql',
   ],
 
   edgeFunctions: [

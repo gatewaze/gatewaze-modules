@@ -5,6 +5,8 @@
  * supabase client (workers bypass RLS by design).
  */
 
+import { pricePhaseCostUSD } from './cost.js';
+
 const now = () => new Date().toISOString();
 
 export async function recordPhaseStart(sb: unknown, run: any, phase: string) {
@@ -32,14 +34,41 @@ export async function recordPhaseEnd(
   phase: string,
   status: 'passed' | 'failed' | 'blocked' | 'skipped',
   summary?: string,
-  tokens?: { model?: string; input?: number; output?: number },
+  tokens?: {
+    model?: string;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheCreation?: number;
+    /** Agent SDK total_cost_usd — the fallback when the model has no ai_model_prices row. */
+    cost?: number;
+  },
 ) {
+  // Price from the ai module's price book (cache-aware, operator-editable) so SE costs agree with
+  // the platform AI dashboards; fall back to the SDK's own figure for models the book doesn't know.
+  let costUSD: number | null = null;
+  if (tokens?.model) {
+    try {
+      costUSD = await pricePhaseCostUSD(sb, tokens.model, {
+        input: tokens.input ?? 0,
+        output: tokens.output ?? 0,
+        cacheRead: tokens.cacheRead ?? 0,
+        cacheCreation: tokens.cacheCreation ?? 0,
+      });
+    } catch { /* pricing is best-effort — never fail the phase for it */ }
+    if (costUSD == null && typeof tokens.cost === 'number' && tokens.cost > 0) {
+      costUSD = Math.round(tokens.cost * 10000) / 10000;
+    }
+  }
   const patch = {
     status,
     summary: summary ?? null,
     model: tokens?.model ?? null,
     tokens_input: tokens?.input ?? 0,
     tokens_output: tokens?.output ?? 0,
+    tokens_cache_read: tokens?.cacheRead ?? 0,
+    tokens_cache_creation: tokens?.cacheCreation ?? 0,
+    cost_usd: costUSD,
     finished_at: now(),
   };
   // Close the open 'running' row for this phase; if there isn't one (e.g. blocked before
@@ -53,6 +82,17 @@ export async function recordPhaseEnd(
     .select('id');
   if (!data || data.length === 0) {
     await sb.from('se_phases').insert({ run_id: run.id, site_id: run.site_id, phase, ...patch });
+  }
+  // Keep the run's denormalised total in sync (phases run sequentially per run, so a recompute
+  // here is race-free and survives phase re-runs/attempts better than incrementing). Best-effort
+  // like the pricing call above: a transient DB blip here must not fail a phase whose real work
+  // already succeeded (callers re-enter recordPhaseEnd as 'failed' from their catch blocks).
+  if (costUSD != null) {
+    try {
+      const { data: rows } = await sb.from('se_phases').select('cost_usd').eq('run_id', run.id);
+      const total = (rows ?? []).reduce((s: number, r: any) => s + (Number(r.cost_usd) || 0), 0);
+      await sb.from('se_runs').update({ cost_usd: Math.round(total * 10000) / 10000 }).eq('id', run.id);
+    } catch { /* denorm total is best-effort */ }
   }
 }
 

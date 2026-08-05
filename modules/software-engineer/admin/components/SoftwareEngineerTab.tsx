@@ -73,6 +73,14 @@ const PHASE_PROSE: Record<string, string> = {
 };
 const phaseProse = (p?: string) => (p && PHASE_PROSE[p]) || (p ? `Working (${p})` : 'Working');
 
+// Model spend for a run, priced from the ai module's price book at phase end (se_runs.cost_usd,
+// migration 012). Null/0 → '' so pre-012 runs and non-model runs render nothing.
+const fmtCost = (c: unknown): string => {
+  const n = Number(c);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return n < 0.01 ? '<$0.01' : `$${n.toFixed(2)}`;
+};
+
 // A run's headline label. Interactive (pair-programming) sessions have no issue, so they read as a
 // session on their project rather than "owner/repo #n".
 const runLabel = (r: any): string =>
@@ -410,6 +418,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <Badge color={STATUS_COLOR[r.status] ?? 'gray'} size="1">{r.status}</Badge>
               <span className="text-xs text-[var(--gray-10)]">{r.current_phase}</span>
+              {fmtCost(r.cost_usd) && <span className="text-[11px] font-mono text-[var(--gray-10)]" title="Model spend (priced from the AI price book)">{fmtCost(r.cost_usd)}</span>}
               {r.project?.name && <span className="text-[11px] text-[var(--gray-10)] ml-auto inline-flex items-center gap-1"><ProjectAvatar emoji={r.project.avatar_emoji} className="size-3.5" /> {r.project.name}{r.engineer_name ? ` · ${r.engineer_name}` : ''}</span>}
             </div>
           </button>
@@ -441,6 +450,17 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 {detail.run.project?.name && <span className="text-xs text-[var(--gray-10)] inline-flex items-center gap-1"><ProjectAvatar emoji={detail.run.project.avatar_emoji} className="size-4" /> {detail.run.project.name}</span>}
                 {detail.run.engineer_name && <span className="text-xs text-[var(--gray-10)]">🧑‍💻 {detail.run.engineer_name}</span>}
                 {detail.run.revise_count > 0 && <span className="text-xs text-[var(--gray-10)]">· {detail.run.revise_count} revision{detail.run.revise_count > 1 ? 's' : ''}</span>}
+                {fmtCost(detail.run.cost_usd) && (
+                  <span
+                    className="text-xs font-mono text-[var(--gray-10)]"
+                    title={(detail.phases ?? [])
+                      .filter((p: any) => fmtCost(p.cost_usd))
+                      .map((p: any) => `${p.phase} ${fmtCost(p.cost_usd)}`)
+                      .join(' · ') || 'Model spend (priced from the AI price book)'}
+                  >
+                    · {fmtCost(detail.run.cost_usd)}
+                  </span>
+                )}
                 {detail.run.pr_url && (
                   <a href={detail.run.pr_url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-1">
                     PR <ArrowTopRightOnSquareIcon className="size-3" />

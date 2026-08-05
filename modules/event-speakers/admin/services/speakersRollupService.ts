@@ -7,6 +7,27 @@
  */
 
 import { supabase } from '@/lib/supabase';
+import {
+  buildSpeakerListingQuery,
+  speakerPageCount,
+  type ListSpeakersOptions,
+} from './speakerListingQuery';
+
+export type {
+  ListSpeakersOptions,
+  SpeakerListingQuery,
+  SpeakerSortColumn,
+  SortDirection,
+} from './speakerListingQuery';
+export {
+  SPEAKER_SORT_COLUMNS,
+  DEFAULT_SPEAKER_SORT,
+  DEFAULT_SPEAKER_PAGE_SIZE,
+  MAX_SPEAKER_PAGE_SIZE,
+  buildSpeakerListingQuery,
+  speakerPageCount,
+  defaultDirectionFor,
+} from './speakerListingQuery';
 
 export type TalkScope = 'event' | 'calendar' | 'platform';
 export type TalkStatus = 'pending' | 'accepted' | 'held' | 'declined' | 'scheduled' | 'withdrawn';
@@ -27,6 +48,27 @@ export interface SpeakerProfile {
   topics: string[];
   availability_notes: string | null;
   is_active: boolean;
+}
+
+/**
+ * A directory row: the profile plus the event rollup from
+ * `events_speaker_profiles_with_counts` (migration 012). Kept separate from
+ * SpeakerProfile because `getSpeaker` reads the base table, which has neither
+ * column.
+ */
+export interface SpeakerDirectoryRow extends SpeakerProfile {
+  /** Distinct events this speaker appears on, scoped by the caller's RLS. */
+  event_count: number;
+  /** Those event ids — powers the "filter by event" control without an N+1. */
+  event_uuids: string[];
+}
+
+export interface SpeakerDirectoryPage {
+  speakers: SpeakerDirectoryRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
 }
 
 export interface Talk {
@@ -74,35 +116,58 @@ export class SpeakersRollupService {
   // --------------------------------------------------------------------------
   // Speaker directory
   // --------------------------------------------------------------------------
+  /**
+   * Paginated, sortable, filterable speaker directory.
+   *
+   * Reads `events_speaker_profiles_with_counts` (security_invoker), so
+   * event_count and event_uuids are already scoped to what the caller's RLS
+   * lets them see — there is no privileged path here and no per-row follow-up
+   * query.
+   *
+   * Every user-controlled input is shaped by `buildSpeakerListingQuery`
+   * first: the sort column comes from an allowlist, the direction is a
+   * string union, eventId must be a uuid, and the search term has PostgREST
+   * filter-grammar metacharacters stripped before it reaches `.or()`.
+   */
   static async listSpeakers(
-    opts: { search?: string; limit?: number; offset?: number } = {}
-  ): Promise<ServiceResponse<{ speakers: SpeakerProfile[]; total: number }>> {
+    opts: ListSpeakersOptions = {}
+  ): Promise<ServiceResponse<SpeakerDirectoryPage>> {
     try {
-      const limit = opts.limit ?? 50;
-      const offset = opts.offset ?? 0;
+      const q = buildSpeakerListingQuery(opts);
 
       let query = supabase
-        .from('events_speaker_profiles')
+        .from('events_speaker_profiles_with_counts')
         .select('*', { count: 'exact' })
         .is('canonical_profile_id', null)
         .eq('is_active', true)
-        .order('name')
-        .range(offset, offset + limit - 1);
+        .order(q.sort, { ascending: q.ascending })
+        // Stable tiebreaker: without it, rows tied on the sort column (every
+        // speaker with the same event_count, say) can be returned in a
+        // different order per page and the same speaker shows up twice.
+        .order('id', { ascending: true })
+        .range(q.from, q.to);
 
-      if (opts.search) {
-        query = query.or(
-          `name.ilike.%${opts.search}%,email.ilike.%${opts.search}%,company.ilike.%${opts.search}%`
-        );
+      if (q.orFilter) {
+        query = query.or(q.orFilter);
+      }
+
+      if (q.eventId) {
+        query = query.overlaps('event_uuids', [q.eventId]);
       }
 
       const { data, error, count } = await query;
       if (error) return { success: false, error: error.message };
 
+      const total = count ?? data?.length ?? 0;
+
       return {
         success: true,
         data: {
-          speakers: (data || []) as SpeakerProfile[],
-          total: count ?? data?.length ?? 0,
+          speakers: (data || []) as SpeakerDirectoryRow[],
+          total,
+          page: q.page,
+          pageSize: q.pageSize,
+          pageCount: speakerPageCount(total, q.pageSize),
         },
       };
     } catch (err: any) {
