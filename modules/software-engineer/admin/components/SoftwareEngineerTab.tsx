@@ -20,8 +20,10 @@ import {
   ChartBarIcon, PlayCircleIcon, StopCircleIcon, ArrowDownIcon, ArrowsRightLeftIcon,
   SparklesIcon,
 } from '@heroicons/react/24/outline';
+import { toast } from 'sonner';
 import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
+import TranscriptMarkdown from './TranscriptMarkdown';
 import TriageCopilot from './TriageCopilot';
 import { ProjectAvatar } from './ProjectAvatar';
 import { projectOptionLabel } from './projectAvatarUtils';
@@ -308,6 +310,41 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     } catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setMerging(false); }
   };
+  // §7.6 architecture-review gate: the proposal PR + plan for a run parked at `awaiting_architecture`.
+  const [arch, setArch] = useState<any | null>(null);
+  const [archBusy, setArchBusy] = useState<'' | 'load' | 'merge' | 'notify'>('');
+  const [archTeam, setArchTeam] = useState('');   // team slug / user login to request review from
+  useEffect(() => {
+    setArch(null);
+    if (!selected || detail?.run?.status !== 'awaiting_architecture') return;
+    let live = true;
+    (async () => {
+      setArchBusy('load');
+      try { const a = await api(`/runs/${selected}/architecture`); if (live) setArch(a); }
+      catch { /* the PR link on the run still works */ }
+      finally { if (live) setArchBusy(''); }
+    })();
+    return () => { live = false; };
+  }, [selected, detail?.run?.status]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const mergeArch = async () => {
+    if (!selected || !window.confirm('Merge this architecture proposal? Approving it resumes the run to implementation.')) return;
+    setArchBusy('merge'); setErr(null);
+    try { await api(`/runs/${selected}/architecture/merge`, { method: 'POST' }); toast.success('Architecture approved — resuming implementation'); await loadRuns(); await loadDetail(selected); }
+    catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setArchBusy(''); }
+  };
+  const notifyArch = async () => {
+    if (!selected) return;
+    const t = archTeam.trim();
+    setArchBusy('notify'); setErr(null);
+    try {
+      // A value with a '/' is an org/team ("linuxfoundation/architecture") → team_reviewers; else a user login.
+      const [teams, reviewers] = t.includes('/') ? [[t.split('/').slice(1).join('/')], []] : [[], t ? [t] : []];
+      await api(`/runs/${selected}/architecture/notify`, { method: 'POST', body: JSON.stringify({ teams, reviewers }) });
+      toast.success('Architecture team notified on the proposal PR');
+    } catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setArchBusy(''); }
+  };
   // Manually start a blank interactive engineer on a project, then open it to chat live.
   const startInteractive = async () => {
     const pid = startProject || projectFilter || projectList[0]?.id;
@@ -482,6 +519,46 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 ))}
               </div>
             </div>
+
+            {/* §7.6 architecture-review gate: proposal PR + plan + approve/notify, shown while a run is
+                parked awaiting architecture review. Merging the proposal resumes the run to implement. */}
+            {detail.run.status === 'awaiting_architecture' && (
+              <div className="mt-3 rounded-lg border border-[var(--amber-6)] bg-[var(--amber-2)] p-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-[var(--gray-12)]">🏛️ Architecture review required</span>
+                  <a href={arch?.url ?? detail.run.architecture_pr_url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-1">
+                    Proposal PR{arch?.number ? ` #${arch.number}` : ''} <ArrowTopRightOnSquareIcon className="size-3.5" />
+                  </a>
+                </div>
+                <p className="text-xs text-[var(--gray-10)] mt-1">The agent classified this work as architecture-impacting and opened a proposal in <code className="font-mono text-[11px]">{detail.run.architecture_repo}</code>. Review the plan, then <strong>merge</strong> to approve — implementation resumes automatically. Notify the architecture team to request their review.</p>
+                {archBusy === 'load' && !arch ? (
+                  <div className="mt-2 text-xs text-[var(--gray-10)]">Loading the plan…</div>
+                ) : arch?.plan?.markdown ? (
+                  <details className="mt-2" open>
+                    <summary className="text-xs text-[var(--gray-11)] cursor-pointer">{arch.title || 'Architecture proposal'} · <span className="font-mono text-[11px]">{arch.plan.path}</span></summary>
+                    <div className="mt-2 max-h-96 overflow-auto rounded border border-[var(--gray-5)] bg-[var(--gray-1)] p-3 text-sm text-[var(--gray-12)]">
+                      <TranscriptMarkdown>{arch.plan.markdown}</TranscriptMarkdown>
+                    </div>
+                  </details>
+                ) : (
+                  <div className="mt-2 text-xs text-[var(--gray-10)]">Plan preview unavailable — open the proposal PR to read it.</div>
+                )}
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  <Button size="xs" onClick={mergeArch} disabled={archBusy !== ''}>
+                    <ArrowsRightLeftIcon className="size-3.5 mr-1" />{archBusy === 'merge' ? 'Merging…' : 'Merge & resume'}
+                  </Button>
+                  <input
+                    value={archTeam}
+                    onChange={(e) => setArchTeam(e.target.value)}
+                    placeholder="team or user (e.g. linuxfoundation/architecture)"
+                    className="rounded border border-[var(--gray-6)] bg-[var(--gray-1)] px-2 py-1 text-xs w-72 text-[var(--gray-12)]"
+                  />
+                  <Button variant="soft" size="xs" onClick={notifyArch} disabled={archBusy !== ''}>
+                    <PaperAirplaneIcon className="size-3.5 mr-1" />{archBusy === 'notify' ? 'Notifying…' : 'Notify architecture team'}
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* Live "working" strip — persistent while the run is live so progress is visible between
                 turn-boundary transcript messages. Distinct queued (waiting) vs running (active) states,

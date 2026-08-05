@@ -118,6 +118,14 @@ export function githubClient(token: string) {
     getPullRequest(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/pulls/${number}`);
     },
+    /** Files changed by a PR (path + status). Used to locate the architecture proposal doc. */
+    listPullFiles(owner: string, name: string, number: number) {
+      return j(`/repos/${owner}/${name}/pulls/${number}/files?per_page=100`);
+    },
+    /** Request reviewers (users and/or org teams) on a PR — used to notify the architecture team. */
+    requestReviewers(owner: string, name: string, number: number, body: { reviewers?: string[]; team_reviewers?: string[] }) {
+      return j(`/repos/${owner}/${name}/pulls/${number}/requested_reviewers`, { method: 'POST', body: JSON.stringify(body) });
+    },
     /** Contents of a file OR directory. Path segments are encoded individually so nested paths work
      *  (a file → an object with base64 `content`; a directory → an array of entries). Used to read a
      *  project's process rules at run start. */
