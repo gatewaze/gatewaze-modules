@@ -52,6 +52,7 @@ async function api(path: string, init?: RequestInit) {
 const STATUS_COLOR: Record<string, string> = {
   merged: 'green', pr_open: 'amber', watching: 'blue', changes_requested: 'amber',
   running: 'blue', failed: 'red', blocked: 'red', closed: 'gray', cancelled: 'gray', queued: 'gray',
+  awaiting_architecture: 'amber',
 };
 const phaseColor = (s: string) =>
   s === 'passed' ? 'green' : s === 'failed' || s === 'blocked' ? 'red' : s === 'running' ? 'blue' : 'gray';
@@ -62,6 +63,7 @@ const PHASE_PROSE: Record<string, string> = {
   intake: 'Reading the issue and planning the work',
   spec: 'Writing the change spec',
   review: 'Reviewing the spec',
+  architecture: 'Architecture review',
   implement: 'Writing the code',
   verify: 'Running checks and tests',
   revise: 'Revising in response to feedback',
