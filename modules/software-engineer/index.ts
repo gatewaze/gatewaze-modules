@@ -72,6 +72,9 @@ const softwareEngineerModule: GatewazeModule = {
         { name: 'software-engineer:intake', handler: './workers/intake.ts' },
         { name: 'software-engineer:spec', handler: './workers/spec.ts' },
         { name: 'software-engineer:review', handler: './workers/review.ts' },
+        // architecture: §7.6 arch-review gate (only when a project sets architecture_repo). Runs after
+        // review; classifies arch-impact and, if impacting, opens a proposal PR + blocks the run.
+        { name: 'software-engineer:architecture', handler: './workers/architecture.ts' },
         { name: 'software-engineer:implement', handler: './workers/implement.ts' },
         { name: 'software-engineer:verify', handler: './workers/verify.ts' },
         { name: 'software-engineer:pr', handler: './workers/pr.ts' },
