@@ -484,7 +484,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               </div>
             </div>
 
-            <TestEnvPanel prs={detail.prs ?? []} />
+            <TestEnvPanel prs={detail.prs ?? []} projectId={detail.run.project_id} projectName={detail.run.project?.name} />
 
             {/* Live "working" strip — persistent while the run is live so progress is visible between
                 turn-boundary transcript messages. Distinct queued (waiting) vs running (active) states,

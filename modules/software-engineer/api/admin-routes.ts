@@ -219,6 +219,46 @@ export function mountAdminRoutes(router, deps) {
     res.status(202).json(testEnvStatus());
   });
 
+  // Cross-repo related PRs for a deployable PR: agent runs reuse ONE head
+  // branch name across the repos they touch, so "same head branch, open, in
+  // another deployable repo" is the dependency heuristic the deploy UI
+  // pre-selects. Read-only (standard admin gate suffices); uses the project's
+  // PAT like every other GitHub read here.
+  router.get('/test-env/related', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-related:${clientIp(req)}`, 60, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const projectId = String(req.query.project_id ?? '');
+    const repo = String(req.query.repo ?? '');
+    const number = Number(req.query.number);
+    if (!UUID.test(projectId) || !TEST_ENV_REPOS.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'project_id + deployable repo + PR number required' } });
+    }
+    const proj = await getProject(supabase, projectId);
+    if (!proj?.githubToken) return res.status(404).json({ error: { code: 'not_found', message: 'Project or its GitHub credential not found' } });
+    const gh = githubClient(proj.githubToken);
+    try {
+      const pull = await gh.getPullRequest('gatewaze', repo, number);
+      const branch = String(pull?.head?.ref ?? '');
+      const headOwner = String(pull?.head?.repo?.owner?.login ?? 'gatewaze');
+      if (!branch) return res.json({ branch: null, related: [] });
+      const related = [];
+      for (const other of TEST_ENV_REPOS) {
+        if (other === repo) continue;
+        try {
+          const matches = await gh.listOpenPullsByHead('gatewaze', other, headOwner, branch);
+          for (const m of matches ?? []) {
+            related.push({ repo: other, number: m.number, title: m.title, url: m.html_url, branch });
+          }
+        } catch { /* repo unreadable with this PAT — skip */ }
+      }
+      res.json({ branch, related });
+    } catch (e) {
+      logger?.warn?.('se: test-env related lookup failed', { error: String(e) });
+      res.status(502).json({ error: { code: 'github_error', message: 'Could not look up related PRs' } });
+    }
+  });
+
   router.post('/test-env/teardown', async (req, res) => {
     if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });

@@ -1,93 +1,74 @@
 // @ts-nocheck
 /**
  * PR test environment panel (run view). Deployment-optional — renders only
- * where the operator wired a /staging-control channel (the staging box; see
- * api/admin-routes.ts test-env routes). Lets a super admin deploy this run's
- * PR set (plus any related PRs from other repos) into the single `aaif-test`
- * environment alongside staging: own DB (cloned from staging at deploy time),
- * own hostnames, no se-runner. One slot — deploying replaces the previous
- * test env; teardown frees it.
+ * where the operator wired a /staging-control channel AND the run belongs to
+ * the profile the env serves (Gatewaze until per-project profiles exist).
+ * Run PRs pre-select; cross-repo related PRs (same head branch, via
+ * /test-env/related) auto-populate pre-checked; a manual "+ related PR" row
+ * remains for anything the heuristic misses. One env slot — deploying
+ * replaces it.
  */
-import React, { useCallback, useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import React, { useEffect, useState } from 'react';
 import { Badge, Button } from '@/components/ui';
 import { toast } from 'sonner';
 import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, PlusIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
+import {
+  DEPLOYABLE, TEST_ENV_ACTIVE, TEST_ENV_PROJECT, STEPS, stepPct, normUrls,
+  useTestEnvStatus, deployTestEnv, teardownTestEnv, fetchRelated,
+} from './testEnv';
 
-const API = '/api/modules/software-engineer/admin';
-const DEPLOYABLE = ['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules'];
-const ACTIVE = new Set(['preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down']);
-
-// Deploy-cycle progress model. Percentages are hand-weighted by observed step
-// duration (building dominates); "tearing-down" appears only when replacing a
-// previous env, so it maps to the same early band as queued.
-const STEPS: { state: string; label: string; pct: number }[] = [
-  { state: 'queued', label: 'Queued', pct: 3 },
-  { state: 'tearing-down', label: 'Replacing previous env', pct: 6 },
-  { state: 'preparing-worktrees', label: 'Checking out PRs', pct: 12 },
-  { state: 'cloning-db', label: 'Cloning database', pct: 30 },
-  { state: 'cloning-storage', label: 'Cloning storage', pct: 42 },
-  { state: 'building', label: 'Building images', pct: 70 },
-  { state: 'starting', label: 'Starting services', pct: 90 },
-  { state: 'ready', label: 'Live', pct: 100 },
-];
-const stepPct = (state?: string, pending?: boolean) => {
-  if (!state || state === 'torn-down' || state === 'error') return pending ? 3 : 0;
-  return STEPS.find((s) => s.state === state)?.pct ?? 0;
-};
-// Normalize urls: the agent emits [{label,url,launch}]; tolerate legacy strings.
-const normUrls = (urls: any): { label: string; url: string; launch: boolean }[] =>
-  (urls ?? []).map((u: any) => typeof u === 'string'
-    ? { label: u.replace('https://', '').split('.')[0], url: u, launch: true }
-    : { label: u.label, url: u.url, launch: !!u.launch });
-
-async function api(path: string, init?: RequestInit) {
-  const { data } = await supabase.auth.getSession();
-  const token = data?.session?.access_token;
-  const r = await fetch(`${API}${path}`, {
-    ...init, credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
-  });
-  if (!r.ok) throw new Error(`${init?.method ?? 'GET'} ${path} → ${r.status}`);
-  return r.status === 204 ? null : r.json();
-}
-
-export default function TestEnvPanel({ prs }: { prs: any[] }) {
+export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any[]; projectId?: string; projectName?: string }) {
   const runPrs = (prs ?? []).filter(
     (p) => p.repo_owner === 'gatewaze' && DEPLOYABLE.includes(p.repo_name) && p.pr_number,
   );
-  const [info, setInfo] = useState<any>(null);
+  const { info, load, active } = useTestEnvStatus();
   const [selected, setSelected] = useState<Record<string, boolean>>(
     () => Object.fromEntries(runPrs.map((p) => [`${p.repo_name}#${p.pr_number}`, true])),
   );
+  const [related, setRelated] = useState<any[]>([]);   // auto-discovered, pre-checked
   const [extra, setExtra] = useState<{ repo: string; number: string }[]>([]);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(() => {
-    api('/test-env/status').then(setInfo).catch(() => setInfo(null));
-  }, []);
-  const active = !!info && (info.pending || ACTIVE.has(info.status?.state));
-  useEffect(() => { load(); }, [load]);
+  // Auto-discover cross-repo related PRs for each of the run's PRs.
   useEffect(() => {
-    if (!active) return;
-    const t = setInterval(load, 6000);
-    return () => clearInterval(t);
-  }, [active, load]);
+    if (!projectId || runPrs.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const found: any[] = [];
+      for (const p of runPrs) {
+        try {
+          const r = await fetchRelated(projectId, p.repo_name, p.pr_number);
+          for (const rel of r?.related ?? []) {
+            if (!found.some((f) => f.repo === rel.repo && f.number === rel.number)
+              && !runPrs.some((rp) => rp.repo_name === rel.repo && rp.pr_number === rel.number)) {
+              found.push(rel);
+            }
+          }
+        } catch { /* lookup is best-effort */ }
+      }
+      if (!cancelled && found.length) {
+        setRelated(found);
+        setSelected((s) => ({ ...s, ...Object.fromEntries(found.map((f) => [`${f.repo}#${f.number}`, true])) }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps -- run PR set is stable per run
 
+  if (projectName && projectName !== TEST_ENV_PROJECT) return null;
   if (!info?.available) return null;
 
   const deploySet = () => {
     const set: { repo: string; number: number }[] = [];
-    for (const p of runPrs) {
-      if (selected[`${p.repo_name}#${p.pr_number}`] && !set.some((x) => x.repo === p.repo_name)) {
-        set.push({ repo: p.repo_name, number: p.pr_number });
-      }
+    const consider = [
+      ...runPrs.map((p) => ({ repo: p.repo_name, number: p.pr_number })),
+      ...related.map((r) => ({ repo: r.repo, number: r.number })),
+    ];
+    for (const c of consider) {
+      if (selected[`${c.repo}#${c.number}`] && !set.some((x) => x.repo === c.repo)) set.push(c);
     }
     for (const e of extra) {
       const n = Number(e.number);
-      if (e.repo && Number.isInteger(n) && n > 0 && !set.some((x) => x.repo === e.repo)) {
-        set.push({ repo: e.repo, number: n });
-      }
+      if (e.repo && Number.isInteger(n) && n > 0 && !set.some((x) => x.repo === e.repo)) set.push({ repo: e.repo, number: n });
     }
     return set;
   };
@@ -95,7 +76,7 @@ export default function TestEnvPanel({ prs }: { prs: any[] }) {
   const deploy = async () => {
     setBusy(true);
     try {
-      await api('/test-env/deploy', { method: 'POST', body: JSON.stringify({ prs: deploySet() }) });
+      await deployTestEnv(deploySet());
       toast.success('Test environment deploy requested');
       load();
     } catch (e: any) {
@@ -105,7 +86,7 @@ export default function TestEnvPanel({ prs }: { prs: any[] }) {
   const teardown = async () => {
     if (!window.confirm('Tear down the test environment?')) return;
     setBusy(true);
-    try { await api('/test-env/teardown', { method: 'POST' }); toast.success('Teardown requested'); load(); }
+    try { await teardownTestEnv(); toast.success('Teardown requested'); load(); }
     catch (e: any) { toast.error(`Teardown failed: ${e?.message ?? e}`); }
     finally { setBusy(false); }
   };
@@ -114,9 +95,10 @@ export default function TestEnvPanel({ prs }: { prs: any[] }) {
   const ready = st?.state === 'ready';
   const urls = normUrls(st?.urls);
   const launchUrls = urls.filter((u) => u.launch);
-  const pct = stepPct(info.pending && !ACTIVE.has(st?.state) ? 'queued' : st?.state, info.pending);
+  const pct = stepPct(info.pending && !TEST_ENV_ACTIVE.has(st?.state) ? 'queued' : st?.state, info.pending);
   const stepAgeSec = st?.updated_at ? Math.max(0, Math.round((Date.now() - new Date(st.updated_at).getTime()) / 1000)) : 0;
   const launch = () => { for (const u of launchUrls) window.open(u.url, '_blank', 'noopener'); };
+
   return (
     <div className="mb-3 rounded-md border border-[var(--gray-6)] px-3 py-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -124,7 +106,7 @@ export default function TestEnvPanel({ prs }: { prs: any[] }) {
         <span className="text-sm font-medium">Test environment</span>
         {st && (
           <Badge color={ready ? 'green' : st.state === 'error' ? 'red' : st.state === 'torn-down' ? 'gray' : 'blue'} variant="soft" size="1">
-            {info.pending && !ACTIVE.has(st.state) ? 'queued' : st.state}
+            {info.pending && !TEST_ENV_ACTIVE.has(st.state) ? 'queued' : st.state}
           </Badge>
         )}
         <span className="text-xs text-[var(--gray-11)] truncate">{st?.detail}</span>
@@ -173,6 +155,17 @@ export default function TestEnvPanel({ prs }: { prs: any[] }) {
               <input type="checkbox" className="size-3.5" checked={!!selected[k]}
                 onChange={() => setSelected((s) => ({ ...s, [k]: !s[k] }))} />
               <span>{p.repo_name} <a href={p.pr_url} target="_blank" rel="noreferrer" className="text-blue-500">#{p.pr_number}</a></span>
+            </label>
+          );
+        })}
+        {related.map((r) => {
+          const k = `${r.repo}#${r.number}`;
+          return (
+            <label key={k} className="inline-flex items-center gap-1.5" title={`Same head branch (${r.branch}) — auto-detected`}>
+              <input type="checkbox" className="size-3.5" checked={!!selected[k]}
+                onChange={() => setSelected((s) => ({ ...s, [k]: !s[k] }))} />
+              <span>{r.repo} <a href={r.url} target="_blank" rel="noreferrer" className="text-blue-500">#{r.number}</a>
+                <Badge color="purple" variant="soft" size="1" className="ml-1">related</Badge></span>
             </label>
           );
         })}

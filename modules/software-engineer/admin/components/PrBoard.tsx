@@ -14,8 +14,9 @@ import { isGatewayError, StartingBanner } from './starting';
 import { timeAgo, formatSubmittedDate } from '../lib/pr-format';
 import {
   ArrowPathIcon, ArrowTopRightOnSquareIcon, UserIcon, UsersIcon, CpuChipIcon, BoltIcon,
-  MinusCircleIcon, BellAlertIcon, LinkIcon,
+  MinusCircleIcon, BellAlertIcon, LinkIcon, BeakerIcon,
 } from '@heroicons/react/24/outline';
+import { DEPLOYABLE, deployTestEnv, fetchRelated, useTestEnvStatus } from './testEnv';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -71,11 +72,40 @@ function checkAccent(pr: any): string {
   return 'border-l-green-500';                              // all checks green
 }
 
-function PrRow({ pr, onChanged }: { pr: any; onChanged?: () => void }) {
+function PrRow({ pr, onChanged, testEnvAvailable }: { pr: any; onChanged?: () => void; testEnvAvailable?: boolean }) {
   const [notify, setNotify] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
   const [notifyMsg, setNotifyMsg] = useState('');
   const [connect, setConnect] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
   const [connectMsg, setConnectMsg] = useState('');
+  const [deploying, setDeploying] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+  const [deployMsg, setDeployMsg] = useState('');
+  // "Deploy to test" — deployable repos only; replaces the current test env
+  // (single slot). Related PRs (same head branch in the other repos) are
+  // auto-included; the run view offers finer-grained selection.
+  const [prOwner, prName] = String(pr.repo).split('/');
+  const canDeployTest = !!testEnvAvailable && prOwner === 'gatewaze' && DEPLOYABLE.includes(prName)
+    && pr.status !== 'merged' && pr.status !== 'closed';
+  const doDeployTest = async () => {
+    if (deploying === 'sending') return;
+    setDeploying('sending'); setDeployMsg('');
+    try {
+      let set = [{ repo: prName, number: pr.number }];
+      if (pr.project_id) {
+        try {
+          const rel = await fetchRelated(String(pr.project_id), prName, pr.number);
+          for (const r of rel?.related ?? []) {
+            if (!set.some((x) => x.repo === r.repo)) set.push({ repo: r.repo, number: r.number });
+          }
+        } catch { /* best-effort — deploy the single PR */ }
+      }
+      await deployTestEnv(set);
+      setDeploying('done');
+      setDeployMsg(`Deploying ${set.map((s) => `${s.repo}#${s.number}`).join(' + ')} — replaces the current test env. Watch progress on any run or above.`);
+    } catch (e: any) {
+      setDeploying('error');
+      setDeployMsg(/403/.test(String(e?.message)) ? 'Super-admin access required.' : /409/.test(String(e?.message)) ? 'A test-env operation is already in progress.' : 'Could not request the deploy.');
+    }
+  };
   const reviewers: string[] = Array.isArray(pr.reviewers) ? pr.reviewers : [];
   const canNotify = pr.actor === 'reviewers' && !!pr.project_id;
   // An external PR (no linked run) that's still open can be CONNECTED to a watching run: the agent
@@ -184,15 +214,29 @@ function PrRow({ pr, onChanged }: { pr: any; onChanged?: () => void }) {
               {notify === 'sending' ? 'Notifying…' : notify === 'done' ? 'Notified ✓' : 'Notify reviewers'}
             </button>
           )}
+          {canDeployTest && (
+            <button
+              type="button" onClick={doDeployTest} disabled={deploying === 'sending'}
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--gray-6)] px-2 py-1 text-xs text-[var(--gray-11)] hover:bg-[var(--gray-3)] disabled:opacity-50"
+              title="Deploy this PR (plus auto-detected related PRs) to the test environment — replaces whatever is currently deployed there"
+            >
+              <BeakerIcon className="size-3.5" />
+              {deploying === 'sending' ? 'Deploying…' : deploying === 'done' ? 'Deploy requested ✓' : 'Deploy to test'}
+            </button>
+          )}
         </div>
       </div>
       {connectMsg && <div className={`text-[11px] ${connect === 'error' ? 'text-red-600' : 'text-[var(--gray-10)]'}`}>{connectMsg}</div>}
       {notifyMsg && <div className={`text-[11px] ${notify === 'error' ? 'text-red-600' : 'text-[var(--gray-10)]'}`}>{notifyMsg}</div>}
+      {deployMsg && <div className={`text-[11px] ${deploying === 'error' ? 'text-red-600' : 'text-[var(--gray-10)]'}`}>{deployMsg}</div>}
     </div>
   );
 }
 
 export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
+  // One status probe for the whole board — rows only render "Deploy to test"
+  // where the deployment actually has a test-env channel.
+  const { info: testEnvInfo } = useTestEnvStatus();
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -290,7 +334,7 @@ export default function PrBoard({ projectFilter }: { projectFilter?: string }) {
                   {g.icon}{g.title}
                   <span className="tabular-nums text-[var(--gray-9)]">({rows.length})</span>
                 </div>
-                {rows.map((pr) => <PrRow key={`${pr.repo}#${pr.number}`} pr={pr} onChanged={() => load(true)} />)}
+                {rows.map((pr) => <PrRow key={`${pr.repo}#${pr.number}`} pr={pr} onChanged={() => load(true)} testEnvAvailable={!!testEnvInfo?.available} />)}
               </div>
             );
           })}
