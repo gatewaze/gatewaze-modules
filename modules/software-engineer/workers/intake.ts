@@ -9,6 +9,7 @@ import { getProject } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun } from '../lib/run-state.js';
+import { parseOverrideLabels } from '../lib/model-select.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -30,6 +31,30 @@ export default async function intake(job, ctx) {
   await writeGate(supabase, run, 'authorization', 'pass', { labeller: run.labeller, instance: run.instance_id });
 
   const gh = githubClient(project.githubToken);
+  // Per-run routing overrides from issue labels (agent:model:<alias|id> / agent:engine:<claude|codex>),
+  // parsed ONCE here so later phases read them off the run row (lib/model-select.ts precedence).
+  // AUTHZ: an override redirects the project's model/OpenAI spend, so it is only honored when the
+  // person who APPLIED the label is trusted — allowed_labellers or the run's own labeller — resolved
+  // from issue events exactly like intake-poll resolves the trigger labeller (webhook sender parity).
+  // GitHub label-write (triage role) is a much broader set than allowed_labellers; the label's mere
+  // presence proves nothing. Unresolvable applier → that label is ignored (fail closed).
+  try {
+    const issue = await gh.getIssue(run.repo_owner, run.repo_name, run.issue_number);
+    const labels = (issue?.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
+    const overrideLabels = labels.filter((n) => n.startsWith('agent:model:') || n.startsWith('agent:engine:'));
+    if (overrideLabels.length) {
+      const trusted = (login) => !!login && (project.allowedLabellers.includes(login) || login === run.labeller);
+      const events = await gh.listIssueEvents(run.repo_owner, run.repo_name, run.issue_number);
+      const applier = {};
+      for (const ev of events ?? []) {
+        if (ev?.event === 'labeled' && ev?.label?.name && ev?.actor?.login) applier[ev.label.name] = ev.actor.login; // last event wins
+      }
+      const ov = parseOverrideLabels(overrideLabels.filter((n) => trusted(applier[n])));
+      if (ov.model || ov.engine) {
+        await supabase.from('se_runs').update({ model_override: ov.model ?? null, engine_override: ov.engine ?? null }).eq('id', run.id);
+      }
+    }
+  } catch { /* best-effort — no overrides is the default */ }
   // Reflect status on the issue + finalize the claim (§2.1, §12.5). run.repo_* is the issues repo.
   try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:in-progress'); } catch { /* best-effort */ }
   try {

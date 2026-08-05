@@ -23,13 +23,14 @@ export async function pricePhaseCostUSD(
   sb: unknown,
   model: string,
   usage: PhaseUsage,
-  occurredAt: Date = new Date(),
+  opts: { provider?: 'anthropic' | 'openai'; occurredAt?: Date } = {},
 ): Promise<number | null> {
+  const occurredAt = opts.occurredAt ?? new Date();
   if (!model) return null;
   const { data } = await sb
     .from('ai_model_prices')
     .select('input_per_million_usd, output_per_million_usd, cached_per_million_usd, cache_creation_per_million_usd')
-    .eq('provider', 'anthropic')
+    .eq('provider', opts.provider ?? 'anthropic')
     .eq('model', model)
     .lte('effective_from', occurredAt.toISOString().slice(0, 10))
     .order('effective_from', { ascending: false })

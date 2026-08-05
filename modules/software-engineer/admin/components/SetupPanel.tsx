@@ -105,6 +105,7 @@ export default function SetupPanel(
   const [repos, setRepos] = useState<any[]>([]);
   const [ghToken, setGhToken] = useState('');
   const [modelCred, setModelCred] = useState('');
+  const [openaiCred, setOpenaiCred] = useState('');
   const [mcpConfig, setMcpConfig] = useState('');
   const [skills, setSkills] = useState('');
   const [newProj, setNewProj] = useState({ name: '', emoji: '' });
@@ -145,7 +146,7 @@ export default function SetupPanel(
     if (!id) { setS({}); setRepos([]); return; }
     try {
       const [d, rp] = await Promise.all([api(`/projects/${id}`), api(`/projects/${id}/repos`)]);
-      setS(d.project ?? {}); setRepos(rp.repos ?? []); setGhToken(''); setModelCred(''); setMcpConfig('');
+      setS(d.project ?? {}); setRepos(rp.repos ?? []); setGhToken(''); setModelCred(''); setOpenaiCred(''); setMcpConfig('');
       setSkills(Array.isArray(d.project?.skills) && d.project.skills.length ? JSON.stringify(d.project.skills, null, 2) : '');
     } catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
   }, []);
@@ -191,6 +192,10 @@ export default function SetupPanel(
     };
     if (ghToken.trim()) body.github_token = ghToken.trim();
     if (modelCred.trim()) body.model_cred = modelCred.trim();
+    if (openaiCred.trim()) body.openai_cred = openaiCred.trim() === 'clear' ? null : openaiCred.trim();
+    body.escalation_model = s.escalation_model?.trim() || null;
+    // Per-phase routing: send the object as edited; the server drops junk and validates ids.
+    if (s.phase_models !== undefined) body.phase_models = s.phase_models ?? {};
     // MCP config: send only when the operator typed something. A literal "clear" empties it.
     if (mcpConfig.trim()) body.mcp_config = mcpConfig.trim() === 'clear' ? null : mcpConfig.trim();
     // Skills: a JSON array of { repo, path, ref }. Blank = clear. Parse client-side to catch typos
@@ -294,6 +299,42 @@ export default function SetupPanel(
                     data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
                 </Field>
                 <Field label="Model"><input value={s.model ?? 'claude-opus-4-8'} onChange={set('model')} className={inputCls} /></Field>
+                <Field label="Escalation model"><input value={s.escalation_model ?? ''} onChange={set('escalation_model')} placeholder="(optional — e.g. claude-opus-5; retries failed CI-fix/revise rounds on it)" className={inputCls} /></Field>
+              </Section>
+
+              <Section icon={<CommandLineIcon className="size-4" />} title="Engines + per-phase routing">
+                <Field label={<>OpenAI credential {s.openai_cred_last4 ? <span className="text-neutral-400">(••••{s.openai_cred_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
+                  {/* Needed only for the codex engine. Autofill suppressed like the other secrets. */}
+                  <input type="password" placeholder="paste to set — 'clear' removes" value={openaiCred} onChange={(e) => setOpenaiCred(e.target.value)} className={inputCls}
+                    autoComplete="new-password" name="se-openai-cred" spellCheck={false}
+                    data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
+                </Field>
+                <div className="pt-1 space-y-1">
+                  {['triage', 'spec', 'review', 'implement', 'verify', 'revise', 'reflect'].map((phase) => {
+                    const pm = (s.phase_models ?? {})[phase] ?? {};
+                    const setPhase = (key: string) => (e: any) => setS((prev: any) => {
+                      const map = { ...(prev.phase_models ?? {}) };
+                      const entry = { ...(map[phase] ?? {}), [key]: e.target.value };
+                      if (!entry.engine && !entry.model) delete map[phase]; else map[phase] = entry;
+                      // Empty values fall back to the project default at resolve time.
+                      if (entry[key] === '') { delete entry[key]; if (!Object.keys(entry).length) delete map[phase]; else map[phase] = entry; }
+                      return { ...prev, phase_models: map };
+                    });
+                    const codexAllowed = ['spec', 'review', 'implement', 'verify', 'revise'].includes(phase);
+                    return (
+                      <div key={phase} className="flex items-center gap-2">
+                        <span className="w-24 shrink-0 font-mono text-[11px] text-[var(--gray-11)]">{phase}</span>
+                        <select value={pm.engine ?? ''} onChange={setPhase('engine')} className={`${inputCls} !w-32 shrink-0`}>
+                          <option value="">default</option>
+                          <option value="claude">claude</option>
+                          {codexAllowed && <option value="codex">codex</option>}
+                        </select>
+                        <input value={pm.model ?? ''} onChange={setPhase('model')} placeholder="(project default)" className={inputCls} />
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-[var(--gray-10)] pt-1">Unset phases use the project default model on the claude engine. The codex engine (OpenAI) needs the credential above and only runs repo phases. Per-issue overrides: label <code className="font-mono text-[11px]">agent:model:&lt;sonnet|opus|haiku|full-id&gt;</code> or <code className="font-mono text-[11px]">agent:engine:codex</code>.</p>
               </Section>
 
               <Section icon={<KeyIcon className="size-4" />} title="Work source (issues repo)">

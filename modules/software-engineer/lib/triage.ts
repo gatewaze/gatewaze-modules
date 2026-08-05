@@ -19,6 +19,7 @@
  * recipe later only changes this file.
  */
 import { InProcessRunner } from './agent-session.js';
+import { resolvePhaseModel } from './model-select.js';
 
 const MAX_MESSAGES = 20;
 const MAX_MSG_CHARS = 4000;
@@ -107,7 +108,7 @@ export async function runTriageTurn(
   const result = await runner.runPhase({
     cwd: '/tmp',
     prompt,
-    model: project.model,
+    model: resolvePhaseModel(project, null, 'triage').model,
     credential: { kind: project.modelCredKind, value: project.modelCred },
     noTools: true,
   });
