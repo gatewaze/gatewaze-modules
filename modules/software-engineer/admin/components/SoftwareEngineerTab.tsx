@@ -533,6 +533,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 )}
                 {detail.run.project?.name && <span className="text-xs text-[var(--gray-10)] inline-flex items-center gap-1"><ProjectAvatar emoji={detail.run.project.avatar_emoji} className="size-4" /> {detail.run.project.name}</span>}
                 {detail.run.engineer_name && <span className="text-xs text-[var(--gray-10)]">🧑‍💻 {detail.run.engineer_name}</span>}
+                {detail.run.reporter_display_name && <span className="text-xs text-[var(--gray-10)]">· reported by {detail.run.reporter_display_name}</span>}
                 {detail.run.revise_count > 0 && <span className="text-xs text-[var(--gray-10)]">· {detail.run.revise_count} revision{detail.run.revise_count > 1 ? 's' : ''}</span>}
                 {fmtCost(detail.run.cost_usd) && (
                   <span

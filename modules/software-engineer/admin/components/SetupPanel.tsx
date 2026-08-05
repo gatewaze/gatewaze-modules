@@ -105,6 +105,12 @@ export default function SetupPanel(
   const [repos, setRepos] = useState<any[]>([]);
   const [ghToken, setGhToken] = useState('');
   const [modelCred, setModelCred] = useState('');
+  // Credential model (§12): role-scoped credentials (set-only; blank leaves unchanged).
+  const [committingPat, setCommittingPat] = useState('');
+  const [commentingPat, setCommentingPat] = useState('');
+  const [pullRequestPat, setPullRequestPat] = useState('');
+  const [codingAgentModel, setCodingAgentModel] = useState('');
+  const [slackWebhook, setSlackWebhook] = useState('');
   const [openaiCred, setOpenaiCred] = useState('');
   const [mcpConfig, setMcpConfig] = useState('');
   const [skills, setSkills] = useState('');
@@ -147,6 +153,7 @@ export default function SetupPanel(
     try {
       const [d, rp] = await Promise.all([api(`/projects/${id}`), api(`/projects/${id}/repos`)]);
       setS(d.project ?? {}); setRepos(rp.repos ?? []); setGhToken(''); setModelCred(''); setOpenaiCred(''); setMcpConfig('');
+      setCommittingPat(''); setCommentingPat(''); setPullRequestPat(''); setCodingAgentModel(''); setSlackWebhook('');
       setSkills(Array.isArray(d.project?.skills) && d.project.skills.length ? JSON.stringify(d.project.skills, null, 2) : '');
     } catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
   }, []);
@@ -196,6 +203,12 @@ export default function SetupPanel(
     };
     if (ghToken.trim()) body.github_token = ghToken.trim();
     if (modelCred.trim()) body.model_cred = modelCred.trim();
+    body.credential_mode = s.credential_mode ?? 'shared';
+    if (committingPat.trim()) body.committing_pat = committingPat.trim();
+    if (commentingPat.trim()) body.commenting_pat = commentingPat.trim();
+    if (pullRequestPat.trim()) body.pull_request_pat = pullRequestPat.trim();
+    if (codingAgentModel.trim()) body.coding_agent_model = codingAgentModel.trim();
+    if (slackWebhook.trim()) body.slack_webhook = slackWebhook.trim();
     if (openaiCred.trim()) body.openai_cred = openaiCred.trim() === 'clear' ? null : openaiCred.trim();
     body.escalation_model = s.escalation_model?.trim() || null;
     // Per-phase routing: send the object as edited; the server drops junk and validates ids.
@@ -304,6 +317,32 @@ export default function SetupPanel(
                 </Field>
                 <Field label="Model"><input value={s.model ?? 'claude-opus-4-8'} onChange={set('model')} className={inputCls} /></Field>
                 <Field label="Escalation model"><input value={s.escalation_model ?? ''} onChange={set('escalation_model')} placeholder="(optional — e.g. claude-opus-5; retries failed CI-fix/revise rounds on it)" className={inputCls} /></Field>
+                {/* Credential model (§12): mode + role-scoped credentials. Each role PAT falls back to the
+                    default token above, so leaving them blank keeps the single-PAT behavior. */}
+                <Field label="Credential mode">
+                  <select value={s.credential_mode ?? 'shared'} onChange={set('credential_mode')} className={inputCls}>
+                    <option value="shared">Shared — every run uses the project credentials</option>
+                    <option value="mixed">Mixed — shared coding-agent model, acting user’s git identity</option>
+                    <option value="per_user">Per-user — the acting user’s own credentials</option>
+                  </select>
+                </Field>
+                <Field label={<>Committing PAT {s.committing_pat_last4 ? <span className="text-neutral-400">(••••{s.committing_pat_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
+                  <input type="password" placeholder="separate PAT for commits (optional)" value={committingPat} onChange={(e) => setCommittingPat(e.target.value)} className={inputCls} autoComplete="new-password" name="se-committing-pat" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                <Field label={<>Commenting PAT {s.commenting_pat_last4 ? <span className="text-neutral-400">(••••{s.commenting_pat_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
+                  <input type="password" placeholder="separate PAT for comments (optional)" value={commentingPat} onChange={(e) => setCommentingPat(e.target.value)} className={inputCls} autoComplete="new-password" name="se-commenting-pat" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                <Field label={<>Pull-request PAT {s.pull_request_pat_last4 ? <span className="text-neutral-400">(••••{s.pull_request_pat_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
+                  <input type="password" placeholder="separate PAT for opening PRs (optional)" value={pullRequestPat} onChange={(e) => setPullRequestPat(e.target.value)} className={inputCls} autoComplete="new-password" name="se-pr-pat" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                <Field label={<>Coding-agent model {s.coding_agent_model_last4 ? <span className="text-neutral-400">(••••{s.coding_agent_model_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
+                  <input type="password" placeholder="separate model credential for agent sessions (optional)" value={codingAgentModel} onChange={(e) => setCodingAgentModel(e.target.value)} className={inputCls} autoComplete="new-password" name="se-coding-agent-model" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                {/* §8 notifications: a Slack incoming-webhook. When set, gate events (spec/plan ready,
+                    PR ready, submitted) post to that channel. Blank = off. */}
+                <Field label={<>Slack webhook {s.slack_webhook_last4 ? <span className="text-neutral-400">(••••{s.slack_webhook_last4})</span> : <span className="text-neutral-400">(off)</span>}</>}>
+                  <input type="password" placeholder="https://hooks.slack.com/services/… (optional; gate-event posts)" value={slackWebhook} onChange={(e) => setSlackWebhook(e.target.value)} className={inputCls} autoComplete="new-password" name="se-slack-webhook" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
               </Section>
 
               <Section icon={<CommandLineIcon className="size-4" />} title="Engines + per-phase routing">
