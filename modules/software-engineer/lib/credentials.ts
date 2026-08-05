@@ -63,6 +63,7 @@ export interface ProjectSettings {
   processRef: string | null;        // branch/tag (default 'main')
   architectureRepo: string | null;  // owner/name of the arch proposals repo; null = gate off
   architectureRef: string | null;   // base branch for the proposal PR (default 'main')
+  trackerUrlTemplate: string | null; // URL template with {key} for linking the external ticket in cross-repo PRs
   // Policy + concurrency.
   allowedLabellers: string[];
   intakeEnabled: boolean;
@@ -176,6 +177,7 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     processRef: data.process_ref ?? null,
     architectureRepo: data.architecture_repo ?? null,
     architectureRef: data.architecture_ref ?? null,
+    trackerUrlTemplate: data.tracker_url_template ?? null,
     allowedLabellers: data.allowed_labellers ?? [],
     intakeEnabled: data.intake_enabled,
     autonomyMode: data.autonomy_mode,

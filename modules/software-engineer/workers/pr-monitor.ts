@@ -26,7 +26,6 @@ const sb = (ctx) =>
     auth: { autoRefreshToken: false, persistSession: false },
   });
 const nowISO = () => new Date().toISOString();
-const ARCH_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 async function reconcile(supabase, ctx, run) {
   if (run.archived_at || run.status === 'cancelled') return { runId: run.id, skipped: 'inactive' };
@@ -143,39 +142,9 @@ async function reconcile(supabase, ctx, run) {
   }
 }
 
-// §7.6: a run parked at the architecture-review gate. Watch its proposal PR in the arch repo:
-//   merged   → the architecture is approved → resume the run to implement.
-//   closed   → rejected → block for a human decision (the spec/approach needs rethinking).
-//   open     → keep waiting.
-async function reconcileArchitecture(supabase, ctx, run) {
-  if (run.archived_at || run.status === 'cancelled') return { runId: run.id, skipped: 'inactive' };
-  const project = await getProject(supabase, run.project_id);
-  const token = project?.githubToken;
-  const repo = String(run.architecture_repo ?? '').trim();
-  if (!token || !repo || !ARCH_REPO_RE.test(repo) || !run.architecture_pr_number) return { runId: run.id, skipped: 'no arch pr' };
-  const [owner, name] = repo.split('/');
-  const gh = githubClient(token);
-  const patch = { pr_checked_at: nowISO() };
-  try {
-    const pr = await gh.getPullRequest(owner, name, run.architecture_pr_number);
-    if (pr.merged || pr.merged_at) {
-      await supabase.from('se_runs').update({ ...patch, status: 'running', current_phase: 'implement' }).eq('id', run.id);
-      if (run.issue_number) { try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, `Architecture approved (proposal merged) — resuming implementation.`); } catch { /* */ } }
-      await enqueuePhase(ctx, run.id, 'implement');
-      return { runId: run.id, action: 'architecture-approved' };
-    }
-    if (pr.state === 'closed') {
-      if (run.issue_number) { try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:blocked'); } catch { /* */ } }
-      await supabase.from('se_runs').update({ ...patch, status: 'blocked', error: 'architecture proposal was closed unmerged — needs a human decision' }).eq('id', run.id);
-      return { runId: run.id, action: 'architecture-rejected' };
-    }
-    await supabase.from('se_runs').update(patch).eq('id', run.id);
-    return { runId: run.id, action: 'awaiting-architecture' };
-  } catch (e) {
-    await supabase.from('se_runs').update({ ...patch, error: redactToken(e?.message || String(e), token) }).eq('id', run.id);
-    return { runId: run.id, error: true };
-  }
-}
+// §7.6 note: the architecture-review gate no longer uses a PR, so pr-monitor does not watch it. A run
+// parked at `awaiting_architecture` / `architecture_in_review` is driven only by explicit human actions
+// in the admin (finalize, approve) and by workers/architecture-refine.ts — not by this reconciler.
 
 export default async function prMonitor(job, ctx) {
   const supabase = sb(ctx);
@@ -185,14 +154,12 @@ export default async function prMonitor(job, ctx) {
     const { data } = await supabase.from('se_runs').select('*').eq('id', single).maybeSingle();
     runs = data ? [data] : [];
   } else {
-    const { data } = await supabase.from('se_runs').select('*').is('archived_at', null).in('status', ['pr_open', 'watching', 'awaiting_architecture']);
+    const { data } = await supabase.from('se_runs').select('*').is('archived_at', null).in('status', ['pr_open', 'watching']);
     runs = data ?? [];
   }
   const results = [];
   for (const run of runs) {
-    results.push(run.status === 'awaiting_architecture'
-      ? await reconcileArchitecture(supabase, ctx, run)
-      : await reconcile(supabase, ctx, run));
+    results.push(await reconcile(supabase, ctx, run));
   }
   if (!single) { try { await dispatchAll(supabase, ctx); } catch { /* best-effort */ } }
   return { checked: runs.length, results };
