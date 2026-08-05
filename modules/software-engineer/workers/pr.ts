@@ -51,14 +51,32 @@ export default async function pr(job, ctx) {
     for (const p of prs) {
       if (p.pr_number) { links.push(`- ${p.repo_owner}/${p.repo_name}: ${p.pr_url}`); continue; }
       const base = baseOf(p.repo_owner, p.repo_name) || (await gh.defaultBranch(p.repo_owner, p.repo_name));
-      const body = [
-        `Resolves ${run.repo_owner}/${run.repo_name}#${run.issue_number}`,
-        ``, `### Gates`,
-        `- adversarial review: ${gate['adversarial_review'] ?? 'n/a'}`,
-        `- security: ${gate['security'] ?? 'n/a'}`,
-        `- blast radius: ${run.blast_radius}`,
-        ``, `### Spec`, (art?.content ?? '_(spec unavailable)_').slice(0, 18000),
-      ].join('\n');
+      // A PR whose repo differs from the issue's repo is CROSS-REPO: the triggering issue lives in a
+      // separate (often private) tracker/roadmap repo, and this PR is on a public code repo. Never
+      // reference that internal issue/repo here and never dump the spec/transcript — cite the real
+      // tracking ticket (e.g. Jira) by link, in the house writing style. The roadmap issue is still
+      // closed by pr-monitor when every PR merges, so no "Resolves" line is needed.
+      const external = p.repo_owner !== run.repo_owner || p.repo_name !== run.repo_name;
+      let body;
+      if (external) {
+        const key = String(issueTitle || run.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1] || null;
+        const tpl = project.trackerUrlTemplate;
+        const trackerLine = key
+          ? (tpl && tpl.includes('{key}') ? `**Tracking:** [${key}](${tpl.replace('{key}', key)})` : `**Tracking:** ${key}`)
+          : null;
+        const cleanTitle = String(issueTitle || run.title || '').replace(/^\s*\[[A-Za-z][A-Za-z0-9]*-\d+\]\s*/, '').trim();
+        body = [trackerLine, trackerLine ? '' : null, `Implements ${cleanTitle || 'the tracked work'}.`].filter((l) => l !== null).join('\n');
+      } else {
+        // Internal same-repo PR (e.g. gatewaze): link + auto-close the issue, and include the gates + spec.
+        body = [
+          `Resolves ${run.repo_owner}/${run.repo_name}#${run.issue_number}`,
+          ``, `### Gates`,
+          `- adversarial review: ${gate['adversarial_review'] ?? 'n/a'}`,
+          `- security: ${gate['security'] ?? 'n/a'}`,
+          `- blast radius: ${run.blast_radius}`,
+          ``, `### Spec`, (art?.content ?? '_(spec unavailable)_').slice(0, 18000),
+        ].join('\n');
+      }
       try {
         const prData = await gh.createPullRequest(p.repo_owner, p.repo_name, { title: issueTitle || `Resolve #${run.issue_number}`, head: p.branch, base, body });
         await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { pr_number: prData.number, pr_url: prData.html_url, state: 'open' });
