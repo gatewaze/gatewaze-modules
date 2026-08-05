@@ -27,7 +27,7 @@ import { ProjectAvatar } from './ProjectAvatar';
 import { projectOptionLabel } from './projectAvatarUtils';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
-import { filterLabelForParam } from './overview-filters';
+import { filterLabelForParam, fmtCost } from './overview-filters';
 import { isNearBottom } from './autoscroll';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
@@ -72,14 +72,6 @@ const PHASE_PROSE: Record<string, string> = {
   merge: 'Merging',
 };
 const phaseProse = (p?: string) => (p && PHASE_PROSE[p]) || (p ? `Working (${p})` : 'Working');
-
-// Model spend for a run, priced from the ai module's price book at phase end (se_runs.cost_usd,
-// migration 012). Null/0 → '' so pre-012 runs and non-model runs render nothing.
-const fmtCost = (c: unknown): string => {
-  const n = Number(c);
-  if (!Number.isFinite(n) || n <= 0) return '';
-  return n < 0.01 ? '<$0.01' : `$${n.toFixed(2)}`;
-};
 
 // A run's headline label. Interactive (pair-programming) sessions have no issue, so they read as a
 // session on their project rather than "owner/repo #n".
