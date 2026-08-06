@@ -20,7 +20,7 @@ import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.j
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { enqueuePhase } from '../lib/enqueue.js';
-import { listRunPrs, writeMessage, touchRun } from '../lib/run-state.js';
+import { listRunPrs, writeMessage, touchRun, recordPhaseEnd, nextPhaseAttempt } from '../lib/run-state.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -94,6 +94,16 @@ export default async function codeRefine(job, ctx) {
       try { await writeMessage(supabase, run, 'system', `Could not apply the change: ${msg}`); } catch { /* */ }
       return { failed: msg };   // stay at ready_to_submit; feedback left undelivered for a retry
     }
+
+    // Attribute this refine's token spend (main + subagents, via modelUsage) as its own costed record.
+    try {
+      await recordPhaseEnd(supabase, run, 'code-refine', 'passed', 'applied reviewer feedback pre-PR', {
+        model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude',
+        input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead,
+        cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage,
+        attempt: await nextPhaseAttempt(supabase, run.id, 'code-refine'),
+      });
+    } catch { /* cost tracking is best-effort — never fail a refine over it */ }
 
     let pushed = 0;
     for (const r of ws.repos.filter((x) => x.writable)) {

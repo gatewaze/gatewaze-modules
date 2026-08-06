@@ -76,7 +76,7 @@ export default async function review(job, ctx) {
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
-      await recordPhaseEnd(supabase, run, 'review', 'failed', msg);
+      await recordPhaseEnd(supabase, run, 'review', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
       return { failed: msg };
     }
@@ -96,7 +96,7 @@ export default async function review(job, ctx) {
     if (project.specGate && run.kind !== 'external_pr') {
       await recordPhaseEnd(supabase, run, 'review', verdict === 'pass' ? 'passed' : 'blocked',
         verdict === 'pass' ? 'spec approved by skeptic (advisory); awaiting human review' : `skeptic flagged concerns (advisory): ${objections.slice(0, 3).join('; ')}`,
-        { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
+        { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       if (verdict !== 'pass' && objections.length) {
         try { await writeMessage(supabase, run, 'system', `The automated skeptic review flagged these concerns (advisory — you decide):\n${objections.map((o) => `- ${o}`).join('\n')}\n\nRefine the spec by chatting, then approve to proceed.`); } catch { /* */ }
       }
@@ -117,7 +117,7 @@ export default async function review(job, ctx) {
       return { ok: true, verdict, next };
     }
 
-    await recordPhaseEnd(supabase, run, 'review', 'blocked', `skeptic blocked: ${objections.slice(0, 3).join('; ')}`);
+    await recordPhaseEnd(supabase, run, 'review', 'blocked', `skeptic blocked: ${objections.slice(0, 3).join('; ')}`, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
     if ((run.retry_count ?? 0) < MAX_REVIEW_RETRIES) {
       await supabase.from('se_runs').update({ retry_count: (run.retry_count ?? 0) + 1, current_phase: 'spec' }).eq('id', run.id);
       await enqueuePhase(ctx, run.id, 'spec', { objections });
