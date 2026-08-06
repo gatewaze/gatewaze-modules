@@ -464,11 +464,18 @@ Deno.serve(async (req: Request) => {
 
     // Fetch event details — used by buildRecipientContext to populate
     // {{event.*}} substitution variables on the enqueued recipient rows.
-    const { data: event } = await supabase
-      .from('events')
-      .select('event_id, event_title, event_city, event_country_code, event_start, event_end, event_link, event_location')
-      .eq('event_id', job.event_id)
-      .single()
+    // job.event_id holds the event UUID (EventCommunicationsTab stores the
+    // events.id, not the event_id slug), so match on id; fall back to the
+    // event_id slug for any legacy job. Matching only the slug column (as the
+    // original did) returned NULL, blanking every {{event.*}} token.
+    const EVENT_COLS = 'event_id, event_title, event_city, event_country_code, event_start, event_end, event_link, event_location'
+    let { data: event } = await supabase
+      .from('events').select(EVENT_COLS).eq('id', job.event_id).maybeSingle()
+    if (!event) {
+      const fb = await supabase
+        .from('events').select(EVENT_COLS).eq('event_id', job.event_id).maybeSingle()
+      event = fb.data
+    }
 
     const config = job.config || {}
 

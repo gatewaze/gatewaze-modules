@@ -31,6 +31,9 @@ export interface RunnerInput {
   plugins?: Array<{ type: 'local'; path: string; skipMcpDiscovery?: boolean }>;  // §7.5a: per-project local skills
   onEvent?: (ev: RunnerEvent) => void | Promise<void>;
   onAgentMessage?: (text: string) => void | Promise<void>;
+  /** Live per-model token accumulation from streamed assistant usage (main + subagent threads).
+   *  Costs are NOT included here — the caller estimates them until the SDK result lands. */
+  onUsage?: (live: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>) => void;
 }
 export interface RunnerResult {
   text: string;
@@ -41,8 +44,28 @@ export interface RunnerResult {
   tokensCacheRead: number;
   tokensCacheCreation: number;
   costUSD: number;
+  /** Per-model usage/cost from the SDK result (subagents + harness utility models included) —
+   *  normalised to {input, output, cacheRead, cacheCreation, costUSD} keyed by canonical model id. */
+  modelUsage: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number; costUSD: number }>;
   interrupted: boolean;
   error?: string;
+}
+
+/** Normalise the SDK's Record<model, ModelUsage> into our compact per-model shape. */
+function normalizeModelUsage(mu: any): RunnerResult['modelUsage'] {
+  const out: RunnerResult['modelUsage'] = {};
+  for (const [key, u] of Object.entries(mu ?? {})) {
+    const k = (u as any)?.canonicalModel ?? key;
+    const prev = out[k] ?? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUSD: 0 };
+    out[k] = {
+      input: prev.input + ((u as any)?.inputTokens ?? 0),
+      output: prev.output + ((u as any)?.outputTokens ?? 0),
+      cacheRead: prev.cacheRead + ((u as any)?.cacheReadInputTokens ?? 0),
+      cacheCreation: prev.cacheCreation + ((u as any)?.cacheCreationInputTokens ?? 0),
+      costUSD: Math.round((prev.costUSD + ((u as any)?.costUSD ?? 0)) * 10000) / 10000,
+    };
+  }
+  return out;
 }
 /**
  * Interactive (pair-programming) session input. Same seams as RunnerInput, but instead of a one-shot
@@ -64,6 +87,9 @@ export interface InteractiveInput {
   plugins?: Array<{ type: 'local'; path: string; skipMcpDiscovery?: boolean }>;  // §7.5a: per-project local skills
   onEvent?: (ev: RunnerEvent) => void | Promise<void>;
   onAgentMessage?: (text: string) => void | Promise<void>;
+  /** Live per-model token accumulation from streamed assistant usage (main + subagent threads).
+   *  Costs are NOT included here — the caller estimates them until the SDK result lands. */
+  onUsage?: (live: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>) => void;
 }
 export interface Runner {
   runPhase(input: RunnerInput): Promise<RunnerResult>;
@@ -97,7 +123,8 @@ function scopedEnv(c: PhaseCredential): Record<string, string | undefined> {
 
 export class InProcessRunner implements Runner {
   async runPhase(input: RunnerInput): Promise<RunnerResult> {
-    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, interrupted: false };
+    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, modelUsage: {}, interrupted: false };
+    const liveUsage: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number }> = {};
     const env = scopedEnv(input.credential);
     // The SDK collapses any subprocess exit-1 into a generic "Operation aborted"; capture the real
     // stderr so failures are diagnosable (surfaced in out.error / se_phases.error).
@@ -191,6 +218,19 @@ export class InProcessRunner implements Runner {
     try {
       for await (const msg of q) {
         if (msg?.type === 'assistant') {
+          // Live usage: every streamed assistant message (main thread AND subagents — they arrive
+          // with parent_tool_use_id set) carries its API call's usage. Accumulated per model so the
+          // phase heartbeat can persist a running cost estimate while the session works.
+          const u = msg.message?.usage;
+          const m = msg.message?.model;
+          if (u && m && input.onUsage) {
+            const cur = (liveUsage[m] ??= { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
+            cur.input += u.input_tokens ?? 0;
+            cur.output += u.output_tokens ?? 0;
+            cur.cacheRead += u.cache_read_input_tokens ?? 0;
+            cur.cacheCreation += u.cache_creation_input_tokens ?? 0;
+            try { input.onUsage(liveUsage); } catch { /* observer only */ }
+          }
           for (const b of msg.message?.content ?? []) {
             if (b?.type === 'text') {
               out.text += b.text;
@@ -214,6 +254,7 @@ export class InProcessRunner implements Runner {
           }
         } else if (msg?.type === 'result') {
           out.costUSD = msg.total_cost_usd ?? out.costUSD;
+          if (msg.modelUsage) out.modelUsage = normalizeModelUsage(msg.modelUsage);
           out.tokensInput += msg.usage?.input_tokens ?? 0;
           out.tokensOutput += msg.usage?.output_tokens ?? 0;
           out.tokensCacheRead += msg.usage?.cache_read_input_tokens ?? 0;
@@ -245,7 +286,8 @@ export class InProcessRunner implements Runner {
    * Same secret-scoped env, tool-approval, and Bash guard as runPhase.
    */
   async runInteractive(input: InteractiveInput): Promise<RunnerResult> {
-    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, interrupted: false };
+    const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, modelUsage: {}, interrupted: false };
+    const liveUsage: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number }> = {};
     const env = scopedEnv(input.credential);
     let stderrBuf = '';
 
@@ -321,6 +363,19 @@ export class InProcessRunner implements Runner {
     try {
       for await (const msg of q) {
         if (msg?.type === 'assistant') {
+          // Live usage: every streamed assistant message (main thread AND subagents — they arrive
+          // with parent_tool_use_id set) carries its API call's usage. Accumulated per model so the
+          // phase heartbeat can persist a running cost estimate while the session works.
+          const u = msg.message?.usage;
+          const m = msg.message?.model;
+          if (u && m && input.onUsage) {
+            const cur = (liveUsage[m] ??= { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
+            cur.input += u.input_tokens ?? 0;
+            cur.output += u.output_tokens ?? 0;
+            cur.cacheRead += u.cache_read_input_tokens ?? 0;
+            cur.cacheCreation += u.cache_creation_input_tokens ?? 0;
+            try { input.onUsage(liveUsage); } catch { /* observer only */ }
+          }
           for (const b of msg.message?.content ?? []) {
             if (b?.type === 'text') {
               out.text += b.text;
@@ -341,6 +396,7 @@ export class InProcessRunner implements Runner {
           }
         } else if (msg?.type === 'result') {
           out.costUSD = msg.total_cost_usd ?? out.costUSD;
+          if (msg.modelUsage) out.modelUsage = normalizeModelUsage(msg.modelUsage);
           out.tokensInput += msg.usage?.input_tokens ?? 0;
           out.tokensOutput += msg.usage?.output_tokens ?? 0;
           out.tokensCacheRead += msg.usage?.cache_read_input_tokens ?? 0;

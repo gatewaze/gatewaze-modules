@@ -21,6 +21,7 @@ import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
 import { runTriageTurn } from '../lib/triage.js';
+import { dispatchTriageTurn } from '../lib/triage-dispatch.js';
 import { redactToken } from '../lib/git.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
@@ -1254,10 +1255,22 @@ export function mountAdminRoutes(router, deps) {
           feature: typeof req.body.page_context.feature === 'string' ? req.body.page_context.feature : undefined }
       : null;
     try {
-      const result = await Promise.race([
-        runTriageTurn(proj, req.body?.messages, pageContext),
-        new Promise((resolve) => setTimeout(() => resolve({ type: 'error', message: 'triage timed out' }), 90_000)),
-      ]);
+      // Structural fix: the model turn runs in a WORKER via the se-triage queue (job result awaited),
+      // not in the API pod — prod's api memory limits OOMKilled the in-process CLI spawn.
+      // SE_TRIAGE_INLINE=1 restores the in-process path (dev escape hatch without a consumer).
+      const result = process.env.SE_TRIAGE_INLINE === '1'
+        ? await Promise.race([
+            runTriageTurn(proj, req.body?.messages, pageContext),
+            new Promise((resolve) => setTimeout(() => resolve({ type: 'error', message: 'triage timed out' }), 90_000)),
+          ])
+        : await dispatchTriageTurn(
+            { projectId, messages: req.body?.messages, pageContext },
+          ).catch((e) => ({
+            type: 'error',
+            message: /timed out|Timeout/i.test(String(e?.message))
+              ? 'triage timed out — is a triage consumer (se-runner) running?'
+              : 'triage failed',
+          }));
       res.json(result);
     } catch (e) {
       logger?.warn?.('se: triage failed', { error: redactToken(String(e?.message ?? e), proj.modelCred).slice(0, 300) });
