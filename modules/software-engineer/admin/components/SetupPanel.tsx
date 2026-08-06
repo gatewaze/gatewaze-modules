@@ -94,6 +94,57 @@ function StagingUpdateSection() {
   );
 }
 
+// Per-user credentials (§12.2) — self-service. Each signed-in user sets their OWN GitHub PAT + model
+// credentials + GitHub identity, used by runs they advance on a project in per-user credential mode.
+// Sealed server-side (last-4 shown back); the GitHub login/email feeds the identity map.
+function MyCredentialsSection() {
+  const [c, setC] = useState<any>(null);
+  const [ghPat, setGhPat] = useState('');
+  const [modelCred, setModelCred] = useState('');
+  const [codexCred, setCodexCred] = useState('');
+  const [ghLogin, setGhLogin] = useState('');
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api('/me/credentials').then((d) => { setC(d); setGhLogin(d?.github_login ?? ''); setEmail(d?.email ?? ''); }).catch(() => setC(null));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body: any = { github_login: ghLogin.trim(), email: email.trim() || null };
+      if (ghPat.trim()) body.github_pat = ghPat.trim();
+      if (modelCred.trim()) body.model_cred = modelCred.trim();
+      if (codexCred.trim()) body.codex_cred = codexCred.trim();
+      await api('/me/credentials', { method: 'PUT', body: JSON.stringify(body) });
+      toast.success('Your credentials were saved');
+      setGhPat(''); setModelCred(''); setCodexCred(''); load();
+    } catch (e: any) { toast.error(String(e?.message ?? e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Section icon={<KeyIcon className="size-4" />} title="My credentials">
+      <p className="text-xs text-neutral-500 mb-2">
+        Your own GitHub PAT and model credentials, used by runs you advance on a project that is set to
+        per-user credentials. They are sealed server-side and only the last 4 characters are shown back.
+        Map your GitHub login so your commits, pull requests, and reported issues are attributed to you.
+      </p>
+      <Field label={<>GitHub PAT {c?.github_pat_last4 ? <span className="text-neutral-400">(••••{c.github_pat_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
+        <input type="password" placeholder="ghp_… (your own PAT)" value={ghPat} onChange={(e) => setGhPat(e.target.value)} className={inputCls} autoComplete="new-password" name="se-me-ghpat" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+      </Field>
+      <Field label={<>Model credential {c?.model_cred_last4 ? <span className="text-neutral-400">(••••{c.model_cred_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
+        <input type="password" placeholder="Anthropic API key or Claude OAuth token" value={modelCred} onChange={(e) => setModelCred(e.target.value)} className={inputCls} autoComplete="new-password" name="se-me-model" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+      </Field>
+      <Field label={<>Codex credential {c?.codex_cred_last4 ? <span className="text-neutral-400">(••••{c.codex_cred_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
+        <input type="password" placeholder="OpenAI / Codex credential (optional)" value={codexCred} onChange={(e) => setCodexCred(e.target.value)} className={inputCls} autoComplete="new-password" name="se-me-codex" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+      </Field>
+      <Field label="GitHub login"><input placeholder="your-github-username" value={ghLogin} onChange={(e) => setGhLogin(e.target.value)} className={inputCls} /></Field>
+      <Field label="Email (for identity match)"><input placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} /></Field>
+      <Button size="sm" onClick={save} disabled={busy}><KeyIcon className="size-4 mr-1" />{busy ? 'Saving…' : 'Save my credentials'}</Button>
+    </Section>
+  );
+}
+
 export default function SetupPanel(
   { routeProjectId, onSelectProject }: { routeProjectId?: string | null; onSelectProject?: (id: string | null) => void } = {},
 ) {
@@ -460,6 +511,8 @@ export default function SetupPanel(
               </div>
 
               <MemoryReviewSection projectId={pid} onMessage={setMsg} />
+
+              <MyCredentialsSection />
 
               <StagingUpdateSection />
 
