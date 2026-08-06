@@ -949,6 +949,9 @@ function IssuesView() {
           <TriageCopilot
             projectId={form.project_id}
             onDraft={(d) => setForm((f: any) => ({ ...f, title: d.title, body: d.body, assign: d.assign_to_agent }))}
+            attachments={atts}
+            onUploadImage={uploadImage}
+            onRemoveAttachment={removeAtt}
           />
         )}
         <div className="flex flex-col sm:flex-row gap-2">
