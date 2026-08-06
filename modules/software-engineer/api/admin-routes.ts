@@ -1025,6 +1025,70 @@ export function mountAdminRoutes(router, deps) {
     res.json({ approved: true, next });
   });
 
+  // ── Per-user credentials (§12.2) — self-service ─────────────────────────────
+  // Each signed-in user manages THEIR OWN GitHub PAT + model credentials + GitHub identity, used by runs
+  // they advance on a project in per_user/mixed credential mode. Scoped to the caller (authorOf(req)) as a
+  // global default (project_id null); credentials are sealed and returned only as a masked last4. GitHub
+  // login/email is the identity map, so a GitHub reporter can be matched to the user.
+  const GH_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+  const singleSiteId = async (): Promise<string | null> => {
+    const { data: p } = await supabase.from('se_projects').select('site_id').limit(1).maybeSingle();
+    if (p?.site_id) return p.site_id;
+    const { data: s } = await supabase.from('sites').select('id').limit(1).maybeSingle();
+    return s?.id ?? null;
+  };
+
+  router.get('/me/credentials', async (req, res) => {
+    if (!rateLimit(`se-admin:me-cred:${clientIp(req)}`, 120, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    const userId = authorOf(req);
+    if (!userId) return res.status(401).json({ error: 'unauthenticated' });
+    const { data: cred } = await supabase.from('se_user_credentials')
+      .select('github_pat_last4, model_cred_last4, codex_cred_last4').eq('user_id', userId).is('project_id', null).maybeSingle();
+    const { data: idm } = await supabase.from('se_identity_map')
+      .select('github_login, email').eq('user_id', userId).is('project_id', null).limit(1).maybeSingle();
+    res.json({
+      github_pat_last4: cred?.github_pat_last4 ?? null,
+      model_cred_last4: cred?.model_cred_last4 ?? null,
+      codex_cred_last4: cred?.codex_cred_last4 ?? null,
+      github_login: idm?.github_login ?? null,
+      email: idm?.email ?? null,
+    });
+  });
+
+  router.put('/me/credentials', async (req, res) => {
+    if (!rateLimit(`se-admin:me-cred-put:${clientIp(req)}`, 30, 60_000)) return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    const userId = authorOf(req);
+    if (!userId) return res.status(401).json({ error: 'unauthenticated' });
+    const b = req.body ?? {};
+    const siteId = await singleSiteId();
+    if (!siteId) return res.status(500).json({ error: 'no site configured' });
+
+    // Credentials: seal any provided secret; an empty/absent value leaves that slot unchanged. project_id
+    // is null (a per-user global default), and because a unique constraint treats null as distinct we
+    // update-or-insert the existing global row by id rather than upserting.
+    const credPatch: Record<string, unknown> = {};
+    for (const [field, col] of [['github_pat', 'github_pat'], ['model_cred', 'model_cred'], ['codex_cred', 'codex_cred']] as const) {
+      if (b[field]) { const s = sealToken(String(b[field])); credPatch[`${col}_ciphertext`] = s.ciphertext; credPatch[`${col}_last4`] = s.last4; }
+    }
+    if (Object.keys(credPatch).length) {
+      credPatch.updated_at = new Date().toISOString();
+      const { data: existing } = await supabase.from('se_user_credentials').select('id').eq('user_id', userId).is('project_id', null).maybeSingle();
+      if (existing?.id) await supabase.from('se_user_credentials').update(credPatch).eq('id', existing.id);
+      else await supabase.from('se_user_credentials').insert({ site_id: siteId, user_id: userId, project_id: null, ...credPatch });
+    }
+
+    // Identity map: the caller's GitHub login (+ optional email). Validated as a GitHub login. Replace any
+    // existing global mapping for this user so it stays single-valued.
+    if (b.github_login !== undefined) {
+      const login = String(b.github_login ?? '').trim();
+      if (login && !GH_LOGIN_RE.test(login)) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid GitHub login' } });
+      const email = b.email == null ? null : String(b.email).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 200) || null;
+      await supabase.from('se_identity_map').delete().eq('user_id', userId).is('project_id', null);
+      if (login) await supabase.from('se_identity_map').insert({ site_id: siteId, user_id: userId, project_id: null, github_login: login, email });
+    }
+    res.json({ ok: true });
+  });
+
   router.post('/runs/:id/archive', async (req, res) => {
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
