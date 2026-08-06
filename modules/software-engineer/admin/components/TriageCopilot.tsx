@@ -33,10 +33,21 @@ export default function TriageCopilot({
   projectId,
   pageContext,
   onDraft,
+  attachments,
+  onUploadImage,
+  onRemoveAttachment,
 }: {
   projectId: string;
   pageContext?: { route?: string; feature?: string } | null;
   onDraft: (draft: { title: string; body: string; assign_to_agent: boolean; rationale?: string }) => void;
+  // Screenshots pasted/dropped into THIS box are uploaded via the parent's own upload path (the
+  // "Report feedback" widget and the Issues-tab panel each already maintain an `atts` list for their
+  // second-stage textarea) so a single shared attachment set backs both boxes and rides along on both
+  // /issues/triage and the eventual POST /issues (issue: images pasted before a draft exists were
+  // silently dropped). Optional — omit to keep the plain text-only chat box.
+  attachments?: Array<{ key: string; name: string; url: string; uploading: boolean }>;
+  onUploadImage?: (file: File) => void;
+  onRemoveAttachment?: (key: string) => void;
 }) {
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const [input, setInput] = useState('');
@@ -44,6 +55,19 @@ export default function TriageCopilot({
   const [err, setErr] = useState<string | null>(null);
   const [drafted, setDrafted] = useState(false);
   const bottom = useRef<HTMLDivElement | null>(null);
+
+  const onPaste = (e: React.ClipboardEvent) => {
+    if (!onUploadImage) return;
+    const imgs = Array.from(e.clipboardData?.items ?? []).filter((it) => it.type.startsWith('image/'));
+    if (!imgs.length) return;
+    e.preventDefault();
+    imgs.forEach((it) => { const f = it.getAsFile(); if (f) onUploadImage(f); });
+  };
+  const onDrop = (e: React.DragEvent) => {
+    if (!onUploadImage) return;
+    e.preventDefault();
+    Array.from(e.dataTransfer?.files ?? []).forEach(onUploadImage);
+  };
 
   const send = async () => {
     const content = input.trim();
@@ -97,12 +121,30 @@ export default function TriageCopilot({
       {err && <div className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-800">{err}</div>}
       {drafted && <div className="rounded-md border border-green-300 bg-green-50 p-2 text-xs text-green-800">Draft ready below — review and Create.</div>}
 
+      {attachments && attachments.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {attachments.map((a) => (
+            <div key={a.key} className="relative group">
+              {a.url
+                ? <img src={a.url} alt={a.name} className="h-14 w-14 rounded border object-cover" />
+                : <div className="h-14 w-14 rounded border flex items-center justify-center bg-[var(--gray-2)] text-[10px] text-[var(--gray-10)]">…</div>}
+              {onRemoveAttachment && (
+                <button type="button" onClick={() => onRemoveAttachment(a.key)} className="absolute -top-1.5 -right-1.5 rounded-full bg-[var(--gray-12)] text-[var(--gray-1)] size-4 leading-none text-[11px] opacity-0 group-hover:opacity-100" aria-label="Remove">×</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex gap-2">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder={messages.length ? 'Answer or add detail…' : 'e.g. "the runs board jumps to the top every time it refreshes"'}
+          onPaste={onPaste}
+          onDrop={onDrop}
+          onDragOver={(e) => { if (onUploadImage) e.preventDefault(); }}
+          placeholder={messages.length ? 'Answer or add detail…' : 'e.g. "the runs board jumps to the top every time it refreshes"  (paste or drop a screenshot to attach)'}
           rows={2}
           disabled={busy}
           className="flex-1 min-w-0 rounded-md border px-3 py-2 text-sm"
