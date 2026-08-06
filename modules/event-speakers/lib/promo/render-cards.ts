@@ -269,19 +269,31 @@ export async function renderSpeakerCards(
   formats: CardFormatSpec[] = CARD_FORMATS,
 ): Promise<RenderedCard[]> {
   const context = buildContext(input);
+  const launchArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-breakpad',
+    '--disable-crash-reporter',
+    '--disable-crashpad',
+    '--force-color-profile=srgb',
+  ];
+  // Chromium's multi-process compositor never produces a frame on
+  // linux/arm64 containers (Docker Desktop / OrbStack on Apple Silicon) —
+  // screenshots hang until the protocol times out. Single-process mode is
+  // the working fallback there; prod (amd64) keeps the normal process model.
+  if (process.platform === 'linux' && process.arch === 'arm64') {
+    launchArgs.push('--single-process', '--no-zygote');
+  }
+  // Operator escape hatch for other container/GPU quirks.
+  launchArgs.push(
+    ...(process.env.SPEAKER_CARDS_CHROMIUM_EXTRA_ARGS ?? '').split(/[,\s]+/).filter(Boolean),
+  );
   const browser = await puppeteer.launch({
     executablePath: chromiumExecutablePath(),
     headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-breakpad',
-      '--disable-crash-reporter',
-      '--disable-crashpad',
-      '--force-color-profile=srgb',
-    ],
+    args: launchArgs,
   });
   try {
     const rendered: RenderedCard[] = [];
