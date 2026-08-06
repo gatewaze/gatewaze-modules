@@ -29,6 +29,7 @@ import {
   resolveAvatarDataUri,
   TEMPLATE_VERSION,
 } from '../lib/promo/render-cards.js';
+import { loadTemplateSource, templateLoader, resolveBrandVars } from '../lib/promo/template-source.js';
 import { buildRecipeParams, dispatchPromoTextRun, readPromoTextRun } from '../lib/promo/promo-text.js';
 import { buildPromoKitZip } from '../lib/promo/build-zip.js';
 
@@ -110,10 +111,15 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
   });
   log(`tracking link ${link.shortUrl}`);
 
-  // 2. Cards: render all three formats and upload.
+  // 2. Cards: resolve the template source (git repo when configured, else
+  // vendored) + the event's brand colorway, render all formats, upload.
   const moduleDir = ctx?.moduleDir ?? join(dirname(fileURLToPath(import.meta.url)), '..');
+  const templatesDir = join(moduleDir, 'templates');
+  const source = await loadTemplateSource(templatesDir);
+  const brand = resolveBrandVars(source, context.event);
+  log(`templates: ${source.origin}${source.ref ? ` (${source.ref})` : ''}${Object.keys(brand).length ? ', branded' : ', default colorway'}`);
   const avatarDataUri = await resolveAvatarDataUri(supabase, context.speaker.avatarUrl);
-  const rendered = await renderSpeakerCards(join(moduleDir, 'templates'), {
+  const rendered = await renderSpeakerCards(templateLoader(source, templatesDir), {
     speaker: {
       full_name: context.speaker.fullName,
       job_title: context.speaker.jobTitle,
@@ -125,6 +131,7 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
       date_short: dateShort(context.event.event_start, context.event.event_timezone),
       city: (context.event.event_city || 'ONLINE').toUpperCase(),
     },
+    brand,
   });
   const cards = [];
   for (const card of rendered) {
@@ -145,7 +152,7 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
     tracking_destination_url: link.destinationUrl,
     tracking_redirect_id: link.redirectId,
     cards,
-    template_version: TEMPLATE_VERSION,
+    template_version: source.origin === 'git' ? `git:${source.ref}` : TEMPLATE_VERSION,
   };
   if (dispatch.ok) {
     log(`promo text run dispatched (${dispatch.runId})`);
