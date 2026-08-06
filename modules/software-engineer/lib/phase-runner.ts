@@ -12,6 +12,7 @@ import { subscribeInput } from './input-channel.js';
 import { InProcessRunner } from './agent-session.js';
 import { CodexRunner } from './codex-runner.js';
 import { resolvePhaseModel } from './model-select.js';
+import { estimateLiveCostUSD } from './cost.js';
 import { writeEvent, writeMessage, touchRun } from './run-state.js';
 import { resolveCommitIdentity } from './credentials.js';
 import { recallMemory, listMemorySources } from './memory.js';
@@ -165,8 +166,27 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     }
     await status(`Starting the agent (${phase})`, 'start');
     // Heartbeat: while the agent works, bump se_runs.updated_at every 20s so a live-but-quiet run stays
-    // distinguishable from a wedged one in the Runs tab. Cleared in finally so the interval never leaks.
-    const heartbeat = setInterval(() => { touchRun(supabase, run).catch(() => {}); }, 20000);
+    // distinguishable from a wedged one in the Runs tab — and persist the session's accumulated
+    // per-model usage + a book-priced cost ESTIMATE onto the running phase row, so the run header can
+    // tick while the agent works. The SDK's authoritative total replaces it at phase end. Cleared in
+    // finally so the interval never leaks.
+    let liveUsage = null;
+    let liveBusy = false;
+    const heartbeat = setInterval(() => {
+      touchRun(supabase, run).catch(() => {});
+      if (!liveUsage || liveBusy) return;
+      liveBusy = true;
+      (async () => {
+        try {
+          const est = await estimateLiveCostUSD(supabase, liveUsage);
+          const mu = Object.fromEntries(Object.entries(liveUsage).map(([m, u]) => [m, { ...u, costUSD: null }]));
+          await supabase.from('se_phases')
+            .update({ model_usage: mu, cost_usd: est > 0 ? est : null })
+            .eq('run_id', run.id).eq('phase', phase).eq('status', 'running');
+        } catch { /* estimate write is best-effort */ }
+        liveBusy = false;
+      })();
+    }, 20000);
     // Routing (migration 013): phase map + run overrides + escalation decide the engine and model.
     const routed = resolvePhaseModel(project, run, phase);
     const runner = routed.engine === 'codex' ? new CodexRunner() : new InProcessRunner();
@@ -181,6 +201,7 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
         model: routed.model,
         credential: routedCredential,
         redactValues: [project.githubToken, project.modelCred, project.openaiCred, ...mcpSecretValues(mcpServers)],
+        onUsage: (live) => { liveUsage = live; },
         allowedTools: spec.allowedTools,
         systemAppend,
         mcpServers,

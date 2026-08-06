@@ -120,6 +120,9 @@ export default function ReportFeedbackWidget() {
                 projectId={projectId}
                 pageContext={{ route: typeof window !== 'undefined' ? window.location.pathname : undefined }}
                 onDraft={(d) => setDraft({ title: d.title, body: d.body, assign: d.assign_to_agent })}
+                attachments={atts}
+                onUploadImage={uploadImage}
+                onRemoveAttachment={removeAtt}
               />
               {draft && (
                 <div className="space-y-1.5 rounded-md border border-[var(--gray-5)] p-2">

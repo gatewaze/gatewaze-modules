@@ -111,3 +111,50 @@ export async function computeSpendOverview(sb: unknown, projectId: string | null
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Live estimation support: the phase heartbeat prices accumulated tokens every
+// ~20s while a session runs, so rate rows are cached briefly (the book changes
+// on operator edits / litellm refresh — minutes-stale is fine for an estimate
+// that the SDK's authoritative figure replaces at phase end).
+
+const rateCache = new Map<string, { at: number; rate: any | null }>();
+const RATE_TTL_MS = 5 * 60_000;
+
+async function loadRate(sb: unknown, provider: string, model: string) {
+  const key = `${provider}:${model}`;
+  const hit = rateCache.get(key);
+  if (hit && Date.now() - hit.at < RATE_TTL_MS) return hit.rate;
+  const { data } = await sb
+    .from('ai_model_prices')
+    .select('input_per_million_usd, output_per_million_usd, cached_per_million_usd, cache_creation_per_million_usd')
+    .eq('provider', provider)
+    .eq('model', model)
+    .lte('effective_from', new Date().toISOString().slice(0, 10))
+    .order('effective_from', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  rateCache.set(key, { at: Date.now(), rate: data ?? null });
+  return data ?? null;
+}
+
+/** Book-price a live per-model token map (models missing from the book price as 0 — this is a
+ *  running ESTIMATE shown mid-phase; the SDK's own total replaces it at phase end). */
+export async function estimateLiveCostUSD(
+  sb: unknown,
+  live: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>,
+  provider: 'anthropic' | 'openai' = 'anthropic',
+): Promise<number> {
+  let micros = 0;
+  for (const [model, u] of Object.entries(live ?? {})) {
+    const r = await loadRate(sb, provider, model);
+    if (!r) continue;
+    const ccRate = r.cache_creation_per_million_usd ?? r.input_per_million_usd;
+    micros +=
+      Math.round((u.input ?? 0) * (r.input_per_million_usd ?? 0)) +
+      Math.round((u.output ?? 0) * (r.output_per_million_usd ?? 0)) +
+      (r.cached_per_million_usd ? Math.round((u.cacheRead ?? 0) * r.cached_per_million_usd) : 0) +
+      Math.round((u.cacheCreation ?? 0) * (ccRate ?? 0));
+  }
+  return Math.round(micros / 100) / 10000;
+}

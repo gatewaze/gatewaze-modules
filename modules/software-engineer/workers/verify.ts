@@ -78,7 +78,7 @@ export default async function verify(job, ctx) {
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
-      await recordPhaseEnd(supabase, run, 'verify', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
+      await recordPhaseEnd(supabase, run, 'verify', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
       return { failed: msg };
     }
@@ -88,12 +88,12 @@ export default async function verify(job, ctx) {
     if (blocked) {
       const reason = (text.match(/VERDICT:\s*BLOCK:?\s*(.*)/i)?.[1] ?? 'security review blocked').slice(0, 500);
       await writeGate(supabase, run, 'security', 'block', { reason });
-      await recordPhaseEnd(supabase, run, 'verify', 'blocked', reason, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
+      await recordPhaseEnd(supabase, run, 'verify', 'blocked', reason, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'blocked', error: `security: ${reason}` }).eq('id', run.id);
       return { blocked: reason };
     }
     await writeGate(supabase, run, 'security', 'pass', {});
-    await recordPhaseEnd(supabase, run, 'verify', 'passed', 'security review clean', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
+    await recordPhaseEnd(supabase, run, 'verify', 'passed', 'security review clean', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
     await supabase.from('se_runs').update({ current_phase: 'pr' }).eq('id', run.id);
     await enqueuePhase(ctx, run.id, 'pr');
     return { ok: true };
