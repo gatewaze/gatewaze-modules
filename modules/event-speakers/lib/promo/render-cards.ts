@@ -295,10 +295,15 @@ export async function renderSpeakerCards(
       try {
         await page.setViewport({ width: cardW, height: cardH, deviceScaleFactor: 2 });
         // Templates are fully self-contained (fonts + art as data URIs), so
-        // no network access happens during load.
-        await page.setContent(html, { waitUntil: 'load', timeout: 60_000 });
+        // no network access happens during load. Wait on domcontentloaded,
+        // NOT 'load': setContent uses CDP Page.setDocumentContent, which has
+        // no real navigation, and the load event can hang indefinitely on
+        // data-URI-heavy documents in containerized Chromium (observed as a
+        // 60s navigation timeout on the worker image). fonts.ready + the
+        // settle delay below cover everything 'load' would have waited for.
+        await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 60_000 });
         await page.evaluate(() => document.fonts.ready);
-        await new Promise((r) => setTimeout(r, 300)); // auto-fit script settle
+        await new Promise((r) => setTimeout(r, 500)); // auto-fit script settle
         const shot = await page.screenshot({ type: 'png' });
         const png = await sharp(Buffer.from(shot))
           .resize(spec.exportWidth, spec.exportHeight, { kernel: 'lanczos3', fit: 'fill' })
