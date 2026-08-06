@@ -167,9 +167,15 @@ export async function resolveAvatarDataUri(supabase, avatarUrl: string | null | 
   try {
     if (/^data:image\//i.test(trimmed)) return trimmed;
     if (/^https:/i.test(trimmed)) {
-      // Own-storage public URLs skip the generic fetch and use the storage API.
-      const storageMatch = trimmed.match(/\/storage\/v1\/object\/public\/media\/(.+)$/);
-      if (storageMatch) return await storageDataUri(supabase, decodeURIComponent(storageMatch[1]));
+      // OWN-instance storage URLs skip the generic fetch and use the storage
+      // API (service role, no egress). The host check matters: another
+      // instance's Supabase URL (e.g. prod avatars viewed from a local
+      // stack) must fall through to the guarded external fetch, not 404
+      // against our local bucket and lose the avatar.
+      const storageMatch = trimmed.match(/^https:\/\/([^/]+)\/storage\/v1\/object\/public\/media\/(.+)$/i);
+      if (storageMatch && isOwnSupabaseHost(storageMatch[1])) {
+        return await storageDataUri(supabase, decodeURIComponent(storageMatch[2]));
+      }
       const image = await fetchPublicImage(trimmed);
       if (!image) return null;
       return `data:${image.mime};base64,${image.buf.toString('base64')}`;
@@ -182,6 +188,24 @@ export async function resolveAvatarDataUri(supabase, avatarUrl: string | null | 
   } catch {
     return null;
   }
+}
+
+export function isOwnSupabaseHost(host: string): boolean {
+  const candidates = [
+    process.env.SUPABASE_PUBLIC_URL,
+    process.env.SUPABASE_URL,
+    process.env.VITE_SUPABASE_URL,
+  ];
+  const h = host.toLowerCase();
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      if (new URL(candidate).host.toLowerCase() === h) return true;
+    } catch {
+      /* ignore malformed env */
+    }
+  }
+  return false;
 }
 
 async function storageDataUri(supabase, path: string): Promise<string | null> {
