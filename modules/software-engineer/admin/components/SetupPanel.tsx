@@ -94,6 +94,57 @@ function StagingUpdateSection() {
   );
 }
 
+// Per-user credentials (§12.2) — self-service. Each signed-in user sets their OWN GitHub PAT + model
+// credentials + GitHub identity, used by runs they advance on a project in per-user credential mode.
+// Sealed server-side (last-4 shown back); the GitHub login/email feeds the identity map.
+function MyCredentialsSection() {
+  const [c, setC] = useState<any>(null);
+  const [ghPat, setGhPat] = useState('');
+  const [modelCred, setModelCred] = useState('');
+  const [codexCred, setCodexCred] = useState('');
+  const [ghLogin, setGhLogin] = useState('');
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api('/me/credentials').then((d) => { setC(d); setGhLogin(d?.github_login ?? ''); setEmail(d?.email ?? ''); }).catch(() => setC(null));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body: any = { github_login: ghLogin.trim(), email: email.trim() || null };
+      if (ghPat.trim()) body.github_pat = ghPat.trim();
+      if (modelCred.trim()) body.model_cred = modelCred.trim();
+      if (codexCred.trim()) body.codex_cred = codexCred.trim();
+      await api('/me/credentials', { method: 'PUT', body: JSON.stringify(body) });
+      toast.success('Your credentials were saved');
+      setGhPat(''); setModelCred(''); setCodexCred(''); load();
+    } catch (e: any) { toast.error(String(e?.message ?? e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Section icon={<KeyIcon className="size-4" />} title="My credentials">
+      <p className="text-xs text-neutral-500 mb-2">
+        Your own GitHub PAT and model credentials, used by runs you advance on a project that is set to
+        per-user credentials. They are sealed server-side and only the last 4 characters are shown back.
+        Map your GitHub login so your commits, pull requests, and reported issues are attributed to you.
+      </p>
+      <Field label={<>GitHub PAT {c?.github_pat_last4 ? <span className="text-neutral-400">(••••{c.github_pat_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
+        <input type="password" placeholder="ghp_… (your own PAT)" value={ghPat} onChange={(e) => setGhPat(e.target.value)} className={inputCls} autoComplete="new-password" name="se-me-ghpat" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+      </Field>
+      <Field label={<>Model credential {c?.model_cred_last4 ? <span className="text-neutral-400">(••••{c.model_cred_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
+        <input type="password" placeholder="Anthropic API key or Claude OAuth token" value={modelCred} onChange={(e) => setModelCred(e.target.value)} className={inputCls} autoComplete="new-password" name="se-me-model" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+      </Field>
+      <Field label={<>Codex credential {c?.codex_cred_last4 ? <span className="text-neutral-400">(••••{c.codex_cred_last4})</span> : <span className="text-neutral-400">(unset)</span>}</>}>
+        <input type="password" placeholder="OpenAI / Codex credential (optional)" value={codexCred} onChange={(e) => setCodexCred(e.target.value)} className={inputCls} autoComplete="new-password" name="se-me-codex" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+      </Field>
+      <Field label="GitHub login"><input placeholder="your-github-username" value={ghLogin} onChange={(e) => setGhLogin(e.target.value)} className={inputCls} /></Field>
+      <Field label="Email (for identity match)"><input placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} /></Field>
+      <Button size="sm" onClick={save} disabled={busy}><KeyIcon className="size-4 mr-1" />{busy ? 'Saving…' : 'Save my credentials'}</Button>
+    </Section>
+  );
+}
+
 export default function SetupPanel(
   { routeProjectId, onSelectProject }: { routeProjectId?: string | null; onSelectProject?: (id: string | null) => void } = {},
 ) {
@@ -105,6 +156,12 @@ export default function SetupPanel(
   const [repos, setRepos] = useState<any[]>([]);
   const [ghToken, setGhToken] = useState('');
   const [modelCred, setModelCred] = useState('');
+  // Credential model (§12): role-scoped credentials (set-only; blank leaves unchanged).
+  const [committingPat, setCommittingPat] = useState('');
+  const [commentingPat, setCommentingPat] = useState('');
+  const [pullRequestPat, setPullRequestPat] = useState('');
+  const [codingAgentModel, setCodingAgentModel] = useState('');
+  const [slackWebhook, setSlackWebhook] = useState('');
   const [openaiCred, setOpenaiCred] = useState('');
   const [mcpConfig, setMcpConfig] = useState('');
   const [skills, setSkills] = useState('');
@@ -147,6 +204,7 @@ export default function SetupPanel(
     try {
       const [d, rp] = await Promise.all([api(`/projects/${id}`), api(`/projects/${id}/repos`)]);
       setS(d.project ?? {}); setRepos(rp.repos ?? []); setGhToken(''); setModelCred(''); setOpenaiCred(''); setMcpConfig('');
+      setCommittingPat(''); setCommentingPat(''); setPullRequestPat(''); setCodingAgentModel(''); setSlackWebhook('');
       setSkills(Array.isArray(d.project?.skills) && d.project.skills.length ? JSON.stringify(d.project.skills, null, 2) : '');
     } catch (e: any) { setMsg({ text: String(e.message ?? e) }); }
   }, []);
@@ -178,6 +236,9 @@ export default function SetupPanel(
       github_token_kind: s.github_token_kind, model_cred_kind: s.model_cred_kind, model: s.model,
       commit_author_name: s.commit_author_name?.trim() || null, commit_author_email: s.commit_author_email?.trim() || null,
       autonomy_mode: s.autonomy_mode, pr_submit_mode: s.pr_submit_mode ?? 'auto', intake_enabled: !!s.intake_enabled,
+      gates: { spec: !!(s.gates && s.gates.spec) },
+      approvers: (typeof s.approvers === 'string' ? s.approvers.split(',').map((x: string) => x.trim()).filter(Boolean) : (Array.isArray(s.approvers) ? s.approvers : [])),
+      refine_budget: (s.refine_budget === '' || s.refine_budget == null) ? null : Number(s.refine_budget),
       max_concurrent_engineers: s.max_concurrent_engineers ? Number(s.max_concurrent_engineers) : 2,
       max_interactive_engineers: s.max_interactive_engineers ? Number(s.max_interactive_engineers) : 1,
       allowed_labellers: (typeof s.allowed_labellers === 'string' ? s.allowed_labellers.split(',').map((x: string) => x.trim()).filter(Boolean) : s.allowed_labellers) ?? [],
@@ -193,6 +254,12 @@ export default function SetupPanel(
     };
     if (ghToken.trim()) body.github_token = ghToken.trim();
     if (modelCred.trim()) body.model_cred = modelCred.trim();
+    body.credential_mode = s.credential_mode ?? 'shared';
+    if (committingPat.trim()) body.committing_pat = committingPat.trim();
+    if (commentingPat.trim()) body.commenting_pat = commentingPat.trim();
+    if (pullRequestPat.trim()) body.pull_request_pat = pullRequestPat.trim();
+    if (codingAgentModel.trim()) body.coding_agent_model = codingAgentModel.trim();
+    if (slackWebhook.trim()) body.slack_webhook = slackWebhook.trim();
     if (openaiCred.trim()) body.openai_cred = openaiCred.trim() === 'clear' ? null : openaiCred.trim();
     body.escalation_model = s.escalation_model?.trim() || null;
     // Per-phase routing: send the object as edited; the server drops junk and validates ids.
@@ -301,6 +368,32 @@ export default function SetupPanel(
                 </Field>
                 <Field label="Model"><input value={s.model ?? 'claude-opus-4-8'} onChange={set('model')} className={inputCls} /></Field>
                 <Field label="Escalation model"><input value={s.escalation_model ?? ''} onChange={set('escalation_model')} placeholder="(optional — e.g. claude-opus-5; retries failed CI-fix/revise rounds on it)" className={inputCls} /></Field>
+                {/* Credential model (§12): mode + role-scoped credentials. Each role PAT falls back to the
+                    default token above, so leaving them blank keeps the single-PAT behavior. */}
+                <Field label="Credential mode">
+                  <select value={s.credential_mode ?? 'shared'} onChange={set('credential_mode')} className={inputCls}>
+                    <option value="shared">Shared — every run uses the project credentials</option>
+                    <option value="mixed">Mixed — shared coding-agent model, acting user’s git identity</option>
+                    <option value="per_user">Per-user — the acting user’s own credentials</option>
+                  </select>
+                </Field>
+                <Field label={<>Committing PAT {s.committing_pat_last4 ? <span className="text-neutral-400">(••••{s.committing_pat_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
+                  <input type="password" placeholder="separate PAT for commits (optional)" value={committingPat} onChange={(e) => setCommittingPat(e.target.value)} className={inputCls} autoComplete="new-password" name="se-committing-pat" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                <Field label={<>Commenting PAT {s.commenting_pat_last4 ? <span className="text-neutral-400">(••••{s.commenting_pat_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
+                  <input type="password" placeholder="separate PAT for comments (optional)" value={commentingPat} onChange={(e) => setCommentingPat(e.target.value)} className={inputCls} autoComplete="new-password" name="se-commenting-pat" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                <Field label={<>Pull-request PAT {s.pull_request_pat_last4 ? <span className="text-neutral-400">(••••{s.pull_request_pat_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
+                  <input type="password" placeholder="separate PAT for opening PRs (optional)" value={pullRequestPat} onChange={(e) => setPullRequestPat(e.target.value)} className={inputCls} autoComplete="new-password" name="se-pr-pat" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                <Field label={<>Coding-agent model {s.coding_agent_model_last4 ? <span className="text-neutral-400">(••••{s.coding_agent_model_last4})</span> : <span className="text-neutral-400">(uses default)</span>}</>}>
+                  <input type="password" placeholder="separate model credential for agent sessions (optional)" value={codingAgentModel} onChange={(e) => setCodingAgentModel(e.target.value)} className={inputCls} autoComplete="new-password" name="se-coding-agent-model" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
+                {/* §8 notifications: a Slack incoming-webhook. When set, gate events (spec/plan ready,
+                    PR ready, submitted) post to that channel. Blank = off. */}
+                <Field label={<>Slack webhook {s.slack_webhook_last4 ? <span className="text-neutral-400">(••••{s.slack_webhook_last4})</span> : <span className="text-neutral-400">(off)</span>}</>}>
+                  <input type="password" placeholder="https://hooks.slack.com/services/… (optional; gate-event posts)" value={slackWebhook} onChange={(e) => setSlackWebhook(e.target.value)} className={inputCls} autoComplete="new-password" name="se-slack-webhook" data-1p-ignore="true" data-lpignore="true" data-form-type="other" />
+                </Field>
               </Section>
 
               <Section icon={<CommandLineIcon className="size-4" />} title="Engines + per-phase routing">
@@ -362,6 +455,14 @@ export default function SetupPanel(
                     <option value="manual">Human approval (hold at "needs submitting")</option>
                   </select>
                 </Field>
+                <Field label="Spec gate">
+                  <label className="flex items-center gap-2 text-sm text-[var(--gray-11)]">
+                    <input type="checkbox" checked={!!(s.gates && s.gates.spec)} onChange={(e) => setS((p: any) => ({ ...p, gates: { ...(p.gates || {}), spec: e.target.checked } }))} />
+                    Hold at “spec review” for a human before implementing
+                  </label>
+                </Field>
+                <Field label="Approvers (gatewaze user ids)"><input placeholder="comma-separated user ids; empty = any admin can advance" value={Array.isArray(s.approvers) ? s.approvers.join(', ') : (s.approvers ?? '')} onChange={set('approvers')} className={inputCls} /></Field>
+                <Field label="Refine budget (rounds/run)"><input type="number" min="0" value={s.refine_budget ?? ''} onChange={set('refine_budget')} placeholder="(unlimited)" className={inputCls} /></Field>
                 <Field label="Allowed labellers"><input placeholder="comma-separated GitHub logins" value={Array.isArray(s.allowed_labellers) ? s.allowed_labellers.join(', ') : (s.allowed_labellers ?? '')} onChange={set('allowed_labellers')} className={inputCls} /></Field>
                 <Field label="Per-run token ceiling"><input type="number" value={s.per_run_token_ceiling ?? ''} onChange={set('per_run_token_ceiling')} className={inputCls} /></Field>
                 <Field label="Per-run cost ceiling ($)"><input type="number" min="0" step="0.5" value={s.per_run_cost_ceiling_usd ?? ''} onChange={set('per_run_cost_ceiling_usd')} placeholder="(unlimited)" className={inputCls} /></Field>
@@ -410,6 +511,8 @@ export default function SetupPanel(
               </div>
 
               <MemoryReviewSection projectId={pid} onMessage={setMsg} />
+
+              <MyCredentialsSection />
 
               <StagingUpdateSection />
 

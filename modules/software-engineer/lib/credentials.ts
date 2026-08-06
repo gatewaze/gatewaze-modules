@@ -42,6 +42,14 @@ export interface ProjectSettings {
   escalationModel: string | null;
   openaiCred: string | null;
   openaiCredLast4: string | null;
+  // Credential model (§12). Mode + role-scoped credentials. Each role PAT falls back to githubToken and
+  // the coding-agent model falls back to modelCred, so an unconfigured project behaves exactly as before.
+  credentialMode: 'shared' | 'per_user' | 'mixed';
+  committingPat: string | null;    // authors commits (workspace clone/commit/push)
+  commentingPat: string | null;    // posts comments on issues/PRs
+  pullRequestPat: string | null;   // opens pull requests
+  codingAgentModel: string | null; // the model credential the agent sessions run on
+  slackWebhook: string | null;     // optional Slack incoming-webhook for gate-event notifications
   // Work source: the (private) issues repo, the trigger label, and multi-instance routing.
   issuesRepoOwner: string | null;
   issuesRepoName: string | null;
@@ -69,6 +77,9 @@ export interface ProjectSettings {
   intakeEnabled: boolean;
   autonomyMode: 'pr_only' | 'auto_merge_safe';
   prSubmitMode: 'auto' | 'manual';  // manual = stop at ready_to_submit for a human to open the PR
+  specGate: boolean;                 // gates.spec: park at awaiting_spec after self-review for human review
+  approvers: string[];               // gatewaze user ids allowed to Advance; empty = unrestricted (any admin)
+  refineBudget: number | null;       // max chat-to-refine rounds per run; null = unlimited
   maxConcurrentEngineers: number;
   maxInteractiveEngineers: number;
   perRunTokenCeiling: number | null;
@@ -165,6 +176,12 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     escalationModel: data.escalation_model ?? null,
     openaiCred: openToken(data.openai_cred_ciphertext),
     openaiCredLast4: data.openai_cred_last4 ?? null,
+    credentialMode: data.credential_mode === 'per_user' ? 'per_user' : data.credential_mode === 'mixed' ? 'mixed' : 'shared',
+    committingPat: openToken(data.committing_pat_ciphertext) ?? openToken(data.github_token_ciphertext),
+    commentingPat: openToken(data.commenting_pat_ciphertext) ?? openToken(data.github_token_ciphertext),
+    pullRequestPat: openToken(data.pull_request_pat_ciphertext) ?? openToken(data.github_token_ciphertext),
+    codingAgentModel: openToken(data.coding_agent_model_ciphertext) ?? openToken(data.model_cred_ciphertext),
+    slackWebhook: openToken(data.slack_webhook_ciphertext),
     issuesRepoOwner: data.issues_repo_owner ?? null,
     issuesRepoName: data.issues_repo_name ?? null,
     triggerLabel: data.trigger_label ?? 'agent:build',
@@ -183,6 +200,9 @@ export async function getProject(sb: unknown, projectId: string): Promise<Projec
     intakeEnabled: data.intake_enabled,
     autonomyMode: data.autonomy_mode,
     prSubmitMode: data.pr_submit_mode === 'manual' ? 'manual' : 'auto',
+    specGate: !!(data.gates && typeof data.gates === 'object' && data.gates.spec === true),
+    approvers: Array.isArray(data.approvers) ? data.approvers.map(String) : [],
+    refineBudget: data.refine_budget ?? null,
     maxConcurrentEngineers: data.max_concurrent_engineers ?? 2,
     maxInteractiveEngineers: data.max_interactive_engineers ?? 1,
     perRunTokenCeiling: data.per_run_token_ceiling,
@@ -220,4 +240,42 @@ export async function resolveCommitIdentity(sb: unknown, project: ProjectSetting
   const name = project.commitAuthorName?.trim() || uname || login || 'Software Engineer';
   const email = project.commitAuthorEmail?.trim() || (id && login ? `${id}+${login}@users.noreply.github.com` : null);
   return { name, email };
+}
+
+/**
+ * Resolve which credentials a run acts as for each GitHub write role, honoring the project's credential
+ * mode (§12). 'shared' (default) → the project's role-scoped PATs (each already falling back to the
+ * default PAT), so behavior is unchanged. 'per_user'/'mixed' → when the run records an acting gatewaze
+ * user who has stored their own credentials, that user's PAT drives the git identities so commits, the
+ * pull request, and comments come from their real GitHub account. 'mixed' keeps the coding-agent model
+ * shared; 'per_user' uses the user's model when they have one. Anything unconfigured falls back.
+ */
+export async function resolveRunCredentials(
+  sb: unknown,
+  project: ProjectSettings,
+  run: { project_id?: string; acting_user_id?: string | null } | null,
+): Promise<{ committingPat: string | null; commentingPat: string | null; pullRequestPat: string | null; modelCred: string | null }> {
+  const base = {
+    committingPat: project.committingPat, commentingPat: project.commentingPat,
+    pullRequestPat: project.pullRequestPat, modelCred: project.modelCred,
+  };
+  const mode = project.credentialMode;
+  if ((mode !== 'per_user' && mode !== 'mixed') || !run?.acting_user_id) return base;
+  try {
+    // Fetch the acting user's stored credential rows and pick the project-scoped one, else their global
+    // default (project_id null). Filtered in JS to avoid interpolating into a PostgREST .or() filter.
+    const { data: rows } = await (sb as { from: (t: string) => any }).from('se_user_credentials')
+      .select('*').eq('user_id', run.acting_user_id);
+    const list: any[] = Array.isArray(rows) ? rows : [];
+    const row = list.find((r) => r.project_id === run.project_id) ?? list.find((r) => r.project_id == null);
+    if (!row) return base;
+    const pat = openToken(row.github_pat_ciphertext);
+    const userModel = openToken(row.model_cred_ciphertext);
+    return {
+      committingPat: pat ?? base.committingPat,
+      commentingPat: pat ?? base.commentingPat,
+      pullRequestPat: pat ?? base.pullRequestPat,
+      modelCred: mode === 'per_user' ? (userModel ?? base.modelCred) : base.modelCred,
+    };
+  } catch { return base; }
 }

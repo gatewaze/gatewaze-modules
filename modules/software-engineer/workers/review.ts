@@ -8,6 +8,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
+import { notifyGate } from '../lib/notify.js';
 import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
@@ -93,6 +94,15 @@ export default async function review(job, ctx) {
       // first (it decides arch-impact and, if impacting, opens a proposal PR + blocks). External-PR
       // runs (Connect) have no spec to gate — they skip straight to implement. Otherwise → implement.
       const next = project.architectureRepo && run.kind !== 'external_pr' ? 'architecture' : 'implement';
+      // Human spec gate (§ phase gates): when the project turns on the spec gate, park the run after the
+      // skeptic self-review so a reviewer can chat to refine the spec (spec-refine) and an approver can
+      // approve it (admin route) before any implementation tokens are spent. External-PR runs have no
+      // spec to gate. Approval advances the run to `next` (architecture or implement).
+      if (project.specGate && run.kind !== 'external_pr') {
+        await supabase.from('se_runs').update({ status: 'awaiting_spec', current_phase: 'review' }).eq('id', run.id);
+        try { await notifyGate(project, run, 'Spec ready for review'); } catch { /* */ }
+        return { ok: true, verdict, gated: 'spec' };
+      }
       await supabase.from('se_runs').update({ current_phase: next }).eq('id', run.id);
       await enqueuePhase(ctx, run.id, next);
       return { ok: true, verdict, next };
