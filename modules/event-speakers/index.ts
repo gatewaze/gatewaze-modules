@@ -9,7 +9,9 @@ const eventSpeakersModule: GatewazeModule = {
   description: 'Speaker profiles, talk submissions, and cross-event speaker management',
   // v2.0.0 — adds calendar / platform scope for talks, canonical person link,
   // top-level Speakers admin nav, calendar submit-talk portal page.
-  version: '2.0.0',
+  // v2.1.0 — speaker promo kits: auto-generated umami tracking link, AI post
+  // variants, rendered social cards + zip for confirmed talks (see guide.md).
+  version: '2.1.0',
   features: [
     'event-speakers',
     'event-speakers.manage',
@@ -49,6 +51,41 @@ const eventSpeakersModule: GatewazeModule = {
     // event_count + event_uuids. Granted to authenticated/service_role only —
     // anon would otherwise learn unlisted/draft events exist from the count.
     'migrations/012_speakers_event_count.sql',
+    // 013 adds speaker_promo_kits: the per-talk promo bundle (umami tracking
+    // link, AI post variants, rendered social cards, zip) generated for
+    // confirmed talks by the promo-kit workers. Service-role only; the
+    // portal reads kits through an edit_token-authenticated server route.
+    'migrations/013_speaker_promo_kits.sql',
+    // 014 seeds + binds the speaker-promo-posts AI use-case to its recipe in
+    // gatewaze/lf-agents (skipped when the ai module is absent — kits then
+    // ship cards + link without text).
+    'migrations/014_seed_promo_posts_use_case.sql',
+  ],
+
+  workers: [
+    {
+      // File stem MUST equal the job-name suffix: the prod worker derives the
+      // job name from the handler filename as `${moduleId}:${stem}`.
+      name: 'event-speakers:promo-kit-sweep',
+      handler: './workers/promo-kit-sweep.ts',
+    },
+    {
+      name: 'event-speakers:generate-promo-kit',
+      handler: './workers/generate-promo-kit.ts',
+    },
+  ],
+
+  crons: [
+    {
+      // Heartbeat for speaker promo kits: creates kit rows for newly
+      // confirmed talks (upcoming events), retries bounded failures, and
+      // advances requested/generating kits. Idempotent; 2-minute cadence
+      // keeps "confirm → kit ready" latency low without meaningful load.
+      name: 'event-speakers-promo-kit-sweep',
+      queue: 'jobs',
+      schedule: { pattern: '*/2 * * * *' },
+      data: { kind: 'event-speakers:promo-kit-sweep' },
+    },
   ],
 
   edgeFunctions: [
