@@ -6,7 +6,7 @@
  * verify. If nothing changed, fails.
  */
 import { createClient } from '@supabase/supabase-js';
-import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credentials.js';
+import { getProject, getCodeRepos, resolveCommitIdentity, resolveRunCredentials } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.js';
@@ -36,8 +36,12 @@ export default async function implement(job, ctx) {
   try {
     const { data: art } = await supabase.from('se_artifacts').select('content').eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
     const branch = run.branch_name;
-    const commitId = await resolveCommitIdentity(supabase, project, token);
-    ws = await makeMultiWorkspace(codeRepos, token, branch, commitId);
+    // Credential model (§12): author + push the commits as the committing PAT (or the acting user's PAT
+    // in per-user mode). Falls back to the default token, so an unconfigured project is unchanged.
+    const cred = await resolveRunCredentials(supabase, project, run);
+    const commitToken = cred.committingPat ?? token;
+    const commitId = await resolveCommitIdentity(supabase, project, commitToken);
+    ws = await makeMultiWorkspace(codeRepos, commitToken, branch, commitId);
 
     const prompt = [
       `Implement the approved spec below across the WRITABLE repos in your workspace. Change only the`,

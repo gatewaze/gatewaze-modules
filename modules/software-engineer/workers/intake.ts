@@ -40,6 +40,21 @@ export default async function intake(job, ctx) {
   // presence proves nothing. Unresolvable applier → that label is ignored (fail closed).
   try {
     const issue = await gh.getIssue(run.repo_owner, run.repo_name, run.issue_number);
+    // Reporter provenance (§7): the GitHub issue author reported this work. Match them to a gatewaze user
+    // via the identity map (by GitHub login) so a later gate event can notify them. Best-effort.
+    try {
+      const login = issue?.user?.login ? String(issue.user.login) : null;
+      if (login) {
+        let reporterUserId = null;
+        try {
+          const { data: idm } = await supabase.from('se_identity_map').select('user_id').eq('github_login', login).limit(1).maybeSingle();
+          reporterUserId = idm?.user_id ?? null;
+        } catch { /* no identity map row */ }
+        await supabase.from('se_runs').update({
+          reporter_source: 'github', reporter_identity: login, reporter_display_name: login, reporter_user_id: reporterUserId,
+        }).eq('id', run.id);
+      }
+    } catch { /* best-effort — reporter provenance is non-critical */ }
     const labels = (issue?.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
     const overrideLabels = labels.filter((n) => n.startsWith('agent:model:') || n.startsWith('agent:engine:'));
     if (overrideLabels.length) {

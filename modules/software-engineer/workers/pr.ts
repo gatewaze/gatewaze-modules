@@ -5,10 +5,11 @@
  * issue status to agent:in-review, and hands off to the monitor. No agent session — pure GitHub API.
  */
 import { createClient } from '@supabase/supabase-js';
-import { getProject, getCodeRepos } from '../lib/credentials.js';
+import { getProject, getCodeRepos, resolveRunCredentials } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun, listRunPrs, upsertRunPr } from '../lib/run-state.js';
+import { notifyGate } from '../lib/notify.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -27,6 +28,10 @@ export default async function pr(job, ctx) {
 
   await recordPhaseStart(supabase, run, 'pr');
   const gh = githubClient(token);
+  // Credential model (§12): open the PUBLIC pull request as the project's pull-request PAT (or the acting
+  // user's PAT in per-user mode). Falls back to the default token, so an unconfigured project is unchanged.
+  const cred = await resolveRunCredentials(supabase, project, run);
+  const ghPr = githubClient(cred.pullRequestPat ?? token);
   try {
     const { data: gateRows } = await supabase.from('se_gates').select('gate, verdict').eq('run_id', run.id);
     const gate = {};
@@ -51,6 +56,7 @@ export default async function pr(job, ctx) {
       await supabase.from('se_runs').update({ status: 'ready_to_submit', current_phase: 'pr' }).eq('id', run.id);
       try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:needs-submit'); } catch { /* */ }
       try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, 'Code is complete and the branch is pushed. The pull request is ready to submit and is waiting for a person to submit it from the dashboard.'); } catch { /* */ }
+      try { await notifyGate(project, run, 'Pull request ready to submit'); } catch { /* */ }
       return { ok: true, readyToSubmit: true, prs: prs.length };
     }
 
@@ -90,7 +96,7 @@ export default async function pr(job, ctx) {
         ].join('\n');
       }
       try {
-        const prData = await gh.createPullRequest(p.repo_owner, p.repo_name, { title: issueTitle || `Resolve #${run.issue_number}`, head: p.branch, base, body });
+        const prData = await ghPr.createPullRequest(p.repo_owner, p.repo_name, { title: issueTitle || `Resolve #${run.issue_number}`, head: p.branch, base, body });
         await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { pr_number: prData.number, pr_url: prData.html_url, state: 'open' });
         links.push(`- ${p.repo_owner}/${p.repo_name}: ${prData.html_url}`);
       } catch (e) {

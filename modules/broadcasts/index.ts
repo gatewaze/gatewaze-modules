@@ -51,6 +51,13 @@ const broadcastsModule: GatewazeModule = {
       name: 'broadcasts:draft-from-recap',
       handler: './workers/draft-from-recap.ts',
     },
+    {
+      // plays per-recipient delivery drip (spec-plays-scheduling-automation §4.2):
+      // runs the shared send engine over the plays binding. Co-located here to
+      // reuse the engine import + the (co-located) plays binding.
+      name: 'broadcasts:dispatch-plays-send',
+      handler: './workers/dispatch-plays-send.ts',
+    },
   ],
 
   crons: [
@@ -59,6 +66,12 @@ const broadcastsModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 60_000 },
       data: { kind: 'broadcasts:dispatch-scheduled' },
+    },
+    {
+      name: 'plays-dispatch-send',
+      queue: 'jobs',
+      schedule: { every: 60_000 },
+      data: { kind: 'broadcasts:dispatch-plays-send' },
     },
   ],
 
