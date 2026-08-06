@@ -87,7 +87,7 @@ export default async function promoKitSweep(): Promise<void> {
   // ── 3. ADVANCE pending kits ────────────────────────────────────────────
   const { data: pending } = await supabase
     .from('speaker_promo_kits')
-    .select('id, status, attempts')
+    .select('id, status, attempts, updated_at')
     .in('status', ['requested', 'generating'])
     .order('created_at', { ascending: true })
     .limit(ENQUEUE_CAP);
@@ -97,12 +97,16 @@ export default async function promoKitSweep(): Promise<void> {
   try {
     queue = jobsQueue();
     for (const kit of pending) {
-      // Deterministic jobId dedupes against a still-queued job for the same
-      // kit state; a new state/attempt gets a fresh id.
+      // jobId dedupes concurrent sweeps enqueuing the same kit state, keyed
+      // on updated_at: every state transition (including a manual reset to
+      // 'requested') mints a fresh id. Keying on status/attempts collided
+      // with BullMQ's retained completed-job ids after a reset, silently
+      // dropping the re-enqueue.
+      const stamp = Date.parse(kit.updated_at ?? '') || 0;
       await queue.add(
         'event-speakers:generate-promo-kit',
         { kitId: kit.id },
-        { jobId: `es-promo-${kit.id}-${kit.status}-${kit.attempts ?? 0}`, removeOnComplete: 100, removeOnFail: 100 },
+        { jobId: `es-promo-${kit.id}-${stamp}`, removeOnComplete: 100, removeOnFail: 100 },
       );
     }
     log(`enqueued ${pending.length} generate job(s)`);
