@@ -450,7 +450,7 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
         let q = supabase
           .from('events_registrations')
           .select(
-            'status, checked_in, registered_at, registration_source, people!inner(email, attributes), events!inner(event_id, event_title, event_start, event_city, event_country_code)',
+            'status, checked_in, registered_at, registration_source, registration_metadata, people!inner(email, attributes), events!inner(event_id, event_title, event_start, event_city, event_country_code)',
             { count: 'exact' },
           )
           .order('registered_at', { ascending: false });
@@ -459,11 +459,24 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
         if (req.query.from) q = q.gte('registered_at', req.query.from);
         if (req.query.to) q = q.lte('registered_at', req.query.to);
         if (req.query.status) q = q.eq('status', String(req.query.status));
+        // Event-side filters ride the !inner embed — the join makes them
+        // parent-row filters, no id pre-resolve or URL-length ceiling.
+        if (req.query.city) q = q.ilike('events.event_city', `%${String(req.query.city)}%`);
+        if (req.query.event_from) q = q.gte('events.event_start', req.query.event_from);
+        if (req.query.event_to) q = q.lte('events.event_start', req.query.event_to);
+        // Free-text match over the registration-form answers jsonb ("who is
+        // an engineer"). ->> renders the answers array as text; the pattern
+        // is passed as a filter VALUE (not interpolated into an .or()
+        // string), so wildcards from callers are harmless.
+        if (req.query.answers_contain) {
+          q = q.ilike('registration_metadata->>registration_answers', `%${String(req.query.answers_contain)}%`);
+        }
         return q;
       };
 
       type RawRow = {
         status: string | null; checked_in: boolean | null; registered_at: string; registration_source: string | null;
+        registration_metadata: { registration_answers?: Array<{ label?: string; answer?: string }> } | null;
         people: { email?: string | null; attributes?: Record<string, unknown> | null } | Array<{ email?: string | null; attributes?: Record<string, unknown> | null }>;
         events: Record<string, unknown> | Record<string, unknown>[];
       };
@@ -472,6 +485,9 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
         const ev = ((Array.isArray(r.events) ? r.events[0] : r.events) ?? {}) as Record<string, unknown>;
         const a = (p.attributes ?? {}) as Record<string, unknown>;
         const name = [a.first_name, a.last_name].filter(Boolean).join(' ') || (typeof a.full_name === 'string' ? a.full_name : null);
+        const answers = (r.registration_metadata?.registration_answers ?? [])
+          .map((ans) => ({ label: ans.label ?? null, answer: ans.answer ?? null }))
+          .filter((ans) => ans.answer);
         return {
           email: p.email ?? null,
           name: name || null,
@@ -484,6 +500,7 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
           checked_in: r.checked_in,
           registered_at: r.registered_at,
           registration_source: r.registration_source,
+          answers,
         };
       };
 
