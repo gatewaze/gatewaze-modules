@@ -21,7 +21,7 @@ export async function loadPromoKitContext(supabase, talkId: string): Promise<Pro
   const { data: event, error: eventError } = await supabase
     .from('events')
     .select(
-      'id, event_id, event_slug, event_title, event_start, event_timezone, event_city, event_link, enable_native_registration',
+      'id, event_id, event_slug, event_title, event_type, event_start, event_timezone, event_city, event_link, enable_native_registration',
     )
     .eq('id', talk.event_uuid)
     .maybeSingle();

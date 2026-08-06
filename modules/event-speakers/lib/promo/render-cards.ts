@@ -253,9 +253,18 @@ function buildContext(input: RenderCardInput): Record<string, Record<string, str
   return ctx;
 }
 
+/** Loads a template's HTML by file name — from the git template source when
+ *  configured, else the module's vendored templates dir. */
+export type TemplateLoader = (fileName: string) => Promise<string>;
+
+/** Directory-backed loader (vendored templates / tests). */
+export function dirTemplateLoader(templatesDir: string): TemplateLoader {
+  return (fileName: string) => readFile(join(templatesDir, fileName), 'utf8');
+}
+
 /** Render every format for one speaker in a single browser session. */
 export async function renderSpeakerCards(
-  templatesDir: string,
+  loadTemplate: TemplateLoader,
   input: RenderCardInput,
   formats: CardFormatSpec[] = CARD_FORMATS,
 ): Promise<RenderedCard[]> {
@@ -277,7 +286,7 @@ export async function renderSpeakerCards(
   try {
     const rendered: RenderedCard[] = [];
     for (const spec of formats) {
-      const template = await readFile(join(templatesDir, spec.templateFile), 'utf8');
+      const template = await loadTemplate(spec.templateFile);
       const html = substituteVariables(template, context);
       const cardW = Number((html.match(/#card\s*{[^}]*width:\s*(\d+)px/) ?? [])[1]) || spec.exportWidth;
       const cardH = Number((html.match(/#card\s*{[^}]*height:\s*(\d+)px/) ?? [])[1]) || spec.exportHeight;

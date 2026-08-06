@@ -59,6 +59,7 @@ export interface PromoKitContext {
     event_id: string;
     event_slug: string | null;
     event_title: string;
+    event_type?: string | null;
     event_start: string;
     event_timezone: string | null;
     event_city: string | null;

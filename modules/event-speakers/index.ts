@@ -140,7 +140,19 @@ const eventSpeakersModule: GatewazeModule = {
 
   dependencies: ['content-platform', 'events', 'event-sponsors'],
 
-  configSchema: {},
+  configSchema: {
+    SPEAKER_CARDS_TEMPLATE_REPO: {
+      key: 'SPEAKER_CARDS_TEMPLATE_REPO',
+      type: 'string',
+      required: false,
+      description:
+        'Git repo holding the speaker promo-card templates, brand colorways, and ' +
+        'event→brand mapping (https://github.com/<org>/<repo>[#ref], e.g. ' +
+        'https://github.com/gatewaze/gatewaze-template-speaker-cards#main). ' +
+        'GitHub only; private repos use the worker\'s GITHUB_TOKEN. Unset = the ' +
+        'templates vendored with the module, default Voice colorway for every event.',
+    },
+  },
 
   onInstall: async () => {
     console.log('[event-speakers] Module installed');

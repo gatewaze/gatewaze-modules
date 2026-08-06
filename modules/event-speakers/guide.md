@@ -56,12 +56,15 @@ Once a talk is **confirmed**, the module automatically generates a per-speaker
   module's umami instance (`UMAMI_*` env on the worker) and `PORTAL_HOST`.
   This replaces the old Short.io speaker link.
 - **Share images** — three branded cards (feed 1200×1200, story 1080×1920,
-  link-preview 1200×630) rendered from `templates/speaker-card-*.html` by the
-  worker image's pinned Chromium (puppeteer-core, 2x + Lanczos downscale).
-  Templates ship with the module so they stay atomic with the renderer's
-  variable/escaping contract; per-brand template overrides (à la
-  `invite_templates`) are the documented follow-up if designers need to
-  iterate without deploys.
+  link-preview 1200×630) rendered by the worker image's pinned Chromium
+  (puppeteer-core, 2x + Lanczos downscale). Templates, brand colorways/
+  lockups, and the event→brand mapping live in a git template repo
+  (`SPEAKER_CARDS_TEMPLATE_REPO` config, e.g.
+  `github.com/gatewaze/gatewaze-template-speaker-cards`) so designers
+  iterate without a deploy — mapping rules like `title_contains: "finance"`
+  pick each forum's colorway. The repo is fetched with a 10-min cache; the
+  copies vendored in `templates/` are the always-works fallback (and the
+  default Voice colorway applies when no rule matches or no repo is set).
 - **Post text** — four LinkedIn-safe plain-text variants written by the
   `speaker-promo-posts` goose recipe + skill (gatewaze/lf-agents), embedding
   the tracking link. Degrades gracefully: if the `ai` module is absent or the

@@ -5,6 +5,13 @@ import { stringToSlug, buildDestinationUrl, shortLinkDomain } from '../lib/promo
 import { buildRecipeParams, dateLong, readPromoTextRun } from '../lib/promo/promo-text';
 import { buildPromoKitZip } from '../lib/promo/build-zip';
 import { dateShort } from '../lib/promo/context';
+import {
+  parseTemplateRepoUrl,
+  resolveBrandKey,
+  buildBrandVars,
+  templateLoader,
+  type TemplateSource,
+} from '../lib/promo/template-source';
 import type { PromoKitContext } from '../lib/promo/types';
 
 describe('escapeHtml', () => {
@@ -208,6 +215,93 @@ describe('readPromoTextRun', () => {
     expect(
       (await readPromoTextRun(fakeSupabase({ status: 'complete', final_output: { options: [] } }), 'r1')).state,
     ).toBe('failed');
+  });
+});
+
+describe('parseTemplateRepoUrl', () => {
+  it('parses github URLs with optional ref and .git suffix', () => {
+    expect(parseTemplateRepoUrl('https://github.com/gatewaze/gatewaze-template-speaker-cards')).toEqual({
+      org: 'gatewaze',
+      repo: 'gatewaze-template-speaker-cards',
+      ref: 'main',
+    });
+    expect(parseTemplateRepoUrl('https://github.com/org/repo.git#release/v2')).toEqual({
+      org: 'org',
+      repo: 'repo',
+      ref: 'release/v2',
+    });
+  });
+
+  it('rejects non-github and malformed URLs', () => {
+    expect(parseTemplateRepoUrl('')).toBeNull();
+    expect(parseTemplateRepoUrl('https://evil.example/org/repo')).toBeNull();
+    expect(parseTemplateRepoUrl('http://github.com/org/repo')).toBeNull();
+    expect(parseTemplateRepoUrl('https://github.com/org')).toBeNull();
+  });
+});
+
+describe('resolveBrandKey', () => {
+  const mapping = {
+    default_brand: 'voice',
+    rules: [
+      { brand: 'voice', title_contains: 'voice' },
+      { brand: 'finance', title_contains: 'finance' },
+      { brand: 'special', event_id: 'evt999', event_type: 'forum' },
+    ],
+  };
+
+  it('matches the live forum events case-insensitively', () => {
+    expect(resolveBrandKey(mapping, { event_title: 'Voice Agents Forum' })).toBe('voice');
+    expect(resolveBrandKey(mapping, { event_title: 'Finance Agents Forum' })).toBe('finance');
+  });
+
+  it('falls back to the default brand and handles null mapping', () => {
+    expect(resolveBrandKey(mapping, { event_title: 'Coding Agents Forum' })).toBe('voice');
+    expect(resolveBrandKey(null, { event_title: 'x' })).toBeNull();
+  });
+
+  it('requires ALL fields of a rule to match', () => {
+    expect(resolveBrandKey(mapping, { event_id: 'evt999', event_type: 'forum', event_title: 'x' })).toBe('special');
+    expect(resolveBrandKey(mapping, { event_id: 'evt999', event_type: 'community-event', event_title: 'x' })).toBe('voice');
+  });
+});
+
+describe('buildBrandVars', () => {
+  it('keeps valid hex colors, drops junk, and inlines the lockup', () => {
+    const vars = buildBrandVars(
+      {
+        accent: '#88C749',
+        accent_bright: 'url(javascript:alert(1))',
+        accent_dark: '#55871F',
+        wave_from: 'not-a-color',
+      },
+      Buffer.from('<svg/>'),
+    );
+    expect(vars.accent).toBe('#88C749');
+    expect(vars.accent_dark).toBe('#55871F');
+    expect(vars.accent_bright).toBeUndefined();
+    expect(vars.wave_from).toBeUndefined();
+    expect(vars.lockup_url).toBe(`data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}`);
+  });
+
+  it('returns empty vars for a null brand (template defaults apply)', () => {
+    expect(buildBrandVars(null, null)).toEqual({});
+  });
+});
+
+describe('templateLoader', () => {
+  it('prefers repo templates and falls back to the vendored dir', async () => {
+    const repoFiles = new Map([['templates/speaker-card-square.html', Buffer.from('REPO')]]);
+    const gitSource: TemplateSource = {
+      origin: 'git',
+      ref: 'org/repo#main',
+      getFile: (p) => repoFiles.get(p) ?? null,
+    };
+    const load = templateLoader(gitSource, `${__dirname}/../templates`);
+    expect(await load('speaker-card-square.html')).toBe('REPO');
+    // Not in the repo → vendored file from disk.
+    const vendored = await load('speaker-card-story.html');
+    expect(vendored).toContain('{{speaker.full_name}}');
   });
 });
 
