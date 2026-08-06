@@ -23,6 +23,15 @@ export async function recordPhaseStart(sb: unknown, run: any, phase: string) {
       finished_at: null,
       summary: null,
       error: null,
+      // A reopened (retried) phase must not display the failed attempt's usage; live heartbeat
+      // estimates repopulate these within ~20s of the new attempt starting.
+      model_usage: null,
+      cost_usd: null,
+      book_cost_usd: null,
+      tokens_input: 0,
+      tokens_output: 0,
+      tokens_cache_read: 0,
+      tokens_cache_creation: 0,
     },
     { onConflict: 'run_id,phase,attempt' },
   );
@@ -42,26 +51,32 @@ export async function recordPhaseEnd(
     cacheCreation?: number;
     /** Which harness ran the phase ('claude' | 'codex'); selects the price-book provider. */
     engine?: string;
-    /** Agent SDK total_cost_usd — the fallback when the model has no ai_model_prices row. */
+    /** Agent SDK total_cost_usd — the PRIMARY cost figure (complete: subagents + harness utility
+     *  models at list prices; reconciles with seat billing). Book price is the fallback. */
     cost?: number;
+    /** Per-model breakdown from the SDK result ({model: {input, output, cacheRead, cacheCreation, costUSD}}). */
+    modelUsage?: Record<string, unknown>;
   },
 ) {
-  // Price from the ai module's price book (cache-aware, operator-editable) so SE costs agree with
-  // the platform AI dashboards; fall back to the SDK's own figure for models the book doesn't know.
-  let costUSD: number | null = null;
+  // Cost preference (migration 018, reversing 012's): the SDK's total_cost_usd is PRIMARY — it is
+  // the harness's own complete meter (subagent sessions + utility-model calls the main-thread token
+  // fields never see; seat reconciliation measured a ~3.5x gap). The ai_model_prices book price is
+  // computed anyway as book_cost_usd for analytics, and stands in for cost_usd only when the SDK
+  // reported nothing (e.g. a phase that died before its result message).
+  let bookUSD: number | null = null;
   if (tokens?.model) {
     try {
-      costUSD = await pricePhaseCostUSD(sb, tokens.model, {
+      bookUSD = await pricePhaseCostUSD(sb, tokens.model, {
         input: tokens.input ?? 0,
         output: tokens.output ?? 0,
         cacheRead: tokens.cacheRead ?? 0,
         cacheCreation: tokens.cacheCreation ?? 0,
       }, { provider: tokens.engine === 'codex' ? 'openai' : 'anthropic' });
     } catch { /* pricing is best-effort — never fail the phase for it */ }
-    if (costUSD == null && typeof tokens.cost === 'number' && tokens.cost > 0) {
-      costUSD = Math.round(tokens.cost * 10000) / 10000;
-    }
   }
+  const sdkUSD = typeof tokens?.cost === 'number' && tokens.cost > 0
+    ? Math.round(tokens.cost * 10000) / 10000 : null;
+  const costUSD = sdkUSD ?? bookUSD;
   const patch = {
     status,
     summary: summary ?? null,
@@ -72,6 +87,8 @@ export async function recordPhaseEnd(
     tokens_cache_creation: tokens?.cacheCreation ?? 0,
     engine: tokens?.engine ?? (tokens?.model ? 'claude' : null),
     cost_usd: costUSD,
+    book_cost_usd: bookUSD,
+    model_usage: tokens?.modelUsage && Object.keys(tokens.modelUsage).length ? tokens.modelUsage : null,
     finished_at: now(),
   };
   // Close the open 'running' row for this phase; if there isn't one (e.g. blocked before

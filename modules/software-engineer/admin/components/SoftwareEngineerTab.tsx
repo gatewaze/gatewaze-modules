@@ -31,6 +31,7 @@ import { projectOptionLabel } from './projectAvatarUtils';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 import { ALL_RUN_STATUSES, STATUS_LABELS, toggleStatusInParam, fmtCost } from './overview-filters';
+import { aggregateRunModelCosts, shortModel } from '../lib/run-costs';
 import { isNearBottom } from './autoscroll';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
@@ -75,6 +76,29 @@ const PHASE_PROSE: Record<string, string> = {
   merge: 'Merging',
 };
 const phaseProse = (p?: string) => (p && PHASE_PROSE[p]) || (p ? `Working (${p})` : 'Working');
+
+/**
+ * Fixed header cost strip (§ accurate per-run metrics): the authoritative total (SDK-metered from
+ * migration 018; live phases tick from heartbeat estimates) plus a per-model breakdown so routing
+ * decisions can see where the money goes — including the harness's own utility-model (Haiku) spend.
+ * The detail poller/realtime refetch keeps it updating while the run works.
+ */
+function RunCostStrip({ phases, live }: { phases: any[]; live: boolean }) {
+  const { total, rows } = aggregateRunModelCosts(phases);
+  if (!(total > 0)) return null;
+  return (
+    <div className="mb-2 flex items-baseline gap-3 flex-wrap">
+      <span className="font-mono text-base font-semibold text-[var(--gray-12)]">
+        {fmtCost(total)}{live ? <span className="text-[var(--gray-9)] font-normal text-xs"> · running</span> : null}
+      </span>
+      {rows.map((r) => (
+        <span key={r.model} className="font-mono text-[11px] text-[var(--gray-10)]" title={r.model}>
+          {shortModel(r.model)} {fmtCost(r.costUSD) || '<$0.01'}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // A run's headline label. Interactive (pair-programming) sessions have no issue, so they read as a
 // session on their project rather than "owner/repo #n".
@@ -525,6 +549,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
         ) : (
           <>
             <div className="pb-3 border-b border-[var(--gray-5)] mb-3">
+              <RunCostStrip phases={detail.phases ?? []} live={liveStatus} />
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium text-[var(--gray-12)]">{runLabel(detail.run)}</span>
                 <Badge color={STATUS_COLOR[detail.run.status] ?? 'gray'}>{detail.run.status}</Badge>
@@ -535,17 +560,6 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 {detail.run.engineer_name && <span className="text-xs text-[var(--gray-10)]">🧑‍💻 {detail.run.engineer_name}</span>}
                 {detail.run.reporter_display_name && <span className="text-xs text-[var(--gray-10)]">· reported by {detail.run.reporter_display_name}</span>}
                 {detail.run.revise_count > 0 && <span className="text-xs text-[var(--gray-10)]">· {detail.run.revise_count} revision{detail.run.revise_count > 1 ? 's' : ''}</span>}
-                {fmtCost(detail.run.cost_usd) && (
-                  <span
-                    className="text-xs font-mono text-[var(--gray-10)]"
-                    title={(detail.phases ?? [])
-                      .filter((p: any) => fmtCost(p.cost_usd))
-                      .map((p: any) => `${p.phase} ${fmtCost(p.cost_usd)}`)
-                      .join(' · ') || 'Model spend (priced from the AI price book)'}
-                  >
-                    · {fmtCost(detail.run.cost_usd)}
-                  </span>
-                )}
                 {detail.run.pr_url && (
                   <a href={detail.run.pr_url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-1">
                     PR <ArrowTopRightOnSquareIcon className="size-3" />

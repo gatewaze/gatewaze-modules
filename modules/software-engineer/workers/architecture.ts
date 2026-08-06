@@ -126,7 +126,7 @@ export default async function architecture(job, ctx) {
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
-      await recordPhaseEnd(supabase, run, 'architecture', 'failed', msg);
+      await recordPhaseEnd(supabase, run, 'architecture', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
       return { failed: msg };
     }
@@ -135,7 +135,7 @@ export default async function architecture(job, ctx) {
     const proposalPath = join(ws.root, 'PROPOSAL.md');
     const proposal = existsSync(proposalPath) ? readFileSync(proposalPath, 'utf8') : '';
     if (proposal.trim().length < 200) {
-      await recordPhaseEnd(supabase, run, 'architecture', 'passed', 'no architecture change required');
+      await recordPhaseEnd(supabase, run, 'architecture', 'passed', 'no architecture change required', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ current_phase: 'implement' }).eq('id', run.id);
       await enqueuePhase(ctx, run.id, 'implement');
       return { ok: true, gated: false };
@@ -160,7 +160,7 @@ export default async function architecture(job, ctx) {
       try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, `Architecture review required — a draft proposal is ready in the Software Engineer admin. Review and refine it there, then finalize to commit it to \`${archRepo}\` and approve to resume implementation.`); } catch { /* */ }
     }
     try { await notifyGate(project, run, 'Architecture proposal ready for review'); } catch { /* */ }
-    await recordPhaseEnd(supabase, run, 'architecture', 'blocked', 'awaiting architecture review (draft)');
+    await recordPhaseEnd(supabase, run, 'architecture', 'blocked', 'awaiting architecture review (draft)', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
     return { ok: true, gated: true, folder };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);

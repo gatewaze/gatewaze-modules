@@ -119,7 +119,7 @@ export default async function revise(job, ctx) {
       catch { /* leave that PR as-is */ }
     }
     const round = (run.revise_count ?? 0) + 1;
-    await recordPhaseEnd(supabase, run, 'revise', pushed ? 'passed' : 'skipped', pushed ? `addressed feedback (round ${round}, ${pushed} repo(s))` : 'no code change produced', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
+    await recordPhaseEnd(supabase, run, 'revise', pushed ? 'passed' : 'skipped', pushed ? `addressed feedback (round ${round}, ${pushed} repo(s))` : 'no code change produced', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
     // If revise pushed new code, the blast_radius computed back in `implement`
     // no longer describes what's on the branch. Downgrade to 'needs_human' so
     // pr-monitor's auto-merge (which gates on blast_radius === 'safe') can't

@@ -98,7 +98,7 @@ export default async function implement(job, ctx) {
       ? { classification: 'needs_human', reasons: ['diff unavailable for one or more changed repos — cannot assess blast radius'] }
       : classifyBlastRadius(allFiles);
     await writeGate(supabase, run, 'blast_radius', blast.classification === 'safe' ? 'pass' : 'block', { files, lines, repos: changed });
-    await recordPhaseEnd(supabase, run, 'implement', 'passed', `implemented across ${changed} repo(s)`, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
+    await recordPhaseEnd(supabase, run, 'implement', 'passed', `implemented across ${changed} repo(s)`, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
     await supabase.from('se_runs').update({
       blast_radius: blast.classification, current_phase: 'verify',
       tokens_input: (run.tokens_input ?? 0) + result.tokensInput,
