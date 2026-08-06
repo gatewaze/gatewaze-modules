@@ -13,7 +13,7 @@ import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
-import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun } from '../lib/run-state.js';
+import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, writeMessage } from '../lib/run-state.js';
 
 const MAX_REVIEW_RETRIES = 2;
 
@@ -88,21 +88,30 @@ export default async function review(job, ctx) {
       tokens_output: (run.tokens_output ?? 0) + result.tokensOutput,
     }).eq('id', run.id);
 
+    // Human spec gate (§ phase gates): when the project turns on the spec gate, the automated skeptic is
+    // ADVISORY, not a hard gate. After ONE review the run parks at `awaiting_spec` whether the skeptic
+    // passed or blocked, with the skeptic's objections surfaced to the reviewer as a message. The human
+    // then refines the spec by chat and approves it, so a strict skeptic can no longer hard-block a sound
+    // spec (which is exactly what a human gate is for). External-PR runs have no spec to gate.
+    if (project.specGate && run.kind !== 'external_pr') {
+      await recordPhaseEnd(supabase, run, 'review', verdict === 'pass' ? 'passed' : 'blocked',
+        verdict === 'pass' ? 'spec approved by skeptic (advisory); awaiting human review' : `skeptic flagged concerns (advisory): ${objections.slice(0, 3).join('; ')}`,
+        { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
+      if (verdict !== 'pass' && objections.length) {
+        try { await writeMessage(supabase, run, 'system', `The automated skeptic review flagged these concerns (advisory — you decide):\n${objections.map((o) => `- ${o}`).join('\n')}\n\nRefine the spec by chatting, then approve to proceed.`); } catch { /* */ }
+      }
+      await supabase.from('se_runs').update({ status: 'awaiting_spec', current_phase: 'review' }).eq('id', run.id);
+      try { await notifyGate(project, run, 'Spec ready for review'); } catch { /* */ }
+      return { ok: true, verdict, gated: 'spec' };
+    }
+
+    // Un-gated projects: the skeptic IS the gate — pass advances, block retries then blocks the run.
     if (verdict === 'pass') {
       await recordPhaseEnd(supabase, run, 'review', 'passed', 'spec approved by skeptic', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD });
       // §7.6: if this project has an architecture-review gate, route through the `architecture` phase
       // first (it decides arch-impact and, if impacting, opens a proposal PR + blocks). External-PR
       // runs (Connect) have no spec to gate — they skip straight to implement. Otherwise → implement.
       const next = project.architectureRepo && run.kind !== 'external_pr' ? 'architecture' : 'implement';
-      // Human spec gate (§ phase gates): when the project turns on the spec gate, park the run after the
-      // skeptic self-review so a reviewer can chat to refine the spec (spec-refine) and an approver can
-      // approve it (admin route) before any implementation tokens are spent. External-PR runs have no
-      // spec to gate. Approval advances the run to `next` (architecture or implement).
-      if (project.specGate && run.kind !== 'external_pr') {
-        await supabase.from('se_runs').update({ status: 'awaiting_spec', current_phase: 'review' }).eq('id', run.id);
-        try { await notifyGate(project, run, 'Spec ready for review'); } catch { /* */ }
-        return { ok: true, verdict, gated: 'spec' };
-      }
       await supabase.from('se_runs').update({ current_phase: next }).eq('id', run.id);
       await enqueuePhase(ctx, run.id, next);
       return { ok: true, verdict, next };
