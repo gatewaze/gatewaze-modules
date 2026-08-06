@@ -115,6 +115,17 @@ const softwareEngineerModule: GatewazeModule = {
         { name: 'software-engineer:intake-poll', handler: './workers/intake-poll.ts' },
       ],
     },
+    {
+      // Dedicated triage queue (§10.5): one tool-less model turn per job, consumed by any runner —
+      // including a prod triage-only runner (WORKER_QUEUES=se-triage) that must never consume the
+      // agent-phase 'se' queue. attempts:1 — the API surfaces errors straight to the admin.
+      name: 'se-triage',
+      defaultConcurrency: 2,
+      defaultJobOptions: { attempts: 1 },
+      handlers: [
+        { name: 'software-engineer:triage-turn', handler: './workers/triage-turn.ts' },
+      ],
+    },
   ],
 
   // Cron heartbeat that polls open PRs and reconciles them (the fallback where GitHub can't reach
