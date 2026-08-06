@@ -9,7 +9,7 @@
  * palette — every colored bar carries an adjacent text label + count, never colour alone.
  * No @radix-ui/themes import (module Radix-singleton hazard).
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
@@ -18,6 +18,7 @@ import {
   ExclamationTriangleIcon, CpuChipIcon, Cog6ToothIcon, CurrencyDollarIcon,
 } from '@heroicons/react/24/outline';
 import { CARD_FILTERS, statusesToParam, fmtCost } from './overview-filters';
+import { startVisibilityPoll } from '../lib/visibility-poll';
 import { ProjectAvatar } from './ProjectAvatar';
 import { projectOptionLabel } from './projectAvatarUtils';
 import PrBoard from './PrBoard';
@@ -122,10 +123,16 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  // Realtime, the 3s startup poll, and the 20s visibility-poll backstop below can all call `load`
+  // around the same time; this guard skips a tick that overlaps an in-flight fetch instead of
+  // firing a redundant request.
+  const inFlight = useRef(false);
 
   useEffect(() => { api('/projects').then((d) => setProjects(d.projects ?? [])).catch(() => {}); }, []);
 
   const load = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const qs = projectFilter ? `?project=${encodeURIComponent(projectFilter)}` : '';
       setData(await api(`/overview${qs}`)); setErr(null); setStarting(false);
@@ -135,7 +142,7 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
       if (isGatewayError(e)) { setStarting(true); setErr(null); }
       else { setErr(String(e.message ?? e)); setStarting(false); }
     }
-    finally { setLoading(false); }
+    finally { setLoading(false); inFlight.current = false; }
   }, [projectFilter]);
 
   useEffect(() => {
@@ -145,6 +152,12 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [load]);
+
+  // Realtime is the primary update mechanism and already works; this is the backstop for a
+  // silently dropped/never-reconnected channel. Mirrors the Issues tab's visibility-aware poll
+  // (SoftwareEngineerTab.tsx IssuesView): every 20s while the tab is visible, plus an immediate
+  // refetch on regaining focus so a backgrounded tab isn't stale.
+  useEffect(() => startVisibilityPoll(load, 20000), [load]);
 
   // While the stack is coming up, poll until the API answers again.
   useEffect(() => {
