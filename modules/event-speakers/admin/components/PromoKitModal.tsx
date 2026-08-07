@@ -209,24 +209,33 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
           )}
 
           {/* Footer actions */}
-          <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-700/50">
+          <div className="pt-3 border-t border-gray-100 dark:border-gray-700/50 space-y-2">
             <div className="flex items-center gap-2">
               {kit.zip_storage_path && (
                 <a href={mediaPublicUrl(kit.zip_storage_path)} download>
-                  <Button variant="secondary" size="sm">
-                    <ArrowDownTrayIcon className="w-4 h-4 mr-1" />
+                  <Button variant="secondary" size="sm" className="whitespace-nowrap">
+                    <ArrowDownTrayIcon className="w-4 h-4 mr-1 shrink-0" />
                     Download zip
                   </Button>
                 </a>
               )}
-              <Button variant="secondary" size="sm" onClick={handleRegenerate} disabled={regenerating}>
-                <ArrowPathIcon className="w-4 h-4 mr-1" />
+              <Button
+                variant="secondary"
+                size="sm"
+                className="whitespace-nowrap"
+                onClick={handleRegenerate}
+                disabled={regenerating}
+              >
+                <ArrowPathIcon className="w-4 h-4 mr-1 shrink-0" />
                 {regenerating ? 'Queueing…' : 'Regenerate'}
               </Button>
             </div>
-            <p className="text-xs text-gray-400 dark:text-gray-500">
-              {kit.template_version ? `templates: ${kit.template_version}` : ''}
-            </p>
+            {kit.template_version && (
+              <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                Templates: {kit.template_version}
+                {kit.generated_at ? ` · generated ${new Date(kit.generated_at).toLocaleString()}` : ''}
+              </p>
+            )}
           </div>
         </div>
       )}
