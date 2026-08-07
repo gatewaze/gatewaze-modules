@@ -165,6 +165,21 @@ export type RunState =
   | { state: 'failed'; reason: string };
 
 /** Read a dispatched run back and validate its output shape. */
+/**
+ * House rule: we never publish em or en dashes. The model is told this in the
+ * recipe, but a model instruction is a request, not a guarantee, so the text
+ * is normalised on the way out of the run as well. " - " is the replacement,
+ * matching the house writing style.
+ *
+ * Applied to the post bodies and the mention note, which is the other string
+ * that reaches a speaker's screen.
+ */
+function stripDashes(text: string): string {
+  return text
+    .replace(/\s*[\u2014\u2013]\s*/g, ' - ')
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
 export async function readPromoTextRun(supabase, runId: string): Promise<RunState> {
   const { data: run } = await supabase
     .from('ai_recipe_runs')
@@ -192,12 +207,12 @@ export async function readPromoTextRun(supabase, runId: string): Promise<RunStat
     .map((o) => ({
       key: String(o.key ?? 'professional'),
       label: String(o.label ?? o.key ?? 'Option'),
-      body: String(o.body).trim(),
+      body: stripDashes(String(o.body).trim()),
     }));
   if (clean.length === 0) return { state: 'failed', reason: 'no_valid_options' };
   const promoText: PromoText = { options: clean };
   if (typeof out.mention_note === 'string' && out.mention_note.trim()) {
-    promoText.mention_note = out.mention_note.trim();
+    promoText.mention_note = stripDashes(out.mention_note.trim());
   }
   return { state: 'complete', promoText };
 }
