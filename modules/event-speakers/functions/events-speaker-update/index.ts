@@ -52,6 +52,8 @@ interface SpeakerUpdateResponse {
   status_changed?: boolean
   // True when this edit re-armed the speaker's promo kit for regeneration.
   promo_kit_regenerating?: boolean
+  // True when the status reset is provisional, pending a materiality check.
+  edit_review_queued?: boolean
   error?: string
   debug?: {
     person_id?: number
@@ -283,10 +285,35 @@ async function handler(req: Request) {
     const talkTitleChanged = body.talk_title !== undefined && body.talk_title !== currentTitle
     const talkSynopsisChanged = body.talk_synopsis !== undefined && body.talk_synopsis !== currentSynopsis
 
+    // Reset first, judge after. The reset is the fail-safe: a substantive
+    // rewrite must never keep a confirmed slot just because AI was
+    // unreachable. The talk-edit-review sweep then decides whether the edit
+    // actually changed the substance of the talk and, if not, restores the
+    // status the speaker already held.
+    let editReviewQueued = false
     if ((talkTitleChanged || talkSynopsisChanged) && statusResetStatuses.includes(newStatus)) {
+      const previousStatus = newStatus
       newStatus = 'pending'
       statusChanged = true
       console.log(`⚠️ Status reset to pending due to talk content change`)
+
+      const { error: reviewError } = await supabase
+        .from('speaker_talk_edit_reviews')
+        .insert({
+          talk_id: talk.id,
+          previous_status: previousStatus,
+          old_title: currentTitle ?? null,
+          new_title: talkTitleChanged ? body.talk_title : (currentTitle ?? null),
+          old_synopsis: currentSynopsis ?? null,
+          new_synopsis: talkSynopsisChanged ? body.talk_synopsis : (currentSynopsis ?? null),
+        })
+      if (reviewError) {
+        // Non-fatal: without the row the talk simply stays pending, which is
+        // the behaviour that existed before leniency was added.
+        console.error('Could not queue talk-edit review:', reviewError.message)
+      } else {
+        editReviewQueued = true
+      }
     }
 
     // Build talk update (for event_talks table)
@@ -444,12 +471,15 @@ async function handler(req: Request) {
       success: true,
       promo_kit_regenerating: kitRegenerated,
       message: statusChanged
-        ? 'Submission updated. Status reset to pending for re-review.'
+        ? (editReviewQueued
+            ? 'Submission updated. We\u2019re checking whether this changes the substance of your talk \u2014 if it\u2019s a minor edit your existing status is restored automatically, usually within a few minutes.'
+            : 'Submission updated. Status reset to pending for re-review.')
         : 'Submission updated successfully.',
       speaker_id: speaker?.id,
       talk_id: talk?.id,
       status: newStatus,
       status_changed: statusChanged,
+      edit_review_queued: editReviewQueued,
       debug: debugInfo
     }
 
