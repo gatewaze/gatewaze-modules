@@ -21,6 +21,7 @@
     "bullmq": "^5.76.10",
     "jszip": "^3.10.1",
     "puppeteer-core": "^23.11.1",
+    "qrcode": "^1.5.4",
     "sharp": "^0.33.5"
   },
   "devDependencies": {
