@@ -50,6 +50,8 @@ interface SpeakerUpdateResponse {
   talk_id?: string
   status?: string
   status_changed?: boolean
+  // True when this edit re-armed the speaker's promo kit for regeneration.
+  promo_kit_regenerating?: boolean
   error?: string
   debug?: {
     person_id?: number
@@ -414,8 +416,33 @@ async function handler(req: Request) {
       }
     }
 
+    // A speaker's promo kit renders their photo, name, role and company onto
+    // the cards and slide deck, so an edit here makes the existing kit stale.
+    // Re-arm it: the 2-minute sweep picks up 'requested' rows and rebuilds.
+    // Best-effort — a kit problem must never fail the speaker's own edit.
+    let kitRegenerated = false
+    if (talk?.id) {
+      const { error: kitError } = await supabase
+        .from('speaker_promo_kits')
+        .update({
+          status: 'requested',
+          attempts: 0,
+          error: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('talk_id', talk.id)
+        .in('status', ['ready', 'failed'])
+      if (kitError) {
+        console.error('Could not re-arm promo kit after profile edit:', kitError.message)
+      } else {
+        kitRegenerated = true
+        console.log(`♻️  Promo kit re-armed for talk ${talk.id} after profile edit`)
+      }
+    }
+
     const response: SpeakerUpdateResponse = {
       success: true,
+      promo_kit_regenerating: kitRegenerated,
       message: statusChanged
         ? 'Submission updated. Status reset to pending for re-review.'
         : 'Submission updated successfully.',
