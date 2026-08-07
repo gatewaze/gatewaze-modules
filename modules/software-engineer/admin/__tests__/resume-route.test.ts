@@ -144,7 +144,7 @@ describe('POST /runs/:id/resume', () => {
     expect(res.body).toEqual({ resumed: true, phase: 'implement', attempt: 2 });
     expect(enqueued).toEqual([[
       'se', 'software-engineer:implement', { runId: RID, attempt: 2 },
-      { jobId: `se-run-${RID}-implement`, removeOnComplete: true },
+      { jobId: `se-run-${RID}-implement`, removeOnComplete: true, removeOnFail: true },
     ]]);
   });
 
@@ -160,7 +160,7 @@ describe('POST /runs/:id/resume', () => {
     expect(res.body).toEqual({ resumed: true, phase: 'verify', attempt: 1 });
     expect(enqueued).toEqual([[
       'se', 'software-engineer:verify', { runId: RID, attempt: 1 },
-      { jobId: `se-run-${RID}-verify`, removeOnComplete: true },
+      { jobId: `se-run-${RID}-verify`, removeOnComplete: true, removeOnFail: true },
     ]]);
   });
 

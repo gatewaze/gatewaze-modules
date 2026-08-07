@@ -8,7 +8,15 @@
  * with the same (runId, phase). Because the jobId is deterministic (`se-run-<id>-<phase>`):
  *   - if the job is still queued/active, BullMQ dedups → no duplicate agent session;
  *   - if it was lost, the job is recreated → the run resumes from its saved phase.
- * removeOnComplete frees the id so the same phase can be re-driven later if needed.
+ *
+ * removeOnComplete AND removeOnFail both free the deterministic id on a terminal outcome so the phase
+ * can be re-driven later. removeOnFail is not optional: a TERMINAL BullMQ failure — a stall (the
+ * runner was killed mid-phase by a deploy/OOM, so BullMQ marks the job "stalled more than allowable
+ * limit") or an uncaught crash — otherwise leaves the failed job holding the id FOREVER. Every
+ * subsequent recover re-enqueue with the same id is then silently deduped, so the reconciler logs
+ * "re-drove" but nothing runs and the run wedges in its phase indefinitely (observed: a run stuck a
+ * full day in `implement` after a staging redeploy). The DB (se_phases / se_runs) is the durable
+ * failure record, so dropping the dead Redis job loses nothing diagnostic.
  */
 export async function enqueuePhase(ctx: unknown, runId: string, phase: string, data: Record<string, unknown> = {}) {
   if (!runId || !phase) return { id: undefined };
@@ -16,7 +24,7 @@ export async function enqueuePhase(ctx: unknown, runId: string, phase: string, d
     'se',
     `software-engineer:${phase}`,
     { runId, ...data },
-    { jobId: `se-run-${runId}-${phase}`, removeOnComplete: true },
+    { jobId: `se-run-${runId}-${phase}`, removeOnComplete: true, removeOnFail: true },
   ) ?? { id: undefined };
 }
 
