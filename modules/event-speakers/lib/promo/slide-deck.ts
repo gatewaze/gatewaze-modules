@@ -226,30 +226,25 @@ export async function buildSpeakerDeck(templatePptx: Buffer, inputs: DeckInputs)
         }
       } else {
         // ── Content slides, and the closing "Connect With Me" slide ─────
-        // Both share the same chrome: white page inside a thin accent
-        // border, with a card-black masthead band carrying the lockup.
+        // Both share the same chrome: a plain white page under a
+        // card-black masthead band carrying the lockup. The band runs the
+        // full width and sits flush to the top, with no border around the
+        // page — an inset band leaves slivers of white down the sides and
+        // above it, which reads as a mistake on a projector.
         const isConnectSlide = slidePaths.length > 2 && index === slidePaths.length - 1;
         bg = solidBg('FFFFFF');
-        const inset = 114300; // 0.125" border inset
-        shapes += rect(
-          inset,
-          inset,
-          SLIDE_W - inset * 2,
-          SLIDE_H - inset * 2,
-          { lineColor: accent, lineWidthEmu: 15875 }, // 1.25pt
-          'Border',
-        );
-        const bandH = 571500; // 0.625"
-        shapes += rect(inset, inset, SLIDE_W - inset * 2, bandH, { fill: cardBlack }, 'Masthead');
+        const bandH = 685800; // 0.75"
+        const margin = 457200; // 0.5" left/right margin for everything below
+        shapes += rect(0, 0, SLIDE_W, bandH, { fill: cardBlack }, 'Masthead');
         if (inputs.logoPng && inputs.logoAspect) {
           relsXml = addImageRel(relsXml, 'rIdPromoLogo', '../media/promoLogo.png');
           if (!relsXml) return null;
           const logoH = 342900; // 0.375"
           const logoW = Math.round(logoH * inputs.logoAspect);
-          shapes += picture('rIdPromoLogo', inset + 171450, inset + Math.round((bandH - logoH) / 2), logoW, logoH, 'Logo');
+          shapes += picture('rIdPromoLogo', margin, Math.round((bandH - logoH) / 2), logoW, logoH, 'Logo');
         }
-        const bodyX = inset + 228600;
-        const titleY = inset + bandH + 171450;
+        const bodyX = margin;
+        const titleY = bandH + 228600;
         shapes += textBox(
           bodyX,
           titleY,
@@ -269,7 +264,7 @@ export async function buildSpeakerDeck(templatePptx: Buffer, inputs: DeckInputs)
             bodyX,
             bodyTop,
             SLIDE_W - bodyX * 2,
-            SLIDE_H - inset - 228600 - bodyTop,
+            SLIDE_H - margin - bodyTop,
             para('Body text. Replace this with your own words, and duplicate this slide for the rest of your talk.', {
               sz: 1600,
               color: '374151',
@@ -286,9 +281,9 @@ export async function buildSpeakerDeck(templatePptx: Buffer, inputs: DeckInputs)
           // code is sized for someone reading it from the back of a room,
           // which is the whole point of repeating it at the end of the talk.
           const qrSize = 2377440; // 2.6"
-          const qrX = SLIDE_W - inset - 228600 - qrSize;
+          const qrX = SLIDE_W - margin - qrSize;
           const bodyTop = titleY + 685800;
-          const bodyBottom = SLIDE_H - inset - 228600;
+          const bodyBottom = SLIDE_H - margin;
           const qrY = bodyTop + Math.round((bodyBottom - bodyTop - qrSize) / 2);
           if (inputs.linkedinQrPng) {
             relsXml = addImageRel(relsXml, 'rIdPromoQrEnd', '../media/promoLinkedinQr.png');
