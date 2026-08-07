@@ -25,6 +25,12 @@ import PrBoard from './PrBoard';
 import { isGatewayError, StartingBanner } from './starting';
 import PendingApprovals from './PendingApprovals';
 import TestEnvStrip from './TestEnvStrip';
+import RunListSection from './RunListSection';
+
+// Runs-board rows shown per dashboard section — a dashboard summarises, it doesn't replace the Runs
+// board's full filterable list. A section past the cap shows "+N more" linking into the Runs board
+// (filtered to the same status set) rather than silently truncating with no indication.
+const SECTION_ROW_CAP = 8;
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -111,11 +117,14 @@ function BarRow({ label, count, max, barClass }: { label: React.ReactNode; count
   );
 }
 
-export default function OverviewView({ onGoToSetup, onOpenRuns }: {
+export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
   onGoToSetup?: () => void;
   // Open the Runs board filtered to a status set (comma-separated `?status=` param), carrying the
   // Overview's current project scope. When absent, the count tiles render non-interactive.
   onOpenRuns?: (statusParam: string, project?: string) => void;
+  // Open one run's detail pane directly, from a row in a dashboard run list. When absent, the run
+  // lists below render as plain (non-clickable) rows.
+  onOpenRun?: (runId: string) => void;
 }) {
   const [projects, setProjects] = useState<any[]>([]);
   const [projectFilter, setProjectFilter] = useState('');   // '' = all projects
@@ -126,6 +135,12 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
   // Per-model spend (subagent-inclusive), lazy-loaded from /overview/model-usage over a chosen window.
   const [modelUsage, setModelUsage] = useState<any | null>(null);
   const [muDays, setMuDays] = useState(7);
+  // The four run-list sections (SPEC.md §14.1): each is its own GET /runs?status=... call, scoped to
+  // the current project filter, so any one section refreshes/errors independently of the others.
+  const [awaitingSpecRuns, setAwaitingSpecRuns] = useState<any[]>([]);
+  const [architectureRuns, setArchitectureRuns] = useState<any[]>([]);
+  const [activeRuns, setActiveRuns] = useState<any[]>([]);
+  const [completedRuns, setCompletedRuns] = useState<any[]>([]);
   // Realtime, the 3s startup poll, and the 20s visibility-poll backstop below can all call `load`
   // around the same time; this guard skips a tick that overlaps an in-flight fetch instead of
   // firing a redundant request.
@@ -148,19 +163,42 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
     finally { setLoading(false); inFlight.current = false; }
   }, [projectFilter]);
 
+  // The four run-list sections ride the SAME refresh mechanism as the KPI/rollup payload above
+  // (Realtime on se_runs + the visibility-poll backstop) rather than a second polling loop. Each
+  // status set is its own GET /runs call — no new endpoint/migration; see SPEC.md §14.1's Open
+  // Questions for why (independent refresh per section, no aggregate-endpoint round trip).
+  const loadRunLists = useCallback(async () => {
+    const base = projectFilter ? `&project=${encodeURIComponent(projectFilter)}` : '';
+    const [spec, arch, active, completed] = await Promise.all([
+      api(`/runs?status=awaiting_spec${base}`).catch(() => null),
+      api(`/runs?status=awaiting_architecture,architecture_in_review${base}`).catch(() => null),
+      api(`/runs?status=${statusesToParam(CARD_FILTERS.active.statuses)}${base}`).catch(() => null),
+      api(`/runs?status=merged,closed,cancelled${base}`).catch(() => null),
+    ]);
+    if (spec) setAwaitingSpecRuns(spec.runs ?? []);
+    if (arch) setArchitectureRuns(arch.runs ?? []);
+    if (active) setActiveRuns(active.runs ?? []);
+    if (completed) {
+      // GET /runs sorts by created_at desc; "recently completed" wants most-recently-finished first.
+      const rows = [...(completed.runs ?? [])].sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
+      setCompletedRuns(rows);
+    }
+  }, [projectFilter]);
+
   useEffect(() => {
     load();
+    loadRunLists();
     const ch = supabase.channel('se-overview')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => { load(); loadRunLists(); })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
-  }, [load]);
+  }, [load, loadRunLists]);
 
   // Realtime is the primary update mechanism and already works; this is the backstop for a
   // silently dropped/never-reconnected channel. Mirrors the Issues tab's visibility-aware poll
   // (SoftwareEngineerTab.tsx IssuesView): every 20s while the tab is visible, plus an immediate
   // refetch on regaining focus so a backgrounded tab isn't stale.
-  useEffect(() => startVisibilityPoll(load, 20000), [load]);
+  useEffect(() => startVisibilityPoll(() => { load(); loadRunLists(); }, 20000), [load, loadRunLists]);
 
   // While the stack is coming up, poll until the API answers again.
   useEffect(() => {
@@ -233,7 +271,7 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
       ) : (
         <>
           {/* KPI tiles */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <Tile icon={<CommandLineIcon className="size-3.5" />} label="Active" value={nf.format(totals.active ?? 0)} sub="in flight" onClick={openRuns && (() => openRuns(CARD_FILTERS.active.statuses))} />
             <Tile icon={<CheckCircleIcon className="size-3.5" />} label="Merged" value={nf.format(totals.merged_30d ?? 0)} sub="last 30 days" tone={(totals.merged_30d ?? 0) > 0 ? 'good' : 'default'} onClick={openRuns && (() => openRuns(CARD_FILTERS.merged.statuses))} />
             <Tile icon={<ArrowTopRightOnSquareIcon className="size-3.5" />} label="Open PRs" value={nf.format(totals.open_prs ?? 0)} sub="awaiting review/merge" onClick={openRuns && (() => openRuns(CARD_FILTERS.open_prs.statuses))} />
@@ -249,6 +287,53 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
               />
             )}
           </div>
+
+          {/* Human-gate sections (SPEC.md §14.1): runs parked waiting on a person. These read
+              directly off se_runs.status — awaiting_spec (migration 018) and the two
+              architecture-review statuses (migrations 015/016) — via the now-fixed RUN_STATUSES /
+              ALL_RUN_STATUSES allowlists. Approving happens on the Runs board's own detail pane
+              (POST /runs/:id/spec/approve, /runs/:id/architecture/approve); these rows link there
+              rather than duplicating that write action. */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <RunListSection
+              title="Awaiting spec approval"
+              rows={awaitingSpecRuns.slice(0, SECTION_ROW_CAP)}
+              emptyLabel="Nothing waiting on spec approval."
+              onOpenRun={onOpenRun}
+            />
+            <RunListSection
+              title="Architecture review"
+              rows={architectureRuns.slice(0, SECTION_ROW_CAP)}
+              emptyLabel="Nothing in architecture review."
+              onOpenRun={onOpenRun}
+            />
+          </div>
+          {(awaitingSpecRuns.length > SECTION_ROW_CAP || architectureRuns.length > SECTION_ROW_CAP) && onOpenRuns && (
+            <p className="text-xs text-[var(--gray-10)]">
+              Showing the {SECTION_ROW_CAP} most recent per gate —{' '}
+              <button type="button" className="underline hover:text-[var(--gray-12)]" onClick={() => openRuns?.(['awaiting_architecture', 'architecture_in_review', 'awaiting_spec'])}>
+                see all gated runs on the Runs board
+              </button>.
+            </p>
+          )}
+
+          {/* Active runs — runtime ticks up live (no stored duration column on se_runs; computed
+              client-side from started_at) alongside the cost already tracked per run. */}
+          <RunListSection
+            title="Active runs"
+            rows={activeRuns.slice(0, SECTION_ROW_CAP)}
+            emptyLabel="Nothing in flight."
+            onOpenRun={onOpenRun}
+          />
+
+          {/* Recently completed — merged, closed, or cancelled, most-recently-finished first. */}
+          <RunListSection
+            title="Recently completed"
+            rows={completedRuns.slice(0, SECTION_ROW_CAP)}
+            emptyLabel="No completed runs yet."
+            onOpenRun={onOpenRun}
+            durationEnd="updated_at"
+          />
 
           {/* PR board — the live "where is every PR + who acts next" view */}
           <PrBoard projectFilter={projectFilter} />

@@ -122,4 +122,20 @@ describe('GET /runs — status filtering', () => {
     await router.handler('GET /runs')({ query: { status: 'architecture_in_review,awaiting_architecture' } }, mockRes());
     expect(statusFilters(supa)).toEqual([{ op: 'in', args: ['status', ['architecture_in_review', 'awaiting_architecture']] }]);
   });
+
+  // Migrations 017 (ready_to_submit) and 018 (awaiting_spec) previously lagged behind the same way —
+  // the allowlist here silently returned zero rows for either filter until fixed.
+  it('accepts awaiting_spec as a single valid status', async () => {
+    const supa = mockSupabase();
+    const router = mount(supa);
+    await router.handler('GET /runs')({ query: { status: 'awaiting_spec' } }, mockRes());
+    expect(statusFilters(supa)).toEqual([{ op: 'eq', args: ['status', 'awaiting_spec'] }]);
+  });
+
+  it('accepts ready_to_submit in a status set', async () => {
+    const supa = mockSupabase();
+    const router = mount(supa);
+    await router.handler('GET /runs')({ query: { status: 'ready_to_submit,awaiting_spec' } }, mockRes());
+    expect(statusFilters(supa)).toEqual([{ op: 'in', args: ['status', ['ready_to_submit', 'awaiting_spec']] }]);
+  });
 });
