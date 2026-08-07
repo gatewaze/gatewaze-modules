@@ -32,6 +32,7 @@ import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
 import { ALL_RUN_STATUSES, STATUS_LABELS, toggleStatusInParam, fmtCost } from './overview-filters';
 import { aggregateRunModelCosts, shortModel } from '../lib/run-costs';
+import { formatAbsolute, formatRelative } from '../lib/format-time';
 import { isNearBottom } from './autoscroll';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
@@ -538,6 +539,11 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <Badge color={STATUS_COLOR[r.status] ?? 'gray'} size="1">{r.status}</Badge>
               <span className="text-xs text-[var(--gray-10)]">{r.current_phase}</span>
+              {formatRelative(r.started_at ?? r.created_at) && (
+                <span className="text-[11px] text-[var(--gray-10)]" title={formatAbsolute(r.started_at ?? r.created_at) ?? undefined}>
+                  started {formatRelative(r.started_at ?? r.created_at)}
+                </span>
+              )}
               {fmtCost(r.cost_usd) && <span className="text-[11px] font-mono text-[var(--gray-10)]" title="Model spend (priced from the AI price book)">{fmtCost(r.cost_usd)}</span>}
               {r.project?.name && <span className="text-[11px] text-[var(--gray-10)] ml-auto inline-flex items-center gap-1"><ProjectAvatar emoji={r.project.avatar_emoji} className="size-3.5" /> {r.project.name}{r.engineer_name ? ` · ${r.engineer_name}` : ''}</span>}
             </div>
@@ -569,6 +575,11 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   <Badge color={STATUS_COLOR[detail.run.pr_state] ?? 'gray'} variant="soft" size="1">PR: {detail.run.pr_state}</Badge>
                 )}
                 {detail.run.project?.name && <span className="text-xs text-[var(--gray-10)] inline-flex items-center gap-1"><ProjectAvatar emoji={detail.run.project.avatar_emoji} className="size-4" /> {detail.run.project.name}</span>}
+                {formatRelative(detail.run.started_at ?? detail.run.created_at) && (
+                  <span className="text-xs text-[var(--gray-10)]" title={formatAbsolute(detail.run.started_at ?? detail.run.created_at) ?? undefined}>
+                    started {formatRelative(detail.run.started_at ?? detail.run.created_at)}
+                  </span>
+                )}
                 {detail.run.engineer_name && <span className="text-xs text-[var(--gray-10)]">🧑‍💻 {detail.run.engineer_name}</span>}
                 {detail.run.reporter_display_name && <span className="text-xs text-[var(--gray-10)]">· reported by {detail.run.reporter_display_name}</span>}
                 {detail.run.revise_count > 0 && <span className="text-xs text-[var(--gray-10)]">· {detail.run.revise_count} revision{detail.run.revise_count > 1 ? 's' : ''}</span>}
