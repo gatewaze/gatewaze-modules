@@ -1,0 +1,21 @@
+-- ============================================================================
+-- Module: newsletters
+-- Migration: 078_newsletter_replies_grant
+-- Description: Grant table-level privileges on newsletter_replies to
+-- authenticated + service_role. Migration 015 enabled RLS and added
+-- SELECT/UPDATE/DELETE policies for authenticated, but never granted the
+-- table itself, so PostgREST rejects every authenticated request with a
+-- permission error before the RLS policy even runs.
+--
+-- Symptom: marking a newsletter reply as read from the admin Replies tab
+-- silently fails (the update is rejected at the grant layer), while sending
+-- a reply works because that path goes through an edge function using the
+-- service_role client, which bypasses table grants and RLS.
+--
+-- Sibling tables broadcast_replies and event_replies already carry this
+-- grant (see broadcasts/migrations/009_broadcast_replies.sql and
+-- bulk-emailing/migrations/025_event_replies.sql); this migration brings
+-- newsletter_replies in line.
+-- ============================================================================
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.newsletter_replies TO authenticated, service_role;
