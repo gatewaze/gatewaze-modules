@@ -1289,13 +1289,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                       <EnvelopeIcon className="w-4 h-4" />
                     </button>
                   )}
-                  <button
-                    onClick={() => setDeletingTalk(talk)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
-                    title="Delete submission (removes speaker from event, keeps member)"
-                  >
-                    <TrashIcon className="w-4 h-4" />
-                  </button>
                 </div>
               </>
             ) : viewMode === 'approved' ? (
@@ -1333,13 +1326,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     title="Edit speaker"
                   >
                     <PencilIcon className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => setDeletingTalk(talk)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                    title="Remove speaker"
-                  >
-                    <TrashIcon className="w-4 h-4" />
                   </button>
                 </div>
               </>
@@ -1394,13 +1380,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         title="Edit speaker"
                       >
                         <PencilIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeletingTalk(talk)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                        title="Remove speaker"
-                      >
-                        <TrashIcon className="w-4 h-4" />
                       </button>
                     </div>
                   </>
@@ -1474,13 +1453,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         title="Edit speaker"
                       >
                         <PencilIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeletingTalk(talk)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                        title="Remove speaker"
-                      >
-                        <TrashIcon className="w-4 h-4" />
                       </button>
                     </div>
                   </>
