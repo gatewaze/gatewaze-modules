@@ -24,6 +24,21 @@ import React, { useEffect, useRef, useState } from 'react';
 import { DocumentTextIcon, PencilSquareIcon, ArrowPathIcon, WrenchIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import TranscriptMarkdown from './TranscriptMarkdown';
 import { buildTimeline, currentActivity, basename, type TimelineStep, type DocEdit } from '../lib/timeline';
+import { formatAbsolute, formatRelative } from '../lib/format-time';
+
+/** Small muted relative-time label for a step, with the absolute time as its tooltip. Omitted when
+ * the step has no usable timestamp (e.g. a synthetic/zero `at`). */
+function StepTime({ at }: { at: number }) {
+  if (!at) return null;
+  const iso = new Date(at).toISOString();
+  const rel = formatRelative(iso);
+  if (!rel) return null;
+  return (
+    <span className="ml-auto shrink-0 text-[10px] font-normal text-[var(--gray-9)]" title={formatAbsolute(iso) ?? undefined}>
+      {rel}
+    </span>
+  );
+}
 
 const FLASH_STYLE = `
 @keyframes se-flash-in { 0% { background-color: var(--green-4); } 100% { background-color: transparent; } }
@@ -113,14 +128,20 @@ function StepView({ step, flash }: { step: TimelineStep; flash: boolean }) {
         <div className={`rounded-md px-3 py-2 border-l-2 bg-[var(--gray-2)] ${flashCls} ${
           step.role === 'admin' ? 'border-l-blue-400' : step.role === 'system' ? 'border-l-amber-400' : 'border-l-[var(--gray-6)]'
         }`}>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-10)]">{step.role}{step.subSessionId ? ` · ${step.subSessionId}` : ''}</div>
+          <div className="flex items-baseline text-[11px] uppercase tracking-wide text-[var(--gray-10)]">
+            <span>{step.role}{step.subSessionId ? ` · ${step.subSessionId}` : ''}</span>
+            <StepTime at={step.at} />
+          </div>
           <TranscriptMarkdown className="text-[var(--gray-12)]">{step.content}</TranscriptMarkdown>
         </div>
       );
     case 'assistant':
       return (
         <div className={`rounded-md px-3 py-2 bg-[var(--gray-2)] border-l-2 border-l-[var(--gray-6)] ${flashCls}`}>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-10)]">agent{step.agent ? ` · ${step.agent}` : ''}</div>
+          <div className="flex items-baseline text-[11px] uppercase tracking-wide text-[var(--gray-10)]">
+            <span>agent{step.agent ? ` · ${step.agent}` : ''}</span>
+            <StepTime at={step.at} />
+          </div>
           <Clampable text={step.text} className="whitespace-pre-wrap text-[var(--gray-12)]" />
         </div>
       );
@@ -133,6 +154,7 @@ function StepView({ step, flash }: { step: TimelineStep; flash: boolean }) {
             <div className="flex items-center gap-2 px-3 py-1 text-xs text-[var(--gray-11)]">
               <WrenchIcon className="size-3.5 shrink-0 text-[var(--gray-9)]" />
               <span className="text-[var(--gray-12)]">{step.label}</span>
+              <StepTime at={step.at} />
             </div>
           )}
         </div>
