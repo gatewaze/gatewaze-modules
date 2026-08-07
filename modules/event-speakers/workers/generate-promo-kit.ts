@@ -173,13 +173,17 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
           event: { date_short: '', city: '' },
           brand,
           hideChrome: true,
-          // 3x of the 1200x630 card. This art is stretched across the full
-          // width of a 10-inch slide, so the 1200px the shareable cards use
-          // lands at 120 DPI and the lockups look soft on a big screen.
-          // 3600px is 360 DPI there, which holds up on a 4K display.
-          scale: 3,
         },
-        [{ format: 'landscape', templateFile: 'speaker-card-landscape.html', exportWidth: 3600, exportHeight: 1890 }],
+        // Export at HD width. This art spans the full width of the slide, so
+        // 1920px matches a 1080p projector pixel for pixel, which is what
+        // these decks are shown on. It was exported at 1200px, the size the
+        // shareable cards use, which left the lockups soft at 120 DPI.
+        //
+        // The render itself is unchanged at device scale 2, so Chromium
+        // still draws 2400px and sharp still downsamples. Rendering above
+        // the target and coming down is what keeps the lockup edges clean;
+        // the old export just came down too far.
+        [{ format: 'landscape', templateFile: 'speaker-card-landscape.html', exportWidth: 1920, exportHeight: 1008 }],
       );
 
       // Brand lockup → PNG for the content-slide masthead.

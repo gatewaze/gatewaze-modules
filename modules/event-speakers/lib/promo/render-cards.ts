@@ -252,14 +252,6 @@ export interface RenderCardInput {
    *  code instead, and the deck overlays its own editable name block, which
    *  sits where the chip used to be. The shareable cards keep both. */
   hideChrome?: boolean;
-  /**
-   * Chromium device scale factor, default 2. The shareable cards are viewed
-   * at their own pixel size so 2 is plenty. The slide-deck background is
-   * stretched across a 10-inch slide and shown on a projector or a large
-   * screen, where 1200px works out at 120 DPI and the lockups go soft, so
-   * that render asks for 3 and exports at the full rendered size.
-   */
-  scale?: number;
 }
 
 export interface RenderedCard {
@@ -348,7 +340,7 @@ export async function renderSpeakerCards(
 
       const page = await browser.newPage();
       try {
-        await page.setViewport({ width: cardW, height: cardH, deviceScaleFactor: input.scale ?? 2 });
+        await page.setViewport({ width: cardW, height: cardH, deviceScaleFactor: 2 });
         // Templates are fully self-contained (fonts + art as data URIs), so
         // no network access happens during load. Wait on domcontentloaded,
         // NOT 'load': setContent uses CDP Page.setDocumentContent, which has
