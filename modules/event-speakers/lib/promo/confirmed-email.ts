@@ -74,8 +74,15 @@ export interface ConfirmedEmailResult {
 
 /**
  * Send the confirmed email for a kit if due: enabled in comms settings,
- * inline content present, not already sent. Attaches the kit zip when
- * provided. Never throws — kit finalization must not fail on email issues.
+ * content present, not already sent, AND the kit zip built.
+ *
+ * The zip is required, not optional: the email copy tells the speaker their
+ * promo kit is attached, so sending without it delivers a broken promise.
+ * Callers must finish building the zip first — which is exactly why this
+ * send lives at kit-finalize time rather than at the moment an admin clicks
+ * Confirm (the kit doesn't exist yet at that point).
+ *
+ * Never throws — kit finalization must not fail on email issues.
  */
 export async function sendConfirmedEmailIfDue(
   supabase,
@@ -93,12 +100,21 @@ export async function sendConfirmedEmailIfDue(
     speaker: { fullName: string; jobTitle: string | null; company: string | null };
   },
   speakerEmail: string | null,
+  // Required in practice — see the note above. Typed nullable only so the
+  // caller can pass a failed/absent build through and get a held result
+  // rather than having to branch itself.
   zip: { buffer: Buffer; filename: string } | null,
   log: (m: string) => void,
 ): Promise<ConfirmedEmailResult> {
   try {
     if (kit.confirmed_email_sent_at) return { sent: false, reason: 'already_sent' };
     if (!speakerEmail) return { sent: false, reason: 'no_speaker_email' };
+    // Never announce an attachment we aren't carrying. Leaving
+    // confirmed_email_sent_at unset means a later kit run still sends it.
+    if (!zip) {
+      log('confirmed email held: promo-kit zip not generated yet');
+      return { sent: false, reason: 'zip_not_ready' };
+    }
 
     const { data: settings } = await supabase
       .from('events_communication_settings')
