@@ -210,10 +210,8 @@ const EventDetailPage = () => {
   const [isSaving, setSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [isGeneratingQr, setIsGeneratingQr] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [allEvents, setAllEvents] = useState<Event[]>([]);
-  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
 
   // Build tab list dynamically from core tabs + module slots.
   // Memoised so the Radix Tabs component keeps a stable trigger collection
@@ -284,20 +282,6 @@ const EventDetailPage = () => {
 
     loadEvent();
   }, [eventId]);
-
-  // Generate QR code when event loads
-  useEffect(() => {
-    if (event?.checkinQrCode) {
-      QRCodeService.generateEventQRCode(event.checkinQrCode, { size: 200 })
-        .then(setQrCodeDataUrl)
-        .catch(error => {
-          console.error('Error generating QR code:', error);
-          setQrCodeDataUrl(null);
-        });
-    } else {
-      setQrCodeDataUrl(null);
-    }
-  }, [event?.checkinQrCode]);
 
   const loadAccounts = async () => {
     try {
@@ -560,26 +544,6 @@ const EventDetailPage = () => {
     }
   };
 
-  const handleGenerateQrCode = async () => {
-    if (!eventId) return;
-
-    setIsGeneratingQr(true);
-    try {
-      const response = await ScreenshotManagementService.generateCheckinQrCode(eventId!);
-      if (response.success && response.data) {
-        toast.success('Check-in QR code generated successfully');
-        await loadEvent(); // Reload to show the new QR code
-      } else {
-        toast.error(response.error || 'Failed to generate QR code');
-      }
-    } catch (error) {
-      console.error('Error generating QR code:', error);
-      toast.error('Failed to generate QR code');
-    } finally {
-      setIsGeneratingQr(false);
-    }
-  };
-
   if (loading) {
     return (
       <Page>
@@ -813,12 +777,9 @@ const EventDetailPage = () => {
               errors={errors}
               watch={watch}
               setValue={setValue}
-              onGenerateQrCode={handleGenerateQrCode}
-              isGeneratingQr={isGeneratingQr}
               isSaving={isSaving}
               accounts={accounts}
               allEvents={allEvents}
-              qrCodeDataUrl={qrCodeDataUrl}
               eventTypes={eventTypes}
               contentCategories={contentCategories}
               onReload={loadEvent}
@@ -1081,7 +1042,7 @@ const PUBLISH_STATE_ACTIONS: Record<string, Array<{ to: string; label: string; c
   ],
 };
 
-const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue, onGenerateQrCode, isGeneratingQr, isSaving, accounts, allEvents, qrCodeDataUrl, eventTypes, contentCategories, onReload }: any) => {
+const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue, isSaving, accounts, allEvents, eventTypes, contentCategories, onReload }: any) => {
   const { isModuleEnabled } = useModulesContext();
   const hasTopicsModule = isModuleEnabled('event-topics');
   const hasSpeakersModule = isModuleEnabled('event-speakers');
@@ -2003,81 +1964,6 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
                   />
                 )}
               </div>
-            </div>
-          </Card>
-        )}
-
-        {/* Event Check-In QR Code - Enhanced styling */}
-        {event.enableRegistration && (
-          <Card className="overflow-hidden border-0 shadow-sm">
-            <div className="p-6">
-              <div className="flex items-center gap-3 mb-5">
-                <div className="p-2 bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-900/20 dark:to-purple-900/20 rounded-lg">
-                  <QrCodeIcon className="w-5 h-5 text-violet-600 dark:text-violet-400" />
-                </div>
-                <h3 className="text-lg font-bold text-[var(--gray-12)]">
-                  Check-In QR Code
-                </h3>
-              </div>
-              {event.checkinQrCode ? (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-center bg-white p-4 rounded-lg border border-[var(--gray-a6)]">
-                    {qrCodeDataUrl ? (
-                      <img
-                        src={qrCodeDataUrl}
-                        alt="Event Check-in QR Code"
-                        className="w-48 h-48"
-                      />
-                    ) : (
-                      <div className="w-48 h-48 flex items-center justify-center">
-                        <div className="text-[var(--gray-a9)]">Loading QR Code...</div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs font-mono text-[var(--gray-a11)] mb-2">
-                      {event.checkinQrCode}
-                    </p>
-                    <p className="text-xs text-[var(--gray-a11)]">
-                      Display this QR code at the event venue for attendee check-in
-                    </p>
-                  </div>
-                  <div className="pt-2">
-                    <Button variant="solid" onClick={() => QRCodeService.downloadQRCode(event.checkinQrCode!, `${event.eventId}-checkin-qr`, 1000)}>
-                      Download High-Res QR Code
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-center h-48 bg-[var(--gray-a3)] rounded-lg border-2 border-dashed border-[var(--gray-a6)]">
-                    <div className="text-center">
-                      <QrCodeIcon className="w-12 h-12 mx-auto mb-2 text-[var(--gray-a9)]" />
-                      <p className="text-sm text-[var(--gray-a11)]">
-                        No check-in QR code generated yet
-                      </p>
-                    </div>
-                  </div>
-                  <Button
-                    variant="solid"
-                    onClick={onGenerateQrCode}
-                    disabled={isGeneratingQr}
-                    className="w-full"
-                  >
-                    {isGeneratingQr ? (
-                      <>Generating...</>
-                    ) : (
-                      <>
-                        <QrCodeIcon className="w-4 h-4 mr-2" />
-                        Generate Check-In QR Code
-                      </>
-                    )}
-                  </Button>
-                  <p className="text-xs text-[var(--gray-a11)] text-center">
-                    Generate a unique QR code for event attendees to scan and check in
-                  </p>
-                </div>
-              )}
             </div>
           </Card>
         )}
