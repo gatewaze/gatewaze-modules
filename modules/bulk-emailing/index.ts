@@ -25,6 +25,15 @@ const bulkEmailingModule: GatewazeModule = {
       requiredFeature: 'bulk-emailing',
       meta: { tabId: 'communications', label: 'Comms', icon: 'ChatBubbleLeftRightIcon' },
     },
+    {
+      // Inbound replies to this event's comms. Sits directly after Comms so
+      // "what did we send" and "what came back" are adjacent.
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/components/EventRepliesTab'),
+      order: 131,
+      requiredFeature: 'bulk-emailing',
+      meta: { tabId: 'replies', label: 'Replies', icon: 'InboxIcon' },
+    },
   ],
 
   edgeFunctions: [
@@ -130,6 +139,9 @@ const bulkEmailingModule: GatewazeModule = {
     // 025 event_replies + event_reply_messages + forward_replies_to, so event
     // comms replies land against the event like newsletter/broadcast replies.
     'migrations/025_event_replies.sql',
+    // 026 aligns event_reply_messages with broadcast_reply_messages so
+    // reply-send's generic insert works without a third column mapping.
+    'migrations/026_event_reply_messages_align.sql',
   ],
 
   workers: [
