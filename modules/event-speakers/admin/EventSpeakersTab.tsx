@@ -198,8 +198,9 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   const [eventSponsors, setEventSponsors] = useState<EventSponsor[]>([]);
 
   // Speaker tracking links state — disabled when the redirects module isn't installed
+  // Tracking links are minted by the promo-kit worker; the admin only READS
+  // them here (click + registration stats badge). No manual generation.
   const [speakerLinks, setSpeakerLinks] = useState<Record<string, SpeakerTrackingLink>>({});
-  const [copyingLinkFor, setCopyingLinkFor] = useState<string | null>(null);
   const [linksAvailable, setLinksAvailable] = useState<boolean | null>(null); // null = not checked yet
 
   // Form state for existing customer
@@ -379,40 +380,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
       setSpeakerLinks(links);
     } catch (error) {
       console.error('Error loading speaker links:', error);
-    }
-  };
-
-  const handleCopyTrackingLink = async (speakerId: string, speakerName?: string) => {
-    if (linksAvailable === false) return;
-    if (!eventLink) {
-      toast.error('Event link is required to generate tracking links');
-      return;
-    }
-
-    setCopyingLinkFor(speakerId);
-
-    try {
-      const name = speakerName || 'speaker';
-      const link = await SpeakerLinkService.getOrCreateSpeakerLink(
-        speakerId,
-        eventId,
-        eventLink,
-        name
-      );
-
-      await navigator.clipboard.writeText(link.shortUrl);
-      toast.success('Tracking link copied to clipboard!');
-
-      // Update local state with the new link
-      setSpeakerLinks(prev => ({
-        ...prev,
-        [speakerId]: link
-      }));
-    } catch (error) {
-      console.error('Error copying tracking link:', error);
-      toast.error('Failed to generate tracking link');
-    } finally {
-      setCopyingLinkFor(null);
     }
   };
 
@@ -1333,20 +1300,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   >
                     <TrashIcon className="w-4 h-4" />
                   </button>
-                  {eventLink && linksAvailable === true && (
-                    <button
-                      onClick={() => speakerId && handleCopyTrackingLink(speakerId, speaker?.full_name || speaker?.email)}
-                      disabled={copyingLinkFor === speakerId}
-                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
-                      title="Copy tracking link"
-                    >
-                      {copyingLinkFor === speakerId ? (
-                        <LoadingSpinner size="xs" />
-                      ) : (
-                        <LinkIcon className="w-4 h-4" />
-                      )}
-                    </button>
-                  )}
                 </div>
               </>
             ) : (
@@ -1408,20 +1361,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                       >
                         <TrashIcon className="w-4 h-4" />
                       </button>
-                      {eventLink && linksAvailable === true && (
-                        <button
-                          onClick={() => speakerId && handleCopyTrackingLink(speakerId, speaker?.full_name || speaker?.email)}
-                          disabled={copyingLinkFor === speakerId}
-                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
-                          title="Copy tracking link"
-                        >
-                          {copyingLinkFor === speakerId ? (
-                            <LoadingSpinner size="xs" />
-                          ) : (
-                            <LinkIcon className="w-4 h-4" />
-                          )}
-                        </button>
-                      )}
                     </div>
                   </>
                 )}
@@ -2175,23 +2114,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   )}
                 </div>
 
-                {/* Actions */}
-                {(viewMode === 'confirmed' || viewMode === 'approved') && eventLink && linksAvailable === true && (
-                  <div className="shrink-0">
-                    <button
-                      onClick={() => handleCopyTrackingLink(speakerGroup.speakerId, speakerGroup.speakerName)}
-                      disabled={copyingLinkFor === speakerGroup.speakerId}
-                      className="p-2 text-gray-400 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
-                      title="Copy tracking link"
-                    >
-                      {copyingLinkFor === speakerGroup.speakerId ? (
-                        <LoadingSpinner size="xs" />
-                      ) : (
-                        <LinkIcon className="w-5 h-5" />
-                      )}
-                    </button>
-                  </div>
-                )}
               </div>
             </Card>
           ));
