@@ -93,6 +93,9 @@ const eventSpeakersModule: GatewazeModule = {
   ],
 
   edgeFunctions: [
+    // Add-to-calendar links for the speaker checklist (google/outlook/ics),
+    // ported from legacy gatewaze-admin — the portal was 404ing without it.
+    'calendar',
     'events-speaker-confirm',
     'events-speaker-submission',
     'events-speaker-submissions',
