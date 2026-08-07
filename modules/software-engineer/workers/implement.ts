@@ -31,7 +31,10 @@ export default async function implement(job, ctx) {
   const token = project.githubToken;
 
   const codeRepos = (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun);
-  await recordPhaseStart(supabase, run, 'implement');
+  // A resumed run (admin-routes.ts's /resume) passes an incremented attempt so this retry's row
+  // doesn't clobber the FAILED attempt 1 row — both stay visible on the run detail phase badges.
+  const attempt = job?.data?.attempt ?? 1;
+  await recordPhaseStart(supabase, run, 'implement', attempt);
   let ws;
   try {
     const { data: art } = await supabase.from('se_artifacts').select('content').eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
@@ -54,7 +57,7 @@ export default async function implement(job, ctx) {
     ].join('\n');
 
     const result = await runAgentSession(supabase, ctx, run, project, 'implement', {
-      cwd: ws.root, prompt, repos: ws.repos,
+      cwd: ws.root, prompt, repos: ws.repos, attempt,
       allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
       systemAppend: 'Implement per the spec + each repo\'s rules. Never use --no-verify or --force. Do not open PRs.',
     });

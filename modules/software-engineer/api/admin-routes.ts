@@ -861,6 +861,52 @@ export function mountAdminRoutes(router, deps) {
     res.json({ status: 'cancelled' });
   });
 
+  // Resume a FAILED run back into the phase that failed, keeping the same run id + full message/event
+  // history (issue #36). Modeled on spec/approve below: jump straight to 'running' rather than 'queued'
+  // — a resume is an admin continuing a run that already occupies its concurrency slot, so it bypasses
+  // dispatchProject's promotion path on purpose (that path always re-enqueues 'intake', which would
+  // restart the pipeline instead of retrying the phase that actually failed). Gated the same way as the
+  // other Advance actions (spend tokens + PAT push power) via denyIfNotApprover.
+  router.post('/runs/:id/resume', async (req, res) => {
+    if (!rateLimit(`se-admin:resume:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: run } = await supabase.from('se_runs')
+      .select('id, site_id, project_id, status, kind, archived_at, current_phase, error').eq('id', id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'not found' });
+    if (run.status !== 'failed') return res.status(409).json({ error: { code: 'not_failed', message: `run is ${run.status}` } });
+    if (run.archived_at) return res.status(409).json({ error: { code: 'archived', message: 'Unarchive the run before resuming it.' } });
+    if (run.kind === 'interactive') return res.status(409).json({ error: { code: 'not_resumable', message: 'Interactive sessions cannot be resumed this way.' } });
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
+
+    // Ground truth for what actually failed is the latest FAILED se_phases row, not run.current_phase
+    // (they can disagree, e.g. a crash mid-write) — prefer the phase row and fail closed if neither
+    // resolves, rather than guessing and re-cloning into the wrong phase.
+    const { data: lastFailed } = await supabase.from('se_phases')
+      .select('phase, attempt').eq('run_id', id).eq('status', 'failed').order('started_at', { ascending: false }).limit(1).maybeSingle();
+    const resumePhase = lastFailed?.phase ?? run.current_phase ?? null;
+    if (!resumePhase) return res.status(409).json({ error: { code: 'no_phase', message: 'Could not determine which phase to resume.' } });
+    const { count: attemptCount } = await supabase.from('se_phases')
+      .select('id', { count: 'exact', head: true }).eq('run_id', id).eq('phase', resumePhase);
+    const nextAttempt = (attemptCount ?? lastFailed?.attempt ?? 0) + 1;
+
+    const { error } = await supabase.from('se_runs')
+      .update({ status: 'running', current_phase: resumePhase, error: null, acting_user_id: authorOf(req) })
+      .eq('id', id).eq('status', 'failed');   // atomic guard against a double-resume race
+    if (error) return res.status(500).json({ error: 'update failed' });
+    try {
+      await supabase.from('se_messages').insert({
+        run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req),
+        content: `Resumed by admin (attempt ${nextAttempt} of ${resumePhase}). Original failure: ${run.error ?? 'unknown'}`,
+      });
+    } catch { /* best-effort — the phase badges still show the resume via attempt tracking */ }
+    try { await enqueuePhase({ enqueueJob }, id, resumePhase, { attempt: nextAttempt }); }
+    catch (e) { logger?.warn?.('se: enqueue after resume failed', { error: String(e) }); }
+    res.json({ resumed: true, phase: resumePhase, attempt: nextAttempt });
+  });
+
   // Manually merge a run's open, mergeable PR(s) from the Runs dashboard — the human counterpart to the
   // autonomous workers/merge.ts. It deliberately BYPASSES the autonomy/blast gate (an admin is explicitly
   // asking, which is the whole point for pr_only projects and needs_human runs) but keeps every other

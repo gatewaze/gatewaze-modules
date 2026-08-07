@@ -33,6 +33,7 @@ import OverviewView from './OverviewView';
 import { ALL_RUN_STATUSES, STATUS_LABELS, toggleStatusInParam, fmtCost } from './overview-filters';
 import { aggregateRunModelCosts, shortModel } from '../lib/run-costs';
 import { isNearBottom } from './autoscroll';
+import { resumeBlockedReason } from './resumeButton';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -150,6 +151,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [starting, setStarting] = useState(false);
   const [merging, setMerging] = useState(false);            // guard against a double manual-merge submit
   const [submitting, setSubmitting] = useState(false);      // guard against a double PR-submit click
+  const [resuming, setResuming] = useState(false);          // guard against a double resume click
   const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
   const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
   const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
@@ -335,6 +337,17 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
       await loadRuns(); await loadDetail(selected);
     } catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setMerging(false); }
+  };
+  // Resume a FAILED run back into the phase that failed (issue #36) — keeps the run id + full history.
+  const resume = async () => {
+    if (!selected || !window.confirm('Resume this run? It will retry the phase that failed.')) return;
+    setResuming(true); setErr(null);
+    try {
+      const r = await api(`/runs/${selected}/resume`, { method: 'POST' });
+      toast.success(`Resuming — retrying ${r?.phase ?? 'the failed phase'} (attempt ${r?.attempt ?? '?'}).`);
+      await loadRuns(); await loadDetail(selected);
+    } catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setResuming(false); }
   };
   // Submit a human-gated PR (status ready_to_submit): opens the pull request(s) the agent prepared.
   const submitPr = async () => {
@@ -579,6 +592,21 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   {detail.run.kind === 'interactive' && detail.run.status === 'running' && (
                     <Button variant="soft" color="red" size="xs" onClick={closeSession}><StopCircleIcon className="size-3.5 mr-1" />End session</Button>
                   )}
+                  {detail.run.status === 'failed' && (() => {
+                    const blockedReason = resumeBlockedReason(detail.run);
+                    return (
+                      <span className="inline-flex items-center gap-1.5">
+                        <Button
+                          variant="solid" color="amber" size="xs" onClick={resume}
+                          disabled={resuming || !!blockedReason}
+                          title={blockedReason ?? 'Retry the phase that failed, keeping this run’s history'}
+                        >
+                          <ArrowPathIcon className="size-3.5 mr-1" />{resuming ? 'Resuming…' : 'Resume'}
+                        </Button>
+                        {blockedReason && <span className="text-xs text-[var(--gray-10)]">{blockedReason}</span>}
+                      </span>
+                    );
+                  })()}
                   <Button variant="soft" size="xs" onClick={override} disabled={!liveStatus}><ArrowUturnLeftIcon className="size-3.5 mr-1" />Override</Button>
                   {detail.run.kind !== 'interactive' && (
                     <Button variant="soft" color="red" size="xs" onClick={cancel} disabled={!liveStatus}><XCircleIcon className="size-3.5 mr-1" />Cancel</Button>

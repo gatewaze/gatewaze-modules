@@ -9,15 +9,18 @@ import { pricePhaseCostUSD } from './cost.js';
 
 const now = () => new Date().toISOString();
 
-export async function recordPhaseStart(sb: unknown, run: any, phase: string) {
+export async function recordPhaseStart(sb: unknown, run: any, phase: string, attempt = 1) {
   // Upsert (not insert) so a re-run of a phase — e.g. the review→spec retry loop — reuses its
   // row instead of violating the unique (run_id, phase, attempt) constraint and failing the run.
+  // `attempt` defaults to 1 for the normal single-attempt pipeline path; callers that resume a
+  // previously FAILED phase (see admin-routes.ts's /resume) pass an explicit incremented attempt so
+  // the prior failure's row is preserved instead of being overwritten by this upsert.
   await sb.from('se_phases').upsert(
     {
       run_id: run.id,
       site_id: run.site_id,
       phase,
-      attempt: 1,
+      attempt,
       status: 'running',
       started_at: now(),
       finished_at: null,
@@ -223,6 +226,33 @@ export async function upsertRunPr(
 export async function listRunPrs(sb: unknown, runId: string): Promise<any[]> {
   const { data } = await sb.from('se_run_prs').select('*').eq('run_id', runId).order('repo_owner');
   return data ?? [];
+}
+
+/**
+ * Gate mailbox drain (resume race, SPEC #36 §3.3): an admin note sent right after a resume lands in
+ * se_messages with delivered_at=null before the resumed phase's live pub/sub subscriber exists —
+ * publishInput (input-channel.ts) would silently drop it. Called once at the top of a phase's agent
+ * session; returns a prompt block to prepend (or '' if there's nothing pending) and marks whatever it
+ * returns as delivered so a later attempt of the same phase doesn't redeliver it.
+ *
+ * Only call this when `attempt > 1` (i.e. the phase itself is a resume retry). An ORDINARY chat message
+ * sent to an already-running phase also inserts with delivered_at=null — the live subscriber consumes
+ * it, but nothing marks the row delivered afterwards (there is no message id in the pub/sub payload to
+ * correlate back to). Draining unconditionally on every phase start would re-inject that already-
+ * consumed, unrelated chat as a fake "admin note" on every later phase transition for every run, not
+ * just resumed ones — gating on attempt keeps this scoped to the case it exists for.
+ */
+export async function drainPendingAdminMessages(sb: unknown, run: any, attempt: number): Promise<string> {
+  if (!attempt || attempt <= 1) return '';
+  try {
+    const { data: pending } = await sb
+      .from('se_messages').select('id, content').eq('run_id', run.id).eq('role', 'admin').is('delivered_at', null).order('id');
+    if (!pending?.length) return '';
+    await sb.from('se_messages').update({ delivered_at: now() }).in('id', pending.map((m: any) => m.id));
+    return `\n--- ADMIN NOTE (steering feedback for this turn) ---\n${pending.map((m: any) => m.content).join('\n\n')}\n`;
+  } catch {
+    return ''; // best-effort — a dropped note surfaces to the admin, who can resend via chat
+  }
 }
 
 /** Terminal block: record the gate + a blocked phase + set the run blocked. */
