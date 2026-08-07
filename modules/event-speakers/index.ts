@@ -87,6 +87,12 @@ const eventSpeakersModule: GatewazeModule = {
     // settings (enabled/copy/offsets, default 14 + 8 days before) plus a
     // per-(talk, offset) send log that keeps the sweep idempotent.
     'migrations/021_presentation_reminders.sql',
+    // 022 + 023 make the talk-edit status reset lenient: the reset still
+    // happens immediately (fail-safe), then a worker judges via the ai module
+    // whether the edit changed the SUBSTANCE of the talk and restores the
+    // previous status when it didn't. 023 is skipped when ai is absent.
+    'migrations/022_talk_edit_reviews.sql',
+    'migrations/023_talk_edit_materiality_use_case.sql',
   ],
 
   workers: [
@@ -103,6 +109,10 @@ const eventSpeakersModule: GatewazeModule = {
     {
       name: 'event-speakers:presentation-reminder-sweep',
       handler: './workers/presentation-reminder-sweep.ts',
+    },
+    {
+      name: 'event-speakers:talk-edit-review-sweep',
+      handler: './workers/talk-edit-review-sweep.ts',
     },
   ],
 
@@ -126,6 +136,15 @@ const eventSpeakersModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '0 9 * * *' },
       data: { kind: 'event-speakers:presentation-reminder-sweep' },
+    },
+    {
+      // Judges speaker talk edits soon after they happen. Every 2 minutes so a
+      // speaker fixing a typo gets their confirmed status back while they're
+      // still on the page, rather than discovering it days later.
+      name: 'event-speakers-talk-edit-review-sweep',
+      queue: 'jobs',
+      schedule: { pattern: '*/2 * * * *' },
+      data: { kind: 'event-speakers:talk-edit-review-sweep' },
     },
   ],
 
