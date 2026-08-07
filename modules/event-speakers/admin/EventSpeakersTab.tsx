@@ -19,6 +19,7 @@ import {
   BuildingOfficeIcon,
   LinkIcon,
   ChartBarIcon,
+  QrCodeIcon,
   ClipboardDocumentListIcon as ClipboardDocumentListIconOutline,
   ChevronUpIcon,
   ChevronDownIcon,
@@ -1240,6 +1241,15 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   {speakerLinks[speakerId].registrationCount} registrations
                 </span>
               )}
+              {speakerLinks[speakerId].qrScans > 0 && (
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-200"
+                  title="Scans of the LinkedIn QR code on this speaker's slide deck"
+                >
+                  <QrCodeIcon className="w-3 h-3 mr-1" />
+                  {speakerLinks[speakerId].qrScans} QR scans
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -2129,6 +2139,15 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                       {speakerLinks[speakerGroup.speakerId].registrationCount > 0 && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-200">
                           {speakerLinks[speakerGroup.speakerId].registrationCount} registrations
+                        </span>
+                      )}
+                      {speakerLinks[speakerGroup.speakerId].qrScans > 0 && (
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-200"
+                          title="Scans of the LinkedIn QR code on this speaker's slide deck"
+                        >
+                          <QrCodeIcon className="w-3 h-3 mr-1" />
+                          {speakerLinks[speakerGroup.speakerId].qrScans} QR scans
                         </span>
                       )}
                     </div>
