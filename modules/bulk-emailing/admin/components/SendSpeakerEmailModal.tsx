@@ -10,6 +10,7 @@ import { SpeakerEmailService } from '../../../event-speakers/admin/utils/speaker
 import { toast } from 'sonner';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { useAuthContext } from '@/app/contexts/auth/context';
+import { supabase } from '@/lib/supabase';
 import {
   buildContext,
   replaceVariables,
@@ -44,6 +45,12 @@ export function SendSpeakerEmailModal({
   const [cc, setCc] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+
+  // Promo kit attachment: the speaker's own generated zip, resolved fresh when
+  // the modal opens so a regenerated kit is what actually goes out.
+  const [kitZipPath, setKitZipPath] = useState<string | null>(null);
+  const [kitGeneratedAt, setKitGeneratedAt] = useState<string | null>(null);
+  const [attachKit, setAttachKit] = useState(false);
 
   // Template state
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
@@ -146,6 +153,25 @@ export function SendSpeakerEmailModal({
     SpeakerEmailService.getEventDetails(eventId).then(setEventDetails);
   }, [isOpen, eventId]);
 
+  // Look up this talk's ready promo kit each time the modal opens, so
+  // "attach the kit" always offers the latest generated artifacts.
+  useEffect(() => {
+    if (!isOpen || !talk?.id) { setKitZipPath(null); setKitGeneratedAt(null); setAttachKit(false); return; }
+    let cancelled = false;
+    supabase
+      .from('speaker_promo_kits')
+      .select('zip_storage_path, generated_at, status')
+      .eq('talk_id', talk.id)
+      .eq('status', 'ready')
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        setKitZipPath(data?.zip_storage_path ?? null);
+        setKitGeneratedAt(data?.generated_at ?? null);
+      });
+    return () => { cancelled = true; };
+  }, [isOpen, talk?.id]);
+
   // Load templates when modal opens
   useEffect(() => {
     const loadTemplates = async () => {
@@ -225,6 +251,27 @@ export function SendSpeakerEmailModal({
       const processedSubject = replaceVariables(subject, templateContext);
       const processedMessage = replaceVariables(message, templateContext);
 
+      // Pull the kit zip from storage and hand it to SendGrid as base64. Done
+      // at send time (not at modal open) so the bytes match the current kit.
+      let attachments;
+      if (attachKit && kitZipPath) {
+        const { data: file, error: dlError } = await supabase.storage.from('media').download(kitZipPath);
+        if (dlError || !file) {
+          toast.error('Could not read the promo kit — send cancelled so the email does not promise a missing attachment');
+          setIsSending(false);
+          return;
+        }
+        const buf = new Uint8Array(await file.arrayBuffer());
+        let binary = '';
+        for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]);
+        attachments = [{
+          filename: 'promo-kit.zip',
+          content: btoa(binary),
+          type: 'application/zip',
+          disposition: 'attachment' as const,
+        }];
+      }
+
       const result = await EmailService.sendEmail({
         to: [speaker.email],
         cc: cc.trim() || undefined,
@@ -232,6 +279,7 @@ export function SendSpeakerEmailModal({
         subject: processedSubject,
         html: processedMessage,
         replyTo: replyTo.trim() || undefined,
+        attachments,
       });
 
       if (result.success) {
@@ -258,6 +306,7 @@ export function SendSpeakerEmailModal({
     setCc('');
     setSelectedTemplateId('');
     setShowPreview(false);
+    setAttachKit(false);
     onClose();
   };
 
@@ -408,6 +457,30 @@ export function SendSpeakerEmailModal({
                 No templates available. Create templates in Admin &gt; Emails.
               </p>
             )}
+          </div>
+
+          {/* Promo kit attachment — only offered when this speaker has a
+              generated kit; otherwise we'd promise a file we can't send. */}
+          <div className="rounded-md border border-gray-200 dark:border-gray-700 px-3 py-2.5">
+            <label className={`flex items-start gap-2.5 ${kitZipPath ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                checked={attachKit}
+                disabled={!kitZipPath || isSending}
+                onChange={(e) => setAttachKit(e.target.checked)}
+              />
+              <span className="text-sm">
+                <span className="font-medium text-gray-700 dark:text-gray-300">
+                  Attach their promo kit
+                </span>
+                <span className="block text-xs text-gray-500 dark:text-gray-400">
+                  {kitZipPath
+                    ? `Latest kit${kitGeneratedAt ? ` — generated ${new Date(kitGeneratedAt).toLocaleString()}` : ''} (images, post text, tracking link, slide deck)`
+                    : 'No generated kit for this speaker yet — regenerate it from the Promo kit button first.'}
+                </span>
+              </span>
+            </label>
           </div>
 
           {/* Subject */}

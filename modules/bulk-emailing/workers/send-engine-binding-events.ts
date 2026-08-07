@@ -19,6 +19,14 @@
  */
 import { createHmac } from 'node:crypto';
 import type { EngineDeps, SendContext, SendEngineBinding, Recipient } from '../worker/send-engine/engine.js';
+import type { MessageAttachment } from '../worker/send-engine/channels/types.js';
+
+// Storage bucket holding rendered promo-kit artifacts (see event-speakers
+// lib/promo). Kept in sync with that module's BUCKET constant.
+const PROMO_KIT_BUCKET = 'media';
+// SendGrid rejects messages over 30MB total; base64 inflates by ~33%. Cap the
+// raw file well under that so a big deck can't fail the whole send.
+const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 
 type EvCtx = SendContext & {
   listId: string | null;            // 'event-updates' list id (unsubscribe target)
@@ -54,6 +62,10 @@ function resolveScoped(token: string, context: Record<string, Record<string, unk
   const m = segments[0].match(/^([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)(?::([a-zA-Z0-9_-]+))?$/);
   if (!m) return null;
   const [, scope, field] = m;
+  // Underscore-prefixed scopes are engine-internal (e.g. _meta.talk_id, which
+  // routes the promo-kit attachment). Never resolvable as a template token, so
+  // an admin typing {{_meta.talk_id}} can't leak internals into a sent email.
+  if (scope.startsWith('_')) return null;
   let def: string | undefined;
   for (let i = 1; i < segments.length; i++) {
     const f = segments[i].match(/^default:"([^"]*)"$/);
@@ -85,6 +97,11 @@ export const eventCommsBinding: SendEngineBinding = {
     // unsubscribe footer and are NOT tied to a subscription list. Only bulk/
     // marketing event sends (post-event, competition, ad-hoc, calendar blasts)
     // get the footer + list. CAN-SPAM: transactional messages are exempt.
+    // Speaker-audience jobs are the only ones allowed to attach per-recipient
+    // promo kits (see perRecipientAttachments below).
+    const isSpeakerAudience = /^speaker_/.test(job.email_type || '')
+      || job.config?.audience_type === 'speakers';
+
     const isTransactional = /^speaker_/.test(job.email_type || '')
       || job.email_type === 'registration'
       || job.email_type === 'reminder';
@@ -125,6 +142,12 @@ export const eventCommsBinding: SendEngineBinding = {
       portalBaseUrl: process.env.SITE_URL || null,
       supabaseUrl: process.env.SUPABASE_URL || '',
       tokens: scanTokens(html, subject),
+      // Opt-in per job (admin "attach each speaker's promo kit"). Forces the
+      // engine to one personalization per call — attachments are message-level.
+      // Restricted to speaker-audience jobs: the flag turns a batched drip into
+      // serial delivery, so it must never be reachable from a large marketing
+      // audience by way of a copied/reused config blob.
+      perRecipientAttachments: job.config?.attach_promo_kit === true && isSpeakerAudience,
     };
     return ctx;
   },
@@ -158,5 +181,56 @@ export const eventCommsBinding: SendEngineBinding = {
       if (v !== null) subs[token] = v;
     }
     return subs;
+  },
+
+  // Attach the recipient's OWN promo-kit zip. Resolved at send time rather than
+  // captured at fan-out, so a kit regenerated between scheduling and delivery
+  // ships the current artifacts.
+  //
+  // Returns null (no attachment) rather than throwing when the speaker has no
+  // ready kit — the engine still delivers the message. Copy that promises an
+  // attachment should only be sent to speakers whose kit is ready; the admin UI
+  // surfaces that count before sending.
+  async buildAttachments(deps: EngineDeps, _ctx: SendContext, r: Recipient): Promise<MessageAttachment[] | null> {
+    const context = ((r as unknown as { context?: Record<string, Record<string, unknown> | undefined> }).context) || {};
+    const talkId = context._meta?.talk_id;
+    if (typeof talkId !== 'string' || !talkId) return null;
+
+    const { data: kit } = await deps.supabase
+      .from('speaker_promo_kits')
+      .select('zip_storage_path, status')
+      .eq('talk_id', talkId)
+      .eq('status', 'ready')
+      .maybeSingle();
+    if (!kit?.zip_storage_path) return null;
+
+    // Check the object's declared size BEFORE pulling it into memory — a
+    // pathological artifact shouldn't be fully buffered just to be rejected.
+    const lastSlash = kit.zip_storage_path.lastIndexOf('/');
+    const dir = lastSlash > 0 ? kit.zip_storage_path.slice(0, lastSlash) : '';
+    const name = kit.zip_storage_path.slice(lastSlash + 1);
+    const { data: listing } = await deps.supabase.storage.from(PROMO_KIT_BUCKET).list(dir, { search: name, limit: 1 });
+    const declaredSize = listing?.[0]?.metadata?.size;
+    if (typeof declaredSize === 'number' && declaredSize > MAX_ATTACHMENT_BYTES) {
+      deps.logger.warn('[send-engine] promo-kit zip too large to attach', { talkId, bytes: declaredSize });
+      return null;
+    }
+
+    const { data: file, error } = await deps.supabase.storage.from(PROMO_KIT_BUCKET).download(kit.zip_storage_path);
+    if (error || !file) {
+      deps.logger.warn('[send-engine] promo-kit zip download failed', { talkId, path: kit.zip_storage_path });
+      return null;
+    }
+    const bytes = Buffer.from(await file.arrayBuffer());
+    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+      deps.logger.warn('[send-engine] promo-kit zip too large to attach', { talkId, bytes: bytes.byteLength });
+      return null;
+    }
+    return [{
+      filename: 'promo-kit.zip',
+      content: bytes.toString('base64'),
+      type: 'application/zip',
+      disposition: 'attachment',
+    }];
   },
 };
