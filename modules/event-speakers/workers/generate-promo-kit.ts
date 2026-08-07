@@ -173,8 +173,13 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
           event: { date_short: '', city: '' },
           brand,
           hideChrome: true,
+          // 3x of the 1200x630 card. This art is stretched across the full
+          // width of a 10-inch slide, so the 1200px the shareable cards use
+          // lands at 120 DPI and the lockups look soft on a big screen.
+          // 3600px is 360 DPI there, which holds up on a 4K display.
+          scale: 3,
         },
-        [{ format: 'landscape', templateFile: 'speaker-card-landscape.html', exportWidth: 1200, exportHeight: 630 }],
+        [{ format: 'landscape', templateFile: 'speaker-card-landscape.html', exportWidth: 3600, exportHeight: 1890 }],
       );
 
       // Brand lockup → PNG for the content-slide masthead.
