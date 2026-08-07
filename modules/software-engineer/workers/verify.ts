@@ -29,7 +29,10 @@ export default async function verify(job, ctx) {
   if (!project?.intakeEnabled) return blockRun(supabase, run, 'verify', 'kill_switch', 'intake disabled');
   const token = project.githubToken;
 
-  await recordPhaseStart(supabase, run, 'verify');
+  // A resumed run (admin-routes.ts's /resume) passes an incremented attempt so this retry's row
+  // doesn't clobber the FAILED attempt 1 row — both stay visible on the run detail phase badges.
+  const attempt = job?.data?.attempt ?? 1;
+  await recordPhaseStart(supabase, run, 'verify', attempt);
   let ws;
   try {
     // Clone the changed repos on the run branch (read-only) so the reviewer sees the actual diff.
@@ -74,7 +77,7 @@ export default async function verify(job, ctx) {
       `diff introduces a real vulnerability.`,
     ].join('\n');
     const result = await runAgentSession(supabase, ctx, run, project, 'verify', {
-      cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob'],
+      cwd: ws.root, prompt, repos: ws.repos, attempt, allowedTools: ['Read', 'Grep', 'Glob'],
     });
     if (result.error) {
       const msg = redactToken(result.error, token);

@@ -24,7 +24,20 @@
 
 import { promises as dns } from 'node:dns';
 
-const ALLOW_PRIVATE = process.env.AI_MCP_HTTP_ALLOW_PRIVATE === 'true';
+/**
+ * Read the override at CALL time, not module-load time.
+ *
+ * Capturing it in a module-level const bound the guard's behaviour to
+ * whatever the ambient environment happened to be at first import. That
+ * made the check untestable (the callers reach it through `await import()`,
+ * so import order — and therefore the captured value — varies per process)
+ * and let an unrelated env var leak into a run and silently disable the
+ * whole guard. Reading per call keeps the documented override working while
+ * making the input explicit.
+ */
+function allowPrivate(): boolean {
+  return process.env.AI_MCP_HTTP_ALLOW_PRIVATE === 'true';
+}
 
 export interface SsrfCheckResult {
   ok: boolean;
@@ -73,7 +86,7 @@ function isV6Private(ip: string): boolean {
  * Returns the resolved IPs the caller should pin to.
  */
 export async function checkSsrfSafe(uri: string): Promise<SsrfCheckResult & { resolvedIps?: string[] }> {
-  if (ALLOW_PRIVATE) return { ok: true };
+  if (allowPrivate()) return { ok: true };
 
   let parsed: URL;
   try {
