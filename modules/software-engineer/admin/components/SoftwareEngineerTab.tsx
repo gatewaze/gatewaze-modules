@@ -107,6 +107,11 @@ const runLabel = (r: any): string =>
     ? `Interactive session${r.project?.name ? ` · ${r.project.name}` : ''}`
     : `${r?.repo_owner}/${r?.repo_name} #${r?.issue_number}`;
 
+// List-only headline: the list already shows the title on its own line, so the
+// headline here only needs the issue number, not the owner/repo source.
+const runListNumber = (r: any): string =>
+  r?.kind === 'interactive' ? runLabel(r) : `#${r?.issue_number}`;
+
 // One-line label promoting the latest live event out of the collapsed "Tool activity" block, so the
 // working strip shows what the agent is doing *right now* between turn-boundary transcript messages.
 function eventLabel(ev: any): string {
@@ -521,8 +526,8 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               selected === r.id ? 'border-[var(--gray-6)] bg-[var(--gray-3)]' : 'border-transparent hover:bg-[var(--gray-2)]'
             }`}
           >
-            <div className="text-sm font-medium truncate text-[var(--gray-12)]">{runLabel(r)}</div>
-            {r.title && r.kind !== 'interactive' && <div className="text-xs text-[var(--gray-11)] truncate">{r.title}</div>}
+            <div className="text-sm font-medium truncate text-[var(--gray-12)]">{runListNumber(r)}</div>
+            {r.title && r.kind !== 'interactive' && <div className="text-xs text-[var(--gray-11)] truncate" title={r.title}>{r.title}</div>}
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <Badge color={STATUS_COLOR[r.status] ?? 'gray'} size="1">{r.status}</Badge>
               <span className="text-xs text-[var(--gray-10)]">{r.current_phase}</span>
