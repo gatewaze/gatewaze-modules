@@ -78,6 +78,15 @@ const eventSpeakersModule: GatewazeModule = {
     // confirm flow always used but no migration ever created (confirm links
     // showed 'Invalid Link' because selecting confirmed_at 400ed).
     'migrations/019_talk_checklist_columns.sql',
+    // 020 exposes presentation_storage_path/type on events_talks_with_speakers.
+    // A speaker who UPLOADS a file sets only the storage path, so the admin
+    // progress tick (url || storage_path) never fired for file uploads —
+    // the column simply wasn't on the view the admin reads.
+    'migrations/020_talks_view_presentation_fields.sql',
+    // 021 scheduled "we still need your presentation" reminders: comms
+    // settings (enabled/copy/offsets, default 14 + 8 days before) plus a
+    // per-(talk, offset) send log that keeps the sweep idempotent.
+    'migrations/021_presentation_reminders.sql',
   ],
 
   workers: [
@@ -91,6 +100,10 @@ const eventSpeakersModule: GatewazeModule = {
       name: 'event-speakers:generate-promo-kit',
       handler: './workers/generate-promo-kit.ts',
     },
+    {
+      name: 'event-speakers:presentation-reminder-sweep',
+      handler: './workers/presentation-reminder-sweep.ts',
+    },
   ],
 
   crons: [
@@ -103,6 +116,16 @@ const eventSpeakersModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '*/2 * * * *' },
       data: { kind: 'event-speakers:promo-kit-sweep' },
+    },
+    {
+      // Daily nudge for confirmed speakers who still owe us a presentation.
+      // Daily (not hourly) because the offsets are whole days and each
+      // (talk, offset) can only send once; 09:00 UTC keeps it inside working
+      // hours for EU/US-east without needing per-recipient timezone logic.
+      name: 'event-speakers-presentation-reminder-sweep',
+      queue: 'jobs',
+      schedule: { pattern: '0 9 * * *' },
+      data: { kind: 'event-speakers:presentation-reminder-sweep' },
     },
   ],
 
