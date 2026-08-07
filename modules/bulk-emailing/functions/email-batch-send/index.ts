@@ -319,7 +319,9 @@ function buildRecipientContext(job: any, event: any, config: any, recipient: Rec
   const isAdhocSpeaker = job.email_type === 'adhoc_email' && config.audience_type === 'speakers'
   if (!nonSpeakerTypes.includes(job.email_type) || isAdhocSpeaker) {
     const confirmationLink = recipient.confirmationToken
-      ? `${SUPABASE_URL}/functions/v1/speaker-confirm?token=${recipient.confirmationToken}` : ''
+      // NB: events-speaker-confirm — a function named speaker-confirm has
+      // never existed on this platform, so these links 404ed when sent.
+      ? `${SUPABASE_URL}/functions/v1/events-speaker-confirm?token=${recipient.confirmationToken}` : ''
     const editLink = recipient.editToken ? `/events/${job.event_id}/talks/success/${recipient.editToken}` : ''
     context.speaker = {
       first_name: recipient.firstName, last_name: recipient.lastName,

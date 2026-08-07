@@ -376,7 +376,7 @@ function SpeakerEmailConfig({
   ): TemplateContext => {
     // Build example confirmation link for preview/test
     const baseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://api.example.com';
-    const exampleConfirmationLink = `${baseUrl}/functions/v1/speaker-confirm?token=example-token-123`;
+    const exampleConfirmationLink = `${baseUrl}/functions/v1/events-speaker-confirm?token=example-token-123`;
     // Build example edit link for speaker portal (relative path)
     // Points to the success/dashboard page where confirmed speakers see their checklist
     const exampleEditLink = `/events/${eventId}/talks/success/example-edit-token-123`;
