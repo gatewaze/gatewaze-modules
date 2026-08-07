@@ -262,6 +262,46 @@ async function handler(req: Request) {
     }
 
     // =========================================================================
+    // Capture-all: record EVERY inbound message before routing is attempted.
+    // Routing below returns early on a match and used to return 200 and
+    // silently discard anything it couldn't place — so unroutable mail left no
+    // trace at all. With this row, `SELECT * FROM inbound_emails WHERE
+    // routed_to IS NULL` answers both "did it reach us?" and "what are we
+    // failing to route?" without the SendGrid dashboard.
+    // Best-effort: capture must never stop a message being routed.
+    // =========================================================================
+    let capturedId: string | null = null;
+    try {
+      const { data: captured } = await supabase
+        .from('inbound_emails')
+        .insert({
+          to_addresses: toEmails,
+          from_email: fromEmail,
+          from_name: fromName,
+          subject,
+          body_text: text,
+          body_html: html,
+          in_reply_to: inReplyTo,
+        })
+        .select('id')
+        .single();
+      capturedId = captured?.id ?? null;
+    } catch (capErr) {
+      console.error('inbound capture failed (continuing to route):', capErr);
+    }
+
+    /** Stamp where this message ended up, so unrouted mail is findable. */
+    const markRouted = async (routedTo: string | null, routedId: string | null, note?: string) => {
+      if (!capturedId) return;
+      try {
+        await supabase
+          .from('inbound_emails')
+          .update({ routed_to: routedTo, routed_id: routedId, routing_note: note ?? null })
+          .eq('id', capturedId);
+      } catch { /* best-effort */ }
+    };
+
+    // =========================================================================
     // Route: Broadcast replies
     // Resolve the originating send via In-Reply-To → email_send_log. If the
     // matched log row is a BROADCAST send, store it as a broadcast reply and
@@ -409,9 +449,126 @@ async function handler(req: Request) {
             }
           }
 
+          await markRouted('broadcast', inserted?.id ?? null);
           console.log(`Processed inbound broadcast reply: stored 1, forwarded ${bForwarded}`);
           return new Response(
             JSON.stringify({ success: true, handler: 'broadcast', stored: 1, forwarded: bForwarded }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          );
+        }
+      }
+    }
+
+    // =========================================================================
+    // Route: Event comms replies
+    // Must sit BEFORE the newsletter address match. Event comms are sent from
+    // the same shared address as newsletter collections (demetrios@aaif.live),
+    // so without this a speaker's reply fell through to the newsletter matcher
+    // and was inserted against every collection using that address, with a
+    // null edition_id — where the newsletter tab's own filter then hid it.
+    //
+    // The send engine already writes an email_send_log row per event-comms
+    // recipient carrying batch_job_id, so correlation uses the same
+    // In-Reply-To → provider_message_id + recipient_email key the broadcast
+    // matcher uses, with an address fallback for mail whose In-Reply-To is
+    // missing or rewritten by the replying client.
+    // =========================================================================
+    let evLog: { id: string; batch_job_id: string | null } | null = null;
+    if (inReplyTo) {
+      const baseId = inReplyTo.split('.')[0].replace(/[<>]/g, '');
+      const { data } = await supabase
+        .from('email_send_log')
+        .select('id, batch_job_id')
+        .eq('provider_message_id', baseId)
+        .eq('recipient_email', fromEmail)
+        .not('batch_job_id', 'is', null)
+        .limit(1)
+        .maybeSingle();
+      if (data) evLog = data;
+    }
+    if (!evLog) {
+      // Fallback: this sender's most recent event-comms send whose From or
+      // Reply-To is one of the addresses this mail was sent to.
+      const { data: recent } = await supabase
+        .from('email_send_log')
+        .select('id, batch_job_id, from_address, reply_to, subject, sent_at')
+        .eq('recipient_email', fromEmail)
+        .not('batch_job_id', 'is', null)
+        .order('sent_at', { ascending: false })
+        .limit(30);
+      const candidates = (recent ?? []).filter((r: Record<string, unknown>) =>
+        toEmails.includes(String(r.from_address ?? '').toLowerCase())
+        || toEmails.includes(String(r.reply_to ?? '').toLowerCase()));
+      const bySubject = candidates.find((r: Record<string, unknown>) =>
+        normSubject(r.subject as string) === normSubject(subject));
+      const chosen = bySubject ?? candidates[0];
+      if (chosen) evLog = { id: chosen.id as string, batch_job_id: chosen.batch_job_id as string };
+    }
+
+    if (evLog?.batch_job_id) {
+      const { data: job } = await supabase
+        .from('email_batch_jobs')
+        .select('id, event_id, forward_replies_to')
+        .eq('id', evLog.batch_job_id)
+        .maybeSingle();
+
+      if (job?.event_id) {
+        const { data: inserted, error: evErr } = await supabase
+          .from('event_replies')
+          .insert({
+            event_id: job.event_id,
+            batch_job_id: job.id,
+            from_email: fromEmail,
+            from_name: fromName,
+            subject,
+            body_text: text,
+            body_html: html,
+            in_reply_to: inReplyTo,
+            send_log_id: evLog.id,
+            is_auto_reply: isAuto,
+            auto_reply_reason: autoReason,
+          })
+          .select('id')
+          .single();
+
+        if (evErr) {
+          console.error('Error storing event reply:', evErr);
+        } else {
+          await markRouted('event', inserted?.id ?? null);
+
+          let evForwarded = 0;
+          if (job.forward_replies_to && !isAuto) {
+            try {
+              const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+              const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+              await fetch(`${supabaseUrl}/functions/v1/email-send`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  apikey: serviceKey,
+                  Authorization: `Bearer ${serviceKey}`,
+                },
+                body: JSON.stringify({
+                  to: [job.forward_replies_to],
+                  from: Deno.env.get('EMAIL_FROM') || fromEmail,
+                  replyTo: fromEmail,
+                  subject: `[Event reply] ${subject}`,
+                  html: html || `<pre>${text}</pre>`,
+                }),
+              });
+              await supabase
+                .from('event_replies')
+                .update({ forwarded_to: job.forward_replies_to, forwarded_at: new Date().toISOString() })
+                .eq('id', inserted?.id);
+              evForwarded = 1;
+            } catch (fwdErr) {
+              console.error('Error forwarding event reply:', fwdErr);
+            }
+          }
+
+          console.log(`Processed inbound event reply: stored 1, forwarded ${evForwarded}`);
+          return new Response(
+            JSON.stringify({ success: true, handler: 'event', stored: 1, forwarded: evForwarded }),
             { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
           );
         }
@@ -435,8 +592,11 @@ async function handler(req: Request) {
 
     if (!collections || collections.length === 0) {
       console.warn('No newsletter collection found for addresses:', toEmails);
+      // Left unrouted deliberately — the capture row above retains the full
+      // message so it can be found and re-routed rather than disappearing.
+      await markRouted(null, null, `no matching route for ${toEmails.join(', ')}`);
       return new Response(
-        JSON.stringify({ success: true, message: 'No matching newsletter, ignored' }),
+        JSON.stringify({ success: true, message: 'No matching route; captured for review', captured_id: capturedId }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
@@ -546,6 +706,7 @@ async function handler(req: Request) {
       }
     }
 
+    await markRouted('newsletter', null, `${stored} collection row(s)`);
     console.log(`Processed inbound email: ${stored} stored, ${forwarded} forwarded`);
 
     return new Response(

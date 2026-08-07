@@ -124,6 +124,12 @@ const bulkEmailingModule: GatewazeModule = {
     // old job_id shape means event/speaker comms enqueue fails and nothing drips.
     // Table is a transient drip queue (empty on affected envs) → drop+recreate.
     'migrations/023_reconcile_event_recipients_send_id.sql',
+    // 024 captures EVERY inbound email before routing, so unroutable mail
+    // (speaker/event replies, until 025) stops vanishing silently.
+    'migrations/024_inbound_emails.sql',
+    // 025 event_replies + event_reply_messages + forward_replies_to, so event
+    // comms replies land against the event like newsletter/broadcast replies.
+    'migrations/025_event_replies.sql',
   ],
 
   workers: [
