@@ -56,6 +56,11 @@ export async function recordPhaseEnd(
     cost?: number;
     /** Per-model breakdown from the SDK result ({model: {input, output, cacheRead, cacheCreation, costUSD}}). */
     modelUsage?: Record<string, unknown>;
+    /** Explicit attempt for AUX phases (spec-refine/code-refine/architecture-refine) that have no prior
+     *  recordPhaseStart 'running' row AND can repeat within one run — pass a distinct attempt (see
+     *  nextPhaseAttempt) so each occurrence is its own costed se_phases record instead of colliding on
+     *  the (run_id, phase, attempt) unique key. Omit for pipeline phases (default single-attempt path). */
+    attempt?: number;
   },
 ) {
   // Cost preference (migration 018, reversing 012's): the SDK's total_cost_usd is PRIMARY — it is
@@ -91,17 +96,26 @@ export async function recordPhaseEnd(
     model_usage: tokens?.modelUsage && Object.keys(tokens.modelUsage).length ? tokens.modelUsage : null,
     finished_at: now(),
   };
-  // Close the open 'running' row for this phase; if there isn't one (e.g. blocked before
-  // start), insert a terminal row. Avoids a duplicate on unique (run_id, phase, attempt).
-  const { data } = await sb
-    .from('se_phases')
-    .update(patch)
-    .eq('run_id', run.id)
-    .eq('phase', phase)
-    .eq('status', 'running')
-    .select('id');
-  if (!data || data.length === 0) {
-    await sb.from('se_phases').insert({ run_id: run.id, site_id: run.site_id, phase, ...patch });
+  if (typeof tokens?.attempt === 'number') {
+    // AUX phase with an explicit attempt (a refine): no 'running' row was ever opened and the same
+    // phase label recurs per refine, so address the row directly by (run_id, phase, attempt).
+    await sb.from('se_phases').upsert(
+      { run_id: run.id, site_id: run.site_id, phase, attempt: tokens.attempt, ...patch },
+      { onConflict: 'run_id,phase,attempt' },
+    );
+  } else {
+    // Close the open 'running' row for this phase; if there isn't one (e.g. blocked before
+    // start), insert a terminal row. Avoids a duplicate on unique (run_id, phase, attempt).
+    const { data } = await sb
+      .from('se_phases')
+      .update(patch)
+      .eq('run_id', run.id)
+      .eq('phase', phase)
+      .eq('status', 'running')
+      .select('id');
+    if (!data || data.length === 0) {
+      await sb.from('se_phases').insert({ run_id: run.id, site_id: run.site_id, phase, ...patch });
+    }
   }
   // Keep the run's denormalised total in sync (phases run sequentially per run, so a recompute
   // here is race-free and survives phase re-runs/attempts better than incrementing). Best-effort
@@ -113,6 +127,23 @@ export async function recordPhaseEnd(
       const total = (rows ?? []).reduce((s: number, r: any) => s + (Number(r.cost_usd) || 0), 0);
       await sb.from('se_runs').update({ cost_usd: Math.round(total * 10000) / 10000 }).eq('id', run.id);
     } catch { /* denorm total is best-effort */ }
+  }
+}
+
+/** Next attempt number for an AUX phase that recurs within a run (the refine workers). Counts the
+ *  existing se_phases rows for (run, phase) so each refine gets a distinct attempt and its own costed
+ *  record. Best-effort: on a count error, falls back to a timestamp-derived attempt to avoid a
+ *  collision rather than clobbering a prior refine's cost. */
+export async function nextPhaseAttempt(sb: unknown, runId: string, phase: string): Promise<number> {
+  try {
+    const { count } = await sb
+      .from('se_phases')
+      .select('id', { count: 'exact', head: true })
+      .eq('run_id', runId)
+      .eq('phase', phase);
+    return (count ?? 0) + 1;
+  } catch {
+    return Math.floor(Date.now() / 1000);
   }
 }
 

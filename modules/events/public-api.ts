@@ -422,6 +422,139 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
     }
   });
 
+  // GET /api/v1/events/registrants — registrant-level rows (names/emails):
+  // PII. Gated by the dedicated events:registrants scope, which NO group
+  // carries by default except where an admin adds it (LF rollout: the staff
+  // group) — grant deliberately, every access is audit-logged upstream.
+  // Covers all events regardless of publish state (operational surface).
+  router.get('/registrants', ctx.requireScope('registrants'), async (req: Request, res: Response) => {
+    try {
+      const limit = Math.min(parseInt(String(req.query.limit)) || 100, 500);
+      const offset = parseInt(String(req.query.offset)) || 0;
+      const groupByPerson = req.query.group_by === 'person';
+
+      // Resolve event filter to UUIDs first (title q or id/slug).
+      let eventIds: string[] | null = null;
+      if (req.query.id || req.query.q) {
+        let evQuery = supabase.from('events').select('id').limit(50);
+        if (req.query.id) evQuery = byIdOrSlug(evQuery, String(req.query.id));
+        if (req.query.q) evQuery = evQuery.ilike('event_title', `%${req.query.q}%`);
+        const { data: evs } = await evQuery;
+        eventIds = ((evs ?? []) as Array<{ id: string }>).map((e) => e.id);
+        if (eventIds.length === 0) {
+          return res.json({ data: [], pagination: { total: 0, limit, offset, has_more: false } });
+        }
+      }
+
+      const buildQuery = () => {
+        let q = supabase
+          .from('events_registrations')
+          .select(
+            'status, checked_in, registered_at, registration_source, registration_metadata, people!inner(email, attributes), events!inner(event_id, event_title, event_start, event_city, event_country_code)',
+            { count: 'exact' },
+          )
+          .order('registered_at', { ascending: false });
+        if (eventIds) q = q.in('event_id', eventIds);
+        if (req.query.source) q = q.like('registration_source', `${String(req.query.source)}%`);
+        if (req.query.from) q = q.gte('registered_at', req.query.from);
+        if (req.query.to) q = q.lte('registered_at', req.query.to);
+        if (req.query.status) q = q.eq('status', String(req.query.status));
+        // Event-side filters ride the !inner embed — the join makes them
+        // parent-row filters, no id pre-resolve or URL-length ceiling.
+        if (req.query.city) q = q.ilike('events.event_city', `%${String(req.query.city)}%`);
+        if (req.query.event_from) q = q.gte('events.event_start', req.query.event_from);
+        if (req.query.event_to) q = q.lte('events.event_start', req.query.event_to);
+        // Free-text match over the registration-form answers jsonb ("who is
+        // an engineer"). ->> renders the answers array as text; the pattern
+        // is passed as a filter VALUE (not interpolated into an .or()
+        // string), so wildcards from callers are harmless.
+        if (req.query.answers_contain) {
+          q = q.ilike('registration_metadata->>registration_answers', `%${String(req.query.answers_contain)}%`);
+        }
+        return q;
+      };
+
+      type RawRow = {
+        status: string | null; checked_in: boolean | null; registered_at: string; registration_source: string | null;
+        registration_metadata: { registration_answers?: Array<{ label?: string; answer?: string }> } | null;
+        people: { email?: string | null; attributes?: Record<string, unknown> | null } | Array<{ email?: string | null; attributes?: Record<string, unknown> | null }>;
+        events: Record<string, unknown> | Record<string, unknown>[];
+      };
+      const flatten = (r: RawRow) => {
+        const p = (Array.isArray(r.people) ? r.people[0] : r.people) ?? {};
+        const ev = ((Array.isArray(r.events) ? r.events[0] : r.events) ?? {}) as Record<string, unknown>;
+        const a = (p.attributes ?? {}) as Record<string, unknown>;
+        const name = [a.first_name, a.last_name].filter(Boolean).join(' ') || (typeof a.full_name === 'string' ? a.full_name : null);
+        const answers = (r.registration_metadata?.registration_answers ?? [])
+          .map((ans) => ({ label: ans.label ?? null, answer: ans.answer ?? null }))
+          .filter((ans) => ans.answer);
+        return {
+          email: p.email ?? null,
+          name: name || null,
+          event_id: ev.event_id,
+          event_title: ev.event_title,
+          event_start: ev.event_start,
+          event_city: ev.event_city,
+          event_country_code: ev.event_country_code,
+          status: r.status,
+          checked_in: r.checked_in,
+          registered_at: r.registered_at,
+          registration_source: r.registration_source,
+          answers,
+        };
+      };
+
+      if (!groupByPerson) {
+        const { data, error, count } = await buildQuery().range(offset, offset + limit - 1);
+        if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+        const rows = ((data ?? []) as unknown as RawRow[]).map(flatten);
+        ctx.setCache(res, { kind: 'no-store' });
+        return res.json({
+          data: rows,
+          pagination: { total: count ?? 0, limit, offset, has_more: offset + rows.length < (count ?? 0) },
+          _links: { self: req.originalUrl },
+        });
+      }
+
+      // group_by=person: page through all matching rows (bounded) and
+      // aggregate per person.
+      const people = new Map<string, { email: string | null; name: string | null; registrations: number; checked_in: number; first_registered_at: string; last_registered_at: string; events: Set<string> }>();
+      for (let page = 0; page < 40; page++) {
+        const { data, error } = await buildQuery().range(page * 1000, page * 1000 + 999);
+        if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+        for (const raw of (data ?? []) as unknown as RawRow[]) {
+          const row = flatten(raw);
+          const key = String(row.email ?? 'unknown').toLowerCase();
+          const agg = people.get(key) ?? {
+            email: row.email, name: row.name, registrations: 0, checked_in: 0,
+            first_registered_at: row.registered_at, last_registered_at: row.registered_at,
+            events: new Set<string>(),
+          };
+          agg.registrations++;
+          if (row.checked_in) agg.checked_in++;
+          if (row.name && !agg.name) agg.name = row.name;
+          if (row.registered_at < agg.first_registered_at) agg.first_registered_at = row.registered_at;
+          if (row.registered_at > agg.last_registered_at) agg.last_registered_at = row.registered_at;
+          if (row.event_title) agg.events.add(String(row.event_title));
+          people.set(key, agg);
+        }
+        if ((data ?? []).length < 1000) break;
+      }
+      const all = [...people.values()]
+        .sort((a, b) => b.registrations - a.registrations)
+        .map((p) => ({ ...p, events_count: p.events.size, events: undefined }));
+      ctx.setCache(res, { kind: 'no-store' });
+      res.json({
+        data: all.slice(offset, offset + limit),
+        pagination: { total: all.length, limit, offset, has_more: offset + limit < all.length },
+        _links: { self: req.originalUrl },
+      });
+    } catch (err) {
+      console.error('[events] public-api registrants error:', err);
+      res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    }
+  });
+
   // GET /api/v1/events/my-registrations — a PERSON's own registrations,
   // for the MCP OAuth surface (events:self — held only by trusted internal
   // callers; the MCP layer always passes the authenticated token's own

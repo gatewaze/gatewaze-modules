@@ -112,6 +112,41 @@ export async function computeSpendOverview(sb: unknown, projectId: string | null
   }
 }
 
+export interface ModelUsageRow {
+  model: string;
+  phases: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  cost: number;
+}
+
+/**
+ * Per-model spend over the last `days`, SUBAGENT- and utility-model-inclusive (reads the
+ * se_phase_model_usage view, which unrolls se_phases.model_usage — the flat token columns are
+ * main-thread only). Aggregation runs in the DB via the se_model_usage() RPC so a wide window is not
+ * truncated by PostgREST's row cap. Best-effort: returns [] on any failure (e.g. a pre-022 instance
+ * without the RPC) so the Overview degrades cleanly.
+ */
+export async function computeModelUsage(sb: unknown, projectId: string | null, days = 7): Promise<ModelUsageRow[]> {
+  try {
+    const { data, error } = await (sb as any).rpc('se_model_usage', { p_project: projectId, p_days: days });
+    if (error || !Array.isArray(data)) return [];
+    return data.map((r: any) => ({
+      model: String(r.model ?? '—'),
+      phases: Number(r.phases ?? 0),
+      input: Number(r.tokens_input ?? 0),
+      output: Number(r.tokens_output ?? 0),
+      cacheRead: Number(r.tokens_cache_read ?? 0),
+      cacheCreation: Number(r.tokens_cache_creation ?? 0),
+      cost: Number(r.cost_usd ?? 0),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Live estimation support: the phase heartbeat prices accumulated tokens every
 // ~20s while a session runs, so rate rows are cached briefly (the book changes
