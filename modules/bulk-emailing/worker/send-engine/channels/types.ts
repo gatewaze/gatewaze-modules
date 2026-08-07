@@ -15,12 +15,27 @@
  */
 import type { Recipient } from '../engine.js';
 
+// A file delivered alongside the message. SendGrid carries attachments at the
+// MESSAGE level, not per-personalization — so a message with attachments can
+// only address the recipients those attachments belong to. The engine handles
+// that by dropping to one personalization per call when a send declares
+// per-recipient attachments (SendContext.perRecipientAttachments).
+export interface MessageAttachment {
+  filename: string;
+  content: string;             // base64
+  type?: string;               // MIME; defaults to application/octet-stream
+  disposition?: 'attachment' | 'inline';
+  contentId?: string;          // for disposition: 'inline'
+}
+
 // Generalised from Tier 2's SendGrid message: html for email, bodyText for
 // sms/whatsapp. The engine fills exactly one per the send's channel.
 export interface BatchedMessage {
   from: string; fromName?: string; replyTo?: string;
   subject: string; html?: string; bodyText?: string;
   disableSubscriptionTracking?: boolean;
+  // Message-level; see MessageAttachment. Only meaningful for email.
+  attachments?: MessageAttachment[];
   personalizations: Array<{
     to: string;
     headers?: Record<string, string>;
@@ -58,6 +73,8 @@ export interface ChannelProvider {
   // Per-recipient destination from the person: email vs E.164 phone vs handle.
   resolveAddress(r: Recipient): string | null;
   // Batched dispatch (email → SendGrid sendBatch; sms/whatsapp → Twilio).
+  // Providers that can't carry attachments simply ignore msg.attachments; the
+  // engine only populates it for channels whose binding builds them.
   sendBatch(msg: BatchedMessage): Promise<BatchedResult>;
   // Crash recovery: was the batch accepted by the provider? Email only (the
   // engine treats absence as "unknown → leave for next tick / release after TTL").
