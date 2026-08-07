@@ -13,7 +13,7 @@ import { InProcessRunner } from './agent-session.js';
 import { CodexRunner } from './codex-runner.js';
 import { resolvePhaseModel } from './model-select.js';
 import { estimateLiveCostUSD } from './cost.js';
-import { writeEvent, writeMessage, touchRun } from './run-state.js';
+import { writeEvent, writeMessage, touchRun, drainPendingAdminMessages } from './run-state.js';
 import { resolveCommitIdentity } from './credentials.js';
 import { recallMemory, listMemorySources } from './memory.js';
 import { buildMemoryMcpServer } from './memory-tools.js';
@@ -130,10 +130,15 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     let processRules = '';
     try { processRules = await fetchProcessRules(project, project.githubToken, ctx?.logger); } catch { /* soft */ }
 
+    // See drainPendingAdminMessages (run-state.ts) for why this is gated on spec.attempt > 1 — it
+    // exists to close the resume cold-start race (SPEC #36 §3.3), not to replay ordinary chat history.
+    const adminNote = await drainPendingAdminMessages(supabase, run, spec.attempt ?? 1);
+
     const layout = (spec.repos ?? []).map((r) => `- ./${r.repoName}/  (${r.writable ? 'WRITABLE — you may change this' : 'read-only — context only'})`).join('\n');
     const systemAppend =
       (spec.systemAppend ? spec.systemAppend + '\n\n' : '') +
       processRulesBlock(processRules) +
+      adminNote +
       `--- WORKSPACE ---\nYou are in a multi-repo workspace; each repository is a subdirectory:\n${layout}\nMake code changes ONLY in WRITABLE repos; read any repo for context.\n` +
       attachNote +
       (contracts ? `\n--- REPO WORKING AGREEMENTS (follow each repo's own exactly) ---${contracts}\n` : '') +
