@@ -259,6 +259,28 @@ export async function buildSpeakerDeck(templatePptx: Buffer, inputs: DeckInputs)
           'Slide title',
         );
 
+        if (!isConnectSlide) {
+          // Body copy under the title. This slide is the one speakers
+          // duplicate to build the rest of their talk, so it carries real
+          // text rather than an empty box: the sizes, colour and spacing
+          // here are the style they inherit on every slide they add.
+          const bodyTop = titleY + 685800;
+          shapes += textBox(
+            bodyX,
+            bodyTop,
+            SLIDE_W - bodyX * 2,
+            SLIDE_H - inset - 228600 - bodyTop,
+            para('Body text. Replace this with your own words, and duplicate this slide for the rest of your talk.', {
+              sz: 1600,
+              color: '374151',
+            }) +
+              para('•  A short point, one line where you can', { sz: 1600, color: '374151', spaceBeforePts: 12 }) +
+              para('•  Another point, kept to the same length', { sz: 1600, color: '374151', spaceBeforePts: 6 }) +
+              para('•  A third, so the spacing is set for you', { sz: 1600, color: '374151', spaceBeforePts: 6 }),
+            'Body',
+          );
+        }
+
         if (isConnectSlide) {
           // Big QR on the right, the speaker's own links on the left. The
           // code is sized for someone reading it from the back of a room,
