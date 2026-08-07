@@ -213,6 +213,7 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
         company: context.speaker.company,
         talkTitle: context.talk.title,
         linkedinQrPng: linkedinQr?.png ?? null,
+        linkedinUrl: linkedinQr?.url ?? null,
       });
       if (deck) {
         deckPath = storagePathFor(context.event.id, context.talk.id, 'presentation-template.pptx');
