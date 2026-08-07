@@ -426,6 +426,34 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100dvh-var(--se-runs-chrome,240px))] lg:overflow-hidden">
       {/* Runs board — full width on mobile; hidden once a run is selected so the detail pane takes over. */}
       <div className={`w-full lg:w-80 shrink-0 lg:overflow-y-auto pr-1 ${selected ? 'hidden lg:block' : 'block'}`}>
+        {!showArchived && projectList.length > 0 && (
+          // Leads the sidebar, set off with its own caption + rule, so it reads as an action
+          // rather than as another entry in the project/status filter cluster below it.
+          <div className="mb-3 pb-3 border-b border-[var(--gray-5)]">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)] mb-1.5">
+              Start a new engineer
+            </div>
+            {/* items-stretch: the auto-height select conforms to the fixed-height
+                Button so both controls line up regardless of the kit's sm height. */}
+            <div className="flex items-stretch gap-2">
+              {projectList.length > 1 && (
+                <select
+                  value={startProject}
+                  onChange={(e) => setStartProject(e.target.value)}
+                  // No vertical padding: keep the select's intrinsic height below the
+                  // Button's fixed height so flex stretch grows it to match the Button.
+                  className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 text-sm"
+                  aria-label="Project for a new interactive engineer"
+                >
+                  {projectList.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
+                </select>
+              )}
+              <Button variant="soft" size="sm" onClick={startInteractive} disabled={starting} className={projectList.length > 1 ? 'shrink-0' : 'w-full'}>
+                <PlayCircleIcon className="size-4 mr-1" />{starting ? 'Starting…' : 'Start engineer'}
+              </Button>
+            </div>
+          </div>
+        )}
         {projectList.length > 1 && (
           <select
             value={projectFilter}
@@ -478,27 +506,6 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             </div>
           );
         })()}
-        {!showArchived && projectList.length > 0 && (
-          // items-stretch: the auto-height select conforms to the fixed-height
-          // Button so both controls line up regardless of the kit's sm height.
-          <div className="mb-2 flex items-stretch gap-2">
-            {projectList.length > 1 && (
-              <select
-                value={startProject}
-                onChange={(e) => setStartProject(e.target.value)}
-                // No vertical padding: keep the select's intrinsic height below the
-                // Button's fixed height so flex stretch grows it to match the Button.
-                className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 text-sm"
-                aria-label="Project for a new interactive engineer"
-              >
-                {projectList.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
-              </select>
-            )}
-            <Button variant="soft" size="sm" onClick={startInteractive} disabled={starting} className={projectList.length > 1 ? 'shrink-0' : 'w-full'}>
-              <PlayCircleIcon className="size-4 mr-1" />{starting ? 'Starting…' : 'Start engineer'}
-            </Button>
-          </div>
-        )}
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">{showArchived ? 'Archive' : 'Runs'}</div>
           <button onClick={() => { onSelect(null); setDetail(null); setShowArchived((v) => !v); }} className="text-[11px] text-[var(--gray-10)] hover:text-[var(--gray-12)] underline">
