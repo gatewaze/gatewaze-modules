@@ -39,6 +39,7 @@ export interface PromoKitRow {
   promo_text_error: string | null;
   cards: PromoCard[] | null;
   zip_storage_path: string | null;
+  deck_storage_path: string | null;
   template_version: string | null;
   generated_at: string | null;
 }
@@ -61,6 +62,7 @@ export interface PromoKitContext {
     event_title: string;
     event_type?: string | null;
     event_start: string;
+    event_end?: string | null;
     event_timezone: string | null;
     event_city: string | null;
     event_link: string | null;
@@ -73,6 +75,7 @@ export interface PromoKitContext {
     company: string | null;
     bio: string | null;
     avatarUrl: string | null;
+    email: string | null;
   };
   otherSpeakers: Array<{ name: string; talk_title: string }>;
 }

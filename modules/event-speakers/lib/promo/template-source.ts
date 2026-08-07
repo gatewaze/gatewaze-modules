@@ -95,10 +95,15 @@ async function fetchRepoFiles(repo: RepoRef): Promise<Map<string, Buffer>> {
   }
 }
 
-/** Resolve the active template source: the configured git repo, else the
- *  templates vendored with the module. Never throws. */
-export async function loadTemplateSource(moduleTemplatesDir: string): Promise<TemplateSource> {
-  const repo = parseTemplateRepoUrl(process.env.SPEAKER_CARDS_TEMPLATE_REPO);
+/** Resolve the active template source: a per-event repo override when given,
+ *  else the module-configured git repo, else the templates vendored with the
+ *  module. Never throws. */
+export async function loadTemplateSource(
+  moduleTemplatesDir: string,
+  repoOverride?: string | null,
+): Promise<TemplateSource> {
+  const repo =
+    parseTemplateRepoUrl(repoOverride) ?? parseTemplateRepoUrl(process.env.SPEAKER_CARDS_TEMPLATE_REPO);
   if (repo) {
     try {
       const files = await fetchRepoFiles(repo);
@@ -202,15 +207,17 @@ export function buildBrandVars(
   return vars;
 }
 
-/** Full event → brand-vars resolution against a loaded source. Returns {}
- *  (template defaults, Voice blue) when unmapped or on any repo problem. */
+/** Full event → brand-vars resolution against a loaded source. A per-event
+ *  brand override (speaker_promo_event_config.brand_key) wins over the
+ *  repo's mapping rules. Returns {} (template defaults, Voice blue) when
+ *  unmapped or on any repo problem. */
 export function resolveBrandVars(
   source: TemplateSource,
   event: { event_id?: string | null; event_slug?: string | null; event_title?: string | null; event_type?: string | null },
+  brandKeyOverride?: string | null,
 ): BrandVars {
   if (source.origin !== 'git') return {};
-  const mapping = parseJsonFile(source, 'mapping.json');
-  const key = resolveBrandKey(mapping, event);
+  const key = brandKeyOverride?.trim() || resolveBrandKey(parseJsonFile(source, 'mapping.json'), event);
   if (!key || !/^[\w-]{1,64}$/.test(key)) return {};
   const brand = parseJsonFile(source, `brands/${key}.json`);
   if (!brand || typeof brand !== 'object') return {};
