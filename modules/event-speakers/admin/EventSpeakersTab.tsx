@@ -1209,8 +1209,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
         </div>
       </div>
 
-      {/* Actions - always at bottom */}
-      <div className="flex flex-wrap items-center gap-1 gap-y-2 mt-3 pt-3 border-t border-gray-100 dark:border-gray-800" onClick={(e) => e.stopPropagation()}>
+      {/* Actions - always at bottom: mt-auto pins this row to the card's
+          bottom edge so buttons align across a grid row regardless of how
+          tall the text above is (Card is h-full flex flex-col). */}
+      <div className="flex flex-wrap items-center gap-1 gap-y-2 mt-auto pt-3 border-t border-gray-100 dark:border-gray-800" onClick={(e) => e.stopPropagation()}>
             {showApprovalActions ? (
               // Pending applications - show Approve, Reserve, Reject buttons together, then Delete
               <>
@@ -1383,6 +1385,9 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                       <XMarkIcon className="w-4 h-4 sm:mr-1" />
                       <span className="hidden sm:inline">Reject</span>
                     </button>
+                    {/* Deliberately just email + edit here — removal lives
+                        inside the edit modal to keep destructive actions off
+                        the card. */}
                     <div className="flex items-center gap-1 ml-auto">
                       {speaker?.email && (
                         <button
@@ -1399,13 +1404,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         title="Edit speaker"
                       >
                         <PencilIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeletingTalk(talk)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                        title="Remove speaker"
-                      >
-                        <TrashIcon className="w-4 h-4" />
                       </button>
                     </div>
                   </>
@@ -2759,18 +2757,33 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
         title="Edit Speaker"
         footer={
           <div className="flex justify-between items-center gap-3 p-4">
-            <Button variant="outline" onClick={() => {
-              setShowEditModal(false);
-              setEditingTalk(null);
-            }}>
-              Cancel
-            </Button>
+            {/* Removal moved off the speaker cards — this is its home now.
+                Hands off to the existing ConfirmModal flow. */}
             <Button
-              onClick={handleSaveEdit}
-              disabled={!speakerForm.talk_title.trim() || !speakerForm.talk_synopsis.trim()}
+              variant="outline"
+              color="error"
+              onClick={() => {
+                setDeletingTalk(editingTalk);
+                setShowEditModal(false);
+              }}
             >
-              Save Changes
+              <TrashIcon className="w-4 h-4 mr-1" />
+              Remove speaker
             </Button>
+            <div className="flex items-center gap-3">
+              <Button variant="outline" onClick={() => {
+                setShowEditModal(false);
+                setEditingTalk(null);
+              }}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveEdit}
+                disabled={!speakerForm.talk_title.trim() || !speakerForm.talk_synopsis.trim()}
+              >
+                Save Changes
+              </Button>
+            </div>
           </div>
         }
       >

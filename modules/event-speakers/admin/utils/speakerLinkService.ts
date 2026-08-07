@@ -26,6 +26,15 @@ export interface SpeakerTrackingLink {
   redirectId: string | null;
 }
 
+/** getApiBaseUrl() returns a base that ALREADY ends in /api (e.g.
+ *  `${VITE_API_URL}/api`, or bare '/api' behind the dev proxy) — appending
+ *  an /api-prefixed path doubles it into /api/api/... 404s. Join tolerantly
+ *  so either base shape works. */
+function apiUrl(path: string): string {
+  const base = getApiBaseUrl().replace(/\/+$/, '');
+  return base.endsWith('/api') ? `${base}${path.replace(/^\/api/, '')}` : `${base}${path}`;
+}
+
 /** 90-day click counts for umami-provider redirects, keyed by redirect id.
  *  Failures degrade to an empty map — the badge then shows the stored
  *  (possibly zero) counts rather than blocking the tab. */
@@ -34,11 +43,10 @@ async function getUmamiClicks(redirectIds: string[]): Promise<Record<string, { c
   const { data: session } = await supabase.auth.getSession();
   const token = session?.session?.access_token;
   if (!token) return {};
-  const apiBaseUrl = getApiBaseUrl();
   const entries = await Promise.all(
     redirectIds.map(async (id) => {
       try {
-        const res = await fetch(`${apiBaseUrl}/api/redirects/link/${encodeURIComponent(id)}/stats`, {
+        const res = await fetch(apiUrl(`/api/redirects/link/${encodeURIComponent(id)}/stats`), {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) return null;
