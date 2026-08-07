@@ -39,6 +39,24 @@ export function renderTemplate(template: string, context: Record<string, Record<
   });
 }
 
+// Obfuscated recipient id for the `calendar` edge function, byte-identical to
+// the bulk sender's encodeEmail (XOR 'HideMe' + base64url). The function
+// authorises the caller from this, so it must match exactly.
+function encodeEmail(email: string): string {
+  if (!email) return '';
+  const passphrase = 'HideMe';
+  const lower = email.toLowerCase();
+  const bytes: number[] = [];
+  for (let i = 0; i < lower.length; i++) {
+    bytes.push(lower.charCodeAt(i) ^ passphrase.charCodeAt(i % passphrase.length));
+  }
+  return Buffer.from(String.fromCharCode(...bytes), 'latin1')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
+
 function formatEmailDate(iso: string | null | undefined): string | undefined {
   if (!iso) return undefined;
   try {
@@ -146,6 +164,9 @@ export async function sendConfirmedEmailIfDue(
       ? `/events/${context.event.event_id}/talks/success/${context.talk.edit_token}`
       : '';
     const nameParts = context.speaker.fullName.trim().split(/\s+/);
+    const supabaseBase = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
+    const calendarBase = `${supabaseBase}/functions/v1/calendar/${context.event.event_id}`;
+    const encodedEmail = encodeEmail(speakerEmail);
     const templateContext = {
       customer: {
         first_name: nameParts[0] ?? '',
@@ -172,6 +193,15 @@ export async function sendConfirmedEmailIfDue(
         start_date: formatEmailDate(context.event.event_start) ?? '',
         end_date: formatEmailDate(context.event.event_end) ?? '',
       },
+      // Same token shape the bulk sender exposes ({{calendar.google}} etc.),
+      // so speaker templates can offer add-to-calendar links as well as the
+      // .ics attachment below.
+      calendar: {
+        google: `${calendarBase}/google/${encodedEmail}`,
+        outlook: `${calendarBase}/outlook/${encodedEmail}`,
+        apple: `${calendarBase}/apple/${encodedEmail}`,
+        ics: `${calendarBase}/ics/${encodedEmail}`,
+      },
     };
 
     const from = fromAddressFor(settings.speaker_confirmed_email_from_key);
@@ -179,6 +209,41 @@ export async function sendConfirmedEmailIfDue(
 
     const supabaseUrl = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+
+    // Pull the .ics from the same calendar function the portal checklist uses,
+    // rather than re-deriving the event here — one source of truth for the
+    // RFC 5545 escaping and the speaker's authorisation. Attaching it means
+    // the mail client offers "add to calendar" directly; the {{calendar.*}}
+    // links remain available for clients that prefer a URL.
+    // Best-effort: a calendar hiccup must not hold up the confirmation.
+    const attachments: Array<Record<string, string>> = [
+      {
+        content: zip.buffer.toString('base64'),
+        filename: zip.filename,
+        type: 'application/zip',
+        disposition: 'attachment',
+      },
+    ];
+    try {
+      const icsRes = await fetch(`${calendarBase}/ics/${encodedEmail}`);
+      if (icsRes.ok) {
+        const ics = await icsRes.text();
+        if (ics.startsWith('BEGIN:VCALENDAR')) {
+          attachments.push({
+            content: Buffer.from(ics, 'utf8').toString('base64'),
+            filename: 'event.ics',
+            type: 'text/calendar',
+            disposition: 'attachment',
+          });
+        } else {
+          log('calendar ics fetch returned unexpected body; sending without invite');
+        }
+      } else {
+        log(`calendar ics fetch failed: ${icsRes.status}; sending without invite`);
+      }
+    } catch (e) {
+      log(`calendar ics fetch error: ${e instanceof Error ? e.message : e}; sending without invite`);
+    }
     const res = await fetch(`${supabaseUrl}/functions/v1/email-send`, {
       method: 'POST',
       headers: {
@@ -194,16 +259,7 @@ export async function sendConfirmedEmailIfDue(
         replyTo: settings.speaker_confirmed_email_reply_to || undefined,
         subject: renderTemplate(subjectTpl, templateContext),
         html: renderTemplate(contentTpl, templateContext),
-        attachments: zip
-          ? [
-              {
-                content: zip.buffer.toString('base64'),
-                filename: zip.filename,
-                type: 'application/zip',
-                disposition: 'attachment',
-              },
-            ]
-          : undefined,
+        attachments,
       }),
     });
     if (!res.ok) {
@@ -216,7 +272,7 @@ export async function sendConfirmedEmailIfDue(
       .from('speaker_promo_kits')
       .update({ confirmed_email_sent_at: new Date().toISOString() })
       .eq('id', kit.id);
-    log(`confirmed email sent to ${speakerEmail}${zip ? ' with promo-kit zip attached' : ''}`);
+    log(`confirmed email sent to ${speakerEmail} (${attachments.length} attachment(s): ${attachments.map((a) => a.filename).join(', ')})`);
     return { sent: true };
   } catch (err) {
     log(`confirmed email error: ${err instanceof Error ? err.message : err}`);
