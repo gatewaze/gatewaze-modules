@@ -18,13 +18,19 @@
  * full day in `implement` after a staging redeploy). The DB (se_phases / se_runs) is the durable
  * failure record, so dropping the dead Redis job loses nothing diagnostic.
  */
+/** The deterministic BullMQ jobId for a run's phase — shared with recover.ts so it can look up an
+ * existing job's state before deciding whether to re-enqueue. */
+export function phaseJobId(runId: string, phase: string): string {
+  return `se-run-${runId}-${phase}`;
+}
+
 export async function enqueuePhase(ctx: unknown, runId: string, phase: string, data: Record<string, unknown> = {}) {
   if (!runId || !phase) return { id: undefined };
   return (ctx as { enqueueJob?: (...a: unknown[]) => Promise<{ id?: string }> })?.enqueueJob?.(
     'se',
     `software-engineer:${phase}`,
     { runId, ...data },
-    { jobId: `se-run-${runId}-${phase}`, removeOnComplete: true, removeOnFail: true },
+    { jobId: phaseJobId(runId, phase), removeOnComplete: true, removeOnFail: true },
   ) ?? { id: undefined };
 }
 
