@@ -1,7 +1,7 @@
 // @ts-nocheck — supabase-js + sibling libs resolved at module-host install time.
 
 /**
- * event-speakers:generate-promo-kit — build one confirmed speaker's promo kit.
+ * event-speakers:generate-promo-kit — build one confirmed speaker's speaker kit.
  *
  * Two-phase state machine driven by the promo-kit-sweep cron (the runtime
  * invokes handlers without an enqueue helper and WORKER_CONCURRENCY defaults
@@ -34,6 +34,7 @@ import { buildRecipeParams, dispatchPromoTextRun, readPromoTextRun } from '../li
 import { buildPromoKitZip } from '../lib/promo/build-zip.js';
 import { sendConfirmedEmailIfDue } from '../lib/promo/confirmed-email.js';
 import { buildSpeakerDeck } from '../lib/promo/slide-deck.js';
+import { buildLinkedInQr } from '../lib/promo/linkedin-qr.js';
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 
@@ -196,6 +197,11 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
         logoPng = null;
       }
 
+      // LinkedIn QR for the title slide. Null when we hold no address for
+      // this speaker, or when the value isn't a real LinkedIn profile.
+      const linkedinQr = await buildLinkedInQr(context.speaker.linkedinUrl);
+      if (linkedinQr) log(`linkedin qr: ${linkedinQr.url}`);
+
       const deck = await buildSpeakerDeck(deckTemplate, {
         bgArtPng: artRender.png,
         logoPng,
@@ -206,6 +212,7 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
         jobTitle: context.speaker.jobTitle,
         company: context.speaker.company,
         talkTitle: context.talk.title,
+        linkedinQrPng: linkedinQr?.png ?? null,
       });
       if (deck) {
         deckPath = storagePathFor(context.event.id, context.talk.id, 'presentation-template.pptx');
@@ -346,7 +353,9 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
     kit,
     context,
     context.speaker.email,
-    { buffer: zipBuffer, filename: 'promo-kit.zip' },
+    // Attachment filename only — the storage key stays promo-kit.zip so
+    // existing kits keep resolving.
+    { buffer: zipBuffer, filename: 'speaker-kit.zip' },
     log,
   );
 }

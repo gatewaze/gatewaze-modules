@@ -54,7 +54,7 @@ export async function buildPromoKitZip(inputs: ZipInputs): Promise<Buffer> {
   }
 
   const readme = [
-    `Promo kit — ${inputs.speakerName}, ${inputs.eventTitle}`,
+    `Speaker kit — ${inputs.speakerName}, ${inputs.eventTitle}`,
     '',
     'What is in here:',
     '  images/          Share images sized for LinkedIn/X feed posts, stories,',

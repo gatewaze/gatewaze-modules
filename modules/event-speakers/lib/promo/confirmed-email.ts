@@ -95,7 +95,7 @@ export interface ConfirmedEmailResult {
  * content present, not already sent, AND the kit zip built.
  *
  * The zip is required, not optional: the email copy tells the speaker their
- * promo kit is attached, so sending without it delivers a broken promise.
+ * speaker kit is attached, so sending without it delivers a broken promise.
  * Callers must finish building the zip first — which is exactly why this
  * send lives at kit-finalize time rather than at the moment an admin clicks
  * Confirm (the kit doesn't exist yet at that point).

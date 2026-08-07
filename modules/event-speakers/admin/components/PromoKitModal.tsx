@@ -1,5 +1,5 @@
 /**
- * Admin surfacing for speaker promo kits (event Speakers tab):
+ * Admin surfacing for speaker speaker kits (event Speakers tab):
  *
  * - PromoKitModal — everything in one speaker's generated kit: the three
  *   share images, every post text variant with copy, the tracking link, the
@@ -112,7 +112,7 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Promo kit — ${speakerName}`} size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={`Speaker kit — ${speakerName}`} size="lg">
       {!kit ? (
         <p className="text-sm text-gray-500 dark:text-gray-400">
           No kit yet for this speaker. Kits are generated automatically for confirmed talks of upcoming
@@ -226,7 +226,7 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
           <div className="pt-3 border-t border-gray-100 dark:border-gray-700/50 space-y-2">
             <div className="flex items-center gap-2">
               {kit.zip_storage_path && (
-                <a href={mediaPublicUrl(kit.zip_storage_path, kit.generated_at)} download>
+                <a href={mediaPublicUrl(kit.zip_storage_path, kit.generated_at)} download="speaker-kit.zip">
                   <Button variant="secondary" size="sm" className="whitespace-nowrap">
                     <ArrowDownTrayIcon className="w-4 h-4 mr-1 shrink-0" />
                     Download zip
@@ -289,7 +289,7 @@ export function PromoKitSettingsModal({ isOpen, onClose, eventUuid }: PromoKitSe
         setTemplateRepo(data?.template_repo ?? '');
         setBrandKey(data?.brand_key ?? '');
       })
-      .then(undefined, () => toast.error('Failed to load promo kit settings'))
+      .then(undefined, () => toast.error('Failed to load speaker kit settings'))
       .then(() => setLoading(false));
   }, [isOpen, eventUuid]);
 
@@ -313,7 +313,7 @@ export function PromoKitSettingsModal({ isOpen, onClose, eventUuid }: PromoKitSe
           { onConflict: 'event_uuid' },
         );
       if (error) throw error;
-      toast.success('Promo kit settings saved — applies to the next (re)generation');
+      toast.success('Speaker kit settings saved — applies to the next (re)generation');
       onClose();
     } catch (err) {
       toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
@@ -323,7 +323,7 @@ export function PromoKitSettingsModal({ isOpen, onClose, eventUuid }: PromoKitSe
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Promo kit settings" size="md">
+    <Modal isOpen={isOpen} onClose={onClose} title="Speaker kit settings" size="md">
       {loading ? (
         <div className="py-6 flex justify-center"><LoadingSpinner size="sm" /></div>
       ) : (

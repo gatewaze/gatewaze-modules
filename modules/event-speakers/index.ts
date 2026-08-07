@@ -9,7 +9,7 @@ const eventSpeakersModule: GatewazeModule = {
   description: 'Speaker profiles, talk submissions, and cross-event speaker management',
   // v2.0.0 — adds calendar / platform scope for talks, canonical person link,
   // top-level Speakers admin nav, calendar submit-talk portal page.
-  // v2.1.0 — speaker promo kits: auto-generated umami tracking link, AI post
+  // v2.1.0 — speaker speaker kits: auto-generated umami tracking link, AI post
   // variants, rendered social cards + zip for confirmed talks (see guide.md).
   version: '2.1.0',
   features: [
@@ -78,6 +78,21 @@ const eventSpeakersModule: GatewazeModule = {
     // confirm flow always used but no migration ever created (confirm links
     // showed 'Invalid Link' because selecting confirmed_at 400ed).
     'migrations/019_talk_checklist_columns.sql',
+    // 020 exposes presentation_storage_path/type on events_talks_with_speakers.
+    // A speaker who UPLOADS a file sets only the storage path, so the admin
+    // progress tick (url || storage_path) never fired for file uploads —
+    // the column simply wasn't on the view the admin reads.
+    'migrations/020_talks_view_presentation_fields.sql',
+    // 021 scheduled "we still need your presentation" reminders: comms
+    // settings (enabled/copy/offsets, default 14 + 8 days before) plus a
+    // per-(talk, offset) send log that keeps the sweep idempotent.
+    'migrations/021_presentation_reminders.sql',
+    // 022 + 023 make the talk-edit status reset lenient: the reset still
+    // happens immediately (fail-safe), then a worker judges via the ai module
+    // whether the edit changed the SUBSTANCE of the talk and restores the
+    // previous status when it didn't. 023 is skipped when ai is absent.
+    'migrations/022_talk_edit_reviews.sql',
+    'migrations/023_talk_edit_materiality_use_case.sql',
   ],
 
   workers: [
@@ -91,11 +106,19 @@ const eventSpeakersModule: GatewazeModule = {
       name: 'event-speakers:generate-promo-kit',
       handler: './workers/generate-promo-kit.ts',
     },
+    {
+      name: 'event-speakers:presentation-reminder-sweep',
+      handler: './workers/presentation-reminder-sweep.ts',
+    },
+    {
+      name: 'event-speakers:talk-edit-review-sweep',
+      handler: './workers/talk-edit-review-sweep.ts',
+    },
   ],
 
   crons: [
     {
-      // Heartbeat for speaker promo kits: creates kit rows for newly
+      // Heartbeat for speaker speaker kits: creates kit rows for newly
       // confirmed talks (upcoming events), retries bounded failures, and
       // advances requested/generating kits. Idempotent; 2-minute cadence
       // keeps "confirm → kit ready" latency low without meaningful load.
@@ -103,6 +126,25 @@ const eventSpeakersModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '*/2 * * * *' },
       data: { kind: 'event-speakers:promo-kit-sweep' },
+    },
+    {
+      // Daily nudge for confirmed speakers who still owe us a presentation.
+      // Daily (not hourly) because the offsets are whole days and each
+      // (talk, offset) can only send once; 09:00 UTC keeps it inside working
+      // hours for EU/US-east without needing per-recipient timezone logic.
+      name: 'event-speakers-presentation-reminder-sweep',
+      queue: 'jobs',
+      schedule: { pattern: '0 9 * * *' },
+      data: { kind: 'event-speakers:presentation-reminder-sweep' },
+    },
+    {
+      // Judges speaker talk edits soon after they happen. Every 2 minutes so a
+      // speaker fixing a typo gets their confirmed status back while they're
+      // still on the page, rather than discovering it days later.
+      name: 'event-speakers-talk-edit-review-sweep',
+      queue: 'jobs',
+      schedule: { pattern: '*/2 * * * *' },
+      data: { kind: 'event-speakers:talk-edit-review-sweep' },
     },
   ],
 
