@@ -60,7 +60,7 @@ export default async function implement(job, ctx) {
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
-      await recordPhaseEnd(supabase, run, 'implement', 'failed', msg);
+      await recordPhaseEnd(supabase, run, 'implement', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
       return { failed: msg };
     }
@@ -84,7 +84,7 @@ export default async function implement(job, ctx) {
       }
     }
     if (changed === 0) {
-      await recordPhaseEnd(supabase, run, 'implement', 'failed', 'agent produced no changes in any writable repo');
+      await recordPhaseEnd(supabase, run, 'implement', 'failed', 'agent produced no changes in any writable repo', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: 'implement produced no changes' }).eq('id', run.id);
       return { failed: 'no changes' };
     }

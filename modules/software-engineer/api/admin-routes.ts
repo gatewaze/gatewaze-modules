@@ -25,7 +25,7 @@ import { dispatchTriageTurn } from '../lib/triage-dispatch.js';
 import { redactToken } from '../lib/git.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
-import { computeSpendOverview } from '../lib/cost.js';
+import { computeSpendOverview, computeModelUsage } from '../lib/cost.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -417,6 +417,20 @@ export function mountAdminRoutes(router, deps) {
       return res.status(500).json({ error: 'overview failed' });
     }
     res.json({ ...(data ?? {}), ...(spend ? { spend } : {}) });
+  });
+
+  // Per-model spend, SUBAGENT-inclusive (from se_phases.model_usage via the se_model_usage RPC) — the
+  // flat token columns miss the subagent sessions a phase fans out. ?project scopes it; ?days windows
+  // it (default 7, clamped 1..365). Separate from /overview so the tab can lazy-load it on demand.
+  router.get('/overview/model-usage', async (req, res) => {
+    let project: string | null = null;
+    if (req.query.project !== undefined && req.query.project !== '') {
+      project = String(req.query.project);
+      if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
+    }
+    const days = Math.min(365, Math.max(1, Math.floor(Number(req.query.days)) || 7));
+    const models = await computeModelUsage(supabase, project, days);
+    res.json({ days, models });
   });
 
   // ── Overview PR board — every open PR AUTHORED by each project's PAT user ─────────────────
