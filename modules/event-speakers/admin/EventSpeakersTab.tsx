@@ -1357,13 +1357,13 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   <>
                     <button
                       onClick={() => setPromoKitTalk(talk)}
-                      className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
+                      className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
                       title="View this speaker's promo kit (share images, post text, tracking link)"
                     >
                       <PhotoIcon className="w-4 h-4 sm:mr-1" />
                       <span className="hidden sm:inline">Promo kit</span>
                       <span
-                        className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] leading-none ${kitStatusBadge(promoKits[talk.id]).className}`}
+                        className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap ${kitStatusBadge(promoKits[talk.id]).className}`}
                       >
                         {kitStatusBadge(promoKits[talk.id]).label}
                       </span>
