@@ -3,7 +3,7 @@
  * Manages email communications and push notifications for events
  */
 
-import { useState, useEffect, useMemo, Fragment, useRef } from 'react';
+import { useState, useEffect, useMemo, Fragment, useRef, type ReactNode } from 'react';
 import { useHasModule } from '@/hooks/useModuleFeature';
 import { toast } from 'sonner';
 import {
@@ -131,6 +131,14 @@ interface CommunicationSettings {
   speaker_reserve_email_content: string | null;
   // Speaker confirmed email settings
   speaker_confirmed_email_enabled: boolean;
+  speaker_presentation_reminder_enabled: boolean;
+  speaker_presentation_reminder_template_id: string | null;
+  speaker_presentation_reminder_from_key: string;
+  speaker_presentation_reminder_reply_to: string | null;
+  speaker_presentation_reminder_cc: string | null;
+  speaker_presentation_reminder_subject: string | null;
+  speaker_presentation_reminder_content: string | null;
+  speaker_presentation_reminder_offsets: number[];
   speaker_confirmed_email_template_id: string | null;
   speaker_confirmed_email_from_key: string;
   speaker_confirmed_email_reply_to: string | null;
@@ -239,6 +247,15 @@ interface SpeakerEmailConfigProps {
   eventDetails: EventDetails | null;
   fromAddresses: ReturnType<typeof EmailService.getFromAddresses>;
   fromOptions: { label: string; value: string }[];
+  /**
+   * Show the "Send to Existing <status> Speakers" block. Off for automated,
+   * CONDITIONAL emails: the presentation reminder only goes to speakers who
+   * haven't uploaded yet, so a blanket send would mail everyone — including
+   * the people who already did — which is exactly what it must avoid.
+   */
+  manualSend?: boolean;
+  /** Extra controls rendered inside the card (e.g. the reminder schedule). */
+  extraControls?: ReactNode;
 }
 
 function SpeakerEmailConfig({
@@ -265,6 +282,8 @@ function SpeakerEmailConfig({
   eventDetails,
   fromAddresses,
   fromOptions,
+  manualSend = true,
+  extraControls,
 }: SpeakerEmailConfigProps) {
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
@@ -753,7 +772,10 @@ function SpeakerEmailConfig({
             </p>
           </div>
 
+          {extraControls}
+
           {/* Send to Existing Speakers */}
+          {manualSend && (
           <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50">
             <div className="flex items-center gap-2 mb-2">
               <UsersIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
@@ -830,6 +852,7 @@ function SpeakerEmailConfig({
               </>
             )}
           </div>
+          )}
         </div>
       )}
 
@@ -2507,6 +2530,14 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
     speaker_reserve_email_content: null,
     // Speaker confirmed email
     speaker_confirmed_email_enabled: false,
+    speaker_presentation_reminder_enabled: false,
+    speaker_presentation_reminder_template_id: null,
+    speaker_presentation_reminder_from_key: 'events',
+    speaker_presentation_reminder_reply_to: null,
+    speaker_presentation_reminder_cc: null,
+    speaker_presentation_reminder_subject: null,
+    speaker_presentation_reminder_content: null,
+    speaker_presentation_reminder_offsets: [14, 8],
     speaker_confirmed_email_template_id: null,
     speaker_confirmed_email_from_key: 'events',
     speaker_confirmed_email_reply_to: null,
@@ -2593,6 +2624,8 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
   const [speakerReserveContent, setSpeakerReserveContent] = useState('');
   const [speakerConfirmedSubject, setSpeakerConfirmedSubject] = useState('');
   const [speakerConfirmedContent, setSpeakerConfirmedContent] = useState('');
+  const [speakerReminderSubject, setSpeakerReminderSubject] = useState('');
+  const [speakerReminderContent, setSpeakerReminderContent] = useState('');
 
   // Post-event email content state
   const [postEventAttendeeSubject, setPostEventAttendeeSubject] = useState('');
@@ -2868,6 +2901,14 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
           speaker_reserve_email_content: data.speaker_reserve_email_content,
           // Speaker confirmed email
           speaker_confirmed_email_enabled: data.speaker_confirmed_email_enabled || false,
+          speaker_presentation_reminder_enabled: data.speaker_presentation_reminder_enabled || false,
+          speaker_presentation_reminder_template_id: data.speaker_presentation_reminder_template_id || null,
+          speaker_presentation_reminder_from_key: data.speaker_presentation_reminder_from_key || 'events',
+          speaker_presentation_reminder_reply_to: data.speaker_presentation_reminder_reply_to || null,
+          speaker_presentation_reminder_cc: data.speaker_presentation_reminder_cc || null,
+          speaker_presentation_reminder_subject: data.speaker_presentation_reminder_subject || null,
+          speaker_presentation_reminder_content: data.speaker_presentation_reminder_content || null,
+          speaker_presentation_reminder_offsets: data.speaker_presentation_reminder_offsets || [14, 8],
           speaker_confirmed_email_template_id: data.speaker_confirmed_email_template_id,
           speaker_confirmed_email_from_key: data.speaker_confirmed_email_from_key || 'events',
           speaker_confirmed_email_reply_to: data.speaker_confirmed_email_reply_to,
@@ -2997,6 +3038,8 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
         if (data.speaker_confirmed_email_subject || data.speaker_confirmed_email_content) {
           setSpeakerConfirmedSubject(data.speaker_confirmed_email_subject || '');
           setSpeakerConfirmedContent(data.speaker_confirmed_email_content || '');
+          setSpeakerReminderSubject(data.speaker_presentation_reminder_subject || '');
+          setSpeakerReminderContent(data.speaker_presentation_reminder_content || '');
         } else if (data.speaker_confirmed_email_template_id) {
           const template = await EmailTemplateService.getById(data.speaker_confirmed_email_template_id);
           if (template) {
@@ -3235,6 +3278,14 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
         speaker_reserve_email_content: speakerReserveContent || null,
         // Speaker confirmed email
         speaker_confirmed_email_enabled: settings.speaker_confirmed_email_enabled,
+        speaker_presentation_reminder_enabled: settings.speaker_presentation_reminder_enabled,
+        speaker_presentation_reminder_template_id: settings.speaker_presentation_reminder_template_id,
+        speaker_presentation_reminder_from_key: settings.speaker_presentation_reminder_from_key,
+        speaker_presentation_reminder_reply_to: settings.speaker_presentation_reminder_reply_to,
+        speaker_presentation_reminder_cc: settings.speaker_presentation_reminder_cc,
+        speaker_presentation_reminder_subject: speakerReminderSubject || null,
+        speaker_presentation_reminder_content: speakerReminderContent || null,
+        speaker_presentation_reminder_offsets: settings.speaker_presentation_reminder_offsets,
         speaker_confirmed_email_template_id: settings.speaker_confirmed_email_template_id || null,
         speaker_confirmed_email_from_key: settings.speaker_confirmed_email_from_key,
         speaker_confirmed_email_reply_to: settings.speaker_confirmed_email_reply_to || null,
@@ -5021,6 +5072,66 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
                     eventDetails={eventDetails}
                     fromAddresses={fromAddresses}
                     fromOptions={fromOptions}
+                  />
+
+                  {/* Presentation reminder — automated and CONDITIONAL: only
+                      confirmed speakers who still owe us a presentation. */}
+                  <SpeakerEmailConfig
+                    title="Speaker Presentation Reminder"
+                    description="Automatically remind confirmed speakers who still haven't given us their presentation. Only speakers with no uploaded file and no pasted link are emailed, and each speaker gets a given reminder once. Use {{speaker.portal_link}} for their speaker portal."
+                    speakerStatus="confirmed"
+                    manualSend={false}
+                    enabled={settings.speaker_presentation_reminder_enabled}
+                    templateId={settings.speaker_presentation_reminder_template_id}
+                    fromKey={settings.speaker_presentation_reminder_from_key}
+                    replyTo={settings.speaker_presentation_reminder_reply_to}
+                    cc={settings.speaker_presentation_reminder_cc}
+                    emailSubject={speakerReminderSubject}
+                    emailContent={speakerReminderContent}
+                    onEnabledChange={(enabled) => setSettings(prev => ({ ...prev, speaker_presentation_reminder_enabled: enabled }))}
+                    onTemplateIdChange={(templateId) => setSettings(prev => ({ ...prev, speaker_presentation_reminder_template_id: templateId }))}
+                    onFromKeyChange={(fromKey) => {
+                      setSettings(prev => ({ ...prev, speaker_presentation_reminder_from_key: fromKey, speaker_presentation_reminder_template_id: null }));
+                      setSpeakerReminderSubject('');
+                      setSpeakerReminderContent('');
+                    }}
+                    onReplyToChange={(replyTo) => setSettings(prev => ({ ...prev, speaker_presentation_reminder_reply_to: replyTo }))}
+                    onCcChange={(cc) => setSettings(prev => ({ ...prev, speaker_presentation_reminder_cc: cc }))}
+                    onEmailSubjectChange={setSpeakerReminderSubject}
+                    onEmailContentChange={setSpeakerReminderContent}
+                    userId={user?.id || ''}
+                    eventId={eventId}
+                    eventUuid={eventUuid}
+                    eventDetails={eventDetails}
+                    fromAddresses={fromAddresses}
+                    fromOptions={fromOptions}
+                    extraControls={
+                      <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50">
+                        <div className="flex items-center gap-2 mb-2">
+                          <ClockIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                          <h5 className="text-sm font-medium text-gray-900 dark:text-white">Reminder schedule</h5>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                          Days before the event to send a reminder. Comma separated &mdash; 14, 8 sends two weeks out and again eight days out.
+                        </p>
+                        <input
+                          type="text"
+                          value={(settings.speaker_presentation_reminder_offsets || []).join(', ')}
+                          onChange={(e) => {
+                            const days = e.target.value
+                              .split(',')
+                              .map((s) => parseInt(s.trim(), 10))
+                              .filter((n) => Number.isFinite(n) && n > 0 && n <= 365);
+                            setSettings(prev => ({ ...prev, speaker_presentation_reminder_offsets: days }));
+                          }}
+                          placeholder="14, 8"
+                          className="w-40 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm"
+                        />
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                          Runs daily. A speaker who uploads between reminders simply stops qualifying.
+                        </p>
+                      </div>
+                    }
                   />
               </div>
 

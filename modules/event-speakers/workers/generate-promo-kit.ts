@@ -23,7 +23,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serviceClient } from '../lib/promo/service-client.js';
 import { loadPromoKitContext, dateShort } from '../lib/promo/context.js';
-import { mintSpeakerTrackingLink } from '../lib/promo/tracking-link.js';
+import { mintSpeakerTrackingLink, mintSpeakerLinkedInLink } from '../lib/promo/tracking-link.js';
 import {
   renderSpeakerCards,
   resolveAvatarDataUri,
@@ -34,7 +34,7 @@ import { buildRecipeParams, dispatchPromoTextRun, readPromoTextRun } from '../li
 import { buildPromoKitZip } from '../lib/promo/build-zip.js';
 import { sendConfirmedEmailIfDue } from '../lib/promo/confirmed-email.js';
 import { buildSpeakerDeck } from '../lib/promo/slide-deck.js';
-import { buildLinkedInQr } from '../lib/promo/linkedin-qr.js';
+import { buildLinkedInQr, renderLinkedInQrPng } from '../lib/promo/linkedin-qr.js';
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 
@@ -174,7 +174,16 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
           brand,
           hideChrome: true,
         },
-        [{ format: 'landscape', templateFile: 'speaker-card-landscape.html', exportWidth: 1200, exportHeight: 630 }],
+        // Export at HD width. This art spans the full width of the slide, so
+        // 1920px matches a 1080p projector pixel for pixel, which is what
+        // these decks are shown on. It was exported at 1200px, the size the
+        // shareable cards use, which left the lockups soft at 120 DPI.
+        //
+        // The render itself is unchanged at device scale 2, so Chromium
+        // still draws 2400px and sharp still downsamples. Rendering above
+        // the target and coming down is what keeps the lockup edges clean;
+        // the old export just came down too far.
+        [{ format: 'landscape', templateFile: 'speaker-card-landscape.html', exportWidth: 1920, exportHeight: 1008 }],
       );
 
       // Brand lockup → PNG for the content-slide masthead.
@@ -197,10 +206,33 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
         logoPng = null;
       }
 
-      // LinkedIn QR for the title slide. Null when we hold no address for
-      // this speaker, or when the value isn't a real LinkedIn profile.
+      // LinkedIn QR for the deck. Null when we hold no address for this
+      // speaker, or when the value isn't a real LinkedIn profile.
+      //
+      // The code encodes a /go/ redirect rather than the LinkedIn URL itself,
+      // so scans are counted the same way share-link clicks are. If minting
+      // the redirect fails we fall back to encoding LinkedIn directly: a QR
+      // that works untracked beats no QR on the slide.
       const linkedinQr = await buildLinkedInQr(context.speaker.linkedinUrl);
-      if (linkedinQr) log(`linkedin qr: ${linkedinQr.url}`);
+      let linkedinScanUrl: string | null = null;
+      if (linkedinQr) {
+        try {
+          const scanLink = await mintSpeakerLinkedInLink(supabase, {
+            speakerProfileId: context.speaker.profileId,
+            speakerName: context.speaker.fullName,
+            eventId: context.event.event_id,
+            linkedinUrl: linkedinQr.url,
+          });
+          linkedinScanUrl = scanLink.shortUrl;
+          log(`linkedin qr: ${scanLink.shortUrl} -> ${linkedinQr.url}`);
+        } catch (err) {
+          log(`linkedin redirect failed, QR points straight at LinkedIn: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+      // Re-encode against the redirect once we have one.
+      const linkedinQrPng = linkedinScanUrl
+        ? (await renderLinkedInQrPng(linkedinScanUrl)) ?? linkedinQr?.png ?? null
+        : (linkedinQr?.png ?? null);
 
       const deck = await buildSpeakerDeck(deckTemplate, {
         bgArtPng: artRender.png,
@@ -212,7 +244,8 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
         jobTitle: context.speaker.jobTitle,
         company: context.speaker.company,
         talkTitle: context.talk.title,
-        linkedinQrPng: linkedinQr?.png ?? null,
+        linkedinQrPng,
+        linkedinUrl: linkedinQr?.url ?? null,
       });
       if (deck) {
         deckPath = storagePathFor(context.event.id, context.talk.id, 'presentation-template.pptx');
@@ -328,7 +361,10 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
     cards: cardsWithBytes,
     deck: deckBuffer,
   });
-  const zipPath = storagePathFor(context.event.id, context.talk.id, 'promo-kit.zip');
+  // The object name is what a browser saves the file as. The download
+  // attribute on the link cannot override it, because storage is a different
+  // origin, so the name has to be right here.
+  const zipPath = storagePathFor(context.event.id, context.talk.id, 'speaker-kit.zip');
   const { error: zipErr } = await supabase.storage
     .from(BUCKET)
     .upload(zipPath, zipBuffer, { contentType: 'application/zip', cacheControl: '0', upsert: true });
