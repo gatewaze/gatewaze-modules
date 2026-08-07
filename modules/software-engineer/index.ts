@@ -57,6 +57,7 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/019_credential_model.sql',
     'migrations/020_reporter_notifications.sql',
     'migrations/021_sdk_cost_and_model_usage.sql',
+    'migrations/022_model_usage_view.sql',
   ],
 
   // Dedicated `se` queue — NOT the shared `jobs` queue (spec §7.5 / §17, now live). Agent phases run
@@ -113,6 +114,17 @@ const softwareEngineerModule: GatewazeModule = {
         // intake-poll: PULL fallback for issue discovery — NAT'd instances (no webhook) and the
         // cross-instance flow (prod files issues, the owning instance runs them). See workers/intake-poll.ts.
         { name: 'software-engineer:intake-poll', handler: './workers/intake-poll.ts' },
+      ],
+    },
+    {
+      // Dedicated triage queue (§10.5): one tool-less model turn per job, consumed by any runner —
+      // including a prod triage-only runner (WORKER_QUEUES=se-triage) that must never consume the
+      // agent-phase 'se' queue. attempts:1 — the API surfaces errors straight to the admin.
+      name: 'se-triage',
+      defaultConcurrency: 2,
+      defaultJobOptions: { attempts: 1 },
+      handlers: [
+        { name: 'software-engineer:triage-turn', handler: './workers/triage-turn.ts' },
       ],
     },
   ],

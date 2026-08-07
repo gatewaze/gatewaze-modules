@@ -10,6 +10,7 @@ import { getProject } from '../lib/credentials.js';
 import { InProcessRunner } from '../lib/agent-session.js';
 import { resolvePhaseModel } from '../lib/model-select.js';
 import { readLiveMemory, writeMemoryPending } from '../lib/memory.js';
+import { recordPhaseEnd, nextPhaseAttempt } from '../lib/run-state.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -56,6 +57,17 @@ export default async function reflect(job, ctx) {
       credential: { kind: project.modelCredKind, value: project.modelCred },
       noTools: true,
     });
+    // Attribute reflect's token spend as its own costed phase. The InProcessRunner result carries no
+    // modelUsed/engineUsed, so name the resolved reflect model. Use an explicit attempt (like the
+    // refines) so a re-driven reflect records a fresh row instead of colliding on the unique key.
+    try {
+      await recordPhaseEnd(supabase, run, 'reflect', 'passed', 'updated project memory (proposal)', {
+        model: resolvePhaseModel(project, null, 'reflect').model, engine: 'claude',
+        input: result?.tokensInput, output: result?.tokensOutput, cacheRead: result?.tokensCacheRead,
+        cacheCreation: result?.tokensCacheCreation, cost: result?.costUSD, modelUsage: result?.modelUsage,
+        attempt: await nextPhaseAttempt(supabase, run.id, 'reflect'),
+      });
+    } catch { /* cost tracking is best-effort — never fail reflect over it */ }
     if (result?.text?.trim()) {
       // Write the PROPOSAL to pending — it is not injected into any future run
       // until an admin approves it (memory content derives from the

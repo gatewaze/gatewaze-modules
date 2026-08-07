@@ -123,6 +123,9 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  // Per-model spend (subagent-inclusive), lazy-loaded from /overview/model-usage over a chosen window.
+  const [modelUsage, setModelUsage] = useState<any | null>(null);
+  const [muDays, setMuDays] = useState(7);
   // Realtime, the 3s startup poll, and the 20s visibility-poll backstop below can all call `load`
   // around the same time; this guard skips a tick that overlaps an in-flight fetch instead of
   // firing a redundant request.
@@ -165,6 +168,14 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, [starting, load]);
+
+  // Per-model spend follows the project filter + its own window; refetched on either change.
+  useEffect(() => {
+    const qs = new URLSearchParams();
+    if (projectFilter) qs.set('project', projectFilter);
+    qs.set('days', String(muDays));
+    api(`/overview/model-usage?${qs.toString()}`).then(setModelUsage).catch(() => setModelUsage(null));
+  }, [projectFilter, muDays]);
 
   const totals = data?.totals ?? {};
   const byStatus: any[] = data?.by_status ?? [];
@@ -307,6 +318,58 @@ export default function OverviewView({ onGoToSetup, onOpenRuns }: {
                   <span className="font-mono text-[var(--gray-11)]">{fmtCost(p.total)}</span>
                 </div>
               ))}
+            </section>
+          )}
+
+          {/* Spend by model — SUBAGENT- and utility-model-inclusive (from se_phases.model_usage via
+              /overview/model-usage). The KPI "Model spend" tile and the tokens rollups above draw on
+              the flat, main-thread-only columns; this table is the one that counts the subagents a
+              phase fans out (e.g. spec's explorer subagents). */}
+          {(modelUsage?.models?.length ?? 0) > 0 && (
+            <section className="rounded-lg border border-[var(--gray-5)] p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">Spend by model</div>
+                <select
+                  value={muDays}
+                  onChange={(e) => { setModelUsage(null); setMuDays(Number(e.target.value)); }}
+                  className="rounded-md border border-[var(--gray-6)] bg-transparent px-2 py-1 text-xs"
+                >
+                  <option value={1}>last 24h</option>
+                  <option value={7}>last 7 days</option>
+                  <option value={30}>last 30 days</option>
+                </select>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-wide text-[var(--gray-10)] border-b border-[var(--gray-5)]">
+                      <th className="py-1.5 pr-3 font-medium">Model</th>
+                      <th className="py-1.5 px-3 font-medium text-right">Phases</th>
+                      <th className="py-1.5 px-3 font-medium text-right">Output</th>
+                      <th className="py-1.5 px-3 font-medium text-right">Cache read</th>
+                      <th className="py-1.5 px-3 font-medium text-right">Cache write</th>
+                      <th className="py-1.5 pl-3 font-medium text-right">Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modelUsage.models.map((m: any) => (
+                      <tr key={m.model} className="border-b border-[var(--gray-3)] last:border-0">
+                        <td className="py-1.5 pr-3 text-[var(--gray-12)] font-mono text-xs truncate">{m.model}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums text-[var(--gray-11)]">{nf.format(m.phases ?? 0)}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums text-[var(--gray-11)]">{fmtTokens(m.output ?? 0)}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums text-[var(--gray-11)]">{fmtTokens(m.cacheRead ?? 0)}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums text-[var(--gray-11)]">{fmtTokens(m.cacheCreation ?? 0)}</td>
+                        <td className="py-1.5 pl-3 text-right tabular-nums text-[var(--gray-12)] font-medium">{fmtCost(m.cost) || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] leading-relaxed text-[var(--gray-10)]">
+                Subagent- and utility-model-inclusive, from each phase’s per-model breakdown. Cache-read
+                tokens usually dominate agentic spend — the flat token tiles above miss the subagent
+                sessions counted here.
+              </p>
             </section>
           )}
         </>
