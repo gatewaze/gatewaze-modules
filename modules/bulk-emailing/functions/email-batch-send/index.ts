@@ -71,6 +71,7 @@ interface Recipient {
   jobTitle?: string
   confirmationToken?: string
   editToken?: string
+  talkId?: string
 }
 
 async function fetchRegistrationRecipients(eventId: string, offset: number, limit: number, registeredAfter?: string, registrationIds?: string[]): Promise<Recipient[]> {
@@ -167,12 +168,31 @@ async function fetchSpeakerRecipients(eventUuid: string, speakerStatus: string, 
   const { data, error } = await query.order('id', { ascending: true }).range(offset, offset + limit - 1)
   if (error) throw new Error(`Failed to fetch speakers: ${error.message}`)
   if (!data) return []
+
+  // Primary talk id per speaker profile — the key the promo-kit attachment
+  // resolves on at send time (speaker_promo_kits.talk_id). The view exposes
+  // talk-derived status but not the talk id itself.
+  const talkIdBySpeaker = new Map<string, string>()
+  const speakerIds = [...new Set(data.map((s: any) => s.speaker_id).filter(Boolean))]
+  if (speakerIds.length > 0) {
+    const { data: bridges } = await supabase
+      .from('events_talk_speakers')
+      .select('speaker_id, talk_id, talk:events_talks!inner(id, event_uuid)')
+      .in('speaker_id', speakerIds)
+      .eq('is_primary', true)
+      .eq('talk.event_uuid', eventUuid)
+    for (const b of (bridges || []) as any[]) {
+      if (b.speaker_id && b.talk_id) talkIdBySpeaker.set(b.speaker_id, b.talk_id)
+    }
+  }
+
   return data.map((s: any) => ({
     email: s.email, personId: s.customer_id,
     firstName: s.first_name || '', lastName: s.last_name || '', fullName: s.full_name || '',
     talkTitle: s.talk_title || '', talkSynopsis: s.talk_synopsis || '',
     company: s.company || '', jobTitle: s.job_title || '',
     confirmationToken: s.confirmation_token || '', editToken: s.edit_token || '',
+    talkId: talkIdBySpeaker.get(s.speaker_id) || '',
   }))
 }
 
@@ -330,6 +350,11 @@ function buildRecipientContext(job: any, event: any, config: any, recipient: Rec
       company: recipient.company, job_title: recipient.jobTitle,
       confirmation_link: confirmationLink, edit_link: editLink,
     }
+    // Private scope (leading underscore, never a template token): the
+    // send-engine binding reads this to attach the speaker's own promo-kit zip
+    // when the job opts in. Templates only resolve tokens they actually
+    // contain, so this is inert for rendering.
+    if (recipient.talkId) context._meta = { talk_id: recipient.talkId }
   }
   return context
 }

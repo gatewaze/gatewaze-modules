@@ -17,6 +17,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { resolveChannelProvider } from './channels/registry.js';
+import type { MessageAttachment } from './channels/types.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SB = any; // @supabase/supabase-js client (service role), injected by the worker
@@ -31,6 +32,12 @@ export interface SendContext {
   // '{{first_name}}' -> 'Dan', '{{unsubscribe_url}}' -> '...'. The binding owns
   // token shape + content; the engine just passes it through.
   disableSubscriptionTracking?: boolean;
+  // Set by a binding whose sends carry a DIFFERENT attachment per recipient
+  // (e.g. each speaker's own promo-kit zip). SendGrid attaches per message, not
+  // per personalization, so the engine drops to one personalization per call
+  // for these sends — correctness over batching. Leave unset and the batched
+  // path is unchanged.
+  perRecipientAttachments?: boolean;
 }
 export interface SendEngineBinding {
   domain: 'newsletter' | 'broadcast' | 'bulk' | 'event' | 'play';
@@ -47,6 +54,12 @@ export interface SendEngineBinding {
   buildSubstitutions: (ctx: SendContext, r: Recipient, perRecipientHeaders: Record<string, string>) => Promise<Record<string, string>>;
   // Per-recipient List-Unsubscribe etc. (binding fills perRecipientHeaders).
   recipientHeaders?: (ctx: SendContext, r: Recipient) => Promise<Record<string, string>>;
+  // Files to deliver with THIS recipient's message. Only consulted when the
+  // context sets perRecipientAttachments (which forces a single-recipient
+  // batch, since attachments are message-level). Returning null/[] sends the
+  // message with no attachment rather than failing the recipient — the binding
+  // decides whether an absent file is fatal.
+  buildAttachments?: (deps: EngineDeps, ctx: SendContext, r: Recipient) => Promise<MessageAttachment[] | null>;
 }
 export interface EngineDeps {
   supabase: SB;
@@ -118,7 +131,10 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
       if (ctx === undefined) { ctx = await binding.buildSendContext(deps, sendId); ctxCache.set(sendId, ctx); }
       if (!ctx) { await releaseRows(deps, binding, recips.map((r) => r.id)); continue; }   // no content yet — retry next tick
 
-      for (const batch of chunk(recips, config.batchSize)) {
+      // Attachments ride on the message, so a send with per-recipient files
+      // cannot share a batch — one personalization per call.
+      const effectiveBatchSize = ctx.perRecipientAttachments ? 1 : config.batchSize;
+      for (const batch of chunk(recips, effectiveBatchSize)) {
         // Fast bounce/spam gate (last 60s for this send).
         if (await shouldAbortForReputation(deps, binding, sendId)) {
           await releaseRows(deps, binding, batch.map((r) => r.id));
@@ -197,10 +213,24 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
     addressed.push(r);
   }
 
+  // Per-recipient attachments: only for single-recipient batches (the chunk
+  // size above guarantees this when the flag is set). A failure to build is
+  // logged and the message still goes — the binding returns null when it wants
+  // the recipient held instead.
+  let attachments: MessageAttachment[] | undefined;
+  if (ctx.perRecipientAttachments && binding.buildAttachments && addressed.length === 1) {
+    try {
+      const built = await binding.buildAttachments(deps, ctx, addressed[0]);
+      if (built?.length) attachments = built;
+    } catch (e) {
+      logger.warn('[send-engine] attachment build failed; sending without', { sendId: ctx.sendId, err: (e as Error).message });
+    }
+  }
+
   const result = await provider.sendBatch({
     from: ctx.fromEmail, fromName: ctx.fromName, replyTo: ctx.replyTo ?? undefined,
     subject: ctx.subject, html: ctx.html, bodyText: ctx.bodyText, disableSubscriptionTracking: ctx.disableSubscriptionTracking,
-    personalizations,
+    personalizations, attachments,
   });
 
   if (result.success) {

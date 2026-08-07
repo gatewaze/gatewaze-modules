@@ -13,6 +13,10 @@ export interface NodeBatchedMessage {
   from: string; fromName?: string; replyTo?: string; subject: string; html: string;
   disableSubscriptionTracking?: boolean;
   personalizations: Array<{ to: string; headers?: Record<string, string>; substitutions: Record<string, string>; customArgs?: Record<string, string>; }>;
+  // SendGrid carries attachments per MESSAGE, so every personalization in this
+  // call receives them. The engine only sets this when the batch is a single
+  // recipient (SendContext.perRecipientAttachments).
+  attachments?: Array<{ filename: string; content: string; type?: string; disposition?: string; contentId?: string }>;
 }
 export interface NodeBatchedResult { success: boolean; batchMessageId?: string; error?: string; statusCode?: number; retryable?: boolean; }
 
@@ -31,6 +35,15 @@ export async function sendBatchViaSendgrid(message: NodeBatchedMessage): Promise
       ...(p.customArgs ? { custom_args: p.customArgs } : {}),
     })),
   };
+  if (message.attachments?.length) {
+    body.attachments = message.attachments.map((a) => ({
+      filename: a.filename,
+      content: a.content,
+      type: a.type ?? 'application/octet-stream',
+      disposition: a.disposition ?? 'attachment',
+      ...(a.contentId ? { content_id: a.contentId } : {}),
+    }));
+  }
   if (message.replyTo) body.reply_to = { email: message.replyTo };
   if (message.disableSubscriptionTracking) body.tracking_settings = { subscription_tracking: { enable: false } };
 
