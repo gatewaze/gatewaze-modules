@@ -227,7 +227,7 @@ export const eventCommsBinding: SendEngineBinding = {
       return null;
     }
     return [{
-      filename: 'promo-kit.zip',
+      filename: 'speaker-kit.zip',
       content: bytes.toString('base64'),
       type: 'application/zip',
       disposition: 'attachment',

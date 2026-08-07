@@ -145,7 +145,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   // Talk-centric state: each talk submission is managed independently
   const [approvedTalks, setApprovedTalks] = useState<EventTalkWithSpeakers[]>([]);
   const [confirmedTalks, setConfirmedTalks] = useState<EventTalkWithSpeakers[]>([]);
-  // Speaker promo kits (by talk id) + modal state
+  // Speaker speaker kits (by talk id) + modal state
   const [promoKits, setPromoKits] = useState<Record<string, PromoKitRow>>({});
   const [promoKitTalk, setPromoKitTalk] = useState<EventTalkWithSpeakers | null>(null);
   const [showPromoKitSettings, setShowPromoKitSettings] = useState(false);
@@ -243,7 +243,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
     loadPromoKits();
   }, [eventUuid]);
 
-  // Speaker promo kits for this event, keyed by talk id (admin-read RLS,
+  // Speaker speaker kits for this event, keyed by talk id (admin-read RLS,
   // migration 015). Missing table / no access degrades to an empty map.
   const loadPromoKits = async () => {
     try {
@@ -258,7 +258,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
       for (const kit of (data ?? []) as PromoKitRow[]) byTalk[kit.talk_id] = kit;
       setPromoKits(byTalk);
     } catch {
-      /* promo kits are optional surfacing — never block the tab */
+      /* speaker kits are optional surfacing — never block the tab */
     }
   };
 
@@ -1115,7 +1115,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
       // The confirmed email is sent by the promo-kit worker once the kit is
       // built (a few minutes), so the kit zip can be attached — sending here
       // at confirm time predates the kit's existence.
-      toast.success(`"${talk.title}" confirmed — the confirmation email (with promo kit attached) sends automatically once their kit is ready`);
+      toast.success(`"${talk.title}" confirmed — the confirmation email (with speaker kit attached) sends automatically once their kit is ready`);
       loadTalks();
     } catch (error) {
       console.error('Error confirming talk:', error);
@@ -1335,10 +1335,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     <button
                       onClick={() => setPromoKitTalk(talk)}
                       className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
-                      title={`Promo kit: ${kitStatusBadge(promoKits[talk.id]).label} — share images, post text, tracking link`}
+                      title={`Speaker kit: ${kitStatusBadge(promoKits[talk.id]).label} — share images, post text, tracking link`}
                     >
                       <PhotoIcon className="w-4 h-4 sm:mr-1" />
-                      <span className="hidden sm:inline">Promo kit</span>
+                      <span className="hidden sm:inline">Speaker kit</span>
                       {/* Status as a compact dot — the words live in the tooltip and modal */}
                       <span
                         className={`ml-1.5 w-2 h-2 rounded-full shrink-0 ${kitStatusBadge(promoKits[talk.id]).dot}`}
@@ -1648,7 +1648,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" onClick={() => setShowPromoKitSettings(true)}>
             <Cog6ToothIcon className="w-4 h-4 mr-1" />
-            Promo Kits
+            Speaker Kits
           </Button>
           <Button variant="secondary" size="sm" onClick={handleDownloadSpeakerPhotos} disabled={downloadingPhotos}>
             <PhotoIcon className="w-4 h-4 mr-1" />
@@ -1830,9 +1830,9 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     {linksAvailable === true && (
                       <th
                         className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide"
-                        title="Completed when the speaker copies a post or their tracking link, opens a share image, or downloads the zip from their promo kit in the portal"
+                        title="Completed when the speaker copies a post or their tracking link, opens a share image, or downloads the zip from their speaker kit in the portal"
                       >
-                        Promo Kit
+                        Speaker Kit
                       </th>
                     )}
                     <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
@@ -2095,10 +2095,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         </div>
                         {/* Promo-kit engagement task. The portal stamps
                             tracking_link_copied_at on the speaker's FIRST
-                            share action inside their promo kit — copying a
+                            share action inside their speaker kit — copying a
                             post or the link, opening a card image, or
                             downloading the zip — so this reads as "used
-                            their promo kit", not just "copied the link". */}
+                            their speaker kit", not just "copied the link". */}
                         {linksAvailable === true && (
                           <div className="flex items-center gap-2">
                             {speakerGroup.talks.some(t => t.tracking_link_copied_at) ? (
@@ -2109,9 +2109,9 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                             <PhotoIcon className="w-4 h-4 text-gray-400" />
                             <span
                               className={`text-xs ${speakerGroup.talks.some(t => t.tracking_link_copied_at) ? 'text-gray-600 dark:text-gray-300' : 'text-gray-400 dark:text-gray-500'}`}
-                              title="Completed when the speaker copies a post or their tracking link, opens a share image, or downloads the zip from their promo kit in the portal"
+                              title="Completed when the speaker copies a post or their tracking link, opens a share image, or downloads the zip from their speaker kit in the portal"
                             >
-                              Promo kit used
+                              Speaker kit used
                             </span>
                           </div>
                         )}
@@ -3025,7 +3025,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     </button>
                   </>
                 )}
-                {/* Confirmed: Promo kit, Reserve, Reject */}
+                {/* Confirmed: Speaker kit, Reserve, Reject */}
                 {viewingTalk.status === 'confirmed' && (
                   <>
                     <button
@@ -3034,10 +3034,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         setViewingTalk(null);
                       }}
                       className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
-                      title={`Promo kit: ${kitStatusBadge(promoKits[viewingTalk.id]).label} — share images, post text, tracking link`}
+                      title={`Speaker kit: ${kitStatusBadge(promoKits[viewingTalk.id]).label} — share images, post text, tracking link`}
                     >
                       <PhotoIcon className="w-4 h-4 sm:mr-1" />
-                      <span className="hidden sm:inline">Promo kit</span>
+                      <span className="hidden sm:inline">Speaker kit</span>
                       <span
                         className={`ml-1.5 w-2 h-2 rounded-full shrink-0 ${kitStatusBadge(promoKits[viewingTalk.id]).dot}`}
                         aria-label={kitStatusBadge(promoKits[viewingTalk.id]).label}
@@ -3492,7 +3492,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
         />
       )}
 
-      {/* Speaker Promo Kit Modal */}
+      {/* Speaker Speaker Kit Modal */}
       {promoKitTalk && (
         <PromoKitModal
           isOpen={!!promoKitTalk}
@@ -3503,7 +3503,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
         />
       )}
 
-      {/* Promo Kit Settings (per-event template repo / brand mapping) */}
+      {/* Speaker Kit Settings (per-event template repo / brand mapping) */}
       <PromoKitSettingsModal
         isOpen={showPromoKitSettings}
         onClose={() => setShowPromoKitSettings(false)}

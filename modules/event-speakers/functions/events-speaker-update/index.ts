@@ -50,7 +50,7 @@ interface SpeakerUpdateResponse {
   talk_id?: string
   status?: string
   status_changed?: boolean
-  // True when this edit re-armed the speaker's promo kit for regeneration.
+  // True when this edit re-armed the speaker's speaker kit for regeneration.
   promo_kit_regenerating?: boolean
   error?: string
   debug?: {
@@ -416,7 +416,7 @@ async function handler(req: Request) {
       }
     }
 
-    // A speaker's promo kit renders their photo, name, role and company onto
+    // A speaker's speaker kit renders their photo, name, role and company onto
     // the cards and slide deck, so an edit here makes the existing kit stale.
     // Re-arm it: the 2-minute sweep picks up 'requested' rows and rebuilds.
     // Best-effort — a kit problem must never fail the speaker's own edit.
@@ -433,10 +433,10 @@ async function handler(req: Request) {
         .eq('talk_id', talk.id)
         .in('status', ['ready', 'failed'])
       if (kitError) {
-        console.error('Could not re-arm promo kit after profile edit:', kitError.message)
+        console.error('Could not re-arm speaker kit after profile edit:', kitError.message)
       } else {
         kitRegenerated = true
-        console.log(`♻️  Promo kit re-armed for talk ${talk.id} after profile edit`)
+        console.log(`♻️  Speaker kit re-armed for talk ${talk.id} after profile edit`)
       }
     }
 

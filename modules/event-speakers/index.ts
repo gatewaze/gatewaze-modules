@@ -9,7 +9,7 @@ const eventSpeakersModule: GatewazeModule = {
   description: 'Speaker profiles, talk submissions, and cross-event speaker management',
   // v2.0.0 — adds calendar / platform scope for talks, canonical person link,
   // top-level Speakers admin nav, calendar submit-talk portal page.
-  // v2.1.0 — speaker promo kits: auto-generated umami tracking link, AI post
+  // v2.1.0 — speaker speaker kits: auto-generated umami tracking link, AI post
   // variants, rendered social cards + zip for confirmed talks (see guide.md).
   version: '2.1.0',
   features: [
@@ -108,7 +108,7 @@ const eventSpeakersModule: GatewazeModule = {
 
   crons: [
     {
-      // Heartbeat for speaker promo kits: creates kit rows for newly
+      // Heartbeat for speaker speaker kits: creates kit rows for newly
       // confirmed talks (upcoming events), retries bounded failures, and
       // advances requested/generating kits. Idempotent; 2-minute cadence
       // keeps "confirm → kit ready" latency low without meaningful load.
