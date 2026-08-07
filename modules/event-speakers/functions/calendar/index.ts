@@ -207,24 +207,21 @@ Deno.serve(async (req) => {
     if (!event) return json({ error: 'Event not found' }, 404);
 
     // Authorize: the email must belong to a confirmed speaker of this event,
-    // or a confirmed registrant (person by email → registration).
+    // or a confirmed registrant (person by email → registration). The
+    // speaker check uses events_speakers_with_details — its email is
+    // COALESCEd across profile and people records (prod profiles often
+    // carry NULL email, with the real address on the person), and
+    // primary_talk_status is the talk-centric confirmation.
     let roleLine: string | null = null;
 
-    const { data: profiles } = await supabase
-      .from('events_speaker_profiles')
-      .select('id')
-      .ilike('email', email);
-    const profileIds = (profiles ?? []).map((p: { id: string }) => p.id);
-    if (profileIds.length > 0) {
-      const { data: bridges } = await supabase
-        .from('events_talk_speakers')
-        .select('talk:events_talks!inner(id, event_uuid, status)')
-        .in('speaker_id', profileIds)
-        .eq('talk.event_uuid', event.id)
-        .eq('talk.status', 'confirmed')
-        .limit(1);
-      if ((bridges ?? []).length > 0) roleLine = 'Attending as: Speaker';
-    }
+    const { data: speakerRows } = await supabase
+      .from('events_speakers_with_details')
+      .select('id, primary_talk_status')
+      .eq('event_uuid', event.id)
+      .ilike('email', email)
+      .eq('primary_talk_status', 'confirmed')
+      .limit(1);
+    if ((speakerRows ?? []).length > 0) roleLine = 'Attending as: Speaker';
 
     if (!roleLine) {
       const { data: person } = await supabase
