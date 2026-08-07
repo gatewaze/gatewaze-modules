@@ -226,7 +226,7 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
           <div className="pt-3 border-t border-gray-100 dark:border-gray-700/50 space-y-2">
             <div className="flex items-center gap-2">
               {kit.zip_storage_path && (
-                <a href={mediaPublicUrl(kit.zip_storage_path, kit.generated_at)} download>
+                <a href={mediaPublicUrl(kit.zip_storage_path, kit.generated_at)} download="speaker-kit.zip">
                   <Button variant="secondary" size="sm" className="whitespace-nowrap">
                     <ArrowDownTrayIcon className="w-4 h-4 mr-1 shrink-0" />
                     Download zip
