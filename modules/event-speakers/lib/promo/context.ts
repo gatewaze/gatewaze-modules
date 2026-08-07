@@ -39,14 +39,14 @@ export async function loadPromoKitContext(supabase, talkId: string): Promise<Pro
   // Per-event participation row with COALESCEd display fields.
   const { data: details } = await supabase
     .from('events_speakers_with_details')
-    .select('full_name, job_title, company, avatar_url, speaker_bio, email')
+    .select('full_name, job_title, company, avatar_url, speaker_bio, email, linkedin_url')
     .eq('speaker_id', profileId)
     .eq('event_uuid', talk.event_uuid)
     .maybeSingle();
 
   const { data: profile } = await supabase
     .from('events_speaker_profiles')
-    .select('name, title, company, bio, avatar_url, email')
+    .select('name, title, company, bio, avatar_url, email, linkedin_url')
     .eq('id', profileId)
     .maybeSingle();
 
@@ -96,6 +96,7 @@ export async function loadPromoKitContext(supabase, talkId: string): Promise<Pro
       bio: details?.speaker_bio || profile?.bio || null,
       avatarUrl: details?.avatar_url || profile?.avatar_url || null,
       email: details?.email || profile?.email || null,
+      linkedinUrl: details?.linkedin_url || profile?.linkedin_url || null,
     },
     otherSpeakers,
   };
