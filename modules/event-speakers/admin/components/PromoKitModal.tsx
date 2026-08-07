@@ -205,8 +205,15 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
             <section>
               <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-2">Tracking link</h4>
               <div className="flex items-center gap-2">
-                <Input value={kit.tracking_short_url} readOnly className="flex-1" />
-                <Button variant="secondary" size="sm" onClick={() => copy('link', kit.tracking_short_url!)}>
+                {/* className lands on the inner <input>; the root div is what
+                    participates in this flex row, so stretch it via classNames. */}
+                <Input
+                  value={kit.tracking_short_url}
+                  readOnly
+                  className="w-full"
+                  classNames={{ root: 'flex-1 min-w-0' }}
+                />
+                <Button variant="secondary" size="sm" className="whitespace-nowrap" onClick={() => copy('link', kit.tracking_short_url!)}>
                   {copiedKey === 'link' ? 'Copied' : 'Copy'}
                 </Button>
               </div>
