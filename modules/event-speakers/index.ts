@@ -74,6 +74,10 @@ const eventSpeakersModule: GatewazeModule = {
     // 018 deck_storage_path — personalized PPTX talk template (branded
     // title slide from the landscape card, talk/speaker pre-filled).
     'migrations/018_promo_kit_slide_deck.sql',
+    // 019 declares the five events_talks columns the speaker checklist +
+    // confirm flow always used but no migration ever created (confirm links
+    // showed 'Invalid Link' because selecting confirmed_at 400ed).
+    'migrations/019_talk_checklist_columns.sql',
   ],
 
   workers: [

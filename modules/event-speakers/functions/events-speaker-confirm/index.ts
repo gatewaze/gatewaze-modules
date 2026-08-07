@@ -6,6 +6,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// HTML-escape dynamic values interpolated into the response page
+// (event titles are DB data, not static strings).
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Generate HTML response page
 function generateHtmlPage(
   success: boolean,
@@ -97,7 +108,7 @@ function generateHtmlPage(
     ${iconSvg}
     <h1>${title}</h1>
     <p class="message">${message}</p>
-    ${eventTitle ? `<div class="event-name">${eventTitle}</div>` : ''}
+    ${eventTitle ? `<div class="event-name">${escapeHtml(eventTitle)}</div>` : ''}
     <div class="footer">You can close this page now.</div>
   </div>
 </body>
@@ -166,18 +177,16 @@ async function handler(req: Request) {
       );
     }
 
-    // Get the primary speaker for this talk
+    // Get the primary speaker profile for this talk
+    // (events_talk_speakers.speaker_id → events_speaker_profiles.id)
     const { data: talkSpeaker, error: speakerError } = await supabaseClient
       .from('events_talk_speakers')
       .select(`
         speaker_id,
-        speaker:event_speakers (
+        speaker:events_speaker_profiles (
           id,
-          people_profile_id,
-          speaker_title,
-          speaker_bio,
-          speaker_topic,
-          event_sponsor_id
+          name,
+          email
         )
       `)
       .eq('talk_id', talk.id)
@@ -195,8 +204,26 @@ async function handler(req: Request) {
     const speaker = talkSpeaker.speaker as any;
 
     // If event_id is provided, this is a cross-event confirmation
-    // (e.g., rejected speaker being offered a slot at a different event)
+    // (e.g., a reserve-list speaker being offered a slot at a different
+    // event). Gate it on the SAME approved-status check the same-event path
+    // applies below — without it, any live confirmation_token could be
+    // replayed with an arbitrary event_id to self-enrol as a confirmed
+    // speaker on an event nobody approved the speaker for.
     if (targetEventId) {
+      if (talk.status !== 'approved') {
+        console.log(`Cross-event confirm refused: talk ${talk.id} has status ${talk.status}`);
+        return htmlResponse(
+          generateHtmlPage(
+            false,
+            'Cannot Confirm',
+            talk.status === 'confirmed'
+              ? 'This speaking slot has already been confirmed.'
+              : 'Your speaker application is not in a state that can be confirmed. Please contact the event organizers.',
+          ),
+          400,
+        );
+      }
+
       // Look up the target event by its 6-character event_id
       const { data: targetEvent, error: eventError } = await supabaseClient
         .from('events')
@@ -215,20 +242,24 @@ async function handler(req: Request) {
       const targetEventUuid = targetEvent.id;
 
       // Check if speaker is already registered for the target event
+      // (events_speakers.speaker_id → events_speaker_profiles.id)
       const { data: existingSpeaker } = await supabaseClient
         .from('events_speakers')
         .select('id')
         .eq('event_uuid', targetEventUuid)
-        .eq('people_profile_id', speaker.people_profile_id)
+        .eq('speaker_id', speaker.id)
         .maybeSingle();
 
       if (existingSpeaker) {
-        // Check if they have a talk for this event
+        // Check if they have a primary talk for this event (the bridge is
+        // keyed by profile id, so filter the embedded talk by event)
         const { data: existingTalk } = await supabaseClient
           .from('events_talk_speakers')
-          .select('talk:event_talks(id, status)')
-          .eq('speaker_id', existingSpeaker.id)
+          .select('talk:events_talks!inner(id, status)')
+          .eq('speaker_id', speaker.id)
           .eq('is_primary', true)
+          .eq('talk.event_uuid', targetEventUuid)
+          .limit(1)
           .maybeSingle();
 
         if (existingTalk?.talk) {
@@ -264,15 +295,25 @@ async function handler(req: Request) {
         }
       }
 
-      // Create new speaker entry for the target event
+      // Create new speaker entry for the target event, carrying the
+      // per-event participation fields over from the source event's row
+      // when one exists.
+      const { data: sourceParticipation } = await supabaseClient
+        .from('events_speakers')
+        .select('people_profile_id, speaker_title, speaker_bio, speaker_topic')
+        .eq('event_uuid', talk.event_uuid)
+        .eq('speaker_id', speaker.id)
+        .maybeSingle();
+
       const { data: newSpeaker, error: createSpeakerError } = await supabaseClient
         .from('events_speakers')
         .insert({
           event_uuid: targetEventUuid,
-          people_profile_id: speaker.people_profile_id,
-          speaker_title: speaker.speaker_title,
-          speaker_bio: speaker.speaker_bio,
-          speaker_topic: speaker.speaker_topic,
+          speaker_id: speaker.id,
+          people_profile_id: sourceParticipation?.people_profile_id ?? null,
+          speaker_title: sourceParticipation?.speaker_title ?? null,
+          speaker_bio: sourceParticipation?.speaker_bio ?? null,
+          speaker_topic: sourceParticipation?.speaker_topic ?? null,
           is_featured: false,
         })
         .select('id')
@@ -312,12 +353,13 @@ async function handler(req: Request) {
         );
       }
 
-      // Link the new speaker to the new talk
+      // Link the profile to the new talk (bridge speaker_id is the
+      // events_speaker_profiles id, not the events_speakers row id)
       const { error: linkError } = await supabaseClient
         .from('events_talk_speakers')
         .insert({
           talk_id: newTalk.id,
-          speaker_id: newSpeaker.id,
+          speaker_id: speaker.id,
           role: 'presenter',
           is_primary: true,
           sort_order: 0,
@@ -328,7 +370,7 @@ async function handler(req: Request) {
         // Non-fatal, log but continue
       }
 
-      console.log(`Speaker ${speaker.people_profile_id} created and confirmed for different event ${targetEvent.event_title} (new speaker ID: ${newSpeaker.id}, new talk ID: ${newTalk.id})`);
+      console.log(`Speaker profile ${speaker.id} created and confirmed for different event ${targetEvent.event_title} (new participation ID: ${newSpeaker.id}, new talk ID: ${newTalk.id})`);
 
       return htmlResponse(
         generateHtmlPage(true, 'Speaker Confirmed!', 'Your speaker slot has been confirmed. We look forward to seeing you at the event!', targetEvent.event_title)
@@ -407,5 +449,4 @@ async function handler(req: Request) {
   }
 }
 
-export default handler
-Deno.serve(handler)
+Deno.serve(handler);

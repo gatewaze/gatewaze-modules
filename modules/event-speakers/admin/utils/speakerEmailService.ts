@@ -132,7 +132,10 @@ export class SpeakerEmailService {
    */
   static buildConfirmationLink(confirmationToken: string): string {
     const baseUrl = getAppBaseUrl();
-    return `${baseUrl}/functions/v1/speaker-confirm?token=${confirmationToken}`;
+    // NB: the function is events-speaker-confirm — the old speaker-confirm
+    // name never existed on this platform, so every emailed confirm link
+    // 404ed until this was fixed.
+    return `${baseUrl}/functions/v1/events-speaker-confirm?token=${confirmationToken}`;
   }
 
   /**
