@@ -57,8 +57,14 @@ export function normalizeLinkedInUrl(raw: string | null | undefined): string | n
  * PNG of a QR code for `url`, dark on white so it scans against the
  * card-black title slide. Returns null when the qrcode package isn't
  * present in this worker image yet, or when encoding fails.
+ *
+ * The default size is set by the LARGER of its two uses. The same file is
+ * placed at roughly 1.2 inches on the title slide and 2.6 inches on the
+ * Connect With Me slide, and 512px worked out at under 200 DPI at the
+ * bigger size, which is soft on a projector. A QR is flat black and white,
+ * so a much larger PNG still compresses to a few kilobytes.
  */
-export async function renderLinkedInQrPng(url: string, sizePx = 512): Promise<Buffer | null> {
+export async function renderLinkedInQrPng(url: string, sizePx = 1400): Promise<Buffer | null> {
   try {
     const mod = await import('qrcode');
     const QRCode = mod?.default ?? mod;

@@ -19,6 +19,7 @@ import {
   BuildingOfficeIcon,
   LinkIcon,
   ChartBarIcon,
+  QrCodeIcon,
   ClipboardDocumentListIcon as ClipboardDocumentListIconOutline,
   ChevronUpIcon,
   ChevronDownIcon,
@@ -1170,10 +1171,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
             <img
               src={resolveAvatarUrl(speaker?.avatar_url)!}
               alt={speaker.full_name || 'Speaker'}
-              className="w-16 h-16 rounded-full object-cover"
+              className="w-16 h-16 rounded-lg object-cover"
             />
           ) : (
-            <div className="w-16 h-16 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+            <div className="w-16 h-16 rounded-lg bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
               <UserIcon className="w-8 h-8 text-gray-400" />
             </div>
           )}
@@ -1238,6 +1239,15 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
               {speakerLinks[speakerId].registrationCount > 0 && (
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-200">
                   {speakerLinks[speakerId].registrationCount} registrations
+                </span>
+              )}
+              {speakerLinks[speakerId].qrScans > 0 && (
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-200"
+                  title="Scans of the LinkedIn QR code on this speaker's slide deck"
+                >
+                  <QrCodeIcon className="w-3 h-3 mr-1" />
+                  {speakerLinks[speakerId].qrScans} QR scans
                 </span>
               )}
             </div>
@@ -1848,9 +1858,9 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             {speakerGroup.avatarUrl ? (
-                              <img src={speakerGroup.avatarUrl} alt={speakerGroup.speakerName} className="w-8 h-8 rounded-full object-cover" />
+                              <img src={speakerGroup.avatarUrl} alt={speakerGroup.speakerName} className="w-8 h-8 rounded-lg object-cover" />
                             ) : (
-                              <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                              <div className="w-8 h-8 rounded-lg bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
                                 <UserIcon className="w-4 h-4 text-gray-400" />
                               </div>
                             )}
@@ -1922,10 +1932,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     <img
                       src={speakerGroup.avatarUrl}
                       alt={speakerGroup.speakerName}
-                      className="w-16 h-16 rounded-full object-cover"
+                      className="w-16 h-16 rounded-lg object-cover"
                     />
                   ) : (
-                    <div className="w-16 h-16 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                    <div className="w-16 h-16 rounded-lg bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
                       <UserIcon className="w-8 h-8 text-gray-400" />
                     </div>
                   )}
@@ -2131,6 +2141,15 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                           {speakerLinks[speakerGroup.speakerId].registrationCount} registrations
                         </span>
                       )}
+                      {speakerLinks[speakerGroup.speakerId].qrScans > 0 && (
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-200"
+                          title="Scans of the LinkedIn QR code on this speaker's slide deck"
+                        >
+                          <QrCodeIcon className="w-3 h-3 mr-1" />
+                          {speakerLinks[speakerGroup.speakerId].qrScans} QR scans
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2297,10 +2316,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                                 <img
                                   src={customer.attributes.avatar_url}
                                   alt={fullName}
-                                  className="w-10 h-10 rounded-full object-cover"
+                                  className="w-10 h-10 rounded-lg object-cover"
                                 />
                               ) : (
-                                <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                                <div className="w-10 h-10 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
                                   <ExclamationTriangleIcon className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                                 </div>
                               )}
@@ -2351,7 +2370,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         <img
                           src={selectedCustomer.attributes.avatar_url}
                           alt="Current avatar"
-                          className="w-20 h-20 rounded-full object-cover border-2 border-green-500"
+                          className="w-20 h-20 rounded-lg object-cover border-2 border-green-500"
                         />
                         <div className="text-sm text-green-600 dark:text-green-400">
                           This member already has a photo
@@ -2371,7 +2390,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                               <img
                                 src={avatarPreview}
                                 alt="Avatar preview"
-                                className="w-20 h-20 rounded-full object-cover border-2 border-primary-500"
+                                className="w-20 h-20 rounded-lg object-cover border-2 border-primary-500"
                               />
                               <button
                                 type="button"
@@ -2384,7 +2403,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                           ) : (
                             <div
                               onClick={() => fileInputRef.current?.click()}
-                              className="w-20 h-20 rounded-full border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center cursor-pointer hover:border-primary-500 transition-colors"
+                              className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center cursor-pointer hover:border-primary-500 transition-colors"
                             >
                               <PhotoIcon className="w-8 h-8 text-gray-400" />
                             </div>
@@ -2535,7 +2554,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         <img
                           src={avatarPreview}
                           alt="Avatar preview"
-                          className="w-20 h-20 rounded-full object-cover border-2 border-primary-500"
+                          className="w-20 h-20 rounded-lg object-cover border-2 border-primary-500"
                         />
                         <button
                           type="button"
@@ -2548,7 +2567,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     ) : (
                       <div
                         onClick={() => fileInputRef.current?.click()}
-                        className="w-20 h-20 rounded-full border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center cursor-pointer hover:border-primary-500 transition-colors"
+                        className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center cursor-pointer hover:border-primary-500 transition-colors"
                       >
                         <PhotoIcon className="w-8 h-8 text-gray-400" />
                       </div>
@@ -2819,10 +2838,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                 <img
                   src={resolveAvatarUrl(speaker?.avatar_url)!}
                   alt={speaker.full_name || 'Speaker'}
-                  className="w-10 h-10 rounded-full object-cover"
+                  className="w-10 h-10 rounded-lg object-cover"
                 />
               ) : (
-                <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
                   <UserIcon className="w-5 h-5 text-gray-400" />
                 </div>
               )}
@@ -3180,10 +3199,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                 <img
                   src={resolveAvatarUrl(primarySpeaker?.avatar_url)!}
                   alt={primarySpeaker.full_name || 'Speaker'}
-                  className="w-24 h-24 rounded-full object-cover"
+                  className="w-24 h-24 rounded-lg object-cover"
                 />
               ) : (
-                <div className="w-24 h-24 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                <div className="w-24 h-24 rounded-lg bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
                   <UserIcon className="w-12 h-12 text-gray-400" />
                 </div>
               )}
@@ -3355,10 +3374,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                 <img
                   src={editingSpeaker.avatarUrl}
                   alt={editingSpeaker.speakerName}
-                  className="w-12 h-12 rounded-full object-cover"
+                  className="w-12 h-12 rounded-lg object-cover"
                 />
               ) : (
-                <div className="w-12 h-12 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                <div className="w-12 h-12 rounded-lg bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
                   <UserIcon className="w-6 h-6 text-gray-400" />
                 </div>
               )}
