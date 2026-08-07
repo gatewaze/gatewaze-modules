@@ -1,7 +1,7 @@
 // @ts-nocheck — jszip resolved at module-host install time.
 
 /**
- * Assemble the downloadable promo-kit zip: the rendered card images, one
+ * Assemble the downloadable speaker-kit zip: the rendered card images, one
  * plain-text file per post option (LinkedIn-safe as generated), the tracking
  * link, and a short README. Built in memory — a kit is a few MB of PNGs.
  */
@@ -54,13 +54,13 @@ export async function buildPromoKitZip(inputs: ZipInputs): Promise<Buffer> {
   }
 
   const readme = [
-    `Speaker kit — ${inputs.speakerName}, ${inputs.eventTitle}`,
+    `Speaker kit - ${inputs.speakerName}, ${inputs.eventTitle}`,
     '',
     'What is in here:',
     '  images/          Share images sized for LinkedIn/X feed posts, stories,',
     '                   and link previews.',
     inputs.promoText
-      ? '  posts/           Ready-to-post text options. Copy one as-is — they are\n                   plain text so they paste cleanly into LinkedIn.'
+      ? '  posts/           Ready-to-post text options. Copy one as-is. They are\n                   plain text so they paste cleanly into LinkedIn.'
       : null,
     inputs.trackingUrl
       ? '  tracking-link.txt  Your personal registration link. It is already in\n                   each post; use it anywhere else you share the event.'
