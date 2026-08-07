@@ -361,7 +361,10 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
     cards: cardsWithBytes,
     deck: deckBuffer,
   });
-  const zipPath = storagePathFor(context.event.id, context.talk.id, 'promo-kit.zip');
+  // The object name is what a browser saves the file as. The download
+  // attribute on the link cannot override it, because storage is a different
+  // origin, so the name has to be right here.
+  const zipPath = storagePathFor(context.event.id, context.talk.id, 'speaker-kit.zip');
   const { error: zipErr } = await supabase.storage
     .from(BUCKET)
     .upload(zipPath, zipBuffer, { contentType: 'application/zip', cacheControl: '0', upsert: true });
