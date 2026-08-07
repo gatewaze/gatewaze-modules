@@ -149,6 +149,13 @@ export interface DeckInputs {
   jobTitle: string | null;
   company: string | null;
   talkTitle: string;
+  /**
+   * QR code for the speaker's LinkedIn profile, dark on white. Replaces the
+   * editable social line at the bottom left of the title slide. Null when we
+   * hold no LinkedIn address for this speaker, in which case the slide simply
+   * omits the block rather than leaving a gap.
+   */
+  linkedinQrPng?: Buffer | null;
 }
 
 export async function buildSpeakerDeck(templatePptx: Buffer, inputs: DeckInputs): Promise<Buffer | null> {
@@ -165,6 +172,7 @@ export async function buildSpeakerDeck(templatePptx: Buffer, inputs: DeckInputs)
 
     zip.file('ppt/media/promoTitleBg.png', inputs.bgArtPng);
     if (inputs.logoPng) zip.file('ppt/media/promoLogo.png', inputs.logoPng);
+    if (inputs.linkedinQrPng) zip.file('ppt/media/promoLinkedinQr.png', inputs.linkedinQrPng);
 
     for (const [index, slidePath] of slidePaths.entries()) {
       const relsPath = slidePath.replace('ppt/slides/', 'ppt/slides/_rels/') + '.rels';
@@ -188,14 +196,23 @@ export async function buildSpeakerDeck(templatePptx: Buffer, inputs: DeckInputs)
           (inputs.company ? para(inputs.company, { sz: 1700, color: accentBright, bold: true, spaceBeforePts: 4 }) : '') +
           para(`“${inputs.talkTitle}”`, { sz: 1300, color: 'FFFFFF', italic: true, alpha: 75, spaceBeforePts: 8 });
         shapes += textBox(px(64), ART_Y + px(238), px(640), px(300), textParas, 'Speaker details');
-        shapes += textBox(
-          px(64),
-          ART_Y + px(544),
-          px(640),
-          px(40),
-          para('@your-handle · linkedin.com/in/your-profile', { sz: 1250, color: 'FFFFFF', alpha: 55 }),
-          'Social links',
-        );
+        // Bottom left: the speaker's LinkedIn QR code under a short caption,
+        // in place of the old editable social line. The block sits between the
+        // text above and the bottom of the art, so the sizes below are what
+        // fits that band. Omitted entirely when we hold no address.
+        if (inputs.linkedinQrPng) {
+          relsXml = addImageRel(relsXml, 'rIdPromoQr', '../media/promoLinkedinQr.png');
+          if (!relsXml) return null;
+          shapes += textBox(
+            px(64),
+            ART_Y + px(538),
+            px(420),
+            px(22),
+            para('Connect with me on LinkedIn', { sz: 1000, color: 'FFFFFF', alpha: 70 }),
+            'LinkedIn caption',
+          );
+          shapes += picture('rIdPromoQr', px(64), ART_Y + px(562), px(66), px(66), 'LinkedIn QR code');
+        }
       } else {
         // ── Content slides ─────────────────────────────────────────────
         bg = solidBg('FFFFFF');
