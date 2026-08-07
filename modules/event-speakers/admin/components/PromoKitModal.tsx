@@ -40,8 +40,9 @@ export interface PromoKitRow {
   error: string | null;
 }
 
-export function mediaPublicUrl(path: string): string {
-  return `${supabaseUrl}/storage/v1/object/public/media/${path}`;
+export function mediaPublicUrl(path: string, version?: string | null): string {
+  const v = version ? `?v=${encodeURIComponent(version)}` : '';
+  return `${supabaseUrl}/storage/v1/object/public/media/${path}${v}`;
 }
 
 const CARD_LABELS: Record<string, string> = {
@@ -146,14 +147,14 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
                 {kit.cards!.map((card) => (
                   <a
                     key={card.format}
-                    href={mediaPublicUrl(card.storage_path)}
+                    href={mediaPublicUrl(card.storage_path, kit.generated_at)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="block group"
                     title={CARD_LABELS[card.format] ?? card.format}
                   >
                     <img
-                      src={mediaPublicUrl(card.storage_path)}
+                      src={mediaPublicUrl(card.storage_path, kit.generated_at)}
                       alt={`${CARD_LABELS[card.format] ?? card.format} card for ${speakerName}`}
                       className="rounded-lg border border-gray-200 dark:border-gray-700 w-full h-auto group-hover:opacity-90"
                     />
@@ -225,7 +226,7 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
           <div className="pt-3 border-t border-gray-100 dark:border-gray-700/50 space-y-2">
             <div className="flex items-center gap-2">
               {kit.zip_storage_path && (
-                <a href={mediaPublicUrl(kit.zip_storage_path)} download>
+                <a href={mediaPublicUrl(kit.zip_storage_path, kit.generated_at)} download>
                   <Button variant="secondary" size="sm" className="whitespace-nowrap">
                     <ArrowDownTrayIcon className="w-4 h-4 mr-1 shrink-0" />
                     Download zip
@@ -233,7 +234,7 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
                 </a>
               )}
               {kit.deck_storage_path && (
-                <a href={mediaPublicUrl(kit.deck_storage_path)} download>
+                <a href={mediaPublicUrl(kit.deck_storage_path, kit.generated_at)} download>
                   <Button variant="secondary" size="sm" className="whitespace-nowrap" title="Personalized talk template — opens in PowerPoint or Google Slides (upload to Drive)">
                     <ArrowDownTrayIcon className="w-4 h-4 mr-1 shrink-0" />
                     Slide deck

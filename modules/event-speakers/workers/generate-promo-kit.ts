@@ -148,7 +148,7 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
     const path = storagePathFor(context.event.id, context.talk.id, `card-${card.format}.png`);
     const { error: upErr } = await supabase.storage
       .from(BUCKET)
-      .upload(path, card.png, { contentType: 'image/png', cacheControl: '3600', upsert: true });
+      .upload(path, card.png, { contentType: 'image/png', cacheControl: '0', upsert: true });
     if (upErr) throw new Error(`card upload failed (${card.format}): ${upErr.message}`);
     cards.push({ format: card.format, storage_path: path, width: card.width, height: card.height });
   }
@@ -211,7 +211,7 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
         deckPath = storagePathFor(context.event.id, context.talk.id, 'presentation-template.pptx');
         const { error: deckErr } = await supabase.storage.from(BUCKET).upload(deckPath, deck, {
           contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-          cacheControl: '3600',
+          cacheControl: '0',
           upsert: true,
         });
         if (deckErr) {
@@ -324,7 +324,7 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
   const zipPath = storagePathFor(context.event.id, context.talk.id, 'promo-kit.zip');
   const { error: zipErr } = await supabase.storage
     .from(BUCKET)
-    .upload(zipPath, zipBuffer, { contentType: 'application/zip', cacheControl: '3600', upsert: true });
+    .upload(zipPath, zipBuffer, { contentType: 'application/zip', cacheControl: '0', upsert: true });
   if (zipErr) throw new Error(`zip upload failed: ${zipErr.message}`);
 
   await supabase
