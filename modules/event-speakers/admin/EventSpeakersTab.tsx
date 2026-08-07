@@ -25,6 +25,8 @@ import {
   CalendarDaysIcon,
   DocumentTextIcon,
   EnvelopeIcon,
+  Cog6ToothIcon,
+  ArrowTopRightOnSquareIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, CheckCircleIcon, XCircleIcon, ClipboardDocumentListIcon, UserGroupIcon } from '@heroicons/react/24/solid';
 import { Button, Card, Input, Modal, ConfirmModal } from '@/components/ui';
@@ -39,6 +41,7 @@ import { EventQrService, EventSponsor } from '@/utils/eventQrService';
 import { SpeakerLinkService, SpeakerTrackingLink } from './utils/speakerLinkService';
 import { supabase, supabaseUrl } from '@/lib/supabase';
 import { SendSpeakerEmailModal } from '../../bulk-emailing/admin/components/SendSpeakerEmailModal';
+import { PromoKitModal, PromoKitSettingsModal, kitStatusBadge, type PromoKitRow } from './components/PromoKitModal';
 
 /** Resolve a speaker avatar_url to a full public URL.
  *  The view may return a storage path (e.g. 'people/uuid.jpg') or a full URL. */
@@ -57,7 +60,10 @@ interface TalkDurationOption {
 
 interface EventSpeakersTabProps {
   eventUuid: string;
-  eventId: string; // The short event ID (e.g., 'kgbw63') used by event_sponsors
+  // NOTE: despite the historical name, the event-detail tab slot passes the
+  // event UUID here (EventDetailPage: eventId: event.id). Query by the right
+  // column for the value's actual shape.
+  eventId: string;
   eventLink: string; // The event registration URL
   eventTitle: string; // The event title
   talkDurationOptions?: TalkDurationOption[] | null;
@@ -139,6 +145,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   // Talk-centric state: each talk submission is managed independently
   const [approvedTalks, setApprovedTalks] = useState<EventTalkWithSpeakers[]>([]);
   const [confirmedTalks, setConfirmedTalks] = useState<EventTalkWithSpeakers[]>([]);
+  // Speaker speaker kits (by talk id) + modal state
+  const [promoKits, setPromoKits] = useState<Record<string, PromoKitRow>>({});
+  const [promoKitTalk, setPromoKitTalk] = useState<EventTalkWithSpeakers | null>(null);
+  const [showPromoKitSettings, setShowPromoKitSettings] = useState(false);
   const [pendingTalks, setPendingTalks] = useState<EventTalkWithSpeakers[]>([]);
   const [reserveTalks, setReserveTalks] = useState<EventTalkWithSpeakers[]>([]);
   const [rejectedTalks, setRejectedTalks] = useState<EventTalkWithSpeakers[]>([]);
@@ -192,8 +202,9 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   const [eventSponsors, setEventSponsors] = useState<EventSponsor[]>([]);
 
   // Speaker tracking links state — disabled when the redirects module isn't installed
+  // Tracking links are minted by the promo-kit worker; the admin only READS
+  // them here (click + registration stats badge). No manual generation.
   const [speakerLinks, setSpeakerLinks] = useState<Record<string, SpeakerTrackingLink>>({});
-  const [copyingLinkFor, setCopyingLinkFor] = useState<string | null>(null);
   const [linksAvailable, setLinksAvailable] = useState<boolean | null>(null); // null = not checked yet
 
   // Form state for existing customer
@@ -229,7 +240,65 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   useEffect(() => {
     loadTalks();
     loadEventSponsors();
+    loadPromoKits();
   }, [eventUuid]);
+
+  // Speaker speaker kits for this event, keyed by talk id (admin-read RLS,
+  // migration 015). Missing table / no access degrades to an empty map.
+  const loadPromoKits = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('speaker_promo_kits')
+        .select(
+          'id, talk_id, status, promo_text_status, promo_text, promo_text_error, tracking_short_url, cards, zip_storage_path, deck_storage_path, template_version, generated_at, error',
+        )
+        .eq('event_uuid', eventUuid);
+      if (error) return;
+      const byTalk: Record<string, PromoKitRow> = {};
+      for (const kit of (data ?? []) as PromoKitRow[]) byTalk[kit.talk_id] = kit;
+      setPromoKits(byTalk);
+    } catch {
+      /* speaker kits are optional surfacing — never block the tab */
+    }
+  };
+
+  // Resolve the viewed speaker's person id so the talk modal can deep-link
+  // to their People record (opened in a new tab). Resolution is async, so
+  // the link renders only once the id is known.
+  const [viewingPersonId, setViewingPersonId] = useState<string | null>(null);
+  useEffect(() => {
+    setViewingPersonId(null);
+    const speaker = viewingTalk ? getPrimarySpeaker(viewingTalk) : null;
+    if (!speaker) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        let personId: string | null = null;
+        if (speaker.speaker_id) {
+          const { data } = await supabase
+            .from('events_speaker_profiles')
+            .select('person_id')
+            .eq('id', speaker.speaker_id)
+            .maybeSingle();
+          personId = data?.person_id ?? null;
+        }
+        if (!personId && speaker.people_profile_id) {
+          const { data } = await supabase
+            .from('people_profiles')
+            .select('person_id')
+            .eq('id', speaker.people_profile_id)
+            .maybeSingle();
+          personId = data?.person_id ?? null;
+        }
+        if (!cancelled) setViewingPersonId(personId);
+      } catch {
+        /* no link shown when unresolvable */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingTalk]);
 
   const loadTalks = async () => {
     try {
@@ -353,40 +422,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
       setSpeakerLinks(links);
     } catch (error) {
       console.error('Error loading speaker links:', error);
-    }
-  };
-
-  const handleCopyTrackingLink = async (speakerId: string, speakerName?: string) => {
-    if (linksAvailable === false) return;
-    if (!eventLink) {
-      toast.error('Event link is required to generate tracking links');
-      return;
-    }
-
-    setCopyingLinkFor(speakerId);
-
-    try {
-      const name = speakerName || 'speaker';
-      const link = await SpeakerLinkService.getOrCreateSpeakerLink(
-        speakerId,
-        eventId,
-        eventLink,
-        name
-      );
-
-      await navigator.clipboard.writeText(link.shortUrl);
-      toast.success('Tracking link copied to clipboard!');
-
-      // Update local state with the new link
-      setSpeakerLinks(prev => ({
-        ...prev,
-        [speakerId]: link
-      }));
-    } catch (error) {
-      console.error('Error copying tracking link:', error);
-      toast.error('Failed to generate tracking link');
-    } finally {
-      setCopyingLinkFor(null);
     }
   };
 
@@ -1077,17 +1112,11 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   const handleConfirmTalk = async (talk: EventTalkWithSpeakers) => {
     try {
       await TalkService.confirmTalk(talk.id);
-      toast.success(`"${talk.title}" has been confirmed`);
+      // The confirmed email is sent by the promo-kit worker once the kit is
+      // built (a few minutes), so the kit zip can be attached — sending here
+      // at confirm time predates the kit's existence.
+      toast.success(`"${talk.title}" confirmed — the confirmation email (with speaker kit attached) sends automatically once their kit is ready`);
       loadTalks();
-
-      // Send automated confirmed email with edit link
-      const speakerForEmail = buildSpeakerForEmail(talk);
-      if (speakerForEmail) {
-        const emailResult = await SpeakerEmailService.sendConfirmedEmail(speakerForEmail, eventId);
-        if (emailResult.error) {
-          console.warn('Speaker confirmed email not sent:', emailResult.error);
-        }
-      }
     } catch (error) {
       console.error('Error confirming talk:', error);
       toast.error('Failed to confirm talk');
@@ -1216,8 +1245,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
         </div>
       </div>
 
-      {/* Actions - always at bottom */}
-      <div className="flex items-center gap-1 mt-3 pt-3 border-t border-gray-100 dark:border-gray-800" onClick={(e) => e.stopPropagation()}>
+      {/* Actions - always at bottom: mt-auto pins this row to the card's
+          bottom edge so buttons align across a grid row regardless of how
+          tall the text above is (Card is h-full flex flex-col). */}
+      <div className="flex flex-wrap items-center gap-1 gap-y-2 mt-auto pt-3 border-t border-gray-100 dark:border-gray-800" onClick={(e) => e.stopPropagation()}>
             {showApprovalActions ? (
               // Pending applications - show Approve, Reserve, Reject buttons together, then Delete
               <>
@@ -1255,13 +1286,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                       <EnvelopeIcon className="w-4 h-4" />
                     </button>
                   )}
-                  <button
-                    onClick={() => setDeletingTalk(talk)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
-                    title="Delete submission (removes speaker from event, keeps member)"
-                  >
-                    <TrashIcon className="w-4 h-4" />
-                  </button>
                 </div>
               </>
             ) : viewMode === 'approved' ? (
@@ -1300,27 +1324,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   >
                     <PencilIcon className="w-4 h-4" />
                   </button>
-                  <button
-                    onClick={() => setDeletingTalk(talk)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                    title="Remove speaker"
-                  >
-                    <TrashIcon className="w-4 h-4" />
-                  </button>
-                  {eventLink && linksAvailable === true && (
-                    <button
-                      onClick={() => speakerId && handleCopyTrackingLink(speakerId, speaker?.full_name || speaker?.email)}
-                      disabled={copyingLinkFor === speakerId}
-                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
-                      title="Copy tracking link"
-                    >
-                      {copyingLinkFor === speakerId ? (
-                        <LoadingSpinner size="xs" />
-                      ) : (
-                        <LinkIcon className="w-4 h-4" />
-                      )}
-                    </button>
-                  )}
                 </div>
               </>
             ) : (
@@ -1329,6 +1332,19 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                 {/* Confirmed speakers: Reserve/Reject buttons, Email, Edit, Delete, Copy Link */}
                 {viewMode === 'confirmed' && (
                   <>
+                    <button
+                      onClick={() => setPromoKitTalk(talk)}
+                      className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
+                      title={`Speaker kit: ${kitStatusBadge(promoKits[talk.id]).label} — share images, post text, tracking link`}
+                    >
+                      <PhotoIcon className="w-4 h-4 sm:mr-1" />
+                      <span className="hidden sm:inline">Speaker kit</span>
+                      {/* Status as a compact dot — the words live in the tooltip and modal */}
+                      <span
+                        className={`ml-1.5 w-2 h-2 rounded-full shrink-0 ${kitStatusBadge(promoKits[talk.id]).dot}`}
+                        aria-label={kitStatusBadge(promoKits[talk.id]).label}
+                      />
+                    </button>
                     <button
                       onClick={() => handleReserveTalk(talk)}
                       className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
@@ -1362,27 +1378,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                       >
                         <PencilIcon className="w-4 h-4" />
                       </button>
-                      <button
-                        onClick={() => setDeletingTalk(talk)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                        title="Remove speaker"
-                      >
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
-                      {eventLink && linksAvailable === true && (
-                        <button
-                          onClick={() => speakerId && handleCopyTrackingLink(speakerId, speaker?.full_name || speaker?.email)}
-                          disabled={copyingLinkFor === speakerId}
-                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
-                          title="Copy tracking link"
-                        >
-                          {copyingLinkFor === speakerId ? (
-                            <LoadingSpinner size="xs" />
-                          ) : (
-                            <LinkIcon className="w-4 h-4" />
-                          )}
-                        </button>
-                      )}
                     </div>
                   </>
                 )}
@@ -1405,6 +1400,9 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                       <XMarkIcon className="w-4 h-4 sm:mr-1" />
                       <span className="hidden sm:inline">Reject</span>
                     </button>
+                    {/* Deliberately just email + edit here — removal lives
+                        inside the edit modal to keep destructive actions off
+                        the card. */}
                     <div className="flex items-center gap-1 ml-auto">
                       {speaker?.email && (
                         <button
@@ -1421,13 +1419,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         title="Edit speaker"
                       >
                         <PencilIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeletingTalk(talk)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                        title="Remove speaker"
-                      >
-                        <TrashIcon className="w-4 h-4" />
                       </button>
                     </div>
                   </>
@@ -1459,13 +1450,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         title="Edit speaker"
                       >
                         <PencilIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeletingTalk(talk)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                        title="Remove speaker"
-                      >
-                        <TrashIcon className="w-4 h-4" />
                       </button>
                     </div>
                   </>
@@ -1662,6 +1646,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => setShowPromoKitSettings(true)}>
+            <Cog6ToothIcon className="w-4 h-4 mr-1" />
+            Speaker Kits
+          </Button>
           <Button variant="secondary" size="sm" onClick={handleDownloadSpeakerPhotos} disabled={downloadingPhotos}>
             <PhotoIcon className="w-4 h-4 mr-1" />
             {downloadingPhotos ? 'Downloading...' : 'Download Photos'}
@@ -1839,7 +1827,14 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Speaker</th>
                     <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Calendar</th>
                     <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Presentation</th>
-                    {linksAvailable === true && <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Tracking Link</th>}
+                    {linksAvailable === true && (
+                      <th
+                        className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide"
+                        title="Completed when the speaker copies a post or their tracking link, opens a share image, or downloads the zip from their speaker kit in the portal"
+                      >
+                        Speaker Kit
+                      </th>
+                    )}
                     <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
                   </tr>
                 </thead>
@@ -1847,7 +1842,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   {sorted.map((speakerGroup) => {
                     const hasCalendar = speakerGroup.talks.some(t => t.calendar_added_at);
                     const hasPresentation = speakerGroup.talks.some(t => t.presentation_url || t.presentation_storage_path);
-                    const hasTrackingLink = speakerGroup.talks.some(t => t.tracking_link_copied_at);
+                    const hasUsedPromoKit = speakerGroup.talks.some(t => t.tracking_link_copied_at);
                     return (
                       <tr key={speakerGroup.speakerId} className="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                         <td className="px-4 py-3">
@@ -1883,7 +1878,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         </td>
                         {linksAvailable === true && (
                           <td className="px-4 py-3 text-center">
-                            {hasTrackingLink ? (
+                            {hasUsedPromoKit ? (
                               <CheckCircleIcon className="w-5 h-5 text-green-500 mx-auto" />
                             ) : (
                               <XCircleIcon className="w-5 h-5 text-red-400 mx-auto" />
@@ -2098,7 +2093,12 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                             Presentation uploaded
                           </span>
                         </div>
-                        {/* Tracking link task - only show if redirects module is available */}
+                        {/* Promo-kit engagement task. The portal stamps
+                            tracking_link_copied_at on the speaker's FIRST
+                            share action inside their speaker kit — copying a
+                            post or the link, opening a card image, or
+                            downloading the zip — so this reads as "used
+                            their speaker kit", not just "copied the link". */}
                         {linksAvailable === true && (
                           <div className="flex items-center gap-2">
                             {speakerGroup.talks.some(t => t.tracking_link_copied_at) ? (
@@ -2106,9 +2106,12 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                             ) : (
                               <div className="w-4 h-4 rounded-full border-2 border-gray-300 dark:border-gray-600" />
                             )}
-                            <LinkIcon className="w-4 h-4 text-gray-400" />
-                            <span className={`text-xs ${speakerGroup.talks.some(t => t.tracking_link_copied_at) ? 'text-gray-600 dark:text-gray-300' : 'text-gray-400 dark:text-gray-500'}`}>
-                              Tracking link shared
+                            <PhotoIcon className="w-4 h-4 text-gray-400" />
+                            <span
+                              className={`text-xs ${speakerGroup.talks.some(t => t.tracking_link_copied_at) ? 'text-gray-600 dark:text-gray-300' : 'text-gray-400 dark:text-gray-500'}`}
+                              title="Completed when the speaker copies a post or their tracking link, opens a share image, or downloads the zip from their speaker kit in the portal"
+                            >
+                              Speaker kit used
                             </span>
                           </div>
                         )}
@@ -2132,23 +2135,6 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   )}
                 </div>
 
-                {/* Actions */}
-                {(viewMode === 'confirmed' || viewMode === 'approved') && eventLink && linksAvailable === true && (
-                  <div className="shrink-0">
-                    <button
-                      onClick={() => handleCopyTrackingLink(speakerGroup.speakerId, speakerGroup.speakerName)}
-                      disabled={copyingLinkFor === speakerGroup.speakerId}
-                      className="p-2 text-gray-400 hover:text-blue-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
-                      title="Copy tracking link"
-                    >
-                      {copyingLinkFor === speakerGroup.speakerId ? (
-                        <LoadingSpinner size="xs" />
-                      ) : (
-                        <LinkIcon className="w-5 h-5" />
-                      )}
-                    </button>
-                  </div>
-                )}
               </div>
             </Card>
           ));
@@ -2794,18 +2780,33 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
         title="Edit Speaker"
         footer={
           <div className="flex justify-between items-center gap-3 p-4">
-            <Button variant="outline" onClick={() => {
-              setShowEditModal(false);
-              setEditingTalk(null);
-            }}>
-              Cancel
-            </Button>
+            {/* Removal moved off the speaker cards — this is its home now.
+                Hands off to the existing ConfirmModal flow. */}
             <Button
-              onClick={handleSaveEdit}
-              disabled={!speakerForm.talk_title.trim() || !speakerForm.talk_synopsis.trim()}
+              variant="outline"
+              color="error"
+              onClick={() => {
+                setDeletingTalk(editingTalk);
+                setShowEditModal(false);
+              }}
             >
-              Save Changes
+              <TrashIcon className="w-4 h-4 mr-1" />
+              Remove speaker
             </Button>
+            <div className="flex items-center gap-3">
+              <Button variant="outline" onClick={() => {
+                setShowEditModal(false);
+                setEditingTalk(null);
+              }}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveEdit}
+                disabled={!speakerForm.talk_title.trim() || !speakerForm.talk_synopsis.trim()}
+              >
+                Save Changes
+              </Button>
+            </div>
           </div>
         }
       >
@@ -3024,9 +3025,24 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     </button>
                   </>
                 )}
-                {/* Confirmed: Reserve, Reject */}
+                {/* Confirmed: Speaker kit, Reserve, Reject */}
                 {viewingTalk.status === 'confirmed' && (
                   <>
+                    <button
+                      onClick={() => {
+                        setPromoKitTalk(viewingTalk);
+                        setViewingTalk(null);
+                      }}
+                      className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
+                      title={`Speaker kit: ${kitStatusBadge(promoKits[viewingTalk.id]).label} — share images, post text, tracking link`}
+                    >
+                      <PhotoIcon className="w-4 h-4 sm:mr-1" />
+                      <span className="hidden sm:inline">Speaker kit</span>
+                      <span
+                        className={`ml-1.5 w-2 h-2 rounded-full shrink-0 ${kitStatusBadge(promoKits[viewingTalk.id]).dot}`}
+                        aria-label={kitStatusBadge(promoKits[viewingTalk.id]).label}
+                      />
+                    </button>
                     <button
                       onClick={() => {
                         handleReserveTalk(viewingTalk);
@@ -3094,6 +3110,17 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                 )}
                 {/* Icon buttons on the right */}
                 <div className="flex items-center gap-1 ml-auto">
+                  {viewingPersonId && (
+                    <a
+                      href={`/people/${viewingPersonId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                      title="Open person record in a new tab"
+                    >
+                      <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+                    </a>
+                  )}
                   {(() => {
                     const detailSpeaker = viewingTalk.speakers?.find(s => s.is_primary) || viewingTalk.speakers?.[0];
                     return detailSpeaker?.email ? (
@@ -3464,6 +3491,24 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
           eventTitle={eventTitle}
         />
       )}
+
+      {/* Speaker Speaker Kit Modal */}
+      {promoKitTalk && (
+        <PromoKitModal
+          isOpen={!!promoKitTalk}
+          onClose={() => setPromoKitTalk(null)}
+          kit={promoKits[promoKitTalk.id] ?? null}
+          speakerName={getPrimarySpeaker(promoKitTalk)?.full_name || promoKitTalk.title}
+          onKitChanged={loadPromoKits}
+        />
+      )}
+
+      {/* Speaker Kit Settings (per-event template repo / brand mapping) */}
+      <PromoKitSettingsModal
+        isOpen={showPromoKitSettings}
+        onClose={() => setShowPromoKitSettings(false)}
+        eventUuid={eventUuid}
+      />
     </div>
   );
 }
