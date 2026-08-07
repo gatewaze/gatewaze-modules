@@ -1243,7 +1243,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
       </div>
 
       {/* Actions - always at bottom */}
-      <div className="flex items-center gap-1 mt-3 pt-3 border-t border-gray-100 dark:border-gray-800" onClick={(e) => e.stopPropagation()}>
+      <div className="flex flex-wrap items-center gap-1 gap-y-2 mt-3 pt-3 border-t border-gray-100 dark:border-gray-800" onClick={(e) => e.stopPropagation()}>
             {showApprovalActions ? (
               // Pending applications - show Approve, Reserve, Reject buttons together, then Delete
               <>
@@ -1358,15 +1358,15 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     <button
                       onClick={() => setPromoKitTalk(talk)}
                       className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
-                      title="View this speaker's promo kit (share images, post text, tracking link)"
+                      title={`Promo kit: ${kitStatusBadge(promoKits[talk.id]).label} — share images, post text, tracking link`}
                     >
                       <PhotoIcon className="w-4 h-4 sm:mr-1" />
                       <span className="hidden sm:inline">Promo kit</span>
+                      {/* Status as a compact dot — the words live in the tooltip and modal */}
                       <span
-                        className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap ${kitStatusBadge(promoKits[talk.id]).className}`}
-                      >
-                        {kitStatusBadge(promoKits[talk.id]).label}
-                      </span>
+                        className={`ml-1.5 w-2 h-2 rounded-full shrink-0 ${kitStatusBadge(promoKits[talk.id]).dot}`}
+                        aria-label={kitStatusBadge(promoKits[talk.id]).label}
+                      />
                     </button>
                     <button
                       onClick={() => handleReserveTalk(talk)}

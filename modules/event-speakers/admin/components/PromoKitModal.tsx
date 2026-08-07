@@ -49,17 +49,22 @@ const CARD_LABELS: Record<string, string> = {
   landscape: 'Link preview (1200×630)',
 };
 
-export function kitStatusBadge(kit: PromoKitRow | undefined): { label: string; className: string } {
-  if (!kit) return { label: 'Not generated', className: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300' };
+export function kitStatusBadge(kit: PromoKitRow | undefined): { label: string; className: string; dot: string } {
+  if (!kit)
+    return {
+      label: 'Not generated',
+      className: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+      dot: 'bg-gray-300 dark:bg-gray-600',
+    };
   switch (kit.status) {
     case 'ready':
       return kit.promo_text_status === 'ready'
-        ? { label: 'Ready', className: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' }
-        : { label: 'Ready (no text)', className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' };
+        ? { label: 'Ready', className: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300', dot: 'bg-green-500' }
+        : { label: 'Ready (no text)', className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300', dot: 'bg-yellow-500' };
     case 'failed':
-      return { label: 'Failed', className: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' };
+      return { label: 'Failed', className: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300', dot: 'bg-red-500' };
     default:
-      return { label: 'Generating…', className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' };
+      return { label: 'Generating…', className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300', dot: 'bg-blue-500 animate-pulse' };
   }
 }
 
