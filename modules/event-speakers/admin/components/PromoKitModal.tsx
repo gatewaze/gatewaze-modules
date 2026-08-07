@@ -34,6 +34,7 @@ export interface PromoKitRow {
   tracking_short_url: string | null;
   cards: Array<{ format: string; storage_path: string; width: number; height: number }> | null;
   zip_storage_path: string | null;
+  deck_storage_path: string | null;
   template_version: string | null;
   generated_at: string | null;
   error: string | null;
@@ -228,6 +229,14 @@ export function PromoKitModal({ isOpen, onClose, kit, speakerName, onKitChanged 
                   <Button variant="secondary" size="sm" className="whitespace-nowrap">
                     <ArrowDownTrayIcon className="w-4 h-4 mr-1 shrink-0" />
                     Download zip
+                  </Button>
+                </a>
+              )}
+              {kit.deck_storage_path && (
+                <a href={mediaPublicUrl(kit.deck_storage_path)} download>
+                  <Button variant="secondary" size="sm" className="whitespace-nowrap" title="Personalized talk template — opens in PowerPoint or Google Slides (upload to Drive)">
+                    <ArrowDownTrayIcon className="w-4 h-4 mr-1 shrink-0" />
+                    Slide deck
                   </Button>
                 </a>
               )}

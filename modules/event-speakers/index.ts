@@ -64,6 +64,16 @@ const eventSpeakersModule: GatewazeModule = {
     // modal + Regenerate) and manage speaker_promo_event_config, the
     // per-event template-repo/brand mapping override.
     'migrations/015_promo_kit_admin_access.sql',
+    // 016 storage INSERT policy for media/talks/* — presentation uploads
+    // from the speaker checklist failed RLS on fresh installs (only
+    // speaker-submissions/ was covered by 009).
+    'migrations/016_talk_presentation_uploads.sql',
+    // 017 confirmed_email_sent_at — the speaker-confirmed email sends from
+    // the promo-kit worker post-build (zip attached), idempotently.
+    'migrations/017_promo_kit_confirmed_email.sql',
+    // 018 deck_storage_path — personalized PPTX talk template (branded
+    // title slide from the landscape card, talk/speaker pre-filled).
+    'migrations/018_promo_kit_slide_deck.sql',
   ],
 
   workers: [

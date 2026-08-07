@@ -32,6 +32,9 @@ import {
 import { loadTemplateSource, templateLoader, resolveBrandVars } from '../lib/promo/template-source.js';
 import { buildRecipeParams, dispatchPromoTextRun, readPromoTextRun } from '../lib/promo/promo-text.js';
 import { buildPromoKitZip } from '../lib/promo/build-zip.js';
+import { sendConfirmedEmailIfDue } from '../lib/promo/confirmed-email.js';
+import { buildSpeakerDeck } from '../lib/promo/slide-deck.js';
+import { readFile } from 'node:fs/promises';
 
 interface JobInput {
   data?: { kitId?: string };
@@ -150,9 +153,52 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
   }
   log(`rendered ${cards.length} cards`);
 
+  // Personalized slide deck: the event's plain PPTX template with the
+  // landscape card as the title-slide background and the talk/speaker
+  // pre-filled. Best-effort — a template mismatch skips the deck.
+  let deckPath: string | null = null;
+  try {
+    const landscape = rendered.find((c) => c.format === 'landscape');
+    const deckTemplate =
+      source.getFile('templates/speaker-deck-template.pptx') ??
+      (await readFile(join(templatesDir, 'speaker-deck-template.pptx')).catch(() => null));
+    if (landscape && deckTemplate) {
+      const speakerLine = [
+        context.speaker.fullName,
+        [context.speaker.jobTitle, context.speaker.company].filter(Boolean).join(', '),
+      ]
+        .filter(Boolean)
+        .join(' \u2014 ');
+      const deck = await buildSpeakerDeck(deckTemplate, {
+        titleCardPng: landscape.png,
+        talkTitle: context.talk.title,
+        speakerLine,
+      });
+      if (deck) {
+        deckPath = storagePathFor(context.event.id, context.talk.id, 'presentation-template.pptx');
+        const { error: deckErr } = await supabase.storage.from(BUCKET).upload(deckPath, deck, {
+          contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          cacheControl: '3600',
+          upsert: true,
+        });
+        if (deckErr) {
+          log(`deck upload failed: ${deckErr.message}`);
+          deckPath = null;
+        } else {
+          log('personalized slide deck built');
+        }
+      } else {
+        log('deck template mismatch — skipping personalized deck');
+      }
+    }
+  } catch (err) {
+    log(`deck generation failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+  }
+
   // 3. Promo text: dispatch the recipe run (graceful when ai is absent).
   const dispatch = await dispatchPromoTextRun(supabase, buildRecipeParams(context, link.shortUrl));
   const patch = {
+    deck_storage_path: deckPath,
     tracking_slug: link.slug,
     tracking_short_url: link.shortUrl,
     tracking_destination_url: link.destinationUrl,
@@ -228,12 +274,19 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
     cardsWithBytes.push({ ...card, png: Buffer.from(await data.arrayBuffer()) });
   }
 
+  let deckBuffer: Buffer | null = null;
+  if (kit.deck_storage_path) {
+    const { data: deckData } = await supabase.storage.from(BUCKET).download(kit.deck_storage_path);
+    if (deckData) deckBuffer = Buffer.from(await deckData.arrayBuffer());
+  }
+
   const zipBuffer = await buildPromoKitZip({
     speakerName: context.speaker.fullName,
     eventTitle: context.event.event_title,
     trackingUrl: kit.tracking_short_url,
     promoText: kit.promo_text_status === 'ready' ? kit.promo_text : null,
     cards: cardsWithBytes,
+    deck: deckBuffer,
   });
   const zipPath = storagePathFor(context.event.id, context.talk.id, 'promo-kit.zip');
   const { error: zipErr } = await supabase.storage
@@ -251,4 +304,16 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
     })
     .eq('id', kit.id);
   log('kit ready');
+
+  // Speaker-confirmed email rides on kit completion so the zip can be
+  // attached (the admin-side send at confirm time predates the kit).
+  // Idempotent via confirmed_email_sent_at; failures never fail the kit.
+  await sendConfirmedEmailIfDue(
+    supabase,
+    kit,
+    context,
+    context.speaker.email,
+    { buffer: zipBuffer, filename: 'promo-kit.zip' },
+    log,
+  );
 }

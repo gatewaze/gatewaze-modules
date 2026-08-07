@@ -247,7 +247,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
       const { data, error } = await supabase
         .from('speaker_promo_kits')
         .select(
-          'id, talk_id, status, promo_text_status, promo_text, promo_text_error, tracking_short_url, cards, zip_storage_path, template_version, generated_at, error',
+          'id, talk_id, status, promo_text_status, promo_text, promo_text_error, tracking_short_url, cards, zip_storage_path, deck_storage_path, template_version, generated_at, error',
         )
         .eq('event_uuid', eventUuid);
       if (error) return;
@@ -1109,17 +1109,11 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   const handleConfirmTalk = async (talk: EventTalkWithSpeakers) => {
     try {
       await TalkService.confirmTalk(talk.id);
-      toast.success(`"${talk.title}" has been confirmed`);
+      // The confirmed email is sent by the promo-kit worker once the kit is
+      // built (a few minutes), so the kit zip can be attached — sending here
+      // at confirm time predates the kit's existence.
+      toast.success(`"${talk.title}" confirmed — the confirmation email (with promo kit attached) sends automatically once their kit is ready`);
       loadTalks();
-
-      // Send automated confirmed email with edit link
-      const speakerForEmail = buildSpeakerForEmail(talk);
-      if (speakerForEmail) {
-        const emailResult = await SpeakerEmailService.sendConfirmedEmail(speakerForEmail, eventId);
-        if (emailResult.error) {
-          console.warn('Speaker confirmed email not sent:', emailResult.error);
-        }
-      }
     } catch (error) {
       console.error('Error confirming talk:', error);
       toast.error('Failed to confirm talk');
