@@ -30,7 +30,7 @@ import { ProjectAvatar } from './ProjectAvatar';
 import { projectOptionLabel } from './projectAvatarUtils';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
-import { ALL_RUN_STATUSES, STATUS_LABELS, toggleStatusInParam, fmtCost } from './overview-filters';
+import { ALL_RUN_STATUSES, STATUS_LABELS, STATUS_COLOR, toggleStatusInParam, fmtCost } from './overview-filters';
 import { aggregateRunModelCosts, shortModel } from '../lib/run-costs';
 import { formatAbsolute, formatRelative } from '../lib/format-time';
 import { isNearBottom } from './autoscroll';
@@ -55,11 +55,6 @@ async function api(path: string, init?: RequestInit) {
   return r.status === 204 ? null : r.json();
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  merged: 'green', pr_open: 'amber', watching: 'blue', changes_requested: 'amber',
-  running: 'blue', failed: 'red', blocked: 'red', closed: 'gray', cancelled: 'gray', queued: 'gray',
-  awaiting_architecture: 'amber', architecture_in_review: 'amber', ready_to_submit: 'amber', awaiting_spec: 'amber',
-};
 const phaseColor = (s: string) =>
   s === 'passed' ? 'green' : s === 'failed' || s === 'blocked' ? 'red' : s === 'running' ? 'blue' : 'gray';
 
@@ -1130,7 +1125,7 @@ export default function SoftwareEngineerTab() {
         onTabChange={onTabChange}
       >
         <div className="py-6">
-          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} onOpenRuns={onOpenRuns} />}
+          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} onOpenRuns={onOpenRuns} onOpenRun={onSelectRun} />}
           {activeTab === 'runs' && <RunsView selected={selectedRun} onSelect={onSelectRun} onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'issues' && <IssuesView />}
           {activeTab === 'setup' && <SetupPanel routeProjectId={selectedProject} onSelectProject={onSelectProject} />}

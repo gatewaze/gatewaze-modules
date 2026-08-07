@@ -30,12 +30,13 @@ import { computeSpendOverview, computeModelUsage } from '../lib/cost.js';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Allowlist of valid se_runs.status values (mirrors the CHECK constraint, widened by migrations 015
-// and 016 to add the architecture-review flow's two statuses). The /runs board accepts a comma-
-// separated status set from the Overview KPI tiles or the board's own status filter chips; every
-// value is validated against this set so a caller can't smuggle an arbitrary string into the filter.
+// and 016 to add the architecture-review flow's two statuses, and by 017/018 to add the manual PR
+// submit gate and the human spec-approval gate). The /runs board accepts a comma-separated status set
+// from the Overview KPI tiles or the board's own status filter chips; every value is validated
+// against this set so a caller can't smuggle an arbitrary string into the filter.
 const RUN_STATUSES = new Set([
   'queued', 'running', 'blocked', 'failed', 'pr_open', 'watching', 'changes_requested', 'merged', 'closed', 'cancelled',
-  'awaiting_architecture', 'architecture_in_review',
+  'awaiting_architecture', 'architecture_in_review', 'ready_to_submit', 'awaiting_spec',
 ]);
 
 const PROJECT_MASKED =
