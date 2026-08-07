@@ -93,6 +93,10 @@ const eventSpeakersModule: GatewazeModule = {
     // previous status when it didn't. 023 is skipped when ai is absent.
     'migrations/022_talk_edit_reviews.sql',
     'migrations/023_talk_edit_materiality_use_case.sql',
+    // 024 adds p.avatar_storage_path to the talks view's avatar COALESCE. A
+    // photo uploaded from the portal sets only that column, so the admin talk
+    // cards showed a placeholder while the Speakers list showed the photo.
+    'migrations/024_talks_view_avatar_storage_path.sql',
   ],
 
   workers: [
