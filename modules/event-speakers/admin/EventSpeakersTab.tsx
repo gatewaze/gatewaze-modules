@@ -26,6 +26,7 @@ import {
   DocumentTextIcon,
   EnvelopeIcon,
   Cog6ToothIcon,
+  ArrowTopRightOnSquareIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, CheckCircleIcon, XCircleIcon, ClipboardDocumentListIcon, UserGroupIcon } from '@heroicons/react/24/solid';
 import { Button, Card, Input, Modal, ConfirmModal } from '@/components/ui';
@@ -257,6 +258,44 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
       /* promo kits are optional surfacing — never block the tab */
     }
   };
+
+  // Resolve the viewed speaker's person id so the talk modal can deep-link
+  // to their People record (opened in a new tab). Resolution is async, so
+  // the link renders only once the id is known.
+  const [viewingPersonId, setViewingPersonId] = useState<string | null>(null);
+  useEffect(() => {
+    setViewingPersonId(null);
+    const speaker = viewingTalk ? getPrimarySpeaker(viewingTalk) : null;
+    if (!speaker) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        let personId: string | null = null;
+        if (speaker.speaker_id) {
+          const { data } = await supabase
+            .from('events_speaker_profiles')
+            .select('person_id')
+            .eq('id', speaker.speaker_id)
+            .maybeSingle();
+          personId = data?.person_id ?? null;
+        }
+        if (!personId && speaker.people_profile_id) {
+          const { data } = await supabase
+            .from('people_profiles')
+            .select('person_id')
+            .eq('id', speaker.people_profile_id)
+            .maybeSingle();
+          personId = data?.person_id ?? null;
+        }
+        if (!cancelled) setViewingPersonId(personId);
+      } catch {
+        /* no link shown when unresolvable */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingTalk]);
 
   const loadTalks = async () => {
     try {
@@ -3002,9 +3041,24 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     </button>
                   </>
                 )}
-                {/* Confirmed: Reserve, Reject */}
+                {/* Confirmed: Promo kit, Reserve, Reject */}
                 {viewingTalk.status === 'confirmed' && (
                   <>
+                    <button
+                      onClick={() => {
+                        setPromoKitTalk(viewingTalk);
+                        setViewingTalk(null);
+                      }}
+                      className="inline-flex items-center whitespace-nowrap px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
+                      title={`Promo kit: ${kitStatusBadge(promoKits[viewingTalk.id]).label} — share images, post text, tracking link`}
+                    >
+                      <PhotoIcon className="w-4 h-4 sm:mr-1" />
+                      <span className="hidden sm:inline">Promo kit</span>
+                      <span
+                        className={`ml-1.5 w-2 h-2 rounded-full shrink-0 ${kitStatusBadge(promoKits[viewingTalk.id]).dot}`}
+                        aria-label={kitStatusBadge(promoKits[viewingTalk.id]).label}
+                      />
+                    </button>
                     <button
                       onClick={() => {
                         handleReserveTalk(viewingTalk);
@@ -3072,6 +3126,17 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                 )}
                 {/* Icon buttons on the right */}
                 <div className="flex items-center gap-1 ml-auto">
+                  {viewingPersonId && (
+                    <a
+                      href={`/people/${viewingPersonId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                      title="Open person record in a new tab"
+                    >
+                      <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+                    </a>
+                  )}
                   {(() => {
                     const detailSpeaker = viewingTalk.speakers?.find(s => s.is_primary) || viewingTalk.speakers?.[0];
                     return detailSpeaker?.email ? (
