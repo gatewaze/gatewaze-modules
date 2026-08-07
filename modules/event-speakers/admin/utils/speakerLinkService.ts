@@ -23,6 +23,8 @@ export interface SpeakerTrackingLink {
   humanClicks: number;
   uniqueClicks: number;
   registrationCount: number;
+  /** Scans of the LinkedIn QR code on this speaker's slide deck. */
+  qrScans: number;
   redirectId: string | null;
 }
 
@@ -72,13 +74,18 @@ export async function getSpeakerLinksForEvent(
     return {};
   }
 
-  const { data: redirects, error } = await supabase
+  // Two redirect kinds per speaker: 'speaker' is their share link, and
+  // 'speaker_linkedin' is the QR code on their slide deck. They are separate
+  // rows so the click and scan counts stay apart.
+  const { data: allRedirects, error } = await supabase
     .from('redirects')
-    .select('id, short_url, original_url, path, total_clicks, human_clicks, unique_clicks, source_id, provider')
-    .eq('source_type', 'speaker')
+    .select('id, short_url, original_url, path, total_clicks, human_clicks, unique_clicks, source_id, provider, source_type')
+    .in('source_type', ['speaker', 'speaker_linkedin'])
     .in('source_id', speakerIds);
+  const redirects = (allRedirects ?? []).filter((r) => r.source_type === 'speaker');
+  const qrRedirects = (allRedirects ?? []).filter((r) => r.source_type === 'speaker_linkedin');
 
-  if (error || !redirects) {
+  if (error || !allRedirects) {
     // Silently handle missing redirects table (module not installed)
     if (error?.code === 'PGRST204' || error?.code === 'PGRST205' || error?.message?.includes('schema cache')) {
       return {};
@@ -88,11 +95,16 @@ export async function getSpeakerLinksForEvent(
   }
 
   // Umami links carry no synced click columns — fetch live counts.
-  const umamiIds = redirects.filter((r) => r.provider === 'umami').map((r) => r.id);
+  const umamiIds = [...redirects, ...qrRedirects].filter((r) => r.provider === 'umami').map((r) => r.id);
   const [umamiClicks, registrationCounts] = await Promise.all([
     getUmamiClicks(umamiIds),
     getSpeakerRegistrationCounts(eventId, speakerIds),
   ]);
+  // Scans of the deck's LinkedIn QR, keyed by speaker.
+  const qrScansBySpeaker: Record<string, number> = {};
+  for (const r of qrRedirects) {
+    qrScansBySpeaker[r.source_id] = umamiClicks[r.id]?.clicks ?? r.human_clicks ?? r.total_clicks ?? 0;
+  }
 
   const result: Record<string, SpeakerTrackingLink> = {};
   for (const redirect of redirects) {
@@ -107,6 +119,7 @@ export async function getSpeakerLinksForEvent(
       humanClicks: live?.clicks ?? redirect.human_clicks ?? 0,
       uniqueClicks: live?.unique ?? redirect.unique_clicks ?? 0,
       registrationCount: registrationCounts[speakerId] || 0,
+      qrScans: qrScansBySpeaker[speakerId] || 0,
       redirectId: redirect.id,
     };
   }

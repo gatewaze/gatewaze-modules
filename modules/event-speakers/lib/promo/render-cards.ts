@@ -247,8 +247,10 @@ export interface RenderCardInput {
   talk: { title?: string | null };
   event: { date_short: string; city: string };
   brand?: Partial<Record<'accent' | 'accent_bright' | 'accent_dark' | 'wave_from' | 'lockup_url', string>>;
-  /** Hide the date/location footer — used for the slide-deck title
-   *  background, where that area holds an editable social-handle field. */
+  /** Hide the date/location footer and the SPEAKER chip — used for the
+   *  slide-deck title background. The footer area holds the LinkedIn QR
+   *  code instead, and the deck overlays its own editable name block, which
+   *  sits where the chip used to be. The shareable cards keep both. */
   hideChrome?: boolean;
 }
 
@@ -328,7 +330,10 @@ export async function renderSpeakerCards(
       const template = await loadTemplate(spec.templateFile);
       let html = substituteVariables(template, context);
       if (input.hideChrome) {
-        html = html.replace('</head>', '<style>.footer{display:none !important}</style></head>');
+        html = html.replace(
+          '</head>',
+          '<style>.footer,.speaker-chip{display:none !important}</style></head>',
+        );
       }
       const cardW = Number((html.match(/#card\s*{[^}]*width:\s*(\d+)px/) ?? [])[1]) || spec.exportWidth;
       const cardH = Number((html.match(/#card\s*{[^}]*height:\s*(\d+)px/) ?? [])[1]) || spec.exportHeight;

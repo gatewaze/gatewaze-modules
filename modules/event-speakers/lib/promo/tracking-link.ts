@@ -148,6 +148,87 @@ export function buildDestinationUrl(event: {
 }
 
 /**
+ * Mint (or reuse) the tracking redirect behind the speaker's LinkedIn QR
+ * code. The QR points here rather than straight at LinkedIn so we can count
+ * scans, the same way we count clicks on the speaker's share link.
+ *
+ * Kept as a separate `source_type` ('speaker_linkedin'). The admin reads
+ * share-link clicks with source_type='speaker' and source_id=<profile>, so a
+ * second row under that same pair would be picked up as a duplicate and the
+ * two counts would run together.
+ *
+ * The destination must already be a validated LinkedIn URL — see
+ * normalizeLinkedInUrl in linkedin-qr.ts. This function does not re-check it,
+ * and nothing else should write an unvalidated URL into a redirect we then
+ * put behind a QR code on a slide.
+ */
+export async function mintSpeakerLinkedInLink(
+  supabase,
+  args: {
+    speakerProfileId: string;
+    speakerName: string;
+    eventId: string;
+    linkedinUrl: string;
+  },
+): Promise<TrackingLinkResult> {
+  const domain = shortLinkDomain();
+  if (!domain) throw new Error('no short-link domain configured (PORTAL_HOST / REDIRECT_PUBLIC_BASE_URL)');
+  if (!process.env.UMAMI_PASSWORD) throw new Error('UMAMI_PASSWORD not configured (umami link provider)');
+  if (args.linkedinUrl.length > 500) throw new Error('destination URL exceeds umami limit (500 chars)');
+
+  const nameSlug = stringToSlug(args.speakerName) || 'speaker';
+  const eventSlugPart = stringToSlug(args.eventId) || 'event';
+  const maxSlugLen = Math.min(80, 100 - domain.length - 2);
+  // '-li' marks the LinkedIn redirect apart from the share link's slug.
+  let base = `${eventSlugPart}-${nameSlug}-li`.slice(0, maxSlugLen).replace(/-+$/, '');
+  if (!SLUG_RE.test(base)) throw new Error(`derived slug invalid: ${base}`);
+  let slug = base;
+  for (let suffix = 2; suffix < 50; suffix++) {
+    const { data: existing } = await supabase
+      .from('redirects')
+      .select('id, source_id, source_type')
+      .eq('domain', domain)
+      .eq('path', slug)
+      .maybeSingle();
+    if (!existing) break;
+    if (existing.source_type === 'speaker_linkedin' && existing.source_id === args.speakerProfileId) break;
+    slug = `${base.slice(0, maxSlugLen - 1 - String(suffix).length)}-${suffix}`;
+  }
+
+  const baseUrl = (process.env.UMAMI_BASE_URL || 'http://umami:3000').replace(/\/+$/, '');
+  const token = await umamiLogin(baseUrl);
+  const title = `Speaker LinkedIn: ${args.speakerName} (${args.eventId})`;
+  const uLink = await createUmamiLink(baseUrl, token, {
+    path: internalSlug(domain, slug),
+    originalUrl: args.linkedinUrl,
+    title,
+  });
+
+  const shortUrl = shortUrlFor(domain, slug);
+  const { data: row } = await supabase
+    .from('redirects')
+    .upsert(
+      {
+        shortio_id: uLink.id,
+        provider: 'umami',
+        domain,
+        short_url: shortUrl,
+        original_url: args.linkedinUrl,
+        path: slug,
+        title,
+        source_type: 'speaker_linkedin',
+        source_id: args.speakerProfileId,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'shortio_id' },
+    )
+    .select('id')
+    .maybeSingle();
+
+  return { slug, shortUrl, destinationUrl: args.linkedinUrl, redirectId: row?.id ?? null };
+}
+
+/**
  * Mint (or reuse) the tracking link for one speaker+event. Idempotent:
  * the slug is deterministic (`<event_id>-<speaker-name>`), the umami create
  * upserts by slug, and a slug already owned by a DIFFERENT speaker gets a
