@@ -25,6 +25,15 @@ const bulkEmailingModule: GatewazeModule = {
       requiredFeature: 'bulk-emailing',
       meta: { tabId: 'communications', label: 'Comms', icon: 'ChatBubbleLeftRightIcon' },
     },
+    {
+      // Inbound replies to this event's comms. Sits directly after Comms so
+      // "what did we send" and "what came back" are adjacent.
+      slotName: 'event-detail:tab',
+      component: () => import('./admin/components/EventRepliesTab'),
+      order: 131,
+      requiredFeature: 'bulk-emailing',
+      meta: { tabId: 'replies', label: 'Replies', icon: 'InboxIcon' },
+    },
   ],
 
   edgeFunctions: [
@@ -124,6 +133,15 @@ const bulkEmailingModule: GatewazeModule = {
     // old job_id shape means event/speaker comms enqueue fails and nothing drips.
     // Table is a transient drip queue (empty on affected envs) → drop+recreate.
     'migrations/023_reconcile_event_recipients_send_id.sql',
+    // 024 captures EVERY inbound email before routing, so unroutable mail
+    // (speaker/event replies, until 025) stops vanishing silently.
+    'migrations/024_inbound_emails.sql',
+    // 025 event_replies + event_reply_messages + forward_replies_to, so event
+    // comms replies land against the event like newsletter/broadcast replies.
+    'migrations/025_event_replies.sql',
+    // 026 aligns event_reply_messages with broadcast_reply_messages so
+    // reply-send's generic insert works without a third column mapping.
+    'migrations/026_event_reply_messages_align.sql',
   ],
 
   workers: [

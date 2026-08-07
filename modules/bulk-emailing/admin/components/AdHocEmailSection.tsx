@@ -192,6 +192,10 @@ export function AdHocEmailSection({
 
   // Audience selection state — default to 'audience' if speakers module not installed
   const [audienceType, setAudienceType] = useState<AudienceType>(hasSpeakers ? 'speakers' : 'audience');
+  // Attach each speaker's own generated speaker kit. Speakers-only: the engine
+  // sends one message per recipient when set, which is fine for a speaker list
+  // and wrong for a large audience blast.
+  const [attachPromoKits, setAttachPromoKits] = useState(false);
   const [speakerStatuses, setSpeakerStatuses] = useState<Set<SpeakerStatusFilter>>(new Set());
   const [checklistFilters, setChecklistFilters] = useState<Set<ChecklistFilter>>(new Set());
   const [audienceSubTypes, setAudienceSubTypes] = useState<Set<AudienceSubType>>(new Set());
@@ -657,6 +661,9 @@ export function AdHocEmailSection({
             member_profile_ids: memberProfileIds,
             audience_type: audienceType,
             event_uuid: eventUuid,
+            // Each speaker gets their OWN kit zip, so the send engine drops to
+            // one message per recipient (attachments are message-level).
+            ...(audienceType === 'speakers' && attachPromoKits ? { attach_promo_kit: true } : {}),
           },
           created_by: userId || null,
         })
@@ -997,6 +1004,31 @@ export function AdHocEmailSection({
                 ))}
               </select>
             </div>
+
+            {/* Attach each speaker's own speaker kit (speakers audience only) */}
+            {audienceType === 'speakers' && (
+              <div className="rounded-md border border-gray-200 dark:border-gray-700 px-3 py-2.5">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    checked={attachPromoKits}
+                    onChange={(e) => setAttachPromoKits(e.target.checked)}
+                  />
+                  <span className="text-sm">
+                    <span className="font-medium text-gray-700 dark:text-gray-300">
+                      Attach each speaker&apos;s speaker kit
+                    </span>
+                    <span className="block text-xs text-gray-500 dark:text-gray-400">
+                      Every recipient gets their own kit zip. Speakers without a
+                      generated kit still receive the email, without an attachment —
+                      so avoid copy that promises one unless every kit is ready.
+                      Sends one message per recipient, so a large list takes longer.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
 
             {/* Subject */}
             <div>
