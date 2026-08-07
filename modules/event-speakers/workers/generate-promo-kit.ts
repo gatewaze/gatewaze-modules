@@ -35,6 +35,7 @@ import { buildPromoKitZip } from '../lib/promo/build-zip.js';
 import { sendConfirmedEmailIfDue } from '../lib/promo/confirmed-email.js';
 import { buildSpeakerDeck } from '../lib/promo/slide-deck.js';
 import { readFile } from 'node:fs/promises';
+import sharp from 'sharp';
 
 interface JobInput {
   data?: { kitId?: string };
@@ -153,26 +154,58 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
   }
   log(`rendered ${cards.length} cards`);
 
-  // Personalized slide deck: the event's plain PPTX template with the
-  // landscape card as the title-slide background and the talk/speaker
-  // pre-filled. Best-effort — a template mismatch skips the deck.
+  // Personalized slide deck (v2): base template PPTX + a TEXTLESS,
+  // footerless landscape render as the undistorted title art, with the
+  // speaker/talk as native editable text boxes in card styling, and
+  // branded white content slides. Best-effort — mismatches skip the deck.
   let deckPath: string | null = null;
   try {
-    const landscape = rendered.find((c) => c.format === 'landscape');
     const deckTemplate =
       source.getFile('templates/speaker-deck-template.pptx') ??
       (await readFile(join(templatesDir, 'speaker-deck-template.pptx')).catch(() => null));
-    if (landscape && deckTemplate) {
-      const speakerLine = [
-        context.speaker.fullName,
-        [context.speaker.jobTitle, context.speaker.company].filter(Boolean).join(', '),
-      ]
-        .filter(Boolean)
-        .join(' \u2014 ');
+    if (deckTemplate) {
+      const [artRender] = await renderSpeakerCards(
+        templateLoader(source, templatesDir),
+        {
+          speaker: { full_name: '', job_title: '', company: '', avatar_data_uri: avatarDataUri },
+          talk: { title: '' },
+          event: { date_short: '', city: '' },
+          brand,
+          hideChrome: true,
+        },
+        [{ format: 'landscape', templateFile: 'speaker-card-landscape.html', exportWidth: 1200, exportHeight: 630 }],
+      );
+
+      // Brand lockup → PNG for the content-slide masthead.
+      let logoPng: Buffer | null = null;
+      let logoAspect: number | null = null;
+      try {
+        let lockupSvg: Buffer | null = null;
+        if (brand.lockup_url?.startsWith('data:image/svg+xml;base64,')) {
+          lockupSvg = Buffer.from(brand.lockup_url.split(',')[1], 'base64');
+        } else {
+          lockupSvg = await readFile(join(templatesDir, 'brand-assets', 'lockup-voice.svg')).catch(() => null);
+        }
+        if (lockupSvg) {
+          const raster = sharp(lockupSvg, { density: 150 }).resize({ height: 200 }).png();
+          logoPng = await raster.toBuffer();
+          const meta = await sharp(logoPng).metadata();
+          if (meta.width && meta.height) logoAspect = meta.width / meta.height;
+        }
+      } catch {
+        logoPng = null;
+      }
+
       const deck = await buildSpeakerDeck(deckTemplate, {
-        titleCardPng: landscape.png,
+        bgArtPng: artRender.png,
+        logoPng,
+        logoAspect,
+        accent: brand.accent,
+        accentBright: brand.accent_bright,
+        name: context.speaker.fullName,
+        jobTitle: context.speaker.jobTitle,
+        company: context.speaker.company,
         talkTitle: context.talk.title,
-        speakerLine,
       });
       if (deck) {
         deckPath = storagePathFor(context.event.id, context.talk.id, 'presentation-template.pptx');

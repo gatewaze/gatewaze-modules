@@ -60,7 +60,10 @@ interface TalkDurationOption {
 
 interface EventSpeakersTabProps {
   eventUuid: string;
-  eventId: string; // The short event ID (e.g., 'kgbw63') used by event_sponsors
+  // NOTE: despite the historical name, the event-detail tab slot passes the
+  // event UUID here (EventDetailPage: eventId: event.id). Query by the right
+  // column for the value's actual shape.
+  eventId: string;
   eventLink: string; // The event registration URL
   eventTitle: string; // The event title
   talkDurationOptions?: TalkDurationOption[] | null;
