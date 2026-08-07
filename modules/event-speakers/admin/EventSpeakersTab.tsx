@@ -1858,7 +1858,14 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Speaker</th>
                     <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Calendar</th>
                     <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Presentation</th>
-                    {linksAvailable === true && <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Tracking Link</th>}
+                    {linksAvailable === true && (
+                      <th
+                        className="text-center px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide"
+                        title="Completed when the speaker copies a post or their tracking link, opens a share image, or downloads the zip from their promo kit in the portal"
+                      >
+                        Promo Kit
+                      </th>
+                    )}
                     <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
                   </tr>
                 </thead>
@@ -1866,7 +1873,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   {sorted.map((speakerGroup) => {
                     const hasCalendar = speakerGroup.talks.some(t => t.calendar_added_at);
                     const hasPresentation = speakerGroup.talks.some(t => t.presentation_url || t.presentation_storage_path);
-                    const hasTrackingLink = speakerGroup.talks.some(t => t.tracking_link_copied_at);
+                    const hasUsedPromoKit = speakerGroup.talks.some(t => t.tracking_link_copied_at);
                     return (
                       <tr key={speakerGroup.speakerId} className="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                         <td className="px-4 py-3">
@@ -1902,7 +1909,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                         </td>
                         {linksAvailable === true && (
                           <td className="px-4 py-3 text-center">
-                            {hasTrackingLink ? (
+                            {hasUsedPromoKit ? (
                               <CheckCircleIcon className="w-5 h-5 text-green-500 mx-auto" />
                             ) : (
                               <XCircleIcon className="w-5 h-5 text-red-400 mx-auto" />
@@ -2117,7 +2124,12 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                             Presentation uploaded
                           </span>
                         </div>
-                        {/* Tracking link task - only show if redirects module is available */}
+                        {/* Promo-kit engagement task. The portal stamps
+                            tracking_link_copied_at on the speaker's FIRST
+                            share action inside their promo kit — copying a
+                            post or the link, opening a card image, or
+                            downloading the zip — so this reads as "used
+                            their promo kit", not just "copied the link". */}
                         {linksAvailable === true && (
                           <div className="flex items-center gap-2">
                             {speakerGroup.talks.some(t => t.tracking_link_copied_at) ? (
@@ -2125,9 +2137,12 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                             ) : (
                               <div className="w-4 h-4 rounded-full border-2 border-gray-300 dark:border-gray-600" />
                             )}
-                            <LinkIcon className="w-4 h-4 text-gray-400" />
-                            <span className={`text-xs ${speakerGroup.talks.some(t => t.tracking_link_copied_at) ? 'text-gray-600 dark:text-gray-300' : 'text-gray-400 dark:text-gray-500'}`}>
-                              Tracking link shared
+                            <PhotoIcon className="w-4 h-4 text-gray-400" />
+                            <span
+                              className={`text-xs ${speakerGroup.talks.some(t => t.tracking_link_copied_at) ? 'text-gray-600 dark:text-gray-300' : 'text-gray-400 dark:text-gray-500'}`}
+                              title="Completed when the speaker copies a post or their tracking link, opens a share image, or downloads the zip from their promo kit in the portal"
+                            >
+                              Promo kit used
                             </span>
                           </div>
                         )}
