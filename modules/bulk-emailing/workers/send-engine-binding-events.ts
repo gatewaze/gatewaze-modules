@@ -79,9 +79,19 @@ export const eventCommsBinding: SendEngineBinding = {
     const subject: string = job.subject_template || 'Message';
     let html: string = job.content_template;
 
+    // Transactional event emails (speaker review lifecycle, registration
+    // confirmations/reminders) are triggered by the recipient's own action and
+    // must be delivered regardless of marketing consent — so they carry NO
+    // unsubscribe footer and are NOT tied to a subscription list. Only bulk/
+    // marketing event sends (post-event, competition, ad-hoc, calendar blasts)
+    // get the footer + list. CAN-SPAM: transactional messages are exempt.
+    const isTransactional = /^speaker_/.test(job.email_type || '')
+      || job.email_type === 'registration'
+      || job.email_type === 'reminder';
+
     // Inject the unsubscribe footer once (the batch body carries the tokens;
     // SendGrid substitutes per recipient) unless the content already has one.
-    if (!/\{\{unsubscribe_url\}\}/.test(html)) {
+    if (!isTransactional && !/\{\{unsubscribe_url\}\}/.test(html)) {
       const footer =
         `<div style="text-align:center;padding:20px;font-size:12px;color:#999;">` +
         `<a href="{{unsubscribe_url}}" style="color:#999;">Unsubscribe</a> &middot; ` +
@@ -89,8 +99,11 @@ export const eventCommsBinding: SendEngineBinding = {
       html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${footer}</body>`) : html + footer;
     }
 
-    // The global "Event Updates" list is the unsubscribe category for event comms.
-    const { data: list } = await deps.supabase.from('lists').select('id').eq('slug', 'event-updates').maybeSingle();
+    // The global "Event Updates" list is the unsubscribe category for bulk event
+    // comms. Transactional sends have no list (no unsubscribe surface at all).
+    const { data: list } = isTransactional
+      ? { data: null }
+      : await deps.supabase.from('lists').select('id').eq('slug', 'event-updates').maybeSingle();
 
     // From: "Name - email@x" or a bare address (matches the edge fn's parse).
     let fromEmail: string = job.from_address || '';

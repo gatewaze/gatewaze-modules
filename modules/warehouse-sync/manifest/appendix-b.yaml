@@ -1,0 +1,82 @@
+# =============================================================================
+# Appendix B — Segment → Snowflake Mapping  (spec §11, §17 Appendix B)
+# Produced in Phase 0 (2026-08-06). This is the REAL mapping, derived from the
+# live code — it supersedes the placeholder join contract in
+# appendix-b.example.yaml, which assumed Segment userId == people.id (it does NOT).
+# =============================================================================
+
+version: 1
+segment_workspace: "Marketing Ops"          # created 2026-07-07; SEGMENT_WRITE_KEY in aaif.production.env:321
+
+# -----------------------------------------------------------------------------
+# BLOCKING FINDING (spec §11 action item) — RESOLVED, and the spec's assumption
+# was WRONG for AAIF.
+#
+# Evidence: packages/portal/app/api/t/route.ts:82-97 (@gatewaze/tracking relay).
+#   • Segment `userId`  = the LFID sub (`user_metadata.lfid_sub`), NOT people.id.
+#     Deliberate: the LF identity space (Auth0 Actions / LFX Unify) keys profiles
+#     on the LFID; sending the app-local Supabase uid would split profiles there.
+#     This is CORRECT and must NOT be "fixed" in the SDK.
+#   • Non-LFID users identify anonymously (anonymousId + email trait only).
+#   • Two identifiers ride as TRAITS on every identify:
+#       - supabase_user_id = auth.users.id   (people.auth_user_id → auth.users(id))
+#       - email
+#   • people.id (the person UUID) is NEVER emitted to Segment.
+#
+# Therefore the warehouse join is NOT `userId = people.id`. Use the structured
+# auth link as the primary key and the LFID as the secondary.
+# -----------------------------------------------------------------------------
+
+join_contract:
+  # PRIMARY — structured, no jsonb, works for all authenticated members.
+  # Segment lands identify traits as columns on its users/identifies tables.
+  primary:
+    segment_column: "supabase_user_id"       # trait → SEGMENT users/identifies column
+    staging_column: "people.auth_user_id"    # real column: people.auth_user_id uuid → auth.users(id)
+    sql: "CAST(seg.supabase_user_id AS STRING) = staging.people.auth_user_id"
+    notes: >
+      auth_user_id is NULL for guests / unauth imports (is_guest, apollo). Those
+      people simply don't join to identified events — expected.
+  # SECONDARY — matches Segment's userId directly (LFID-keyed profiles / LFX Unify).
+  secondary:
+    segment_column: "user_id"                # = lfid_sub
+    staging_column: "people.lfid_sub"        # DERIVED from attributes->>'lfid_sub' (see gap G2)
+    sql: "CAST(seg.user_id AS STRING) = staging.people.lfid_sub"
+    notes: >
+      lfid_sub is stored inside people.attributes (jsonb), which is fully masked
+      (§8.2, PR #68). It MUST be lifted into a dedicated non-PII STAGING column
+      `lfid_sub` (attributes->>'lfid_sub'); relying on the masked jsonb won't work.
+  # email is available on both sides but is PII + email-alias-identity means one
+  # person owns many emails — do NOT use email as the warehouse join key (§8.2).
+  do_not_use: ["email"]
+
+# -----------------------------------------------------------------------------
+# Segment's actual Snowflake location is configured in the Segment DASHBOARD,
+# not in the app repo (aaif.production.env has only SEGMENT_WRITE_KEY, no
+# SNOWFLAKE_* keys). These MUST be read from the Segment "Marketing Ops"
+# destination settings by whoever has access, then filled in here.
+# -----------------------------------------------------------------------------
+segment_snowflake:
+  same_account_as_relational_replica: null   # CONFIRM (open Q2) — same Snowflake account as AAIF.RAW?
+  database: null                             # CONFIRM from Segment dashboard (Segment → Marketing Ops → Snowflake dest)
+  schema: null                               # CONFIRM — Segment source slug (e.g. AAIF_WEB)
+  identity_columns:
+    user_id: USER_ID                         # = lfid_sub (Segment lower-cases traits → USER_ID)
+    anonymous_id: ANONYMOUS_ID               # gw_aid cookie, pre-identify
+    timestamp: TIMESTAMP
+  # Segment materialises identify traits as columns on IDENTIFIES/USERS. Confirm
+  # the exact table + that supabase_user_id landed as a column.
+  trait_columns:
+    supabase_user_id: SUPABASE_USER_ID       # CONFIRM present on IDENTIFIES/USERS
+    email: EMAIL
+  tables:
+    tracks: TRACKS                           # CONFIRM
+    pages: PAGES                             # CONFIRM
+    identifies: IDENTIFIES                   # CONFIRM
+    users: USERS                             # CONFIRM (Segment's deduped user table — best for the join)
+    event_tables: []                         # CONFIRM — per-event tables (LINK_CLICKED, RSVP_SUBMITTED, …)
+
+# Resolution of the tracking-SDK question (open Q9): userId is the LFID sub by
+# design; no SDK change is needed. The change is warehouse-side: expose
+# people.auth_user_id and a derived people.lfid_sub as join keys (gap G2).
+tracking_sdk_userid_is_person_uuid: false

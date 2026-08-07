@@ -21,10 +21,11 @@ import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
 import { runTriageTurn } from '../lib/triage.js';
+import { dispatchTriageTurn } from '../lib/triage-dispatch.js';
 import { redactToken } from '../lib/git.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
-import { computeSpendOverview } from '../lib/cost.js';
+import { computeSpendOverview, computeModelUsage } from '../lib/cost.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -416,6 +417,20 @@ export function mountAdminRoutes(router, deps) {
       return res.status(500).json({ error: 'overview failed' });
     }
     res.json({ ...(data ?? {}), ...(spend ? { spend } : {}) });
+  });
+
+  // Per-model spend, SUBAGENT-inclusive (from se_phases.model_usage via the se_model_usage RPC) — the
+  // flat token columns miss the subagent sessions a phase fans out. ?project scopes it; ?days windows
+  // it (default 7, clamped 1..365). Separate from /overview so the tab can lazy-load it on demand.
+  router.get('/overview/model-usage', async (req, res) => {
+    let project: string | null = null;
+    if (req.query.project !== undefined && req.query.project !== '') {
+      project = String(req.query.project);
+      if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
+    }
+    const days = Math.min(365, Math.max(1, Math.floor(Number(req.query.days)) || 7));
+    const models = await computeModelUsage(supabase, project, days);
+    res.json({ days, models });
   });
 
   // ── Overview PR board — every open PR AUTHORED by each project's PAT user ─────────────────
@@ -1254,10 +1269,22 @@ export function mountAdminRoutes(router, deps) {
           feature: typeof req.body.page_context.feature === 'string' ? req.body.page_context.feature : undefined }
       : null;
     try {
-      const result = await Promise.race([
-        runTriageTurn(proj, req.body?.messages, pageContext),
-        new Promise((resolve) => setTimeout(() => resolve({ type: 'error', message: 'triage timed out' }), 90_000)),
-      ]);
+      // Structural fix: the model turn runs in a WORKER via the se-triage queue (job result awaited),
+      // not in the API pod — prod's api memory limits OOMKilled the in-process CLI spawn.
+      // SE_TRIAGE_INLINE=1 restores the in-process path (dev escape hatch without a consumer).
+      const result = process.env.SE_TRIAGE_INLINE === '1'
+        ? await Promise.race([
+            runTriageTurn(proj, req.body?.messages, pageContext),
+            new Promise((resolve) => setTimeout(() => resolve({ type: 'error', message: 'triage timed out' }), 90_000)),
+          ])
+        : await dispatchTriageTurn(
+            { projectId, messages: req.body?.messages, pageContext },
+          ).catch((e) => ({
+            type: 'error',
+            message: /timed out|Timeout/i.test(String(e?.message))
+              ? 'triage timed out — is a triage consumer (se-runner) running?'
+              : 'triage failed',
+          }));
       res.json(result);
     } catch (e) {
       logger?.warn?.('se: triage failed', { error: redactToken(String(e?.message ?? e), proj.modelCred).slice(0, 300) });
