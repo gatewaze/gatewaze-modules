@@ -60,6 +60,20 @@ const eventSpeakersModule: GatewazeModule = {
     // gatewaze/lf-agents (skipped when the ai module is absent — kits then
     // ship cards + link without text).
     'migrations/014_seed_promo_posts_use_case.sql',
+    // 015 admin surfacing: active admins read/update kits (Speakers-tab
+    // modal + Regenerate) and manage speaker_promo_event_config, the
+    // per-event template-repo/brand mapping override.
+    'migrations/015_promo_kit_admin_access.sql',
+    // 016 storage INSERT policy for media/talks/* — presentation uploads
+    // from the speaker checklist failed RLS on fresh installs (only
+    // speaker-submissions/ was covered by 009).
+    'migrations/016_talk_presentation_uploads.sql',
+    // 017 confirmed_email_sent_at — the speaker-confirmed email sends from
+    // the promo-kit worker post-build (zip attached), idempotently.
+    'migrations/017_promo_kit_confirmed_email.sql',
+    // 018 deck_storage_path — personalized PPTX talk template (branded
+    // title slide from the landscape card, talk/speaker pre-filled).
+    'migrations/018_promo_kit_slide_deck.sql',
   ],
 
   workers: [
@@ -89,6 +103,9 @@ const eventSpeakersModule: GatewazeModule = {
   ],
 
   edgeFunctions: [
+    // Add-to-calendar links for the speaker checklist (google/outlook/ics),
+    // ported from legacy gatewaze-admin — the portal was 404ing without it.
+    'calendar',
     'events-speaker-confirm',
     'events-speaker-submission',
     'events-speaker-submissions',

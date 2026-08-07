@@ -32,6 +32,10 @@ import {
 import { loadTemplateSource, templateLoader, resolveBrandVars } from '../lib/promo/template-source.js';
 import { buildRecipeParams, dispatchPromoTextRun, readPromoTextRun } from '../lib/promo/promo-text.js';
 import { buildPromoKitZip } from '../lib/promo/build-zip.js';
+import { sendConfirmedEmailIfDue } from '../lib/promo/confirmed-email.js';
+import { buildSpeakerDeck } from '../lib/promo/slide-deck.js';
+import { readFile } from 'node:fs/promises';
+import sharp from 'sharp';
 
 interface JobInput {
   data?: { kitId?: string };
@@ -111,12 +115,18 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
   });
   log(`tracking link ${link.shortUrl}`);
 
-  // 2. Cards: resolve the template source (git repo when configured, else
-  // vendored) + the event's brand colorway, render all formats, upload.
+  // 2. Cards: resolve the template source (per-event repo override →
+  // module-configured repo → vendored) + the event's brand colorway
+  // (per-event brand_key override → mapping rules), render, upload.
   const moduleDir = ctx?.moduleDir ?? join(dirname(fileURLToPath(import.meta.url)), '..');
   const templatesDir = join(moduleDir, 'templates');
-  const source = await loadTemplateSource(templatesDir);
-  const brand = resolveBrandVars(source, context.event);
+  const { data: eventConfig } = await supabase
+    .from('speaker_promo_event_config')
+    .select('template_repo, brand_key')
+    .eq('event_uuid', context.event.id)
+    .maybeSingle();
+  const source = await loadTemplateSource(templatesDir, eventConfig?.template_repo);
+  const brand = resolveBrandVars(source, context.event, eventConfig?.brand_key);
   log(`templates: ${source.origin}${source.ref ? ` (${source.ref})` : ''}${Object.keys(brand).length ? ', branded' : ', default colorway'}`);
   const avatarDataUri = await resolveAvatarDataUri(supabase, context.speaker.avatarUrl);
   const rendered = await renderSpeakerCards(templateLoader(source, templatesDir), {
@@ -138,15 +148,90 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
     const path = storagePathFor(context.event.id, context.talk.id, `card-${card.format}.png`);
     const { error: upErr } = await supabase.storage
       .from(BUCKET)
-      .upload(path, card.png, { contentType: 'image/png', cacheControl: '3600', upsert: true });
+      .upload(path, card.png, { contentType: 'image/png', cacheControl: '0', upsert: true });
     if (upErr) throw new Error(`card upload failed (${card.format}): ${upErr.message}`);
     cards.push({ format: card.format, storage_path: path, width: card.width, height: card.height });
   }
   log(`rendered ${cards.length} cards`);
 
+  // Personalized slide deck (v2): base template PPTX + a TEXTLESS,
+  // footerless landscape render as the undistorted title art, with the
+  // speaker/talk as native editable text boxes in card styling, and
+  // branded white content slides. Best-effort — mismatches skip the deck.
+  let deckPath: string | null = null;
+  try {
+    const deckTemplate =
+      source.getFile('templates/speaker-deck-template.pptx') ??
+      (await readFile(join(templatesDir, 'speaker-deck-template.pptx')).catch(() => null));
+    if (deckTemplate) {
+      const [artRender] = await renderSpeakerCards(
+        templateLoader(source, templatesDir),
+        {
+          speaker: { full_name: '', job_title: '', company: '', avatar_data_uri: avatarDataUri },
+          talk: { title: '' },
+          event: { date_short: '', city: '' },
+          brand,
+          hideChrome: true,
+        },
+        [{ format: 'landscape', templateFile: 'speaker-card-landscape.html', exportWidth: 1200, exportHeight: 630 }],
+      );
+
+      // Brand lockup → PNG for the content-slide masthead.
+      let logoPng: Buffer | null = null;
+      let logoAspect: number | null = null;
+      try {
+        let lockupSvg: Buffer | null = null;
+        if (brand.lockup_url?.startsWith('data:image/svg+xml;base64,')) {
+          lockupSvg = Buffer.from(brand.lockup_url.split(',')[1], 'base64');
+        } else {
+          lockupSvg = await readFile(join(templatesDir, 'brand-assets', 'lockup-voice.svg')).catch(() => null);
+        }
+        if (lockupSvg) {
+          const raster = sharp(lockupSvg, { density: 150 }).resize({ height: 200 }).png();
+          logoPng = await raster.toBuffer();
+          const meta = await sharp(logoPng).metadata();
+          if (meta.width && meta.height) logoAspect = meta.width / meta.height;
+        }
+      } catch {
+        logoPng = null;
+      }
+
+      const deck = await buildSpeakerDeck(deckTemplate, {
+        bgArtPng: artRender.png,
+        logoPng,
+        logoAspect,
+        accent: brand.accent,
+        accentBright: brand.accent_bright,
+        name: context.speaker.fullName,
+        jobTitle: context.speaker.jobTitle,
+        company: context.speaker.company,
+        talkTitle: context.talk.title,
+      });
+      if (deck) {
+        deckPath = storagePathFor(context.event.id, context.talk.id, 'presentation-template.pptx');
+        const { error: deckErr } = await supabase.storage.from(BUCKET).upload(deckPath, deck, {
+          contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          cacheControl: '0',
+          upsert: true,
+        });
+        if (deckErr) {
+          log(`deck upload failed: ${deckErr.message}`);
+          deckPath = null;
+        } else {
+          log('personalized slide deck built');
+        }
+      } else {
+        log('deck template mismatch — skipping personalized deck');
+      }
+    }
+  } catch (err) {
+    log(`deck generation failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+  }
+
   // 3. Promo text: dispatch the recipe run (graceful when ai is absent).
   const dispatch = await dispatchPromoTextRun(supabase, buildRecipeParams(context, link.shortUrl));
   const patch = {
+    deck_storage_path: deckPath,
     tracking_slug: link.slug,
     tracking_short_url: link.shortUrl,
     tracking_destination_url: link.destinationUrl,
@@ -222,17 +307,24 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
     cardsWithBytes.push({ ...card, png: Buffer.from(await data.arrayBuffer()) });
   }
 
+  let deckBuffer: Buffer | null = null;
+  if (kit.deck_storage_path) {
+    const { data: deckData } = await supabase.storage.from(BUCKET).download(kit.deck_storage_path);
+    if (deckData) deckBuffer = Buffer.from(await deckData.arrayBuffer());
+  }
+
   const zipBuffer = await buildPromoKitZip({
     speakerName: context.speaker.fullName,
     eventTitle: context.event.event_title,
     trackingUrl: kit.tracking_short_url,
     promoText: kit.promo_text_status === 'ready' ? kit.promo_text : null,
     cards: cardsWithBytes,
+    deck: deckBuffer,
   });
   const zipPath = storagePathFor(context.event.id, context.talk.id, 'promo-kit.zip');
   const { error: zipErr } = await supabase.storage
     .from(BUCKET)
-    .upload(zipPath, zipBuffer, { contentType: 'application/zip', cacheControl: '3600', upsert: true });
+    .upload(zipPath, zipBuffer, { contentType: 'application/zip', cacheControl: '0', upsert: true });
   if (zipErr) throw new Error(`zip upload failed: ${zipErr.message}`);
 
   await supabase
@@ -245,4 +337,16 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
     })
     .eq('id', kit.id);
   log('kit ready');
+
+  // Speaker-confirmed email rides on kit completion so the zip can be
+  // attached (the admin-side send at confirm time predates the kit).
+  // Idempotent via confirmed_email_sent_at; failures never fail the kit.
+  await sendConfirmedEmailIfDue(
+    supabase,
+    kit,
+    context,
+    context.speaker.email,
+    { buffer: zipBuffer, filename: 'promo-kit.zip' },
+    log,
+  );
 }
