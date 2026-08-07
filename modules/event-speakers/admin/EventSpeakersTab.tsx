@@ -25,6 +25,7 @@ import {
   CalendarDaysIcon,
   DocumentTextIcon,
   EnvelopeIcon,
+  Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid, CheckCircleIcon, XCircleIcon, ClipboardDocumentListIcon, UserGroupIcon } from '@heroicons/react/24/solid';
 import { Button, Card, Input, Modal, ConfirmModal } from '@/components/ui';
@@ -39,6 +40,7 @@ import { EventQrService, EventSponsor } from '@/utils/eventQrService';
 import { SpeakerLinkService, SpeakerTrackingLink } from './utils/speakerLinkService';
 import { supabase, supabaseUrl } from '@/lib/supabase';
 import { SendSpeakerEmailModal } from '../../bulk-emailing/admin/components/SendSpeakerEmailModal';
+import { PromoKitModal, PromoKitSettingsModal, kitStatusBadge, type PromoKitRow } from './components/PromoKitModal';
 
 /** Resolve a speaker avatar_url to a full public URL.
  *  The view may return a storage path (e.g. 'people/uuid.jpg') or a full URL. */
@@ -139,6 +141,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   // Talk-centric state: each talk submission is managed independently
   const [approvedTalks, setApprovedTalks] = useState<EventTalkWithSpeakers[]>([]);
   const [confirmedTalks, setConfirmedTalks] = useState<EventTalkWithSpeakers[]>([]);
+  // Speaker promo kits (by talk id) + modal state
+  const [promoKits, setPromoKits] = useState<Record<string, PromoKitRow>>({});
+  const [promoKitTalk, setPromoKitTalk] = useState<EventTalkWithSpeakers | null>(null);
+  const [showPromoKitSettings, setShowPromoKitSettings] = useState(false);
   const [pendingTalks, setPendingTalks] = useState<EventTalkWithSpeakers[]>([]);
   const [reserveTalks, setReserveTalks] = useState<EventTalkWithSpeakers[]>([]);
   const [rejectedTalks, setRejectedTalks] = useState<EventTalkWithSpeakers[]>([]);
@@ -229,7 +235,27 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
   useEffect(() => {
     loadTalks();
     loadEventSponsors();
+    loadPromoKits();
   }, [eventUuid]);
+
+  // Speaker promo kits for this event, keyed by talk id (admin-read RLS,
+  // migration 015). Missing table / no access degrades to an empty map.
+  const loadPromoKits = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('speaker_promo_kits')
+        .select(
+          'id, talk_id, status, promo_text_status, promo_text, promo_text_error, tracking_short_url, cards, zip_storage_path, template_version, generated_at, error',
+        )
+        .eq('event_uuid', eventUuid);
+      if (error) return;
+      const byTalk: Record<string, PromoKitRow> = {};
+      for (const kit of (data ?? []) as PromoKitRow[]) byTalk[kit.talk_id] = kit;
+      setPromoKits(byTalk);
+    } catch {
+      /* promo kits are optional surfacing — never block the tab */
+    }
+  };
 
   const loadTalks = async () => {
     try {
@@ -1330,6 +1356,19 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                 {viewMode === 'confirmed' && (
                   <>
                     <button
+                      onClick={() => setPromoKitTalk(talk)}
+                      className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
+                      title="View this speaker's promo kit (share images, post text, tracking link)"
+                    >
+                      <PhotoIcon className="w-4 h-4 sm:mr-1" />
+                      <span className="hidden sm:inline">Promo kit</span>
+                      <span
+                        className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] leading-none ${kitStatusBadge(promoKits[talk.id]).className}`}
+                      >
+                        {kitStatusBadge(promoKits[talk.id]).label}
+                      </span>
+                    </button>
+                    <button
                       onClick={() => handleReserveTalk(talk)}
                       className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-colors"
                       title="Move to reserve list"
@@ -1662,6 +1701,10 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => setShowPromoKitSettings(true)}>
+            <Cog6ToothIcon className="w-4 h-4 mr-1" />
+            Promo Kits
+          </Button>
           <Button variant="secondary" size="sm" onClick={handleDownloadSpeakerPhotos} disabled={downloadingPhotos}>
             <PhotoIcon className="w-4 h-4 mr-1" />
             {downloadingPhotos ? 'Downloading...' : 'Download Photos'}
@@ -3464,6 +3507,24 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
           eventTitle={eventTitle}
         />
       )}
+
+      {/* Speaker Promo Kit Modal */}
+      {promoKitTalk && (
+        <PromoKitModal
+          isOpen={!!promoKitTalk}
+          onClose={() => setPromoKitTalk(null)}
+          kit={promoKits[promoKitTalk.id] ?? null}
+          speakerName={getPrimarySpeaker(promoKitTalk)?.full_name || promoKitTalk.title}
+          onKitChanged={loadPromoKits}
+        />
+      )}
+
+      {/* Promo Kit Settings (per-event template repo / brand mapping) */}
+      <PromoKitSettingsModal
+        isOpen={showPromoKitSettings}
+        onClose={() => setShowPromoKitSettings(false)}
+        eventUuid={eventUuid}
+      />
     </div>
   );
 }

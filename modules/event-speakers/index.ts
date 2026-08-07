@@ -60,6 +60,10 @@ const eventSpeakersModule: GatewazeModule = {
     // gatewaze/lf-agents (skipped when the ai module is absent — kits then
     // ship cards + link without text).
     'migrations/014_seed_promo_posts_use_case.sql',
+    // 015 admin surfacing: active admins read/update kits (Speakers-tab
+    // modal + Regenerate) and manage speaker_promo_event_config, the
+    // per-event template-repo/brand mapping override.
+    'migrations/015_promo_kit_admin_access.sql',
   ],
 
   workers: [

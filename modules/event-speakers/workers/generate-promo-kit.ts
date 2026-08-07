@@ -111,12 +111,18 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
   });
   log(`tracking link ${link.shortUrl}`);
 
-  // 2. Cards: resolve the template source (git repo when configured, else
-  // vendored) + the event's brand colorway, render all formats, upload.
+  // 2. Cards: resolve the template source (per-event repo override →
+  // module-configured repo → vendored) + the event's brand colorway
+  // (per-event brand_key override → mapping rules), render, upload.
   const moduleDir = ctx?.moduleDir ?? join(dirname(fileURLToPath(import.meta.url)), '..');
   const templatesDir = join(moduleDir, 'templates');
-  const source = await loadTemplateSource(templatesDir);
-  const brand = resolveBrandVars(source, context.event);
+  const { data: eventConfig } = await supabase
+    .from('speaker_promo_event_config')
+    .select('template_repo, brand_key')
+    .eq('event_uuid', context.event.id)
+    .maybeSingle();
+  const source = await loadTemplateSource(templatesDir, eventConfig?.template_repo);
+  const brand = resolveBrandVars(source, context.event, eventConfig?.brand_key);
   log(`templates: ${source.origin}${source.ref ? ` (${source.ref})` : ''}${Object.keys(brand).length ? ', branded' : ', default colorway'}`);
   const avatarDataUri = await resolveAvatarDataUri(supabase, context.speaker.avatarUrl);
   const rendered = await renderSpeakerCards(templateLoader(source, templatesDir), {
