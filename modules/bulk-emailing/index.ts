@@ -32,7 +32,9 @@ const bulkEmailingModule: GatewazeModule = {
       component: () => import('./admin/components/EventRepliesTab'),
       order: 131,
       requiredFeature: 'bulk-emailing',
-      meta: { tabId: 'replies', label: 'Replies', icon: 'InboxIcon' },
+      // ChatBubbleLeftRightIcon matches the newsletter Replies tab, so the
+      // same concept looks the same wherever it appears.
+      meta: { tabId: 'replies', label: 'Replies', icon: 'ChatBubbleLeftRightIcon' },
     },
   ],
 
