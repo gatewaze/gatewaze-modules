@@ -109,13 +109,21 @@ export async function sendConfirmedEmailIfDue(
       .maybeSingle<CommsSettings>();
 
     if (!settings?.speaker_confirmed_email_enabled) return { sent: false, reason: 'disabled' };
-    // Template-by-id rendering lives in the admin; the worker supports the
-    // inline (Start-from-scratch) form the Comms tab saves.
-    const subjectTpl = settings.speaker_confirmed_email_subject;
-    const contentTpl = settings.speaker_confirmed_email_content;
-    if (!subjectTpl || !contentTpl) {
-      return { sent: false, reason: settings.speaker_confirmed_email_template_id ? 'template_id_unsupported_in_worker' : 'no_inline_content' };
+    // Prefer the inline copy the Comms tab saves (it mirrors the selected
+    // template); fall back to the email_templates row when only a
+    // template_id is stored.
+    let subjectTpl = settings.speaker_confirmed_email_subject;
+    let contentTpl = settings.speaker_confirmed_email_content;
+    if ((!subjectTpl || !contentTpl) && settings.speaker_confirmed_email_template_id) {
+      const { data: tpl } = await supabase
+        .from('email_templates')
+        .select('subject, content_html')
+        .eq('id', settings.speaker_confirmed_email_template_id)
+        .maybeSingle();
+      subjectTpl = subjectTpl || tpl?.subject || null;
+      contentTpl = contentTpl || tpl?.content_html || null;
     }
+    if (!subjectTpl || !contentTpl) return { sent: false, reason: 'no_email_content' };
 
     const portalBase = (process.env.PORTAL_URL ?? '').trim().replace(/\/+$/, '');
     const editPath = context.talk.edit_token
