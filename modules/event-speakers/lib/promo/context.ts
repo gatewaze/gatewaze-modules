@@ -16,7 +16,7 @@ export async function loadPromoKitContext(supabase, talkId: string): Promise<Pro
     .eq('id', talkId)
     .maybeSingle();
   if (talkError || !talk) throw new Error(`talk not found: ${talkId}`);
-  if (!talk.event_uuid) throw new Error('talk has no event (calendar/platform-scope talks have no promo kit)');
+  if (!talk.event_uuid) throw new Error('talk has no event (calendar/platform-scope talks have no speaker kit)');
 
   const { data: event, error: eventError } = await supabase
     .from('events')

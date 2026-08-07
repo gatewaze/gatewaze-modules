@@ -1,7 +1,7 @@
 // @ts-nocheck — supabase-js + sibling libs resolved at module-host install time.
 
 /**
- * event-speakers:generate-promo-kit — build one confirmed speaker's promo kit.
+ * event-speakers:generate-promo-kit — build one confirmed speaker's speaker kit.
  *
  * Two-phase state machine driven by the promo-kit-sweep cron (the runtime
  * invokes handlers without an enqueue helper and WORKER_CONCURRENCY defaults
@@ -346,7 +346,9 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
     kit,
     context,
     context.speaker.email,
-    { buffer: zipBuffer, filename: 'promo-kit.zip' },
+    // Attachment filename only — the storage key stays promo-kit.zip so
+    // existing kits keep resolving.
+    { buffer: zipBuffer, filename: 'speaker-kit.zip' },
     log,
   );
 }

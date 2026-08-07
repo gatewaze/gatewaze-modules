@@ -1,7 +1,7 @@
 // @ts-nocheck — supabase-js + bullmq resolved at module-host install time.
 
 /**
- * event-speakers:promo-kit-sweep — cron heartbeat for speaker promo kits.
+ * event-speakers:promo-kit-sweep — cron heartbeat for speaker speaker kits.
  *
  * Each tick:
  *   1. DISCOVER  — every confirmed talk of an upcoming event gets a

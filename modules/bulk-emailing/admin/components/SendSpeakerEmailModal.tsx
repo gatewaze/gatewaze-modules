@@ -46,7 +46,7 @@ export function SendSpeakerEmailModal({
   const [isSending, setIsSending] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
-  // Promo kit attachment: the speaker's own generated zip, resolved fresh when
+  // Speaker kit attachment: the speaker's own generated zip, resolved fresh when
   // the modal opens so a regenerated kit is what actually goes out.
   const [kitZipPath, setKitZipPath] = useState<string | null>(null);
   const [kitGeneratedAt, setKitGeneratedAt] = useState<string | null>(null);
@@ -153,7 +153,7 @@ export function SendSpeakerEmailModal({
     SpeakerEmailService.getEventDetails(eventId).then(setEventDetails);
   }, [isOpen, eventId]);
 
-  // Look up this talk's ready promo kit each time the modal opens, so
+  // Look up this talk's ready speaker kit each time the modal opens, so
   // "attach the kit" always offers the latest generated artifacts.
   useEffect(() => {
     if (!isOpen || !talk?.id) { setKitZipPath(null); setKitGeneratedAt(null); setAttachKit(false); return; }
@@ -257,7 +257,7 @@ export function SendSpeakerEmailModal({
       if (attachKit && kitZipPath) {
         const { data: file, error: dlError } = await supabase.storage.from('media').download(kitZipPath);
         if (dlError || !file) {
-          toast.error('Could not read the promo kit — send cancelled so the email does not promise a missing attachment');
+          toast.error('Could not read the speaker kit — send cancelled so the email does not promise a missing attachment');
           setIsSending(false);
           return;
         }
@@ -265,7 +265,7 @@ export function SendSpeakerEmailModal({
         let binary = '';
         for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]);
         attachments = [{
-          filename: 'promo-kit.zip',
+          filename: 'speaker-kit.zip',
           content: btoa(binary),
           type: 'application/zip',
           disposition: 'attachment' as const,
@@ -459,7 +459,7 @@ export function SendSpeakerEmailModal({
             )}
           </div>
 
-          {/* Promo kit attachment — only offered when this speaker has a
+          {/* Speaker kit attachment — only offered when this speaker has a
               generated kit; otherwise we'd promise a file we can't send. */}
           <div className="rounded-md border border-gray-200 dark:border-gray-700 px-3 py-2.5">
             <label className={`flex items-start gap-2.5 ${kitZipPath ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
@@ -472,12 +472,12 @@ export function SendSpeakerEmailModal({
               />
               <span className="text-sm">
                 <span className="font-medium text-gray-700 dark:text-gray-300">
-                  Attach their promo kit
+                  Attach their speaker kit
                 </span>
                 <span className="block text-xs text-gray-500 dark:text-gray-400">
                   {kitZipPath
                     ? `Latest kit${kitGeneratedAt ? ` — generated ${new Date(kitGeneratedAt).toLocaleString()}` : ''} (images, post text, tracking link, slide deck)`
-                    : 'No generated kit for this speaker yet — regenerate it from the Promo kit button first.'}
+                    : 'No generated kit for this speaker yet — regenerate it from the Speaker kit button first.'}
                 </span>
               </span>
             </label>

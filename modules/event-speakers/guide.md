@@ -44,10 +44,10 @@ This module has no configurable settings.
 | `events` | Yes |
 | `event-sponsors` | Yes |
 
-## Speaker promo kits (v2.1)
+## Speaker speaker kits (v2.1)
 
 Once a talk is **confirmed**, the module automatically generates a per-speaker
-**promo kit** the speaker can use to promote the event:
+**speaker kit** the speaker can use to promote the event:
 
 - **Tracking link** — an umami redirect link (`https://<portal-host>/go/<event>-<speaker-name>`)
   pointing at the event's registration page with the legacy attribution UTMs

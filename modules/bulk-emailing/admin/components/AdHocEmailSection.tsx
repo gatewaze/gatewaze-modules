@@ -192,7 +192,7 @@ export function AdHocEmailSection({
 
   // Audience selection state — default to 'audience' if speakers module not installed
   const [audienceType, setAudienceType] = useState<AudienceType>(hasSpeakers ? 'speakers' : 'audience');
-  // Attach each speaker's own generated promo kit. Speakers-only: the engine
+  // Attach each speaker's own generated speaker kit. Speakers-only: the engine
   // sends one message per recipient when set, which is fine for a speaker list
   // and wrong for a large audience blast.
   const [attachPromoKits, setAttachPromoKits] = useState(false);
@@ -1005,7 +1005,7 @@ export function AdHocEmailSection({
               </select>
             </div>
 
-            {/* Attach each speaker's own promo kit (speakers audience only) */}
+            {/* Attach each speaker's own speaker kit (speakers audience only) */}
             {audienceType === 'speakers' && (
               <div className="rounded-md border border-gray-200 dark:border-gray-700 px-3 py-2.5">
                 <label className="flex items-start gap-2.5 cursor-pointer">
@@ -1017,7 +1017,7 @@ export function AdHocEmailSection({
                   />
                   <span className="text-sm">
                     <span className="font-medium text-gray-700 dark:text-gray-300">
-                      Attach each speaker&apos;s promo kit
+                      Attach each speaker&apos;s speaker kit
                     </span>
                     <span className="block text-xs text-gray-500 dark:text-gray-400">
                       Every recipient gets their own kit zip. Speakers without a
