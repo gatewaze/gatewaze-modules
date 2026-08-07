@@ -1,0 +1,281 @@
+// @ts-nocheck — supabase-js resolved at module-host install time.
+
+/**
+ * Speaker-confirmed email, sent by the promo-kit worker at kit-finalize time
+ * so the kit zip rides along as an attachment (the kit doesn't exist yet at
+ * the moment an admin clicks Confirm — the old client-side send could never
+ * attach it).
+ *
+ * Template source is the same events_communication_settings row the admin
+ * Comms UI edits (speaker_confirmed_email_*). Rendering implements the
+ * admin templateVariables grammar subset these templates use:
+ * {{scope.field}} dotted lookups with an optional `| default:"..."` filter
+ * (unknown filters are ignored rather than erroring). The context mirrors
+ * SpeakerEmailService.buildSpeakerContext, plus:
+ *   {{speaker.portal_link}} — ABSOLUTE link to the speaker's checklist page
+ *   (edit_link stays portal-relative for parity with the admin sender).
+ *
+ * Delivery goes through the platform's email-send edge function (service
+ * role), which forwards attachments to SendGrid as base64.
+ */
+
+interface CommsSettings {
+  speaker_confirmed_email_enabled: boolean;
+  speaker_confirmed_email_from_key: string | null;
+  speaker_confirmed_email_reply_to: string | null;
+  speaker_confirmed_email_cc: string | null;
+  speaker_confirmed_email_subject: string | null;
+  speaker_confirmed_email_content: string | null;
+  speaker_confirmed_email_template_id: string | null;
+}
+
+/** {{scope.field}} + `| default:"…"` rendering (subset of the admin grammar). */
+export function renderTemplate(template: string, context: Record<string, Record<string, string | undefined>>): string {
+  return template.replace(/\{\{\s*(\w+)\.(\w+)((?:\s*\|[^}]*)?)\s*\}\}/g, (raw, scope, field, filterPart) => {
+    let value = context?.[scope]?.[field];
+    const defaultMatch = /\|\s*default:\s*"([^"]*)"/.exec(filterPart ?? '');
+    if ((value === undefined || value === null || value === '') && defaultMatch) value = defaultMatch[1];
+    return value ?? '';
+  });
+}
+
+// Obfuscated recipient id for the `calendar` edge function, byte-identical to
+// the bulk sender's encodeEmail (XOR 'HideMe' + base64url). The function
+// authorises the caller from this, so it must match exactly.
+function encodeEmail(email: string): string {
+  if (!email) return '';
+  const passphrase = 'HideMe';
+  const lower = email.toLowerCase();
+  const bytes: number[] = [];
+  for (let i = 0; i < lower.length; i++) {
+    bytes.push(lower.charCodeAt(i) ^ passphrase.charCodeAt(i % passphrase.length));
+  }
+  return Buffer.from(String.fromCharCode(...bytes), 'latin1')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
+
+function formatEmailDate(iso: string | null | undefined): string | undefined {
+  if (!iso) return undefined;
+  try {
+    return new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(
+      new Date(iso),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function fromAddressFor(fromKey: string | null): { email: string; name?: string } | null {
+  const key = (fromKey || 'events').toUpperCase();
+  const raw =
+    process.env[`VITE_SENDGRID_FROM_${key}`] ||
+    process.env.VITE_SENDGRID_FROM_EVENTS ||
+    process.env.VITE_SENDGRID_FROM_DEFAULT ||
+    process.env.EMAIL_FROM ||
+    '';
+  if (!raw) return null;
+  // "Name - email@x" / "Name <email@x>" / bare address
+  const angled = raw.match(/^(.*?)\s*<([^>]+)>$/);
+  if (angled) return { email: angled[2].trim(), name: angled[1].trim() || undefined };
+  const dashed = raw.match(/^(.*?)\s+-\s+(\S+@\S+)$/);
+  if (dashed) return { email: dashed[2].trim(), name: dashed[1].trim() || undefined };
+  return { email: raw.trim(), name: process.env.EMAIL_FROM_NAME || undefined };
+}
+
+export interface ConfirmedEmailResult {
+  sent: boolean;
+  reason?: string;
+}
+
+/**
+ * Send the confirmed email for a kit if due: enabled in comms settings,
+ * content present, not already sent, AND the kit zip built.
+ *
+ * The zip is required, not optional: the email copy tells the speaker their
+ * speaker kit is attached, so sending without it delivers a broken promise.
+ * Callers must finish building the zip first — which is exactly why this
+ * send lives at kit-finalize time rather than at the moment an admin clicks
+ * Confirm (the kit doesn't exist yet at that point).
+ *
+ * Never throws — kit finalization must not fail on email issues.
+ */
+export async function sendConfirmedEmailIfDue(
+  supabase,
+  kit: { id: string; confirmed_email_sent_at?: string | null },
+  context: {
+    talk: { title: string; synopsis: string | null; edit_token: string | null };
+    event: {
+      id: string;
+      event_id: string;
+      event_title: string;
+      event_city: string | null;
+      event_start: string;
+      event_end?: string | null;
+    };
+    speaker: { fullName: string; jobTitle: string | null; company: string | null };
+  },
+  speakerEmail: string | null,
+  // Required in practice — see the note above. Typed nullable only so the
+  // caller can pass a failed/absent build through and get a held result
+  // rather than having to branch itself.
+  zip: { buffer: Buffer; filename: string } | null,
+  log: (m: string) => void,
+): Promise<ConfirmedEmailResult> {
+  try {
+    if (kit.confirmed_email_sent_at) return { sent: false, reason: 'already_sent' };
+    if (!speakerEmail) return { sent: false, reason: 'no_speaker_email' };
+    // Never announce an attachment we aren't carrying. Leaving
+    // confirmed_email_sent_at unset means a later kit run still sends it.
+    if (!zip) {
+      log('confirmed email held: promo-kit zip not generated yet');
+      return { sent: false, reason: 'zip_not_ready' };
+    }
+
+    const { data: settings } = await supabase
+      .from('events_communication_settings')
+      .select(
+        'speaker_confirmed_email_enabled, speaker_confirmed_email_from_key, speaker_confirmed_email_reply_to, speaker_confirmed_email_cc, speaker_confirmed_email_subject, speaker_confirmed_email_content, speaker_confirmed_email_template_id',
+      )
+      .eq('event_id', context.event.id)
+      .maybeSingle<CommsSettings>();
+
+    if (!settings?.speaker_confirmed_email_enabled) return { sent: false, reason: 'disabled' };
+    // Prefer the inline copy the Comms tab saves (it mirrors the selected
+    // template); fall back to the email_templates row when only a
+    // template_id is stored.
+    let subjectTpl = settings.speaker_confirmed_email_subject;
+    let contentTpl = settings.speaker_confirmed_email_content;
+    if ((!subjectTpl || !contentTpl) && settings.speaker_confirmed_email_template_id) {
+      const { data: tpl } = await supabase
+        .from('email_templates')
+        .select('subject, content_html')
+        .eq('id', settings.speaker_confirmed_email_template_id)
+        .maybeSingle();
+      subjectTpl = subjectTpl || tpl?.subject || null;
+      contentTpl = contentTpl || tpl?.content_html || null;
+    }
+    if (!subjectTpl || !contentTpl) return { sent: false, reason: 'no_email_content' };
+
+    const portalBase = (process.env.PORTAL_URL ?? '').trim().replace(/\/+$/, '');
+    const editPath = context.talk.edit_token
+      ? `/events/${context.event.event_id}/talks/success/${context.talk.edit_token}`
+      : '';
+    const nameParts = context.speaker.fullName.trim().split(/\s+/);
+    const supabaseBase = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
+    const calendarBase = `${supabaseBase}/functions/v1/calendar/${context.event.event_id}`;
+    const encodedEmail = encodeEmail(speakerEmail);
+    const templateContext = {
+      customer: {
+        first_name: nameParts[0] ?? '',
+        last_name: nameParts.slice(1).join(' '),
+        full_name: context.speaker.fullName,
+        email: speakerEmail,
+      },
+      speaker: {
+        first_name: nameParts[0] ?? '',
+        last_name: nameParts.slice(1).join(' '),
+        full_name: context.speaker.fullName,
+        email: speakerEmail,
+        talk_title: context.talk.title,
+        talk_synopsis: context.talk.synopsis ?? '',
+        company: context.speaker.company ?? '',
+        job_title: context.speaker.jobTitle ?? '',
+        edit_link: editPath,
+        portal_link: portalBase && editPath ? `${portalBase}${editPath}` : editPath,
+      },
+      event: {
+        name: context.event.event_title,
+        id: context.event.event_id,
+        city: context.event.event_city ?? '',
+        start_date: formatEmailDate(context.event.event_start) ?? '',
+        end_date: formatEmailDate(context.event.event_end) ?? '',
+      },
+      // Same token shape the bulk sender exposes ({{calendar.google}} etc.),
+      // so speaker templates can offer add-to-calendar links as well as the
+      // .ics attachment below.
+      calendar: {
+        google: `${calendarBase}/google/${encodedEmail}`,
+        outlook: `${calendarBase}/outlook/${encodedEmail}`,
+        apple: `${calendarBase}/apple/${encodedEmail}`,
+        ics: `${calendarBase}/ics/${encodedEmail}`,
+      },
+    };
+
+    const from = fromAddressFor(settings.speaker_confirmed_email_from_key);
+    if (!from) return { sent: false, reason: 'no_from_address' };
+
+    const supabaseUrl = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+
+    // Pull the .ics from the same calendar function the portal checklist uses,
+    // rather than re-deriving the event here — one source of truth for the
+    // RFC 5545 escaping and the speaker's authorisation. Attaching it means
+    // the mail client offers "add to calendar" directly; the {{calendar.*}}
+    // links remain available for clients that prefer a URL.
+    // Best-effort: a calendar hiccup must not hold up the confirmation.
+    const attachments: Array<Record<string, string>> = [
+      {
+        content: zip.buffer.toString('base64'),
+        filename: zip.filename,
+        type: 'application/zip',
+        disposition: 'attachment',
+      },
+    ];
+    try {
+      const icsRes = await fetch(`${calendarBase}/ics/${encodedEmail}`);
+      if (icsRes.ok) {
+        const ics = await icsRes.text();
+        if (ics.startsWith('BEGIN:VCALENDAR')) {
+          attachments.push({
+            content: Buffer.from(ics, 'utf8').toString('base64'),
+            filename: 'event.ics',
+            type: 'text/calendar',
+            disposition: 'attachment',
+          });
+        } else {
+          log('calendar ics fetch returned unexpected body; sending without invite');
+        }
+      } else {
+        log(`calendar ics fetch failed: ${icsRes.status}; sending without invite`);
+      }
+    } catch (e) {
+      log(`calendar ics fetch error: ${e instanceof Error ? e.message : e}; sending without invite`);
+    }
+    const res = await fetch(`${supabaseUrl}/functions/v1/email-send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({
+        to: [speakerEmail],
+        cc: settings.speaker_confirmed_email_cc || undefined,
+        from: from.email,
+        fromName: from.name,
+        replyTo: settings.speaker_confirmed_email_reply_to || undefined,
+        subject: renderTemplate(subjectTpl, templateContext),
+        html: renderTemplate(contentTpl, templateContext),
+        attachments,
+      }),
+    });
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 200);
+      log(`confirmed email send failed: ${res.status} ${body}`);
+      return { sent: false, reason: `send_failed_${res.status}` };
+    }
+
+    await supabase
+      .from('speaker_promo_kits')
+      .update({ confirmed_email_sent_at: new Date().toISOString() })
+      .eq('id', kit.id);
+    log(`confirmed email sent to ${speakerEmail} (${attachments.length} attachment(s): ${attachments.map((a) => a.filename).join(', ')})`);
+    return { sent: true };
+  } catch (err) {
+    log(`confirmed email error: ${err instanceof Error ? err.message : err}`);
+    return { sent: false, reason: 'exception' };
+  }
+}

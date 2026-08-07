@@ -25,6 +25,7 @@ export const emailChannelProvider: ChannelProvider = {
         substitutions: p.substitutions,
         customArgs: p.customArgs,
       })),
+      attachments: msg.attachments,
     }),
   queryBatchAccepted: (providerBatchId: string, postedAt: Date) => queryBatchAccepted(providerBatchId, postedAt),
 };
