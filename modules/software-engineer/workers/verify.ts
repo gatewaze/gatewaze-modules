@@ -13,6 +13,7 @@ import { runAgentSession } from '../lib/phase-runner.js';
 import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, listRunPrs } from '../lib/run-state.js';
+import { createOrSupersedeDecision } from '../lib/decisions.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -93,6 +94,14 @@ export default async function verify(job, ctx) {
       await writeGate(supabase, run, 'security', 'block', { reason });
       await recordPhaseEnd(supabase, run, 'verify', 'blocked', reason, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'blocked', error: `security: ${reason}` }).eq('id', run.id);
+      // This block bypasses lib/run-state.ts's blockRun() (it's a phase-verdict block, not a
+      // kill_switch/authorization block), so it emits its own decision row (issue #52).
+      try {
+        await createOrSupersedeDecision(supabase, {
+          runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: 'verify',
+          question: `security: ${reason}`, kind: 'text', context: null,
+        });
+      } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
       return { blocked: reason };
     }
     await writeGate(supabase, run, 'security', 'pass', {});
