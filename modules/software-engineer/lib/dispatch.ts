@@ -76,6 +76,47 @@ export async function dispatchProject(sb: unknown, ctx: unknown, projectId: stri
   return started;
 }
 
+/**
+ * Archive a run and insert its replacement atomically (issue #52 shared infra — not wired to any UI
+ * action in this issue, but must exist and be correct for a future "start over" / "supersede" action).
+ * Steps: (1) CAS-archive the old run so a concurrent caller can't double-archive/double-replace it,
+ * (2) insert the new run row, rolling the archive back if the insert fails so the old run is never
+ * left stranded archived with no replacement, (3) dispatch the project so the new run gets a slot if
+ * one is free, reporting a dispatch failure explicitly rather than swallowing it like the best-effort
+ * notification/comment calls elsewhere in this module.
+ */
+export async function archiveAndReplace(
+  sb: unknown, ctx: unknown, oldRunId: string, newRunParams: Record<string, unknown>,
+): Promise<{ ok: true; oldRunId: string; newRun: any; started: number } | { ok: false; reason: string }> {
+  const { data: old } = await sb.from('se_runs').select('id, project_id, archived_at').eq('id', oldRunId).maybeSingle();
+  if (!old) return { ok: false, reason: 'old run not found' };
+  if (old.archived_at) return { ok: false, reason: 'old run already archived' };
+
+  const { data: archived, error: archiveError } = await sb
+    .from('se_runs').update({ archived_at: new Date().toISOString() })
+    .eq('id', oldRunId).is('archived_at', null)   // atomic guard against a double-archive race
+    .select('id');
+  if (archiveError) return { ok: false, reason: 'archive failed' };
+  if (!archived || archived.length === 0) return { ok: false, reason: 'old run already archived' };
+
+  const { data: created, error: insertError } = await sb
+    .from('se_runs').insert({ status: 'queued', ...newRunParams }).select().single();
+  if (insertError) {
+    // Roll back the archive — an insert failure must not leave the old run archived with nothing
+    // replacing it.
+    await sb.from('se_runs').update({ archived_at: null }).eq('id', oldRunId);
+    return { ok: false, reason: 'insert failed' };
+  }
+
+  let started = 0;
+  try {
+    started = await dispatchProject(sb, ctx, created.project_id);
+  } catch (e) {
+    return { ok: false, reason: `dispatch failed: ${(e as Error)?.message ?? String(e)}` };
+  }
+  return { ok: true, oldRunId, newRun: created, started };
+}
+
 /** Dispatch every project that currently has a queued run (pr-monitor cron safety net). */
 export async function dispatchAll(sb: unknown, ctx: unknown): Promise<void> {
   const { data } = await sb
