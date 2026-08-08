@@ -24,6 +24,7 @@ import { projectOptionLabel } from './projectAvatarUtils';
 import PrBoard from './PrBoard';
 import { isGatewayError, StartingBanner } from './starting';
 import PendingApprovals from './PendingApprovals';
+import DecisionsPanel from './DecisionsPanel';
 import TestEnvStrip from './TestEnvStrip';
 import RunListSection from './RunListSection';
 
@@ -135,10 +136,11 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
   // Per-model spend (subagent-inclusive), lazy-loaded from /overview/model-usage over a chosen window.
   const [modelUsage, setModelUsage] = useState<any | null>(null);
   const [muDays, setMuDays] = useState(7);
-  // The four run-list sections (SPEC.md §14.1): each is its own GET /runs?status=... call, scoped to
-  // the current project filter, so any one section refreshes/errors independently of the others.
-  const [awaitingSpecRuns, setAwaitingSpecRuns] = useState<any[]>([]);
-  const [architectureRuns, setArchitectureRuns] = useState<any[]>([]);
+  // The two run-list sections below (SPEC.md §14.1): each is its own GET /runs?status=... call,
+  // scoped to the current project filter, so either section refreshes/errors independently of the
+  // other. The two human-gate sections that used to live here (awaiting spec approval, architecture
+  // review) moved into DecisionsPanel (issue #49), which covers those PLUS the rest of the
+  // human-gated statuses in one place.
   const [activeRuns, setActiveRuns] = useState<any[]>([]);
   const [completedRuns, setCompletedRuns] = useState<any[]>([]);
   // Realtime, the 3s startup poll, and the 20s visibility-poll backstop below can all call `load`
@@ -163,20 +165,16 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
     finally { setLoading(false); inFlight.current = false; }
   }, [projectFilter]);
 
-  // The four run-list sections ride the SAME refresh mechanism as the KPI/rollup payload above
+  // These two run-list sections ride the SAME refresh mechanism as the KPI/rollup payload above
   // (Realtime on se_runs + the visibility-poll backstop) rather than a second polling loop. Each
   // status set is its own GET /runs call — no new endpoint/migration; see SPEC.md §14.1's Open
   // Questions for why (independent refresh per section, no aggregate-endpoint round trip).
   const loadRunLists = useCallback(async () => {
     const base = projectFilter ? `&project=${encodeURIComponent(projectFilter)}` : '';
-    const [spec, arch, active, completed] = await Promise.all([
-      api(`/runs?status=awaiting_spec${base}`).catch(() => null),
-      api(`/runs?status=awaiting_architecture,architecture_in_review${base}`).catch(() => null),
+    const [active, completed] = await Promise.all([
       api(`/runs?status=${statusesToParam(CARD_FILTERS.active.statuses)}${base}`).catch(() => null),
       api(`/runs?status=merged,closed,cancelled${base}`).catch(() => null),
     ]);
-    if (spec) setAwaitingSpecRuns(spec.runs ?? []);
-    if (arch) setArchitectureRuns(arch.runs ?? []);
     if (active) setActiveRuns(active.runs ?? []);
     if (completed) {
       // GET /runs sorts by created_at desc; "recently completed" wants most-recently-finished first.
@@ -251,6 +249,10 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
           is the page operators watch; renders nothing when there is nothing to review. */}
       <PendingApprovals projects={projects} />
 
+      {/* Every run parked waiting on a human, disambiguated + plain-language, with a deep link to
+          act (issue #49). Renders nothing when nothing is gated. */}
+      <DecisionsPanel projectFilter={projectFilter} onOpenRun={onOpenRun} />
+
       {loading && !data ? (
         <div className="flex justify-center p-12"><LoadingSpinner /></div>
       ) : (totals.runs ?? 0) === 0 ? (
@@ -287,35 +289,6 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
               />
             )}
           </div>
-
-          {/* Human-gate sections (SPEC.md §14.1): runs parked waiting on a person. These read
-              directly off se_runs.status — awaiting_spec (migration 018) and the two
-              architecture-review statuses (migrations 015/016) — via the now-fixed RUN_STATUSES /
-              ALL_RUN_STATUSES allowlists. Approving happens on the Runs board's own detail pane
-              (POST /runs/:id/spec/approve, /runs/:id/architecture/approve); these rows link there
-              rather than duplicating that write action. */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <RunListSection
-              title="Awaiting spec approval"
-              rows={awaitingSpecRuns.slice(0, SECTION_ROW_CAP)}
-              emptyLabel="Nothing waiting on spec approval."
-              onOpenRun={onOpenRun}
-            />
-            <RunListSection
-              title="Architecture review"
-              rows={architectureRuns.slice(0, SECTION_ROW_CAP)}
-              emptyLabel="Nothing in architecture review."
-              onOpenRun={onOpenRun}
-            />
-          </div>
-          {(awaitingSpecRuns.length > SECTION_ROW_CAP || architectureRuns.length > SECTION_ROW_CAP) && onOpenRuns && (
-            <p className="text-xs text-[var(--gray-10)]">
-              Showing the {SECTION_ROW_CAP} most recent per gate —{' '}
-              <button type="button" className="underline hover:text-[var(--gray-12)]" onClick={() => openRuns?.(['awaiting_architecture', 'architecture_in_review', 'awaiting_spec'])}>
-                see all gated runs on the Runs board
-              </button>.
-            </p>
-          )}
 
           {/* Active runs — runtime ticks up live (no stored duration column on se_runs; computed
               client-side from started_at) alongside the cost already tracked per run. */}

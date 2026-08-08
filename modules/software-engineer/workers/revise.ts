@@ -34,10 +34,11 @@ export default async function revise(job, ctx) {
 
   // 'ci' = pr-monitor triggered a bounded CI-fix pass (no new review feedback, CI settled-red).
   const reason = job?.data?.reason;
+  const attempt = job?.data?.attempt ?? 1;
   const openPrs = (await listRunPrs(supabase, run.id)).filter((p) => p.pr_number && p.state === 'open');
   if (openPrs.length === 0) { await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch' }).eq('id', run.id); return { skipped: 'no open prs' }; }
 
-  await recordPhaseStart(supabase, run, 'revise');
+  await recordPhaseStart(supabase, run, 'revise', attempt);
   // Escalation ladder: a 2nd+ revise round means the mapped model's previous attempt didn't stick.
   // Latch escalation BEFORE the session so resolvePhaseModel sees it for this round.
   if ((run.revise_count ?? 0) >= 1 && !run.model_escalated && project.escalationModel) {
@@ -107,6 +108,7 @@ export default async function revise(job, ctx) {
     const result = await runAgentSession(supabase, ctx, run, project, 'revise', {
       cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
       systemAppend: 'Address the review feedback per each repo\'s rules. Never use --no-verify or --force.',
+      attempt,
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
