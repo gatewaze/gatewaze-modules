@@ -41,6 +41,8 @@ function mockSupabase(config: any = {}) {
     if (table === 'se_phases' && selectOpts?.head) return { count: config.attemptCount ?? 0, error: null };
     if (table === 'se_phases' && op === 'select') return { data: config.lastFailed ?? null, error: null };
     if (table === 'se_projects' && op === 'select') return { data: config.project ?? { approvers: [] }, error: null };
+    if (table === 'se_run_prs' && op === 'select') return { data: config.prs ?? [], error: null };
+    if (table === 'se_gates' && op === 'select') return { data: config.gate ?? null, error: null };
     return { data: null, error: null };
   };
   const from = (table: string) => {
@@ -91,12 +93,12 @@ describe('POST /runs/:id/resume', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it('409s when the run is not failed', async () => {
+  it('409s when the run is not resumable (neither failed nor blocked)', async () => {
     const { router } = mount(mockSupabase({ run: failedRun({ status: 'running' }) }));
     const res = mockRes();
     await router.handler('POST /runs/:id/resume')({ params: { id: RID } }, res);
     expect(res.statusCode).toBe(409);
-    expect(res.body.error.code).toBe('not_failed');
+    expect(res.body.error.code).toBe('not_resumable');
   });
 
   it('409s when the run is archived', async () => {
@@ -179,6 +181,65 @@ describe('POST /runs/:id/resume', () => {
     expect(msg.row.role).toBe('system');
     expect(msg.row.content).toContain('boom');
     expect(msg.row.content).toContain('attempt 2');
+  });
+
+  it('resumes a review_blocked run into the spec phase with objections threaded through', async () => {
+    const supabase = mockSupabase({
+      run: failedRun({ status: 'blocked', current_phase: 'review', error: 'adversarial review blocked (retries exhausted)', retry_count: 2 }),
+      prs: [],
+      gate: { detail: { objections: ['missing tests', 'wrong repo'] } },
+      attemptCount: 0,
+    });
+    const { router, enqueued } = mount(supabase);
+    const res = mockRes();
+    await router.handler('POST /runs/:id/resume')({ params: { id: RID } }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ resumed: true, phase: 'spec', attempt: 1 });
+    expect(enqueued).toEqual([[
+      'se', 'software-engineer:spec', { runId: RID, attempt: 1, objections: ['missing tests', 'wrong repo'] },
+      { jobId: `se-run-${RID}-spec`, removeOnComplete: true, removeOnFail: true },
+    ]]);
+    const msg = supabase.__calls.inserts.find((c: any) => c.table === 'se_messages');
+    expect(msg.row.content).toContain('missing tests');
+    expect(msg.row.content).toContain('wrong repo');
+  });
+
+  it('resumes a pr_closed_partial run into the revise phase', async () => {
+    const supabase = mockSupabase({
+      run: failedRun({ status: 'blocked', current_phase: 'watch', error: 'a PR was closed unmerged — partial; needs a human decision' }),
+      prs: [{ state: 'closed_unmerged' }],
+      attemptCount: 0,
+    });
+    const { router, enqueued } = mount(supabase);
+    const res = mockRes();
+    await router.handler('POST /runs/:id/resume')({ params: { id: RID } }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ resumed: true, phase: 'revise', attempt: 1 });
+    expect(enqueued).toEqual([[
+      'se', 'software-engineer:revise', { runId: RID, attempt: 1 },
+      { jobId: `se-run-${RID}-revise`, removeOnComplete: true, removeOnFail: true },
+    ]]);
+    const msg = supabase.__calls.inserts.find((c: any) => c.table === 'se_messages');
+    expect(msg.row.content).toContain('closed without merging');
+  });
+
+  it('resumes a config_blocked run into its current_phase as-is', async () => {
+    const supabase = mockSupabase({
+      run: failedRun({ status: 'blocked', current_phase: 'implement', error: 'intake disabled' }),
+      prs: [],
+      attemptCount: 1,
+    });
+    const { router, enqueued } = mount(supabase);
+    const res = mockRes();
+    await router.handler('POST /runs/:id/resume')({ params: { id: RID } }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ resumed: true, phase: 'implement', attempt: 2 });
+    expect(enqueued).toEqual([[
+      'se', 'software-engineer:implement', { runId: RID, attempt: 2 },
+      { jobId: `se-run-${RID}-implement`, removeOnComplete: true, removeOnFail: true },
+    ]]);
+    const msg = supabase.__calls.inserts.find((c: any) => c.table === 'se_messages');
+    expect(msg.row.content).toContain('intake disabled');
   });
 
   it('500s when the atomic status-guarded update fails', async () => {

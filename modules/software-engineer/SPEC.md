@@ -269,9 +269,27 @@ feedback into a well-formed ticket via a **triage agent** — distinct from the 
 
 Hero-header + tab shell (`WorkspaceLayout`). **URL-driven / deep-linkable**:
 
+- `/software-engineer` → **Overview** (default landing) — read-only KPI tiles + status/phase/project
+  rollups, live via the same Supabase realtime + visibility-poll backstop as the rest of the tab.
+  **BUILT.** Includes a **"Decisions needed" panel** (issue #49) above the KPI tiles: every run
+  parked waiting on a human, disambiguated into a `DecisionKind` (`review_blocked`,
+  `pr_closed_partial`, `config_blocked`, `awaiting_spec`, `awaiting_architecture`, `ready_to_submit`;
+  see `lib/decision-kind.ts`), grouped in that order, each row in plain language with a deep link
+  into the run. Fed by `GET /overview/decisions`. Replaces the two narrower "Awaiting spec approval" /
+  "Architecture review" run-list sections that used to sit lower on the page — those only covered two
+  of the six kinds and left the rest of `blocked` an undifferentiated bucket. Renders nothing when
+  there is nothing to decide.
 - `/software-engineer` → **Runs** (across all projects; project filter; live via Supabase realtime on
   se_runs/se_phases/se_events/se_messages; drill into a run for the live transcript + chat/steer/
-  cancel/archive). **BUILT.**
+  cancel/archive). **BUILT.** A `blocked` run's detail view (issue #49 §5/§6) is resumable and, unless
+  `config_blocked`, discussable exactly like a `failed` run: **Resume** (`POST /runs/:id/resume`)
+  redrafts the spec (`review_blocked`, carrying the skeptic's objections into the agent's context),
+  retries `revise` (`pr_closed_partial`), or retries the current phase as-is (`config_blocked`); a
+  kind-aware hint and confirm-dialog text explain which before the admin clicks. **Discuss**
+  (`POST /runs/:id/message`) stores the message without enqueuing a live job — there is no running
+  agent to stream to — and the agent reads it via the admin-note mailbox the next time the run is
+  Resumed. A `config_blocked` run shows the reason but no chat box; it needs a Setup fix, not a
+  conversation.
 - `/software-engineer/runs/<id>` → a specific run (shareable). **BUILT.**
 - `/software-engineer/issues` → **Issues** — aggregates open issues from each project's issues repo,
   marks agent-targeted ones + run status, project filter. **BUILT.** The list stays live: run-status
@@ -388,6 +406,7 @@ scope — physically impossible.
 
 - **DONE + verified:** projects + all-creds-on-project; ephemeral engineer pool + concurrency;
   PAT-owner commits; single-repo pipeline; two-way PR watch + auto-archive; project memory
-  (recall/reflect); real-time dashboard; run/setup URLs; project filter.
+  (recall/reflect); real-time dashboard; run/setup URLs; project filter; "Decisions needed" panel +
+  resumable/discussable `blocked` runs (issue #49, §11).
 - **NEXT (this spec's deltas):** (1) issues-repo on the project + trigger against it; (2) multi-repo
   run engine (§7) + multi-PR tracking + watch; (3) Issues tab; then (4) memory import + RAG; (5) MCP.

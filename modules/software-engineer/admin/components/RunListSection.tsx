@@ -27,7 +27,7 @@ export interface RunListRow {
   project?: { name?: string; avatar_emoji?: string } | null;
 }
 
-const runLabel = (r: RunListRow): string =>
+export const runLabel = (r: RunListRow): string =>
   r.kind === 'interactive'
     ? `Interactive session${r.project?.name ? ` · ${r.project.name}` : ''}`
     : `${r.repo_owner}/${r.repo_name} #${r.issue_number}`;
