@@ -8,7 +8,7 @@
 //     (§3.3): only active for attempt > 1, so it never re-surfaces ordinary already-consumed live
 //     chat as a fake "admin note" on every phase transition.
 import { describe, it, expect } from 'vitest';
-import { recordPhaseStart, drainPendingAdminMessages } from '../run-state.js';
+import { recordPhaseStart, drainPendingAdminMessages, recomputeRunCost } from '../run-state.js';
 
 // Chainable supabase double. `upserts`/`updates` record every call for assertion; `select` chains
 // resolve via the `config` the test passes in.
@@ -24,6 +24,7 @@ function mockSupabase(config: any = {}) {
       eq() { return b; }, is() { return b; }, in() { return b; }, order() { return b; },
       then(onF: any, onR: any) {
         if (table === 'se_messages') return Promise.resolve({ data: config.pending ?? [], error: null }).then(onF, onR);
+        if (table === 'se_phases') return Promise.resolve({ data: config.phases ?? null, error: null }).then(onF, onR);
         return Promise.resolve({ data: null, error: null }).then(onF, onR);
       },
     };
@@ -99,5 +100,20 @@ describe('drainPendingAdminMessages', () => {
     };
     const note = await drainPendingAdminMessages(supa, RUN, 2);
     expect(note).toBe('');
+  });
+});
+
+describe('recomputeRunCost', () => {
+  it('sums se_phases.cost_usd for the run and writes the rounded total to se_runs.cost_usd', async () => {
+    const supa = mockSupabase({ phases: [{ cost_usd: 1.23456 }, { cost_usd: 2.0 }, { cost_usd: null }] });
+    await recomputeRunCost(supa, RUN);
+    expect(supa.__updates).toHaveLength(1);
+    expect(supa.__updates[0]).toMatchObject({ table: 'se_runs', row: { cost_usd: 3.2346 } });
+  });
+
+  it('writes 0 when the run has no phase rows yet', async () => {
+    const supa = mockSupabase({ phases: [] });
+    await recomputeRunCost(supa, RUN);
+    expect(supa.__updates[0].row.cost_usd).toBe(0);
   });
 });
