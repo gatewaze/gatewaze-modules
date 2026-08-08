@@ -37,7 +37,7 @@ function mockSupabase(config: any = {}) {
   const resolve = (state: any) => {
     const { table, op, selectOpts } = state;
     if (table === 'se_runs' && op === 'select') return { data: config.run ?? null, error: null };
-    if (table === 'se_runs' && op === 'update') return { data: null, error: config.updateError ?? null };
+    if (table === 'se_runs' && op === 'update') return { data: config.updateError ? null : (config.updateRaced ? [] : [{ id: 'run-1' }]), error: config.updateError ?? null };
     if (table === 'se_phases' && selectOpts?.head) return { count: config.attemptCount ?? 0, error: null };
     if (table === 'se_phases' && op === 'select') return { data: config.lastFailed ?? null, error: null };
     if (table === 'se_projects' && op === 'select') return { data: config.project ?? { approvers: [] }, error: null };
@@ -79,6 +79,14 @@ const failedRun = (over: any = {}) => ({
 });
 
 describe('POST /runs/:id/resume', () => {
+  it('returns 409 when the atomic status guard loses the race (0 rows updated)', async () => {
+    const { router } = mount(mockSupabase({ run: failedRun(), updateRaced: true }));
+    const res = mockRes();
+    await router.handler('POST /runs/:id/resume')({ params: { id: RID } }, res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error.code).toBe('state_changed');
+  });
+
   it('rejects a bad id with 400', async () => {
     const { router } = mount(mockSupabase());
     const res = mockRes();
