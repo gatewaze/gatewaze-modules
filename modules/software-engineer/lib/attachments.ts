@@ -150,7 +150,9 @@ export async function downloadAttachmentUrls(
       const ext = sniffImage(buf);       // validate by content, not header
       if (!ext) continue;
       const name = `${prefix}screenshot-${names.length + 1}.${ext}`;
-      await writeFile(join(dir, name), buf);
+      // 'wx': fail if the path already exists (regular file OR symlink) instead of following it —
+      // closes the classic predictable-temp-filename race/symlink attack CodeQL flags here.
+      await writeFile(join(dir, name), buf, { flag: 'wx' });
       names.push(name);
     } catch { /* skip this attachment */ }
   }
