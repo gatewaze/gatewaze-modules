@@ -63,6 +63,7 @@ export interface WsRepo {
   dir: string;
   writable: boolean;
   baseBranch: string | null;
+  startSha: string | null; // HEAD right after clone, before the agent runs; null for read-only repos
 }
 
 /**
@@ -110,7 +111,11 @@ export async function makeMultiWorkspace(
         await rm(dir, { recursive: true, force: true }).catch(() => {});
         continue;
       }
-      repos.push({ repoOwner: r.repoOwner, repoName: r.repoName, dir, writable, baseBranch: r.baseBranch });
+      // Captured right after clone (+ checkout -b for the fresh-branch case), so HEAD is exactly
+      // the commit the agent starts editing from — the boundary `commitsAhead` diffs against to
+      // detect a self-committing agent, regardless of which clone mode ran above.
+      const startSha = writable ? (await git(['-C', dir, 'rev-parse', 'HEAD'])).trim() : null;
+      repos.push({ repoOwner: r.repoOwner, repoName: r.repoName, dir, writable, baseBranch: r.baseBranch, startSha });
     }
     return { root, repos, cleanup: () => rm(root, { recursive: true, force: true }).catch(() => {}) };
   } catch (e) {
@@ -129,5 +134,17 @@ export async function commitAndPush(repoDir: string, branch: string, message: st
   // agent's (the agent is separately barred from --no-verify by the PreToolUse hook).
   // -s: DCO Signed-off-by from the configured commit identity — LF repos reject unsigned commits.
   await git(['-C', repoDir, 'commit', '-s', '-m', message, '--no-verify']);
+  await git(['-C', repoDir, 'push', '-u', 'origin', branch]);
+}
+
+/** Commits made on HEAD since `startSha` — non-zero means the agent ran `git commit` itself. */
+export async function commitsAhead(repoDir: string, startSha: string | null): Promise<number> {
+  if (!startSha) return 0;
+  const out = await git(['-C', repoDir, 'rev-list', '--count', `${startSha}..HEAD`]);
+  return parseInt(out.trim(), 10) || 0;
+}
+
+/** Push only — for the case where the agent already committed and the tree is clean. */
+export async function pushBranch(repoDir: string, branch: string) {
   await git(['-C', repoDir, 'push', '-u', 'origin', branch]);
 }
