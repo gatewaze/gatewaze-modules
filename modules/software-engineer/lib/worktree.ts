@@ -127,6 +127,7 @@ export async function commitAndPush(repoDir: string, branch: string, message: st
   await git(['-C', repoDir, 'add', '-A']);
   // --no-verify: shallow clone has no hooks installed; this is the worker's commit, not the
   // agent's (the agent is separately barred from --no-verify by the PreToolUse hook).
-  await git(['-C', repoDir, 'commit', '-m', message, '--no-verify']);
+  // -s: DCO Signed-off-by from the configured commit identity — LF repos reject unsigned commits.
+  await git(['-C', repoDir, 'commit', '-s', '-m', message, '--no-verify']);
   await git(['-C', repoDir, 'push', '-u', 'origin', branch]);
 }
