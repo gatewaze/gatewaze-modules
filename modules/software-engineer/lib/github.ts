@@ -199,5 +199,38 @@ export function githubClient(token: string) {
     listCheckRuns(owner: string, name: string, ref: string) {
       return j(`/repos/${owner}/${name}/commits/${encodeURIComponent(ref)}/check-runs?per_page=100`);
     },
+    /** Actions workflow runs attached to a commit — used to map a Checks-API failing check back to
+     *  its Actions job for step-level and log-tail signals the Checks API doesn't expose. */
+    listWorkflowRunsForCommit(owner: string, name: string, sha: string) {
+      return j(`/repos/${owner}/${name}/actions/runs?head_sha=${encodeURIComponent(sha)}&per_page=50`);
+    },
+    /** Jobs (with .steps[]) for one workflow run. */
+    listWorkflowRunJobs(owner: string, name: string, runId: number | string) {
+      return j(`/repos/${owner}/${name}/actions/runs/${runId}/jobs?per_page=100`);
+    },
+    /** Plain-text log tail for one job, capped at `maxBytes`. The endpoint 302s to a short-lived blob
+     *  URL; fetch follows the redirect. Caller is responsible for secret-redaction before this text is
+     *  stored or sent to a model — this client never logs or persists it itself. Best-effort: any
+     *  fetch failure (expired job, permissions) returns ''. */
+    async getJobLogTail(owner: string, name: string, jobId: number | string, maxBytes = 8192): Promise<string> {
+      try {
+        const r = await fetch(`${BASE}/repos/${owner}/${name}/actions/jobs/${jobId}/logs`, { headers });
+        if (!r.ok) return '';
+        const text = await r.text();
+        return text.length > maxBytes ? text.slice(-maxBytes) : text;
+      } catch {
+        return '';
+      }
+    },
+    /** Latest commit sha on a branch — used to compare a failing check against the base branch's
+     *  current head (repo-wide breakage vs this PR's diff). */
+    async getBranchHeadSha(owner: string, name: string, branch: string): Promise<string | null> {
+      try {
+        const b = await j(`/repos/${owner}/${name}/branches/${encodeURIComponent(branch)}`);
+        return b?.commit?.sha ?? null;
+      } catch {
+        return null;
+      }
+    },
   };
 }
