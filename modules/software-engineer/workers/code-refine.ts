@@ -16,7 +16,7 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credentials.js';
-import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.js';
+import { makeMultiWorkspace, hasChanges, commitAndPush, commitsAhead, pushBranch } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { enqueuePhase } from '../lib/enqueue.js';
@@ -107,8 +107,14 @@ export default async function codeRefine(job, ctx) {
 
     let pushed = 0;
     for (const r of ws.repos.filter((x) => x.writable)) {
-      if (!(await hasChanges(r.dir))) continue;
-      try { await commitAndPush(r.dir, run.branch_name, `fix: address reviewer feedback${run.issue_number ? ` on #${run.issue_number}` : ''}`); pushed++; }
+      const dirty = await hasChanges(r.dir);
+      const ahead = dirty ? 0 : await commitsAhead(r.dir, r.startSha);
+      if (!dirty && ahead === 0) continue;
+      try {
+        if (dirty) await commitAndPush(r.dir, run.branch_name, `fix: address reviewer feedback${run.issue_number ? ` on #${run.issue_number}` : ''}`);
+        else await pushBranch(r.dir, run.branch_name);
+        pushed++;
+      }
       catch { /* leave that repo as-is */ }
     }
 

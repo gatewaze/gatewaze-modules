@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity, resolveRunCredentials } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
-import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.js';
+import { makeMultiWorkspace, hasChanges, commitAndPush, commitsAhead, pushBranch } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { classifyBlastRadius } from '../lib/blast-radius.js';
 import { redactToken } from '../lib/git.js';
@@ -49,7 +49,8 @@ export default async function implement(job, ctx) {
     const prompt = [
       `Implement the approved spec below across the WRITABLE repos in your workspace. Change only the`,
       `repos and files the spec calls for; follow each repo's CLAUDE.md/.claude rules exactly. Make the`,
-      `code changes and any tests. Do NOT push, tag, or open PRs — the system handles that.`,
+      `code changes and any tests. Do NOT push, tag, or open PRs — the system handles that. Do NOT run`,
+      `git commit yourself; leave the working tree as edited/untracked files for the system to commit.`,
       ``,
       `--- APPROVED SPEC ---`,
       String(art?.content ?? '').slice(0, 20000),
@@ -73,10 +74,17 @@ export default async function implement(job, ctx) {
     const allFiles = []; // real changed-file objects across every writable repo (for blast-radius)
     let compareUnknown = false; // a diff fetch failed → we cannot assess blast radius → fail safe
     for (const r of ws.repos.filter((x) => x.writable)) {
-      if (!(await hasChanges(r.dir))) continue;
+      const dirty = await hasChanges(r.dir);
+      const ahead = dirty ? 0 : await commitsAhead(r.dir, r.startSha);
+      if (!dirty && ahead === 0) continue;
       changed++;
       try {
-        await commitAndPush(r.dir, branch, `feat: implement issue #${run.issue_number}`);
+        if (dirty) {
+          await commitAndPush(r.dir, branch, `feat: implement issue #${run.issue_number}`);
+        } else {
+          // Agent already committed (tree is clean but HEAD moved) — nothing to add, just push.
+          await pushBranch(r.dir, branch);
+        }
         await upsertRunPr(supabase, run, r.repoOwner, r.repoName, { branch, state: 'open' });
         try {
           const cmp = await gitCompareCount(githubClient(token), r.repoOwner, r.repoName, r.baseBranch, branch);
