@@ -16,6 +16,10 @@
  * and the review-KB are single no-tools JSON turns built around the Claude Agent SDK's noTools seam,
  * which the Codex CLI has no equivalent for. An invalid/unauthorised codex resolution falls back to
  * claude rather than failing the run — routing must never be the reason a run dies.
+ *
+ * `ci-classify` (pr-monitor's pre-fix-pass CI classifier) is a cheap utility phase, same category as
+ * `triage`/`reflect` — not in ESCALATION_PHASES or CODEX_PHASES. It always resolves to the plain
+ * claude default unless a project maps `phaseModels['ci-classify']` to something cheaper.
  */
 
 export type Engine = 'claude' | 'codex';
