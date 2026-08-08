@@ -4,7 +4,14 @@
  * implementation spec for the issue (which lives in the issues repo). The spec is stored as a run
  * artifact — NOT committed to any code repo (§1a) — then adversarial review runs. On a review retry
  * (job.data.objections) it re-drafts resolving every objection.
+ *
+ * The agent writes the spec to ./specs/issue-<n>.md at the workspace root (outside every repo). The
+ * worker reads that file back as the artifact — it does NOT trust the agent's closing chat message,
+ * which is a conversational summary, not the spec (review/implement both read the artifact verbatim).
+ * If the file is missing or too short, the phase fails loud rather than passing prose downstream.
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
@@ -46,6 +53,7 @@ export default async function spec(job, ctx) {
     const truncated = codeRepos.length > project.maxCodeReposPerRun;
     ws = await makeMultiWorkspace(forSpec, token, branch);
 
+    const specRelPath = `specs/issue-${run.issue_number}.md`;
     const prompt = [
       `Draft an implementation SPEC for this GitHub issue. The issue lives in a separate issues repo;`,
       `the code lives in the repos in your workspace. Explore them read-only, decide which WRITABLE`,
@@ -54,6 +62,9 @@ export default async function spec(job, ctx) {
       `FIRST: use the wiki_search tool to look for existing related specs in project memory (pages`,
       `under specs/ — every past run's spec is logged there). If a prior spec covers overlapping`,
       `ground, build on it and note the relationship; do not contradict it silently.`,
+      `Write the finished spec to ./${specRelPath} at the workspace ROOT (NOT inside any repo`,
+      `subdirectory) — create the specs/ directory if it doesn't exist. That file, not your chat`,
+      `reply, is what gets reviewed and implemented, so it must be the complete, self-contained spec.`,
       truncated ? `NOTE: the project has more code repos than the ${project.maxCodeReposPerRun}-repo cap; only those in your workspace are available — do not spec against repos not present.` : '',
       ``,
       `Issue #${run.issue_number}: ${issue.title ?? ''}`,
@@ -63,7 +74,8 @@ export default async function spec(job, ctx) {
     ].join('\n');
 
     const result = await runAgentSession(supabase, ctx, run, project, 'spec', {
-      cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob'],
+      cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit'],
+      systemAppend: `Draft a spec, do not implement. All repos here are read-only reference. Write the complete spec to ./${specRelPath} at the workspace root (outside every repo) — that file is what gets reviewed and implemented, not your chat reply.`,
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
@@ -72,8 +84,22 @@ export default async function spec(job, ctx) {
       return { failed: msg };
     }
 
-    const specText = (result.text ?? '').slice(0, 200000);
+    const specPath = join(ws.root, specRelPath);
+    const specText = (existsSync(specPath) ? readFileSync(specPath, 'utf8') : '').slice(0, 200000);
+    if (specText.trim().length < 200) {
+      const msg = 'agent did not write the spec file';
+      await recordPhaseEnd(supabase, run, 'spec', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
+      await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
+      return { failed: msg };
+    }
     await supabase.from('se_artifacts').insert({ run_id: run.id, site_id: run.site_id, phase: 'spec', kind: 'spec', content: specText });
+    // Best-effort transcript of the agent's closing chat message — never treated as the spec itself.
+    try {
+      const summary = String(result.text ?? '').trim();
+      if (summary) {
+        await supabase.from('se_artifacts').insert({ run_id: run.id, site_id: run.site_id, phase: 'spec', kind: 'spec_summary', content: summary.slice(0, 20000) });
+      }
+    } catch { /* best-effort */ }
 
     // Spec log (best-effort, never blocks the pipeline):
     // 1. Commit the spec to the ISSUES repo at specs/issue-<n>.md — one file per issue, updated in
