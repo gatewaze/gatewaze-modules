@@ -22,6 +22,7 @@ import { summarizeChecks } from '../lib/pr-status.js';
 import { classifyDeterministic } from '../lib/ci-classify.js';
 import { InProcessRunner } from '../lib/agent-session.js';
 import { resolvePhaseModel } from '../lib/model-select.js';
+import { createOrSupersedeDecision } from '../lib/decisions.js';
 
 const CHECK_FAILURE_CONCLUSIONS = ['failure', 'timed_out', 'cancelled', 'action_required'];
 
@@ -239,6 +240,13 @@ async function reconcile(supabase, ctx, run) {
     if (anyClosedUnmerged) {
       if (managesIssue) { try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:blocked'); } catch { /* */ } }
       await supabase.from('se_runs').update({ ...patch, status: 'blocked', pr_state: 'changes_requested', pr_url: firstUrl, error: 'a PR was closed unmerged — partial; needs a human decision' }).eq('id', run.id);
+      try {
+        await createOrSupersedeDecision(supabase, {
+          runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: run.current_phase,
+          question: 'The pull request was closed unmerged, partway through. What should change?',
+          kind: 'text', context: firstUrl,
+        });
+      } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
       return { runId: run.id, action: 'blocked-partial' };
     }
 

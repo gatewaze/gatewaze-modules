@@ -27,6 +27,7 @@ import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
 import { notifyGate } from '../lib/notify.js';
+import { createOrSupersedeDecision, ARCHITECTURE_DECISION_OPTIONS } from '../lib/decisions.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -160,6 +161,16 @@ export default async function architecture(job, ctx) {
       try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, `Architecture review required — a draft proposal is ready in the Software Engineer admin. Review and refine it there, then finalize to commit it to \`${archRepo}\` and approve to resume implementation.`); } catch { /* */ }
     }
     try { await notifyGate(project, run, 'Architecture proposal ready for review'); } catch { /* */ }
+    try {
+      await createOrSupersedeDecision(supabase, {
+        runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: 'architecture',
+        question: 'An architecture proposal is ready for review. What should happen next?',
+        kind: 'choice', options: ARCHITECTURE_DECISION_OPTIONS,
+        // No commit URL yet at this point (draft, not finalized) — /architecture/finalize refreshes
+        // this decision's context with the real commit URL once the human commits it.
+        context: null,
+      });
+    } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
     await recordPhaseEnd(supabase, run, 'architecture', 'blocked', 'awaiting architecture review (draft)', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
     return { ok: true, gated: true, folder };
   } catch (e) {
