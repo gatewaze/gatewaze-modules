@@ -15,7 +15,7 @@
  *    PNG/JPEG/GIF/WebP are written to disk.
  *  - Bounded: at most MAX_FILES images, each capped at MAX_BYTES.
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const MAX_FILES = 8;
@@ -131,6 +131,10 @@ export async function downloadAttachmentUrls(
   const prefix = (opts.prefix ?? '').replace(/[^a-z0-9-]/gi, '');   // keep filenames path-safe
   const dir = join(destRoot, ATTACH_DIRNAME);
   await mkdir(dir, { recursive: true });
+  // destRoot is a per-run mkdtemp workspace in every current call path, but harden anyway for any
+  // future shared-tmp caller: refuse a dir swapped for a symlink, and write files exclusively so a
+  // pre-placed path can never be followed/overwritten (js/insecure-temporary-file class).
+  if ((await lstat(dir)).isSymbolicLink()) return { count: 0, dir: null, names: [] };
   const names: string[] = [];
   for (const raw of list) {
     try {
@@ -150,7 +154,7 @@ export async function downloadAttachmentUrls(
       const ext = sniffImage(buf);       // validate by content, not header
       if (!ext) continue;
       const name = `${prefix}screenshot-${names.length + 1}.${ext}`;
-      await writeFile(join(dir, name), buf);
+      await writeFile(join(dir, name), buf, { flag: 'wx' });   // exclusive: never follow/overwrite an existing path
       names.push(name);
     } catch { /* skip this attachment */ }
   }
