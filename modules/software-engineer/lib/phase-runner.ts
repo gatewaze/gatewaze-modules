@@ -13,7 +13,7 @@ import { InProcessRunner } from './agent-session.js';
 import { CodexRunner } from './codex-runner.js';
 import { resolvePhaseModel } from './model-select.js';
 import { estimateLiveCostUSD } from './cost.js';
-import { writeEvent, writeMessage, touchRun, drainPendingAdminMessages } from './run-state.js';
+import { writeEvent, writeMessage, touchRun, drainPendingAdminMessages, recomputeRunCost } from './run-state.js';
 import { resolveCommitIdentity } from './credentials.js';
 import { recallMemory, listMemorySources } from './memory.js';
 import { buildMemoryMcpServer } from './memory-tools.js';
@@ -170,11 +170,24 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
       } catch { /* ceiling check is best-effort — never block a run on a read blip */ }
     }
     await status(`Starting the agent (${phase})`, 'start');
+    // Routing (migration 013): phase map + run overrides + escalation decide the engine and model.
+    const routed = resolvePhaseModel(project, run, phase);
+    // Write the resolved model onto the running phase row NOW, not just at phase end (recordPhaseEnd).
+    // se_phases.model otherwise stays NULL for the phase's entire 'running' lifetime, which makes the
+    // run-header cost aggregation attribute the live heartbeat estimate below to 'unattributed' even
+    // though the model was already known here. Best-effort like every other cost-tracking write in
+    // this file — a failed write costs a display label, not phase correctness.
+    try {
+      await supabase.from('se_phases').update({ model: routed.model, engine: routed.engine })
+        .eq('run_id', run.id).eq('phase', phase).eq('status', 'running');
+    } catch { /* model write is best-effort */ }
     // Heartbeat: while the agent works, bump se_runs.updated_at every 20s so a live-but-quiet run stays
     // distinguishable from a wedged one in the Runs tab — and persist the session's accumulated
     // per-model usage + a book-priced cost ESTIMATE onto the running phase row, so the run header can
-    // tick while the agent works. The SDK's authoritative total replaces it at phase end. Cleared in
-    // finally so the interval never leaks.
+    // tick while the agent works. Also keep se_runs.cost_usd (the total the Runs board / Overview
+    // list rows read) in sync with that live estimate — otherwise it only advances at phase end and
+    // undercounts the run by exactly the in-flight phase's live spend. The SDK's authoritative total
+    // replaces both at phase end (recordPhaseEnd). Cleared in finally so the interval never leaks.
     let liveUsage = null;
     let liveBusy = false;
     const heartbeat = setInterval(() => {
@@ -188,12 +201,11 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
           await supabase.from('se_phases')
             .update({ model_usage: mu, cost_usd: est > 0 ? est : null })
             .eq('run_id', run.id).eq('phase', phase).eq('status', 'running');
+          await recomputeRunCost(supabase, run);
         } catch { /* estimate write is best-effort */ }
         liveBusy = false;
       })();
     }, 20000);
-    // Routing (migration 013): phase map + run overrides + escalation decide the engine and model.
-    const routed = resolvePhaseModel(project, run, phase);
     const runner = routed.engine === 'codex' ? new CodexRunner() : new InProcessRunner();
     const routedCredential = routed.engine === 'codex'
       ? { kind: 'openai_api_key', value: project.openaiCred }
