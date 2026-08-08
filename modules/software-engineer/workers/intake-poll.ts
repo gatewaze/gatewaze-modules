@@ -26,6 +26,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
+import { parseDependencies, unmetDependencies, ensureWaitingMarker, clearWaitingMarker, WAITING_LABEL } from '../lib/dependencies.js';
 import { dispatchProject } from '../lib/dispatch.js';
 
 const sb = (ctx) =>
@@ -84,6 +85,22 @@ export default async function intakePoll(job, ctx) {
       } catch { /* events unreadable → labeller stays null → skipped below */ }
       if (!labeller) continue;
       if (allowed.length && !allowed.includes(labeller)) continue; // same policy as the webhook path
+
+      // Dependency sequencing: defer (visibly) until every declared dep issue is closed. Fresh
+      // issues are checked immediately; issues ALREADY marked waiting re-check on a ~10-minute
+      // cadence, not every tick — bounds the steady-state GitHub API fan-out (security review
+      // 2026-08-08) at the cost of up to ~10min extra latency after the last dep lands.
+      const isWaiting = labels.includes(WAITING_LABEL);
+      if (isWaiting && Math.floor(Date.now() / 60000) % 10 >= 2) continue;
+      const deps = parseDependencies(String(issue.body ?? ''), issue.number);
+      if (deps.length) {
+        const unmet = await unmetDependencies(gh, p.issues_repo_owner, p.issues_repo_name, deps);
+        if (unmet.length) {
+          await ensureWaitingMarker(gh, p.issues_repo_owner, p.issues_repo_name, issue.number, labels, unmet, deps);
+          continue;
+        }
+        await clearWaitingMarker(gh, p.issues_repo_owner, p.issues_repo_name, issue.number, labels);
+      }
 
       const { error } = await supabase.from('se_runs').insert({
         site_id: p.site_id, project_id: p.id, instance_id: inst,
