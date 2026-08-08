@@ -40,6 +40,16 @@ export async function recordPhaseStart(sb: unknown, run: any, phase: string, att
   );
 }
 
+/** Sum se_phases.cost_usd across a run and write the rounded total onto se_runs.cost_usd. Shared
+ *  by recordPhaseEnd (phase-close accurate) and the phase-runner heartbeat (keeps the running
+ *  phase's live estimate reflected in the same total, not just at phase end). Callers wrap this in
+ *  their own best-effort try/catch — a transient DB blip here must never fail the phase/run. */
+export async function recomputeRunCost(sb: unknown, run: any) {
+  const { data: rows } = await sb.from('se_phases').select('cost_usd').eq('run_id', run.id);
+  const total = (rows ?? []).reduce((s: number, r: any) => s + (Number(r.cost_usd) || 0), 0);
+  await sb.from('se_runs').update({ cost_usd: Math.round(total * 10000) / 10000 }).eq('id', run.id);
+}
+
 export async function recordPhaseEnd(
   sb: unknown,
   run: any,
@@ -125,11 +135,7 @@ export async function recordPhaseEnd(
   // like the pricing call above: a transient DB blip here must not fail a phase whose real work
   // already succeeded (callers re-enter recordPhaseEnd as 'failed' from their catch blocks).
   if (costUSD != null) {
-    try {
-      const { data: rows } = await sb.from('se_phases').select('cost_usd').eq('run_id', run.id);
-      const total = (rows ?? []).reduce((s: number, r: any) => s + (Number(r.cost_usd) || 0), 0);
-      await sb.from('se_runs').update({ cost_usd: Math.round(total * 10000) / 10000 }).eq('id', run.id);
-    } catch { /* denorm total is best-effort */ }
+    try { await recomputeRunCost(sb, run); } catch { /* denorm total is best-effort */ }
   }
 }
 

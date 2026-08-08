@@ -47,6 +47,24 @@ describe('aggregateRunModelCosts', () => {
     expect(rows).toEqual([{ model: 'claude-sonnet-5', costUSD: 8.44 }]);
   });
 
+  it('attributes a live snapshot to the phase model once it is set (issue #55 fix), not the dominant-usage fallback', () => {
+    const phases = [
+      { phase: 'implement', model: 'claude-sonnet-5', cost_usd: 6.89, model_usage: {
+        'claude-sonnet-5': { input: 500, output: 1344, cacheRead: 29897356, costUSD: null } } },
+      { phase: 'spec', model: 'claude-sonnet-5', cost_usd: 2.21, model_usage: {
+        'claude-sonnet-5': { costUSD: 2.21 } } },
+      { phase: 'review', model: 'claude-haiku-4-5', cost_usd: 0.64, model_usage: {
+        'claude-haiku-4-5': { costUSD: 0.64 } } },
+    ];
+    const { total, rows } = aggregateRunModelCosts(phases);
+    expect(total).toBe(9.74);
+    expect(rows.find((r) => r.model === 'unattributed')).toBeUndefined();
+    expect(rows).toEqual([
+      { model: 'claude-sonnet-5', costUSD: 9.1 },
+      { model: 'claude-haiku-4-5', costUSD: 0.64 },
+    ]);
+  });
+
   it('shortModel strips dated snapshot suffixes', () => {
     expect(aggregateRunModelCosts([])).toEqual({ total: 0, rows: [] });
   });
