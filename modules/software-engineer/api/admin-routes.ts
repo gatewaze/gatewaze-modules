@@ -820,6 +820,9 @@ export function mountAdminRoutes(router, deps) {
   });
 
   router.post('/runs/:id/message', async (req, res) => {
+    if (!rateLimit(`se-admin:run-message:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
     const content = String(req.body?.content ?? '').slice(0, 8000);
@@ -978,10 +981,16 @@ export function mountAdminRoutes(router, deps) {
       .select('id', { count: 'exact', head: true }).eq('run_id', id).eq('phase', resumePhase);
     const nextAttempt = (attemptCount ?? lastFailed?.attempt ?? 0) + 1;
 
-    const { error } = await supabase.from('se_runs')
+    const { data: raced, error } = await supabase.from('se_runs')
       .update({ status: 'running', current_phase: resumePhase, error: null, acting_user_id: authorOf(req) })
-      .eq('id', id).eq('status', run.status);   // atomic guard against a double-resume race
+      .eq('id', id).eq('status', run.status)    // atomic guard against a double-resume race
+      .select('id');
     if (error) return res.status(500).json({ error: 'update failed' });
+    if (!raced || raced.length === 0) {
+      // Lost the CAS: another resume (or the pipeline itself) moved the run first. Say so instead
+      // of reporting a success that did nothing.
+      return res.status(409).json({ error: { code: 'state_changed', message: 'Run state changed — refresh and retry if still needed.' } });
+    }
     try {
       await supabase.from('se_messages').insert({
         run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req),
