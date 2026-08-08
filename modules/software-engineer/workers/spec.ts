@@ -31,6 +31,7 @@ const sb = (ctx) =>
 export default async function spec(job, ctx) {
   const supabase = sb(ctx);
   const objections = job?.data?.objections;
+  const attempt = job?.data?.attempt ?? 1;
   const { data: run } = await supabase.from('se_runs').select('*').eq('id', job?.data?.runId).maybeSingle();
   if (!run) return { skipped: 'no run' };
   if (run.status === 'cancelled') return { skipped: 'cancelled' };
@@ -42,7 +43,7 @@ export default async function spec(job, ctx) {
   const codeRepos = await getCodeRepos(supabase, run.project_id);
   if (codeRepos.length === 0) return blockRun(supabase, run, 'spec', 'authorization', 'project has no code repos');
 
-  await recordPhaseStart(supabase, run, 'spec');
+  await recordPhaseStart(supabase, run, 'spec', attempt);
   const gh = githubClient(token);
   let ws;
   try {
@@ -76,6 +77,7 @@ export default async function spec(job, ctx) {
     const result = await runAgentSession(supabase, ctx, run, project, 'spec', {
       cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit'],
       systemAppend: `Draft a spec, do not implement. All repos here are read-only reference. Write the complete spec to ./${specRelPath} at the workspace root (outside every repo) — that file is what gets reviewed and implemented, not your chat reply.`,
+      attempt,
     });
     if (result.error) {
       const msg = redactToken(result.error, token);

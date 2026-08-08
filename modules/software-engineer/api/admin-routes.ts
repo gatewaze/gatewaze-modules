@@ -26,6 +26,7 @@ import { redactToken } from '../lib/git.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
 import { computeSpendOverview, computeModelUsage } from '../lib/cost.js';
+import { classifyDecision, decisionTextFor, blockSummaryFor } from '../lib/decision-kind.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -434,6 +435,51 @@ export function mountAdminRoutes(router, deps) {
     res.json({ days, models });
   });
 
+  // ── Decisions needed — every run parked waiting on a human, disambiguated + plain-language ─
+  // (issue #49). Aggregates the human-gated statuses that used to be scattered across two separate
+  // spec/architecture RunListSections plus an undifferentiated `blocked` bucket into one endpoint, so
+  // the admin has one place to see everything waiting on them with a deep link to act on it.
+  router.get('/overview/decisions', async (req, res) => {
+    let project: string | null = null;
+    if (req.query.project !== undefined && req.query.project !== '') {
+      project = String(req.query.project);
+      if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
+    }
+    let q = supabase
+      .from('se_runs')
+      .select('id, project_id, repo_owner, repo_name, issue_number, title, status, error, retry_count, current_phase, cost_usd, created_at, updated_at, architecture_repo, architecture_path, architecture_commit_url, project:se_projects(name, avatar_emoji)')
+      .is('archived_at', null)
+      .in('status', ['awaiting_spec', 'awaiting_architecture', 'architecture_in_review', 'ready_to_submit', 'blocked'])
+      .order('updated_at', { ascending: true })
+      .limit(200);
+    if (project) q = q.eq('project_id', project);
+    const { data: runs, error } = await q;
+    if (error) {
+      logger?.warn?.('se: overview/decisions failed', { error: String(error?.message ?? error) });
+      return res.status(500).json({ error: 'overview/decisions failed' });
+    }
+    const runIds = (runs ?? []).map((r) => r.id);
+    const { data: prs } = runIds.length
+      ? await supabase.from('se_run_prs').select('run_id, state').in('run_id', runIds)
+      : { data: [] };
+    const { data: gates } = runIds.length
+      ? await supabase.from('se_gates').select('run_id, detail, created_at').eq('gate', 'adversarial_review').in('run_id', runIds).order('created_at', { ascending: false })
+      : { data: [] };
+    const byRun = {};
+    for (const p of prs ?? []) (byRun[p.run_id] ??= []).push(p);
+    const latestGateByRun = {};
+    for (const g of gates ?? []) if (!latestGateByRun[g.run_id]) latestGateByRun[g.run_id] = g;
+    const decisions = (runs ?? [])
+      .map((r) => {
+        const kind = classifyDecision(r, byRun[r.id] ?? []);
+        if (!kind) return null;
+        const gateDetail = kind === 'review_blocked' ? latestGateByRun[r.id]?.detail ?? null : null;
+        return { ...r, kind, decision: decisionTextFor(kind, r), objections: gateDetail?.objections ?? undefined };
+      })
+      .filter(Boolean);
+    res.json({ decisions, count: decisions.length });
+  });
+
   // ── Overview PR board — every open PR AUTHORED by each project's PAT user ─────────────────
   // Live GitHub view (not just se_run_prs): `author:@me` search per project token, so PRs the
   // user opened OUTSIDE Gatewaze appear too. Each PR is enriched (merge state, latest reviews,
@@ -790,14 +836,22 @@ export function mountAdminRoutes(router, deps) {
     const images = candidateImages.filter((u: string) => isAllowedAttachmentUrl(u));
     const imagesDropped = candidateImages.length - images.length;
     if (!content.trim() && !images.length) return res.status(400).json({ error: 'empty' });
-    const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
+    const { data: run } = await supabase.from('se_runs').select('id, site_id, status, error, retry_count').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
     // A run parked at a gate (spec, architecture) is not a live session — a message is feedback on the
     // parked artifact, handled asynchronously by the matching refine job rather than streamed to a live agent.
     const archState = ['awaiting_architecture', 'architecture_in_review'].includes(run.status);
     const specState = run.status === 'awaiting_spec';
     const codeState = run.status === 'ready_to_submit';
-    if (!archState && !specState && !codeState && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
+    // A `blocked` run is only agent-discussable when the block itself is something the agent can act
+    // on (review_blocked, pr_closed_partial) — a config_blocked run (authorization/kill_switch) needs
+    // a config fix, not a chat, so it still 409s and points the admin at Setup (issue #49 §6).
+    let blockedDiscussable = false;
+    if (run.status === 'blocked') {
+      const { data: prs } = await supabase.from('se_run_prs').select('state').eq('run_id', id);
+      blockedDiscussable = classifyDecision(run, prs ?? []) !== 'config_blocked';
+    }
+    if (!archState && !specState && !codeState && !blockedDiscussable && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
     // Persist the images as markdown appended to the stored message so the transcript renders them
     // inline — the same `![](url)` convention se_messages already carries for issue attachments.
     const stored = images.length
@@ -812,6 +866,9 @@ export function mountAdminRoutes(router, deps) {
       const jobId = specState ? `se-spec-refine-${id}` : codeState ? `se-code-refine-${id}` : `se-arch-refine-${id}`;
       try { await enqueueJob?.('se', worker, { runId: id }, { jobId, removeOnComplete: true }); }
       catch (e) { logger?.warn?.('se: enqueue refine failed', { error: String(e) }); }
+    } else if (blockedDiscussable) {
+      // No live agent to stream to and no refine job to run — the message just sits in the mailbox
+      // (delivered_at=null) and surfaces via drainPendingAdminMessages the next time the run is Resumed.
     } else {
       try { await publishInput(getRedis?.(), id, { kind: 'chat', content, images }); }
       catch (e) { logger?.warn?.('se: publish chat failed', { error: String(e) }); }
@@ -877,17 +934,45 @@ export function mountAdminRoutes(router, deps) {
     const { data: run } = await supabase.from('se_runs')
       .select('id, site_id, project_id, status, kind, archived_at, current_phase, error').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
-    if (run.status !== 'failed') return res.status(409).json({ error: { code: 'not_failed', message: `run is ${run.status}` } });
+    // issue #49: `blocked` joined `failed` as a resumable status — a run parked on a closed-unmerged
+    // PR or a skeptic block is just as resumable as a crashed phase, it just resolves a different
+    // target phase below (per its DecisionKind) instead of the last-FAILED se_phases row.
+    if (!['failed', 'blocked'].includes(run.status)) return res.status(409).json({ error: { code: 'not_resumable', message: `run is ${run.status}` } });
     if (run.archived_at) return res.status(409).json({ error: { code: 'archived', message: 'Unarchive the run before resuming it.' } });
     if (run.kind === 'interactive') return res.status(409).json({ error: { code: 'not_resumable', message: 'Interactive sessions cannot be resumed this way.' } });
     if (await denyIfNotApprover(req, res, run)) return;   // Advance action
 
-    // Ground truth for what actually failed is the latest FAILED se_phases row, not run.current_phase
-    // (they can disagree, e.g. a crash mid-write) — prefer the phase row and fail closed if neither
-    // resolves, rather than guessing and re-cloning into the wrong phase.
-    const { data: lastFailed } = await supabase.from('se_phases')
-      .select('phase, attempt').eq('run_id', id).eq('status', 'failed').order('started_at', { ascending: false }).limit(1).maybeSingle();
-    const resumePhase = lastFailed?.phase ?? run.current_phase ?? null;
+    let resumePhase = null;
+    let kind = null;
+    let gateDetail = null;
+    let lastFailed = null;
+    let extraJobData = {};
+    if (run.status === 'blocked') {
+      // Disambiguate the block (issue #49 §1) so the run rejoins the pipeline at the RIGHT phase —
+      // a closed-unmerged PR needs `revise`, a skeptic block needs a fresh `spec` draft, and a
+      // config block (authorization/kill_switch) just retries whatever phase it was already on.
+      const { data: prs } = await supabase.from('se_run_prs').select('state').eq('run_id', id);
+      kind = classifyDecision(run, prs ?? []);
+      if (kind === 'review_blocked') {
+        const { data: gate } = await supabase.from('se_gates')
+          .select('detail').eq('run_id', id).eq('gate', 'adversarial_review').order('created_at', { ascending: false }).limit(1).maybeSingle();
+        gateDetail = gate?.detail ?? null;
+        resumePhase = 'spec';
+        extraJobData = { objections: gateDetail?.objections ?? [] };
+      } else if (kind === 'pr_closed_partial') {
+        resumePhase = 'revise';
+      } else {
+        resumePhase = run.current_phase ?? null;
+      }
+    } else {
+      // Ground truth for what actually failed is the latest FAILED se_phases row, not run.current_phase
+      // (they can disagree, e.g. a crash mid-write) — prefer the phase row and fail closed if neither
+      // resolves, rather than guessing and re-cloning into the wrong phase.
+      const { data } = await supabase.from('se_phases')
+        .select('phase, attempt').eq('run_id', id).eq('status', 'failed').order('started_at', { ascending: false }).limit(1).maybeSingle();
+      lastFailed = data;
+      resumePhase = lastFailed?.phase ?? run.current_phase ?? null;
+    }
     if (!resumePhase) return res.status(409).json({ error: { code: 'no_phase', message: 'Could not determine which phase to resume.' } });
     const { count: attemptCount } = await supabase.from('se_phases')
       .select('id', { count: 'exact', head: true }).eq('run_id', id).eq('phase', resumePhase);
@@ -895,15 +980,15 @@ export function mountAdminRoutes(router, deps) {
 
     const { error } = await supabase.from('se_runs')
       .update({ status: 'running', current_phase: resumePhase, error: null, acting_user_id: authorOf(req) })
-      .eq('id', id).eq('status', 'failed');   // atomic guard against a double-resume race
+      .eq('id', id).eq('status', run.status);   // atomic guard against a double-resume race
     if (error) return res.status(500).json({ error: 'update failed' });
     try {
       await supabase.from('se_messages').insert({
         run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req),
-        content: `Resumed by admin (attempt ${nextAttempt} of ${resumePhase}). Original failure: ${run.error ?? 'unknown'}`,
+        content: `Resumed by admin (attempt ${nextAttempt} of ${resumePhase}). ${blockSummaryFor(kind, run, gateDetail)}`,
       });
     } catch { /* best-effort — the phase badges still show the resume via attempt tracking */ }
-    try { await enqueuePhase({ enqueueJob }, id, resumePhase, { attempt: nextAttempt }); }
+    try { await enqueuePhase({ enqueueJob }, id, resumePhase, { attempt: nextAttempt, ...extraJobData }); }
     catch (e) { logger?.warn?.('se: enqueue after resume failed', { error: String(e) }); }
     res.json({ resumed: true, phase: resumePhase, attempt: nextAttempt });
   });

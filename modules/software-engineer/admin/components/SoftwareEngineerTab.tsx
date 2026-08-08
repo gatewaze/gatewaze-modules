@@ -34,7 +34,8 @@ import { ALL_RUN_STATUSES, STATUS_LABELS, STATUS_COLOR, toggleStatusInParam, fmt
 import { aggregateRunModelCosts, shortModel } from '../lib/run-costs';
 import { formatAbsolute, formatRelative } from '../lib/format-time';
 import { isNearBottom } from './autoscroll';
-import { resumeBlockedReason } from './resumeButton';
+import { resumeBlockedReason, resumeHintFor, resumeConfirmText } from './resumeButton';
+import { classifyDecision, decisionTextFor } from '../../lib/decision-kind.js';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -341,7 +342,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   };
   // Resume a FAILED run back into the phase that failed (issue #36) — keeps the run id + full history.
   const resume = async () => {
-    if (!selected || !window.confirm('Resume this run? It will retry the phase that failed.')) return;
+    if (!selected || !window.confirm(resumeConfirmText(detail?.run ?? { status: 'failed' }, detail?.prs ?? []))) return;
     setResuming(true); setErr(null);
     try {
       const r = await api(`/runs/${selected}/resume`, { method: 'POST' });
@@ -610,18 +611,24 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   {detail.run.kind === 'interactive' && detail.run.status === 'running' && (
                     <Button variant="soft" color="red" size="xs" onClick={closeSession}><StopCircleIcon className="size-3.5 mr-1" />End session</Button>
                   )}
-                  {detail.run.status === 'failed' && (() => {
+                  {/* A `blocked` run joined `failed` as resumable (issue #49 §5) — Resume redrafts the
+                      spec, retries `revise`, or just retries the current phase, depending on the run's
+                      DecisionKind. `blockedReason` still hard-disables (archived/interactive); the
+                      DecisionKind hint below it is informational only — even config_blocked stays
+                      resumable, since /resume just retries that phase. */}
+                  {['failed', 'blocked'].includes(detail.run.status) && (() => {
                     const blockedReason = resumeBlockedReason(detail.run);
+                    const hint = blockedReason ? null : resumeHintFor(detail.run, detail.prs ?? []);
                     return (
                       <span className="inline-flex items-center gap-1.5">
                         <Button
                           variant="solid" color="amber" size="xs" onClick={resume}
                           disabled={resuming || !!blockedReason}
-                          title={blockedReason ?? 'Retry the phase that failed, keeping this run’s history'}
+                          title={blockedReason ?? hint ?? 'Retry the phase that failed, keeping this run’s history'}
                         >
                           <ArrowPathIcon className="size-3.5 mr-1" />{resuming ? 'Resuming…' : 'Resume'}
                         </Button>
-                        {blockedReason && <span className="text-xs text-[var(--gray-10)]">{blockedReason}</span>}
+                        {(blockedReason || hint) && <span className="text-xs text-[var(--gray-10)]">{blockedReason ?? hint}</span>}
                       </span>
                     );
                   })()}
@@ -768,6 +775,41 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                 </div>
               </div>
             )}
+
+            {/* A `blocked` run disambiguated (issue #49 §1/§6): review_blocked / pr_closed_partial are
+                agent-discussable — there's no live agent to stream to, so the message sits in the
+                mailbox and is read the next time the run is Resumed (button above). config_blocked
+                needs a Setup fix, not a chat, so it only shows the reason. */}
+            {detail.run.status === 'blocked' && (() => {
+              const kind = classifyDecision(detail.run, detail.prs ?? []);
+              const discussable = kind !== 'config_blocked';
+              return (
+                <div className="mt-3 rounded-lg border border-[var(--red-6)] bg-[var(--red-2)] p-3">
+                  <span className="text-sm font-medium text-[var(--gray-12)]">🛑 {kind ? decisionTextFor(kind, detail.run) : 'Blocked'}</span>
+                  {discussable ? (
+                    <>
+                      <p className="text-xs text-[var(--gray-10)] mt-1">Chat below to give the agent context — it’s stored and read the next time you <strong>Resume</strong> above (there’s no live agent to stream to right now).</p>
+                      <div className="mt-3">
+                        <textarea
+                          value={draft}
+                          onChange={(e) => setDraft(e.target.value)}
+                          placeholder="Give the agent context for when this run is resumed…"
+                          rows={2}
+                          className="w-full rounded border border-[var(--gray-6)] bg-[var(--gray-1)] px-2 py-1 text-sm text-[var(--gray-12)]"
+                        />
+                        <div className="mt-2">
+                          <Button variant="soft" size="xs" onClick={send} disabled={!draft.trim()}>
+                            <PaperAirplaneIcon className="size-3.5 mr-1" />Send to agent
+                          </Button>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-[var(--gray-10)] mt-1">This needs a configuration fix (see Setup), not a chat. Fix the issue, then use <strong>Resume</strong> above to retry.</p>
+                  )}
+                </div>
+              );
+            })()}
 
             <TestEnvPanel prs={detail.prs ?? []} projectId={detail.run.project_id} projectName={detail.run.project?.name} />
 
