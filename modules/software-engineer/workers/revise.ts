@@ -83,8 +83,14 @@ export default async function revise(job, ctx) {
     const commitId = await resolveCommitIdentity(supabase, project, token);
     ws = await makeMultiWorkspace(codeRepos, token, run.branch_name, commitId, true);
 
+    // classification (issue #54): the platform's ci-classify pass already flagged which checks look
+    // addressable, and why. Prepending it focuses the agent on those checks instead of re-diagnosing
+    // everything from scratch. Absent for a `revise` job enqueued before this field existed, or for
+    // any non-CI reason — the prompt is unchanged in that case.
+    const classification = typeof job?.data?.classification === 'string' ? job.data.classification.trim() : '';
     const prompt = ciMode
       ? [
+          ...(classification ? [`CI TRIAGE NOTE (from the platform, before you start):`, classification, ``] : []),
           `The CI checks on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''} are FAILING.`,
           `Reproduce and fix them by editing the code in the relevant WRITABLE repo(s) in your workspace.`,
           `Run the repo's own checks (typecheck, lint, tests, security review) exactly as its CLAUDE.md`,
