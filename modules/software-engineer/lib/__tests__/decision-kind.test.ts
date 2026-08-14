@@ -53,6 +53,15 @@ describe('classifyDecision', () => {
     const prs = [{ state: 'open' }, { state: 'merged' }];
     expect(classifyDecision(run, prs)).toBe('config_blocked');
   });
+
+  it('classifies a cost-ceiling block as config_blocked with the raise-the-ceiling text (issue #57)', () => {
+    const run = {
+      status: 'blocked',
+      error: 'cost ceiling reached: this run has spent $22.55 of its $20.00 per-run ceiling — raise it in Setup or split the issue',
+    };
+    expect(classifyDecision(run, [])).toBe('config_blocked');
+    expect(decisionTextFor('config_blocked', run)).toBe(run.error);
+  });
 });
 
 describe('decisionTextFor', () => {
