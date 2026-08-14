@@ -81,6 +81,7 @@ export default async function verify(job, ctx) {
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
+      if (result.costCeiling) return blockRun(supabase, run, 'verify', 'cost_ceiling', msg);
       await recordPhaseEnd(supabase, run, 'verify', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
       return { failed: msg };
