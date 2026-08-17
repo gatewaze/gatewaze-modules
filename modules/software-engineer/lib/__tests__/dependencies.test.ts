@@ -27,8 +27,35 @@ describe('unmetDependencies', () => {
   it('returns only still-open deps', async () => {
     expect(await unmetDependencies(gh({ 1: 'closed', 2: 'open', 3: 'closed' }), 'o', 'r', [1, 2, 3])).toEqual([2]);
   });
-  it('fails open on unfetchable/unknown issues', async () => {
-    expect(await unmetDependencies(gh({ 1: new Error('404'), 2: 'open' }), 'o', 'r', [1, 2])).toEqual([2]);
+  it("fails OPEN only on a definitive 404 (unknown/typo'd issue number)", async () => {
+    expect(await unmetDependencies(gh({ 1: new Error('github GET /repos/o/r/issues/1 → 404'), 2: 'open' }), 'o', 'r', [1, 2]))
+      .toEqual([2]);
+  });
+  it('fails CLOSED on a 401 (auth) error', async () => {
+    expect(await unmetDependencies(gh({ 1: new Error('github GET /repos/o/r/issues/1 → 401'), 2: 'closed' }), 'o', 'r', [1, 2]))
+      .toEqual([1]);
+  });
+  it('fails CLOSED on a 403 (auth) error', async () => {
+    expect(await unmetDependencies(gh({ 1: new Error('github GET /repos/o/r/issues/1 → 403') }), 'o', 'r', [1]))
+      .toEqual([1]);
+  });
+  it('fails CLOSED on a 5xx (server) error', async () => {
+    expect(await unmetDependencies(gh({ 1: new Error('github GET /repos/o/r/issues/1 → 503') }), 'o', 'r', [1]))
+      .toEqual([1]);
+  });
+  it('fails CLOSED on a network error with no status code', async () => {
+    expect(await unmetDependencies(gh({ 1: new Error('fetch failed') }), 'o', 'r', [1]))
+      .toEqual([1]);
+  });
+  it('logs which path was taken (smoke test, not per-status-class)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await unmetDependencies(gh({ 1: new Error('github GET /repos/o/r/issues/1 → 500') }), 'o', 'r', [1]);
+    expect(warnSpy).toHaveBeenCalled();
+    await unmetDependencies(gh({ 2: new Error('github GET /repos/o/r/issues/2 → 404') }), 'o', 'r', [2]);
+    expect(logSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
   });
 });
 
