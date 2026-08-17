@@ -9,7 +9,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
-import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.js';
+import { makeMultiWorkspace, hasChanges, commitAndPush, commitsAhead, pushBranch } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, listRunPrs } from '../lib/run-state.js';
@@ -119,11 +119,17 @@ export default async function revise(job, ctx) {
 
     let pushed = 0;
     for (const r of ws.repos.filter((x) => x.writable)) {
-      if (!(await hasChanges(r.dir))) continue;
+      const dirty = await hasChanges(r.dir);
+      const ahead = dirty ? 0 : await commitsAhead(r.dir, r.startSha);
+      if (!dirty && ahead === 0) continue;
       const subject = ciMode
         ? `fix(ci): repair failing checks${run.issue_number ? ` on #${run.issue_number}` : ''}`
         : `fix: address review feedback${run.issue_number ? ` on #${run.issue_number}` : ''}`;
-      try { await commitAndPush(r.dir, run.branch_name, subject); pushed++; }
+      try {
+        if (dirty) await commitAndPush(r.dir, run.branch_name, subject);
+        else await pushBranch(r.dir, run.branch_name);
+        pushed++;
+      }
       catch { /* leave that PR as-is */ }
     }
     const round = (run.revise_count ?? 0) + 1;
