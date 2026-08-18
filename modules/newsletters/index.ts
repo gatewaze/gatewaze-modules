@@ -339,6 +339,7 @@ const newslettersModule: GatewazeModule = {
     'migrations/079_block_member_gating.sql',
     'migrations/080_default_placeholder_signin_cta.sql',
     'migrations/081_block_gating_via_content.sql',
+    'migrations/082_edition_member_embargo.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

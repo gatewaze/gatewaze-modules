@@ -12,6 +12,22 @@ function sb() {
   return _sb;
 }
 
+// Bearer token -> Supabase user -> is_admin() evaluated WITH the caller's JWT
+// (same predicate RLS uses). Returns a Response on failure (caller returns it),
+// or null when the caller is a verified admin.
+async function requireAdmin(req: Request, res: Response): Promise<Response | null> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: { code: 'unauthorized', message: 'Missing bearer token' } });
+  }
+  const jwt = authHeader.slice('Bearer '.length);
+  const { data, error } = await sb().auth.getUser(jwt);
+  if (error || !data?.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Invalid token' } });
+  const { data: isAdmin, error: rpcError } = await sb().rpc('is_admin', {}, { headers: { Authorization: `Bearer ${jwt}` } });
+  if (rpcError || !isAdmin) return res.status(403).json({ error: { code: 'forbidden', message: 'Admin privileges required' } });
+  return null;
+}
+
 const INBOX_DEFAULT_STATES = ['pending_review'];
 const ALLOWED_PUBLISH_STATES = [
   'draft', 'pending_review', 'auto_suppressed', 'rejected', 'published', 'unpublished',
@@ -291,6 +307,69 @@ async function listFromContentTables(
 }
 
 export function registerRoutes(app: Express, _ctx?: ModuleContext) {
+  // ──────────────────────────────────────────────────────────────────────────
+  // Content access policies (the member-gating registry). Admin-only. Lets an
+  // operator set a per-item or per-type gate: audience (public|members),
+  // min_tier_rank, embargo_days (recent-content window), gated_actions (e.g.
+  // 'register'). Enforcement lives in each content type's RLS/read via
+  // content_access_visible() / content_access_action_allowed().
+  // ──────────────────────────────────────────────────────────────────────────
+  app.get('/api/admin/content-access', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
+    try {
+      let q = sb().from('content_access_policies').select('*').order('content_type').order('entity_id', { nullsFirst: true });
+      if (typeof req.query.content_type === 'string') q = q.eq('content_type', req.query.content_type);
+      const { data, error } = await q;
+      if (error) return res.status(500).json({ error: { code: 'db', message: error.message } });
+      return res.json({ policies: data ?? [] });
+    } catch (e) {
+      return res.status(500).json({ error: { code: 'internal', message: (e as Error).message } });
+    }
+  });
+
+  app.put('/api/admin/content-access', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
+    try {
+      const b = req.body ?? {};
+      const content_type = typeof b.content_type === 'string' ? b.content_type.trim() : '';
+      if (!content_type) return res.status(400).json({ error: { code: 'validation', message: 'content_type required' } });
+      const audience = b.audience === 'members' ? 'members' : 'public';
+      // Allowlisted args only — never spread req.body into the RPC.
+      const args = {
+        p_content_type: content_type,
+        p_entity_id: typeof b.entity_id === 'string' && b.entity_id ? b.entity_id : null,
+        p_audience: audience,
+        p_min_tier_rank: Number.isFinite(Number(b.min_tier_rank)) ? Math.max(0, Math.trunc(Number(b.min_tier_rank))) : 0,
+        p_embargo_days: b.embargo_days == null || b.embargo_days === '' ? null : Math.max(1, Math.trunc(Number(b.embargo_days))),
+        p_gated_actions: Array.isArray(b.gated_actions) ? b.gated_actions.filter((a: unknown) => typeof a === 'string') : [],
+        p_placeholder: b.placeholder && typeof b.placeholder === 'object' ? b.placeholder : null,
+        p_note: typeof b.note === 'string' ? b.note : null,
+      };
+      const { data, error } = await sb().rpc('register_content_access', args);
+      if (error) return res.status(500).json({ error: { code: 'db', message: error.message } });
+      return res.json({ policy: data });
+    } catch (e) {
+      return res.status(500).json({ error: { code: 'internal', message: (e as Error).message } });
+    }
+  });
+
+  app.delete('/api/admin/content-access', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
+    try {
+      const b = req.body ?? {};
+      const content_type = typeof b.content_type === 'string' ? b.content_type.trim() : '';
+      if (!content_type) return res.status(400).json({ error: { code: 'validation', message: 'content_type required' } });
+      const { data, error } = await sb().rpc('clear_content_access', {
+        p_content_type: content_type,
+        p_entity_id: typeof b.entity_id === 'string' && b.entity_id ? b.entity_id : null,
+      });
+      if (error) return res.status(500).json({ error: { code: 'db', message: error.message } });
+      return res.json({ cleared: data });
+    } catch (e) {
+      return res.status(500).json({ error: { code: 'internal', message: (e as Error).message } });
+    }
+  });
+
   // ──────────────────────────────────────────────────────────────────────────
   // Inbox list
   // ──────────────────────────────────────────────────────────────────────────
