@@ -52,3 +52,15 @@ AS $$
   LIMIT p_limit OFFSET p_offset;
 $$;
 ALTER FUNCTION public.newsletters_public_list(int, int) OWNER TO gatewaze_module_writer;
+
+-- The generic /api/v1/content aggregator (packages/api reads each module's
+-- publicContentSources.table via the SERVICE-ROLE client, bypassing RLS). Point
+-- the newsletters source at a gated view so a gated/embargoed edition's METADATA
+-- (title, preheader) doesn't leak via /api/v1/content?expand=full. Columns mirror
+-- publicContentSources.fullFields + what the aggregator's summary/resourcePath need.
+CREATE OR REPLACE VIEW public.newsletters_public_editions AS
+SELECT id, collection_id, title, edition_date, preheader, content_category, status, created_at, updated_at
+FROM public.newsletters_editions
+WHERE status = 'published'
+  AND public.content_access_visible('newsletter_edition', id, edition_date::timestamptz);
+GRANT SELECT ON public.newsletters_public_editions TO anon, authenticated, service_role;
