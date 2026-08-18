@@ -528,5 +528,20 @@ function puckEntryFromRegistry(
     // at the boundary so callers aren't forced to thread Puck generics.
     config.resolveData = entry.resolveData as unknown;
   }
+  // Member gating is enforced ONLY for top-level edition blocks (the send path
+  // wraps sentinels around top-level blocks; the web-view RPC + RLS read
+  // top-level rows). A block nested inside a slot container is never a gated
+  // row, so a gate toggle there would be a silent no-op that ships the content
+  // in full. Hide the gate fields when the block has a parent so the control is
+  // only offered where it actually works.
+  config.resolveFields = ((_data: unknown, params?: { parent?: unknown }) => {
+    if (params && params.parent) {
+      const clone: Record<string, unknown> = { ...(mergedFields as Record<string, unknown>) };
+      delete clone._gate_audience;
+      delete clone._gate_tier;
+      return clone;
+    }
+    return mergedFields;
+  }) as unknown;
   return config as Config['components'][string];
 }
