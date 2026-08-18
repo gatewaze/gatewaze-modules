@@ -27,6 +27,9 @@ import {
 } from './event-personalisation.js';
 // Weather resolver shared with the broadcast binding (per spec-broadcasts-blocks §11.4).
 import { WEATHER_TOKENS, resolveWeather } from './weather-personalisation.js';
+// Per-recipient member gating for blocks: lift gated regions to {{gate_<id>}}
+// tokens, then substitute real html (member) or a members-only placeholder.
+import { parseGatedBlocks, renderGatePlaceholderHtml, type GatePlaceholder } from './block-gating.js';
 
 const MERGE_FIELDS = ['first_name', 'last_name', 'name', 'company', 'job_title'];
 
@@ -39,6 +42,15 @@ type NlCtx = SendContext & {
   usesLocalEvents: boolean; localConfig: LocalConfig;
   localEventsCache: Map<string, string>;             // area key -> rendered events HTML (or '')
   virtualEventsHtml: string;                         // resolved once per send (global); '' when none/unused
+  // Member-gated blocks. `gates` maps each {{gate_<id>}} token to the real block
+  // html + the members-only placeholder html + the min tier. Membership is
+  // resolved per batch (person_id -> highest active tier_rank); a recipient
+  // absent from memberTierByPerson is treated as a non-member (fail-closed:
+  // gated content never ships to a non-member, even if the lookup errored).
+  hasGates: boolean;
+  gates: Map<string, { realHtml: string; placeholderHtml: string; tier: number }>;
+  personIdByEmail: Map<string, string>;
+  memberTierByPerson: Map<string, number>;
 };
 
 function escapeHtml(s: string): string {
@@ -154,6 +166,31 @@ export const newsletterBinding: SendEngineBinding = {
       } catch (e) { deps.logger.warn('[send-engine] virtual events resolve failed', e); }
     }
 
+    // Member-gated blocks: lift each gated region out of the html into a
+    // {{gate_<id>}} token (resolved per recipient in buildSubstitutions). Do this
+    // BEFORE scanTokens so the gate tokens are picked up.
+    const { html: gatedHtml, gates: gateList } = parseGatedBlocks(html);
+    html = gatedHtml;
+    const gates = new Map<string, { realHtml: string; placeholderHtml: string; tier: number }>();
+    if (gateList.length) {
+      let def: GatePlaceholder = {
+        title: 'Members only',
+        body: 'This section is for members. Sign in with your member email to read it.',
+        cta_label: 'Sign in to read', cta_url: '/sign-in',
+      };
+      try {
+        const { data } = await deps.supabase.rpc('newsletters_default_block_placeholder');
+        if (data && typeof data === 'object') def = data as GatePlaceholder;
+      } catch { /* hardcoded default stands */ }
+      for (const g of gateList) {
+        gates.set(g.token, {
+          tier: g.tier,
+          realHtml: g.realHtml,
+          placeholderHtml: renderGatePlaceholderHtml(g.placeholder, def, portalBaseUrl),
+        });
+      }
+    }
+
     const ctx: NlCtx = {
       sendId, brand: send.brand || process.env.SEND_ENGINE_DEFAULT_BRAND || 'default', channel: send.channel || 'email',
       subject, html,
@@ -166,6 +203,7 @@ export const newsletterBinding: SendEngineBinding = {
       usesWeather, weatherUnits: unitMarker && unitMarker[1] === 'fahrenheit' ? 'fahrenheit' : 'celsius',
       attrs: new Map(), weatherCache: new Map(),
       usesLocalEvents, localConfig, localEventsCache: new Map(), virtualEventsHtml,
+      hasGates: gates.size > 0, gates, personIdByEmail: new Map(), memberTierByPerson: new Map(),
     };
     return ctx;
   },
@@ -174,8 +212,33 @@ export const newsletterBinding: SendEngineBinding = {
     const c = ctx as NlCtx;
     const emails = recipients.map((r) => r.email).filter(Boolean) as string[];
     for (let i = 0; i < emails.length; i += 500) {
-      const { data } = await deps.supabase.from('people').select('email, attributes').in('email', emails.slice(i, i + 500));
-      for (const row of data ?? []) c.attrs.set(row.email, row.attributes ?? {});
+      const { data } = await deps.supabase.from('people').select('id, email, attributes').in('email', emails.slice(i, i + 500));
+      for (const row of data ?? []) {
+        c.attrs.set(row.email, row.attributes ?? {});
+        if (row.id) c.personIdByEmail.set(row.email, row.id as string);
+      }
+    }
+
+    // Member gating: resolve each recipient's highest active member tier once per
+    // batch (single RPC). Fail-closed — if the lookup errors or membership isn't
+    // installed, no one is marked a member and every gated block shows its
+    // placeholder, so gated content can never leak.
+    if (c.hasGates) {
+      const ids = Array.from(new Set(
+        recipients.map((r) => r.email && c.personIdByEmail.get(r.email)).filter(Boolean) as string[],
+      )).filter((id) => !c.memberTierByPerson.has(id));
+      for (let i = 0; i < ids.length; i += 1000) {
+        const slice = ids.slice(i, i + 1000);
+        try {
+          const { data, error } = await deps.supabase.rpc('membership_persons_member_tiers', { p_person_ids: slice });
+          if (error) { deps.logger.warn('[send-engine] membership tier lookup failed — gated blocks show placeholder', error); continue; }
+          for (const row of (data ?? []) as Array<{ person_id: string; tier_rank: number }>) {
+            c.memberTierByPerson.set(row.person_id, Number(row.tier_rank) || 0);
+          }
+        } catch (e) {
+          deps.logger.warn('[send-engine] membership tier lookup threw — gated blocks show placeholder', e);
+        }
+      }
     }
 
     // Local events: resolve once per unique area (recipients in the same metro
@@ -241,6 +304,17 @@ export const newsletterBinding: SendEngineBinding = {
         continue;
       }
       if (inner === 'virtual_events_block') { subs[token] = c.virtualEventsHtml || ''; continue; }
+      // Member-gated block: real html for a qualifying member, placeholder for
+      // everyone else. Fail-closed — unknown token or unresolved membership => placeholder.
+      if (inner.startsWith('gate_')) {
+        const g = c.gates.get(token);
+        if (!g) { subs[token] = ''; continue; }
+        const pid = r.email ? c.personIdByEmail.get(r.email) : undefined;
+        const tierRank = pid ? c.memberTierByPerson.get(pid) : undefined;
+        const isMember = tierRank !== undefined && tierRank >= g.tier;
+        subs[token] = isMember ? g.realHtml : g.placeholderHtml;
+        continue;
+      }
       // merge field, optionally `field|fallback`
       const m = inner.match(/^([a-z_]+)\s*(?:\|(.*))?$/);
       if (m && MERGE_FIELDS.includes(m[1])) {

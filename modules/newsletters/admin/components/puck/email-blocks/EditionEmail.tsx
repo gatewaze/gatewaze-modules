@@ -26,7 +26,7 @@
  */
 
 import { Body, Container, Head, Html, Preview } from '@react-email/components';
-import { cloneElement, isValidElement } from 'react';
+import { cloneElement, isValidElement, Fragment } from 'react';
 import type { ComponentType, ReactElement, ReactNode } from 'react';
 import type { NewsletterEdition, EditionBlock } from '../../../utils/types.js';
 import { getEmailBlock, type FormatId } from './index.js';
@@ -41,6 +41,14 @@ import { renderTemplate } from '../../../../../sites/lib/canvas-render/mustache-
 import { extractSpacing, wrapWithSpacing } from './spacing-wrapper.js';
 import { parseTemplate } from './declarative/parse-template.js';
 import { DeclarativeBlock } from './declarative/render.js';
+
+/** UTF-8-safe base64 for the gate sentinel config. Runs in the Node worker
+ *  (Buffer) and the browser editor (btoa) — both produce/consume base64 the
+ *  send binding decodes with Buffer.from(b64,'base64'). */
+function gateConfigB64(s: string): string {
+  if (typeof Buffer !== 'undefined') return Buffer.from(s, 'utf8').toString('base64');
+  return btoa(unescape(encodeURIComponent(s)));
+}
 
 export interface EditionEmailProps {
   edition: NewsletterEdition;
@@ -137,9 +145,30 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
     (b) => (blockMeta.get(b.id)?.render_kind ?? 'mustache') === 'mustache',
   );
 
-  const blockEls = sorted.map((block) => (
-    <BlockSlot key={block.id} block={block} format={format} meta={blockMeta.get(block.id)} registry={registry} />
-  ));
+  const blockEls = sorted.map((block) => {
+    const slot = (
+      <BlockSlot key={block.id} block={block} format={format} meta={blockMeta.get(block.id)} registry={registry} />
+    );
+    // Member gating (send renders only). A members-only block still renders its
+    // REAL html here, but wrapped between empty sentinel spans carrying the tier
+    // + custom placeholder. The send binding lifts the region out and swaps in
+    // the real html for a qualifying member, or a members-only placeholder for
+    // everyone else (workers/block-gating.ts). Non-send renders (publish / web /
+    // editor canvas) never emit the sentinels — the web view gates via the
+    // newsletters_blocks_for_viewer RPC instead.
+    const gateContent = (block as { content?: Record<string, unknown> }).content ?? {};
+    if (!forSend || gateContent._gate_audience !== 'members') return slot;
+    const tier = Number(gateContent._gate_tier) || 0;
+    const placeholder = (gateContent._gate_placeholder as unknown) ?? null;
+    const cfg = gateConfigB64(JSON.stringify({ t: tier, p: placeholder }));
+    return (
+      <Fragment key={block.id}>
+        <span data-gwgate={block.id} data-gwph={cfg} />
+        {slot}
+        <span data-gwgate-end={block.id} />
+      </Fragment>
+    );
+  });
 
   // Declarative wrapper from the newsletter's template repo (templates_wrappers
   // row, key='default'). When present the edition body renders inside the
