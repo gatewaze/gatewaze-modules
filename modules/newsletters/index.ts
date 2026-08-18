@@ -337,6 +337,8 @@ const newslettersModule: GatewazeModule = {
     // out of THIS change to isolate the gating deploy; register them in a
     // separate, verified step.
     'migrations/079_block_member_gating.sql',
+    'migrations/080_default_placeholder_signin_cta.sql',
+    'migrations/081_block_gating_via_content.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

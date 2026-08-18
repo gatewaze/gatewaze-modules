@@ -170,6 +170,37 @@ const SPACING_DEFAULTS = {
   _spacing_margin: '0px',
 };
 
+// Universal per-block member gating. Like the spacing fields, these are merged
+// into every block's sidebar. Their values flow into the block's `content`
+// jsonb via the normal save path; the gating SQL (migration 081) reads
+// content->'_gate_audience' / '_gate_tier'. 'members' hides the block's real
+// content from non-members in both the web view (redacting RPC) and email
+// (send-time substitution), showing a members-only placeholder instead.
+const MEMBER_GATE_FIELDS: Record<string, Field> = {
+  _gate_audience: {
+    type: 'radio',
+    label: 'Who can see this block',
+    options: [
+      { label: 'Everyone', value: 'public' },
+      { label: 'Members only', value: 'members' },
+    ],
+  },
+  _gate_tier: {
+    type: 'select',
+    label: 'Minimum member tier (if members only)',
+    options: [
+      { label: 'Any member', value: '0' },
+      { label: 'Gold or higher', value: '300' },
+      { label: 'Platinum only', value: '400' },
+    ],
+  },
+};
+
+const MEMBER_GATE_DEFAULTS = {
+  _gate_audience: 'public',
+  _gate_tier: '0',
+};
+
 /**
  * A field key whose value is rendered into an HTML *attribute* (href, src)
  * rather than as visible text. Puck's `contentEditable` transform replaces
@@ -418,6 +449,7 @@ function puckEntryFromRegistry(
         // so the order flip doesn't change collision behaviour.)
         ...(entry.fields as Record<string, Field>),
         ...SPACING_FIELDS,
+        ...MEMBER_GATE_FIELDS,
       }),
       { renderHost },
     ),
@@ -425,6 +457,7 @@ function puckEntryFromRegistry(
   assertCustomFieldsHaveRender(entry.componentId, mergedFields);
   const mergedDefaults = {
     ...SPACING_DEFAULTS,
+    ...MEMBER_GATE_DEFAULTS,
     ...entry.defaultProps,
   };
   const config: Record<string, unknown> = {
@@ -448,6 +481,9 @@ function puckEntryFromRegistry(
         editMode,
         _spacing_padding,
         _spacing_margin,
+        _gate_audience,
+        _gate_tier,
+        _gate_placeholder,
         ...rest
       } = rawProps as {
         id?: string;
@@ -457,8 +493,14 @@ function puckEntryFromRegistry(
         editMode?: unknown;
         _spacing_padding?: string;
         _spacing_margin?: string;
+        _gate_audience?: string;
+        _gate_tier?: string;
+        _gate_placeholder?: unknown;
         [k: string]: unknown;
       };
+      // Gating props are consumed by the SQL layer (content->'_gate_*'), not the
+      // block Component — strip them like _spacing_* so they never render.
+      void _gate_audience; void _gate_tier; void _gate_placeholder;
       void id; void variant_key;
       // Editor-vs-publish discriminator. Puck only ever supplies this through
       // `puck.isEditing` (true inside the canvas, false at publish); the
