@@ -63,7 +63,10 @@ export function parseGatedBlocks(html: string): { html: string; gates: GatedBloc
       tier = Number(cfg.t) || 0;
       placeholder = cfg.p && typeof cfg.p === 'object' ? (cfg.p as GatePlaceholder) : null;
     } catch {
-      /* malformed config -> tier 0, default placeholder (fail-closed anyway) */
+      /* malformed config -> tier 0 + default placeholder. A non-member still
+         never sees the block (fail-closed across the public/member boundary);
+         tier 0 is only the least-restrictive *member* tier if the config was
+         corrupted, which trusted server/client emission does not produce. */
     }
     const token = `{{gate_${id}}}`;
     // Guard against a duplicate id somehow appearing twice: keep the first.
@@ -99,6 +102,10 @@ export function renderGatePlaceholderHtml(
   const body = esc(p.body || 'This section is for members. Sign in with your member email to read it.');
   const label = esc(p.cta_label || 'Sign in to read');
   let url = p.cta_url || '/sign-in';
+  // Scheme allowlist (matches the Button.tsx SAFE_HREF convention) — never let a
+  // javascript:/data: URL through even though the placeholder is admin-authored.
+  const SAFE_HREF = /^(https?:|mailto:|tel:|\/)/i;
+  if (!SAFE_HREF.test(url)) url = '/sign-in';
   if (/^\//.test(url) && portalBaseUrl) url = `${portalBaseUrl.replace(/\/$/, '')}${url}`;
   const cta = url
     ? `<div style="margin-top:14px;"><a href="${esc(url)}" style="display:inline-block;background:#111827;color:#ffffff;` +

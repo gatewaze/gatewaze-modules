@@ -318,6 +318,9 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   // is prefixed with "[TEST] " so the recipient never confuses a
   // preview with a real edition.
   router.post('/newsletters/editions/:editionId/test-send', wrap(async (req, res) => {
+    // Editor/admin only: this relays caller-supplied HTML to an arbitrary
+    // address, so it must not be reachable by every authenticated user.
+    if (!(await requireAdmin(req, res))) return;
     const editionId = req.params.editionId;
     const { recipient_email, html, subject, from_email, from_name } = (req.body ?? {}) as Record<string, string | undefined>;
     if (!recipient_email || !recipient_email.includes('@')) {
@@ -326,6 +329,39 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     }
     if (!html || typeof html !== 'string' || html.length < 16) {
       res.status(400).json({ error: { code: 'invalid_html', message: 'html is required' } });
+      return;
+    }
+    // The client renders the preview with forSend=true, so the posted HTML
+    // carries member-gated blocks inline (wrapped in gate sentinels). Apply the
+    // SAME gating a real send would, resolved for this single test recipient, so
+    // a test send can never leak gated content. Fail-closed: a gate we can't
+    // resolve as a member becomes the placeholder.
+    let finalHtml = html;
+    try {
+      const { parseGatedBlocks, renderGatePlaceholderHtml } = await import('../workers/block-gating.js');
+      const { html: gatedHtml, gates } = parseGatedBlocks(html);
+      if (gates.length) {
+        finalHtml = gatedHtml;
+        let def = { title: 'Members only', body: 'This section is for members. Sign in with your member email to read it.', cta_label: 'Sign in to read', cta_url: '/sign-in' };
+        try {
+          const { data } = await supabase.rpc('newsletters_default_block_placeholder');
+          if (data && typeof data === 'object') def = data as typeof def;
+        } catch { /* default stands */ }
+        const portalBase = process.env.SITE_URL ?? null;
+        for (const g of gates) {
+          let isMember = false;
+          try {
+            const { data } = await supabase.rpc('membership_email_is_member', { p_email: recipient_email, p_min_tier_rank: g.tier });
+            isMember = data === true;
+          } catch { /* membership unavailable => fail-closed (placeholder) */ }
+          const repl = isMember ? g.realHtml : renderGatePlaceholderHtml(g.placeholder, def, portalBase);
+          finalHtml = finalHtml.split(g.token).join(repl);
+        }
+      }
+    } catch (gateErr) {
+      // Fail-closed: if gating can't be processed we must NOT relay the raw HTML
+      // (it may contain inline gated content) — refuse the send instead.
+      res.status(500).json({ error: { code: 'gating_failed', message: `Could not apply member gating to preview: ${gateErr instanceof Error ? gateErr.message : String(gateErr)}` } });
       return;
     }
     const apiKey = process.env.SENDGRID_API_KEY;
@@ -374,7 +410,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
           personalizations: [{ to: [{ email: recipient_email }] }],
           from: { email: resolvedFrom, ...(resolvedFromName ? { name: resolvedFromName } : {}) },
           subject: finalSubject,
-          content: [{ type: 'text/html', value: html }],
+          content: [{ type: 'text/html', value: finalHtml }],
         }),
       });
       if (!sgRes.ok) {

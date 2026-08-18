@@ -305,7 +305,9 @@ export const newsletterBinding: SendEngineBinding = {
       }
       if (inner === 'virtual_events_block') { subs[token] = c.virtualEventsHtml || ''; continue; }
       // Member-gated block: real html for a qualifying member, placeholder for
-      // everyone else. Fail-closed — unknown token or unresolved membership => placeholder.
+      // everyone else. Fail-closed — an unknown gate token resolves to '' (block
+      // omitted) and unresolved membership resolves to the placeholder; neither
+      // ever ships the real block to a non-member.
       if (inner.startsWith('gate_')) {
         const g = c.gates.get(token);
         if (!g) { subs[token] = ''; continue; }
