@@ -512,7 +512,10 @@ const newslettersModule: GatewazeModule = {
   publicContentSources: [
     {
       type: 'newsletter_edition',
-      table: 'newsletters_editions',
+      // Gated view (not the base table) so the /api/v1/content aggregator, which
+      // reads this via the service-role client (bypassing RLS), doesn't leak
+      // gated/embargoed edition metadata. See migration 082.
+      table: 'newsletters_public_editions',
       scope: 'newsletters:read',
       fields: { id: 'id', title: 'title', date: 'edition_date', summary: 'preheader' },
       visibilityFilter: [{ column: 'status', eq: 'published' }],
