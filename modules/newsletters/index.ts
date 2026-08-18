@@ -329,6 +329,14 @@ const newslettersModule: GatewazeModule = {
     // 076 tz_local grace-window send timing (per-recipient local target, not
     // default-tz schedule date + hard clamp) — fixes the evening-schedule blast.
     'migrations/076_tz_local_grace_window.sql',
+    // NOTE: 077 + 078 exist as files but were never added to this array, so
+    // they have never applied on prod (the "migration file not in the array
+    // never runs" trap — 077 re-checks unsubscribe state at drip-claim time
+    // (compliance); 078 grants newsletter_replies, the root cause of the admin
+    // mark-as-read/"reply reverts to unread" bug). They are intentionally left
+    // out of THIS change to isolate the gating deploy; register them in a
+    // separate, verified step.
+    'migrations/079_block_member_gating.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
