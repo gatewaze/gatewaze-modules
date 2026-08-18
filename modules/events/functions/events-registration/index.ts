@@ -159,6 +159,32 @@ async function handler(req: Request) {
     const resolvedEventId = eventRecord.id // Use UUID for registration (events_registrations.event_id is uuid)
     console.log(`✅ Event verified: ${eventRecord.event_title} (${resolvedEventId})`)
 
+    // Members-only registration gate. If an admin has set a content_access
+    // policy on this event with gated_actions including 'register', only a
+    // member-company email may register (the event itself stays publicly
+    // visible). Opt-in + fail-open: only an explicit `false` blocks — no policy,
+    // or the gating infra not yet deployed, allows registration as today.
+    try {
+      const { data: allowed, error: gateErr } = await supabase.rpc('content_access_action_allowed_email', {
+        p_content_type: 'event',
+        p_entity_id: resolvedEventId,
+        p_action: 'register',
+        p_email: normalizedEmail,
+      })
+      if (!gateErr && allowed === false) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Registration for this event is open to AAIF member organizations. Please register with your member email.',
+          code: 'members_only',
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+    } catch (gateEx) {
+      console.warn('[events-registration] member gate check failed (allowing):', gateEx)
+    }
+
     // Step 2: Get IP-based location (prioritize this over event location)
     const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
                      req.headers.get('x-real-ip') ||
