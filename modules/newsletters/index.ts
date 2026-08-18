@@ -342,6 +342,7 @@ const newslettersModule: GatewazeModule = {
     'migrations/079_block_member_gating.sql',
     'migrations/080_default_placeholder_signin_cta.sql',
     'migrations/081_block_gating_via_content.sql',
+    'migrations/082_edition_member_embargo.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
@@ -514,7 +515,10 @@ const newslettersModule: GatewazeModule = {
   publicContentSources: [
     {
       type: 'newsletter_edition',
-      table: 'newsletters_editions',
+      // Gated view (not the base table) so the /api/v1/content aggregator, which
+      // reads this via the service-role client (bypassing RLS), doesn't leak
+      // gated/embargoed edition metadata. See migration 082.
+      table: 'newsletters_public_editions',
       scope: 'newsletters:read',
       fields: { id: 'id', title: 'title', date: 'edition_date', summary: 'preheader' },
       visibilityFilter: [{ column: 'status', eq: 'published' }],
