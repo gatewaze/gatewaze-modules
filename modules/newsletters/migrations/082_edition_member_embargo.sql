@@ -31,3 +31,24 @@ DROP POLICY IF EXISTS "newsletters_editions_select" ON public.newsletters_editio
 CREATE POLICY "newsletters_editions_select" ON public.newsletters_editions
   FOR SELECT TO authenticated
   USING (public.is_admin() OR public.content_access_visible('newsletter_edition', id, edition_date::timestamptz));
+
+-- CRITICAL: newsletters also has a SECURITY DEFINER anon read RPC that BYPASSES
+-- RLS, so the gate must be added there too (else embargoed/gated editions leak
+-- via the anon key). Body otherwise verbatim from 017_keyword_adapter.sql.
+CREATE OR REPLACE FUNCTION public.newsletters_public_list(p_limit int DEFAULT 50, p_offset int DEFAULT 0)
+RETURNS SETOF public.newsletters_editions
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT n.* FROM public.newsletters_editions n
+  LEFT JOIN public.content_keyword_item_state s
+    ON s.content_type='newsletter_edition' AND s.content_id=n.id
+  WHERE n.status = 'published'
+    AND COALESCE(s.is_visible,
+                 (SELECT default_visible_when_no_rules FROM public.content_keyword_adapters WHERE content_type='newsletter_edition'),
+                 true) = true
+    AND public.content_access_visible('newsletter_edition', n.id, n.edition_date::timestamptz)
+  ORDER BY n.edition_date DESC NULLS LAST, n.id DESC
+  LIMIT p_limit OFFSET p_offset;
+$$;
+ALTER FUNCTION public.newsletters_public_list(int, int) OWNER TO gatewaze_module_writer;

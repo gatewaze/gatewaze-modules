@@ -156,6 +156,20 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Edition not found' } });
       }
 
+      // Member gating. This route runs on the SERVICE-ROLE client (bypasses
+      // RLS), so gated/embargoed editions must be checked explicitly. This is an
+      // API-key surface with no end-user identity (auth.uid() is null), so a
+      // members-gated edition resolves to not-visible and is 404'd — the public
+      // API never serves gated content.
+      const { data: vis } = await supabase.rpc('content_access_visible', {
+        p_content_type: 'newsletter_edition',
+        p_entity_id: req.params.id,
+        p_published_at: (data as any).edition_date ?? null,
+      });
+      if (vis === false) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Edition not found' } });
+      }
+
       ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 600 });
       res.json({
         data,
@@ -182,6 +196,18 @@ export function registerPublicApi(router: any, ctx: PublicApiContext) {
         .single();
 
       if (eErr || !edition) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Edition not found' } });
+      }
+
+      // Member gating (service-role client bypasses RLS — check explicitly).
+      // Gated/embargoed editions are 404'd on this API-key surface before any
+      // block/brick content is fetched.
+      const { data: vis } = await supabase.rpc('content_access_visible', {
+        p_content_type: 'newsletter_edition',
+        p_entity_id: edition.id,
+        p_published_at: edition.edition_date ?? null,
+      });
+      if (vis === false) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Edition not found' } });
       }
 

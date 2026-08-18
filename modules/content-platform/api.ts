@@ -333,6 +333,18 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       const b = req.body ?? {};
       const content_type = typeof b.content_type === 'string' ? b.content_type.trim() : '';
       if (!content_type) return res.status(400).json({ error: { code: 'validation', message: 'content_type required' } });
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (b.entity_id != null && b.entity_id !== '' && !(typeof b.entity_id === 'string' && UUID_RE.test(b.entity_id))) {
+        return res.status(400).json({ error: { code: 'validation', message: 'entity_id must be a uuid' } });
+      }
+      let embargoDays: number | null = null;
+      if (b.embargo_days != null && b.embargo_days !== '') {
+        const n = Number(b.embargo_days);
+        if (!Number.isInteger(n) || n < 1) {
+          return res.status(400).json({ error: { code: 'validation', message: 'embargo_days must be a positive integer' } });
+        }
+        embargoDays = n;
+      }
       const audience = b.audience === 'members' ? 'members' : 'public';
       // Allowlisted args only — never spread req.body into the RPC.
       const args = {
@@ -340,7 +352,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
         p_entity_id: typeof b.entity_id === 'string' && b.entity_id ? b.entity_id : null,
         p_audience: audience,
         p_min_tier_rank: Number.isFinite(Number(b.min_tier_rank)) ? Math.max(0, Math.trunc(Number(b.min_tier_rank))) : 0,
-        p_embargo_days: b.embargo_days == null || b.embargo_days === '' ? null : Math.max(1, Math.trunc(Number(b.embargo_days))),
+        p_embargo_days: embargoDays,
         p_gated_actions: Array.isArray(b.gated_actions) ? b.gated_actions.filter((a: unknown) => typeof a === 'string') : [],
         p_placeholder: b.placeholder && typeof b.placeholder === 'object' ? b.placeholder : null,
         p_note: typeof b.note === 'string' ? b.note : null,
@@ -359,6 +371,10 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       const b = req.body ?? {};
       const content_type = typeof b.content_type === 'string' ? b.content_type.trim() : '';
       if (!content_type) return res.status(400).json({ error: { code: 'validation', message: 'content_type required' } });
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (b.entity_id != null && b.entity_id !== '' && !(typeof b.entity_id === 'string' && UUID_RE.test(b.entity_id))) {
+        return res.status(400).json({ error: { code: 'validation', message: 'entity_id must be a uuid' } });
+      }
       const { data, error } = await sb().rpc('clear_content_access', {
         p_content_type: content_type,
         p_entity_id: typeof b.entity_id === 'string' && b.entity_id ? b.entity_id : null,
