@@ -32,10 +32,15 @@ export interface GatedBlock {
 }
 
 // Matches a start sentinel, captures the base64 config + the real HTML up to the
-// matching end sentinel (keyed by the same id via the \1 backreference). Tolerant
-// of attribute order / extra attributes / whitespace inside the empty spans.
+// matching end sentinel (keyed by the same id via the \1 backreference). Matches
+// the EXACT shape EditionEmail emits: `<span data-gwgate="<id>" data-gwph="<b64>">
+// </span>` — a bare span, attributes in that fixed order (react-email preserves
+// JSX prop order), no other attributes. Deliberately LINEAR: no `[^>]*` segments
+// (those made it a polynomial-backtracking / ReDoS regex over attacker-influenceable
+// html). Only the id/base64 char classes, single bounded `\s*` between fixed
+// literals, and one lazy `[\s\S]*?` terminated by a specific end sentinel.
 const GATE_RE =
-  /<span[^>]*\sdata-gwgate="([0-9a-fA-F-]+)"[^>]*\sdata-gwph="([A-Za-z0-9+/=]*)"[^>]*>\s*<\/span>([\s\S]*?)<span[^>]*\sdata-gwgate-end="\1"[^>]*>\s*<\/span>/g;
+  /<span data-gwgate="([0-9a-fA-F-]+)" data-gwph="([A-Za-z0-9+/=]*)"\s*>\s*<\/span>([\s\S]*?)<span data-gwgate-end="\1"\s*>\s*<\/span>/g;
 
 /** UTF-8-safe base64 decode (Node worker). */
 function b64decode(b64: string): string {
