@@ -112,6 +112,9 @@ REVOKE ALL ON FUNCTION public.newsletters_blocks_for_viewer(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.newsletters_blocks_for_viewer(uuid)
   TO anon, authenticated, service_role;
 
--- The dedicated column is now unused (gating lives in content). No block has
--- set it yet (gating shipped in the same batch), so dropping loses no data.
-ALTER TABLE public.newsletters_edition_blocks DROP COLUMN IF EXISTS access_policy;
+-- The dedicated access_policy column (added in 079) is now unused — gating
+-- lives in content->'_gate_*'. Per the platform's expand/contract migration
+-- discipline (no DROP COLUMN in the same release; the reconcile's
+-- MIGRATION_UNSAFE_SQL gate rejects it), it is intentionally LEFT IN PLACE here
+-- and can be dropped in a later release. It is harmless: nothing reads or writes
+-- it after this migration.
