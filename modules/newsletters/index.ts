@@ -329,13 +329,16 @@ const newslettersModule: GatewazeModule = {
     // 076 tz_local grace-window send timing (per-recipient local target, not
     // default-tz schedule date + hard clamp) — fixes the evening-schedule blast.
     'migrations/076_tz_local_grace_window.sql',
-    // NOTE: 077 + 078 exist as files but were never added to this array, so
-    // they have never applied on prod (the "migration file not in the array
-    // never runs" trap — 077 re-checks unsubscribe state at drip-claim time
-    // (compliance); 078 grants newsletter_replies, the root cause of the admin
-    // mark-as-read/"reply reverts to unread" bug). They are intentionally left
-    // out of THIS change to isolate the gating deploy; register them in a
-    // separate, verified step.
+    // 077 + 078 existed as files but were never registered, so they had never
+    // applied on prod (the "migration file not in the array never runs" trap).
+    // 077 re-checks unsubscribe state at drip-claim time so someone who
+    // unsubscribes after fan-out isn't emailed (compliance); 078 grants
+    // newsletter_replies to authenticated (migration 015 added RLS policies but
+    // never the table grant — the root cause of the admin "mark reply as read
+    // reverts to unread" bug). Both are CREATE-OR-REPLACE / GRANT over existing
+    // objects, safe + idempotent.
+    'migrations/077_claim_recheck_subscription.sql',
+    'migrations/078_newsletter_replies_grant.sql',
     'migrations/079_block_member_gating.sql',
     'migrations/080_default_placeholder_signin_cta.sql',
     'migrations/081_block_gating_via_content.sql',
