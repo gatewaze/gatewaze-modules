@@ -27,6 +27,7 @@ import { createClient } from '@supabase/supabase-js';
 import { Router, type Express, type Request, type Response, type NextFunction } from 'express';
 
 import { requireJwt } from '../lib/require-jwt.js';
+import { rateLimit, clientIp } from '../lib/rate-limit.js';
 
 export async function registerRoutes(app: Express, context?: ModuleContext): Promise<void> {
   const supabaseUrl = process.env.SUPABASE_URL ?? '';
@@ -321,6 +322,12 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     // Editor/admin only: this relays caller-supplied HTML to an arbitrary
     // address, so it must not be reachable by every authenticated user.
     if (!(await requireAdmin(req, res))) return;
+    // Rate-limit the send relay per client IP (defence against an editor
+    // account being used to blast mail).
+    if (!rateLimit(`nl-test-send:${clientIp(req)}`, 20, 60_000)) {
+      res.status(429).json({ error: { code: 'rate_limited', message: 'Too many test sends; please wait a minute and try again.' } });
+      return;
+    }
     const editionId = req.params.editionId;
     const { recipient_email, html, subject, from_email, from_name } = (req.body ?? {}) as Record<string, string | undefined>;
     if (!recipient_email || !recipient_email.includes('@')) {
