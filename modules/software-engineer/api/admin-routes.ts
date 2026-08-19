@@ -177,20 +177,43 @@ export function mountAdminRoutes(router, deps) {
     res.status(202).json(stagingStatus());
   });
 
-  // ── PR test environment (Phase 1: gatewaze project) ────────────────────────
+  // ── PR test environment ────────────────────────────────────────────────────
   // Same control-channel model as staging-update, but the request CARRIES
   // CONTENT (a PR set), so both sides validate it: here a strict repo enum +
   // integer PR numbers; the host agent (staging-test-env.sh) re-validates and
   // resolves PRs via numeric refs/pull/N/head only — no branch names, no
   // request string ever reaches a shell. Deploying replaces the single test
-  // env slot; the test stack never runs se-runner.
-  const TEST_ENV_REPOS = new Set(['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules']);
-  const TEST_ENV_ACTIVE = new Set(['preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down']);
-  const testEnvStatus = () => {
+  // env slot per PROFILE; the test stack never runs se-runner.
+  //
+  // Profiles: each profile is a separate env slot with its own host-agent
+  // daemon, request/status file pair and repo allowlist. `prs` is an ORDERED
+  // list and may repeat a repo — the host agent merges same-repo PRs onto
+  // origin/main locally, in order (merge-queue semantics); a merge conflict
+  // surfaces as status state:"error" naming the conflicting PR. The profile is
+  // validated as a literal key BEFORE any filename is derived from it.
+  const TEST_ENV_PROFILES = {
+    gatewaze: { requestFile: 'test-env-request.json', statusFile: 'test-status.json', repos: ['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules'], maxPrs: 6 },
+    lfx: { requestFile: 'lfx-env-request.json', statusFile: 'lfx-status.json', repos: ['lfx-self-serve', 'lfx-v2-helm', 'lfx-v2-email-service', 'lfx-v2-campaign-service', 'lfx-v2-mailing-list-service', 'lfx-v2-newsletter-service', 'lfx-v2-committee-service'], maxPrs: 8 },
+  } as const;
+  // Strict enum gate (security: the profile selects control-channel FILENAMES —
+  // never let a non-literal value near a path). Missing/empty → 'gatewaze' for
+  // back-compat with pre-profile clients; anything else unknown → null (422).
+  const testEnvProfileOf = (raw: unknown): keyof typeof TEST_ENV_PROFILES | null => {
+    if (raw === undefined || raw === null || raw === '') return 'gatewaze';
+    const s = String(raw);
+    return Object.prototype.hasOwnProperty.call(TEST_ENV_PROFILES, s) ? (s as keyof typeof TEST_ENV_PROFILES) : null;
+  };
+  const TEST_ENV_ACTIVE = new Set([
+    'preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down',
+    // lfx-profile cycle states (same busy semantics)
+    'deploying-helm', 'building-services', 'building-app', 'starting-app',
+  ]);
+  const testEnvStatus = (profile: keyof typeof TEST_ENV_PROFILES) => {
+    const { requestFile, statusFile } = TEST_ENV_PROFILES[profile];
     let status = null;
-    try { status = JSON.parse(readFileSync(`${STAGING_CONTROL}/test-status.json`, 'utf8')); } catch { /* none yet */ }
-    const pending = existsSync(`${STAGING_CONTROL}/test-env-request.json`) || existsSync(`${STAGING_CONTROL}/test-env-request.processing`);
-    return { available: true, pending, status };
+    try { status = JSON.parse(readFileSync(`${STAGING_CONTROL}/${statusFile}`, 'utf8')); } catch { /* none yet */ }
+    const pending = existsSync(`${STAGING_CONTROL}/${requestFile}`) || existsSync(`${STAGING_CONTROL}/${requestFile.replace(/\.json$/, '.processing')}`);
+    return { available: true, profile, pending, status };
   };
   const requireSuperAdminBearer = async (req, res) => {
     if (!String(req.headers.authorization ?? '').startsWith('Bearer ')) {
@@ -212,7 +235,9 @@ export function mountAdminRoutes(router, deps) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     }
     if (!existsSync(STAGING_CONTROL)) return res.json({ available: false });
-    res.json(testEnvStatus());
+    const profile = testEnvProfileOf(req.query.profile);
+    if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
+    res.json(testEnvStatus(profile));
   });
 
   router.post('/test-env/deploy', async (req, res) => {
@@ -223,27 +248,37 @@ export function mountAdminRoutes(router, deps) {
       return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no test-env channel' } });
     }
     if (!(await requireSuperAdminBearer(req, res))) return;
-    const raw = Array.isArray(req.body?.prs) ? req.body.prs.slice(0, 6) : [];
+    const profile = testEnvProfileOf(req.body?.profile);
+    if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
+    const { repos, maxPrs, requestFile } = TEST_ENV_PROFILES[profile];
+    const allowed = new Set(repos);
+    const raw = Array.isArray(req.body?.prs) ? req.body.prs : [];
+    if (raw.length === 0 || raw.length > maxPrs) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: `prs must be an ordered array of 1..${maxPrs} entries` } });
+    }
+    // Order is preserved VERBATIM into the request file. Repeated repos are
+    // allowed (same-repo PRs merge sequentially on the host); an exact
+    // duplicate {repo,number} pair is a caller mistake, so reject it.
     const prs = [];
     for (const p of raw) {
       const repo = String(p?.repo ?? '');
       const number = Number(p?.number);
-      if (!TEST_ENV_REPOS.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
+      if (!allowed.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
         return res.status(422).json({ error: { code: 'invalid_input', message: `Bad PR entry: ${repo}#${p?.number}` } });
       }
-      if (prs.some((x) => x.repo === repo)) {
-        return res.status(422).json({ error: { code: 'invalid_input', message: `Multiple PRs for ${repo} — one per repo` } });
+      if (prs.some((x) => x.repo === repo && x.number === number)) {
+        return res.status(422).json({ error: { code: 'invalid_input', message: `Duplicate PR entry: ${repo}#${number}` } });
       }
       prs.push({ repo, number });
     }
-    const cur = testEnvStatus();
+    const cur = testEnvStatus(profile);
     if (cur.pending || TEST_ENV_ACTIVE.has(cur.status?.state)) {
       return res.status(409).json({ error: { code: 'busy', message: 'A test-env operation is already in progress' }, ...cur });
     }
-    writeFileSync(`${STAGING_CONTROL}/test-env-request.json`,
+    writeFileSync(`${STAGING_CONTROL}/${requestFile}`,
       JSON.stringify({ action: 'deploy', prs, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
-    logger?.info?.('se: test-env deploy requested', { prs });
-    res.status(202).json(testEnvStatus());
+    logger?.info?.('se: test-env deploy requested', { profile, prs });
+    res.status(202).json(testEnvStatus(profile));
   });
 
   // Cross-repo related PRs for a deployable PR: agent runs reuse ONE head
@@ -255,10 +290,13 @@ export function mountAdminRoutes(router, deps) {
     if (!rateLimit(`se-admin:test-env-related:${clientIp(req)}`, 60, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     }
+    const profile = testEnvProfileOf(req.query.profile);
+    if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
+    const deployable = TEST_ENV_PROFILES[profile].repos;
     const projectId = String(req.query.project_id ?? '');
     const repo = String(req.query.repo ?? '');
     const number = Number(req.query.number);
-    if (!UUID.test(projectId) || !TEST_ENV_REPOS.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
+    if (!UUID.test(projectId) || !deployable.includes(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
       return res.status(422).json({ error: { code: 'invalid_input', message: 'project_id + deployable repo + PR number required' } });
     }
     const proj = await getProject(supabase, projectId);
@@ -270,7 +308,7 @@ export function mountAdminRoutes(router, deps) {
       const headOwner = String(pull?.head?.repo?.owner?.login ?? 'gatewaze');
       if (!branch) return res.json({ branch: null, related: [] });
       const related = [];
-      for (const other of TEST_ENV_REPOS) {
+      for (const other of deployable) {
         if (other === repo) continue;
         try {
           const matches = await gh.listOpenPullsByHead('gatewaze', other, headOwner, branch);
@@ -294,14 +332,16 @@ export function mountAdminRoutes(router, deps) {
       return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no test-env channel' } });
     }
     if (!(await requireSuperAdminBearer(req, res))) return;
-    const cur = testEnvStatus();
+    const profile = testEnvProfileOf(req.body?.profile);
+    if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
+    const cur = testEnvStatus(profile);
     if (cur.pending || TEST_ENV_ACTIVE.has(cur.status?.state)) {
       return res.status(409).json({ error: { code: 'busy', message: 'A test-env operation is already in progress' }, ...cur });
     }
-    writeFileSync(`${STAGING_CONTROL}/test-env-request.json`,
+    writeFileSync(`${STAGING_CONTROL}/${TEST_ENV_PROFILES[profile].requestFile}`,
       JSON.stringify({ action: 'teardown', requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
-    logger?.info?.('se: test-env teardown requested', {});
-    res.status(202).json(testEnvStatus());
+    logger?.info?.('se: test-env teardown requested', { profile });
+    res.status(202).json(testEnvStatus(profile));
   });
 
   // ── Project memory: review + human approval (memory-poisoning gate) ────────

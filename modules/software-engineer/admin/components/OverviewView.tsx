@@ -26,6 +26,7 @@ import { isGatewayError, StartingBanner } from './starting';
 import PendingApprovals from './PendingApprovals';
 import DecisionsPanel from './DecisionsPanel';
 import TestEnvStrip from './TestEnvStrip';
+import { testEnvProfile } from './testEnv';
 import RunListSection from './RunListSection';
 
 // Runs-board rows shown per dashboard section — a dashboard summarises, it doesn't replace the Runs
@@ -230,7 +231,8 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
 
   return (
     <div className="space-y-6">
-      <TestEnvStrip />
+      {/* Profile follows the project filter (LFX projects → lfx env); default gatewaze. */}
+      <TestEnvStrip profile={testEnvProfile(projects.find((p) => p.id === projectFilter)?.name) ?? 'gatewaze'} />
       {showProjectFilter && (
         <select
           value={projectFilter}
