@@ -58,9 +58,12 @@ const contentPlatformModule: GatewazeModule = {
     {
       // Central management view for the content_access_policies registry (member
       // gating). The inline controls in each editor write the same rows.
+      // guard:'none' keeps it top-level at /content-access (matching the nav item
+      // and the sibling inbox route). Every data operation is admin-gated
+      // server-side by requireAdmin on /api/admin/content-access.
       path: 'content-access',
       component: () => import('./admin/pages/ContentAccessPage'),
-      guard: 'admin',
+      guard: 'none',
     },
   ],
 
