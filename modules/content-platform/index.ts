@@ -55,11 +55,27 @@ const contentPlatformModule: GatewazeModule = {
       requiredFeature: 'content-platform.inbox',
       guard: 'none',
     },
+    {
+      // Central management view for the content_access_policies registry (member
+      // gating). The inline controls in each editor write the same rows.
+      path: 'content-access',
+      component: () => import('./admin/pages/ContentAccessPage'),
+      guard: 'admin',
+    },
   ],
 
   // Inbox nav lives in the static dashboards segment so it sits at the very top
   // of the sidebar (above all module-contributed nav items).
-  adminNavItems: [],
+  adminNavItems: [
+    {
+      path: '/content-access',
+      label: 'Content Access',
+      icon: 'ShieldCheck',
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      order: 90,
+    },
+  ],
 };
 
 export default contentPlatformModule;
