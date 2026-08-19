@@ -573,15 +573,21 @@ async function findOrCreatePerson(
     if (attributes.phone) personAttributes.phone = attributes.phone
     if (attributes.linkedin_url) personAttributes.linkedin_url = attributes.linkedin_url
 
+    // Upsert on email, NOT insert. supabase.auth.admin.createUser() above fires
+    // the ensure_person_on_signup trigger, which already inserts the people row
+    // (email + auth_user_id). A plain insert here then collides on the email
+    // unique constraint and returns null → "Failed to create or find person
+    // record", which broke every NEW-person speaker submission. Upserting
+    // reconciles with (and enriches) the trigger-created row.
     const { data: newPerson, error: insertError } = await supabase
       .from('people')
-      .insert({
+      .upsert({
         cio_id: cioId,
         email: email,
         auth_user_id: authUserId,
         attributes: personAttributes,
         last_synced_at: new Date().toISOString()
-      })
+      }, { onConflict: 'email' })
       .select('id, cio_id')
       .single()
 

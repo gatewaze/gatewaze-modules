@@ -27,6 +27,10 @@ const STEPS = [
 
 const inputCls = 'w-full rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm disabled:opacity-60';
 
+// A broadcast must have a real From address before it can send (a fallback
+// no-reply address lands in spam). Keep this loose but non-empty.
+const isValidEmail = (v: string | null | undefined): boolean => !!v && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+
 export default function BroadcastDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
   const navigate = useNavigate();
@@ -83,12 +87,15 @@ export default function BroadcastDetailPage() {
       logSendIdColumn: 'broadcast_send_id',
       tzBreakdownRpc: 'broadcast_send_timezone_breakdown',
       sendEndpoint: 'broadcast-send',
-      // A broadcast can't send without content, an audience, AND an unsubscribe
-      // list (the send is tied to that list; unsubscribing removes from it).
-      canSend: !!b.rendered_html && hasAudience && !!b.category_list_id,
+      // A broadcast can't send without content, an audience, an unsubscribe list
+      // (the send is tied to that list; unsubscribing removes from it), AND a
+      // valid From address — sending from a fallback no-reply address lands in
+      // spam, so a real sender is mandatory (defaulted from config on create).
+      canSend: !!b.rendered_html && hasAudience && !!b.category_list_id && isValidEmail(b.from_address),
       canSendReason: !b.rendered_html ? 'Add content before sending'
         : !hasAudience ? 'Set an audience first'
         : !b.category_list_id ? 'Choose an unsubscribe list before sending'
+        : !isValidEmail(b.from_address) ? 'Set a valid From address before sending'
         : undefined,
       features: { deliveryStrategy: true, excludeSent: true },
       emailDetails: {

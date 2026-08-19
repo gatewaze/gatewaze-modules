@@ -59,6 +59,56 @@ function editionHref(collectionSlug: string, editionDate: string, title: string 
   return `/newsletters/${collectionSlug}/${editionFolderSlug(editionDate, title)}`
 }
 
+// Rendered in place of a member-gated block whose content the current viewer is
+// not entitled to see. The copy + CTA come from the block's placeholder payload
+// (or the platform default from newsletters_default_block_placeholder), so the
+// real block content is never shipped to a non-member. The CTA points a
+// logged-out member at sign-in to unlock the section in place.
+function MembersOnlyPlaceholder({ placeholder }: { placeholder: any }) {
+  const p = placeholder || {}
+  const title = p.title || 'Members only'
+  const body =
+    p.body ||
+    'This section is available to AAIF member organizations. Sign in with your member email to read it.'
+  const ctaLabel = p.cta_label || 'Sign in'
+  const ctaUrl = p.cta_url || '/auth/login'
+  return (
+    <div
+      className="nl-members-only"
+      style={{
+        border: '1px dashed rgba(0,0,0,0.18)',
+        background: 'rgba(0,0,0,0.03)',
+        borderRadius: 12,
+        padding: '20px 22px',
+        margin: '14px 0',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: 0.3, textTransform: 'uppercase', opacity: 0.6 }}>
+        🔒 {title}
+      </div>
+      <p style={{ margin: '8px auto 14px', maxWidth: 420, opacity: 0.8 }}>{body}</p>
+      {ctaUrl ? (
+        <a
+          href={ctaUrl}
+          style={{
+            display: 'inline-block',
+            padding: '8px 18px',
+            borderRadius: 8,
+            background: '#111',
+            color: '#fff',
+            fontWeight: 600,
+            fontSize: 14,
+            textDecoration: 'none',
+          }}
+        >
+          {ctaLabel}
+        </a>
+      ) : null}
+    </div>
+  )
+}
+
 export default function NewsletterEditionPage({ params }: { params: { collection: string; edition: string } }) {
   const [edition, setEdition] = useState<EditionData | null>(null)
   const [others, setOthers] = useState<Array<{ id: string; title: string | null; edition_date: string }>>([])
@@ -122,23 +172,51 @@ export default function NewsletterEditionPage({ params }: { params: { collection
           return
         }
 
-        // Get blocks with templates (joined to templates_block_defs).
-        // The block_def_id FK is templates_block_def_id (added in migration 020).
-        const { data: blocks } = await supabase
-          .from('newsletters_edition_blocks')
-          .select('id, block_type, content, sort_order, block_template:templates_block_defs!templates_block_def_id(name, html, rich_text_template)')
-          .eq('edition_id', editionData.id)
-          .order('sort_order')
+        // Member-gated read. newsletters_blocks_for_viewer (SECURITY DEFINER,
+        // migration 079) returns every block of the published edition, but a
+        // block the current viewer may NOT see comes back redacted: content +
+        // templates_block_def_id nulled, gated=true, and a placeholder payload
+        // to render in its place. The real content never reaches a non-member's
+        // browser. A logged-in member carries their JWT through
+        // getSupabaseClient(), so the RPC resolves their membership via
+        // auth.uid(); anonymous readers resolve to non-member.
+        const { data: rpcBlocks } = await supabase
+          .rpc('newsletters_blocks_for_viewer', { p_edition_id: editionData.id })
+
+        // The RPC returns templates_block_def_id (non-gated only); fetch the
+        // matching block-def templates in one query and attach them.
+        const defIds = Array.from(
+          new Set(
+            (rpcBlocks || [])
+              .filter((b: any) => !b.gated && b.templates_block_def_id)
+              .map((b: any) => b.templates_block_def_id),
+          ),
+        )
+        const defsById: Record<string, any> = {}
+        if (defIds.length) {
+          const { data: defs } = await supabase
+            .from('templates_block_defs')
+            .select('id, name, html, rich_text_template')
+            .in('id', defIds)
+          for (const d of defs || []) defsById[d.id] = d
+        }
+
+        const blocks = (rpcBlocks || []).map((b: any) => ({
+          id: b.id,
+          block_type: b.block_type,
+          content: b.content,
+          sort_order: b.sort_order,
+          gated: b.gated,
+          placeholder: b.placeholder,
+          block_template: b.gated ? null : defsById[b.templates_block_def_id] || null,
+        }))
 
         setEdition({
           ...editionData,
           newsletter_name: newsletter.name,
           newsletter_slug: newsletter.slug,
           accent_color: newsletter.accent_color,
-          blocks: (blocks || []).map((b: any) => ({
-            ...b,
-            block_template: Array.isArray(b.block_template) ? b.block_template[0] : b.block_template,
-          })),
+          blocks,
         })
 
         // Other published editions of this newsletter — for the sidebar.
@@ -154,7 +232,9 @@ export default function NewsletterEditionPage({ params }: { params: { collection
 
         // Slot-block bricks + their declarative templates (for mlops_community
         // etc.). Bricks join to templates_brick_defs by brick_type === key.
-        const blockIds = (blocks || []).map((b: any) => b.id)
+        // Only non-gated blocks contribute bricks (a gated block renders the
+        // placeholder, and its bricks are RLS-hidden from non-members anyway).
+        const blockIds = blocks.filter((b: any) => !b.gated).map((b: any) => b.id)
         if (blockIds.length) {
           const [bricksRes, brickDefsRes] = await Promise.all([
             supabase
@@ -290,6 +370,11 @@ export default function NewsletterEditionPage({ params }: { params: { collection
               .filter((b) => !(b.block_type ?? '').startsWith('email_only_'))
               .sort((a, b) => a.sort_order - b.sort_order)
               .map((block) => {
+                // Member-gated block: the RPC redacted its content — render the
+                // members-only placeholder in its place (never the real block).
+                if (block.gated) {
+                  return <MembersOnlyPlaceholder key={block.id} placeholder={block.placeholder} />
+                }
                 const tpl = block.block_template
                 const source = (tpl?.html || tpl?.rich_text_template || '') as string
                 const resolvedContent = brand.storageBucketUrl

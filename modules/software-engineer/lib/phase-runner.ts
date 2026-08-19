@@ -165,6 +165,7 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
         const spent = Number(fresh?.cost_usd) || 0;
         if (spent >= project.perRunCostCeilingUSD) {
           return { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, interrupted: false,
+            costCeiling: true,
             error: `cost ceiling reached: this run has spent $${spent.toFixed(2)} of its $${project.perRunCostCeilingUSD.toFixed(2)} per-run ceiling — raise it in Setup or split the issue` };
         }
       } catch { /* ceiling check is best-effort — never block a run on a read blip */ }

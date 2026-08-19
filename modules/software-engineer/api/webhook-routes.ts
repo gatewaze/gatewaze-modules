@@ -10,6 +10,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { resolveIssuesRepoProject, getProject } from '../lib/credentials.js';
 import { dispatchProject } from '../lib/dispatch.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
+import { githubClient } from '../lib/github.js';
+import { parseDependencies, unmetDependencies, ensureWaitingMarker } from '../lib/dependencies.js';
 
 const INSTANCE = () => process.env.SE_INSTANCE_ID || 'default';
 
@@ -86,6 +88,19 @@ export function mountWebhookRoute(router, deps) {
       .eq('site_id', repoProj.siteId).eq('repo_owner', owner).eq('repo_name', name).eq('issue_number', issue.number)
       .in('status', ['queued', 'running', 'blocked', 'pr_open', 'watching', 'changes_requested']).maybeSingle();
     if (existing) return res.status(200).json({ accepted: false, reason: 'run already live', runId: existing.id });
+
+    // Dependency sequencing: same deferral as the poll path — unmet deps mean no run yet; the
+    // marker label + the poll's re-check take it from here (the webhook won't re-fire on its own).
+    const wantDeps = parseDependencies(String(issue.body ?? ''), issue.number);
+    if (wantDeps.length) {
+      const gh = githubClient(project.githubToken);
+      const unmet = await unmetDependencies(gh, owner, name, wantDeps);
+      if (unmet.length) {
+        const issueLabels = (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
+        await ensureWaitingMarker(gh, owner, name, issue.number, issueLabels, unmet, wantDeps);
+        return res.status(200).json({ accepted: false, reason: 'waiting on dependencies', unmet });
+      }
+    }
 
     // Create QUEUED; the run's repo_owner/repo_name IS the issues repo (§2). Dispatcher promotes it.
     const { data: run, error } = await supabase.from('se_runs').insert({
