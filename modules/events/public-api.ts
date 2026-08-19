@@ -642,6 +642,26 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
         (data as Record<string, unknown>).page_text = text || null;
       }
 
+      // Members-only registration flag for the portal CTA. Mirrors the keys the
+      // events-registration edge fn gates on (content_type='event',
+      // action='register'). Evaluated with no auth context (service-role → no
+      // auth.uid()), so content_access_action_allowed returns false exactly when a
+      // register-gate policy applies → registration is members-only. Fail-open:
+      // any error leaves the flag false (registration open, as today).
+      try {
+        const eventUuid = (data as { id?: string }).id;
+        if (eventUuid) {
+          const { data: allowed, error: gateErr } = await supabase.rpc('content_access_action_allowed', {
+            p_content_type: 'event',
+            p_entity_id: eventUuid,
+            p_action: 'register',
+          });
+          (data as Record<string, unknown>).registration_members_only = !gateErr && allowed === false;
+        }
+      } catch {
+        // gating infra absent/unreachable — treat registration as open
+      }
+
       ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 600 });
       res.json({
         data,
