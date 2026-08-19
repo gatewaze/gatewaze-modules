@@ -11,19 +11,19 @@ import { toast } from 'sonner';
 import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
 import { TEST_ENV_ACTIVE, stepPct, normUrls, useTestEnvStatus, teardownTestEnv } from './testEnv';
 
-export default function TestEnvStrip() {
-  const { info, load, active } = useTestEnvStatus();
+export default function TestEnvStrip({ profile = 'gatewaze' }: { profile?: 'gatewaze' | 'lfx' }) {
+  const { info, load, active } = useTestEnvStatus(profile);
   if (!info?.available) return null;
   const st = info.status;
   if (!st || st.state === 'torn-down') return null;   // nothing deployed — stay out of the way
   const ready = st.state === 'ready';
   const urls = normUrls(st.urls);
   const launchUrls = urls.filter((u) => u.launch);
-  const pct = stepPct(info.pending && !TEST_ENV_ACTIVE.has(st.state) ? 'queued' : st.state, info.pending);
+  const pct = stepPct(profile, info.pending && !TEST_ENV_ACTIVE.has(st.state) ? 'queued' : st.state, info.pending);
   const launch = () => { for (const u of launchUrls) window.open(u.url, '_blank', 'noopener'); };
   const teardown = async () => {
     if (!window.confirm('Tear down the test environment?')) return;
-    try { await teardownTestEnv(); toast.success('Teardown requested'); load(); }
+    try { await teardownTestEnv(profile); toast.success('Teardown requested'); load(); }
     catch (e: any) { toast.error(`Teardown failed: ${e?.message ?? e}`); }
   };
   return (
@@ -42,9 +42,12 @@ export default function TestEnvStrip() {
             </Button>
           )}
           {ready && urls.filter((u) => !u.launch).map((u) => (
-            <a key={u.url} href={u.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-0.5">
-              {u.label} <ArrowTopRightOnSquareIcon className="size-3" />
-            </a>
+            <span key={u.url} className="inline-flex items-center gap-1">
+              <a href={u.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-0.5">
+                {u.label} <ArrowTopRightOnSquareIcon className="size-3" />
+              </a>
+              {u.note && <span className="text-[11px] text-[var(--gray-10)]">{u.note}</span>}
+            </span>
           ))}
           {(ready || st.state === 'error') && (
             <Button variant="soft" color="red" size="xs" onClick={teardown} disabled={active}>
