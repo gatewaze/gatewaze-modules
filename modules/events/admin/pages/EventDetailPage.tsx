@@ -57,6 +57,7 @@ import {
   Td,
 } from '@/components/ui';
 import { ContentAccessControl } from '@/components/content-access/ContentAccessControl';
+import { contentAccessService, type AccessTier, type ContentAccessPolicy } from '@/components/content-access/contentAccessService';
 import { RowActions } from '@/components/shared/table/RowActions';
 import { ScrollableTable } from '@/components/shared/table/ScrollableTable';
 import { DataTable } from '@/components/shared/table/DataTable';
@@ -1043,6 +1044,51 @@ const PUBLISH_STATE_ACTIONS: Record<string, Array<{ to: string; label: string; c
   ],
 };
 
+// Read-mode summary of the members-only registration gate. The gate lives in the
+// content_access_policies registry (fetched separately from the event row), so
+// the Status card can't show it from `event` alone — this fetches and renders it.
+// Mirrors ContentAccessControl: a gate is active when a policy has
+// gated_actions=['register']; min_tier_rank names the required tier.
+const EventRegistrationAccessBadge = ({ eventId }: { eventId: string }) => {
+  const [policy, setPolicy] = useState<ContentAccessPolicy | null>(null);
+  const [tiers, setTiers] = useState<AccessTier[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [p, t] = await Promise.all([
+          contentAccessService.getPolicy('event', eventId),
+          contentAccessService.listTiers(),
+        ]);
+        if (!alive) return;
+        setPolicy(p);
+        setTiers(t);
+      } catch {
+        // Best-effort; if the registry read fails, fall through to "Anyone".
+      } finally {
+        if (alive) setLoaded(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, [eventId]);
+
+  const gated = !!policy && (policy.gated_actions?.includes('register') ?? false);
+  const tierLabel = gated && policy?.min_tier_rank
+    ? (tiers.find((t) => t.rank === policy.min_tier_rank)?.display_label ?? `tier ≥ ${policy.min_tier_rank}`)
+    : null;
+
+  if (!loaded) return null;
+  return (
+    <div className="flex items-center justify-between ml-4">
+      <span className="text-sm text-[var(--gray-a11)]">Registration Access</span>
+      <Badge variant="soft" color={gated ? 'amber' : 'gray'}>
+        {gated ? (tierLabel ? `Members only · ${tierLabel}+` : 'Members only') : 'Anyone can register'}
+      </Badge>
+    </div>
+  );
+};
+
 const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue, isSaving, accounts, allEvents, eventTypes, contentCategories, onReload }: any) => {
   const { isModuleEnabled } = useModulesContext();
   const hasTopicsModule = isModuleEnabled('event-topics');
@@ -1786,6 +1832,9 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
                         {event.enableNativeRegistration ? 'Event Portal' : 'External Link'}
                       </Badge>
                     </div>
+                  )}
+                  {event.enableRegistration && event.id && (
+                    <EventRegistrationAccessBadge eventId={event.id} />
                   )}
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-[var(--gray-a11)]">Walk-ins</span>
