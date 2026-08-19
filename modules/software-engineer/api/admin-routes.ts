@@ -660,6 +660,9 @@ export function mountAdminRoutes(router, deps) {
   const PR_BOARD_TTL_MS = 60_000;
 
   router.get('/overview/prs', async (req, res) => {
+    if (!rateLimit(`se-admin:pr-board:${clientIp(req)}`, 60, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     let project: string | null = null;
     if (req.query.project !== undefined && req.query.project !== '') {
       project = String(req.query.project);
