@@ -56,6 +56,7 @@ import {
   Th,
   Td,
 } from '@/components/ui';
+import { ContentAccessControl } from '@/components/content-access/ContentAccessControl';
 import { RowActions } from '@/components/shared/table/RowActions';
 import { ScrollableTable } from '@/components/shared/table/ScrollableTable';
 import { DataTable } from '@/components/shared/table/DataTable';
@@ -1616,6 +1617,9 @@ const EventDetailsTab = ({ event, isEditMode, register, errors, watch, setValue,
                       Enable Registration
                     </span>
                   </label>
+                  {event?.id && (
+                    <ContentAccessControl contentType="event" entityId={event.id} />
+                  )}
                   {watch('enableRegistration') && (
                     <label className="flex items-center gap-2 ml-6">
                       <input
