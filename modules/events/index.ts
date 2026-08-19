@@ -71,6 +71,10 @@ const eventsModule: GatewazeModule = {
     // (people.contact_kind='prospect') into an 'event_contact' — counterpart
     // of core migration 00042 which owns the contact_kind column.
     'migrations/018_registration_contact_kind.sql',
+    // 019: wrap auth.uid() in the registration RLS policies + index
+    // people.auth_user_id — a bare auth.uid() seq-scanned 159k people (~7s) and
+    // timed out PostgREST deletes/reads. See the migration header.
+    'migrations/019_registration_rls_authuid_perf.sql',
   ],
 
   edgeFunctions: [
