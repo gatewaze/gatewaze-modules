@@ -13,6 +13,7 @@ import {
   Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import { Button, Card, Badge, Input, Select, WorkspaceLayout } from '@/components/ui';
+import { ContentAccessControl } from '@/components/content-access/ContentAccessControl';
 import type { Tab } from '@/components/ui/Tabs';
 import RichTextEditor from '@/components/ui/RichTextEditor';
 import { Page } from '@/components/shared/Page';
@@ -651,6 +652,9 @@ function ItemsTab({ collectionId, items, categories, templates, onUpdate }: {
           data={[{ value: 'draft', label: 'Draft' }, { value: 'published', label: 'Published' }, { value: 'archived', label: 'Archived' }]} />
         <Input label="External URL" value={formData.external_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, external_url: e.target.value })} />
       </div>
+      {editingId && (
+        <ContentAccessControl contentType="resource" entityId={editingId} status={formData.status} />
+      )}
       <div className="flex items-end gap-2">
         <div className="flex-1">
           <Input label="Featured Image URL" value={formData.featured_image_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, featured_image_url: e.target.value })} placeholder="Paste a URL, upload, or generate with AI →" />
