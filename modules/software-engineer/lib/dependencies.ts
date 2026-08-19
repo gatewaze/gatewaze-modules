@@ -55,6 +55,12 @@ function classifyFetchFailure(err: unknown): 'not_found' | 'unavailable' {
   return m && m[1] === '404' ? 'not_found' : 'unavailable';
 }
 
+/** Log-safe rendering of a value that may carry remote-echoed content: control characters
+ *  (incl. CR/LF) become spaces so one log call can never forge additional log lines. */
+const logSafe = (v: unknown): string =>
+  // eslint-disable-next-line no-control-regex
+  String(v instanceof Error ? v.message : v).replace(/[\x00-\x1f\x7f]+/g, ' ').slice(0, 300);
+
 /** Which of `deps` are still open? A confirmed-404 dep counts as met (fail open); any other
  *  fetch failure (auth, 5xx, network) counts as unmet (fail closed) — see module doc comment. */
 export async function unmetDependencies(gh, owner: string, name: string, deps: number[]): Promise<number[]> {
@@ -65,9 +71,9 @@ export async function unmetDependencies(gh, owner: string, name: string, deps: n
       if (issue && issue.state === 'open') unmet.push(num);
     } catch (err) {
       if (classifyFetchFailure(err) === 'not_found') {
-        console.log(`se: dependencies — #${num} on ${owner}/${name} not found (404); fail-open, treating as met`);
+        console.log(`se: dependencies — #${num} on ${logSafe(owner)}/${logSafe(name)} not found (404); fail-open, treating as met`);
       } else {
-        console.warn(`se: dependencies — #${num} on ${owner}/${name} unfetchable (${err instanceof Error ? err.message : err}); fail-closed, treating as unmet`);
+        console.warn(`se: dependencies — #${num} on ${logSafe(owner)}/${logSafe(name)} unfetchable (${logSafe(err)}); fail-closed, treating as unmet`);
         unmet.push(num);
       }
     }
