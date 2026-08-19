@@ -148,7 +148,11 @@ function buildSendContext(send: any): SendContext {
     html,
     subject,
     topic: send.suppression_topic || 'broadcasts',
-    fromEmail: send.from_address || Deno.env.get('BULK_EMAIL_FROM_ADDRESS') || Deno.env.get('EMAIL_FROM') || 'noreply@localhost',
+    // Never fall through to a no-reply/localhost address (spam + SPF/DKIM
+    // misalignment). from_address is defaulted from config at insert; if none
+    // resolves, refuse to send rather than send from a junk sender.
+    fromEmail: send.from_address || Deno.env.get('BULK_EMAIL_FROM_ADDRESS') || Deno.env.get('EMAIL_FROM')
+      || (() => { throw new Error('Broadcast has no From address; refusing to send. Set the broadcast From or configure a default sender.') })(),
     fromName: send.from_name || Deno.env.get('BULK_EMAIL_FROM_NAME') || Deno.env.get('EMAIL_FROM_NAME') || 'Gatewaze',
     replyTo: send.reply_to || null,
     hmacSecret: Deno.env.get('UNSUBSCRIBE_HMAC_SECRET'),
