@@ -12,19 +12,34 @@ function sb() {
   return _sb;
 }
 
-// Bearer token -> Supabase user -> is_admin() evaluated WITH the caller's JWT
-// (same predicate RLS uses). Returns a Response on failure (caller returns it),
-// or null when the caller is a verified admin.
+// Bearer token -> is_admin() evaluated WITH the caller's JWT (same predicate RLS
+// uses). Returns a Response on failure (caller returns it), or null when the
+// caller is a verified admin.
+//
+// is_admin() must run AS the caller so auth.uid() resolves to them. supabase-js
+// `.rpc(fn, args, opts)` does NOT accept a per-call `headers` option — passing
+// one is silently ignored and the RPC runs as service_role (auth.uid() = NULL),
+// which makes is_admin() return false for EVERYONE, even super-admins. So we
+// build a short-lived client keyed with the anon key and the caller's bearer in
+// its default headers, exactly like the resources module does.
 async function requireAdmin(req: Request, res: Response): Promise<Response | null> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     return res.status(401).json({ error: { code: 'unauthorized', message: 'Missing bearer token' } });
   }
-  const jwt = authHeader.slice('Bearer '.length);
-  const { data, error } = await sb().auth.getUser(jwt);
-  if (error || !data?.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Invalid token' } });
-  const { data: isAdmin, error: rpcError } = await sb().rpc('is_admin', {}, { headers: { Authorization: `Bearer ${jwt}` } });
-  if (rpcError || !isAdmin) return res.status(403).json({ error: { code: 'forbidden', message: 'Admin privileges required' } });
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    return res.status(500).json({ error: { code: 'server_misconfigured', message: 'Auth not configured' } });
+  }
+  const asUser = createClient(url, anonKey, {
+    auth: { persistSession: false },
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: isAdmin, error: rpcError } = await asUser.rpc('is_admin');
+  if (rpcError || isAdmin !== true) {
+    return res.status(403).json({ error: { code: 'forbidden', message: 'Admin privileges required' } });
+  }
   return null;
 }
 
@@ -390,6 +405,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
   // Inbox list
   // ──────────────────────────────────────────────────────────────────────────
   app.get('/api/admin/inbox/list', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
     try {
       const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
       const cursor = decodeCursor(typeof req.query.cursor === 'string' ? req.query.cursor : undefined);
@@ -593,6 +609,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
   // Bulk actions
   // ──────────────────────────────────────────────────────────────────────────
   app.post('/api/admin/inbox/bulk', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
     try {
       // Resolve the calling admin's Supabase Auth user id from the
       // Authorization header. The triage_items_reviewed_consistency
@@ -822,6 +839,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
   // "Why is this here?" — single-item explanation
   // ──────────────────────────────────────────────────────────────────────────
   app.get('/api/admin/inbox/explain/:triage_item_id', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
     try {
       const id = req.params.triage_item_id;
       const { data: row, error } = await sb()
