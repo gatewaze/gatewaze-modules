@@ -9,6 +9,8 @@
  * credential — the agent's tools never see GATEWAZE_SECRETS_KEY, DB creds, or other brands' secrets.
  */
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { readFile } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
 
 export type ModelCredKind = 'anthropic_api_key' | 'claude_code_oauth_token' | 'bedrock' | 'vertex';
 export interface PhaseCredential { kind: ModelCredKind; value: string; }
@@ -121,6 +123,84 @@ function scopedEnv(c: PhaseCredential): Record<string, string | undefined> {
   return env;
 }
 
+// Issue #58: a Read with no limit, or a Bash `cat`, on a file over this many lines is exactly the
+// whole-file-read shape that fills the context window and triggers autocompact thrashing (LFX #17,
+// LFX #15). Soft proxy for "large" — retune here if false positives/negatives show up in practice.
+const LARGE_FILE_LINES = 1500;
+
+async function countLines(absPath: string): Promise<number | null> {
+  try {
+    const buf = await readFile(absPath, 'utf8');
+    return buf.split('\n').length;
+  } catch {
+    return null; // unreadable / not a text file / doesn't exist yet — let the real tool report it
+  }
+}
+
+/** Shared PreToolUse hooks for both runPhase and runInteractive — kept in one place so the Bash
+ *  forbidden-flag guard and the issue #58 context-discipline guards can't drift between the two. */
+function buildPreToolUseHooks(cwd: string) {
+  return [
+    {
+      matcher: 'Bash',
+      hooks: [async (i: any) => {
+        const cmd = i?.tool_input?.command ?? '';
+        if (/--no-verify|--force|rm\s+-rf\s+\//.test(cmd)) {
+          return {
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: 'forbidden git/destructive flag (software-engineer guard)',
+            },
+          };
+        }
+        // Issue #58: `cat <large-file>` is the Bash-side twin of a whole-file Read — same
+        // context-fill risk. Match a bare `cat`/`cat -n`/`cat -A` invocation (not `cat file |
+        // grep ...`, which is already bounded by the pipe's consumer) whose target is oversized.
+        const catMatch = cmd.match(/(?:^|[;&|]\s*)cat\s+(?:-[A-Za-z]+\s+)*(\S+)\s*$/);
+        if (catMatch) {
+          const target = isAbsolute(catMatch[1]) ? catMatch[1] : join(cwd, catMatch[1]);
+          const lines = await countLines(target);
+          if (lines !== null && lines > LARGE_FILE_LINES) {
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason:
+                  `${catMatch[1]} has ${lines} lines (over the ${LARGE_FILE_LINES}-line guard). ` +
+                  `Use head/tail/grep/sed to read the part you need, or Read with offset/limit.`,
+              },
+            };
+          }
+        }
+        return {};
+      }],
+    },
+    {
+      matcher: 'Read',
+      hooks: [async (i: any) => {
+        const filePath = i?.tool_input?.file_path;
+        const limit = i?.tool_input?.limit;
+        if (filePath && limit == null) {
+          const lines = await countLines(filePath);
+          if (lines !== null && lines > LARGE_FILE_LINES) {
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason:
+                  `${filePath} has ${lines} lines (over the ${LARGE_FILE_LINES}-line guard) and ` +
+                  `this Read has no limit. Re-read with offset/limit in chunks of ~400 lines.`,
+              },
+            };
+          }
+        }
+        return {};
+      }],
+    },
+  ];
+}
+
 export class InProcessRunner implements Runner {
   async runPhase(input: RunnerInput): Promise<RunnerResult> {
     const out: RunnerResult = { text: '', tokensInput: 0, tokensOutput: 0, tokensCacheRead: 0, tokensCacheCreation: 0, costUSD: 0, modelUsage: {}, interrupted: false };
@@ -173,22 +253,7 @@ export class InProcessRunner implements Runner {
               : { behavior: 'allow' as const, updatedInput: toolInput },
           allowedTools: input.noTools ? [] : (input.allowedTools ?? ['Read', 'Grep', 'Glob', 'Write', 'Edit']),
           hooks: {
-            PreToolUse: [{
-              matcher: 'Bash',
-              hooks: [async (i: any) => {
-                const cmd = i?.tool_input?.command ?? '';
-                if (/--no-verify|--force|rm\s+-rf\s+\//.test(cmd)) {
-                  return {
-                    hookSpecificOutput: {
-                      hookEventName: 'PreToolUse',
-                      permissionDecision: 'deny',
-                      permissionDecisionReason: 'forbidden git/destructive flag (software-engineer guard)',
-                    },
-                  };
-                }
-                return {};
-              }],
-            }],
+            PreToolUse: buildPreToolUseHooks(input.cwd),
           },
         },
       });
@@ -335,22 +400,7 @@ export class InProcessRunner implements Runner {
           }),
           allowedTools: input.allowedTools ?? ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
           hooks: {
-            PreToolUse: [{
-              matcher: 'Bash',
-              hooks: [async (i: any) => {
-                const cmd = i?.tool_input?.command ?? '';
-                if (/--no-verify|--force|rm\s+-rf\s+\//.test(cmd)) {
-                  return {
-                    hookSpecificOutput: {
-                      hookEventName: 'PreToolUse',
-                      permissionDecision: 'deny',
-                      permissionDecisionReason: 'forbidden git/destructive flag (software-engineer guard)',
-                    },
-                  };
-                }
-                return {};
-              }],
-            }],
+            PreToolUse: buildPreToolUseHooks(input.cwd),
           },
         },
       });
