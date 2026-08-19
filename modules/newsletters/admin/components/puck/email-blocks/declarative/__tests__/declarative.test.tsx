@@ -290,4 +290,45 @@ describe('declarative block format', () => {
       expect(html).not.toContain('the%2520file.png');
     });
   });
+
+  // A template repo owns 100% of its look, including its own light/dark theme,
+  // by carrying a `<style>` block plus `class` / `data-*` hooks on elements.
+  // The renderer must forward those through untouched (no styling values live
+  // in the platform) — see render.tsx.
+  describe('template-owned styling hooks (class / data-* / <style>)', () => {
+    it('forwards `class` as className while still applying shared-class inline styles', async () => {
+      const SRC = `<!-- SCHEMA: { "t": {"type":"text"} } -->
+<Section class="card dm-card"><Text class="eyebrow dm-h">{{t}}</Text></Section>`;
+      const html = await renderEntry(SRC, { t: 'Hi' });
+      // class emitted for the client-side dark-mode hook…
+      expect(html).toMatch(/class="[^"]*dm-card[^"]*"/);
+      expect(html).toMatch(/class="[^"]*dm-h[^"]*"/);
+      // …and the shared `card` class still contributes its inline style.
+      expect(html).toMatch(/border-radius:\s*15px/);
+    });
+
+    it('forwards data-* attributes (Outlook.com [data-ogsc] hook)', async () => {
+      const SRC = `<!-- SCHEMA: {} --><Section data-ogsc="x"><Text data-foo="bar">Hi</Text></Section>`;
+      const html = await renderEntry(SRC, {});
+      expect(html).toContain('data-ogsc="x"');
+      expect(html).toContain('data-foo="bar"');
+    });
+
+    it('emits <style> CSS verbatim (media queries + hooks survive; not escaped)', async () => {
+      const SRC = `<!-- SCHEMA: {} --><Section><style>@media (prefers-color-scheme: dark){ .dm-card{ background-color:#171718 !important } }</style><Text>Hi</Text></Section>`;
+      const html = await renderEntry(SRC, {});
+      expect(html).toContain('@media (prefers-color-scheme: dark)');
+      expect(html).toContain('.dm-card{ background-color:#171718 !important }');
+      // Braces must survive un-escaped so the rules actually parse.
+      expect(html).not.toContain('&#123;');
+    });
+
+    it('does not resolve {{bindings}} inside <style> (no break-out via field values)', async () => {
+      const SRC = `<!-- SCHEMA: { "evil": {"type":"text"} } --><Section><style>.x{color:{{evil}}}</style></Section>`;
+      const html = await renderEntry(SRC, { evil: '}</style><script>alert(1)</script>' });
+      // The field value is NOT interpolated into the style element.
+      expect(html).not.toContain('<script>alert(1)</script>');
+      expect(html).toContain('.x{color:{{evil}}}');
+    });
+  });
 });
