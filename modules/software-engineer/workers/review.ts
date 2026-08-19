@@ -14,8 +14,62 @@ import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, writeMessage } from '../lib/run-state.js';
+import { InProcessRunner } from '../lib/agent-session.js';
+import { resolvePhaseModel } from '../lib/model-select.js';
+import { createOrSupersedeDecision } from '../lib/decisions.js';
 
 const MAX_REVIEW_RETRIES = 2;
+
+// Turn the skeptic's raw objection bullets into an answerable decision (issue #52) — a cheap,
+// no-tools model turn mirroring pr-monitor.ts's ci-classify pattern. Fails OPEN to a plain kind:'text'
+// decision (using the raw objections as the question) on any error or malformed output — a distillation
+// failure must never block the existing retries-exhausted block/comment behavior below it.
+async function distillDecision(supabase, ctx, run, project, objections) {
+  const fallbackQuestion = `Spec still blocked after ${MAX_REVIEW_RETRIES} revisions. Objections:\n${objections.map((o) => `- ${o}`).join('\n')}`;
+  if (!project?.modelCred) return { question: fallbackQuestion, kind: 'text', options: null };
+  try {
+    await recordPhaseStart(supabase, run, 'decision-distill');
+    const prompt = [
+      `A spec was BLOCKED by an adversarial reviewer after ${MAX_REVIEW_RETRIES} revisions. Turn the`,
+      `objections below into ONE short question for a human decision-maker, plus 2-4 short answer`,
+      `OPTIONS if the decision is genuinely a choice among a small set of directions. If the right`,
+      `answer is open-ended (needs free-form guidance, not a pick-one), omit "options" entirely.`,
+      ``,
+      `Respond with ONLY one JSON object:`,
+      `{"question":"<short question>","options":[{"id":"<short-id>","label":"<short label>","description":"<one line>"}]}`,
+      `or, if free-form: {"question":"<short question>"}`,
+      ``,
+      `--- OBJECTIONS ---`,
+      objections.map((o) => `- ${o}`).join('\n'),
+    ].join('\n');
+    const { model } = resolvePhaseModel(project, run, 'decision-distill');
+    const runner = new InProcessRunner();
+    const result = await runner.runPhase({
+      cwd: '/tmp', prompt, model,
+      credential: { kind: project.modelCredKind, value: project.modelCred },
+      noTools: true,
+    });
+    await recordPhaseEnd(supabase, run, 'decision-distill', result?.error ? 'failed' : 'passed', result?.error, {
+      model, engine: 'claude', input: result?.tokensInput, output: result?.tokensOutput,
+      cacheRead: result?.tokensCacheRead, cacheCreation: result?.tokensCacheCreation, cost: result?.costUSD,
+    });
+    if (result?.error) return { question: fallbackQuestion, kind: 'text', options: null };
+    const m = /\{[\s\S]*\}/.exec(result?.text ?? '');
+    if (!m) return { question: fallbackQuestion, kind: 'text', options: null };
+    const parsed = JSON.parse(m[0]);
+    const question = typeof parsed?.question === 'string' && parsed.question.trim() ? parsed.question.trim().slice(0, 500) : fallbackQuestion;
+    const rawOptions = Array.isArray(parsed?.options) ? parsed.options : null;
+    if (!rawOptions || rawOptions.length < 2 || rawOptions.length > 4) return { question, kind: 'text', options: null };
+    const options = rawOptions
+      .filter((o) => o && typeof o.id === 'string' && typeof o.label === 'string')
+      .slice(0, 4)
+      .map((o) => ({ id: o.id.slice(0, 40), label: o.label.slice(0, 80), description: typeof o.description === 'string' ? o.description.slice(0, 300) : undefined }));
+    if (options.length < 2) return { question, kind: 'text', options: null };
+    return { question, kind: 'choice', options };
+  } catch {
+    return { question: fallbackQuestion, kind: 'text', options: null };
+  }
+}
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -127,6 +181,14 @@ export default async function review(job, ctx) {
     try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:blocked'); } catch { /* best-effort */ }
     try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number, `Spec still blocked after ${MAX_REVIEW_RETRIES} revisions — needs human input. Objections:\n${objections.map((o) => `- ${o}`).join('\n')}`); } catch { /* best-effort */ }
     await supabase.from('se_runs').update({ status: 'blocked', error: 'adversarial review blocked (retries exhausted)' }).eq('id', run.id);
+    const distilled = await distillDecision(supabase, ctx, run, project, objections);
+    try {
+      await createOrSupersedeDecision(supabase, {
+        runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: 'review',
+        question: distilled.question, kind: distilled.kind, options: distilled.options,
+        context: objections.map((o) => `- ${o}`).join('\n'),
+      });
+    } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
     return { blocked: true };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);

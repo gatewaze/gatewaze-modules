@@ -27,6 +27,7 @@ import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPen
 import { syncMemoryToRepo } from '../lib/memory-git.js';
 import { computeSpendOverview, computeModelUsage } from '../lib/cost.js';
 import { classifyDecision, decisionTextFor, blockSummaryFor } from '../lib/decision-kind.js';
+import { createOrSupersedeDecision, resumeRunForDecision, approveArchitecture, ARCHITECTURE_DECISION_OPTIONS } from '../lib/decisions.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -469,15 +470,184 @@ export function mountAdminRoutes(router, deps) {
     for (const p of prs ?? []) (byRun[p.run_id] ??= []).push(p);
     const latestGateByRun = {};
     for (const g of gates ?? []) if (!latestGateByRun[g.run_id]) latestGateByRun[g.run_id] = g;
+    // Prefer a PERSISTED se_decisions row over the synthetic classifyDecision() label (issue #52): once
+    // a run reaches a blocking point that emits a decision, the panel should show the actual QUESTION
+    // (and, for a choice decision, its answerable options) rather than a plain-language description
+    // re-derived from live state. A run keeps showing here — as answered — for 15 minutes after an
+    // answer that leaves it in a gated status (e.g. an architecture 'reject', which is terminal).
+    const { data: persisted } = runIds.length
+      ? await supabase.from('se_decisions')
+          .select('id, run_id, question, kind, options, context, status, answer, answered_by, answered_at')
+          .in('run_id', runIds).in('status', ['pending', 'answered'])
+          .order('created_at', { ascending: false })
+      : { data: [] };
+    const fifteenMinAgo = Date.now() - 15 * 60_000;
+    const persistedByRun = {};
+    for (const p of persisted ?? []) {
+      if (persistedByRun[p.run_id]) continue; // keep the newest row per run (order is created_at desc)
+      if (p.status === 'answered' && (!p.answered_at || new Date(p.answered_at).getTime() < fifteenMinAgo)) continue;
+      persistedByRun[p.run_id] = p;
+    }
     const decisions = (runs ?? [])
       .map((r) => {
         const kind = classifyDecision(r, byRun[r.id] ?? []);
         if (!kind) return null;
         const gateDetail = kind === 'review_blocked' ? latestGateByRun[r.id]?.detail ?? null : null;
-        return { ...r, kind, decision: decisionTextFor(kind, r), objections: gateDetail?.objections ?? undefined };
+        const row = { ...r, kind, decision: decisionTextFor(kind, r), objections: gateDetail?.objections ?? undefined };
+        const p = persistedByRun[r.id];
+        if (p) {
+          row.decisionId = p.id;
+          row.decision = p.question;
+          row.question = p.question;
+          row.answerKind = p.kind;
+          row.options = p.options ?? null;
+          row.context = p.context ?? null;
+          row.answered = p.status === 'answered';
+          row.answer = p.answer ?? null;
+          row.answeredBy = p.answered_by ?? null;
+          row.answeredAt = p.answered_at ?? null;
+        }
+        return row;
       })
       .filter(Boolean);
     res.json({ decisions, count: decisions.length });
+  });
+
+  const sanitizeAnswerText = (v: unknown) => String(v ?? '').replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 500);
+  const ARCH_ANSWER_OPTIONS = new Set(['approve', 'request_changes', 'reject']);
+
+  // Answer a persisted decision (issue #52) — the interactive counterpart of the Decisions panel's
+  // question/options. Reuses the same resume/approve machinery a manual admin action already uses:
+  // review_blocked/pr_closed_partial answers resume the run via resumeRunForDecision(); an
+  // architecture answer approves/sends-back/rejects via approveArchitecture() or an inline CAS. A
+  // decision resolved to config_blocked (kill_switch/authorization, or a security-review block) is
+  // NOT agent-discussable — there is nothing an answer could fix short of Setup — so it is rejected.
+  router.post('/decisions/:id/answer', async (req, res) => {
+    if (!rateLimit(`se-admin:decision-answer:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: decision } = await supabase.from('se_decisions').select('*').eq('id', id).maybeSingle();
+    if (!decision) return res.status(404).json({ error: 'not found' });
+    if (decision.status !== 'pending') {
+      return res.status(409).json({ error: { code: 'already_answered', message: `decision is ${decision.status}` } });
+    }
+    const { data: run } = await supabase.from('se_runs')
+      .select('id, site_id, project_id, status, kind, archived_at, current_phase, error, repo_owner, repo_name, issue_number')
+      .eq('id', decision.run_id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'run not found' });
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
+
+    // ── Validate the answer shape against the decision's kind ──────────────────────────────
+    let optionId: string | null = null;
+    let text = '';
+    if (decision.kind === 'choice') {
+      optionId = typeof req.body?.option_id === 'string' ? req.body.option_id : null;
+      const valid = (decision.options ?? []).some((o: any) => o?.id === optionId);
+      if (!optionId || !valid) return res.status(400).json({ error: { code: 'invalid_option', message: 'option_id must match one of the decision options' } });
+      text = sanitizeAnswerText(req.body?.text);
+    } else {
+      text = sanitizeAnswerText(req.body?.text);
+      if (!text) return res.status(400).json({ error: { code: 'empty_answer', message: 'text is required' } });
+    }
+
+    // A true architecture decision if the run is still at (or past) the architecture gate — the run's
+    // status, not decision.kind alone, disambiguates this from a coincidentally-shaped choice decision.
+    const isArchitecture = ARCH_STATES.includes(run.status) && ARCH_ANSWER_OPTIONS.has(optionId ?? '');
+    if (isArchitecture && (optionId === 'request_changes' || optionId === 'reject') && !text) {
+      return res.status(400).json({ error: { code: 'empty_answer', message: 'text is required for this option' } });
+    }
+
+    // Non-architecture origin: re-derive the same classification the resume route uses, and reject
+    // outright if it resolves to config_blocked — that class is not agent-discussable.
+    let originKind: string | null = null;
+    let gateDetail: any = null;
+    if (!isArchitecture) {
+      const { data: prs } = await supabase.from('se_run_prs').select('state').eq('run_id', run.id);
+      originKind = classifyDecision(run, prs ?? []);
+      if (originKind === 'config_blocked' || originKind == null) {
+        return res.status(400).json({ error: { code: 'not_answerable', message: 'This block is a configuration/credential issue — resolve it in Setup, then resume the run.' } });
+      }
+      if (originKind === 'review_blocked') {
+        const { data: gate } = await supabase.from('se_gates')
+          .select('detail').eq('run_id', run.id).eq('gate', 'adversarial_review').order('created_at', { ascending: false }).limit(1).maybeSingle();
+        gateDetail = gate?.detail ?? null;
+      }
+    }
+
+    const actorId = authorOf(req);
+    const answer = decision.kind === 'choice' ? { option_id: optionId, text: text || undefined } : { text };
+    // A distilled review_blocked decision (workers/review.ts's distillDecision) can ALSO be
+    // kind:'choice' with custom option ids/labels, not just the fixed architecture options. The
+    // resumed agent needs to see WHICH option was picked, not just the optional free-text reason —
+    // so build the human-readable summary from the option's label whenever one was selected.
+    const chosenLabel = decision.kind === 'choice' ? (decision.options ?? []).find((o: any) => o.id === optionId)?.label ?? optionId : null;
+    const answerSummary = chosenLabel ? (text ? `${chosenLabel} — ${text}` : chosenLabel) : text;
+
+    // ── CAS the decision to answered BEFORE acting — a lost race means someone else already
+    // answered it, so bail out rather than double-resume the run. ─────────────────────────────
+    const { data: racedDecision, error: decisionError } = await supabase.from('se_decisions')
+      .update({ status: 'answered', answer, answered_by: actorId, answered_at: new Date().toISOString() })
+      .eq('id', id).eq('status', 'pending')
+      .select().single();
+    if (decisionError) return res.status(500).json({ error: 'update failed' });
+    if (!racedDecision) return res.status(409).json({ error: { code: 'already_answered', message: 'decision was already answered' } });
+
+    let actionResult: any = { ok: true };
+    let auditNote = `Answered decision: "${decision.question}" → `;
+    if (isArchitecture) {
+      if (optionId === 'approve') {
+        if (run.status !== 'architecture_in_review') {
+          actionResult = { status: 409, error: { code: 'not_finalized', message: 'Finalize (commit) the proposal before approving.' } };
+        } else {
+          actionResult = await approveArchitecture(supabase, null, run, { actorId, enqueueJob });
+        }
+        auditNote += 'approved.';
+      } else if (optionId === 'request_changes') {
+        actionResult = await resumeRunForDecision(supabase, null, run, 'architecture', {
+          actorId, enqueueJob, note: `Architecture changes requested by admin: ${text}`,
+        });
+        auditNote += `requested changes — ${text}`;
+      } else {
+        const { data: raced } = await supabase.from('se_runs')
+          .update({ status: 'blocked', error: `architecture proposal rejected: ${text}`, acting_user_id: actorId })
+          .eq('id', run.id).eq('status', run.status)
+          .select('id');
+        actionResult = (!raced || raced.length === 0)
+          ? { status: 409, error: { code: 'state_changed', message: 'Run state changed — refresh and retry if still needed.' } }
+          : { ok: true };
+        auditNote += `rejected — ${text}`;
+      }
+    } else if (originKind === 'review_blocked') {
+      actionResult = await resumeRunForDecision(supabase, null, run, 'spec', {
+        actorId, enqueueJob, extraJobData: { objections: gateDetail?.objections ?? [] },
+        note: `Answered by admin: ${answerSummary}`,
+      });
+      auditNote += answerSummary;
+    } else {
+      // pr_closed_partial (the only remaining non-architecture, non-config_blocked DecisionKind).
+      actionResult = await resumeRunForDecision(supabase, null, run, 'revise', {
+        actorId, enqueueJob, note: `Answered by admin: ${answerSummary}`,
+      });
+      auditNote += answerSummary;
+    }
+
+    if (actionResult?.error) {
+      // Roll the decision back to pending — the action didn't take effect, so the question is still open.
+      await supabase.from('se_decisions').update({ status: 'pending', answer: null, answered_by: null, answered_at: null }).eq('id', id);
+      return res.status(actionResult.status ?? 500).json({ error: actionResult.error });
+    }
+
+    if (run.issue_number) {
+      try {
+        const project = await getProject(supabase, run.project_id);
+        if (project?.githubToken) await githubClient(project.githubToken).postComment(run.repo_owner, run.repo_name, run.issue_number, auditNote);
+      } catch { /* best-effort */ }
+    }
+
+    const { data: freshRun } = await supabase.from('se_runs').select('*').eq('id', run.id).maybeSingle();
+    res.json({ decision: racedDecision, run: freshRun });
   });
 
   // ── Overview PR board — every open PR AUTHORED by each project's PAT user ─────────────────
@@ -490,6 +660,9 @@ export function mountAdminRoutes(router, deps) {
   const PR_BOARD_TTL_MS = 60_000;
 
   router.get('/overview/prs', async (req, res) => {
+    if (!rateLimit(`se-admin:pr-board:${clientIp(req)}`, 60, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     let project: string | null = null;
     if (req.query.project !== undefined && req.query.project !== '') {
       project = String(req.query.project);
@@ -977,29 +1150,13 @@ export function mountAdminRoutes(router, deps) {
       resumePhase = lastFailed?.phase ?? run.current_phase ?? null;
     }
     if (!resumePhase) return res.status(409).json({ error: { code: 'no_phase', message: 'Could not determine which phase to resume.' } });
-    const { count: attemptCount } = await supabase.from('se_phases')
-      .select('id', { count: 'exact', head: true }).eq('run_id', id).eq('phase', resumePhase);
-    const nextAttempt = (attemptCount ?? lastFailed?.attempt ?? 0) + 1;
 
-    const { data: raced, error } = await supabase.from('se_runs')
-      .update({ status: 'running', current_phase: resumePhase, error: null, acting_user_id: authorOf(req) })
-      .eq('id', id).eq('status', run.status)    // atomic guard against a double-resume race
-      .select('id');
-    if (error) return res.status(500).json({ error: 'update failed' });
-    if (!raced || raced.length === 0) {
-      // Lost the CAS: another resume (or the pipeline itself) moved the run first. Say so instead
-      // of reporting a success that did nothing.
-      return res.status(409).json({ error: { code: 'state_changed', message: 'Run state changed — refresh and retry if still needed.' } });
-    }
-    try {
-      await supabase.from('se_messages').insert({
-        run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req),
-        content: `Resumed by admin (attempt ${nextAttempt} of ${resumePhase}). ${blockSummaryFor(kind, run, gateDetail)}`,
-      });
-    } catch { /* best-effort — the phase badges still show the resume via attempt tracking */ }
-    try { await enqueuePhase({ enqueueJob }, id, resumePhase, { attempt: nextAttempt, ...extraJobData }); }
-    catch (e) { logger?.warn?.('se: enqueue after resume failed', { error: String(e) }); }
-    res.json({ resumed: true, phase: resumePhase, attempt: nextAttempt });
+    const result = await resumeRunForDecision(supabase, null, run, resumePhase, {
+      extraJobData, actorId: authorOf(req), enqueueJob,
+      note: (attempt) => `Resumed by admin (attempt ${attempt} of ${resumePhase}). ${blockSummaryFor(kind, run, gateDetail)}`,
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json({ resumed: true, phase: result.phase, attempt: result.attempt });
   });
 
   // Manually merge a run's open, mergeable PR(s) from the Runs dashboard — the human counterpart to the
@@ -1101,6 +1258,16 @@ export function mountAdminRoutes(router, deps) {
     }
     await supabase.from('se_runs').update({ status: 'architecture_in_review', architecture_commit_url: url }).eq('id', id).eq('status', 'awaiting_architecture');
     try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: `Proposal committed to ${run.architecture_repo}. Awaiting architectural review.` }); } catch { /* */ }
+    // Refresh the pending decision's context with the real commit URL (it was null at awaiting_architecture
+    // emission time, since nothing was committed yet) — supersede+reinsert keeps the same fixed option set.
+    try {
+      await createOrSupersedeDecision(supabase, {
+        runId: id, projectId: run.project_id, siteId: run.site_id, phase: 'architecture',
+        question: 'An architecture proposal is ready for review. What should happen next?',
+        kind: 'choice', options: ARCHITECTURE_DECISION_OPTIONS,
+        context: url,
+      });
+    } catch { /* best-effort */ }
     res.json({ committed: true, url, status: 'architecture_in_review' });
   });
 
@@ -1114,15 +1281,8 @@ export function mountAdminRoutes(router, deps) {
     if (!run) return res.status(404).json({ error: 'not found' });
     if (run.status !== 'architecture_in_review') return res.status(409).json({ error: 'run is not awaiting architecture approval' });
     if (await denyIfNotApprover(req, res, run)) return;   // Advance action
-    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'implement', acting_user_id: authorOf(req) }).eq('id', id).eq('status', 'architecture_in_review');
-    if (error) return res.status(500).json({ error: 'update failed' });
-    try { await enqueuePhase({ enqueueJob }, id, 'implement'); } catch (e) { logger?.warn?.('se: enqueue implement (arch approve) failed', { error: String(e) }); }
-    try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: 'Architecture approved — resuming implementation.' }); } catch { /* */ }
-    // Best-effort: note it on the internal roadmap issue (private; not LFX-visible).
-    if (run.issue_number) {
-      const project = await getProject(supabase, run.project_id);
-      if (project?.githubToken) { try { await githubClient(project.githubToken).postComment(run.repo_owner, run.repo_name, run.issue_number, 'Architecture approved — resuming implementation.'); } catch { /* */ } }
-    }
+    const result = await approveArchitecture(supabase, null, run, { actorId: authorOf(req), enqueueJob });
+    if (result.error) return res.status(result.status).json({ error: result.error });
     res.json({ approved: true, resuming: true });
   });
 
