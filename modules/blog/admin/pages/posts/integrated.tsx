@@ -17,6 +17,7 @@ import {
   XCircleIcon,
 } from '@heroicons/react/24/outline';
 import { Modal, Button, Input, Card, Badge, ConfirmModal, Select, Tabs } from '@/components/ui';
+import { ContentAccessControl } from '@/components/content-access/ContentAccessControl';
 import RichTextEditor from '@/components/ui/RichTextEditor';
 import {
   BlogPost,
@@ -909,6 +910,16 @@ const BlogManagement: React.FC = () => {
                     </div>
                   </div>
                 </Card>
+
+                {/* Access (member gating) — only for saved posts (needs an id) */}
+                {isEditingPost && editingPost?.id && (
+                  <ContentAccessControl
+                    className="p-4"
+                    contentType="blog_post"
+                    entityId={editingPost.id}
+                    status={postForm.watch('status')}
+                  />
+                )}
 
                 {/* Category & Tags */}
                 <Card className="p-4">

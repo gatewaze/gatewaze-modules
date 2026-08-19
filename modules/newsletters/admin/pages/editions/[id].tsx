@@ -12,6 +12,7 @@ import {
 import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
 import { Badge, WorkspaceLayout } from '@/components/ui';
+import { ContentAccessControl } from '@/components/content-access/ContentAccessControl';
 import type { Tab } from '@/components/ui/Tabs';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { NewsletterCanvasEditor } from '../../components/puck/NewsletterCanvasEditor';
@@ -972,6 +973,10 @@ export default function EditionEditorPage() {
                 Recommended length: ~80 characters.
               </p>
             </div>
+
+            {edition.id && (
+              <ContentAccessControl contentType="newsletter_edition" entityId={edition.id} />
+            )}
 
             <div className="pt-2">
               <button
