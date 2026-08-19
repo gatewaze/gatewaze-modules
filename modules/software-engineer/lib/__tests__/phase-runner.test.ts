@@ -184,3 +184,25 @@ describe('runAgentSession cost ceiling (issue #57)', () => {
     expect(__runPhase).toHaveBeenCalled();
   });
 });
+
+// Issue #58: the context-discipline paragraph must reach every repo phase's systemAppend
+// automatically, so an agent never needs an operator's hand-typed retry instructions to avoid
+// autocompact thrashing from whole-file reads.
+describe('runAgentSession systemAppend includes the context-discipline paragraph (issue #58)', () => {
+  const RUN = { id: 'run-1', site_id: 'site-1', project_id: 'proj-1', title: 'fix bug' };
+  const PROJECT = { modelCredKind: 'api_key', modelCred: 'x', perRunCostCeilingUSD: null };
+  const SPEC = { cwd: '/tmp/x', prompt: 'do it', repos: [], allowedTools: [] };
+
+  beforeEach(() => { __runPhase.mockReset(); });
+
+  it('passes the paragraph in systemAppend', async () => {
+    const supa = fakeSupabase(() => [{ cost_usd: 0 }]);
+    __runPhase.mockImplementation(async () => ({ text: 'ok', costUSD: 0, tokensInput: 1, tokensOutput: 1 }));
+
+    await runAgentSession(supa, {}, RUN, PROJECT, 'implement', SPEC);
+
+    expect(__runPhase).toHaveBeenCalled();
+    const opts = __runPhase.mock.calls[0][0];
+    expect(opts.systemAppend).toContain('Locate code with Grep or Glob first');
+  });
+});
