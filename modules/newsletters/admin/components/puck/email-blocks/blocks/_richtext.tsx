@@ -15,9 +15,9 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { normalizeRichText } from '../rich-text.js';
 
-export function RichText({ value, style }: { value: unknown; style?: CSSProperties }): ReactNode {
+export function RichText({ value, style, className }: { value: unknown; style?: CSSProperties; className?: string }): ReactNode {
   if (typeof value === 'string') {
-    return <div style={style} dangerouslySetInnerHTML={{ __html: normalizeRichText(value) }} />;
+    return <div className={className} style={style} dangerouslySetInnerHTML={{ __html: normalizeRichText(value) }} />;
   }
-  return <div style={style}>{value as ReactNode}</div>;
+  return <div className={className} style={style}>{value as ReactNode}</div>;
 }

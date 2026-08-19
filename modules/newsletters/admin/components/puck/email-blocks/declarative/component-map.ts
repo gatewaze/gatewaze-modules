@@ -46,9 +46,10 @@ export const SPECIAL_TAGS = new Set(['richtext', 'slot']);
 
 /**
  * Plain inert HTML tags the renderer may emit directly (for layout/padding
- * wrappers and inline text formatting). Only `style` + PASSTHROUGH_ATTRS are
- * ever forwarded, so no event handlers / script can ride along. Anything not
- * here and not a react-email component is dropped.
+ * wrappers and inline text formatting). Only `style`, `class`, `data-*`, and
+ * PASSTHROUGH_ATTRS are ever forwarded (see render.tsx) — all inert, so no
+ * event handlers / script can ride along. Anything not here and not a
+ * react-email component is dropped.
  */
 export const INTRINSIC_TAGS = new Set([
   'div', 'span', 'p', 'strong', 'em', 'b', 'i', 'u', 'br', 'ul', 'ol', 'li', 'small',
