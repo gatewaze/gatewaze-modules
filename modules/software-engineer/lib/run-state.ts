@@ -6,6 +6,7 @@
  */
 
 import { pricePhaseCostUSD } from './cost.js';
+import { createOrSupersedeDecision } from './decisions.js';
 
 const now = () => new Date().toISOString();
 
@@ -266,5 +267,15 @@ export async function blockRun(sb: unknown, run: any, phase: string, gate: strin
   await writeGate(sb, run, gate, 'block', { reason });
   await recordPhaseEnd(sb, run, phase, 'blocked', reason);
   await sb.from('se_runs').update({ status: 'blocked', error: reason }).eq('id', run.id);
+  // config_blocked catch-all (issue #52): kill_switch/authorization blocks are NOT agent-discussable —
+  // there is nothing an operator's answer could resolve short of fixing Setup — but the decision row
+  // still gives the Overview panel a real question instead of a generic label, and the answer endpoint
+  // rejects an answer attempt against it (classifyDecision resolves these to 'config_blocked').
+  try {
+    await createOrSupersedeDecision(sb, {
+      runId: run.id, projectId: run.project_id, siteId: run.site_id, phase,
+      question: reason, kind: 'text', context: null,
+    });
+  } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
   return { blocked: reason };
 }
