@@ -186,14 +186,14 @@ export function mountAdminRoutes(router, deps) {
   // env slot per PROFILE; the test stack never runs se-runner.
   //
   // Profiles: each profile is a separate env slot with its own host-agent
-  // daemon, request/status file pair and repo allowlist. `prs` is an ORDERED
+  // daemon, request/status file pair, GitHub org and repo allowlist. `prs` is an ORDERED
   // list and may repeat a repo — the host agent merges same-repo PRs onto
   // origin/main locally, in order (merge-queue semantics); a merge conflict
   // surfaces as status state:"error" naming the conflicting PR. The profile is
   // validated as a literal key BEFORE any filename is derived from it.
   const TEST_ENV_PROFILES = {
-    gatewaze: { requestFile: 'test-env-request.json', statusFile: 'test-status.json', repos: ['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules'], maxPrs: 6 },
-    lfx: { requestFile: 'lfx-env-request.json', statusFile: 'lfx-status.json', repos: ['lfx-self-serve', 'lfx-v2-helm', 'lfx-v2-email-service', 'lfx-v2-campaign-service', 'lfx-v2-mailing-list-service', 'lfx-v2-newsletter-service', 'lfx-v2-committee-service'], maxPrs: 8 },
+    gatewaze: { org: 'gatewaze', requestFile: 'test-env-request.json', statusFile: 'test-status.json', repos: ['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules'], maxPrs: 6 },
+    lfx: { org: 'linuxfoundation', requestFile: 'lfx-env-request.json', statusFile: 'lfx-status.json', repos: ['lfx-self-serve', 'lfx-v2-helm', 'lfx-v2-email-service', 'lfx-v2-campaign-service', 'lfx-v2-mailing-list-service', 'lfx-v2-newsletter-service', 'lfx-v2-committee-service'], maxPrs: 8 },
   } as const;
   // Strict enum gate (security: the profile selects control-channel FILENAMES —
   // never let a non-literal value near a path). Missing/empty → 'gatewaze' for
@@ -292,7 +292,7 @@ export function mountAdminRoutes(router, deps) {
     }
     const profile = testEnvProfileOf(req.query.profile);
     if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
-    const deployable = TEST_ENV_PROFILES[profile].repos;
+    const { org, repos: deployable } = TEST_ENV_PROFILES[profile];
     const projectId = String(req.query.project_id ?? '');
     const repo = String(req.query.repo ?? '');
     const number = Number(req.query.number);
@@ -303,15 +303,15 @@ export function mountAdminRoutes(router, deps) {
     if (!proj?.githubToken) return res.status(404).json({ error: { code: 'not_found', message: 'Project or its GitHub credential not found' } });
     const gh = githubClient(proj.githubToken);
     try {
-      const pull = await gh.getPullRequest('gatewaze', repo, number);
+      const pull = await gh.getPullRequest(org, repo, number);
       const branch = String(pull?.head?.ref ?? '');
-      const headOwner = String(pull?.head?.repo?.owner?.login ?? 'gatewaze');
+      const headOwner = String(pull?.head?.repo?.owner?.login ?? org);
       if (!branch) return res.json({ branch: null, related: [] });
       const related = [];
       for (const other of deployable) {
         if (other === repo) continue;
         try {
-          const matches = await gh.listOpenPullsByHead('gatewaze', other, headOwner, branch);
+          const matches = await gh.listOpenPullsByHead(org, other, headOwner, branch);
           for (const m of matches ?? []) {
             related.push({ repo: other, number: m.number, title: m.title, url: m.html_url, branch });
           }
