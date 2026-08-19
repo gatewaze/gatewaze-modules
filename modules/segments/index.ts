@@ -47,6 +47,7 @@ const segmentsModule: GatewazeModule = {
     // virtual field for the shared condition engine; MCP segment ownership
     // (created_by_person_id/created_via) + service-role preview entry point.
     'migrations/012_smart_geo_and_mcp.sql',
+    'migrations/013_statement_timeout_backstop.sql',
   ],
 
   publicApiScopes: [

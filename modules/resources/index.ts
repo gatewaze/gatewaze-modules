@@ -40,6 +40,7 @@ const structuredResourcesModule: GatewazeModule = {
     'migrations/021_preserve_block_transcripts.sql',
     // Item-level topics for topic-affinity ranking / interest targeting.
     'migrations/023_item_topics.sql',
+    'migrations/024_member_gating.sql',
   ],
 
   // Surface public resource items in the unified /api/v1/content feed. The
