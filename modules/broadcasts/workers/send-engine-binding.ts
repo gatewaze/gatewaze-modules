@@ -155,7 +155,11 @@ export const broadcastBinding: SendEngineBinding = {
       brand: send.brand || process.env.SEND_ENGINE_DEFAULT_BRAND || 'default',
       channel: send.channel || 'email',
       subject, html,
-      fromEmail: send.from_address || process.env.BULK_EMAIL_FROM_ADDRESS || process.env.EMAIL_FROM || 'noreply@localhost',
+      // Never fall through to a no-reply/localhost address (spam + SPF/DKIM
+      // misalignment). from_address is defaulted from config at insert; if none
+      // resolves, refuse to send rather than send from a junk sender.
+      fromEmail: send.from_address || process.env.BULK_EMAIL_FROM_ADDRESS || process.env.EMAIL_FROM
+        || (() => { throw new Error('Broadcast has no From address; refusing to send. Set the broadcast From or configure a default sender.') })(),
       fromName: send.from_name || process.env.BULK_EMAIL_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Gatewaze',
       replyTo: send.reply_to || null,
       disableSubscriptionTracking: true,

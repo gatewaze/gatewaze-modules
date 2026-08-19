@@ -129,6 +129,10 @@ const broadcastsModule: GatewazeModule = {
     // 021 tz_local grace-window send timing (shared gw_tz_local_send_at) —
     // mirrors newsletters/076; fixes the evening-schedule all-at-once blast.
     'migrations/021_tz_local_grace_window.sql',
+    // 022 default + enforce sender details (from_address/from_name) from the
+    // platform_settings global default, so a send never falls back to a
+    // spam-flagged no-reply address.
+    'migrations/022_default_sender_enforcement.sql',
   ],
 
   adminRoutes: [
