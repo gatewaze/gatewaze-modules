@@ -307,6 +307,15 @@ describe('declarative block format', () => {
       expect(html).toMatch(/border-radius:\s*15px/);
     });
 
+    it('forwards `class` onto <richtext> too (dark hooks must reach body copy)', async () => {
+      const SRC = `<!-- SCHEMA: { "body": {"type":"richtext"} } -->
+<Section class="dm-card"><richtext field="body" class="dm-t" style="color:#3c3c3f" /></Section>`;
+      const html = await renderEntry(SRC, { body: '<p>Body copy.</p>' });
+      // The richtext wrapper carries the hook, so a dark-mode `.dm-t` rule can
+      // recolour body copy — not just headings.
+      expect(html).toMatch(/class="dm-t"[^>]*>.*Body copy/s);
+    });
+
     it('forwards data-* attributes (Outlook.com [data-ogsc] hook)', async () => {
       const SRC = `<!-- SCHEMA: {} --><Section data-ogsc="x"><Text data-foo="bar">Hi</Text></Section>`;
       const html = await renderEntry(SRC, {});

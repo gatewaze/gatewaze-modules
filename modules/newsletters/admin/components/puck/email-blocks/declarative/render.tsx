@@ -248,7 +248,12 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   if (tag === 'richtext') {
     const field = attrs['field'] ?? bindingKeyFromChildren(children);
     const value = field ? getPath(ctx.content, field) : undefined;
-    return <RichText key={key} value={value} style={nodeStyle(node)} />;
+    // Forward `class` onto the RichText wrapper too — same reason as the generic
+    // element path: a template's dark-mode `<style>` hooks (`.dm-t` etc.) must
+    // reach the body copy, not just headings. Without this, richtext bodies
+    // rendered with only inline light colours and never flipped in dark mode.
+    const rtClass = attrs['class'] ? resolveBindings(attrs['class'], ctx.content).trim() : '';
+    return <RichText key={key} value={value} style={nodeStyle(node)} className={rtClass || undefined} />;
   }
 
   const Comp = TAG_COMPONENTS[tag];
