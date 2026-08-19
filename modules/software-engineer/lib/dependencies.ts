@@ -17,9 +17,13 @@
  *     the have-we-commented-already latch). Every subsequent poll re-checks; when the last dep
  *     closes, the marker is removed and the run dispatches automatically. Nothing ends up blocked
  *     or failed merely because it was labelled before its prerequisites landed.
- *   - Self-references and duplicates are ignored. Unknown issue numbers fail OPEN (treated as met,
- *     with the reasoning that a typo shouldn't park an issue forever silently — the comment lists
- *     exactly which deps were considered so a typo is visible).
+ *   - Self-references and duplicates are ignored. A dependency issue confirmed GONE via a definitive
+ *     404 fails OPEN (treated as met) — a typo'd issue number shouldn't park an issue forever
+ *     silently, and the comment lists exactly which deps were considered so a typo is visible. Every
+ *     other fetch failure (401/403 auth hiccup, 5xx, a network-level failure with no status at all)
+ *     fails CLOSED (treated as unmet) — those errors look identical to "the dependency doesn't exist"
+ *     but don't mean that, and letting them through created two premature intakes on staging (issue
+ *     #59). A transient failure delays the run by one poll/webhook cycle instead of starting it early.
  */
 
 export const WAITING_LABEL = 'agent:waiting';
@@ -42,14 +46,37 @@ export function parseDependencies(body: string, selfNumber?: number): number[] {
   return [...out].sort((a, b) => a - b).slice(0, MAX_DEPS);
 }
 
-/** Which of `deps` are still open? Unknown/unfetchable issues count as met (fail open, visibly). */
+/** Classify a gh.getIssue() failure. Only a definitive 404 means "this issue genuinely doesn't
+ *  exist" — everything else (401/403 auth hiccup, 5xx, a network-level failure with no status at
+ *  all) must not be read as "dependency satisfied". */
+function classifyFetchFailure(err: unknown): 'not_found' | 'unavailable' {
+  const msg = err instanceof Error ? err.message : String(err);
+  const m = / → (\d{3})$/.exec(msg);
+  return m && m[1] === '404' ? 'not_found' : 'unavailable';
+}
+
+/** Log-safe rendering of a value that may carry remote-echoed content: control characters
+ *  (incl. CR/LF) become spaces so one log call can never forge additional log lines. */
+const logSafe = (v: unknown): string =>
+  // eslint-disable-next-line no-control-regex
+  String(v instanceof Error ? v.message : v).replace(/[\x00-\x1f\x7f]+/g, ' ').slice(0, 300);
+
+/** Which of `deps` are still open? A confirmed-404 dep counts as met (fail open); any other
+ *  fetch failure (auth, 5xx, network) counts as unmet (fail closed) — see module doc comment. */
 export async function unmetDependencies(gh, owner: string, name: string, deps: number[]): Promise<number[]> {
   const unmet: number[] = [];
   for (const num of deps) {
     try {
       const issue = await gh.getIssue(owner, name, num);
       if (issue && issue.state === 'open') unmet.push(num);
-    } catch { /* unfetchable → treated as met; the marker comment names every dep considered */ }
+    } catch (err) {
+      if (classifyFetchFailure(err) === 'not_found') {
+        console.log(`se: dependencies — #${num} on ${logSafe(owner)}/${logSafe(name)} not found (404); fail-open, treating as met`);
+      } else {
+        console.warn(`se: dependencies — #${num} on ${logSafe(owner)}/${logSafe(name)} unfetchable (${logSafe(err)}); fail-closed, treating as unmet`);
+        unmet.push(num);
+      }
+    }
   }
   return unmet;
 }

@@ -12,12 +12,20 @@ import { join } from 'node:path';
 
 const gh = vi.hoisted(() => ({
   putFileCalls: [] as any[],
-  issue: { title: 'Fix the widget', body: 'The widget is broken.' },
+  setStatusLabelCalls: [] as any[],
+  removeLabelCalls: [] as any[],
+  issue: { title: 'Fix the widget', body: 'The widget is broken.', labels: [] as string[] },
+  // Keyed by issue number: the dependency issue's own getIssue result (state only matters for #9).
+  depIssue: { state: 'open' },
 }));
 vi.mock('../../lib/github.js', () => ({
   githubClient: () => ({
-    getIssue: async () => gh.issue,
+    getIssue: async (_o: string, _n: string, num: number) => (num === 53 ? gh.issue : gh.depIssue),
     putFile: async (...args: any[]) => { gh.putFileCalls.push(args); },
+    setStatusLabel: async (...args: any[]) => { gh.setStatusLabelCalls.push(args); },
+    removeLabel: async (...args: any[]) => { gh.removeLabelCalls.push(args); },
+    addLabels: async () => {},
+    postComment: async () => {},
   }),
 }));
 
@@ -108,6 +116,10 @@ describe('spec worker', () => {
   beforeEach(async () => {
     wsRoot = await mkdtemp(join(tmpdir(), 'se-ws-spec-test-'));
     gh.putFileCalls.length = 0;
+    gh.setStatusLabelCalls.length = 0;
+    gh.removeLabelCalls.length = 0;
+    gh.issue = { title: 'Fix the widget', body: 'The widget is broken.', labels: [] };
+    gh.depIssue = { state: 'open' };
     rs.starts.length = 0; rs.ends.length = 0; rs.blocks.length = 0;
     enqueue.calls.length = 0;
     memory.calls.length = 0;
@@ -179,5 +191,38 @@ describe('spec worker', () => {
     expect(result).toEqual({ failed: 'agent session crashed' });
     expect(inserts.find((i) => i.table === 'se_artifacts')).toBeUndefined();
     expect(updates.find((u) => u.table === 'se_runs')?.row).toMatchObject({ status: 'failed' });
+  });
+
+  it('parks the run at spec start when a dependency is still unmet (issue #59)', async () => {
+    gh.issue = { title: 'Fix the widget', body: 'Depends on #9\n\nThe widget is broken.', labels: [] };
+    gh.depIssue = { state: 'open' };
+    runAgentSession.mockImplementation(async () => { throw new Error('should not run — parked before workspace/agent spend'); });
+
+    const { supabase, updates } = mockSupabase();
+    const result = await spec({ data: { runId: 'run-1' } }, { supabase });
+
+    expect(result).toEqual({ parked: [9] });
+    expect(rs.ends.at(-1)).toMatchObject({ phase: 'spec', status: 'skipped', summary: expect.stringContaining('#9') });
+    expect(updates.find((u) => u.table === 'se_runs')?.row).toMatchObject({ status: 'cancelled', error: null });
+    expect(gh.setStatusLabelCalls).toEqual([['acme', 'issues', 53, null]]);
+    expect(gh.removeLabelCalls.length).toBeGreaterThan(0);
+    expect(runAgentSession).not.toHaveBeenCalled();
+  });
+
+  it('proceeds past the dependency check when there are no unmet dependencies (unaffected happy path)', async () => {
+    gh.issue = { title: 'Fix the widget', body: 'Depends on #9\n\nThe widget is broken.', labels: [] };
+    gh.depIssue = { state: 'closed' };
+    const specBody = '# Spec\n\nGoal: fix the widget.\n' + 'Detail line.\n'.repeat(20);
+    runAgentSession.mockImplementation(async (_sb: unknown, _ctx: unknown, _run: any, _project: any, _phase: string, opts: any) => {
+      await mkdir(join(opts.cwd, 'specs'), { recursive: true });
+      await writeFile(join(opts.cwd, 'specs/issue-53.md'), specBody, 'utf8');
+      return { text: 'Done!', tokensInput: 10, tokensOutput: 20 };
+    });
+
+    const { supabase } = mockSupabase();
+    const result = await spec({ data: { runId: 'run-1' } }, { supabase });
+
+    expect(result).toEqual({ ok: true, branch: expect.any(String) });
+    expect(rs.ends.at(-1)).toMatchObject({ phase: 'spec', status: 'passed' });
   });
 });

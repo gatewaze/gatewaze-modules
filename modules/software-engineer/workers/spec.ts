@@ -21,6 +21,7 @@ import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
 import { writeSpecMemory } from '../lib/memory.js';
+import { parseDependencies, unmetDependencies, ensureWaitingMarker } from '../lib/dependencies.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -48,6 +49,34 @@ export default async function spec(job, ctx) {
   let ws;
   try {
     const issue = await gh.getIssue(run.repo_owner, run.repo_name, run.issue_number);
+
+    // Re-verify dependencies (issue #59): intake already checked this, but a run can still reach here
+    // with an unmet dependency if the two checks straddled a very short GitHub outage, or the
+    // dependency reopened between intake's check and now. The issue fetch above is already paid for;
+    // this adds one extra per-dependency fetch before any workspace/agent spend.
+    const deps = parseDependencies(String(issue.body ?? ''), run.issue_number);
+    if (deps.length) {
+      const unmet = await unmetDependencies(gh, run.repo_owner, run.repo_name, deps);
+      if (unmet.length) {
+        const msg = `parked at spec start — unmet dependencies: ${unmet.map((n) => `#${n}`).join(', ')}`;
+        await recordPhaseEnd(supabase, run, 'spec', 'skipped', msg);
+        await supabase.from('se_runs').update({ status: 'cancelled', error: null }).eq('id', run.id);
+        // Mirror the manual cleanup operators did for the two staging incidents: drop the in-progress
+        // status label and this instance's claim, then restore the waiting marker so the normal
+        // intake-poll re-check (or the next webhook label event) picks the issue back up once the
+        // dependency genuinely closes. `cancelled` is the one run status intake's dedupe queries treat
+        // as "no live run" (api/webhook-routes.ts:87-90, workers/intake-poll.ts:70-75).
+        try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, null); } catch { /* best-effort */ }
+        try {
+          const claimLabel = run.instance_id ? `agent:claimed@${run.instance_id}` : 'agent:claimed';
+          await gh.removeLabel(run.repo_owner, run.repo_name, run.issue_number, claimLabel);
+        } catch { /* best-effort */ }
+        const issueLabels = (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
+        await ensureWaitingMarker(gh, run.repo_owner, run.repo_name, run.issue_number, issueLabels, unmet, deps);
+        return { parked: unmet };
+      }
+    }
+
     const branch = run.branch_name || `agent/se-${run.issue_number}-${String(run.id).slice(0, 8)}`;
     // Read-only clone of every code repo (up to the cap) so the agent can explore + pick targets.
     const forSpec = codeRepos.slice(0, project.maxCodeReposPerRun).map((r) => ({ ...r, writeMode: 'read_only' }));
