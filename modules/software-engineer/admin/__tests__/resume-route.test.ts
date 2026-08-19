@@ -250,6 +250,29 @@ describe('POST /runs/:id/resume', () => {
     expect(msg.row.content).toContain('intake disabled');
   });
 
+  it('resumes a cost-ceiling-blocked run into the gated phase (issue #57)', async () => {
+    const supabase = mockSupabase({
+      run: failedRun({
+        status: 'blocked',
+        current_phase: 'verify',
+        error: 'cost ceiling reached: this run has spent $22.55 of its $20.00 per-run ceiling — raise it in Setup or split the issue',
+      }),
+      prs: [],
+      attemptCount: 1,
+    });
+    const { router, enqueued } = mount(supabase);
+    const res = mockRes();
+    await router.handler('POST /runs/:id/resume')({ params: { id: RID } }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ resumed: true, phase: 'verify', attempt: 2 });
+    expect(enqueued).toEqual([[
+      'se', 'software-engineer:verify', { runId: RID, attempt: 2 },
+      { jobId: `se-run-${RID}-verify`, removeOnComplete: true, removeOnFail: true },
+    ]]);
+    const msg = supabase.__calls.inserts.find((c: any) => c.table === 'se_messages');
+    expect(msg.row.content).toContain('cost ceiling reached');
+  });
+
   it('500s when the atomic status-guarded update fails', async () => {
     const { router } = mount(mockSupabase({
       run: failedRun(),

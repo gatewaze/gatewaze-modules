@@ -123,3 +123,64 @@ describe('runAgentSession heartbeat cost attribution (issue #55)', () => {
     clearIntervalSpy.mockRestore();
   });
 });
+
+// Pins issue #57: a per-run cost ceiling trip must be machine-distinguishable from an ordinary
+// agent-session error, so the five phase workers that hard-fail on `result.error` can instead park
+// the run as `blocked` (a config problem, not a crash) rather than dead-ending it as `failed`.
+describe('runAgentSession cost ceiling (issue #57)', () => {
+  const RUN = { id: 'run-1', site_id: 'site-1', project_id: 'proj-1', title: 'fix bug' };
+  const SPEC = { cwd: '/tmp/x', prompt: 'do it', repos: [], allowedTools: [] };
+
+  beforeEach(() => { __runPhase.mockReset(); });
+
+  // Like fakeSupabase, but se_runs.maybeSingle() resolves to a configurable cost_usd — the ceiling
+  // check reads this fresh instead of trusting the in-memory `run` object.
+  function fakeSupabaseWithRunCost(runCostUsd: number) {
+    const from = (table: string) => {
+      const b: any = {
+        select() { return b; },
+        insert() { return Promise.resolve({ data: null, error: null }); },
+        update() { return b; },
+        upsert() { return Promise.resolve({ data: null, error: null }); },
+        eq() { return b; },
+        maybeSingle() {
+          return Promise.resolve(
+            table === 'se_runs' ? { data: { cost_usd: runCostUsd }, error: null } : { data: null, error: null },
+          );
+        },
+        then(onF: any, onR: any) { return Promise.resolve({ data: [], error: null, count: 0 }).then(onF, onR); },
+      };
+      return b;
+    };
+    return { from };
+  }
+
+  it('returns costCeiling: true and the unchanged error message once spend crosses the ceiling, without invoking the runner', async () => {
+    const supa = fakeSupabaseWithRunCost(22.55);
+    const PROJECT = { modelCredKind: 'api_key', modelCred: 'x', perRunCostCeilingUSD: 20 };
+
+    const result = await runAgentSession(supa, {}, RUN, PROJECT, 'verify', SPEC);
+
+    expect(result.costCeiling).toBe(true);
+    expect(result.error).toBe(
+      'cost ceiling reached: this run has spent $22.55 of its $20.00 per-run ceiling — raise it in Setup or split the issue',
+    );
+    expect(__runPhase).not.toHaveBeenCalled();
+  });
+
+  it('does not trip when spend is below the ceiling', async () => {
+    const supa = fakeSupabaseWithRunCost(5);
+    const PROJECT = { modelCredKind: 'api_key', modelCred: 'x', perRunCostCeilingUSD: 20 };
+
+    __runPhase.mockImplementation((opts: any) => {
+      opts.onUsage?.({});
+      return Promise.resolve({ text: 'ok', costUSD: 0.1, tokensInput: 1, tokensOutput: 1 });
+    });
+
+    const result = await runAgentSession(supa, {}, RUN, PROJECT, 'verify', SPEC);
+
+    expect(result.costCeiling).toBeUndefined();
+    expect(result.error).toBeUndefined();
+    expect(__runPhase).toHaveBeenCalled();
+  });
+});
