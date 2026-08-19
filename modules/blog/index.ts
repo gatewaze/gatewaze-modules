@@ -24,6 +24,7 @@ const blogModule: GatewazeModule = {
     'migrations/006_register_with_platform.sql',
     'migrations/007_webhook_topic.sql',
     'migrations/008_blog_authors.sql',
+    'migrations/009_member_gating.sql',
   ],
 
   adminRoutes: [
