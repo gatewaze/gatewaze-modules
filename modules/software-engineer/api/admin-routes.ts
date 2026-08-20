@@ -253,8 +253,13 @@ export function mountAdminRoutes(router, deps) {
     const { repos, maxPrs, requestFile } = TEST_ENV_PROFILES[profile];
     const allowed = new Set(repos);
     const raw = Array.isArray(req.body?.prs) ? req.body.prs : [];
-    if (raw.length === 0 || raw.length > maxPrs) {
-      return res.status(422).json({ error: { code: 'invalid_input', message: `prs must be an ordered array of 1..${maxPrs} entries` } });
+    // Mainline deploy: an EXPLICIT `mainline: true` (strict boolean) allows an empty prs list — the
+    // host agents treat empty prs as "deploy plain origin/main". Without the flag an empty list is
+    // still a caller mistake (an accidentally-empty selection must not wipe the env), so it 422s.
+    // With a non-empty list the flag changes nothing — the PRs are validated and forwarded as ever.
+    const mainline = req.body?.mainline === true;
+    if ((raw.length === 0 && !mainline) || raw.length > maxPrs) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: `prs must be an ordered array of 1..${maxPrs} entries (or empty with mainline: true)` } });
     }
     // Order is preserved VERBATIM into the request file. Repeated repos are
     // allowed (same-repo PRs merge sequentially on the host); an exact
@@ -277,7 +282,7 @@ export function mountAdminRoutes(router, deps) {
     }
     writeFileSync(`${STAGING_CONTROL}/${requestFile}`,
       JSON.stringify({ action: 'deploy', prs, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
-    logger?.info?.('se: test-env deploy requested', { profile, prs });
+    logger?.info?.('se: test-env deploy requested', { profile, prs, mainline });
     res.status(202).json(testEnvStatus(profile));
   });
 

@@ -80,6 +80,11 @@ export async function testEnvApi(path: string, init?: RequestInit) {
 // onto main locally in this exact order (merge-queue semantics).
 export const deployTestEnv = (profile: TestEnvProfile, prs: { repo: string; number: number }[]) =>
   testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs }) });
+// Mainline deploy: plain origin/main with NO PRs. The server only accepts an
+// empty prs list alongside the explicit mainline flag (accidental empty sets
+// still 422), and the host agent deploys origin/main of every profile repo.
+export const deployTestEnvMainline = (profile: TestEnvProfile) =>
+  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs: [], mainline: true }) });
 export const teardownTestEnv = (profile: TestEnvProfile) =>
   testEnvApi('/test-env/teardown', { method: 'POST', body: JSON.stringify({ profile }) });
 /** Cross-repo related PRs (same head branch) for a deployable PR. */
