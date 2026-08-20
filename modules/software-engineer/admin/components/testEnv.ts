@@ -8,9 +8,13 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import type { TestEnvProfile } from './testEnvSet';
 
 const API = '/api/modules/software-engineer/admin';
-export type TestEnvProfile = 'gatewaze' | 'lfx';
+// Deploy-set types + pure ordering helpers live in testEnvSet.ts (node-testable,
+// no supabase/ui imports); re-exported here so consumers keep one import site.
+export { testEnvProfile } from './testEnvSet';
+export type { DeployEntry, TestEnvProfile } from './testEnvSet';
 // Per-profile deployable repo lists — mirror the server + host-agent allowlists.
 export const DEPLOYABLE: Record<TestEnvProfile, string[]> = {
   gatewaze: ['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules'],
@@ -21,14 +25,6 @@ export const TEST_ENV_ACTIVE = new Set([
   // lfx-profile cycle states (same busy semantics)
   'deploying-helm', 'building-services', 'building-app', 'starting-app',
 ]);
-/** Which env profile serves a project's PRs — null hides every test-env surface. */
-export function testEnvProfile(projectName?: string): TestEnvProfile | null {
-  if (!projectName) return null;
-  if (projectName === 'Gatewaze') return 'gatewaze';
-  if (/lfx/i.test(projectName)) return 'lfx';
-  return null;
-}
-
 // Deploy-cycle progress models, per profile. Percentages hand-weighted by
 // observed step duration (building dominates); tearing-down only appears when
 // replacing.

@@ -6,6 +6,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export default defineConfig({
+  // The module has no tsconfig.json of its own, so esbuild's JSX mode is whatever vitest/vite
+  // defaults to — which flipped from automatic to classic somewhere in the floated vitest 4.1.x
+  // range, breaking components that (correctly, for the platform's build) omit `import React`.
+  // Pin the automatic runtime explicitly so the suite doesn't depend on that default.
+  esbuild: { jsx: 'automatic' },
   test: {
     // Cover both the co-located suites ({lib,api,admin,workers}/**/__tests__) and the top-level
     // __tests__/ tree (e.g. the transcript-markdown component test from issue #10).
