@@ -9,13 +9,43 @@ import React from 'react';
 import { Badge, Button } from '@/components/ui';
 import { toast } from 'sonner';
 import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
-import { TEST_ENV_ACTIVE, stepPct, normUrls, useTestEnvStatus, teardownTestEnv } from './testEnv';
+import { TEST_ENV_ACTIVE, stepPct, normUrls, useTestEnvStatus, teardownTestEnv, deployTestEnvMainline } from './testEnv';
 
 export default function TestEnvStrip({ profile = 'gatewaze' }: { profile?: 'gatewaze' | 'lfx' }) {
   const { info, load, active } = useTestEnvStatus(profile);
   if (!info?.available) return null;
   const st = info.status;
-  if (!st || st.state === 'torn-down') return null;   // nothing deployed — stay out of the way
+  const nothingDeployed = !st || st.state === 'torn-down';
+  const deployMain = async () => {
+    const msg = nothingDeployed || st?.state === 'error'
+      ? 'Deploy plain main (no PRs) to the test environment?'
+      : 'Replace the current test environment with plain main (no PRs)?';
+    if (!window.confirm(msg)) return;
+    try { await deployTestEnvMainline(profile); toast.success('Mainline deploy requested'); load(); }
+    catch (e: any) { toast.error(/403/.test(String(e?.message)) ? 'Super-admin access required' : `Deploy failed: ${e?.message ?? e}`); }
+  };
+  if (nothingDeployed) {
+    // Nothing deployed — instead of hiding entirely, offer a plain-main deploy.
+    return (
+      <div className="mb-4 rounded-md border border-[var(--gray-6)] px-3 py-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <BeakerIcon className="size-4 shrink-0" />
+          <span className="text-sm font-medium">Test environment</span>
+          <Badge color="gray" variant="soft" size="1">{info.pending ? 'queued' : 'torn-down'}</Badge>
+          <span className="ml-auto flex items-center gap-2">
+            <Button variant="soft" size="xs" onClick={deployMain} disabled={active}>
+              <RocketLaunchIcon className="size-3.5 mr-1" />Deploy main branch
+            </Button>
+          </span>
+        </div>
+        {info.pending && (
+          <div className="mt-2 h-1.5 rounded-full bg-[var(--gray-4)] overflow-hidden">
+            <div className="h-full rounded-full bg-blue-500 transition-all duration-700" style={{ width: `${stepPct(profile, 'queued', true)}%` }} />
+          </div>
+        )}
+      </div>
+    );
+  }
   const ready = st.state === 'ready';
   const urls = normUrls(st.urls);
   const launchUrls = urls.filter((u) => u.launch);
@@ -49,6 +79,16 @@ export default function TestEnvStrip({ profile = 'gatewaze' }: { profile?: 'gate
               {u.note && <span className="text-[11px] text-[var(--gray-10)]">{u.note}</span>}
             </span>
           ))}
+          {st.state === 'error' && (
+            <Button variant="soft" size="xs" onClick={deployMain} disabled={active}>
+              <RocketLaunchIcon className="size-3.5 mr-1" />Deploy main branch
+            </Button>
+          )}
+          {st.state !== 'error' && (
+            <Button variant="ghost" size="xs" onClick={deployMain} disabled={active}>
+              Replace with main branch
+            </Button>
+          )}
           {(ready || st.state === 'error') && (
             <Button variant="soft" color="red" size="xs" onClick={teardown} disabled={active}>
               <TrashIcon className="size-3.5 mr-1" />Tear down

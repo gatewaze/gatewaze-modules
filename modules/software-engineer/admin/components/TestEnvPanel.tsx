@@ -18,7 +18,7 @@ import { toast } from 'sonner';
 import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, PlusIcon, RocketLaunchIcon, ChevronUpIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import {
   DEPLOYABLE, TEST_ENV_ACTIVE, STEPS, stepPct, normUrls, testEnvProfile,
-  useTestEnvStatus, deployTestEnv, teardownTestEnv, fetchRelated,
+  useTestEnvStatus, deployTestEnv, deployTestEnvMainline, teardownTestEnv, fetchRelated,
 } from './testEnv';
 
 export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any[]; projectId?: string; projectName?: string }) {
@@ -90,6 +90,17 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
     try {
       await deployTestEnv(profile, deploySet.map(({ repo, number }) => ({ repo, number })));
       toast.success('Test environment deploy requested');
+      load();
+    } catch (e: any) {
+      toast.error(/403/.test(String(e?.message)) ? 'Super-admin access required' : `Deploy failed: ${e?.message ?? e}`);
+    } finally { setBusy(false); }
+  };
+  const deployMainline = async () => {
+    if (!window.confirm('Deploy plain main (no PRs) to the test environment? This replaces the current env.')) return;
+    setBusy(true);
+    try {
+      await deployTestEnvMainline(profile);
+      toast.success('Mainline deploy requested');
       load();
     } catch (e: any) {
       toast.error(/403/.test(String(e?.message)) ? 'Super-admin access required' : `Deploy failed: ${e?.message ?? e}`);
@@ -223,6 +234,9 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
         </Button>
         <Button variant="soft" size="xs" onClick={deploy} disabled={busy || active || deploySet.length === 0}>
           <BeakerIcon className="size-3.5 mr-1" />{active ? 'Working…' : ready ? 'Redeploy' : 'Deploy to test env'}
+        </Button>
+        <Button variant="ghost" size="xs" onClick={deployMainline} disabled={busy || active}>
+          Deploy main only (no PRs)
         </Button>
       </div>
       {deploySet.length > 0 && (
