@@ -18,15 +18,33 @@ const CONTENT_TYPES: { value: string; label: string }[] = [
   { value: 'event', label: 'Event (registration)' },
 ];
 
-function ruleSummary(p: ContentAccessPolicy, tierLabel: (rank: number) => string): string {
+// Describe the tier requirement of a policy: an exact set (allowed_tiers) if set,
+// else the min_tier_rank threshold, else nothing (any member).
+function tierDescriptor(
+  p: ContentAccessPolicy,
+  tierLabel: (rank: number) => string,
+  tierLabelByName: (name: string) => string,
+): string {
+  if (p.allowed_tiers && p.allowed_tiers.length > 0) {
+    return ` (${p.allowed_tiers.map(tierLabelByName).join(', ')})`;
+  }
+  return p.min_tier_rank ? ` (${tierLabel(p.min_tier_rank)})` : '';
+}
+
+function ruleSummary(
+  p: ContentAccessPolicy,
+  tierLabel: (rank: number) => string,
+  tierLabelByName: (name: string) => string,
+): string {
+  const d = tierDescriptor(p, tierLabel, tierLabelByName);
   if (p.gated_actions?.includes('register')) {
-    return `Registration: members only${p.min_tier_rank ? ` (${tierLabel(p.min_tier_rank)})` : ''}`;
+    return `Registration: members only${d}`;
   }
   if (p.embargo_days) {
-    return `Members-only for ${p.embargo_days} day(s)${p.min_tier_rank ? ` (${tierLabel(p.min_tier_rank)})` : ''}, then public`;
+    return `Members-only for ${p.embargo_days} day(s)${d}, then public`;
   }
   if (p.audience === 'members') {
-    return `Members only${p.min_tier_rank ? ` (${tierLabel(p.min_tier_rank)})` : ' (any member)'}`;
+    return `Members only${d || ' (any member)'}`;
   }
   return 'Public';
 }
@@ -42,11 +60,18 @@ export default function ContentAccessPage() {
   const [addType, setAddType] = useState('newsletter_edition');
   const [addScope, setAddScope] = useState<'type' | 'item'>('item');
   const [addEntityId, setAddEntityId] = useState('');
+  const [addTierMode, setAddTierMode] = useState<'minimum' | 'specific'>('minimum');
   const [addTierRank, setAddTierRank] = useState(0);
+  const [addTiers, setAddTiers] = useState<string[]>([]);
 
   const tierLabel = useMemo(() => {
     const byRank = new Map(tiers.map((t) => [t.rank, t.display_label]));
     return (rank: number) => byRank.get(rank) ?? `tier ≥ ${rank}`;
+  }, [tiers]);
+
+  const tierLabelByName = useMemo(() => {
+    const byName = new Map(tiers.map((t) => [t.tier, t.display_label]));
+    return (name: string) => byName.get(name) ?? name;
   }, [tiers]);
 
   const tierOptions = useMemo(
@@ -75,11 +100,15 @@ export default function ContentAccessPage() {
       const entity_id = addScope === 'item' ? addEntityId.trim() : null;
       if (addScope === 'item' && !entity_id) { setErr('Enter an item id, or choose "All of this type".'); setBusy(false); return; }
       const isEvent = addType === 'event';
+      // Exact tier set overrides the rank threshold; the API normalises [] -> null.
+      const tierFields = addTierMode === 'specific'
+        ? { min_tier_rank: 0, allowed_tiers: addTiers }
+        : { min_tier_rank: addTierRank, allowed_tiers: null };
       await contentAccessService.setPolicy({
         content_type: addType,
         entity_id,
         audience: isEvent ? 'public' : 'members',
-        min_tier_rank: addTierRank,
+        ...tierFields,
         gated_actions: isEvent ? ['register'] : [],
         note: 'Added from Content Access page',
       });
@@ -111,12 +140,43 @@ export default function ContentAccessPage() {
             <Input label="Item id (uuid)" value={addEntityId} placeholder="00000000-0000-…"
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAddEntityId(e.target.value)} />
           )}
-          <Select label="Minimum tier" value={addTierRank} data={tierOptions}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setAddTierRank(Number(e.target.value))} />
+          <Select label="Tier requirement" value={addTierMode}
+            data={[{ value: 'minimum', label: 'Minimum tier' }, { value: 'specific', label: 'Specific tiers' }]}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setAddTierMode(e.target.value === 'specific' ? 'specific' : 'minimum')} />
+          {addTierMode === 'minimum' && (
+            <Select label="Minimum tier" value={addTierRank} data={tierOptions}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setAddTierRank(Number(e.target.value))} />
+          )}
           <Button onClick={() => void add()} disabled={busy}>
             {addType === 'event' ? 'Gate registration' : 'Make members-only'}
           </Button>
         </div>
+
+        {addTierMode === 'specific' && (
+          <div className="mt-3">
+            <div className="text-xs font-medium text-[var(--gray-11)] mb-1">Allowed tiers</div>
+            {tiers.length === 0 ? (
+              <p className="text-xs text-[var(--gray-a10)]">No tiers available.</p>
+            ) : (
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {tiers.map((t) => (
+                  <label key={t.tier} className="flex items-center gap-2 text-sm text-[var(--gray-11)]">
+                    <input
+                      type="checkbox"
+                      checked={addTiers.includes(t.tier)}
+                      onChange={(e) =>
+                        setAddTiers((prev) => (e.target.checked ? [...prev, t.tier] : prev.filter((x) => x !== t.tier)))
+                      }
+                    />
+                    {t.display_label}
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-[var(--gray-a10)] mt-1">Only members in the checked tiers can access.</p>
+          </div>
+        )}
+
         <p className="text-xs text-[var(--gray-a10)] mt-2">
           Events keep public visibility and gate the <b>register</b> action; other types gate visibility.
         </p>
@@ -139,7 +199,7 @@ export default function ContentAccessPage() {
                       {p.entity_id ? `item ${p.entity_id.slice(0, 8)}…` : 'All of this type'}
                     </span>
                   </div>
-                  <div className="text-sm text-[var(--gray-12)] mt-0.5">{ruleSummary(p, tierLabel)}</div>
+                  <div className="text-sm text-[var(--gray-12)] mt-0.5">{ruleSummary(p, tierLabel, tierLabelByName)}</div>
                   {p.note && <div className="text-xs text-[var(--gray-a9)]">{p.note}</div>}
                 </div>
                 <Button variant="soft" color="red" onClick={() => void remove(p)} disabled={busy}>Remove</Button>
