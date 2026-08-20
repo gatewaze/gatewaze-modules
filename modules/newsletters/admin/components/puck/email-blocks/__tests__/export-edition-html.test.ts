@@ -203,3 +203,35 @@ describe('exportEditionHtml — fallback when meta missing', () => {
     expect(html).toContain('mystery_block');
   });
 });
+
+describe('exportEditionHtml — <style> hoisting (Gmail clip fix)', () => {
+  // A wrapper's dark-mode <style> renders deep in the body; Gmail clips a
+  // message with a body <style> regardless of size. exportEditionHtml must
+  // hoist it into <head>.
+  const WRAPPER = `<!-- SCHEMA: { "edition": { "date": {"type":"text"} } } -->
+<style>@media (prefers-color-scheme: dark){ .dm-card{ background-color:#171718 !important } }</style>
+<Section><Text>HEADER</Text></Section>
+<slot name="body" />
+<Section><Text>FOOTER</Text></Section>`;
+
+  it('moves a body <style> into <head> and leaves none in the body', async () => {
+    const html = await exportEditionHtml({
+      edition: baseEdition,
+      format: 'email',
+      blockMeta: meta,
+      wrapperTemplate: WRAPPER,
+    });
+    const headEnd = html.indexOf('</head>');
+    expect(headEnd).toBeGreaterThan(-1);
+    const head = html.slice(0, headEnd);
+    const body = html.slice(headEnd);
+    expect(head).toContain('@media (prefers-color-scheme: dark)');
+    expect(body).not.toContain('<style');
+    // exactly one style block, and it sits before </head>
+    expect((html.match(/<style/g) || []).length).toBe(1);
+    expect(html.indexOf('<style')).toBeLessThan(headEnd);
+    // body content still intact
+    expect(body).toContain('HEADER');
+    expect(body).toContain('FOOTER');
+  });
+});

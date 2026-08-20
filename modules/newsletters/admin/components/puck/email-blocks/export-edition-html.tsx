@@ -68,8 +68,38 @@ export interface ExportArgs {
   forSend?: boolean;
 }
 
+/**
+ * Move any `<style>` blocks out of the message body and into `<head>`.
+ *
+ * The declarative wrapper renders its dark-mode `<style>` as the first element
+ * of the body (react-email nests it deep inside `<body><table>…<td><style>`).
+ * Gmail chokes on a `<style>` embedded in the body: it clips the message
+ * ("[Message clipped] View entire message") regardless of size — a 13KB Style C
+ * edition clipped while a 50KB+ classic edition (no `<style>`) did not. CSS
+ * belongs in `<head>` anyway, and Gmail handles a head `<style>` normally, so we
+ * hoist every body `<style>` up before `</head>`. Selectors are global either
+ * way, so dark-mode behaviour is unchanged (if anything, better supported).
+ *
+ * Pure string surgery on the already-rendered document: split at `</head>`, pull
+ * `<style>…</style>` out of everything after it, and re-insert before `</head>`.
+ * Anything in the head (there is no author `<style>` there) is untouched.
+ */
+function hoistStyleToHead(html: string): string {
+  const headEnd = html.indexOf('</head>');
+  if (headEnd === -1) return html;
+  const head = html.slice(0, headEnd); // up to, not including, </head>
+  const rest = html.slice(headEnd); // </head> … </html> (the body)
+  const styles: string[] = [];
+  const bodyWithoutStyles = rest.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, (m) => {
+    styles.push(m);
+    return '';
+  });
+  if (styles.length === 0) return html;
+  return head + styles.join('') + bodyWithoutStyles;
+}
+
 export async function exportEditionHtml(args: ExportArgs): Promise<string> {
-  return render(
+  const html = await render(
     <EditionEmail
       edition={args.edition}
       format={args.format}
@@ -82,4 +112,5 @@ export async function exportEditionHtml(args: ExportArgs): Promise<string> {
     />,
     { pretty: args.pretty ?? false },
   );
+  return hoistStyleToHead(html);
 }
