@@ -68,8 +68,39 @@ export interface ExportArgs {
   forSend?: boolean;
 }
 
+// Zero-width non-joiner (U+200C): invisible, non-Latin-1, harmless.
+const UTF8_MARKER = "\u200c";
+// Matches any character OUTSIDE Latin-1 (> U+00FF), i.e. one that forces a
+// UTF-8 encoding. eslint-disable: the control-char range is intentional.
+// eslint-disable-next-line no-control-regex
+const NON_LATIN1 = /[^\u0000-\u00ff]/;
+
+/**
+ * Guarantee the document is encoded as UTF-8 by the sender.
+ *
+ * SendGrid (and mailers generally) pick the MIME charset from the CONTENT
+ * BYTES: a document that fits entirely in Latin-1 is sent as
+ * `text/html; charset=iso-8859-1`, and **Gmail clips iso-8859-1 messages**
+ * ("[Message clipped] View entire message") regardless of size — a 13KB Style C
+ * edition clipped while a 50KB+ utf-8 edition did not. (Adding a preheader
+ * incidentally fixed it, because react-email's `<Preview>` padding is full of
+ * UTF-8 zero-width characters.)
+ *
+ * We force UTF-8 deterministically by ensuring at least one non-Latin-1 byte:
+ * an invisible zero-width non-joiner in a hidden span right after `<body>`.
+ * Only injected when the document is otherwise pure-Latin-1, so any edition
+ * that already contains a UTF-8 character (a smart quote, an emoji, a
+ * preheader) is returned byte-for-byte unchanged. One character — so, unlike a
+ * full `<Preview>` block, it does not blank out the inbox preview.
+ */
+function ensureUtf8Charset(html: string): string {
+  if (NON_LATIN1.test(html)) return html;
+  const marker = `<span style="display:none;max-height:0;overflow:hidden">${UTF8_MARKER}</span>`;
+  return html.replace(/(<body\b[^>]*>)/i, `$1${marker}`);
+}
+
 export async function exportEditionHtml(args: ExportArgs): Promise<string> {
-  return render(
+  const html = await render(
     <EditionEmail
       edition={args.edition}
       format={args.format}
@@ -82,4 +113,5 @@ export async function exportEditionHtml(args: ExportArgs): Promise<string> {
     />,
     { pretty: args.pretty ?? false },
   );
+  return ensureUtf8Charset(html);
 }
