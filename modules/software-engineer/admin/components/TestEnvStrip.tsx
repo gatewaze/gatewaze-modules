@@ -9,7 +9,7 @@ import React from 'react';
 import { Badge, Button } from '@/components/ui';
 import { toast } from 'sonner';
 import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
-import { TEST_ENV_ACTIVE, stepPct, normUrls, useTestEnvStatus, teardownTestEnv, deployTestEnvMainline } from './testEnv';
+import { TEST_ENV_ACTIVE, stepPct, normUrls, splitLiveDetail, useTestEnvStatus, teardownTestEnv, deployTestEnvMainline } from './testEnv';
 
 export default function TestEnvStrip({ profile = 'gatewaze' }: { profile?: 'gatewaze' | 'lfx' }) {
   const { info, load, active } = useTestEnvStatus(profile);
@@ -47,6 +47,7 @@ export default function TestEnvStrip({ profile = 'gatewaze' }: { profile?: 'gate
     );
   }
   const ready = st.state === 'ready';
+  const detail = splitLiveDetail(st.detail);
   const urls = normUrls(st.urls);
   const launchUrls = urls.filter((u) => u.launch);
   const pct = stepPct(profile, info.pending && !TEST_ENV_ACTIVE.has(st.state) ? 'queued' : st.state, info.pending);
@@ -64,7 +65,7 @@ export default function TestEnvStrip({ profile = 'gatewaze' }: { profile?: 'gate
         <Badge color={ready ? 'green' : st.state === 'error' ? 'red' : 'blue'} variant="soft" size="1">
           {info.pending && !TEST_ENV_ACTIVE.has(st.state) ? 'queued' : st.state}
         </Badge>
-        <span className="text-xs text-[var(--gray-11)] truncate">{st.detail}</span>
+        <span className="text-xs text-[var(--gray-11)] truncate">{detail.main}</span>
         <span className="ml-auto flex items-center gap-2">
           {ready && (
             <Button variant="solid" color="green" size="xs" onClick={launch}>
@@ -96,6 +97,12 @@ export default function TestEnvStrip({ profile = 'gatewaze' }: { profile?: 'gate
           )}
         </span>
       </div>
+      {detail.live && (
+        // Live-mode tracking line — never truncated, the sha+PR list is the point.
+        <div className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400 break-words">
+          {detail.live}
+        </div>
+      )}
       {(active || info.pending) && (
         <div className="mt-2 h-1.5 rounded-full bg-[var(--gray-4)] overflow-hidden">
           <div className="h-full rounded-full bg-blue-500 transition-all duration-700" style={{ width: `${pct}%` }} />
