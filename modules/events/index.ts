@@ -75,6 +75,9 @@ const eventsModule: GatewazeModule = {
     // people.auth_user_id — a bare auth.uid() seq-scanned 159k people (~7s) and
     // timed out PostgREST deletes/reads. See the migration header.
     'migrations/019_registration_rls_authuid_perf.sql',
+    // 020: platform-wide follow-up to 019 — wrap every remaining bare auth.uid()
+    // in a public RLS policy as (SELECT auth.uid()) (idempotent DO block).
+    'migrations/020_wrap_authuid_all_policies.sql',
   ],
 
   edgeFunctions: [
