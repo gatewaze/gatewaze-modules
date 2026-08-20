@@ -68,34 +68,35 @@ export interface ExportArgs {
   forSend?: boolean;
 }
 
+// Zero-width non-joiner (U+200C): invisible, non-Latin-1, harmless.
+const UTF8_MARKER = "\u200c";
+// Matches any character OUTSIDE Latin-1 (> U+00FF), i.e. one that forces a
+// UTF-8 encoding. eslint-disable: the control-char range is intentional.
+// eslint-disable-next-line no-control-regex
+const NON_LATIN1 = /[^\u0000-\u00ff]/;
+
 /**
- * Move any `<style>` blocks out of the message body and into `<head>`.
+ * Guarantee the document is encoded as UTF-8 by the sender.
  *
- * The declarative wrapper renders its dark-mode `<style>` as the first element
- * of the body (react-email nests it deep inside `<body><table>…<td><style>`).
- * Gmail chokes on a `<style>` embedded in the body: it clips the message
+ * SendGrid (and mailers generally) pick the MIME charset from the CONTENT
+ * BYTES: a document that fits entirely in Latin-1 is sent as
+ * `text/html; charset=iso-8859-1`, and **Gmail clips iso-8859-1 messages**
  * ("[Message clipped] View entire message") regardless of size — a 13KB Style C
- * edition clipped while a 50KB+ classic edition (no `<style>`) did not. CSS
- * belongs in `<head>` anyway, and Gmail handles a head `<style>` normally, so we
- * hoist every body `<style>` up before `</head>`. Selectors are global either
- * way, so dark-mode behaviour is unchanged (if anything, better supported).
+ * edition clipped while a 50KB+ utf-8 edition did not. (Adding a preheader
+ * incidentally fixed it, because react-email's `<Preview>` padding is full of
+ * UTF-8 zero-width characters.)
  *
- * Pure string surgery on the already-rendered document: split at `</head>`, pull
- * `<style>…</style>` out of everything after it, and re-insert before `</head>`.
- * Anything in the head (there is no author `<style>` there) is untouched.
+ * We force UTF-8 deterministically by ensuring at least one non-Latin-1 byte:
+ * an invisible zero-width non-joiner in a hidden span right after `<body>`.
+ * Only injected when the document is otherwise pure-Latin-1, so any edition
+ * that already contains a UTF-8 character (a smart quote, an emoji, a
+ * preheader) is returned byte-for-byte unchanged. One character — so, unlike a
+ * full `<Preview>` block, it does not blank out the inbox preview.
  */
-function hoistStyleToHead(html: string): string {
-  const headEnd = html.indexOf('</head>');
-  if (headEnd === -1) return html;
-  const head = html.slice(0, headEnd); // up to, not including, </head>
-  const rest = html.slice(headEnd); // </head> … </html> (the body)
-  const styles: string[] = [];
-  const bodyWithoutStyles = rest.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, (m) => {
-    styles.push(m);
-    return '';
-  });
-  if (styles.length === 0) return html;
-  return head + styles.join('') + bodyWithoutStyles;
+function ensureUtf8Charset(html: string): string {
+  if (NON_LATIN1.test(html)) return html;
+  const marker = `<span style="display:none;max-height:0;overflow:hidden">${UTF8_MARKER}</span>`;
+  return html.replace(/(<body\b[^>]*>)/i, `$1${marker}`);
 }
 
 export async function exportEditionHtml(args: ExportArgs): Promise<string> {
@@ -112,5 +113,5 @@ export async function exportEditionHtml(args: ExportArgs): Promise<string> {
     />,
     { pretty: args.pretty ?? false },
   );
-  return hoistStyleToHead(html);
+  return ensureUtf8Charset(html);
 }
