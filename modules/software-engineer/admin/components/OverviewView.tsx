@@ -25,8 +25,7 @@ import PrBoard from './PrBoard';
 import { isGatewayError, StartingBanner } from './starting';
 import PendingApprovals from './PendingApprovals';
 import DecisionsPanel from './DecisionsPanel';
-import TestEnvStrip from './TestEnvStrip';
-import { testEnvProfile } from './testEnv';
+import TestEnvOverviewPanel from './TestEnvOverviewPanel';
 import RunListSection from './RunListSection';
 
 // Runs-board rows shown per dashboard section — a dashboard summarises, it doesn't replace the Runs
@@ -231,8 +230,10 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
 
   return (
     <div className="space-y-6">
-      {/* Profile follows the project filter (LFX projects → lfx env); default gatewaze. */}
-      <TestEnvStrip profile={testEnvProfile(projects.find((p) => p.id === projectFilter)?.name) ?? 'gatewaze'} />
+      {/* One panel per env profile — each with its own status + full PR-set
+          builder; each hides itself when its control channel is absent. */}
+      <TestEnvOverviewPanel profile="gatewaze" projects={projects} />
+      <TestEnvOverviewPanel profile="lfx" projects={projects} />
       {showProjectFilter && (
         <select
           value={projectFilter}
