@@ -367,6 +367,14 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
         p_entity_id: typeof b.entity_id === 'string' && b.entity_id ? b.entity_id : null,
         p_audience: audience,
         p_min_tier_rank: Number.isFinite(Number(b.min_tier_rank)) ? Math.max(0, Math.trunc(Number(b.min_tier_rank))) : 0,
+        // Exact tier set (names). When non-empty it takes precedence over
+        // min_tier_rank; empty/absent -> null (threshold semantics).
+        p_allowed_tiers: Array.isArray(b.allowed_tiers)
+          ? b.allowed_tiers
+              .filter((t: unknown): t is string => typeof t === 'string' && t.trim() !== '')
+              .map((t: string) => t.trim())
+              .slice(0, 50)
+          : null,
         p_embargo_days: embargoDays,
         p_gated_actions: Array.isArray(b.gated_actions) ? b.gated_actions.filter((a: unknown) => typeof a === 'string') : [],
         p_placeholder: b.placeholder && typeof b.placeholder === 'object' ? b.placeholder : null,
