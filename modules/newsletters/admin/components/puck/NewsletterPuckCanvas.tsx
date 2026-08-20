@@ -1392,7 +1392,19 @@ function NewsletterCanvasRoot(props: RootProps) {
       <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
       <FieldsAutoSwitcher />
       <UserBlockSyntheticExpander />
-      <div ref={wrapperRef} className="gw-email-card">
+      {/*
+        Dark preview: the Sun/Moon toggle darkens the canvas backdrop
+        (CANVAS_DARK_CSS) but that alone can't theme the blocks — a template's
+        own dark rules key off `@media (prefers-color-scheme: dark)` (an OS
+        setting we can't force here) or the `[data-ogsc]` attribute hook. So in
+        dark preview we set `data-ogsc` on the email-card wrapper: the same
+        attribute Outlook.com stamps in dark mode, which templates already
+        target. Its `[data-ogsc] .dm-*` rules (emitted by the wrapper's own
+        <style>) then fire, giving a faithful preview of the recipient's dark
+        rendering — logo swap included. No styling lives here; this is purely
+        the trigger. Templates with no dark rules are unaffected.
+      */}
+      <div ref={wrapperRef} className="gw-email-card" {...(mode === 'dark' ? { 'data-ogsc': '' } : {})}>
         {wrappedBody}
       </div>
     </>
