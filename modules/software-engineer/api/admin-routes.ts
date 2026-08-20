@@ -258,6 +258,14 @@ export function mountAdminRoutes(router, deps) {
     // still a caller mistake (an accidentally-empty selection must not wipe the env), so it 422s.
     // With a non-empty list the flag changes nothing — the PRs are validated and forwarded as ever.
     const mainline = req.body?.mainline === true;
+    // Live mode (Tier 1): `live: true` asks the host agent to keep tracking
+    // origin/main + the merged PR heads after the deploy and re-merge/refresh
+    // the env on every push. Strict boolean — absent defaults to false, any
+    // non-boolean value is rejected (the host agent re-validates the same way).
+    const live = req.body?.live;
+    if (live !== undefined && typeof live !== 'boolean') {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'live must be a boolean' } });
+    }
     if ((raw.length === 0 && !mainline) || raw.length > maxPrs) {
       return res.status(422).json({ error: { code: 'invalid_input', message: `prs must be an ordered array of 1..${maxPrs} entries (or empty with mainline: true)` } });
     }
@@ -281,8 +289,8 @@ export function mountAdminRoutes(router, deps) {
       return res.status(409).json({ error: { code: 'busy', message: 'A test-env operation is already in progress' }, ...cur });
     }
     writeFileSync(`${STAGING_CONTROL}/${requestFile}`,
-      JSON.stringify({ action: 'deploy', prs, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
-    logger?.info?.('se: test-env deploy requested', { profile, prs, mainline });
+      JSON.stringify({ action: 'deploy', prs, live: live === true, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
+    logger?.info?.('se: test-env deploy requested', { profile, prs, mainline, live: live === true });
     res.status(202).json(testEnvStatus(profile));
   });
 

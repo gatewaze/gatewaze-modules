@@ -78,13 +78,26 @@ export async function testEnvApi(path: string, init?: RequestInit) {
 
 // prs is an ORDERED list and may repeat a repo — the host merges same-repo PRs
 // onto main locally in this exact order (merge-queue semantics).
-export const deployTestEnv = (profile: TestEnvProfile, prs: { repo: string; number: number }[]) =>
-  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs }) });
+// live=true (Tier 1 live mode): the host agent keeps tracking origin/main and
+// the merged PR heads after the deploy, re-merging and refreshing the env
+// automatically on every push. Strict boolean end to end.
+export const deployTestEnv = (profile: TestEnvProfile, prs: { repo: string; number: number }[], live = false) =>
+  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs, live: live === true }) });
 // Mainline deploy: plain origin/main with NO PRs. The server only accepts an
 // empty prs list alongside the explicit mainline flag (accidental empty sets
 // still 422), and the host agent deploys origin/main of every profile repo.
-export const deployTestEnvMainline = (profile: TestEnvProfile) =>
-  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs: [], mainline: true }) });
+// live=true here tracks pushes to origin/main itself.
+export const deployTestEnvMainline = (profile: TestEnvProfile, live = false) =>
+  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs: [], mainline: true, live: live === true }) });
+// Split a status detail into the main part and the live-tracking part so the
+// live line can render untruncated ("live: tracking repo@sha+#PR …, refreshed
+// <ISO>" — also matches the "live refresh conflict/in progress" variants).
+export const splitLiveDetail = (detail?: string): { main: string; live: string | null } => {
+  const d = String(detail ?? '');
+  const i = d.search(/live: tracking|live refresh/i);
+  if (i < 0) return { main: d, live: null };
+  return { main: d.slice(0, i).replace(/[\s—-]+$/, ''), live: d.slice(i) };
+};
 export const teardownTestEnv = (profile: TestEnvProfile) =>
   testEnvApi('/test-env/teardown', { method: 'POST', body: JSON.stringify({ profile }) });
 /** Cross-repo related PRs (same head branch) for a deployable PR. */

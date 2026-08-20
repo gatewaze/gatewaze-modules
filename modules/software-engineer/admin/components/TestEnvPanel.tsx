@@ -17,7 +17,7 @@ import { Badge, Button } from '@/components/ui';
 import { toast } from 'sonner';
 import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, PlusIcon, RocketLaunchIcon, ChevronUpIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import {
-  DEPLOYABLE, TEST_ENV_ACTIVE, STEPS, stepPct, normUrls, testEnvProfile,
+  DEPLOYABLE, TEST_ENV_ACTIVE, STEPS, stepPct, normUrls, testEnvProfile, splitLiveDetail,
   useTestEnvStatus, deployTestEnv, deployTestEnvMainline, teardownTestEnv, fetchRelated,
 } from './testEnv';
 
@@ -38,6 +38,8 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
   const [related, setRelated] = useState<any[]>([]);   // auto-discovered, pre-checked
   const [extra, setExtra] = useState<{ repo: string; number: string }[]>([]);
   const [busy, setBusy] = useState(false);
+  // Tier 1 live mode: the env re-merges and refreshes itself on every push.
+  const [liveMode, setLiveMode] = useState(false);
 
   const inSet = (repo: string, number: number) => deploySet.some((x) => x.repo === repo && x.number === number);
   const toggle = (repo: string, number: number) =>
@@ -88,7 +90,7 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
   const deploy = async () => {
     setBusy(true);
     try {
-      await deployTestEnv(profile, deploySet.map(({ repo, number }) => ({ repo, number })));
+      await deployTestEnv(profile, deploySet.map(({ repo, number }) => ({ repo, number })), liveMode);
       toast.success('Test environment deploy requested');
       load();
     } catch (e: any) {
@@ -99,7 +101,7 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
     if (!window.confirm('Deploy plain main (no PRs) to the test environment? This replaces the current env.')) return;
     setBusy(true);
     try {
-      await deployTestEnvMainline(profile);
+      await deployTestEnvMainline(profile, liveMode);
       toast.success('Mainline deploy requested');
       load();
     } catch (e: any) {
@@ -115,6 +117,7 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
   };
 
   const st = info.status;
+  const detail = splitLiveDetail(st?.detail);
   const ready = st?.state === 'ready';
   const urls = normUrls(st?.urls);
   const launchUrls = urls.filter((u) => u.launch);
@@ -140,7 +143,7 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
             {info.pending && !TEST_ENV_ACTIVE.has(st.state) ? 'queued' : st.state}
           </Badge>
         )}
-        {st?.state !== 'error' && <span className="text-xs text-[var(--gray-11)] truncate">{st?.detail}</span>}
+        {st?.state !== 'error' && <span className="text-xs text-[var(--gray-11)] truncate">{detail.main}</span>}
         <span className="ml-auto flex items-center gap-2">
           {ready && (
             <Button variant="solid" color="green" size="xs" onClick={launch}>
@@ -170,6 +173,14 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
         // conflict — surface it prominently, untruncated.
         <div className="mt-2 rounded border border-red-300 bg-red-50 px-2 py-1.5 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">
           {st.detail || 'The last test-env operation failed.'}
+        </div>
+      )}
+      {st?.state !== 'error' && detail.live && (
+        // Live-mode tracking line ("live: tracking repo@sha+#PR …, refreshed
+        // <time>" — or the refresh-conflict/in-progress variants). Never
+        // truncated: the sha+PR list is the point.
+        <div className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400 break-words">
+          {detail.live}
         </div>
       )}
       {(active || info.pending) && (
@@ -232,6 +243,11 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
         <Button variant="ghost" size="xs" onClick={() => setExtra((x) => [...x, { repo: deployable[0], number: '' }])}>
           <PlusIcon className="size-3.5 mr-0.5" />related PR
         </Button>
+        <label className="inline-flex items-center gap-1.5 text-[var(--gray-11)]"
+          title="env re-merges and refreshes automatically on every push">
+          <input type="checkbox" className="size-3.5" checked={liveMode} onChange={(e) => setLiveMode(e.target.checked)} />
+          <span>Live — follow branch pushes</span>
+        </label>
         <Button variant="soft" size="xs" onClick={deploy} disabled={busy || active || deploySet.length === 0}>
           <BeakerIcon className="size-3.5 mr-1" />{active ? 'Working…' : ready ? 'Redeploy' : 'Deploy to test env'}
         </Button>
