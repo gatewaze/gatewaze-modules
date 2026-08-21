@@ -266,6 +266,18 @@ export function mountAdminRoutes(router, deps) {
     if (live !== undefined && typeof live !== 'boolean') {
       return res.status(422).json({ error: { code: 'invalid_input', message: 'live must be a boolean' } });
     }
+    // Fresh data: `fresh: true` asks the host agent to wipe the env's data
+    // stores and rerun the full seed after the deploy (lfx profile: newsletter
+    // DB schema drop + mockdata reseed). Strict boolean, validated exactly
+    // like `live` — absent defaults to false, any non-boolean is rejected,
+    // and the host agent re-validates the same way. The lfx agent also
+    // treats ANY deploy starting from a torn-down env as fresh regardless of
+    // this flag; the gatewaze agent currently ignores it (its deploys always
+    // clone data fresh).
+    const fresh = req.body?.fresh;
+    if (fresh !== undefined && typeof fresh !== 'boolean') {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'fresh must be a boolean' } });
+    }
     if ((raw.length === 0 && !mainline) || raw.length > maxPrs) {
       return res.status(422).json({ error: { code: 'invalid_input', message: `prs must be an ordered array of 1..${maxPrs} entries (or empty with mainline: true)` } });
     }
@@ -289,8 +301,8 @@ export function mountAdminRoutes(router, deps) {
       return res.status(409).json({ error: { code: 'busy', message: 'A test-env operation is already in progress' }, ...cur });
     }
     writeFileSync(`${STAGING_CONTROL}/${requestFile}`,
-      JSON.stringify({ action: 'deploy', prs, live: live === true, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
-    logger?.info?.('se: test-env deploy requested', { profile, prs, mainline, live: live === true });
+      JSON.stringify({ action: 'deploy', prs, live: live === true, fresh: fresh === true, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
+    logger?.info?.('se: test-env deploy requested', { profile, prs, mainline, live: live === true, fresh: fresh === true });
     res.status(202).json(testEnvStatus(profile));
   });
 
