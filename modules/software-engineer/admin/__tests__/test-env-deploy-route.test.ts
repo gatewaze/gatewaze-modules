@@ -241,4 +241,78 @@ describe('POST /test-env/deploy', () => {
     expect(res.statusCode).toBe(403);
     expect(fs.writes).toEqual([]);
   });
+
+  // ── Fresh data: `fresh` is a strict boolean written through verbatim ──
+
+  it('rejects a non-boolean fresh flag (string) for the lfx profile with 422', async () => {
+    const handler = mount(mockSupabase());
+    const res = mockRes();
+    await handler(request({ profile: 'lfx', prs: [{ repo: 'lfx-self-serve', number: 3 }], fresh: 'true' }), res);
+    expect(res.statusCode).toBe(422);
+    expect(fs.writes).toEqual([]);
+  });
+
+  it('rejects a non-boolean fresh flag (number) for the gatewaze profile with 422', async () => {
+    const handler = mount(mockSupabase());
+    const res = mockRes();
+    await handler(request({ profile: 'gatewaze', prs: [{ repo: 'gatewaze-modules', number: 7 }], fresh: 1 }), res);
+    expect(res.statusCode).toBe(422);
+    expect(fs.writes).toEqual([]);
+  });
+
+  it('rejects a non-boolean fresh flag (null) with 422 (undefined-only default)', async () => {
+    const handler = mount(mockSupabase());
+    const res = mockRes();
+    await handler(request({ profile: 'lfx', prs: [{ repo: 'lfx-self-serve', number: 3 }], fresh: null }), res);
+    expect(res.statusCode).toBe(422);
+    expect(fs.writes).toEqual([]);
+  });
+
+  it('accepts fresh: true with a PR set (lfx) and writes fresh: true to the lfx request file', async () => {
+    const handler = mount(mockSupabase());
+    const res = mockRes();
+    await handler(request({ profile: 'lfx', prs: [{ repo: 'lfx-v2-newsletter-service', number: 80 }], fresh: true }), res);
+    expect(res.statusCode).toBe(202);
+    expect(fs.writes).toHaveLength(1);
+    const [path, payload] = fs.writes[0];
+    expect(path).toBe('/staging-control/lfx-env-request.json');
+    expect(payload.fresh).toBe(true);
+    expect(payload.prs).toEqual([{ repo: 'lfx-v2-newsletter-service', number: 80 }]);
+  });
+
+  it('writes fresh: false when the flag is omitted (back-compat default)', async () => {
+    const handler = mount(mockSupabase());
+    const res = mockRes();
+    await handler(request({ profile: 'lfx', prs: [{ repo: 'lfx-self-serve', number: 3 }] }), res);
+    expect(res.statusCode).toBe(202);
+    expect(fs.writes[0][1].fresh).toBe(false);
+  });
+
+  it('writes fresh: false when fresh: false is passed explicitly', async () => {
+    const handler = mount(mockSupabase());
+    const res = mockRes();
+    await handler(request({ profile: 'lfx', prs: [{ repo: 'lfx-self-serve', number: 3 }], fresh: false }), res);
+    expect(res.statusCode).toBe(202);
+    expect(fs.writes[0][1].fresh).toBe(false);
+  });
+
+  it('combines fresh: true with mainline + live (fresh mainline live-tracked deploy)', async () => {
+    const handler = mount(mockSupabase());
+    const res = mockRes();
+    await handler(request({ profile: 'lfx', prs: [], mainline: true, live: true, fresh: true }), res);
+    expect(res.statusCode).toBe(202);
+    const [path, payload] = fs.writes[0];
+    expect(path).toBe('/staging-control/lfx-env-request.json');
+    expect(payload.prs).toEqual([]);
+    expect(payload.live).toBe(true);
+    expect(payload.fresh).toBe(true);
+  });
+
+  it('fresh does not bypass the super-admin escalation', async () => {
+    const handler = mount(mockSupabase('admin'));
+    const res = mockRes();
+    await handler(request({ profile: 'lfx', prs: [{ repo: 'lfx-self-serve', number: 3 }], fresh: true }), res);
+    expect(res.statusCode).toBe(403);
+    expect(fs.writes).toEqual([]);
+  });
 });

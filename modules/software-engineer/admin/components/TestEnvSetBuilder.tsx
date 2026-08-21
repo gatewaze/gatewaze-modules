@@ -18,7 +18,7 @@ import { DEPLOYABLE, deployTestEnv, deployTestEnvMainline } from './testEnv';
 import { addEntry, groupRepos, inSet, moveWithinRepo, toggleEntry } from './testEnvSet';
 
 export default function TestEnvSetBuilder({
-  profile, deploySet, onChange, prUrlOf, active, ready, disabled, onRequested, onAdded, addLabel = 'add PR', children,
+  profile, deploySet, onChange, prUrlOf, active, ready, tornDown, disabled, onRequested, onAdded, addLabel = 'add PR', children,
 }: {
   profile: 'gatewaze' | 'lfx';
   deploySet: { repo: string; number: number }[];
@@ -27,6 +27,8 @@ export default function TestEnvSetBuilder({
   prUrlOf?: (repo: string, number: number) => string | null;
   active?: boolean;
   ready?: boolean;
+  /** No env deployed (drives the fresh-data default: torn-down → checked). */
+  tornDown?: boolean;
   /** Extra parent-side lockout (e.g. a teardown in flight). */
   disabled?: boolean;
   /** Reload status after a deploy request was accepted. */
@@ -42,13 +44,23 @@ export default function TestEnvSetBuilder({
   const [extra, setExtra] = useState<{ repo: string; number: string }[]>([]);
   // Tier 1 live mode: the env re-merges and refreshes itself on every push.
   const [liveMode, setLiveMode] = useState(false);
+  // Fresh data (lfx profile): wipe the newsletter DB + rerun the full seed.
+  // Until the user touches the checkbox it FOLLOWS the env state — checked
+  // when torn-down (matching the host agent, which always runs fresh from
+  // torn-down), unchecked when replacing a live env (keep its data). An
+  // explicit click pins the choice for this panel's lifetime.
+  const [freshChoice, setFreshChoice] = useState<boolean | null>(null);
+  const freshMode = freshChoice ?? !!tornDown;
+  // Only the lfx host agent implements fresh; the gatewaze env always clones
+  // its data fresh at deploy, so the checkbox would be a no-op there.
+  const showFresh = profile === 'lfx';
   const [busy, setBusy] = useState(false);
   const blocked = busy || !!active || !!disabled;
 
   const deploy = async () => {
     setBusy(true);
     try {
-      await deployTestEnv(profile, deploySet.map(({ repo, number }) => ({ repo, number })), liveMode);
+      await deployTestEnv(profile, deploySet.map(({ repo, number }) => ({ repo, number })), liveMode, showFresh && freshMode);
       toast.success('Test environment deploy requested');
       onRequested?.();
     } catch (e: any) {
@@ -59,7 +71,7 @@ export default function TestEnvSetBuilder({
     if (!window.confirm('Deploy plain main (no PRs) to the test environment? This replaces the current env.')) return;
     setBusy(true);
     try {
-      await deployTestEnvMainline(profile, liveMode);
+      await deployTestEnvMainline(profile, liveMode, showFresh && freshMode);
       toast.success('Mainline deploy requested');
       onRequested?.();
     } catch (e: any) {
@@ -104,6 +116,13 @@ export default function TestEnvSetBuilder({
           <input type="checkbox" className="size-3.5" checked={liveMode} onChange={(e) => setLiveMode(e.target.checked)} />
           <span>Live — follow branch pushes</span>
         </label>
+        {showFresh && (
+          <label className="inline-flex items-center gap-1.5 text-[var(--gray-11)]"
+            title="Wipes: the newsletter database (dropped and recreated by the deployed branch's own schema), all mock platform data (projects, committees, groups, board meetings), and reseeds the staging playbooks (test-user access grants, newsletter groups, the AAIF foundation). Deploys from a torn-down env always run fresh; uncheck when replacing a live env to keep its data.">
+            <input type="checkbox" className="size-3.5" checked={freshMode} onChange={(e) => setFreshChoice(e.target.checked)} />
+            <span>Fresh data (wipe + reseed)</span>
+          </label>
+        )}
         <Button variant="soft" size="xs" onClick={deploy} disabled={blocked || deploySet.length === 0}>
           <BeakerIcon className="size-3.5 mr-1" />{active ? 'Working…' : ready ? 'Redeploy' : 'Deploy to test env'}
         </Button>

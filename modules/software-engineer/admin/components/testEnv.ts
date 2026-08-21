@@ -83,14 +83,18 @@ export async function testEnvApi(path: string, init?: RequestInit) {
 // live=true (Tier 1 live mode): the host agent keeps tracking origin/main and
 // the merged PR heads after the deploy, re-merging and refreshing the env
 // automatically on every push. Strict boolean end to end.
-export const deployTestEnv = (profile: TestEnvProfile, prs: { repo: string; number: number }[], live = false) =>
-  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs, live: live === true }) });
+// fresh=true: the host agent wipes the env's data stores and reruns the full
+// seed after the deploy (lfx: newsletter DB schema drop + mockdata reseed).
+// Strict boolean end to end, same contract as live. The lfx agent treats any
+// deploy starting from a torn-down env as fresh regardless of the flag.
+export const deployTestEnv = (profile: TestEnvProfile, prs: { repo: string; number: number }[], live = false, fresh = false) =>
+  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs, live: live === true, fresh: fresh === true }) });
 // Mainline deploy: plain origin/main with NO PRs. The server only accepts an
 // empty prs list alongside the explicit mainline flag (accidental empty sets
 // still 422), and the host agent deploys origin/main of every profile repo.
 // live=true here tracks pushes to origin/main itself.
-export const deployTestEnvMainline = (profile: TestEnvProfile, live = false) =>
-  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs: [], mainline: true, live: live === true }) });
+export const deployTestEnvMainline = (profile: TestEnvProfile, live = false, fresh = false) =>
+  testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs: [], mainline: true, live: live === true, fresh: fresh === true }) });
 export const teardownTestEnv = (profile: TestEnvProfile) =>
   testEnvApi('/test-env/teardown', { method: 'POST', body: JSON.stringify({ profile }) });
 /** Cross-repo related PRs (same head branch) for a deployable PR. */
