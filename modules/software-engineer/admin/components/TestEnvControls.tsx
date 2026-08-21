@@ -223,6 +223,7 @@ export default function TestEnvControls({
         prUrlOf={prUrlOf}
         active={active}
         ready={ready}
+        tornDown={tornDown}
         disabled={busy}
         onRequested={load}
         onAdded={onAdded}
