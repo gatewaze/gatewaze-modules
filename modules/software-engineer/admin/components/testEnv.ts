@@ -15,6 +15,12 @@ const API = '/api/modules/software-engineer/admin';
 // no supabase/ui imports); re-exported here so consumers keep one import site.
 export { testEnvProfile } from './testEnvSet';
 export type { DeployEntry, TestEnvProfile } from './testEnvSet';
+// Status-detail-line parsing + freshness helpers live in testEnvStatusLine.ts
+// (node-testable, no supabase/ui imports); re-exported here likewise.
+export {
+  splitLiveDetail, parseTestEnvDetail, relTime, testEnvPrUrl, testEnvCommitUrl,
+} from './testEnvStatusLine';
+export type { ParsedDetail, ParsedRepo, ParsedPr } from './testEnvStatusLine';
 // Per-profile deployable repo lists — mirror the server + host-agent allowlists.
 export const DEPLOYABLE: Record<TestEnvProfile, string[]> = {
   gatewaze: ['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules'],
@@ -85,33 +91,37 @@ export const deployTestEnv = (profile: TestEnvProfile, prs: { repo: string; numb
 // live=true here tracks pushes to origin/main itself.
 export const deployTestEnvMainline = (profile: TestEnvProfile, live = false) =>
   testEnvApi('/test-env/deploy', { method: 'POST', body: JSON.stringify({ profile, prs: [], mainline: true, live: live === true }) });
-// Split a status detail into the main part and the live-tracking part so the
-// live line can render untruncated ("live: tracking repo@sha+#PR …, refreshed
-// <ISO>" — also matches the "live refresh conflict/in progress" variants).
-export const splitLiveDetail = (detail?: string): { main: string; live: string | null } => {
-  const d = String(detail ?? '');
-  const i = d.search(/live: tracking|live refresh/i);
-  if (i < 0) return { main: d, live: null };
-  return { main: d.slice(0, i).replace(/[\s—-]+$/, ''), live: d.slice(i) };
-};
 export const teardownTestEnv = (profile: TestEnvProfile) =>
   testEnvApi('/test-env/teardown', { method: 'POST', body: JSON.stringify({ profile }) });
 /** Cross-repo related PRs (same head branch) for a deployable PR. */
 export const fetchRelated = (profile: TestEnvProfile, projectId: string, repo: string, number: number) =>
   testEnvApi(`/test-env/related?${new URLSearchParams({ profile, project_id: projectId, repo, number: String(number) })}`);
 
-/** Poll-while-active status hook shared by every test-env surface. */
+/**
+ * Polling status hook shared by every test-env surface. Cadence follows what
+ * the panel is watching: 6s through a deploy cycle, 12s while ready in live
+ * mode (so the watcher's "refreshed/checked" heartbeat rewrites surface
+ * quickly — the requirement is ≤15s), 30s otherwise (deploys/teardowns from
+ * another tab should still appear). Hidden tabs skip the fetch and refresh
+ * immediately on becoming visible again.
+ */
 export function useTestEnvStatus(profile: TestEnvProfile = 'gatewaze') {
   const [info, setInfo] = useState<any>(null);
   const load = useCallback(() => {
     testEnvApi(`/test-env/status?${new URLSearchParams({ profile })}`).then(setInfo).catch(() => setInfo(null));
   }, [profile]);
   const active = !!info && (info.pending || TEST_ENV_ACTIVE.has(info.status?.state));
+  const live = !!info && info.status?.state === 'ready'
+    && /live: tracking|live refresh/i.test(String(info.status?.detail ?? ''));
+  const interval = active ? 6000 : live ? 12000 : 30000;
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (!active) return;
-    const t = setInterval(load, 6000);
-    return () => clearInterval(t);
-  }, [active, load]);
-  return { info, load, active };
+    const t = setInterval(() => {
+      if (typeof document === 'undefined' || !document.hidden) load();
+    }, interval);
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
+  }, [interval, load]);
+  return { info, load, active, live };
 }
