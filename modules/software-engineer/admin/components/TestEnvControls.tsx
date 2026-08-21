@@ -11,15 +11,26 @@
  * checkboxes through `children`) and by each per-profile Overview panel — the
  * panels keep only their own deploy-set selection and related-PR sourcing.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Badge, Button } from '@/components/ui';
 import { toast } from 'sonner';
-import { BeakerIcon, ArrowTopRightOnSquareIcon, TrashIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
+import { BeakerIcon, ArrowTopRightOnSquareIcon, BoltIcon, TrashIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
 import {
-  TEST_ENV_ACTIVE, STEPS, stepPct, normUrls, splitLiveDetail,
+  TEST_ENV_ACTIVE, STEPS, stepPct, normUrls,
+  parseTestEnvDetail, relTime, testEnvPrUrl, testEnvCommitUrl,
   useTestEnvStatus, teardownTestEnv,
 } from './testEnv';
 import TestEnvSetBuilder from './TestEnvSetBuilder';
+
+/** 10s re-render tick so the relative-time flags ("updated 20s ago") stay honest between polls. */
+function useNow(ms = 10_000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return now;
+}
 
 export default function TestEnvControls({
   profile, deploySet, onChange, prUrlOf, addLabel, onAdded, className = 'mb-3', children,
@@ -40,10 +51,21 @@ export default function TestEnvControls({
 }) {
   const { info, load, active } = useTestEnvStatus(profile);
   const [busy, setBusy] = useState(false);   // teardown in flight
+  const now = useNow();                      // 10s ticker for the relative-time flags
   if (!info?.available) return null;
 
   const st = info.status;
-  const detail = splitLiveDetail(st?.detail);
+  const detail = parseTestEnvDetail(st?.detail);
+  // "updated" = the status file's last write, whichever path wrote it (state
+  // change, live refresh, or the watcher heartbeat — the heartbeat rewrites
+  // updated_at too, so the freshest of the two is what "updated" means).
+  const updatedMs = Math.max(
+    st?.updated_at ? Date.parse(st.updated_at) || 0 : 0,
+    detail.checkedAt ? Date.parse(detail.checkedAt) || 0 : 0,
+  );
+  const updatedRel = updatedMs > 0 ? relTime(new Date(updatedMs).toISOString(), now) : null;
+  const refreshedRel = relTime(detail.refreshedAt, now);
+  const checkedRel = relTime(detail.checkedAt, now);
   const ready = st?.state === 'ready';
   const tornDown = !st || st.state === 'torn-down';
   const urls = normUrls(st?.urls);
@@ -69,7 +91,22 @@ export default function TestEnvControls({
         <Badge color={ready ? 'green' : st?.state === 'error' ? 'red' : tornDown ? 'gray' : 'blue'} variant="soft" size="1">
           {info.pending && !TEST_ENV_ACTIVE.has(st?.state) ? 'queued' : (st?.state ?? 'torn-down')}
         </Badge>
-        {st?.state !== 'error' && <span className="text-xs text-[var(--gray-11)] truncate">{detail.main}</span>}
+        {detail.liveTracking && st?.state !== 'error' && (
+          <Badge color="green" variant="soft" size="1" title="The host agent re-merges and refreshes this env automatically on every push">
+            <BoltIcon className="size-3 mr-0.5" />Live — following branch pushes
+          </Badge>
+        )}
+        {updatedRel && !tornDown && (
+          <span className="text-[11px] text-[var(--gray-10)] whitespace-nowrap" title={st?.updated_at}>updated {updatedRel}</span>
+        )}
+        {st?.state !== 'error' && (
+          // With a parsed deploy summary the repo rows below say what's
+          // running; the header keeps only the leftover prose (e.g. the
+          // admin/portal startup-builds note). Unparsed details show verbatim.
+          <span className="text-xs text-[var(--gray-11)] truncate">
+            {detail.repos.length > 0 ? (detail.note ?? '') : detail.main}
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-2">
           {ready && (
             <Button variant="solid" color="green" size="xs" onClick={launch}>
@@ -101,10 +138,62 @@ export default function TestEnvControls({
           {st.detail || 'The last test-env operation failed.'}
         </div>
       )}
-      {st?.state !== 'error' && detail.live && (
-        // Live-mode tracking line ("live: tracking repo@sha+#PR …, refreshed
-        // <time>" — or the refresh-conflict/in-progress variants). Never
-        // truncated: the sha+PR list is the point.
+      {st?.state !== 'error' && detail.repos.length > 0 && (
+        // Structured deploy summary — exactly what's running, at a glance:
+        // one row per repo with the base sha, the merged PRs (linked to
+        // GitHub), and the resolved PR-head shas when live tracking reports
+        // them. Freshness flags separate "refreshed" (last actual change)
+        // from "checked" (the watcher heartbeat proving the tracker is alive).
+        <div className="mt-2 rounded border border-[var(--gray-5)] px-2 py-1.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap text-[11px] text-[var(--gray-10)]">
+            <span className="font-medium text-[var(--gray-11)]">
+              Running now{detail.mainline ? ' — mainline (origin/main)' : ''}
+            </span>
+            {(refreshedRel || checkedRel) && (
+              <span className="whitespace-nowrap">
+                {refreshedRel && <span title={`Last change landed: ${detail.refreshedAt}`}>refreshed {refreshedRel}</span>}
+                {refreshedRel && checkedRel && ' · '}
+                {checkedRel && <span title={`Watcher heartbeat: ${detail.checkedAt}`}>checked {checkedRel}</span>}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 flex flex-col gap-1 text-xs">
+            {detail.repos.map((r) => (
+              <div key={r.repo} className="flex items-center gap-2 flex-wrap">
+                <span className="w-56 truncate text-[var(--gray-11)]">{r.repo}</span>
+                <a href={testEnvCommitUrl(profile, r.repo, r.baseSha)} target="_blank" rel="noreferrer"
+                  className="font-mono text-[11px] text-[var(--gray-10)] hover:text-[var(--gray-12)]" title="Base: origin/main at deploy/refresh time">
+                  main@{r.baseSha.slice(0, 7)}
+                </a>
+                {r.prs.map((pr, i) => (
+                  <span key={`${pr.number}-${i}`} className="inline-flex items-center gap-1 rounded border border-[var(--gray-5)] px-1.5 py-0.5">
+                    <a href={testEnvPrUrl(profile, r.repo, pr.number)} target="_blank" rel="noreferrer" className="text-blue-500">#{pr.number}</a>
+                    {pr.headSha && (
+                      <a href={testEnvCommitUrl(profile, r.repo, pr.headSha)} target="_blank" rel="noreferrer"
+                        className="font-mono text-[11px] text-[var(--gray-10)] hover:text-[var(--gray-12)]" title="Resolved PR head — the exact push this env is running">
+                        @{pr.headSha.slice(0, 7)}
+                      </a>
+                    )}
+                  </span>
+                ))}
+                {r.prs.length === 0 && <span className="text-[11px] text-[var(--gray-10)]">no PRs — plain main</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {st?.state !== 'error' && detail.conflict && (
+        // A live refresh hit a merge conflict — the env is frozen at its
+        // previous state until the branch is fixed and pushed again.
+        <div className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 break-words">
+          Live refresh conflict: {detail.conflict}
+        </div>
+      )}
+      {st?.state !== 'error' && detail.live && !detail.conflict
+        && !(detail.liveTracking && detail.repos.length > 0) && (
+        // Live-mode segment not covered by the structured display above (the
+        // "Live refresh in progress …" variant, or a tracking list the parser
+        // didn't recognise). Never truncated: the sha+PR list is the point.
         <div className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400 break-words">
           {detail.live}
         </div>
