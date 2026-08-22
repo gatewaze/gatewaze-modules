@@ -96,28 +96,28 @@ export default function TestEnvSetBuilder({
         {children}
         {extra.map((e, i) => (
           <span key={i} className="inline-flex items-center gap-1">
-            <select value={e.repo} onChange={(ev) => setExtra((x) => x.map((y, j) => j === i ? { ...y, repo: ev.target.value } : y))} className="rounded border px-1 py-0.5 text-xs">
+            <select value={e.repo} onChange={(ev) => setExtra((x) => x.map((y, j) => j === i ? { ...y, repo: ev.target.value } : y))} className="rounded border bg-neutral-800 border-neutral-700 text-neutral-100 px-1 py-0.5 text-xs">
               {deployable.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
-            <input value={e.number} placeholder="PR#" onChange={(ev) => setExtra((x) => x.map((y, j) => j === i ? { ...y, number: ev.target.value.replace(/\D/g, '') } : y))} className="w-14 rounded border px-1 py-0.5 text-xs" />
+            <input value={e.number} placeholder="PR#" onChange={(ev) => setExtra((x) => x.map((y, j) => j === i ? { ...y, number: ev.target.value.replace(/\D/g, '') } : y))} className="w-14 rounded border bg-neutral-800 border-neutral-700 text-neutral-100 px-1 py-0.5 text-xs" />
             <Button variant="ghost" size="xs" disabled={!Number.isInteger(Number(e.number)) || Number(e.number) < 1 || inSet(deploySet, e.repo, Number(e.number))}
               onClick={() => {
                 add(e.repo, Number(e.number));
                 setExtra((x) => x.filter((_, j) => j !== i));
               }}>Add</Button>
-            <button onClick={() => setExtra((x) => x.filter((_, j) => j !== i))} className="text-[var(--gray-10)]">×</button>
+            <button onClick={() => setExtra((x) => x.filter((_, j) => j !== i))} className="text-neutral-400">×</button>
           </span>
         ))}
         <Button variant="ghost" size="xs" onClick={() => setExtra((x) => [...x, { repo: deployable[0], number: '' }])}>
           <PlusIcon className="size-3.5 mr-0.5" />{addLabel}
         </Button>
-        <label className="inline-flex items-center gap-1.5 text-[var(--gray-11)]"
+        <label className="inline-flex items-center gap-1.5 text-neutral-300"
           title="env re-merges and refreshes automatically on every push">
           <input type="checkbox" className="size-3.5" checked={liveMode} onChange={(e) => setLiveMode(e.target.checked)} />
           <span>Live — follow branch pushes</span>
         </label>
         {showFresh && (
-          <label className="inline-flex items-center gap-1.5 text-[var(--gray-11)]"
+          <label className="inline-flex items-center gap-1.5 text-neutral-300"
             title="Wipes: the newsletter database (dropped and recreated by the deployed branch's own schema), all mock platform data (projects, committees, groups, board meetings), and reseeds the staging playbooks (test-user access grants, newsletter groups, the AAIF foundation). Deploys from a torn-down env always run fresh; uncheck when replacing a live env to keep its data.">
             <input type="checkbox" className="size-3.5" checked={freshMode} onChange={(e) => setFreshChoice(e.target.checked)} />
             <span>Fresh data (wipe + reseed)</span>
@@ -131,33 +131,33 @@ export default function TestEnvSetBuilder({
         </Button>
       </div>
       {deploySet.length > 0 && (
-        <div className="mt-2 rounded border border-[var(--gray-5)] px-2 py-1.5">
-          <div className="text-[11px] font-medium text-[var(--gray-11)]">Deploy set</div>
+        <div className="mt-2 rounded border border-neutral-700 px-2 py-1.5">
+          <div className="text-[11px] font-medium text-neutral-300">Deploy set</div>
           <div className="mt-1 flex flex-col gap-1 text-xs">
             {repos.map((repo) => {
               const groupCount = deploySet.filter((x) => x.repo === repo).length;
               return (
                 <div key={repo} className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[var(--gray-10)] w-40 truncate">{repo}</span>
+                  <span className="text-neutral-400 w-40 truncate">{repo}</span>
                   {deploySet.map((x, i) => x.repo === repo && (
-                    <span key={`${x.repo}#${x.number}`} className="inline-flex items-center gap-0.5 rounded border border-[var(--gray-5)] px-1.5 py-0.5">
+                    <span key={`${x.repo}#${x.number}`} className="inline-flex items-center gap-0.5 rounded border border-neutral-700 px-1.5 py-0.5">
                       {prUrlOf?.(x.repo, x.number)
                         ? <a href={prUrlOf(x.repo, x.number)} target="_blank" rel="noreferrer" className="text-blue-500">#{x.number}</a>
                         : <span>#{x.number}</span>}
                       {groupCount > 1 && (
                         <>
-                          <button title="Merge earlier" onClick={() => onChange(moveWithinRepo(deploySet, i, -1))} className="text-[var(--gray-10)] hover:text-[var(--gray-12)]"><ChevronUpIcon className="size-3" /></button>
-                          <button title="Merge later" onClick={() => onChange(moveWithinRepo(deploySet, i, 1))} className="text-[var(--gray-10)] hover:text-[var(--gray-12)]"><ChevronDownIcon className="size-3" /></button>
+                          <button title="Merge earlier" onClick={() => onChange(moveWithinRepo(deploySet, i, -1))} className="text-neutral-400 hover:text-neutral-100"><ChevronUpIcon className="size-3" /></button>
+                          <button title="Merge later" onClick={() => onChange(moveWithinRepo(deploySet, i, 1))} className="text-neutral-400 hover:text-neutral-100"><ChevronDownIcon className="size-3" /></button>
                         </>
                       )}
-                      <button title="Remove" onClick={() => onChange(toggleEntry(deploySet, x.repo, x.number))} className="text-[var(--gray-10)] hover:text-[var(--gray-12)]">×</button>
+                      <button title="Remove" onClick={() => onChange(toggleEntry(deploySet, x.repo, x.number))} className="text-neutral-400 hover:text-neutral-100">×</button>
                     </span>
                   ))}
                 </div>
               );
             })}
           </div>
-          <div className="mt-1 text-[11px] text-[var(--gray-10)]">Same-repo PRs are merged onto main in this order, locally — nothing is pushed to GitHub.</div>
+          <div className="mt-1 text-[11px] text-neutral-400">Same-repo PRs are merged onto main in this order, locally — nothing is pushed to GitHub.</div>
         </div>
       )}
     </>
