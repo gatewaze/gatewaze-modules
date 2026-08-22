@@ -17,6 +17,13 @@
  * list still implies repo-write access, but PR comments have no such floor, so
  * treating empty as open would be the whole vulnerability. Empty ⇒ only the run
  * initiator is trusted.
+ *
+ * This same predicate is the module's single APPLIER-TRUST rule for privileged
+ * labels: intake's agent:model:* / agent:engine:* / agent:spec:* labels (applier
+ * resolved from issue events, workers/intake.ts) and the webhook's agent:adopt
+ * PR label (applier = the HMAC-verified event sender, api/webhook-routes.ts —
+ * pass run=null there: no run exists yet, so ONLY allow-listed labellers count,
+ * fail closed). Keep every label-privilege check on this one function.
  */
 export function isTrustedFeedbackAuthor(
   login: string | undefined | null,
