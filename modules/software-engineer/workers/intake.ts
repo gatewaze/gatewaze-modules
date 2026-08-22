@@ -18,6 +18,7 @@ import { notifyGate } from '../lib/notify.js';
 import { writeSpecMemory } from '../lib/memory.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, writeMessage, blockRun } from '../lib/run-state.js';
 import { parseOverrideLabels } from '../lib/model-select.js';
+import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
 import { parseSpecLabels, extractProvidedSpec, SPEC_PROVIDED_LABEL, SPEC_APPROVED_LABEL } from '../lib/provided-spec.js';
 
 const sb = (ctx) =>
@@ -74,7 +75,7 @@ export default async function intake(job, ctx) {
     } catch { /* best-effort — reporter provenance is non-critical */ }
     const overrideLabels = issueLabels.filter((n) => n.startsWith('agent:model:') || n.startsWith('agent:engine:'));
     if (overrideLabels.length) {
-      const trusted = (login) => !!login && (project.allowedLabellers.includes(login) || login === run.labeller);
+      const trusted = (login) => isTrustedFeedbackAuthor(login, project, run);
       const events = await gh.listIssueEvents(run.repo_owner, run.repo_name, run.issue_number);
       const applier = {};
       for (const ev of events ?? []) {
@@ -101,7 +102,7 @@ export default async function intake(job, ctx) {
     // ignored and the run takes the classic authored-spec path (never a silent gate skip).
     try {
       const rawFor = (canonical) => issueLabels.filter((n) => String(n).trim().toLowerCase() === canonical);
-      const trusted = (login) => !!login && (project.allowedLabellers.includes(login) || login === run.labeller);
+      const trusted = (login) => isTrustedFeedbackAuthor(login, project, run);
       const events = await gh.listIssueEvents(run.repo_owner, run.repo_name, run.issue_number);
       const applier = {};
       for (const ev of events ?? []) {
