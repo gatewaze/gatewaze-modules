@@ -169,7 +169,7 @@ export default async function architecture(job, ctx) {
         kind: 'choice', options: ARCHITECTURE_DECISION_OPTIONS,
         // No commit URL yet at this point (draft, not finalized) — /architecture/finalize refreshes
         // this decision's context with the real commit URL once the human commits it.
-        context: null,
+        context: null, originKind: 'awaiting_architecture',
       });
     } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
     await recordPhaseEnd(supabase, run, 'architecture', 'blocked', 'awaiting architecture review (draft)', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
