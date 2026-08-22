@@ -129,6 +129,24 @@ export async function resolveIssuesRepoProject(sb: unknown, owner: string, name:
   return { projectId: data.id, siteId: data.site_id };
 }
 
+/**
+ * Resolve which PROJECT a CODE repo is connected to (se_repos is unique on owner/name — a repo maps
+ * to exactly one project per deployment). This is the webhook's `agent:adopt` PR-label entry: the
+ * labelled PR lives in a code repo, not the issues repo, so `resolveIssuesRepoProject` cannot find
+ * it. Disabled repo rows do not resolve.
+ */
+export async function resolveCodeRepoProject(sb: unknown, owner: string, name: string): Promise<IssuesRepoProject | null> {
+  const { data, error } = await sb
+    .from('se_repos')
+    .select('project_id, site_id')
+    .eq('repo_owner', owner)
+    .eq('repo_name', name)
+    .eq('enabled', true)
+    .maybeSingle();
+  if (error || !data?.project_id) return null;
+  return { projectId: data.project_id, siteId: data.site_id };
+}
+
 /** The project's CODE repos (where the agent works) — writable ones are edit targets, read_only are
  *  context. Used by the multi-repo run engine (§7). */
 export async function getCodeRepos(sb: unknown, projectId: string): Promise<CodeRepo[]> {
