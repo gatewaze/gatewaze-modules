@@ -47,7 +47,7 @@ export default function TestEnvOverviewPanel({ profile, projects }: { profile: '
   return (
     <TestEnvControls profile={profile} deploySet={deploySet} onChange={setDeploySet} prUrlOf={prUrlOf} onAdded={onAdded} className="mb-4">
       {({ tornDown }) => deploySet.length === 0 && (
-        <span className="text-[var(--gray-10)]">Deploy any open PR set{tornDown ? '' : ' — or replace what’s deployed'}: add PRs below, or deploy plain main.</span>
+        <span className="text-neutral-400">Deploy any open PR set{tornDown ? '' : ' — or replace what’s deployed'}: add PRs below, or deploy plain main.</span>
       )}
     </TestEnvControls>
   );
