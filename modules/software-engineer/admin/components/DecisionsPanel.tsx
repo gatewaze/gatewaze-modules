@@ -74,10 +74,10 @@ function AnswerControl({ decision, onAnswered }: { decision: any; onAnswered: ()
     // Picked an option that needs text (request_changes/reject): show the text box + confirm/cancel.
     if (draft && OPTIONS_REQUIRING_TEXT.has(draft.optionId ?? '')) {
       return (
-        <div className="flex flex-col gap-1 min-w-[16rem]" onClick={stop}>
+        <div className="flex flex-col gap-1 w-full" onClick={stop}>
           <textarea
             autoFocus
-            rows={2}
+            rows={4}
             maxLength={500}
             value={draft.text}
             onChange={(e) => setDraft({ ...draft, text: e.target.value })}
@@ -152,9 +152,9 @@ function AnswerControl({ decision, onAnswered }: { decision: any; onAnswered: ()
   // kind === 'text' — a free-text answer (e.g. a distilled review-blocked question with no fixed options).
   const text = draft?.text ?? '';
   return (
-    <div className="flex flex-col gap-1 min-w-[16rem]" onClick={stop}>
+    <div className="flex flex-col gap-1 w-full" onClick={stop}>
       <textarea
-        rows={2}
+        rows={4}
         maxLength={500}
         value={text}
         onChange={(e) => setDraft({ optionId: null, text: e.target.value })}
@@ -235,29 +235,30 @@ export default function DecisionsPanel({ projectFilter, onOpenRun }: {
                   </div>
                 );
                 return (
-                  <div key={d.id} className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-[var(--gray-2)]">
-                    {label}
-                    <div className="flex items-center gap-2 shrink-0">
-                      {showProposalLink && (
-                        <a
-                          href={d.architecture_commit_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-xs text-blue-600 underline hover:text-blue-700"
-                        >
-                          view proposal
-                        </a>
-                      )}
-                      {interactive ? (
-                        <AnswerControl decision={d} onAnswered={load} />
-                      ) : (
-                        <>
-                          {formatDuration(d.updated_at) && <span className="text-xs tabular-nums text-[var(--gray-10)]">{formatDuration(d.updated_at)} waiting</span>}
-                          {fmtCost(d.cost_usd) && <span className="text-xs font-mono text-[var(--gray-10)]">{fmtCost(d.cost_usd)}</span>}
-                        </>
-                      )}
+                  <div key={d.id} className="flex flex-col gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--gray-2)]">
+                    <div className="flex items-center justify-between gap-3">
+                      {label}
+                      <div className="flex items-center gap-2 shrink-0">
+                        {showProposalLink && (
+                          <a
+                            href={d.architecture_commit_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs text-blue-600 underline hover:text-blue-700"
+                          >
+                            view proposal
+                          </a>
+                        )}
+                        {!interactive && (
+                          <>
+                            {formatDuration(d.updated_at) && <span className="text-xs tabular-nums text-[var(--gray-10)]">{formatDuration(d.updated_at)} waiting</span>}
+                            {fmtCost(d.cost_usd) && <span className="text-xs font-mono text-[var(--gray-10)]">{fmtCost(d.cost_usd)}</span>}
+                          </>
+                        )}
+                      </div>
                     </div>
+                    {interactive && <AnswerControl decision={d} onAnswered={load} />}
                   </div>
                 );
               })}

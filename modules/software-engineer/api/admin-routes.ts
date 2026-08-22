@@ -511,20 +511,36 @@ export function mountAdminRoutes(router, deps) {
       project = String(req.query.project);
       if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
     }
+    const RUN_SELECT = 'id, project_id, repo_owner, repo_name, issue_number, title, status, error, retry_count, current_phase, cost_usd, created_at, updated_at, architecture_repo, architecture_path, architecture_commit_url, project:se_projects(name, avatar_emoji)';
     let q = supabase
       .from('se_runs')
-      .select('id, project_id, repo_owner, repo_name, issue_number, title, status, error, retry_count, current_phase, cost_usd, created_at, updated_at, architecture_repo, architecture_path, architecture_commit_url, project:se_projects(name, avatar_emoji)')
+      .select(RUN_SELECT)
       .is('archived_at', null)
       .in('status', ['awaiting_spec', 'awaiting_architecture', 'architecture_in_review', 'ready_to_submit', 'blocked'])
       .order('updated_at', { ascending: true })
       .limit(200);
     if (project) q = q.eq('project_id', project);
-    const { data: runs, error } = await q;
+    const { data: gatedRuns, error } = await q;
     if (error) {
       logger?.warn?.('se: overview/decisions failed', { error: String(error?.message ?? error) });
       return res.status(500).json({ error: 'overview/decisions failed' });
     }
-    const runIds = (runs ?? []).map((r) => r.id);
+    const fifteenMinAgo = Date.now() - 15 * 60_000;
+    // A run that was just answered can move its live status OUT of the gated set above in the same
+    // request that answered it (e.g. pr_closed_partial/review_blocked resume straight to `running`) —
+    // the query above would never see it again. Look up se_decisions directly (it carries project_id,
+    // so it doesn't need runIds first) for any 'answered' row still inside its 15-minute retention
+    // window, and pull in whatever runs those point to that the status query missed (issue #60).
+    let recentAnsweredQ = supabase.from('se_decisions').select('run_id').eq('status', 'answered').gte('answered_at', new Date(fifteenMinAgo).toISOString());
+    if (project) recentAnsweredQ = recentAnsweredQ.eq('project_id', project);
+    const { data: recentAnswered } = await recentAnsweredQ;
+    const gatedRunIds = new Set((gatedRuns ?? []).map((r) => r.id));
+    const extraRunIds = [...new Set((recentAnswered ?? []).map((d) => d.run_id))].filter((id) => !gatedRunIds.has(id));
+    const { data: extraRuns } = extraRunIds.length
+      ? await supabase.from('se_runs').select(RUN_SELECT).is('archived_at', null).in('id', extraRunIds)
+      : { data: [] };
+    const runs = [...(gatedRuns ?? []), ...(extraRuns ?? [])];
+    const runIds = runs.map((r) => r.id);
     const { data: prs } = runIds.length
       ? await supabase.from('se_run_prs').select('run_id, state').in('run_id', runIds)
       : { data: [] };
@@ -542,24 +558,27 @@ export function mountAdminRoutes(router, deps) {
     // answer that leaves it in a gated status (e.g. an architecture 'reject', which is terminal).
     const { data: persisted } = runIds.length
       ? await supabase.from('se_decisions')
-          .select('id, run_id, question, kind, options, context, status, answer, answered_by, answered_at')
+          .select('id, run_id, question, kind, options, context, status, answer, answered_by, answered_at, origin_kind')
           .in('run_id', runIds).in('status', ['pending', 'answered'])
           .order('created_at', { ascending: false })
       : { data: [] };
-    const fifteenMinAgo = Date.now() - 15 * 60_000;
     const persistedByRun = {};
     for (const p of persisted ?? []) {
       if (persistedByRun[p.run_id]) continue; // keep the newest row per run (order is created_at desc)
       if (p.status === 'answered' && (!p.answered_at || new Date(p.answered_at).getTime() < fifteenMinAgo)) continue;
       persistedByRun[p.run_id] = p;
     }
-    const decisions = (runs ?? [])
+    const decisions = runs
       .map((r) => {
-        const kind = classifyDecision(r, byRun[r.id] ?? []);
+        const p = persistedByRun[r.id];
+        // classifyDecision() only understands the run's CURRENT live status. Once an answer moves the
+        // run out of the gated statuses it recognizes, fall back to the kind frozen on the decision row
+        // at creation time (origin_kind) so the row stays visible for its retention window instead of
+        // being dropped before persistedByRun is even consulted (issue #60).
+        const kind = classifyDecision(r, byRun[r.id] ?? []) ?? p?.origin_kind ?? null;
         if (!kind) return null;
         const gateDetail = kind === 'review_blocked' ? latestGateByRun[r.id]?.detail ?? null : null;
         const row = { ...r, kind, decision: decisionTextFor(kind, r), objections: gateDetail?.objections ?? undefined };
-        const p = persistedByRun[r.id];
         if (p) {
           row.decisionId = p.id;
           row.decision = p.question;
@@ -1330,7 +1349,7 @@ export function mountAdminRoutes(router, deps) {
         runId: id, projectId: run.project_id, siteId: run.site_id, phase: 'architecture',
         question: 'An architecture proposal is ready for review. What should happen next?',
         kind: 'choice', options: ARCHITECTURE_DECISION_OPTIONS,
-        context: url,
+        context: url, originKind: 'awaiting_architecture',
       });
     } catch { /* best-effort */ }
     res.json({ committed: true, url, status: 'architecture_in_review' });
