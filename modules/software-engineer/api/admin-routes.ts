@@ -10,7 +10,6 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
-import { upsertRunPr } from '../lib/run-state.js';
 import { mergeRunPrs } from '../lib/merge-prs.js';
 import { dispatchProject } from '../lib/dispatch.js';
 import { enqueuePhase } from '../lib/enqueue.js';
@@ -20,6 +19,7 @@ import { normalizeModel } from '../lib/model-select.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
+import { connectExternalPr } from '../lib/connect-pr.js';
 import { runTriageTurn } from '../lib/triage.js';
 import { dispatchTriageTurn } from '../lib/triage-dispatch.js';
 import { redactToken } from '../lib/git.js';
@@ -961,10 +961,10 @@ export function mountAdminRoutes(router, deps) {
 
   // Connect an EXISTING external PR (opened outside Gatewaze) to a WATCHING run, so the pr-monitor
   // reconciler tracks it and auto-revises on trusted review feedback — without the platform ever
-  // merging it. Query params (body already parsed upstream). The repo must be one of the project's
-  // CONNECTED code repos. kind='external_pr' makes the reconciler skip issue bookkeeping and never
-  // auto-merge (see workers/pr-monitor.ts). Idempotent: a PR already watched by an active run
-  // returns that run instead of creating a second.
+  // merging it. Query params (body already parsed upstream). Core logic (incl. every validation:
+  // connected repo, kill switch, PR-open + refname-safe branch, active-run dedupe) is SHARED with
+  // the webhook's `agent:adopt` PR-label intake — lib/connect-pr.ts. kind='external_pr' makes the
+  // reconciler skip issue bookkeeping and never auto-merge (see workers/pr-monitor.ts).
   router.post('/prs/connect', async (req, res) => {
     if (!rateLimit(`se-admin:connect:${clientIp(req)}`, 30, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
@@ -978,57 +978,12 @@ export function mountAdminRoutes(router, deps) {
       return res.status(400).json({ error: 'bad repo or PR number' });
     }
     const proj = await getProject(supabase, projectId);
-    if (!proj?.githubToken) return res.status(400).json({ error: 'project has no GitHub token' });
-    if (!proj.intakeEnabled) return res.status(409).json({ error: 'project is disabled (kill switch)' });
-    const codeRepos = await getCodeRepos(supabase, projectId);
-    if (!new Set(codeRepos.map((r) => `${r.repoOwner}/${r.repoName}`.toLowerCase())).has(`${owner}/${name}`.toLowerCase())) {
-      return res.status(403).json({ error: 'repo is not connected to this project' });
-    }
-    // Idempotent: reuse an active run already watching this PR.
-    const { data: existingPr } = await supabase.from('se_run_prs')
-      .select('run_id, se_runs(id, status, archived_at)')
-      .eq('repo_owner', owner).eq('repo_name', name).eq('pr_number', number).eq('state', 'open').maybeSingle();
-    const existingRun = existingPr && (Array.isArray(existingPr.se_runs) ? existingPr.se_runs[0] : existingPr.se_runs);
-    if (existingRun && !existingRun.archived_at && existingRun.status !== 'cancelled') {
-      return res.json({ runId: existingRun.id, existing: true });
-    }
-
-    const gh = githubClient(proj.githubToken);
-    try {
-      const pull = await gh.getPullRequest(owner, name, number);
-      if (!pull || pull.state !== 'open') return res.status(409).json({ error: 'PR is not open' });
-      const branch = String(pull.head?.ref ?? '');
-      if (!branch) return res.status(409).json({ error: 'could not resolve the PR head branch' });
-      // SECURITY: this ref (attacker-controlled on an external PR) becomes run.branch_name and is
-      // later passed as a bare `git push origin <branch>` refspec. A name like `--mirror` / `--delete`
-      // would be read as a git OPTION, not a ref — arbitrary remote-ref destruction with the project
-      // PAT. Reject a leading '-' and anything outside a safe refname subset before storing it.
-      if (branch.startsWith('-') || branch.includes('..') || branch.endsWith('.lock') || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
-        return res.status(422).json({ error: 'unsupported PR branch name' });
-      }
-      const { data: run, error } = await supabase.from('se_runs').insert({
-        site_id: proj.siteId, project_id: projectId, kind: 'external_pr',
-        instance_id: process.env.SE_INSTANCE_ID || 'default',
-        repo_owner: owner, repo_name: name, issue_number: null, title: sanitize(pull.title) ?? `PR #${number}`,
-        labeller: authorOf(req), status: 'watching', current_phase: 'watch',
-        branch_name: branch, pr_number: number, pr_url: pull.html_url, pr_state: 'open',
-        blast_radius: 'needs_human',   // external PRs never auto-merge — belt + braces with the pr-monitor kind gate
-      }).select('id').single();
-      if (error || !run) {
-        logger?.warn?.('se: connect PR failed', { project: projectId, error: String(error?.message ?? error) });
-        return res.status(500).json({ error: 'connect failed' });
-      }
-      await upsertRunPr(supabase, { id: run.id, site_id: proj.siteId }, owner, name, {
-        branch, pr_number: number, pr_url: pull.html_url, state: 'open',
-      });
-      // Reconcile immediately (start watching now); the pr-monitor cron then keeps it fresh.
-      try { await enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: run.id }, { jobId: `se-prmon-connect-${run.id}` }); }
-      catch (e) { logger?.warn?.('se: connect enqueue pr-monitor failed', { error: String(e) }); }
-      res.status(201).json({ runId: run.id });
-    } catch (e) {
-      logger?.warn?.('se: connect PR failed', { project: projectId, error: String((e as Error)?.message ?? e) });
-      res.status(500).json({ error: 'connect failed' });
-    }
+    const result = await connectExternalPr(supabase, { enqueueJob, logger }, {
+      project: proj, owner, name, number, labeller: authorOf(req),
+    });
+    if (result.ok) return res.status(result.existing ? 200 : 201).json({ runId: result.runId, ...(result.existing ? { existing: true } : {}) });
+    const status = { no_token: 400, intake_disabled: 409, repo_not_connected: 403, pr_not_open: 409, no_branch: 409, bad_branch: 422, insert_failed: 500, connect_failed: 500 }[result.code] ?? 500;
+    res.status(status).json({ error: result.message });
   });
 
   // ── Runs ────────────────────────────────────────────────────────────────

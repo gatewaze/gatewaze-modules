@@ -70,3 +70,6 @@ Intake fails the run, with the reason in the run view and in a comment on the is
 
 A failed intake never falls back to the billed spec phase. Fix the issue body or labels and
 re-apply the trigger label to retry.
+
+If you already developed the change locally and opened the PR yourself, you do not need a spec
+handoff at all — apply the `agent:adopt` label to the PR instead. See `adopted-prs.md`.

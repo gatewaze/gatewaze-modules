@@ -4,14 +4,19 @@
  *
  *  - issues.labeled with the project's trigger label on its ISSUES repo → route by instance
  *    (agent:build → primary; agent:build@<instance> → that instance), create a run, dispatch.
+ *  - pull_request.labeled/opened with `agent:adopt` on a project-connected CODE repo, applied by a
+ *    TRUSTED applier → connect the PR as a kind='external_pr' run (same core as POST /prs/connect),
+ *    so a locally-developed PR can be handed to the pr-monitor without admin credentials.
  *  - pull_request / pull_request_review → nudge the pr-monitor for the matching run (any of its PRs).
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { resolveIssuesRepoProject, getProject } from '../lib/credentials.js';
+import { resolveIssuesRepoProject, resolveCodeRepoProject, getProject } from '../lib/credentials.js';
 import { dispatchProject } from '../lib/dispatch.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { githubClient } from '../lib/github.js';
 import { parseDependencies, unmetDependencies, ensureWaitingMarker } from '../lib/dependencies.js';
+import { connectExternalPr, ADOPT_LABEL } from '../lib/connect-pr.js';
+import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
 
 const INSTANCE = () => process.env.SE_INSTANCE_ID || 'default';
 
@@ -51,6 +56,63 @@ export function mountWebhookRoute(router, deps) {
     // ── PR lifecycle → nudge the monitor for the run owning this PR ──────────
     if (event === 'pull_request' || event === 'pull_request_review') {
       const prNum = payload.pull_request?.number;
+
+      // `agent:adopt` PR-label intake: hand an open PR on a CONNECTED code repo to the pr-monitor
+      // as a kind='external_pr' run (shared core with POST /prs/connect — lib/connect-pr.ts).
+      // Handled for the `labeled` action AND for `opened` when the label rode the PR's initial
+      // label set. Instance routing mirrors the issues trigger: bare `agent:adopt` → primary
+      // instance only; `agent:adopt@<instance>` → exactly that instance.
+      // owner/name are only trusted after they exact-match a connected se_repos row below; the PR
+      // number is validated here (it reaches a GitHub URL path) — parity with /prs/connect.
+      if (event === 'pull_request' && owner && name && Number.isInteger(prNum) && prNum > 0 && (payload.action === 'labeled' || payload.action === 'opened')) {
+        const inst = INSTANCE();
+        const eventLabels = (payload.action === 'labeled'
+          ? [payload.label?.name]
+          : (payload.pull_request?.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name))
+        ).map((l) => String(l ?? '').trim());
+        // Match both forms now; the bare label's primary-instance gate needs the project → below.
+        const adoptLabels = eventLabels.filter((l) => l === ADOPT_LABEL || l === `${ADOPT_LABEL}@${inst}`);
+        if (adoptLabels.length) {
+          const repoProj = await resolveCodeRepoProject(supabase, owner, name);
+          if (!repoProj) return res.status(200).json({ accepted: false, reason: 'not a connected code repo' });
+          const project = await getProject(supabase, repoProj.projectId);
+          if (!project || !project.intakeEnabled) return res.status(200).json({ accepted: false, reason: 'intake disabled' });
+          // Same instance rule as the issues trigger: the bare label only acts on the primary
+          // instance (or when no primary is configured); the @<instance> form already matched.
+          const bare = adoptLabels.some((l) => String(l).trim() === ADOPT_LABEL);
+          const qualified = adoptLabels.some((l) => String(l).trim() === `${ADOPT_LABEL}@${inst}`);
+          const act = qualified || (bare && (!project.primaryInstanceId || project.primaryInstanceId === inst));
+          if (!act) return res.status(200).json({ accepted: false, reason: 'not this instance' });
+          // APPLIER TRUST (the security boundary — same fail-closed rule as intake's agent:spec:*/
+          // agent:model:* labels, shared helper): the applier is the HMAC-verified event SENDER —
+          // who GitHub says performed the labeling (or opened the PR carrying the label) — never a
+          // repo/PR body field the payload author could shape. No run exists yet, so run=null:
+          // ONLY the project's allowed_labellers are trusted; an empty list means nobody, because
+          // label-write on a public code repo (triage) is far broader than the issues-repo floor
+          // and an adopter becomes the run's trusted-feedback identity (revise-driving). Untrusted
+          // → log + ignore. NEVER comment on the PR (no error-comment loop on re-labeling).
+          const applier = payload.sender?.login ? String(payload.sender.login) : '';
+          if (!isTrustedFeedbackAuthor(applier, project, null)) {
+            logger?.info?.('se: agent:adopt ignored — applier not trusted', { repo: `${owner}/${name}`, pr: prNum, applier, delivery });
+            return res.status(200).json({ accepted: false, reason: 'applier not trusted' });
+          }
+          const result = await connectExternalPr(supabase, { enqueueJob, logger }, {
+            project, owner, name, number: prNum, labeller: applier,
+          });
+          if (!result.ok) {
+            logger?.info?.('se: agent:adopt not connected', { repo: `${owner}/${name}`, pr: prNum, applier, code: result.code, delivery });
+            return res.status(200).json({ accepted: false, reason: result.code });
+          }
+          if (result.existing) {
+            // Label re-applied / PR already watched → dedupe to the live run; nudge its monitor.
+            await enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: result.runId });
+            return res.status(200).json({ accepted: false, reason: 'run already live', runId: result.runId });
+          }
+          logger?.info?.('se: agent:adopt connected PR', { repo: `${owner}/${name}`, pr: prNum, applier, runId: result.runId, delivery });
+          return res.status(202).json({ accepted: true, runId: result.runId, adopted: true, delivery, instance: inst });
+        }
+      }
+
       if (owner && name && prNum) {
         const { data: prRow } = await supabase.from('se_run_prs').select('run_id')
           .eq('repo_owner', owner).eq('repo_name', name).eq('pr_number', prNum).maybeSingle();
