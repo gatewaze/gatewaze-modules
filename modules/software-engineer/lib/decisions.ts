@@ -30,10 +30,10 @@ export const ARCHITECTURE_DECISION_OPTIONS = [
 // emission call sites are themselves sequential per run (a run only reaches one blocking point at a
 // time), so the race is not reachable in practice.
 export async function createOrSupersedeDecision(supabase, params) {
-  const { runId, projectId, siteId, phase, question, kind, options = null, context = null } = params;
+  const { runId, projectId, siteId, phase, question, kind, options = null, context = null, originKind = null } = params;
   await supabase.from('se_decisions').update({ status: 'superseded' }).eq('run_id', runId).eq('status', 'pending');
   const { data, error } = await supabase.from('se_decisions')
-    .insert({ run_id: runId, project_id: projectId, site_id: siteId, phase, question, kind, options, context, status: 'pending' })
+    .insert({ run_id: runId, project_id: projectId, site_id: siteId, phase, question, kind, options, context, status: 'pending', origin_kind: originKind })
     .select()
     .single();
   if (error) throw error;
