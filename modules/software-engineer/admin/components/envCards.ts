@@ -82,16 +82,16 @@ export const fmtCountdown = (expiresAt: string | null | undefined, now: number):
 // failures an operator would triage the same way.
 export const EVENT_FILTERS: Record<string, { label: string; kinds: string[] | null }> = {
   all: { label: 'All', kinds: null },
-  lifecycle: { label: 'Lifecycle', kinds: ['create', 'ready', 'fail', 'reap', 'teardown', 'admission_refused'] },
+  lifecycle: { label: 'Lifecycle', kinds: ['create', 'ready', 'fail', 'reap', 'teardown', 'admission_refused', 'teardown_refused', 'reap_refused', 'root_promote', 'root_demote', 'root_reassert', 'root_boot_restore', 'root_demote_fallback'] },
   visits: { label: 'Visits', kinds: ['visit'] },
   logins: { label: 'Logins', kinds: ['login_success', 'login_failure'] },
-  errors: { label: 'Errors', kinds: ['service_error', 'fail', 'admission_refused', 'login_failure'] },
+  errors: { label: 'Errors', kinds: ['service_error', 'fail', 'admission_refused', 'login_failure', 'teardown_refused', 'reap_refused', 'root_demote_fallback'] },
 };
 
 export const eventKindTone = (kind: string): 'green' | 'red' | 'gray' | 'blue' | 'amber' => {
-  if (kind === 'ready' || kind === 'login_success') return 'green';
-  if (kind === 'fail' || kind === 'service_error' || kind === 'login_failure') return 'red';
-  if (kind === 'admission_refused' || kind === 'reap') return 'amber';
+  if (kind === 'ready' || kind === 'login_success' || kind === 'root_boot_restore') return 'green';
+  if (kind === 'fail' || kind === 'service_error' || kind === 'login_failure' || kind === 'root_demote_fallback') return 'red';
+  if (kind === 'admission_refused' || kind === 'reap' || kind === 'teardown_refused' || kind === 'reap_refused') return 'amber';
   if (kind === 'visit') return 'gray';
   return 'blue';
 };

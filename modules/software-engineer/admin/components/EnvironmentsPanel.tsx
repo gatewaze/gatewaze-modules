@@ -112,7 +112,8 @@ function EnvCard({ entry, now, onAction, root }) {
             title={reaped ? 'Re-create this environment from its registry spec' : 'Redeploy this environment from its registry spec'}>
             <ArrowPathIcon className="size-3.5 mr-1" />{reaped ? 'Redeploy' : 'Refresh'}
           </Button>
-          <Button variant="soft" color="red" size="xs" disabled={busy || active}
+          <Button variant="soft" color="red" size="xs" disabled={busy || active || root?.env === label}
+            title={root?.env === label ? 'Serving lfx.pr-view.com — restore primary first' : undefined}
             onClick={() => act('Teardown', teardownEnv, `Tear down ${label}?${reaped ? ' (removes the reaped registry entry)' : ''}`)}>
             <TrashIcon className="size-3.5 mr-1" />{reaped ? 'Remove' : 'Tear down'}
           </Button>
