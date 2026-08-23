@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { encodeEnvLabel, parseEnvLabel, envTierCheck } from '../lib/env-label.js';
 import { ingestEnvEvents } from '../lib/env-events.js';
 import { parseEventQuery, summarizeEvents, SUMMARY_SCAN_CAP } from '../lib/env-events-query.js';
+import { clarityConfig, clarityDashboardUrl, refreshIfStale, latestSnapshot, budgetState, attributeByEnv } from '../lib/clarity.js';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
@@ -457,6 +458,66 @@ export function mountAdminRoutes(router, deps) {
       }
     } catch { /* no requests dir yet */ }
     res.json({ available: true, profile, cap: ENV_CAP, root: rootAssignment(), envs: [...labels].sort().map(envEntry) });
+  });
+
+  // ── Clarity live insights (read-only cache; see lib/clarity.ts) ──────────
+  // The Data Export API allows 10 calls per project PER DAY, so this route
+  // NEVER calls Clarity synchronously for the caller's benefit: it serves the
+  // cached snapshot and, at most once every 3h, rides a refresh in behind it.
+  // The token stays in the API container's env — nothing here returns it, and
+  // the response carries only the project id (public) and aggregate numbers.
+  router.get('/test-env/clarity', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-clarity:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const cfg = clarityConfig();
+    if (!cfg.configured) return res.json({ configured: false });
+    try { await refreshIfStale(supabase); } catch { /* best-effort; cache still serves */ }
+    const snapshot = await latestSnapshot(supabase);
+    const budget = await budgetState(supabase);
+    const root = rootAssignment();
+    const metrics = snapshot?.ok && Array.isArray(snapshot.payload) ? snapshot.payload : [];
+    res.json({
+      configured: true,
+      projectId: cfg.projectId,
+      dashboardUrl: clarityDashboardUrl(cfg.projectId),
+      fetchedAt: snapshot?.fetched_at ?? null,
+      lookbackDays: snapshot?.num_of_days ?? null,
+      ok: snapshot?.ok ?? null,
+      error: snapshot?.ok === false ? snapshot.error : null,
+      metrics,
+      byEnv: attributeByEnv(metrics, root.env),
+      budget,
+    });
+  });
+
+  // Operator "Refresh now". Spends from the same daily quota, up to the hard
+  // cap the scheduled path deliberately stays below — so this can always be
+  // used a couple of times, and refuses honestly when the day is spent.
+  router.post('/test-env/clarity/refresh', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-clarity-refresh:${clientIp(req)}`, 6, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    // CSRF hardening (security review), same rationale as /staging-update above: the
+    // platform's requireJwt accepts a Supabase auth COOKIE as a fallback, and a
+    // cross-site form POST sends cookies without CORS stopping it. This route spends
+    // from Clarity's 10-calls/project/day quota with `force: true`, so a forged
+    // request could burn the whole day's budget and blind the feature until 00:00
+    // UTC — require the explicit Bearer header, which the admin SPA already sends.
+    if (!String(req.headers.authorization ?? '').startsWith('Bearer ')) {
+      return res.status(403).json({ error: { code: 'bearer_required', message: 'Explicit Authorization header required for this action' } });
+    }
+    // After the gate, not before it: an unauthenticated caller should not be
+    // able to learn whether this instance has a Clarity credential.
+    const cfg = clarityConfig();
+    if (!cfg.configured) return res.status(422).json({ error: { code: 'not_configured', message: 'Clarity export is not configured' } });
+    const result = await refreshIfStale(supabase, { force: true });
+    if (!result.fetched && result.reason === 'budget_exhausted') {
+      const budget = await budgetState(supabase);
+      return res.status(429).json({ error: { code: 'budget_exhausted', message: `Clarity allows ${budget.dailyCap} calls per day; today's are spent. Resets 00:00 UTC.` }, budget });
+    }
+    logger?.info?.('se: clarity export refreshed', { ok: result.ok === true });
+    res.json({ refreshed: Boolean(result.fetched), ok: result.ok ?? null });
   });
 
   // Choose which env serves the root domain lfx.pr-view.com. "primary"
