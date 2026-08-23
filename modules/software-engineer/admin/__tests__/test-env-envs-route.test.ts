@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // write. readdirSync/statSync serve the same virtual tree.
 const vfs = vi.hoisted(() => ({
   files: new Map<string, string>(),
+  fd: null as string | null,
   writes: [] as Array<[string, any]>,
   reset() { this.files.clear(); this.writes.length = 0; },
 }));
@@ -40,8 +41,20 @@ vi.mock('node:fs', () => ({
   },
   statSync: (p: string) => {
     if (!vfs.files.has(p)) throw new Error('ENOENT');
-    return { size: Buffer.byteLength(vfs.files.get(p)) };
+    return { dev: 1, ino: 100, size: Buffer.byteLength(vfs.files.get(p) as string) };
   },
+  // env-events ingestion reads a bounded chunk positionally rather than
+  // slurping the file, so the virtual fs models a file descriptor too. The
+  // "fd" is just the path — one reader at a time, in-process.
+  openSync: (p: string) => {
+    if (!vfs.files.has(p)) throw new Error('ENOENT');
+    vfs.fd = p;
+    return 3;
+  },
+  closeSync: () => { vfs.fd = null; },
+  fstatSync: () => ({ size: Buffer.byteLength(vfs.files.get(vfs.fd as string) as string) }),
+  readSync: (_fd: number, buf: Buffer, off: number, len: number, pos: number) =>
+    Buffer.from(vfs.files.get(vfs.fd as string) as string).copy(buf, off, pos, pos + len),
 }));
 
 import { mountAdminRoutes } from '../../api/admin-routes.js';

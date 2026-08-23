@@ -118,14 +118,36 @@ export const refreshEnv = (label: string) =>
 /** Assign lfx.pr-view.com to an env ("primary" restores the mainline slot). */
 export const assignRoot = (env: string) =>
   testEnvApi('/test-env/envs/root-assignment', { method: 'POST', body: JSON.stringify({ env }) });
-export const fetchEnvEvents = (opts: { env?: string; kind?: string; limit?: number } = {}) => {
+/**
+ * Log-explorer query. `env` and `kind` are comma-separated sets (env accepts
+ * the literal "none" for the unattributed shared-Authelia events); `since`/
+ * `until` are ISO instants; `before_ts`+`before_id` are the keyset cursor the
+ * previous page returned as `next_cursor`. The server re-validates every one
+ * of these — this builder is convenience, not the trust boundary.
+ */
+export interface EnvEventQuery {
+  env?: string; kind?: string; q?: string;
+  since?: string; until?: string;
+  limit?: number; before_ts?: string; before_id?: number;
+  summary?: boolean; buckets?: number;
+}
+const envEventQs = (opts: EnvEventQuery) => {
   const qs = new URLSearchParams();
-  if (opts.env) qs.set('env', opts.env);
-  if (opts.kind) qs.set('kind', opts.kind);
+  for (const k of ['env', 'kind', 'q', 'since', 'until', 'before_ts'] as const) {
+    if (opts[k]) qs.set(k, String(opts[k]));
+  }
   if (opts.limit) qs.set('limit', String(opts.limit));
-  const q = qs.toString();
+  if (opts.before_id) qs.set('before_id', String(opts.before_id));
+  if (opts.buckets) qs.set('buckets', String(opts.buckets));
+  if (opts.summary) qs.set('summary', '1');
+  return qs.toString();
+};
+export const fetchEnvEvents = (opts: EnvEventQuery = {}) => {
+  const q = envEventQs(opts);
   return testEnvApi(`/test-env/env-events${q ? `?${q}` : ''}`);
 };
+export const fetchEnvEventSummary = (opts: EnvEventQuery = {}) =>
+  fetchEnvEvents({ ...opts, summary: true });
 
 /**
  * Polling status hook shared by every test-env surface. Cadence follows what
