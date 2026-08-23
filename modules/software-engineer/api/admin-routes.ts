@@ -6,7 +6,9 @@
  * memory, policy, and a concurrency cap. Engineers are ephemeral (one per run, run.engineer_name).
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { encodeEnvLabel, parseEnvLabel, envTierCheck } from '../lib/env-label.js';
+import { ingestEnvEvents } from '../lib/env-events.js';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
@@ -367,6 +369,207 @@ export function mountAdminRoutes(router, deps) {
       JSON.stringify({ action: 'teardown', requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
     logger?.info?.('se: test-env teardown requested', { profile });
     res.status(202).json(testEnvStatus(profile));
+  });
+
+  // ── Hostname-keyed multi test environments (spec §4.3, phase 2) ────────────
+  // ADDITIONAL lfx envs at {label}.pr-view.com, alongside the primary slot the
+  // routes above manage. Same control-channel model: the request CARRIES a
+  // spec, so both sides validate — here with the TS twin of the host's
+  // grammar (lib/env-label.ts, pinned against lfx-envlabel.py), and the host
+  // agent (staging-multienv.sh) re-validates with the Python original before
+  // anything is deployed. The request FILENAME is always the label THIS
+  // server computed via encodeEnvLabel — user input never names a file. The
+  // label IS the env identity (canonical encode of the spec).
+  const ENVS_DIR = `${STAGING_CONTROL}/envs`;
+  const ENV_REQS_DIR = `${ENVS_DIR}/requests`;
+  // Same shape gate the host agent applies before deriving anything from a
+  // label (path-param rule). Grammar validation happens on top of this.
+  const ENV_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,52}[a-z0-9])?$/;
+  const ENV_CAP = 4; // spec §3.4 lfx cap — the host agent enforces it too (plus measured admission)
+  const readJson = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+  const envPending = (label) =>
+    existsSync(`${ENV_REQS_DIR}/${label}.request.json`) || existsSync(`${ENV_REQS_DIR}/${label}.request.json.processing`);
+  // Registry labels = envs/<label>.json, excluding the .status/.k8s siblings.
+  const envRegistryLabels = () => {
+    let names = [];
+    try { names = readdirSync(ENVS_DIR); } catch { return []; }
+    return names
+      .filter((n) => n.endsWith('.json') && !n.endsWith('.status.json') && !n.endsWith('.k8s.json') && !n.endsWith('.request.json'))
+      .map((n) => n.slice(0, -5))
+      .filter((l) => ENV_LABEL_RE.test(l) && l.startsWith('lfx--'));
+  };
+  const envEntry = (label) => {
+    const registry = readJson(`${ENVS_DIR}/${label}.json`);
+    const status = readJson(`${ENVS_DIR}/${label}.status.json`);
+    return { label, registry, status, pending: envPending(label) };
+  };
+  // Validate a :label path param: shape first, then the grammar (b- slugs
+  // parse; h- and malformed labels are rejected). Returns null when invalid.
+  const envLabelParam = (raw) => {
+    const label = String(raw ?? '');
+    if (!ENV_LABEL_RE.test(label)) return null;
+    return parseEnvLabel(label).error === null ? label : null;
+  };
+
+  router.get('/test-env/envs', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-envs:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) return res.json({ available: false });
+    const profile = req.query.profile === undefined || req.query.profile === '' ? 'lfx' : String(req.query.profile);
+    if (profile !== 'lfx') return res.status(422).json({ error: { code: 'invalid_input', message: 'Only the lfx profile has hostname-keyed envs' } });
+    // Observability ingest rides the poll (best-effort, never blocks the list).
+    try { await ingestEnvEvents(supabase); } catch { /* best-effort */ }
+    const labels = new Set(envRegistryLabels());
+    // Queued creates for brand-new labels (request exists, registry not yet):
+    // surface them so the Overview shows a "queued" card immediately.
+    try {
+      for (const n of readdirSync(ENV_REQS_DIR)) {
+        const m = n.match(/^([a-z0-9-]+)\.request\.json(\.processing)?$/);
+        if (m && ENV_LABEL_RE.test(m[1]) && m[1].startsWith('lfx--')) labels.add(m[1]);
+      }
+    } catch { /* no requests dir yet */ }
+    res.json({ available: true, profile, cap: ENV_CAP, envs: [...labels].sort().map(envEntry) });
+  });
+
+  router.post('/test-env/envs', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    // Spec entries: {repo, pr} or {repo, branch}. Everything is validated by
+    // the encoder (repo against the alias table, pr 1..99999 integer, branch
+    // against the safe-ref shape with no '..'); nothing user-supplied is used
+    // before it validates.
+    const rawSpec = req.body?.spec;
+    if (!Array.isArray(rawSpec) || rawSpec.length < 1 || rawSpec.length > 8) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'spec must be an ordered array of 1..8 entries' } });
+    }
+    // Live mode defaults TRUE for hostname-keyed envs (host-agent default) —
+    // strict boolean when present, same contract as the primary-slot routes.
+    const live = req.body?.live;
+    if (live !== undefined && typeof live !== 'boolean') {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'live must be a boolean' } });
+    }
+    // TTL (phase 3 reaping): hours from last activity before the env is
+    // reaped. Integer 1..168; default 3 (applied host-side when absent).
+    const ttl = req.body?.ttl_hours;
+    if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 1 || ttl > 168)) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'ttl_hours must be an integer between 1 and 168' } });
+    }
+    const spec = rawSpec.map((e) => {
+      const repo = String(e?.repo ?? '');
+      return 'branch' in (e ?? {}) ? { repo, branch: String(e.branch ?? '') } : { repo, pr: Number(e?.pr) };
+    });
+    const enc = encodeEnvLabel(spec);
+    if (enc.error !== null) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: `Invalid env spec: ${enc.error}` } });
+    }
+    const tierErr = envTierCheck(spec);
+    if (tierErr) return res.status(422).json({ error: { code: 'invalid_input', message: tierErr } });
+    const label = enc.label;
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    const existing = readJson(`${ENVS_DIR}/${label}.json`);
+    if (existing && existing.status !== 'reaped') {
+      return res.status(409).json({ error: { code: 'exists', message: `Environment ${label} already exists — refresh or tear it down instead` }, label });
+    }
+    // Cap gate (reaped entries keep their registry file but hold no
+    // resources, so they don't count). The host agent re-checks, plus its
+    // measured memory/disk admission — this is just the fast client-side no.
+    const active = envRegistryLabels().filter((l) => readJson(`${ENVS_DIR}/${l}.json`)?.status !== 'reaped');
+    if (active.length >= ENV_CAP) {
+      return res.status(409).json({ error: { code: 'cap_reached', message: `Environment cap reached (${ENV_CAP}) — tear one down first` } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`, JSON.stringify({
+      action: 'create', spec, live: live !== false, ...(ttl !== undefined ? { ttl_hours: ttl } : {}),
+      requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: multi-env create requested', { label, live: live !== false, ttl_hours: ttl ?? null });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  router.delete('/test-env/envs/:label', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const label = envLabelParam(req.params.label);
+    if (!label) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`,
+      JSON.stringify({ action: 'teardown', requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
+    logger?.info?.('se: multi-env teardown requested', { label });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  router.post('/test-env/envs/:label/refresh', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const label = envLabelParam(req.params.label);
+    if (!label) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
+    const registry = readJson(`${ENVS_DIR}/${label}.json`);
+    if (!registry || !Array.isArray(registry.spec)) {
+      return res.status(404).json({ error: { code: 'not_found', message: 'No such environment in the registry' } });
+    }
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    // Redeploy from the registry's own spec (the exact branch refs live
+    // there; the hostname slug is lossy). Verify the registry spec still
+    // encodes to this label — a mismatched registry is corrupt, not a deploy.
+    const enc = encodeEnvLabel(registry.spec);
+    if (enc.error !== null || enc.label !== label) {
+      return res.status(409).json({ error: { code: 'registry_mismatch', message: 'Registry spec does not encode to this label — refusing to redeploy' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`, JSON.stringify({
+      action: 'create', spec: registry.spec, live: registry.live !== false,
+      ...(Number.isInteger(registry.ttl_hours) ? { ttl_hours: registry.ttl_hours } : {}),
+      requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: multi-env refresh requested', { label });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  // Activity timeline + errors view for the Environments section — events
+  // ingested from the box by ingestEnvEvents (see lib/env-events.ts).
+  router.get('/test-env/env-events', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-events:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const limitRaw = Number(req.query.limit ?? 100);
+    const limit = Number.isInteger(limitRaw) && limitRaw >= 1 && limitRaw <= 500 ? limitRaw : 100;
+    let q = supabase.from('se_env_events')
+      .select('id, ts, kind, env_label, detail, meta')
+      .order('ts', { ascending: false })
+      .limit(limit);
+    if (req.query.env !== undefined) {
+      const env = envLabelParam(req.query.env);
+      if (!env) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
+      q = q.eq('env_label', env);
+    }
+    if (req.query.kind !== undefined) {
+      const kinds = String(req.query.kind).split(',').filter((k) => /^[a-z][a-z0-9_]{0,31}$/.test(k));
+      if (kinds.length === 0) return res.status(422).json({ error: { code: 'invalid_input', message: 'Bad kind filter' } });
+      q = q.in('kind', kinds);
+    }
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: { code: 'query_failed', message: 'Could not load env events' } });
+    res.json({ events: data ?? [] });
   });
 
   // ── Project memory: review + human approval (memory-poisoning gate) ────────

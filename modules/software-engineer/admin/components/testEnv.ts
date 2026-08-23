@@ -101,6 +101,29 @@ export const teardownTestEnv = (profile: TestEnvProfile) =>
 export const fetchRelated = (profile: TestEnvProfile, projectId: string, repo: string, number: number) =>
   testEnvApi(`/test-env/related?${new URLSearchParams({ profile, project_id: projectId, repo, number: String(number) })}`);
 
+// ── Hostname-keyed multi envs (lfx profile — spec §4.3 phase 2) ──────────────
+// The label is ALWAYS computed server-side from the spec (canonical grammar
+// encode); the client never invents one. Teardown/refresh take a label the
+// server validated against the same grammar before any file path is built.
+export const listEnvs = () => testEnvApi('/test-env/envs');
+export const createEnv = (spec: ({ repo: string; pr: number } | { repo: string; branch: string })[], live: boolean, ttlHours?: number) =>
+  testEnvApi('/test-env/envs', {
+    method: 'POST',
+    body: JSON.stringify({ spec, live: live === true, ...(ttlHours !== undefined ? { ttl_hours: ttlHours } : {}) }),
+  });
+export const teardownEnv = (label: string) =>
+  testEnvApi(`/test-env/envs/${encodeURIComponent(label)}`, { method: 'DELETE' });
+export const refreshEnv = (label: string) =>
+  testEnvApi(`/test-env/envs/${encodeURIComponent(label)}/refresh`, { method: 'POST', body: '{}' });
+export const fetchEnvEvents = (opts: { env?: string; kind?: string; limit?: number } = {}) => {
+  const qs = new URLSearchParams();
+  if (opts.env) qs.set('env', opts.env);
+  if (opts.kind) qs.set('kind', opts.kind);
+  if (opts.limit) qs.set('limit', String(opts.limit));
+  const q = qs.toString();
+  return testEnvApi(`/test-env/env-events${q ? `?${q}` : ''}`);
+};
+
 /**
  * Polling status hook shared by every test-env surface. Cadence follows what
  * the panel is watching: 6s through a deploy cycle, 12s while ready in live
