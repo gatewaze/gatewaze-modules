@@ -34,12 +34,16 @@
  * Custom tags (we set env=<label> on every session) are NOT a dimension in the
  * export API — they are a dashboard filter only. The API's dimensions are
  * Browser, Device, Country/Region, OS, Source, Medium, Campaign, Channel and
- * URL. So attribution rides `URL`: every env has its own hostname, so when the
- * URL values carry a host we can group by env for free. They may instead be
- * bare paths, which are identical across envs; `attributeByEnv` returns null
- * in that case and the UI shows project-wide totals rather than inventing
- * per-env numbers. Replays themselves stay in Clarity — there is no public
- * API for session recordings — hence the deep link.
+ * URL. So attribution rides the URL dimension, and CONFIRMED AGAINST A LIVE
+ * RESPONSE (2026-08-23) it works: the column comes back as `Url` (not `URL`,
+ * whatever the docs say) carrying the full absolute URL including the
+ * hostname, and every env has its own hostname. A `Url: null` summary row
+ * appears alongside and is skipped. The bare-path fallback below is kept
+ * anyway — if Clarity ever changes to paths, `attributeByEnv` returns null and
+ * the UI shows project-wide totals rather than inventing per-env numbers.
+ *
+ * Replays themselves stay in Clarity — there is no public API for session
+ * recordings — hence the deep link.
  *
  * SECRET HANDLING
  * ---------------
