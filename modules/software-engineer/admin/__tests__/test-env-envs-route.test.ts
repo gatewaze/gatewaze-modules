@@ -382,6 +382,90 @@ describe('POST /test-env/envs/:label/refresh', () => {
   });
 });
 
+describe('POST /test-env/envs/root-assignment', () => {
+  const RA_REQ = '/staging-control/envs/requests/root-assignment.request.json';
+
+  it('writes an assign-root request for a ready env', async () => {
+    seedEnv('lfx--newsletter-80');
+    const h = mount(mockSupabase()).handler('POST /test-env/envs/root-assignment');
+    const res = mockRes();
+    await h(request({ body: { env: 'lfx--newsletter-80' } }), res);
+    expect(res.statusCode).toBe(202);
+    const [path, payload] = vfs.writes[0];
+    expect(path).toBe(RA_REQ);
+    expect(payload).toMatchObject({ action: 'assign-root', env: 'lfx--newsletter-80', requested_by: 'user-1' });
+  });
+
+  it('accepts the literal "primary" (restore) without needing a registry entry', async () => {
+    const h = mount(mockSupabase()).handler('POST /test-env/envs/root-assignment');
+    const res = mockRes();
+    await h(request({ body: { env: 'primary' } }), res);
+    expect(res.statusCode).toBe(202);
+    expect(vfs.writes[0][1]).toMatchObject({ action: 'assign-root', env: 'primary' });
+  });
+
+  it('rejects invalid env values before any file path is built', async () => {
+    const h = mount(mockSupabase()).handler('POST /test-env/envs/root-assignment');
+    for (const env of ['../etc', 'root-assignment', 'lfx--h-abcdef0123', 'LFX--NEWSLETTER-80', '', undefined]) {
+      const res = mockRes();
+      await h(request({ body: { env } }), res);
+      expect(res.statusCode).toBe(422);
+    }
+    expect(vfs.writes).toEqual([]);
+  });
+
+  it('404s an unknown/reaped env and 409s a non-ready one', async () => {
+    const h = mount(mockSupabase()).handler('POST /test-env/envs/root-assignment');
+    const res404 = mockRes();
+    await h(request({ body: { env: 'lfx--newsletter-99' } }), res404);
+    expect(res404.statusCode).toBe(404);
+    seedEnv('lfx--newsletter-80', { status: 'reaped' }, { state: 'reaped', detail: '', urls: null, updated_at: 'x' });
+    const resReaped = mockRes();
+    await h(request({ body: { env: 'lfx--newsletter-80' } }), resReaped);
+    expect(resReaped.statusCode).toBe(404);
+    seedEnv('lfx--newsletter-81', {}, { state: 'building-app', detail: '', urls: null, updated_at: 'x' });
+    const res409 = mockRes();
+    await h(request({ body: { env: 'lfx--newsletter-81' } }), res409);
+    expect(res409.statusCode).toBe(409);
+    expect(vfs.writes).toEqual([]);
+  });
+
+  it('409s while a root assignment is already pending and requires super-admin', async () => {
+    seedEnv('lfx--newsletter-80');
+    vfs.files.set(RA_REQ, JSON.stringify({ action: 'assign-root' }));
+    vfs.writes.length = 0;
+    const busy = mockRes();
+    await mount(mockSupabase()).handler('POST /test-env/envs/root-assignment')(
+      request({ body: { env: 'lfx--newsletter-80' } }), busy);
+    expect(busy.statusCode).toBe(409);
+    vfs.files.delete(RA_REQ);
+    const forb = mockRes();
+    await mount(mockSupabase('admin')).handler('POST /test-env/envs/root-assignment')(
+      request({ body: { env: 'lfx--newsletter-80' } }), forb);
+    expect(forb.statusCode).toBe(403);
+    expect(vfs.writes).toEqual([]);
+  });
+
+  it('GET /test-env/envs reports the assignment and never lists root-assignment as an env', async () => {
+    seedEnv('lfx--newsletter-80');
+    vfs.files.set('/staging-control/envs/root-assignment.json', JSON.stringify({ env: 'lfx--newsletter-80' }));
+    vfs.files.set('/staging-control/envs/root-assignment.status.json', JSON.stringify({ state: 'done', detail: 'lfx.pr-view.com serves lfx--newsletter-80', updated_at: 'x' }));
+    const h = mount(mockSupabase()).handler('GET /test-env/envs');
+    const res = mockRes();
+    await h(request(), res);
+    expect(res.body.root).toMatchObject({ env: 'lfx--newsletter-80', pending: false });
+    expect(res.body.root.status.state).toBe('done');
+    expect(res.body.envs.map((e: any) => e.label)).toEqual(['lfx--newsletter-80']);
+  });
+
+  it('GET /test-env/envs defaults the assignment to primary when no pointer exists', async () => {
+    const h = mount(mockSupabase()).handler('GET /test-env/envs');
+    const res = mockRes();
+    await h(request(), res);
+    expect(res.body.root).toMatchObject({ env: 'primary' });
+  });
+});
+
 describe('GET /test-env/env-events', () => {
   it('422s a bad env filter and a bad kind filter', async () => {
     const h = mount(mockSupabase()).handler('GET /test-env/env-events');
