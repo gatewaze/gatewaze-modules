@@ -568,6 +568,12 @@ export function mountAdminRoutes(router, deps) {
     if (!(await requireSuperAdminBearer(req, res))) return;
     const label = envLabelParam(req.params.label);
     if (!label) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
+    // HARD GUARANTEE: the env serving lfx.pr-view.com is teardown-proof. The
+    // host agent refuses too (authoritative) — this is the fast client-side
+    // 409 so the request file is never even written.
+    if (rootAssignment().env === label) {
+      return res.status(409).json({ error: { code: 'root_holder', message: 'This environment holds the root domain (lfx.pr-view.com) — demote first: restore the primary at root, then tear down' } });
+    }
     if (envPending(label)) {
       return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
     }

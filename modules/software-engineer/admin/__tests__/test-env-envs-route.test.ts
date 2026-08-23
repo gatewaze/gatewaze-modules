@@ -332,6 +332,27 @@ describe('DELETE /test-env/envs/:label', () => {
     expect(payload).toMatchObject({ action: 'teardown', requested_by: 'user-1' });
   });
 
+  it('409s (root_holder) teardown of the env holding the root domain — no request file written', async () => {
+    seedEnv('lfx--newsletter-80');
+    seedEnv('lfx--newsletter-81');
+    vfs.files.set('/staging-control/envs/root-assignment.json', JSON.stringify({ env: 'lfx--newsletter-80' }));
+    vfs.writes.length = 0;
+    const h = mount(mockSupabase()).handler('DELETE /test-env/envs/:label');
+    const res = mockRes();
+    await h(request({ params: { label: 'lfx--newsletter-80' } }), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error.code).toBe('root_holder');
+    expect(res.body.error.message).toContain('lfx.pr-view.com');
+    expect(res.body.error.message).toContain('demote');
+    expect(vfs.writes).toEqual([]);
+    // A non-holding env still tears down normally while the assignment stands.
+    const res2 = mockRes();
+    await h(request({ params: { label: 'lfx--newsletter-81' } }), res2);
+    expect(res2.statusCode).toBe(202);
+    expect(vfs.writes[0][0]).toBe(REQ('lfx--newsletter-81'));
+    expect(vfs.writes[0][1]).toMatchObject({ action: 'teardown' });
+  });
+
   it('422s any label that fails the shape or grammar gate BEFORE building a path', async () => {
     const h = mount(mockSupabase()).handler('DELETE /test-env/envs/:label');
     for (const label of ['../etc/passwd', 'lfx--h-abcdef0123', 'gatewaze--gw-3', 'LFX--NEWSLETTER-80', 'lfx--bogus-7', 'a'.repeat(70)]) {
