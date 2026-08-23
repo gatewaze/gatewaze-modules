@@ -20,7 +20,7 @@
  * malicious line can neither break ingestion nor smuggle oversized/unshaped
  * content into the DB and the admin UI.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const KIND_RE = /^[a-z][a-z0-9_]{0,31}$/;
 const LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,52}[a-z0-9])?$/;
@@ -81,14 +81,13 @@ export async function ingestEnvEvents(supabase, path = '/staging-control/events.
   ingestInFlight = true;
   try {
     if (!existsSync(path)) return 0;
-    const size = statSync(path).size;
+    // Single read; the size check runs against the bytes actually read (no
+    // stat-then-read window — the file is append-only between rotations).
+    const buf = readFileSync(path);
     const { data: cur } = await supabase.from('se_env_events_cursor').select('byte_offset').eq('id', 1).maybeSingle();
     let offset = Number(cur?.byte_offset ?? 0);
-    if (!Number.isFinite(offset) || offset < 0 || offset > size) offset = 0; // rotated/truncated → restart
-    if (offset === size) return 0;
-    const buf = readFileSync(path);
-    // The file can grow between statSync and readFileSync; only consume what
-    // we read, and never past the last complete line.
+    if (!Number.isFinite(offset) || offset < 0 || offset > buf.length) offset = 0; // rotated/truncated → restart
+    if (offset === buf.length) return 0;
     const { rows, consumed } = sliceEvents(buf, offset);
     if (consumed === 0) return 0;
     if (rows.length > 0) {
