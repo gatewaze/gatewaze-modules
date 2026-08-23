@@ -101,7 +101,10 @@ function EnvCard({ entry, now, onAction, root }) {
             <Button variant="soft" size="xs" disabled={busy || active || root?.pending}
               title="Serve this environment at the root domain lfx.pr-view.com (the primary moves to lfx--main.pr-view.com)"
               onClick={() => act('Root assignment', assignRoot,
-                `Serve ${label} at lfx.pr-view.com?\n\nThe flipped apps restart — expect a ~30s blip on the root URL and on this env. The current occupant stays reachable (the primary at lfx--main.pr-view.com).`)}>
+                `Serve ${label} at lfx.pr-view.com?\n\nThe flipped apps restart — expect a ~30s blip on the root URL and on this env. The current occupant stays reachable (the primary at lfx--main.pr-view.com).`
+                + (registry?.hostnames?.api === `${label}-api.pr-view.com`
+                  ? `\n\nNOTE: this env runs its own newsletter service, so the SHARED API host lfx-api.pr-view.com will also route newsletter traffic (including unsubscribe links and tracking pixels in already-sent emails) to this env's PR code until the primary is restored.`
+                  : ''))}>
               <GlobeAltIcon className="size-3.5 mr-1" />Serve at root
             </Button>
           )}
