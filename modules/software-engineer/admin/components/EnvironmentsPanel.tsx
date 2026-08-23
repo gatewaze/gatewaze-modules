@@ -19,6 +19,7 @@ import {
 } from '@heroicons/react/24/outline';
 import TestEnvOverviewPanel from './TestEnvOverviewPanel';
 import EnvLogExplorer from './EnvLogExplorer';
+import { ClaritySignals } from './ClaritySignals';
 import { listEnvs, createEnv, teardownEnv, refreshEnv, assignRoot, parseTestEnvDetail, relTime, testEnvPrUrl, testEnvCommitUrl } from './testEnv';
 import {
   ENV_STEPS, ENV_ACTIVE_STATES, envStepPct, envStateBadge, specChips, fmtCountdown,
@@ -346,6 +347,10 @@ export default function EnvironmentsPanel({ projects }) {
           <Button variant="soft" size="xs" onClick={restorePrimary}>Restore primary at root</Button>
         )}
       </div>
+      {/* Behaviour signals from the Clarity session replay the routing layer
+          injects into every env page. Self-contained and self-fetching, and it
+          renders nothing when the export feed is unconfigured. */}
+      <ClaritySignals />
       {/* Primary slot — pinned, never expires, its own agent + controls. */}
       <TestEnvOverviewPanel profile="lfx" projects={projects} />
       {envs.map((e) => <EnvCard key={e.label} entry={e} now={now} onAction={load} root={root} />)}
