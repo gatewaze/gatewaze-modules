@@ -77,31 +77,9 @@ export const fmtCountdown = (expiresAt: string | null | undefined, now: number):
   return `${h}h ${m % 60}m`;
 };
 
-// Activity-timeline kind groupings for the filter chips. "errors" is the
-// spec's Errors view: collector-exported service errors plus the lifecycle
-// failures an operator would triage the same way.
-export const EVENT_FILTERS: Record<string, { label: string; kinds: string[] | null }> = {
-  all: { label: 'All', kinds: null },
-  lifecycle: { label: 'Lifecycle', kinds: ['create', 'ready', 'fail', 'reap', 'teardown', 'admission_refused', 'teardown_refused', 'reap_refused', 'root_promote', 'root_demote', 'root_reassert', 'root_boot_restore', 'root_demote_fallback'] },
-  visits: { label: 'Visits', kinds: ['visit'] },
-  logins: { label: 'Logins', kinds: ['login_success', 'login_failure'] },
-  errors: { label: 'Errors', kinds: ['service_error', 'fail', 'admission_refused', 'login_failure', 'teardown_refused', 'reap_refused', 'root_demote_fallback'] },
-};
-
-export const eventKindTone = (kind: string): 'green' | 'red' | 'gray' | 'blue' | 'amber' => {
-  if (kind === 'ready' || kind === 'login_success' || kind === 'root_boot_restore') return 'green';
-  if (kind === 'fail' || kind === 'service_error' || kind === 'login_failure' || kind === 'root_demote_fallback') return 'red';
-  if (kind === 'admission_refused' || kind === 'reap' || kind === 'teardown_refused' || kind === 'reap_refused') return 'amber';
-  if (kind === 'visit') return 'gray';
-  return 'blue';
-};
-
-/** Compact meta rendering for an event row ("count=3 · host=x"), capped. */
-export const fmtEventMeta = (meta: unknown): string | null => {
-  if (typeof meta !== 'object' || meta === null || Array.isArray(meta)) return null;
-  const parts = Object.entries(meta as Record<string, unknown>)
-    .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v))
-    .slice(0, 6)
-    .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`);
-  return parts.length ? parts.join(' · ') : null;
-};
+// The event-kind taxonomy that used to live here (EVENT_FILTERS /
+// eventKindTone / fmtEventMeta, added with the #213 timeline) moved to
+// lib/env-event-kinds.ts when the timeline became the log explorer: the API's
+// summary aggregation needs the same "what counts as an error" answer the UI
+// uses, and two copies of that would drift. See admin/components/envLog.ts for
+// the presentation layer built on it.
