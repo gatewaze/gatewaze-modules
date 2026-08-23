@@ -75,8 +75,13 @@ describe('fmtCountdown', () => {
 
 describe('activity timeline groupings', () => {
   it('the Errors filter covers service errors, lifecycle failures and refusals', () => {
-    for (const k of ['service_error', 'fail', 'admission_refused']) {
+    for (const k of ['service_error', 'fail', 'admission_refused', 'teardown_refused', 'reap_refused', 'root_demote_fallback']) {
       expect(EVENT_FILTERS.errors.kinds).toContain(k);
+    }
+  });
+  it('the Lifecycle filter covers root-domain guarantee events', () => {
+    for (const k of ['teardown_refused', 'reap_refused', 'root_promote', 'root_demote', 'root_reassert', 'root_boot_restore', 'root_demote_fallback']) {
+      expect(EVENT_FILTERS.lifecycle.kinds).toContain(k);
     }
   });
   it('every non-all filter names only shaped kinds', () => {
@@ -88,6 +93,10 @@ describe('activity timeline groupings', () => {
   it('tones: failures red, refusals amber, visits gray', () => {
     expect(eventKindTone('service_error')).toBe('red');
     expect(eventKindTone('admission_refused')).toBe('amber');
+    expect(eventKindTone('teardown_refused')).toBe('amber');
+    expect(eventKindTone('reap_refused')).toBe('amber');
+    expect(eventKindTone('root_demote_fallback')).toBe('red');
+    expect(eventKindTone('root_boot_restore')).toBe('green');
     expect(eventKindTone('visit')).toBe('gray');
     expect(eventKindTone('ready')).toBe('green');
   });
