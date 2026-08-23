@@ -33,6 +33,31 @@ const REAL_EMPTY = [
   { metricName: 'EngagementTime', information: [] },
 ];
 
+/**
+ * The REAL populated shape, recorded from a second live call on 2026-08-23
+ * once sessions had landed. Two things here are not what Microsoft's docs
+ * show and both matter:
+ *   - the URL dimension column is named `Url`, not `URL`;
+ *   - it carries the FULL absolute URL including the hostname, which is what
+ *     makes per-environment attribution possible at all (custom tags are not
+ *     an export-API dimension);
+ *   - a summary row can carry `Url: null`, and the user-count column is
+ *     `distinctUserCount` (the docs say `distantUserCount`).
+ * Headless-browser visits land in `totalBotSessionCount`, not
+ * `totalSessionCount` — Clarity classifies them as bots, correctly.
+ */
+const REAL_POPULATED = [
+  { metricName: 'DeadClickCount', information: [] },
+  {
+    metricName: 'Traffic',
+    information: [
+      { totalSessionCount: 0, totalBotSessionCount: 0, distinctUserCount: 1, pagesPerSessionPercentage: 1, Url: null },
+      { totalSessionCount: 5, totalBotSessionCount: 2, distinctUserCount: 2, pagesPerSessionPercentage: 1, Url: 'https://lfx.pr-view.com/' },
+      { totalSessionCount: 3, totalBotSessionCount: 1, distinctUserCount: 1, pagesPerSessionPercentage: 1, Url: 'https://lfx--newsletter-80.pr-view.com/' },
+    ],
+  },
+];
+
 /** Populated shape, per Microsoft's documented example plus our URL dimension. */
 const POPULATED = [
   {
@@ -134,6 +159,24 @@ describe('envLabelForHost', () => {
   it('ignores hosts that are not ours', () => {
     expect(envLabelForHost('evil.example.com', null)).toBeNull();
     expect(envLabelForHost('lfx-auth.pr-view.com', null)).toBeNull();
+  });
+});
+
+describe('attributeByEnv against the real recorded response', () => {
+  it('groups by env from the `Url` column, resolving the root through the assignment', () => {
+    expect(attributeByEnv(REAL_POPULATED, 'lfx--self-serve-1688--newsletter-63')).toEqual({
+      'lfx--self-serve-1688--newsletter-63': { Traffic: 5 },
+      'lfx--newsletter-80': { Traffic: 3 },
+    });
+  });
+
+  it('ignores the Url:null summary row rather than counting it as an env', () => {
+    const byEnv = attributeByEnv(REAL_POPULATED, null);
+    expect(Object.keys(byEnv ?? {})).not.toContain('null');
+  });
+
+  it('totals sessions across the real rows, summary row included', () => {
+    expect(totalSessions(REAL_POPULATED)).toBe(8);
   });
 });
 
