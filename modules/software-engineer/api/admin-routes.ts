@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { encodeEnvLabel, parseEnvLabel, envTierCheck } from '../lib/env-label.js';
 import { ingestEnvEvents } from '../lib/env-events.js';
+import { parseEventQuery, summarizeEvents, SUMMARY_SCAN_CAP } from '../lib/env-events-query.js';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
@@ -616,31 +617,93 @@ export function mountAdminRoutes(router, deps) {
     res.status(202).json({ label, ...envEntry(label) });
   });
 
-  // Activity timeline + errors view for the Environments section — events
-  // ingested from the box by ingestEnvEvents (see lib/env-events.ts).
+  // Log explorer for the Environments section — events ingested from the box
+  // by ingestEnvEvents (see lib/env-events.ts). Two modes on one route:
+  //
+  //   ?summary=1  → the at-a-glance strip: per-env counts + sparklines over the
+  //                 selected window, aggregated in-process from a CAPPED scan.
+  //   default     → a page of rows, newest-first, keyset-paged on (ts, id).
+  //
+  // Every filter value that reaches PostgREST is re-derived from a validated
+  // shape by parseEventQuery (lib/env-events-query.ts) — see the injection
+  // notes there. No caller string is ever concatenated into a filter verbatim.
+  const applyEventFilters = (q, query) => {
+    if (query.envFilterPresent) {
+      if (query.envs.length > 0 && query.includeUnattributed) {
+        // Both legs are built from labels that already matched ENV_LABEL_SHAPE
+        // (no comma/paren/quote/dot possible), so nothing here can break out of
+        // the .in.() list. NOTE: the keyset cursor below adds a SECOND .or().
+        // postgrest-js appends each as its own `or=` query param and PostgREST
+        // ANDs top-level params, so the result is
+        //   (env matches OR unattributed) AND (cursor boundary)
+        // which is what we want. Do not "tidy" the two into one .or().
+        q = q.or(`env_label.is.null,env_label.in.(${query.envs.join(',')})`);
+      } else if (query.envs.length > 0) {
+        q = q.in('env_label', query.envs);
+      } else {
+        q = q.is('env_label', null);
+      }
+    }
+    if (query.kinds.length > 0) q = q.in('kind', query.kinds);
+    if (query.since) q = q.gte('ts', query.since);
+    if (query.until) q = q.lte('ts', query.until);
+    return q;
+  };
+
   router.get('/test-env/env-events', async (req, res) => {
-    if (!rateLimit(`se-admin:test-env-events:${clientIp(req)}`, 120, 60_000)) {
+    if (!rateLimit(`se-admin:test-env-events:${clientIp(req)}`, 240, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     }
-    const limitRaw = Number(req.query.limit ?? 100);
-    const limit = Number.isInteger(limitRaw) && limitRaw >= 1 && limitRaw <= 500 ? limitRaw : 100;
-    let q = supabase.from('se_env_events')
-      .select('id, ts, kind, env_label, detail, meta')
-      .order('ts', { ascending: false })
-      .limit(limit);
-    if (req.query.env !== undefined) {
-      const env = envLabelParam(req.query.env);
-      if (!env) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
-      q = q.eq('env_label', env);
+    const parsed = parseEventQuery(req.query ?? {});
+    if (!parsed.ok) return res.status(422).json({ error: { code: 'invalid_input', message: parsed.message } });
+    const query = parsed.query;
+
+    if (query.summary) {
+      // The window must be bounded for the buckets to mean anything; default
+      // to the last hour when the caller gave no `since`.
+      const to = query.until ?? new Date().toISOString();
+      const from = query.since ?? new Date(Date.parse(to) - 3_600_000).toISOString();
+      let sq = supabase.from('se_env_events')
+        .select('ts, kind, env_label')
+        .gte('ts', from).lte('ts', to)
+        .order('ts', { ascending: false })
+        .limit(SUMMARY_SCAN_CAP + 1);
+      // Reuse the kind/env legs only — the window is explicit above.
+      sq = applyEventFilters(sq, { ...query, since: null, until: null });
+      if (query.search) sq = sq.ilike('detail', `%${query.search}%`);
+      const { data, error } = await sq;
+      if (error) return res.status(500).json({ error: { code: 'query_failed', message: 'Could not summarise env events' } });
+      const rows = data ?? [];
+      const truncated = rows.length > SUMMARY_SCAN_CAP;
+      return res.json({
+        summary: summarizeEvents(truncated ? rows.slice(0, SUMMARY_SCAN_CAP) : rows,
+          { from, to, buckets: query.buckets, truncated }),
+      });
     }
-    if (req.query.kind !== undefined) {
-      const kinds = String(req.query.kind).split(',').filter((k) => /^[a-z][a-z0-9_]{0,31}$/.test(k));
-      if (kinds.length === 0) return res.status(422).json({ error: { code: 'invalid_input', message: 'Bad kind filter' } });
-      q = q.in('kind', kinds);
+
+    let q = applyEventFilters(
+      supabase.from('se_env_events').select('id, ts, kind, env_label, detail, meta'),
+      query,
+    );
+    if (query.search) q = q.ilike('detail', `%${query.search}%`);
+    if (query.beforeTs && query.beforeId !== null) {
+      // Keyset page boundary. Both values are OUR re-serialised ISO instant and
+      // a parsed safe integer, not caller strings (parseEventQuery).
+      q = q.or(`ts.lt.${query.beforeTs},and(ts.eq.${query.beforeTs},id.lt.${query.beforeId})`);
     }
+    // Fetch one extra row to answer has_more without a second count query.
+    q = q.order('ts', { ascending: false }).order('id', { ascending: false }).limit(query.limit + 1);
     const { data, error } = await q;
     if (error) return res.status(500).json({ error: { code: 'query_failed', message: 'Could not load env events' } });
-    res.json({ events: data ?? [] });
+    const all = data ?? [];
+    const has_more = all.length > query.limit;
+    const events = has_more ? all.slice(0, query.limit) : all;
+    const last = events[events.length - 1];
+    res.json({
+      events,
+      has_more,
+      next_cursor: has_more && last ? { before_ts: last.ts, before_id: last.id } : null,
+    });
   });
 
   // ── Project memory: review + human approval (memory-poisoning gate) ────────

@@ -18,10 +18,10 @@ import {
   ChevronUpIcon, ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import TestEnvOverviewPanel from './TestEnvOverviewPanel';
-import { listEnvs, createEnv, teardownEnv, refreshEnv, assignRoot, fetchEnvEvents, parseTestEnvDetail, relTime, testEnvPrUrl, testEnvCommitUrl } from './testEnv';
+import EnvLogExplorer from './EnvLogExplorer';
+import { listEnvs, createEnv, teardownEnv, refreshEnv, assignRoot, parseTestEnvDetail, relTime, testEnvPrUrl, testEnvCommitUrl } from './testEnv';
 import {
   ENV_STEPS, ENV_ACTIVE_STATES, envStepPct, envStateBadge, specChips, fmtCountdown,
-  EVENT_FILTERS, eventKindTone, fmtEventMeta,
 } from './envCards';
 import { encodeEnvLabel, envTierCheck, ENV_TIER_A } from '../../lib/env-label.js';
 
@@ -294,70 +294,13 @@ function NewEnvForm({ onRequested, disabled }) {
   );
 }
 
-// ── activity / errors timeline ───────────────────────────────────────────────
-function ActivityTimeline({ envLabels, now, refreshKey }) {
-  const [filter, setFilter] = useState('all');
-  const [envFilter, setEnvFilter] = useState('');
-  const [events, setEvents] = useState(null);
-
-  const load = useCallback(() => {
-    const kinds = EVENT_FILTERS[filter]?.kinds;
-    fetchEnvEvents({
-      ...(envFilter ? { env: envFilter } : {}),
-      ...(kinds ? { kind: kinds.join(',') } : {}),
-      limit: 50,
-    }).then((r) => setEvents(r?.events ?? [])).catch(() => setEvents(null));
-  }, [filter, envFilter]);
-  useEffect(() => { load(); }, [load, refreshKey]);
-
-  if (events === null) return null; // endpoint unavailable (e.g. migration not applied yet) — hide quietly
-  return (
-    <div className="rounded-md border border-[var(--gray-5)] px-3 py-2">
-      <div className="flex items-center gap-2 flex-wrap text-[11px]">
-        <span className="text-xs font-medium text-[var(--gray-11)]">Activity</span>
-        {Object.entries(EVENT_FILTERS).map(([key, f]) => (
-          <button
-            key={key}
-            onClick={() => setFilter(key)}
-            className={`rounded px-1.5 py-0.5 border ${filter === key ? 'border-blue-500 text-blue-500' : 'border-[var(--gray-5)] text-[var(--gray-10)] hover:text-[var(--gray-12)]'}`}
-          >
-            {f.label}
-          </button>
-        ))}
-        {envLabels.length > 0 && (
-          <select value={envFilter} onChange={(e) => setEnvFilter(e.target.value)} className="ml-auto rounded border px-1 py-0.5 text-[11px]">
-            <option value="">all envs</option>
-            {envLabels.map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
-        )}
-      </div>
-      {events.length === 0 ? (
-        <div className="mt-1.5 text-[11px] text-[var(--gray-10)]">No events yet.</div>
-      ) : (
-        <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] max-h-64 overflow-y-auto">
-          {events.map((e) => (
-            <div key={e.id} className="flex items-baseline gap-2 flex-wrap">
-              <span className="w-14 shrink-0 text-[var(--gray-10)] whitespace-nowrap" title={e.ts}>{relTime(e.ts, now)}</span>
-              <Badge color={eventKindTone(e.kind)} variant="soft" size="1">{e.kind}</Badge>
-              {e.env_label && <span className="font-mono text-[var(--gray-11)]">{e.env_label}</span>}
-              {e.detail && <span className="text-[var(--gray-11)] break-words">{e.detail}</span>}
-              {fmtEventMeta(e.meta) && <span className="text-[var(--gray-10)]">{fmtEventMeta(e.meta)}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── the section ──────────────────────────────────────────────────────────────
 export default function EnvironmentsPanel({ projects }) {
   const [info, setInfo] = useState(null);
-  const [tick, setTick] = useState(0);
   const now = useNow();
 
   const load = useCallback(() => {
-    listEnvs().then((r) => { setInfo(r); setTick((t) => t + 1); }).catch(() => setInfo(null));
+    listEnvs().then(setInfo).catch(() => setInfo(null));
   }, []);
   const anyActive = !!info?.envs?.some((e) => e.pending || ENV_ACTIVE_STATES.has(e.status?.state)) || !!info?.root?.pending;
   useEffect(() => { load(); }, [load]);
@@ -407,7 +350,10 @@ export default function EnvironmentsPanel({ projects }) {
       <TestEnvOverviewPanel profile="lfx" projects={projects} />
       {envs.map((e) => <EnvCard key={e.label} entry={e} now={now} onAction={load} root={root} />)}
       <NewEnvForm onRequested={load} disabled={false} />
-      <ActivityTimeline envLabels={envs.map((e) => e.label)} now={now} refreshKey={tick} />
+      {/* The log explorer keeps its own filter/poll state in the URL; `tick` is
+          not threaded in on purpose — a registry poll should not reset the
+          reader's scroll position or drop their live-tail highlight. */}
+      <EnvLogExplorer envLabels={envs.map((e) => e.label)} now={now} />
     </section>
   );
 }
