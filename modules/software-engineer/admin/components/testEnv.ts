@@ -115,6 +115,9 @@ export const teardownEnv = (label: string) =>
   testEnvApi(`/test-env/envs/${encodeURIComponent(label)}`, { method: 'DELETE' });
 export const refreshEnv = (label: string) =>
   testEnvApi(`/test-env/envs/${encodeURIComponent(label)}/refresh`, { method: 'POST', body: '{}' });
+/** Assign lfx.pr-view.com to an env ("primary" restores the mainline slot). */
+export const assignRoot = (env: string) =>
+  testEnvApi('/test-env/envs/root-assignment', { method: 'POST', body: JSON.stringify({ env }) });
 export const fetchEnvEvents = (opts: { env?: string; kind?: string; limit?: number } = {}) => {
   const qs = new URLSearchParams();
   if (opts.env) qs.set('env', opts.env);

@@ -423,6 +423,20 @@ export function mountAdminRoutes(router, deps) {
     return parseEnvLabel(label).error === null ? label : null;
   };
 
+  // Root assignment (which env serves lfx.pr-view.com): a singleton pointer
+  // envs/root-assignment.json written only by the host agent; requests ride
+  // the same channel under the RESERVED filename "root-assignment" (never a
+  // valid env label — no lfx-- prefix, so it can't collide or be listed).
+  const rootAssignment = () => {
+    const cur = readJson(`${ENVS_DIR}/root-assignment.json`);
+    const env = typeof cur?.env === 'string' && cur.env ? cur.env : 'primary';
+    return {
+      env,
+      status: readJson(`${ENVS_DIR}/root-assignment.status.json`),
+      pending: envPending('root-assignment'),
+    };
+  };
+
   router.get('/test-env/envs', async (req, res) => {
     if (!rateLimit(`se-admin:test-env-envs:${clientIp(req)}`, 120, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
@@ -441,7 +455,46 @@ export function mountAdminRoutes(router, deps) {
         if (m && ENV_LABEL_RE.test(m[1]) && m[1].startsWith('lfx--')) labels.add(m[1]);
       }
     } catch { /* no requests dir yet */ }
-    res.json({ available: true, profile, cap: ENV_CAP, envs: [...labels].sort().map(envEntry) });
+    res.json({ available: true, profile, cap: ENV_CAP, root: rootAssignment(), envs: [...labels].sort().map(envEntry) });
+  });
+
+  // Choose which env serves the root domain lfx.pr-view.com. "primary"
+  // restores the pinned mainline slot. The host agent performs the flip
+  // (PCC_BASE_URL rewrite + app restarts + routing/IngressRoute regen); the
+  // displaced occupant stays reachable at its own hostname (the demoted
+  // primary at lfx--main.pr-view.com). Super-admin: this changes the URL the
+  // LFX team is actively using, with a ~30s blip on each flipped app.
+  router.post('/test-env/envs/root-assignment', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const raw = req.body?.env;
+    const target = raw === 'primary' ? 'primary' : envLabelParam(raw);
+    if (!target) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'env must be "primary" or a valid environment label' } });
+    }
+    if (target !== 'primary') {
+      const registry = readJson(`${ENVS_DIR}/${target}.json`);
+      if (!registry || registry.status === 'reaped') {
+        return res.status(404).json({ error: { code: 'not_found', message: 'No such (live) environment in the registry' } });
+      }
+      const st = readJson(`${ENVS_DIR}/${target}.status.json`);
+      if (st?.state !== 'ready') {
+        return res.status(409).json({ error: { code: 'not_ready', message: 'Environment must be ready to serve the root domain' } });
+      }
+    }
+    if (envPending('root-assignment')) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A root assignment is already in progress' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/root-assignment.request.json`, JSON.stringify({
+      action: 'assign-root', env: target, requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: root assignment requested', { env: target });
+    res.status(202).json({ root: rootAssignment() });
   });
 
   router.post('/test-env/envs', async (req, res) => {

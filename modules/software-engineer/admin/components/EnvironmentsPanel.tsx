@@ -18,7 +18,7 @@ import {
   ChevronUpIcon, ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import TestEnvOverviewPanel from './TestEnvOverviewPanel';
-import { listEnvs, createEnv, teardownEnv, refreshEnv, fetchEnvEvents, parseTestEnvDetail, relTime, testEnvPrUrl, testEnvCommitUrl } from './testEnv';
+import { listEnvs, createEnv, teardownEnv, refreshEnv, assignRoot, fetchEnvEvents, parseTestEnvDetail, relTime, testEnvPrUrl, testEnvCommitUrl } from './testEnv';
 import {
   ENV_STEPS, ENV_ACTIVE_STATES, envStepPct, envStateBadge, specChips, fmtCountdown,
   EVENT_FILTERS, eventKindTone, fmtEventMeta,
@@ -38,7 +38,7 @@ function useNow(ms = 10_000) {
 }
 
 // ── one env card ─────────────────────────────────────────────────────────────
-function EnvCard({ entry, now, onAction }) {
+function EnvCard({ entry, now, onAction, root }) {
   const { label, registry, status: st, pending } = entry;
   const [busy, setBusy] = useState(false);
   const badge = envStateBadge(st?.state, pending);
@@ -75,6 +75,11 @@ function EnvCard({ entry, now, onAction }) {
           </a>
         )}
         <Badge color={BADGE_COLOR[badge.color]} variant="soft" size="1">{badge.label}</Badge>
+        {root?.env === label && (
+          <Badge color="purple" variant="soft" size="1" title="This environment currently serves lfx.pr-view.com (TTL-exempt while assigned)">
+            serving lfx.pr-view.com
+          </Badge>
+        )}
         {registry?.live && !reaped && (
           <Badge color="green" variant="soft" size="1" title="Re-merged and refreshed automatically on every push">
             <BoltIcon className="size-3 mr-0.5" />Live
@@ -92,6 +97,14 @@ function EnvCard({ entry, now, onAction }) {
           {registry?.created_at && <span title={registry.created_at}>created {relTime(registry.created_at, now)}</span>}
           {registry?.last_activity_at && <span title={registry.last_activity_at}>active {relTime(registry.last_activity_at, now)}</span>}
           {updatedRel && <span title={st?.updated_at}>updated {updatedRel}</span>}
+          {ready && root?.env !== label && (
+            <Button variant="soft" size="xs" disabled={busy || active || root?.pending}
+              title="Serve this environment at the root domain lfx.pr-view.com (the primary moves to lfx--main.pr-view.com)"
+              onClick={() => act('Root assignment', assignRoot,
+                `Serve ${label} at lfx.pr-view.com?\n\nThe flipped apps restart — expect a ~30s blip on the root URL and on this env. The current occupant stays reachable (the primary at lfx--main.pr-view.com).`)}>
+              <GlobeAltIcon className="size-3.5 mr-1" />Serve at root
+            </Button>
+          )}
           <Button variant="soft" size="xs" onClick={() => act(reaped ? 'Redeploy' : 'Refresh', refreshEnv)} disabled={busy || active}
             title={reaped ? 'Re-create this environment from its registry spec' : 'Redeploy this environment from its registry spec'}>
             <ArrowPathIcon className="size-3.5 mr-1" />{reaped ? 'Redeploy' : 'Refresh'}
@@ -342,7 +355,7 @@ export default function EnvironmentsPanel({ projects }) {
   const load = useCallback(() => {
     listEnvs().then((r) => { setInfo(r); setTick((t) => t + 1); }).catch(() => setInfo(null));
   }, []);
-  const anyActive = !!info?.envs?.some((e) => e.pending || ENV_ACTIVE_STATES.has(e.status?.state));
+  const anyActive = !!info?.envs?.some((e) => e.pending || ENV_ACTIVE_STATES.has(e.status?.state)) || !!info?.root?.pending;
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     const interval = anyActive ? 6000 : 30000;
@@ -359,17 +372,36 @@ export default function EnvironmentsPanel({ projects }) {
   if (!info?.available) return <TestEnvOverviewPanel profile="lfx" projects={projects} />;
 
   const envs = info.envs ?? [];
+  const root = info.root ?? { env: 'primary', status: null, pending: false };
   const activeCount = envs.filter((e) => e.registry?.status !== 'reaped' && e.status?.state !== 'reaped').length;
+  const restorePrimary = async () => {
+    if (!window.confirm('Restore the primary env at lfx.pr-view.com?\n\nThe flipped apps restart — expect a ~30s blip. The displaced env stays reachable at its own hostname.')) return;
+    try { await assignRoot('primary'); toast.success('Root restore requested'); load(); }
+    catch (e) { toast.error(/403/.test(String(e?.message)) ? 'Super-admin access required' : `Root restore failed: ${e?.message ?? e}`); }
+  };
   return (
     <section className="mb-4 space-y-2">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">Environments</span>
         <Badge color="gray" variant="soft" size="1">lfx</Badge>
         <span className="text-[11px] text-[var(--gray-10)]">{activeCount}/{info.cap ?? 4} + primary</span>
+        <span className="text-[11px] text-[var(--gray-11)]" title="Which environment serves the root domain (root-assignment)">
+          lfx.pr-view.com → <span className="font-mono">{root.env === 'primary' ? 'primary' : root.env}</span>
+          {root.env !== 'primary' && <span className="text-[var(--gray-10)]"> · primary at lfx--main.pr-view.com</span>}
+        </span>
+        {root.pending && <Badge color="blue" variant="soft" size="1">root flip in progress</Badge>}
+        {!root.pending && root.status?.state === 'error' && (
+          <span className="text-[11px] text-red-600 dark:text-red-400 break-words" title={root.status?.detail}>
+            root assignment failed: {root.status?.detail}
+          </span>
+        )}
+        {root.env !== 'primary' && !root.pending && (
+          <Button variant="soft" size="xs" onClick={restorePrimary}>Restore primary at root</Button>
+        )}
       </div>
       {/* Primary slot — pinned, never expires, its own agent + controls. */}
       <TestEnvOverviewPanel profile="lfx" projects={projects} />
-      {envs.map((e) => <EnvCard key={e.label} entry={e} now={now} onAction={load} />)}
+      {envs.map((e) => <EnvCard key={e.label} entry={e} now={now} onAction={load} root={root} />)}
       <NewEnvForm onRequested={load} disabled={false} />
       <ActivityTimeline envLabels={envs.map((e) => e.label)} now={now} refreshKey={tick} />
     </section>
