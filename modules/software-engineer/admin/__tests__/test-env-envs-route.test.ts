@@ -342,7 +342,8 @@ describe('DELETE /test-env/envs/:label', () => {
     await h(request({ params: { label: 'lfx--newsletter-80' } }), res);
     expect(res.statusCode).toBe(409);
     expect(res.body.error.code).toBe('root_holder');
-    expect(res.body.error.message).toMatch(/lfx\.pr-view\.com.*demote/i);
+    expect(res.body.error.message).toContain('lfx.pr-view.com');
+    expect(res.body.error.message).toContain('demote');
     expect(vfs.writes).toEqual([]);
     // A non-holding env still tears down normally while the assignment stands.
     const res2 = mockRes();
