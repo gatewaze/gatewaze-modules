@@ -9,7 +9,8 @@
  *   - scripts/staging-multienv.sh + lib-lfx-env.sh (env_event):
  *       create · ready · fail · reap · reap_refused · teardown ·
  *       teardown_refused · admission_refused · root_promote · root_demote ·
- *       root_demote_fallback · root_reassert · root_boot_restore
+ *       root_demote_fallback · root_reassert · root_boot_restore ·
+ *       root_alias_failed
  *   - scripts/staging-provisioner.py: provision
  *   - scripts/staging-prview-tailer.sh: visit · login_success · login_failure ·
  *       service_error
@@ -50,6 +51,17 @@ export const EVENT_KINDS: Record<string, EventKindSpec> = {
   root_demote_fallback: { category: 'lifecycle', severity: 'error', label: 'root demote (fallback)' },
   root_reassert: { category: 'lifecycle', severity: 'info', label: 'root reassert', plural: 'root reasserts' },
   root_boot_restore: { category: 'lifecycle', severity: 'ok', label: 'root restored' },
+  // A displaced primary could not be reached at its lfx--main.pr-view.com alias:
+  // the URL a human was told to use is dead. Error severity, so it lands in the
+  // Errors group and the summary strip's shouting count — the same treatment as
+  // root_demote_fallback, and the reason this needs registering at all (an
+  // unknown kind degrades to lifecycle/info, which reads as benign).
+  root_alias_failed: {
+    category: 'lifecycle',
+    severity: 'error',
+    label: 'root alias failed',
+    plural: 'root alias failures',
+  },
   // ── access ─────────────────────────────────────────────────────────────────
   visit: { category: 'access', severity: 'muted', label: 'visit', plural: 'visits' },
   login_success: { category: 'access', severity: 'ok', label: 'login', plural: 'logins' },

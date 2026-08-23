@@ -54,23 +54,34 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/016_arch_review_flow.sql',
     'migrations/017_pr_submit_mode.sql',
     'migrations/018_phase_gates.sql',
+    'migrations/018_runs_created_at_cost_idx.sql',
     'migrations/019_credential_model.sql',
     'migrations/020_reporter_notifications.sql',
     'migrations/021_sdk_cost_and_model_usage.sql',
     'migrations/022_model_usage_view.sql',
     'migrations/023_decisions.sql',
     'migrations/024_external_pr_kind.sql',
-    // 025 and 026 are deliberately absent: they were applied to staging out of
-    // band and are recorded in module_migrations there, and 025 is not
-    // re-runnable (bare `create table`), so declaring them now is the owning
-    // change's call, not this one's. 027 IS declared because it is fully
-    // idempotent (create table/index if not exists, drop policy if exists) and
-    // because staging-updater.sh now applies DECLARED migrations before it
-    // restarts the containers — an undeclared file is reported and skipped, so
-    // without this line a fresh database would run the Clarity routes against
-    // missing tables.
+    'migrations/025_env_events.sql',
+    'migrations/026_env_events_paging_retention.sql',
     'migrations/027_clarity_insights.sql',
   ],
+  // This array is the ONLY thing the platform runner reads. It does not glob
+  // migrations/ — applyModuleMigrations() iterates these entries, so a .sql on
+  // disk that is not named here is invisible to it and simply never runs. Four
+  // files had drifted out of the array (018_runs_created_at_cost_idx, 025, 026,
+  // 027), which is why they had to be applied to staging by hand. Keep the two
+  // in sync: `__tests__/migrations-declared.test.ts` fails the build if they
+  // ever diverge again, in either direction.
+  //
+  // Re-declaring an already-applied file is safe. The runner skips on filename
+  // (`if (appliedMap.has(filename)) continue;` in
+  // packages/shared/src/modules/migrations.ts) BEFORE it reads or executes the
+  // file, so content never matters for a recorded migration.
+  //
+  // Ordering is array order, not filename order, and the numbers are not
+  // monotonic here: 018_runs_created_at_cost_idx.sql was authored long after
+  // 026. It sits next to its 018 sibling because it only needs se_runs (001),
+  // so any position after 001 is correct on a fresh database.
 
   // Dedicated `se` queue — NOT the shared `jobs` queue (spec §7.5 / §17, now live). Agent phases run
   // in the "SE runner" deployment (WORKER_MODULES=software-engineer, WORKER_BUILTIN_QUEUES="") which
