@@ -398,6 +398,18 @@ export function mountAdminRoutes(router, deps) {
       .map((n) => n.slice(0, -5))
       .filter((l) => ENV_LABEL_RE.test(l) && l.startsWith('lfx--'));
   };
+  // Labels that only have a STATUS file — a refused/failed create leaves an
+  // error status with no registry entry (e.g. measured-admission refusals,
+  // grammar rejections by the host agent). They must surface on the
+  // Overview or the operator never sees the refusal.
+  const envStatusOnlyLabels = () => {
+    let names = [];
+    try { names = readdirSync(ENVS_DIR); } catch { return []; }
+    return names
+      .filter((n) => n.endsWith('.status.json'))
+      .map((n) => n.slice(0, -'.status.json'.length))
+      .filter((l) => ENV_LABEL_RE.test(l) && l.startsWith('lfx--'));
+  };
   const envEntry = (label) => {
     const registry = readJson(`${ENVS_DIR}/${label}.json`);
     const status = readJson(`${ENVS_DIR}/${label}.status.json`);
@@ -420,7 +432,7 @@ export function mountAdminRoutes(router, deps) {
     if (profile !== 'lfx') return res.status(422).json({ error: { code: 'invalid_input', message: 'Only the lfx profile has hostname-keyed envs' } });
     // Observability ingest rides the poll (best-effort, never blocks the list).
     try { await ingestEnvEvents(supabase); } catch { /* best-effort */ }
-    const labels = new Set(envRegistryLabels());
+    const labels = new Set([...envRegistryLabels(), ...envStatusOnlyLabels()]);
     // Queued creates for brand-new labels (request exists, registry not yet):
     // surface them so the Overview shows a "queued" card immediately.
     try {

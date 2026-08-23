@@ -148,6 +148,21 @@ describe('GET /test-env/envs', () => {
     expect(res.body.envs.map((e: any) => e.label)).toEqual(['lfx--newsletter-80']);
   });
 
+  it('surfaces a status-only label (admission refusal — error status, no registry)', async () => {
+    vfs.files.set(STATUS('lfx--newsletter-81'), JSON.stringify({
+      state: 'error',
+      detail: 'admission refused: environment cap reached (1 extra envs). Current envs: lfx--newsletter-80 (expires 2026-08-23T20:43:42Z).',
+      urls: null, updated_at: '2026-08-23T17:45:44Z',
+    }));
+    const h = mount(mockSupabase()).handler('GET /test-env/envs');
+    const res = mockRes();
+    await h(request(), res);
+    expect(res.body.envs).toHaveLength(1);
+    expect(res.body.envs[0]).toMatchObject({ label: 'lfx--newsletter-81', registry: null });
+    expect(res.body.envs[0].status.state).toBe('error');
+    expect(res.body.envs[0].status.detail).toContain('admission refused');
+  });
+
   it('surfaces a queued create (request file, no registry yet) as a pending env', async () => {
     vfs.files.set(REQ('lfx--newsletter-81'), JSON.stringify({ action: 'create' }));
     const h = mount(mockSupabase()).handler('GET /test-env/envs');
