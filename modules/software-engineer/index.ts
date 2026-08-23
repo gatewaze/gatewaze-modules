@@ -60,6 +60,16 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/022_model_usage_view.sql',
     'migrations/023_decisions.sql',
     'migrations/024_external_pr_kind.sql',
+    // 025 and 026 are deliberately absent: they were applied to staging out of
+    // band and are recorded in module_migrations there, and 025 is not
+    // re-runnable (bare `create table`), so declaring them now is the owning
+    // change's call, not this one's. 027 IS declared because it is fully
+    // idempotent (create table/index if not exists, drop policy if exists) and
+    // because staging-updater.sh now applies DECLARED migrations before it
+    // restarts the containers — an undeclared file is reported and skipped, so
+    // without this line a fresh database would run the Clarity routes against
+    // missing tables.
+    'migrations/027_clarity_insights.sql',
   ],
 
   // Dedicated `se` queue — NOT the shared `jobs` queue (spec §7.5 / §17, now live). Agent phases run
