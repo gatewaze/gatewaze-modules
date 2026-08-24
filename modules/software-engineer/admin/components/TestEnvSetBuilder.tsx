@@ -100,17 +100,21 @@ export default function TestEnvSetBuilder({
               {deployable.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
             <input value={e.number} placeholder="PR#" onChange={(ev) => setExtra((x) => x.map((y, j) => j === i ? { ...y, number: ev.target.value.replace(/\D/g, '') } : y))} className="w-14 rounded border bg-neutral-800 border-neutral-700 text-neutral-100 px-1 py-0.5 text-xs" />
-            <Button variant="ghost" size="xs" disabled={!Number.isInteger(Number(e.number)) || Number(e.number) < 1 || inSet(deploySet, e.repo, Number(e.number))}
+            <button type="button" disabled={!Number.isInteger(Number(e.number)) || Number(e.number) < 1 || inSet(deploySet, e.repo, Number(e.number))}
               onClick={() => {
                 add(e.repo, Number(e.number));
                 setExtra((x) => x.filter((_, j) => j !== i));
-              }}>Add</Button>
+              }}
+              className="rounded border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 hover:text-neutral-100 hover:border-neutral-500 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-1 focus-visible:outline-neutral-400 focus-visible:outline-offset-1"
+            >Add</button>
             <button onClick={() => setExtra((x) => x.filter((_, j) => j !== i))} className="text-neutral-400">×</button>
           </span>
         ))}
-        <Button variant="ghost" size="xs" onClick={() => setExtra((x) => [...x, { repo: deployable[0], number: '' }])}>
+        <button type="button" onClick={() => setExtra((x) => [...x, { repo: deployable[0], number: '' }])}
+          className="inline-flex items-center rounded border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 hover:text-neutral-100 hover:border-neutral-500 focus-visible:outline focus-visible:outline-1 focus-visible:outline-neutral-400 focus-visible:outline-offset-1"
+        >
           <PlusIcon className="size-3.5 mr-0.5" />{addLabel}
-        </Button>
+        </button>
         <label className="inline-flex items-center gap-1.5 text-neutral-300"
           title="env re-merges and refreshes automatically on every push">
           <input type="checkbox" className="size-3.5" checked={liveMode} onChange={(e) => setLiveMode(e.target.checked)} />
@@ -126,9 +130,11 @@ export default function TestEnvSetBuilder({
         <Button variant="soft" size="xs" onClick={deploy} disabled={blocked || deploySet.length === 0}>
           <BeakerIcon className="size-3.5 mr-1" />{active ? 'Working…' : ready ? 'Redeploy' : 'Deploy to test env'}
         </Button>
-        <Button variant="ghost" size="xs" onClick={deployMainline} disabled={blocked}>
+        <button type="button" onClick={deployMainline} disabled={blocked}
+          className="text-xs text-neutral-300 underline decoration-neutral-600 underline-offset-2 hover:text-neutral-100 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-1 focus-visible:outline-neutral-400 focus-visible:outline-offset-1"
+        >
           Deploy main only (no PRs)
-        </Button>
+        </button>
       </div>
       {deploySet.length > 0 && (
         <div className="mt-2 rounded border border-neutral-700 px-2 py-1.5">
