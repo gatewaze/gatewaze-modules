@@ -211,6 +211,13 @@ export function mountAdminRoutes(router, deps) {
     'preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down',
     // lfx-profile cycle states (same busy semantics)
     'deploying-helm', 'building-services', 'building-app', 'starting-app',
+    // lfx-profile "fresh" reseed sub-step (staging-lfx-env.sh do_fresh path,
+    // status.json state "seeding-data") — must count as busy too, or a
+    // second deploy/teardown request could be accepted while
+    // lfx-v2-mockdata is mid-write against the live store (race, not just a
+    // progress-bar cosmetic: see testEnv.ts TEST_ENV_ACTIVE/STEPS.lfx, kept
+    // in lockstep with this copy).
+    'seeding-data',
   ]);
   const testEnvStatus = (profile: keyof typeof TEST_ENV_PROFILES) => {
     const { requestFile, statusFile } = TEST_ENV_PROFILES[profile];
