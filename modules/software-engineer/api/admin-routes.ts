@@ -6,7 +6,11 @@
  * memory, policy, and a concurrency cap. Engineers are ephemeral (one per run, run.engineer_name).
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { encodeEnvLabel, parseEnvLabel, envTierCheck } from '../lib/env-label.js';
+import { ingestEnvEvents } from '../lib/env-events.js';
+import { parseEventQuery, summarizeEvents, SUMMARY_SCAN_CAP } from '../lib/env-events-query.js';
+import { clarityConfig, clarityDashboardUrl, refreshIfStale, latestSnapshot, budgetState, attributeByEnv } from '../lib/clarity.js';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
@@ -367,6 +371,400 @@ export function mountAdminRoutes(router, deps) {
       JSON.stringify({ action: 'teardown', requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
     logger?.info?.('se: test-env teardown requested', { profile });
     res.status(202).json(testEnvStatus(profile));
+  });
+
+  // ── Hostname-keyed multi test environments (spec §4.3, phase 2) ────────────
+  // ADDITIONAL lfx envs at {label}.pr-view.com, alongside the primary slot the
+  // routes above manage. Same control-channel model: the request CARRIES a
+  // spec, so both sides validate — here with the TS twin of the host's
+  // grammar (lib/env-label.ts, pinned against lfx-envlabel.py), and the host
+  // agent (staging-multienv.sh) re-validates with the Python original before
+  // anything is deployed. The request FILENAME is always the label THIS
+  // server computed via encodeEnvLabel — user input never names a file. The
+  // label IS the env identity (canonical encode of the spec).
+  const ENVS_DIR = `${STAGING_CONTROL}/envs`;
+  const ENV_REQS_DIR = `${ENVS_DIR}/requests`;
+  // Same shape gate the host agent applies before deriving anything from a
+  // label (path-param rule). Grammar validation happens on top of this.
+  const ENV_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,52}[a-z0-9])?$/;
+  const ENV_CAP = 4; // spec §3.4 lfx cap — the host agent enforces it too (plus measured admission)
+  const readJson = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+  const envPending = (label) =>
+    existsSync(`${ENV_REQS_DIR}/${label}.request.json`) || existsSync(`${ENV_REQS_DIR}/${label}.request.json.processing`);
+  // Registry labels = envs/<label>.json, excluding the .status/.k8s siblings.
+  const envRegistryLabels = () => {
+    let names = [];
+    try { names = readdirSync(ENVS_DIR); } catch { return []; }
+    return names
+      .filter((n) => n.endsWith('.json') && !n.endsWith('.status.json') && !n.endsWith('.k8s.json') && !n.endsWith('.request.json'))
+      .map((n) => n.slice(0, -5))
+      .filter((l) => ENV_LABEL_RE.test(l) && l.startsWith('lfx--'));
+  };
+  // Labels that only have a STATUS file — a refused/failed create leaves an
+  // error status with no registry entry (e.g. measured-admission refusals,
+  // grammar rejections by the host agent). They must surface on the
+  // Overview or the operator never sees the refusal.
+  const envStatusOnlyLabels = () => {
+    let names = [];
+    try { names = readdirSync(ENVS_DIR); } catch { return []; }
+    return names
+      .filter((n) => n.endsWith('.status.json'))
+      .map((n) => n.slice(0, -'.status.json'.length))
+      .filter((l) => ENV_LABEL_RE.test(l) && l.startsWith('lfx--'));
+  };
+  const envEntry = (label) => {
+    const registry = readJson(`${ENVS_DIR}/${label}.json`);
+    const status = readJson(`${ENVS_DIR}/${label}.status.json`);
+    return { label, registry, status, pending: envPending(label) };
+  };
+  // Validate a :label path param: shape first, then the grammar (b- slugs
+  // parse; h- and malformed labels are rejected). Returns null when invalid.
+  const envLabelParam = (raw) => {
+    const label = String(raw ?? '');
+    if (!ENV_LABEL_RE.test(label)) return null;
+    return parseEnvLabel(label).error === null ? label : null;
+  };
+
+  // Root assignment (which env serves lfx.pr-view.com): a singleton pointer
+  // envs/root-assignment.json written only by the host agent; requests ride
+  // the same channel under the RESERVED filename "root-assignment" (never a
+  // valid env label — no lfx-- prefix, so it can't collide or be listed).
+  const rootAssignment = () => {
+    const cur = readJson(`${ENVS_DIR}/root-assignment.json`);
+    const env = typeof cur?.env === 'string' && cur.env ? cur.env : 'primary';
+    return {
+      env,
+      status: readJson(`${ENVS_DIR}/root-assignment.status.json`),
+      pending: envPending('root-assignment'),
+    };
+  };
+
+  router.get('/test-env/envs', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-envs:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) return res.json({ available: false });
+    const profile = req.query.profile === undefined || req.query.profile === '' ? 'lfx' : String(req.query.profile);
+    if (profile !== 'lfx') return res.status(422).json({ error: { code: 'invalid_input', message: 'Only the lfx profile has hostname-keyed envs' } });
+    // Observability ingest rides the poll (best-effort, never blocks the list).
+    try { await ingestEnvEvents(supabase); } catch { /* best-effort */ }
+    const labels = new Set([...envRegistryLabels(), ...envStatusOnlyLabels()]);
+    // Queued creates for brand-new labels (request exists, registry not yet):
+    // surface them so the Overview shows a "queued" card immediately.
+    try {
+      for (const n of readdirSync(ENV_REQS_DIR)) {
+        const m = n.match(/^([a-z0-9-]+)\.request\.json(\.processing)?$/);
+        if (m && ENV_LABEL_RE.test(m[1]) && m[1].startsWith('lfx--')) labels.add(m[1]);
+      }
+    } catch { /* no requests dir yet */ }
+    res.json({ available: true, profile, cap: ENV_CAP, root: rootAssignment(), envs: [...labels].sort().map(envEntry) });
+  });
+
+  // ── Clarity live insights (read-only cache; see lib/clarity.ts) ──────────
+  // The Data Export API allows 10 calls per project PER DAY, so this route
+  // NEVER calls Clarity synchronously for the caller's benefit: it serves the
+  // cached snapshot and, at most once every 3h, rides a refresh in behind it.
+  // The token stays in the API container's env — nothing here returns it, and
+  // the response carries only the project id (public) and aggregate numbers.
+  router.get('/test-env/clarity', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-clarity:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const cfg = clarityConfig();
+    if (!cfg.configured) return res.json({ configured: false });
+    try { await refreshIfStale(supabase); } catch { /* best-effort; cache still serves */ }
+    const snapshot = await latestSnapshot(supabase);
+    const budget = await budgetState(supabase);
+    const root = rootAssignment();
+    const metrics = snapshot?.ok && Array.isArray(snapshot.payload) ? snapshot.payload : [];
+    res.json({
+      configured: true,
+      projectId: cfg.projectId,
+      dashboardUrl: clarityDashboardUrl(cfg.projectId),
+      fetchedAt: snapshot?.fetched_at ?? null,
+      lookbackDays: snapshot?.num_of_days ?? null,
+      ok: snapshot?.ok ?? null,
+      error: snapshot?.ok === false ? snapshot.error : null,
+      metrics,
+      byEnv: attributeByEnv(metrics, root.env),
+      budget,
+    });
+  });
+
+  // Operator "Refresh now". Spends from the same daily quota, up to the hard
+  // cap the scheduled path deliberately stays below — so this can always be
+  // used a couple of times, and refuses honestly when the day is spent.
+  router.post('/test-env/clarity/refresh', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-clarity-refresh:${clientIp(req)}`, 6, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    // CSRF hardening (security review), same rationale as /staging-update above: the
+    // platform's requireJwt accepts a Supabase auth COOKIE as a fallback, and a
+    // cross-site form POST sends cookies without CORS stopping it. This route spends
+    // from Clarity's 10-calls/project/day quota with `force: true`, so a forged
+    // request could burn the whole day's budget and blind the feature until 00:00
+    // UTC — require the explicit Bearer header, which the admin SPA already sends.
+    if (!String(req.headers.authorization ?? '').startsWith('Bearer ')) {
+      return res.status(403).json({ error: { code: 'bearer_required', message: 'Explicit Authorization header required for this action' } });
+    }
+    // After the gate, not before it: an unauthenticated caller should not be
+    // able to learn whether this instance has a Clarity credential.
+    const cfg = clarityConfig();
+    if (!cfg.configured) return res.status(422).json({ error: { code: 'not_configured', message: 'Clarity export is not configured' } });
+    const result = await refreshIfStale(supabase, { force: true });
+    if (!result.fetched && result.reason === 'budget_exhausted') {
+      const budget = await budgetState(supabase);
+      return res.status(429).json({ error: { code: 'budget_exhausted', message: `Clarity allows ${budget.dailyCap} calls per day; today's are spent. Resets 00:00 UTC.` }, budget });
+    }
+    logger?.info?.('se: clarity export refreshed', { ok: result.ok === true });
+    res.json({ refreshed: Boolean(result.fetched), ok: result.ok ?? null });
+  });
+
+  // Choose which env serves the root domain lfx.pr-view.com. "primary"
+  // restores the pinned mainline slot. The host agent performs the flip
+  // (PCC_BASE_URL rewrite + app restarts + routing/IngressRoute regen); the
+  // displaced occupant stays reachable at its own hostname (the demoted
+  // primary at lfx--main.pr-view.com). Super-admin: this changes the URL the
+  // LFX team is actively using, with a ~30s blip on each flipped app.
+  router.post('/test-env/envs/root-assignment', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const raw = req.body?.env;
+    const target = raw === 'primary' ? 'primary' : envLabelParam(raw);
+    if (!target) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'env must be "primary" or a valid environment label' } });
+    }
+    if (target !== 'primary') {
+      const registry = readJson(`${ENVS_DIR}/${target}.json`);
+      if (!registry || registry.status === 'reaped') {
+        return res.status(404).json({ error: { code: 'not_found', message: 'No such (live) environment in the registry' } });
+      }
+      const st = readJson(`${ENVS_DIR}/${target}.status.json`);
+      if (st?.state !== 'ready') {
+        return res.status(409).json({ error: { code: 'not_ready', message: 'Environment must be ready to serve the root domain' } });
+      }
+    }
+    if (envPending('root-assignment')) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A root assignment is already in progress' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/root-assignment.request.json`, JSON.stringify({
+      action: 'assign-root', env: target, requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: root assignment requested', { env: target });
+    res.status(202).json({ root: rootAssignment() });
+  });
+
+  router.post('/test-env/envs', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    // Spec entries: {repo, pr} or {repo, branch}. Everything is validated by
+    // the encoder (repo against the alias table, pr 1..99999 integer, branch
+    // against the safe-ref shape with no '..'); nothing user-supplied is used
+    // before it validates.
+    const rawSpec = req.body?.spec;
+    if (!Array.isArray(rawSpec) || rawSpec.length < 1 || rawSpec.length > 8) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'spec must be an ordered array of 1..8 entries' } });
+    }
+    // Live mode defaults TRUE for hostname-keyed envs (host-agent default) —
+    // strict boolean when present, same contract as the primary-slot routes.
+    const live = req.body?.live;
+    if (live !== undefined && typeof live !== 'boolean') {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'live must be a boolean' } });
+    }
+    // TTL (phase 3 reaping): hours from last activity before the env is
+    // reaped. Integer 1..168; default 3 (applied host-side when absent).
+    const ttl = req.body?.ttl_hours;
+    if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 1 || ttl > 168)) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'ttl_hours must be an integer between 1 and 168' } });
+    }
+    const spec = rawSpec.map((e) => {
+      const repo = String(e?.repo ?? '');
+      return 'branch' in (e ?? {}) ? { repo, branch: String(e.branch ?? '') } : { repo, pr: Number(e?.pr) };
+    });
+    const enc = encodeEnvLabel(spec);
+    if (enc.error !== null) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: `Invalid env spec: ${enc.error}` } });
+    }
+    const tierErr = envTierCheck(spec);
+    if (tierErr) return res.status(422).json({ error: { code: 'invalid_input', message: tierErr } });
+    const label = enc.label;
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    const existing = readJson(`${ENVS_DIR}/${label}.json`);
+    if (existing && existing.status !== 'reaped') {
+      return res.status(409).json({ error: { code: 'exists', message: `Environment ${label} already exists — refresh or tear it down instead` }, label });
+    }
+    // Cap gate (reaped entries keep their registry file but hold no
+    // resources, so they don't count). The host agent re-checks, plus its
+    // measured memory/disk admission — this is just the fast client-side no.
+    const active = envRegistryLabels().filter((l) => readJson(`${ENVS_DIR}/${l}.json`)?.status !== 'reaped');
+    if (active.length >= ENV_CAP) {
+      return res.status(409).json({ error: { code: 'cap_reached', message: `Environment cap reached (${ENV_CAP}) — tear one down first` } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`, JSON.stringify({
+      action: 'create', spec, live: live !== false, ...(ttl !== undefined ? { ttl_hours: ttl } : {}),
+      requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: multi-env create requested', { label, live: live !== false, ttl_hours: ttl ?? null });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  router.delete('/test-env/envs/:label', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const label = envLabelParam(req.params.label);
+    if (!label) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
+    // HARD GUARANTEE: the env serving lfx.pr-view.com is teardown-proof. The
+    // host agent refuses too (authoritative) — this is the fast client-side
+    // 409 so the request file is never even written.
+    if (rootAssignment().env === label) {
+      return res.status(409).json({ error: { code: 'root_holder', message: 'This environment holds the root domain (lfx.pr-view.com) — demote first: restore the primary at root, then tear down' } });
+    }
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`,
+      JSON.stringify({ action: 'teardown', requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
+    logger?.info?.('se: multi-env teardown requested', { label });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  router.post('/test-env/envs/:label/refresh', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const label = envLabelParam(req.params.label);
+    if (!label) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
+    const registry = readJson(`${ENVS_DIR}/${label}.json`);
+    if (!registry || !Array.isArray(registry.spec)) {
+      return res.status(404).json({ error: { code: 'not_found', message: 'No such environment in the registry' } });
+    }
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    // Redeploy from the registry's own spec (the exact branch refs live
+    // there; the hostname slug is lossy). Verify the registry spec still
+    // encodes to this label — a mismatched registry is corrupt, not a deploy.
+    const enc = encodeEnvLabel(registry.spec);
+    if (enc.error !== null || enc.label !== label) {
+      return res.status(409).json({ error: { code: 'registry_mismatch', message: 'Registry spec does not encode to this label — refusing to redeploy' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`, JSON.stringify({
+      action: 'create', spec: registry.spec, live: registry.live !== false,
+      ...(Number.isInteger(registry.ttl_hours) ? { ttl_hours: registry.ttl_hours } : {}),
+      requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: multi-env refresh requested', { label });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  // Log explorer for the Environments section — events ingested from the box
+  // by ingestEnvEvents (see lib/env-events.ts). Two modes on one route:
+  //
+  //   ?summary=1  → the at-a-glance strip: per-env counts + sparklines over the
+  //                 selected window, aggregated in-process from a CAPPED scan.
+  //   default     → a page of rows, newest-first, keyset-paged on (ts, id).
+  //
+  // Every filter value that reaches PostgREST is re-derived from a validated
+  // shape by parseEventQuery (lib/env-events-query.ts) — see the injection
+  // notes there. No caller string is ever concatenated into a filter verbatim.
+  const applyEventFilters = (q, query) => {
+    if (query.envFilterPresent) {
+      if (query.envs.length > 0 && query.includeUnattributed) {
+        // Both legs are built from labels that already matched ENV_LABEL_SHAPE
+        // (no comma/paren/quote/dot possible), so nothing here can break out of
+        // the .in.() list. NOTE: the keyset cursor below adds a SECOND .or().
+        // postgrest-js appends each as its own `or=` query param and PostgREST
+        // ANDs top-level params, so the result is
+        //   (env matches OR unattributed) AND (cursor boundary)
+        // which is what we want. Do not "tidy" the two into one .or().
+        q = q.or(`env_label.is.null,env_label.in.(${query.envs.join(',')})`);
+      } else if (query.envs.length > 0) {
+        q = q.in('env_label', query.envs);
+      } else {
+        q = q.is('env_label', null);
+      }
+    }
+    if (query.kinds.length > 0) q = q.in('kind', query.kinds);
+    if (query.since) q = q.gte('ts', query.since);
+    if (query.until) q = q.lte('ts', query.until);
+    return q;
+  };
+
+  router.get('/test-env/env-events', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-events:${clientIp(req)}`, 240, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const parsed = parseEventQuery(req.query ?? {});
+    if (!parsed.ok) return res.status(422).json({ error: { code: 'invalid_input', message: parsed.message } });
+    const query = parsed.query;
+
+    if (query.summary) {
+      // The window must be bounded for the buckets to mean anything; default
+      // to the last hour when the caller gave no `since`.
+      const to = query.until ?? new Date().toISOString();
+      const from = query.since ?? new Date(Date.parse(to) - 3_600_000).toISOString();
+      let sq = supabase.from('se_env_events')
+        .select('ts, kind, env_label')
+        .gte('ts', from).lte('ts', to)
+        .order('ts', { ascending: false })
+        .limit(SUMMARY_SCAN_CAP + 1);
+      // Reuse the kind/env legs only — the window is explicit above.
+      sq = applyEventFilters(sq, { ...query, since: null, until: null });
+      if (query.search) sq = sq.ilike('detail', `%${query.search}%`);
+      const { data, error } = await sq;
+      if (error) return res.status(500).json({ error: { code: 'query_failed', message: 'Could not summarise env events' } });
+      const rows = data ?? [];
+      const truncated = rows.length > SUMMARY_SCAN_CAP;
+      return res.json({
+        summary: summarizeEvents(truncated ? rows.slice(0, SUMMARY_SCAN_CAP) : rows,
+          { from, to, buckets: query.buckets, truncated }),
+      });
+    }
+
+    let q = applyEventFilters(
+      supabase.from('se_env_events').select('id, ts, kind, env_label, detail, meta'),
+      query,
+    );
+    if (query.search) q = q.ilike('detail', `%${query.search}%`);
+    if (query.beforeTs && query.beforeId !== null) {
+      // Keyset page boundary. Both values are OUR re-serialised ISO instant and
+      // a parsed safe integer, not caller strings (parseEventQuery).
+      q = q.or(`ts.lt.${query.beforeTs},and(ts.eq.${query.beforeTs},id.lt.${query.beforeId})`);
+    }
+    // Fetch one extra row to answer has_more without a second count query.
+    q = q.order('ts', { ascending: false }).order('id', { ascending: false }).limit(query.limit + 1);
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: { code: 'query_failed', message: 'Could not load env events' } });
+    const all = data ?? [];
+    const has_more = all.length > query.limit;
+    const events = has_more ? all.slice(0, query.limit) : all;
+    const last = events[events.length - 1];
+    res.json({
+      events,
+      has_more,
+      next_cursor: has_more && last ? { before_ts: last.ts, before_id: last.id } : null,
+    });
   });
 
   // ── Project memory: review + human approval (memory-poisoning gate) ────────
