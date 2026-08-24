@@ -42,7 +42,7 @@ function mockSupabase({ runs = [], runsError = null, prs = [], gates = [] }: any
     };
     const b: any = {
       select() { return b; },
-      is() { return b; }, in() { return b; }, eq() { return b; }, order() { return b; }, limit() { return b; },
+      is() { return b; }, in() { return b; }, eq() { return b; }, gte() { return b; }, order() { return b; }, limit() { return b; },
       then(resolve: any, reject: any) { return Promise.resolve(resolveFor()).then(resolve, reject); },
     };
     return b;
@@ -115,5 +115,83 @@ describe('GET /overview/decisions', () => {
     const res = mockRes();
     await router.handler('GET /overview/decisions')({ query: {} }, res);
     expect(res.statusCode).toBe(500);
+  });
+});
+
+// Distinguishes the two different se_runs queries (the status-gated page query vs the extra
+// "answered run that already moved on" lookup by id) and the two different se_decisions queries (the
+// cheap recent-answered run_id lookup vs the full persisted-row select), since the naive mockSupabase()
+// above returns the same fixed data for every call to a given table regardless of the filter applied.
+function mockChainSupabase(handlers: Record<string, (calls: Array<[string, unknown[]]>) => any>) {
+  const fromCalls: string[] = [];
+  const from = (table: string) => {
+    fromCalls.push(table);
+    const calls: Array<[string, unknown[]]> = [];
+    const record = (name: string) => (...args: unknown[]) => { calls.push([name, args]); return b; };
+    const b: any = {
+      select: record('select'), is: record('is'), in: record('in'), eq: record('eq'),
+      gte: record('gte'), order: record('order'), limit: record('limit'),
+      then(resolve: any, reject: any) {
+        const h = handlers[table];
+        const result = h ? h(calls) : { data: [], error: null };
+        return Promise.resolve(result).then(resolve, reject);
+      },
+    };
+    return b;
+  };
+  return { from, fromCalls };
+}
+
+describe('GET /overview/decisions — answered row survives a live status that already moved on (issue #60)', () => {
+  const ANSWERED_AT = new Date(Date.now() - 5 * 60_000).toISOString(); // 5 minutes ago — inside the 15-minute window
+  const RUN_ROW = { id: 'r1', status: 'running', retry_count: 0 };
+  const PERSISTED = {
+    id: 'd1', run_id: 'r1', question: 'The pull request was closed unmerged, partway through. What should change?',
+    kind: 'text', options: null, context: null, status: 'answered',
+    answer: { text: 'PR closed without merging' }, answered_by: 'admin', answered_at: ANSWERED_AT,
+    origin_kind: 'pr_closed_partial',
+  };
+
+  it('keeps the row visible, answered, with the submitted text round-tripped, while still inside the 15-minute window', async () => {
+    const supabase = mockChainSupabase({
+      se_runs(calls) {
+        const idFilter = calls.find(([m, a]) => m === 'in' && a[0] === 'id');
+        if (idFilter) return { data: (idFilter[1][1] as string[]).includes('r1') ? [RUN_ROW] : [], error: null };
+        return { data: [], error: null }; // the status-gated query: r1 already left the gated set
+      },
+      se_decisions(calls) {
+        const isRecentAnsweredLookup = calls.some(([m]) => m === 'gte');
+        if (isRecentAnsweredLookup) return { data: [{ run_id: 'r1' }], error: null };
+        return { data: [PERSISTED], error: null };
+      },
+    });
+    const router = mount(supabase);
+    const res = mockRes();
+    await router.handler('GET /overview/decisions')({ query: {} }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.count).toBe(1);
+    const [row] = res.body.decisions;
+    expect(row.id).toBe('r1');
+    expect(row.answered).toBe(true);
+    expect(row.kind).toBe('pr_closed_partial'); // fell back to origin_kind since classifyDecision(running) is null
+    expect(row.answer).toEqual({ text: 'PR closed without merging' });
+  });
+
+  it('drops the row once the answer is past its 15-minute retention window', async () => {
+    const supabase = mockChainSupabase({
+      se_runs(calls) {
+        const idFilter = calls.find(([m, a]) => m === 'in' && a[0] === 'id');
+        if (idFilter) return { data: [], error: null };
+        return { data: [], error: null };
+      },
+      // Simulates the real gte filter on answered_at excluding this row once it's stale — no run_id
+      // comes back, so the extra-run fetch never happens and the row is correctly dropped.
+      se_decisions() { return { data: [], error: null }; },
+    });
+    const router = mount(supabase);
+    const res = mockRes();
+    await router.handler('GET /overview/decisions')({ query: {} }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ decisions: [], count: 0 });
   });
 });

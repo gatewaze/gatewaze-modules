@@ -100,7 +100,7 @@ export default async function verify(job, ctx) {
       try {
         await createOrSupersedeDecision(supabase, {
           runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: 'verify',
-          question: `security: ${reason}`, kind: 'text', context: null,
+          question: `security: ${reason}`, kind: 'text', context: null, originKind: 'config_blocked',
         });
       } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
       return { blocked: reason };

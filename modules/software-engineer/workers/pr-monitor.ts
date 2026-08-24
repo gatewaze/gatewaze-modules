@@ -244,7 +244,7 @@ async function reconcile(supabase, ctx, run) {
         await createOrSupersedeDecision(supabase, {
           runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: run.current_phase,
           question: 'The pull request was closed unmerged, partway through. What should change?',
-          kind: 'text', context: firstUrl,
+          kind: 'text', context: firstUrl, originKind: 'pr_closed_partial',
         });
       } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
       return { runId: run.id, action: 'blocked-partial' };

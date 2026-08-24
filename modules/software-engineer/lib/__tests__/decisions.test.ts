@@ -49,6 +49,26 @@ describe('createOrSupersedeDecision', () => {
     expect(insert.row).toMatchObject({ run_id: 'run-1', project_id: 'proj-1', site_id: 'site-1', phase: 'verify', question: 'security: bad thing', kind: 'text', status: 'pending' });
   });
 
+  it('writes origin_kind (the live DecisionKind at creation time) on insert', async () => {
+    const supa = mockSupabase();
+    await createOrSupersedeDecision(supa, {
+      runId: 'run-1', projectId: 'proj-1', siteId: 'site-1', phase: 'pr-monitor',
+      question: 'The pull request was closed unmerged, partway through. What should change?', kind: 'text',
+      originKind: 'pr_closed_partial',
+    });
+    const insert = supa.__calls.inserts.find((c: any) => c.table === 'se_decisions');
+    expect(insert.row).toMatchObject({ origin_kind: 'pr_closed_partial' });
+  });
+
+  it('writes a null origin_kind when the caller does not pass one', async () => {
+    const supa = mockSupabase();
+    await createOrSupersedeDecision(supa, {
+      runId: 'run-1', projectId: 'proj-1', siteId: 'site-1', phase: 'verify', question: 'q', kind: 'text',
+    });
+    const insert = supa.__calls.inserts.find((c: any) => c.table === 'se_decisions');
+    expect(insert.row.origin_kind).toBeNull();
+  });
+
   it('throws when the insert fails', async () => {
     const supa = mockSupabase({ insertError: { message: 'db down' } });
     await expect(createOrSupersedeDecision(supa, {
