@@ -14,19 +14,29 @@ export type EnvListEntry = {
   pending: boolean;
 };
 
-// Deploy-cycle states the multienv agent emits (lib-lfx-env.sh env_status
-// call sites), with hand-weighted progress like testEnv.ts STEPS.
+// Deploy-cycle states the multienv agent emits (staging-multienv.sh /
+// lib-lfx-env.sh env_status call sites), with hand-weighted progress like
+// testEnv.ts STEPS. Two states were added for stage 3 of the per-env
+// isolation build (spec-se-multi-test-envs): `preparing-dataplane` (the env's
+// own namespace, then its own database/search-index/authorization store —
+// lfx-env-ns.sh + lfx-env-dataplane.sh, BEFORE any worktree is checked out)
+// and `seeding-data` (mockdata playbooks + the writer-grant sweep run
+// against that data plane, once its NATS/heimdall/services are confirmed
+// up — right after `building-services`, before routes/auth are wired).
 export const ENV_STEPS: { state: string; label: string; pct: number }[] = [
   { state: 'queued', label: 'Queued', pct: 3 },
-  { state: 'preparing-worktrees', label: 'Checking out env set', pct: 15 },
+  { state: 'preparing-dataplane', label: 'Provisioning namespace + data plane', pct: 9 },
+  { state: 'preparing-worktrees', label: 'Checking out env set', pct: 18 },
   { state: 'building-services', label: 'Building services', pct: 45 },
-  { state: 'deploying-routes', label: 'Wiring routes + auth', pct: 60 },
+  { state: 'seeding-data', label: 'Seeding projects + access grants', pct: 53 },
+  { state: 'deploying-routes', label: 'Wiring routes + auth', pct: 62 },
   { state: 'building-app', label: 'Building app', pct: 78 },
   { state: 'starting-app', label: 'Starting app', pct: 92 },
   { state: 'ready', label: 'Live', pct: 100 },
 ];
 export const ENV_ACTIVE_STATES = new Set([
-  'preparing-worktrees', 'building-services', 'deploying-routes', 'building-app', 'starting-app', 'tearing-down',
+  'preparing-dataplane', 'preparing-worktrees', 'building-services', 'seeding-data', 'deploying-routes',
+  'building-app', 'starting-app', 'tearing-down',
 ]);
 
 export const envStepPct = (state?: string, pending?: boolean): number => {

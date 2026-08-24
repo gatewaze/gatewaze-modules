@@ -30,6 +30,11 @@ export const TEST_ENV_ACTIVE = new Set([
   'preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down',
   // lfx-profile cycle states (same busy semantics)
   'deploying-helm', 'building-services', 'building-app', 'starting-app',
+  // lfx-profile "fresh" reseed sub-step (staging-lfx-env.sh do_fresh path) —
+  // distinct from 'starting' (which is just the port-wait) so a fresh deploy
+  // shows what it's actually doing instead of looking identical to the app
+  // simply booting; 'ready' is only ever written after this returns 0.
+  'seeding-data',
 ]);
 // Deploy-cycle progress models, per profile. Percentages hand-weighted by
 // observed step duration (building dominates); tearing-down only appears when
@@ -54,6 +59,7 @@ export const STEPS: Record<TestEnvProfile, { state: string; label: string; pct: 
     { state: 'building-app', label: 'Building app', pct: 75 },
     { state: 'starting-app', label: 'Starting app', pct: 88 },
     { state: 'starting', label: 'Starting services', pct: 95 },
+    { state: 'seeding-data', label: 'Fresh data: reseeding mock data', pct: 97 },
     { state: 'ready', label: 'Live', pct: 100 },
   ],
 };

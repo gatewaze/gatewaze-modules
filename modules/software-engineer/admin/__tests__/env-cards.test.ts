@@ -28,7 +28,7 @@ describe('envStateBadge', () => {
 
 describe('envStepPct', () => {
   it('is monotonic through the multienv deploy cycle', () => {
-    const seq = ['preparing-worktrees', 'building-services', 'deploying-routes', 'building-app', 'starting-app', 'ready'];
+    const seq = ['preparing-dataplane', 'preparing-worktrees', 'building-services', 'seeding-data', 'deploying-routes', 'building-app', 'starting-app', 'ready'];
     const pcts = seq.map((s) => envStepPct(s, false));
     expect([...pcts]).toEqual([...pcts].sort((a, b) => a - b));
     expect(pcts[pcts.length - 1]).toBe(100);
