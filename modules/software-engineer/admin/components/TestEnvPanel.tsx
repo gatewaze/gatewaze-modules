@@ -74,7 +74,7 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
 
   return (
     <TestEnvControls profile={profile} deploySet={deploySet} onChange={setDeploySet} prUrlOf={prUrlOf} addLabel="related PR" className="mb-3">
-      {runPrs.length === 0 && <span className="text-[var(--gray-10)]">No deployable PRs on this run yet — add one below to deploy.</span>}
+      {runPrs.length === 0 && <span className="text-neutral-400">No deployable PRs on this run yet — add one below to deploy.</span>}
       {runPrs.map((p) => {
         const k = `${p.repo_name}#${p.pr_number}`;
         return (
