@@ -186,7 +186,7 @@ export default async function review(job, ctx) {
       await createOrSupersedeDecision(supabase, {
         runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: 'review',
         question: distilled.question, kind: distilled.kind, options: distilled.options,
-        context: objections.map((o) => `- ${o}`).join('\n'),
+        context: objections.map((o) => `- ${o}`).join('\n'), originKind: 'review_blocked',
       });
     } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
     return { blocked: true };
