@@ -274,7 +274,7 @@ export async function blockRun(sb: unknown, run: any, phase: string, gate: strin
   try {
     await createOrSupersedeDecision(sb, {
       runId: run.id, projectId: run.project_id, siteId: run.site_id, phase,
-      question: reason, kind: 'text', context: null,
+      question: reason, kind: 'text', context: null, originKind: 'config_blocked',
     });
   } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
   return { blocked: reason };
