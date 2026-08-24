@@ -17,6 +17,8 @@ vi.mock('node:fs', () => ({
   existsSync: (p: string) => p === '/staging-control',
   readFileSync: () => { throw new Error('ENOENT'); },
   writeFileSync: (p: string, body: string) => { fs.writes.push([p, JSON.parse(body)]); },
+  readdirSync: () => [],
+  statSync: () => { throw new Error('ENOENT'); },
 }));
 
 import { mountAdminRoutes } from '../../api/admin-routes.js';

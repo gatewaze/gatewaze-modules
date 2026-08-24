@@ -26,6 +26,7 @@ import { isGatewayError, StartingBanner } from './starting';
 import PendingApprovals from './PendingApprovals';
 import DecisionsPanel from './DecisionsPanel';
 import TestEnvOverviewPanel from './TestEnvOverviewPanel';
+import EnvironmentsPanel from './EnvironmentsPanel';
 import RunListSection from './RunListSection';
 
 // Runs-board rows shown per dashboard section — a dashboard summarises, it doesn't replace the Runs
@@ -231,9 +232,11 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
   return (
     <div className="space-y-6">
       {/* One panel per env profile — each with its own status + full PR-set
-          builder; each hides itself when its control channel is absent. */}
+          builder; each hides itself when its control channel is absent. The
+          lfx panel is the Environments section: primary card + one card per
+          hostname-keyed env, the new-env form, and the activity timeline. */}
       <TestEnvOverviewPanel profile="gatewaze" projects={projects} />
-      <TestEnvOverviewPanel profile="lfx" projects={projects} />
+      <EnvironmentsPanel projects={projects} />
       {showProjectFilter && (
         <select
           value={projectFilter}
