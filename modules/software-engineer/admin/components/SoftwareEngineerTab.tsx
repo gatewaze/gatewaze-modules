@@ -561,7 +561,12 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
       </div>
 
       {/* Live agent view — hidden on mobile until a run is selected, then it takes the full width. */}
-      <div className={`flex-1 min-w-0 min-h-0 flex-col lg:border-l border-[var(--gray-5)] lg:pl-6 ${selected ? 'flex' : 'hidden lg:flex'}`}>
+      {/* The pane's own content (a tall gate panel — spec/architecture/submission review, before the transcript
+          even starts) can exceed the fixed row height on its own. Give the pane its own scroll region so that
+          content — and the gate's action button below it — is always reachable, instead of being clipped by the
+          row's lg:overflow-hidden (issue #61). The transcript below keeps its own independent scroll + tail-pin
+          (issue #18); this only affects the ancestor, not that region. */}
+      <div className={`flex-1 min-w-0 min-h-0 flex-col lg:overflow-y-auto lg:border-l border-[var(--gray-5)] lg:pl-6 ${selected ? 'flex' : 'hidden lg:flex'}`}>
         {/* Mobile-only back control: reuses the URL-driven selection (onSelect(null) → /runs). */}
         {selected && (
           <button
