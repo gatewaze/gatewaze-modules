@@ -10,4 +10,4 @@
 -- without re-deriving a kind from state that has already changed. Nullable and additive: existing rows
 -- fall back to today's behavior (dropped once their live status leaves the gated set) until a new
 -- decision is created after this migration ships.
-alter table public.se_decisions add column origin_kind text;
+alter table public.se_decisions add column if not exists origin_kind text;
