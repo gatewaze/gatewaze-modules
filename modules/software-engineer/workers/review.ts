@@ -12,7 +12,7 @@ import { notifyGate } from '../lib/notify.js';
 import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
-import { redactToken } from '../lib/git.js';
+import { redactToken, branchNameFor } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, writeMessage } from '../lib/run-state.js';
 import { InProcessRunner } from '../lib/agent-session.js';
 import { resolvePhaseModel } from '../lib/model-select.js';
@@ -106,7 +106,11 @@ export default async function review(job, ctx) {
     const { data: art } = await supabase.from('se_artifacts').select('content').eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
     const specText = art?.content ?? '';
     const codeRepos = (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun).map((r) => ({ ...r, writeMode: 'read_only' }));
-    ws = await makeMultiWorkspace(codeRepos, token, run.branch_name || `agent/se-${run.issue_number}`);
+    // No issue fetch at this point (review only needs the spec artifact + repos) — branch_name
+    // should already be set by intake/spec before review ever runs, so this is a defensive
+    // last-resort default, not the normal path. branchNameFor(run) with no title just falls
+    // through to the safe agent/se-<n>-<hash> pattern.
+    ws = await makeMultiWorkspace(codeRepos, token, run.branch_name || branchNameFor(run));
 
     const prompt = [
       `You are a FIXED, ADVERSARIAL SPEC REVIEWER (a skeptic). You do NOT rewrite the spec.`,
