@@ -57,6 +57,7 @@ vi.mock('../../lib/memory.js', () => ({
 
 vi.mock('../../lib/git.js', () => ({
   redactToken: (msg: string) => msg,
+  branchNameFor: (run: { issue_number: number; id: string }) => `agent/se-${run.issue_number}-${String(run.id).slice(0, 8)}`,
 }));
 
 // Not installed in this workspace and never actually invoked — the worker's `sb()` helper prefers
