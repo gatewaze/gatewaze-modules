@@ -14,6 +14,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getProject } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
+import { branchNameFor } from '../lib/git.js';
 import { notifyGate } from '../lib/notify.js';
 import { writeSpecMemory } from '../lib/memory.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, writeMessage, blockRun } from '../lib/run-state.js';
@@ -157,7 +158,7 @@ export default async function intake(job, ctx) {
     // Store the provided text as the run's spec artifact — same kind/shape the spec phase writes
     // (spec.ts:127) — so review/refine/implement downstream are none the wiser. The spec-authoring
     // and self-review phases are recorded 'skipped' (terminal rows, zero tokens — never billed).
-    const branch = run.branch_name || `agent/se-${run.issue_number}-${String(run.id).slice(0, 8)}`;
+    const branch = run.branch_name || branchNameFor(run, issue.title);
     await supabase.from('se_artifacts').insert({ run_id: run.id, site_id: run.site_id, phase: 'spec', kind: 'spec', content: providedSpec.spec });
     await recordPhaseEnd(supabase, run, 'spec', 'skipped', `spec provided in the issue (${providedSpec.source}) — authoring skipped`);
     await recordPhaseEnd(supabase, run, 'review', 'skipped', 'spec provided by a human — automated self-review skipped');

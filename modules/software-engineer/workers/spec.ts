@@ -18,7 +18,7 @@ import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
-import { redactToken } from '../lib/git.js';
+import { redactToken, branchNameFor } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
 import { writeSpecMemory } from '../lib/memory.js';
 import { parseDependencies, unmetDependencies, ensureWaitingMarker } from '../lib/dependencies.js';
@@ -77,7 +77,7 @@ export default async function spec(job, ctx) {
       }
     }
 
-    const branch = run.branch_name || `agent/se-${run.issue_number}-${String(run.id).slice(0, 8)}`;
+    const branch = run.branch_name || branchNameFor(run, issue.title);
     // Read-only clone of every code repo (up to the cap) so the agent can explore + pick targets.
     const forSpec = codeRepos.slice(0, project.maxCodeReposPerRun).map((r) => ({ ...r, writeMode: 'read_only' }));
     const truncated = codeRepos.length > project.maxCodeReposPerRun;
