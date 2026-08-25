@@ -27,6 +27,7 @@ import PendingApprovals from './PendingApprovals';
 import DecisionsPanel from './DecisionsPanel';
 import TestEnvOverviewPanel from './TestEnvOverviewPanel';
 import EnvironmentsPanel from './EnvironmentsPanel';
+import TestEnvErrorBoundary from './TestEnvErrorBoundary';
 import RunListSection from './RunListSection';
 
 // Runs-board rows shown per dashboard section — a dashboard summarises, it doesn't replace the Runs
@@ -235,8 +236,12 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
           builder; each hides itself when its control channel is absent. The
           lfx panel is the Environments section: primary card + one card per
           hostname-keyed env, the new-env form, and the activity timeline. */}
-      <TestEnvOverviewPanel profile="gatewaze" projects={projects} />
-      <EnvironmentsPanel projects={projects} />
+      <TestEnvErrorBoundary label="Test environment">
+        <TestEnvOverviewPanel profile="gatewaze" projects={projects} />
+      </TestEnvErrorBoundary>
+      <TestEnvErrorBoundary label="Environments">
+        <EnvironmentsPanel projects={projects} />
+      </TestEnvErrorBoundary>
       {showProjectFilter && (
         <select
           value={projectFilter}
