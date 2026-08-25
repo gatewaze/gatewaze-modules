@@ -146,6 +146,22 @@ function EnvCard({ entry, now, onAction, root }) {
               api: {registry.hostnames.api}
             </a>
           )}
+          {registry?.k8s_suffix && (
+            // Stage 3 (spec-se-multi-test-envs): every env carries its own
+            // namespace + data plane from spin-up, seeded before it reaches
+            // `ready` — so `dataplane` is present on every registry entry
+            // this UI will ever see, but the check stays defensive for any
+            // pre-stage-1 registry file left on disk.
+            <span
+              className="inline-flex items-center gap-1 rounded border border-[var(--gray-5)] px-1.5 py-0.5 text-[11px] text-[var(--gray-10)]"
+              title={registry?.dataplane
+                ? 'Isolated: its own namespace (NATS, heimdall, every NATS-attached service) plus its own database, search index and OpenFGA store, seeded independently. Only login (Authelia) and the servers it is a tenant of (Postgres, OpenSearch, OpenFGA) are shared with other environments.'
+                : 'This registry entry predates per-env data planes — it still shares the primary’s NATS/search/database.'}
+            >
+              <span className="font-mono">lfx-env-{registry.k8s_suffix}</span>
+              {registry?.dataplane ? ' · isolated data plane' : ' · shared data plane'}
+            </span>
+          )}
         </div>
       )}
 
