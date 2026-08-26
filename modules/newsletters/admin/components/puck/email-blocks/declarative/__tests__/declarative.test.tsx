@@ -135,25 +135,38 @@ describe('declarative block format', () => {
     expect(html).toContain('https://b');
   });
 
-  it('`unless` renders only when the field is falsy (boolean toggle)', async () => {
-    // A boolean toggle picks between two variants: `if` for the on-state,
-    // `unless` for the off-state. Exactly one renders, and the shared field is
-    // never emitted twice.
+  it('== / != switches a boolean toggle (value round-trips as a string; safe default)', async () => {
+    // A boolean field's radio value round-trips as the STRING 'true'/'false'
+    // (Puck stringifies radio values), so `if="italic"` would be truthy for
+    // both. Comparison guards pick the variant, and making the "on" variant
+    // `!= false` keeps it as the default so a missing value never blanks the
+    // block. Exactly one variant renders; the shared field is never doubled.
     const TOGGLE = `
 <!-- SCHEMA: { "text": {"type":"richtext"}, "italic": {"type":"boolean","default":true} } -->
 <Section>
-  <richtext if="italic" field="text" style="font-style:italic" />
-  <richtext unless="italic" field="text" style="font-style:normal" />
+  <richtext if="italic != false" field="text" style="font-style:italic" />
+  <richtext if="italic == false" field="text" style="font-style:normal" />
 </Section>`;
-    const on = await renderEntry(TOGGLE, { text: '<p>Hi</p>', italic: true });
-    expect(on).toContain('font-style:italic');
-    expect(on).not.toContain('font-style:normal');
-    expect((on.match(/Hi/g) || []).length).toBe(1);
+    const cases: [unknown, string, string][] = [
+      ['true', 'italic', 'normal'], // Puck "Yes"
+      ['false', 'normal', 'italic'], // Puck "No"
+      [true, 'italic', 'normal'], // a real boolean, if one ever arrives
+      [undefined, 'italic', 'normal'], // legacy instance with no stored value → default italic
+    ];
+    for (const [val, shown, hidden] of cases) {
+      const html = await renderEntry(TOGGLE, { text: '<p>Hi</p>', italic: val });
+      expect(html).toContain(`font-style:${shown}`);
+      expect(html).not.toContain(`font-style:${hidden}`);
+      expect((html.match(/Hi/g) || []).length).toBe(1);
+    }
+  });
 
-    const off = await renderEntry(TOGGLE, { text: '<p>Hi</p>', italic: false });
-    expect(off).toContain('font-style:normal');
-    expect(off).not.toContain('font-style:italic');
-    expect((off.match(/Hi/g) || []).length).toBe(1);
+  it('`unless` (bare, no ==) still guards on falsiness', async () => {
+    const T = `
+<!-- SCHEMA: { "flag": {"type":"text"} } -->
+<Section><Text unless="flag">SHOWN_WHEN_EMPTY</Text></Section>`;
+    expect(await renderEntry(T, { flag: '' })).toContain('SHOWN_WHEN_EMPTY');
+    expect(await renderEntry(T, { flag: 'x' })).not.toContain('SHOWN_WHEN_EMPTY');
   });
 
   it('exposes a slot field and renders its children', async () => {
