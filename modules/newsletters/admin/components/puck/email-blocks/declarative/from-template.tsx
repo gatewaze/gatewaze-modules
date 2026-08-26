@@ -17,7 +17,7 @@ import { DeclarativeBlock, type Content } from './render.js';
 import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 
 interface DeclField {
-  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number' | 'slot' | 'image';
+  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number' | 'slot' | 'image' | 'boolean';
   label?: string;
   fields?: Record<string, DeclField>;
   default?: unknown;
@@ -45,6 +45,17 @@ function toField(key: string, def: DeclField): Field {
       // the same field every hand-coded image block uses. Edited in the
       // sidebar, not inline.
       return { type: 'custom', label, render: NewsletterImageFieldAdapter as never } as Field;
+    case 'boolean':
+      // On/off toggle → Puck radio with real boolean values, so the renderer's
+      // truthy() and `if`/`unless` guards treat them correctly.
+      return {
+        type: 'radio',
+        label,
+        options: [
+          { label: 'Yes', value: true },
+          { label: 'No', value: false },
+        ],
+      } as Field;
     case 'array': {
       const arrayFields: Record<string, Field> = {};
       const sub = def.fields ?? {};
@@ -60,6 +71,7 @@ function defaultFor(def: DeclField): unknown {
   if (def.default !== undefined) return def.default;
   if (def.type === 'array' || def.type === 'slot') return [];
   if (def.type === 'number') return 0;
+  if (def.type === 'boolean') return false;
   return '';
 }
 
