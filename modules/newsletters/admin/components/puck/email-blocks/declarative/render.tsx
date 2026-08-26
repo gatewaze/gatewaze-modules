@@ -67,6 +67,29 @@ function truthy(v: unknown): boolean {
   return !!v;
 }
 
+/**
+ * Evaluate an `if` / `unless` condition against the content.
+ *
+ *   if="field"            — truthy (non-empty) presence check.
+ *   if="field == value"   — value equality (string compare).
+ *   if="field != value"   — value inequality.
+ *
+ * Equality is the robust way to drive a toggle from a radio/select field:
+ * Puck round-trips those field values as strings (every hand-coded radio here
+ * — underline, align, level — uses string values, not booleans), so a
+ * `boolean` field's "Yes"/"No" arrives as `"true"`/`"false"`, both of which are
+ * truthy. Comparing `String(value)` to the expected literal sidesteps that —
+ * and works whether the value arrives as a boolean or a string.
+ */
+function evalCond(expr: string, content: Content): boolean {
+  const m = /^\s*([\w.$]+)\s*(==|!=)\s*(.*?)\s*$/.exec(expr);
+  if (m) {
+    const equal = String(getPath(content, m[1]) ?? '') === m[3];
+    return m[2] === '==' ? equal : !equal;
+  }
+  return truthy(getPath(content, expr));
+}
+
 function resolveBindings(text: string, content: Content): string {
   return text.replace(/\{\{\s*([\w.$]+)\s*\}\}/g, (_, key: string) => {
     const v = getPath(content, key);
@@ -178,7 +201,7 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   // field visible so the operator can click in and fill it (otherwise an empty
   // <Heading if="title"> has nothing to click). Structural guards (arrays,
   // slots) still collapse when empty so the canvas isn't cluttered.
-  if (attrs['if'] !== undefined && !truthy(getPath(ctx.content, attrs['if']))) {
+  if (attrs['if'] !== undefined && !evalCond(attrs['if'], ctx.content)) {
     if (!(ctx.editMode && ctx.editableFields.has(attrs['if']))) return null;
   }
 
@@ -189,7 +212,7 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   // the element to render is the email-safe way to switch a style. No
   // edit-mode exception: the toggle field is never inline-editable, and the
   // correct variant should always show on the canvas.
-  if (attrs['unless'] !== undefined && truthy(getPath(ctx.content, attrs['unless']))) {
+  if (attrs['unless'] !== undefined && evalCond(attrs['unless'], ctx.content)) {
     return null;
   }
 
