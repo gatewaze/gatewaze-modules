@@ -46,14 +46,16 @@ function toField(key: string, def: DeclField): Field {
       // sidebar, not inline.
       return { type: 'custom', label, render: NewsletterImageFieldAdapter as never } as Field;
     case 'boolean':
-      // On/off toggle → Puck radio with real boolean values, so the renderer's
-      // truthy() and `if`/`unless` guards treat them correctly.
+      // On/off toggle → Puck radio. Values are the STRINGS 'true'/'false'
+      // (Puck round-trips radio values as strings — see the hand-coded
+      // underline/align fields), matched in templates with
+      // `if="field == true"` / `if="field == false"`.
       return {
         type: 'radio',
         label,
         options: [
-          { label: 'Yes', value: true },
-          { label: 'No', value: false },
+          { label: 'Yes', value: 'true' },
+          { label: 'No', value: 'false' },
         ],
       } as Field;
     case 'array': {
@@ -68,10 +70,13 @@ function toField(key: string, def: DeclField): Field {
 }
 
 function defaultFor(def: DeclField): unknown {
+  // Boolean toggles round-trip as the strings 'true'/'false' (see toField),
+  // so normalise the default to a matching string regardless of how it was
+  // written in the schema (true / "true" / omitted → 'true'; false → 'false').
+  if (def.type === 'boolean') return def.default === false || def.default === 'false' ? 'false' : 'true';
   if (def.default !== undefined) return def.default;
   if (def.type === 'array' || def.type === 'slot') return [];
   if (def.type === 'number') return 0;
-  if (def.type === 'boolean') return false;
   return '';
 }
 
