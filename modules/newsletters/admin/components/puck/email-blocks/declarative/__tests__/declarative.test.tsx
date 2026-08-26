@@ -135,6 +135,27 @@ describe('declarative block format', () => {
     expect(html).toContain('https://b');
   });
 
+  it('`unless` renders only when the field is falsy (boolean toggle)', async () => {
+    // A boolean toggle picks between two variants: `if` for the on-state,
+    // `unless` for the off-state. Exactly one renders, and the shared field is
+    // never emitted twice.
+    const TOGGLE = `
+<!-- SCHEMA: { "text": {"type":"richtext"}, "italic": {"type":"boolean","default":true} } -->
+<Section>
+  <richtext if="italic" field="text" style="font-style:italic" />
+  <richtext unless="italic" field="text" style="font-style:normal" />
+</Section>`;
+    const on = await renderEntry(TOGGLE, { text: '<p>Hi</p>', italic: true });
+    expect(on).toContain('font-style:italic');
+    expect(on).not.toContain('font-style:normal');
+    expect((on.match(/Hi/g) || []).length).toBe(1);
+
+    const off = await renderEntry(TOGGLE, { text: '<p>Hi</p>', italic: false });
+    expect(off).toContain('font-style:normal');
+    expect(off).not.toContain('font-style:italic');
+    expect((off.match(/Hi/g) || []).length).toBe(1);
+  });
+
   it('exposes a slot field and renders its children', async () => {
     const SLOT = `
 <!-- SCHEMA: { "children": {"type":"slot"} } -->
