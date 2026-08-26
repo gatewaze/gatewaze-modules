@@ -182,6 +182,17 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
     if (!(ctx.editMode && ctx.editableFields.has(attrs['if']))) return null;
   }
 
+  // `unless="field"` — the negation of `if`: render only when the field is
+  // FALSY. Lets a boolean toggle choose between two variants of an element
+  // (e.g. an italic vs. upright <richtext>) — the parsed `style` is cached
+  // per node, so a style value itself can't be bound to a field, and picking
+  // the element to render is the email-safe way to switch a style. No
+  // edit-mode exception: the toggle field is never inline-editable, and the
+  // correct variant should always show on the canvas.
+  if (attrs['unless'] !== undefined && truthy(getPath(ctx.content, attrs['unless']))) {
+    return null;
+  }
+
   // Loop — repeat this element (minus `each`) per array item.
   if (attrs['each'] !== undefined) {
     const arr = getPath(ctx.content, attrs['each']);
