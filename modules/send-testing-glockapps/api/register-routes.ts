@@ -171,13 +171,22 @@ export function registerRoutes(app: any, _ctx?: any): void {
         .upsert(rows, { onConflict: 'email', ignoreDuplicates: true });
       if (insertError) throw new Error(insertError.message);
 
-      const { data: people, error: readError } = await supabase
-        .from('people')
-        .select('id, email')
-        .in('email', unique);
-      if (readError) throw new Error(readError.message);
+      // Chunked: a 1000-item .in() serialises into a ~26KB request URL, which
+      // PostgREST rejects with 400. Seed lists are ~70 addresses today, but the
+      // validation above allows up to 1000, so this must not depend on the list
+      // staying small.
+      const people: { id: string; email: string }[] = [];
+      const IN_CHUNK = 100;
+      for (let i = 0; i < unique.length; i += IN_CHUNK) {
+        const { data, error: readError } = await supabase
+          .from('people')
+          .select('id, email')
+          .in('email', unique.slice(i, i + IN_CHUNK));
+        if (readError) throw new Error(readError.message);
+        people.push(...(data ?? []));
+      }
 
-      const subs = (people ?? []).map((person: any) => ({
+      const subs = people.map((person: any) => ({
         list_id: listId,
         person_id: person.id,
         email: person.email.toLowerCase(),
