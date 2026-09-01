@@ -470,28 +470,39 @@ export function registerRoutes(app: any, ctx?: any): void {
       const config = await loadConfig(supabase);
       const domain = assertInboundDomain(config);
 
-      const subs = await fetchAllPages((from, to) =>
-        supabase
-          .from('list_subscriptions')
-          .select('email')
-          .eq('list_id', SEND_TESTING_LIST_ID)
-          .eq('subscribed', true)
-          .like('email', `%@${domain}`)
-          .order('email', { ascending: true })
-          .range(from, to),
-      );
+      // Two independent paginated scans, run concurrently: the subscribed
+      // audience, and the people rows carrying the attributes.
+      //
+      // Deliberately NOT `.in('email', <subscriber emails>)`: a 1000-item .in()
+      // serialises into a ~26KB request URL, which PostgREST rejects with 400 —
+      // that is exactly what made a 25k export fail with a 500. Filtering people
+      // by the markers they already carry keeps every URL ~160 chars regardless
+      // of how large the population grows.
+      const [subs, peopleRows] = await Promise.all([
+        fetchAllPages((from, to) =>
+          supabase
+            .from('list_subscriptions')
+            .select('email')
+            .eq('list_id', SEND_TESTING_LIST_ID)
+            .eq('subscribed', true)
+            .like('email', `%@${domain}`)
+            .order('email', { ascending: true })
+            .range(from, to),
+        ),
+        fetchAllPages((from, to) =>
+          supabase
+            .from('people')
+            .select('email, attributes')
+            .eq('acquisition_source', 'send_testing')
+            .like('email', `%@${domain}`)
+            .order('email', { ascending: true })
+            .range(from, to),
+        ),
+      ]);
 
       const emails = subs.map((s: any) => s.email);
       const people = new Map<string, any>();
-      for (let i = 0; i < emails.length; i += PAGE_SIZE) {
-        const slice = emails.slice(i, i + PAGE_SIZE);
-        const { data, error } = await supabase
-          .from('people')
-          .select('email, attributes')
-          .in('email', slice);
-        if (error) throw new Error(error.message);
-        for (const person of data ?? []) people.set(person.email.toLowerCase(), person);
-      }
+      for (const person of peopleRows) people.set(person.email.toLowerCase(), person);
 
       const lines = ['email,first_name,last_name,timezone,sequence'];
       for (const email of emails) {
@@ -533,7 +544,10 @@ export function registerRoutes(app: any, ctx?: any): void {
         .eq('acquisition_source', 'send_testing')
         .like('email', `%@${domain}`)
         .order('email', { ascending: true })
-        .limit(Math.max(config.inspectableCount, 0));
+        // Clamped: inspectable_count has no configured maximum, and the
+        // subscription lookup below uses .in(), which breaks past a few hundred
+        // items (a 1000-item .in() is a ~26KB URL that PostgREST rejects).
+        .limit(Math.min(Math.max(config.inspectableCount, 0), 200));
       if (error) throw new Error(error.message);
 
       const { data: subs } = await supabase
