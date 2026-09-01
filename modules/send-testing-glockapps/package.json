@@ -1,0 +1,23 @@
+{
+  "name": "@gatewaze-modules/send-testing-glockapps",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Inbox-placement reporting for send tests via GlockApps seed lists",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*",
+    "./api/*": "./api/*",
+    "./lib/*": "./lib/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "express": "*"
+  }
+}
