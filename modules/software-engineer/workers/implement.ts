@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity, resolveRunCredentials } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
-import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.js';
+import { makeMultiWorkspace, hasChanges, commitAndPush, commitsAhead, pushBranch } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { classifyBlastRadius } from '../lib/blast-radius.js';
 import { redactToken } from '../lib/git.js';
@@ -31,7 +31,10 @@ export default async function implement(job, ctx) {
   const token = project.githubToken;
 
   const codeRepos = (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun);
-  await recordPhaseStart(supabase, run, 'implement');
+  // A resumed run (admin-routes.ts's /resume) passes an incremented attempt so this retry's row
+  // doesn't clobber the FAILED attempt 1 row — both stay visible on the run detail phase badges.
+  const attempt = job?.data?.attempt ?? 1;
+  await recordPhaseStart(supabase, run, 'implement', attempt);
   let ws;
   try {
     const { data: art } = await supabase.from('se_artifacts').select('content').eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
@@ -46,7 +49,8 @@ export default async function implement(job, ctx) {
     const prompt = [
       `Implement the approved spec below across the WRITABLE repos in your workspace. Change only the`,
       `repos and files the spec calls for; follow each repo's CLAUDE.md/.claude rules exactly. Make the`,
-      `code changes and any tests. Do NOT push, tag, or open PRs — the system handles that.`,
+      `code changes and any tests. Do NOT push, tag, or open PRs — the system handles that. Do NOT run`,
+      `git commit yourself; leave the working tree as edited/untracked files for the system to commit.`,
       ``,
       `--- APPROVED SPEC ---`,
       String(art?.content ?? '').slice(0, 20000),
@@ -54,13 +58,14 @@ export default async function implement(job, ctx) {
     ].join('\n');
 
     const result = await runAgentSession(supabase, ctx, run, project, 'implement', {
-      cwd: ws.root, prompt, repos: ws.repos,
+      cwd: ws.root, prompt, repos: ws.repos, attempt,
       allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
       systemAppend: 'Implement per the spec + each repo\'s rules. Never use --no-verify or --force. Do not open PRs.',
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
-      await recordPhaseEnd(supabase, run, 'implement', 'failed', msg);
+      if (result.costCeiling) return blockRun(supabase, run, 'implement', 'cost_ceiling', msg);
+      await recordPhaseEnd(supabase, run, 'implement', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
       return { failed: msg };
     }
@@ -70,10 +75,17 @@ export default async function implement(job, ctx) {
     const allFiles = []; // real changed-file objects across every writable repo (for blast-radius)
     let compareUnknown = false; // a diff fetch failed → we cannot assess blast radius → fail safe
     for (const r of ws.repos.filter((x) => x.writable)) {
-      if (!(await hasChanges(r.dir))) continue;
+      const dirty = await hasChanges(r.dir);
+      const ahead = dirty ? 0 : await commitsAhead(r.dir, r.startSha);
+      if (!dirty && ahead === 0) continue;
       changed++;
       try {
-        await commitAndPush(r.dir, branch, `feat: implement issue #${run.issue_number}`);
+        if (dirty) {
+          await commitAndPush(r.dir, branch, `feat: implement issue #${run.issue_number}`);
+        } else {
+          // Agent already committed (tree is clean but HEAD moved) — nothing to add, just push.
+          await pushBranch(r.dir, branch);
+        }
         await upsertRunPr(supabase, run, r.repoOwner, r.repoName, { branch, state: 'open' });
         try {
           const cmp = await gitCompareCount(githubClient(token), r.repoOwner, r.repoName, r.baseBranch, branch);
@@ -84,7 +96,7 @@ export default async function implement(job, ctx) {
       }
     }
     if (changed === 0) {
-      await recordPhaseEnd(supabase, run, 'implement', 'failed', 'agent produced no changes in any writable repo');
+      await recordPhaseEnd(supabase, run, 'implement', 'failed', 'agent produced no changes in any writable repo', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: 'implement produced no changes' }).eq('id', run.id);
       return { failed: 'no changes' };
     }

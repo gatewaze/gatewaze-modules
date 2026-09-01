@@ -72,15 +72,30 @@ interface CommunicationSettings {
 
 export type SpeakerEmailType = 'submitted' | 'approved' | 'rejected' | 'reserve' | 'confirmed';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class SpeakerEmailService {
   /**
-   * Get communication settings for an event
+   * Get communication settings for an event.
+   *
+   * events_communication_settings.event_id holds the event UUID, but the
+   * callers' `eventId` is ambiguous: module tab slots receive the UUID
+   * (EventDetailPage passes event.id) while older call sites pass the
+   * 6-char short id. Accept either — a short id resolves through events
+   * first. (Passing the short id straight to .eq() 400s against the uuid
+   * column, which silently killed these emails from short-id callers.)
    */
   static async getCommunicationSettings(eventId: string): Promise<CommunicationSettings | null> {
+    let eventUuid = eventId;
+    if (!UUID_RE.test(eventId)) {
+      const { data: eventRow } = await supabase.from('events').select('id').eq('event_id', eventId).maybeSingle();
+      if (!eventRow?.id) return null;
+      eventUuid = eventRow.id;
+    }
     const { data, error } = await supabase
       .from('events_communication_settings')
       .select('*')
-      .eq('event_id', eventId)
+      .eq('event_id', eventUuid)
       .maybeSingle();
 
     if (error) {
@@ -92,13 +107,16 @@ export class SpeakerEmailService {
   }
 
   /**
-   * Get event details for template variables
+   * Get event details for template variables. Accepts the event UUID or the
+   * 6-char short id (see getCommunicationSettings) — querying events.event_id
+   * with a UUID matched nothing, so every speaker email from a slot-mounted
+   * tab failed with 'Event details not found'.
    */
   static async getEventDetails(eventId: string): Promise<EventDetails | null> {
     const { data, error } = await supabase
       .from('events')
       .select('event_title, event_id, event_city, event_country_code, event_start, event_end, event_location, event_link')
-      .eq('event_id', eventId)
+      .eq(UUID_RE.test(eventId) ? 'id' : 'event_id', eventId)
       .single();
 
     if (error) {
@@ -114,7 +132,10 @@ export class SpeakerEmailService {
    */
   static buildConfirmationLink(confirmationToken: string): string {
     const baseUrl = getAppBaseUrl();
-    return `${baseUrl}/functions/v1/speaker-confirm?token=${confirmationToken}`;
+    // NB: the function is events-speaker-confirm — the old speaker-confirm
+    // name never existed on this platform, so every emailed confirm link
+    // 404ed until this was fixed.
+    return `${baseUrl}/functions/v1/events-speaker-confirm?token=${confirmationToken}`;
   }
 
   /**

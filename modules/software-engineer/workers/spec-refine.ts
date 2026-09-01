@@ -20,7 +20,7 @@ import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credenti
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
-import { writeMessage, touchRun } from '../lib/run-state.js';
+import { writeMessage, touchRun, recordPhaseEnd, nextPhaseAttempt } from '../lib/run-state.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -103,6 +103,16 @@ export default async function specRefine(job, ctx) {
       try { await writeMessage(supabase, run, 'system', `Could not apply the change: ${msg}`); } catch { /* */ }
       return { failed: msg };
     }
+
+    // Attribute this refine's token spend (main + subagents, via modelUsage) as its own costed record.
+    try {
+      await recordPhaseEnd(supabase, run, 'spec-refine', 'passed', 'refined spec under review', {
+        model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude',
+        input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead,
+        cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage,
+        attempt: await nextPhaseAttempt(supabase, run.id, 'spec-refine'),
+      });
+    } catch { /* cost tracking is best-effort — never fail a refine over it */ }
 
     const updatedPath = join(ws.root, 'SPEC.md');
     const updated = existsSync(updatedPath) ? readFileSync(updatedPath, 'utf8') : '';

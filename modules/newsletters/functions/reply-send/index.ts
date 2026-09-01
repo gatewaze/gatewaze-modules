@@ -30,7 +30,7 @@ interface Attachment {
 }
 
 interface RequestBody {
-  kind: 'broadcast' | 'newsletter';
+  kind: 'broadcast' | 'newsletter' | 'event';
   replyId: string;
   bodyHtml: string;
   bodyText?: string;
@@ -88,7 +88,7 @@ Deno.serve(async (req: Request) => {
     if (!admin) return json({ error: 'Not authorized' }, 403);
 
     const { kind, replyId, bodyHtml, bodyText, attachments }: RequestBody = await req.json();
-    if (!replyId || (kind !== 'broadcast' && kind !== 'newsletter')) {
+    if (!replyId || (kind !== 'broadcast' && kind !== 'newsletter' && kind !== 'event')) {
       return json({ error: 'kind and replyId are required' }, 400);
     }
     if (!bodyHtml || !bodyHtml.replace(/<[^>]*>/g, '').trim()) {
@@ -125,6 +125,31 @@ Deno.serve(async (req: Request) => {
       fromAddress = b?.from_address || '';
       fromName = b?.from_name || b?.name || undefined;
       replyTo = b?.reply_to || '';
+    } else if (kind === 'event') {
+      const { data: reply } = await service
+        .from('event_replies')
+        .select('from_email, subject, send_log_id, in_reply_to, event_id, batch_job_id')
+        .eq('id', replyId)
+        .maybeSingle();
+      if (!reply) return json({ error: 'Reply not found' }, 404);
+      toEmail = reply.from_email;
+      subject = reSubject(reply.subject);
+      sendLogId = reply.send_log_id;
+      inReplyTo = reply.in_reply_to;
+      parentId = reply.event_id;
+      // The comms job holds the identity the speaker was originally mailed
+      // from; the send-log override below still wins when it has one.
+      const { data: job } = await service
+        .from('email_batch_jobs')
+        .select('from_address, reply_to')
+        .eq('id', reply.batch_job_id)
+        .maybeSingle();
+      // from_address is stored as "Name - email@x" or a bare address.
+      const raw = job?.from_address || '';
+      const dashed = raw.match(/^(.*?)\s+-\s+(\S+@\S+)$/);
+      fromAddress = dashed ? dashed[2].trim() : raw;
+      fromName = dashed ? dashed[1].trim() : undefined;
+      replyTo = job?.reply_to || '';
     } else {
       const { data: reply } = await service
         .from('newsletter_replies')
@@ -223,8 +248,14 @@ Deno.serve(async (req: Request) => {
       // base64 → bytes (approx; ignores padding).
       size: Math.floor((a.content.length * 3) / 4),
     }));
-    const table = kind === 'broadcast' ? 'broadcast_reply_messages' : 'newsletter_reply_messages';
-    const parentKey = kind === 'broadcast' ? 'broadcast_id' : 'collection_id';
+    const table =
+      kind === 'broadcast' ? 'broadcast_reply_messages'
+      : kind === 'event' ? 'event_reply_messages'
+      : 'newsletter_reply_messages';
+    const parentKey =
+      kind === 'broadcast' ? 'broadcast_id'
+      : kind === 'event' ? 'event_id'
+      : 'collection_id';
     const { error: recErr } = await service.from(table).insert({
       reply_id: replyId,
       [parentKey]: parentId,
@@ -240,7 +271,10 @@ Deno.serve(async (req: Request) => {
     if (recErr) console.error('[reply-send] message record insert failed:', recErr.message);
 
     // Mark the inbound reply as handled.
-    const replyTable = kind === 'broadcast' ? 'broadcast_replies' : 'newsletter_replies';
+    const replyTable =
+      kind === 'broadcast' ? 'broadcast_replies'
+      : kind === 'event' ? 'event_replies'
+      : 'newsletter_replies';
     await service.from(replyTable).update({ is_read: true }).eq('id', replyId);
 
     return json({ success: true, messageId });

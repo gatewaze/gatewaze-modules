@@ -37,6 +37,31 @@ CREATE INDEX IF NOT EXISTS idx_events_gradual_eventslug
   ON public.events (gradual_eventslug)
   WHERE gradual_eventslug IS NOT NULL;
 
+-- Auto-derive gradual_eventslug from a Gradual (home.mlops.community) event_link.
+-- The AAIF virtual-events scraper populates events.event_link from the Gradual
+-- URL (…/public/events/<slug>) but historically never mapped that slug into
+-- gradual_eventslug, so both the outbound sync (portal → Gradual) and inbound
+-- webhook matching (Gradual → AAIF) silently no-op'd and inbound registrations
+-- queued as pending. Rather than thread the slug through every event-writing
+-- path, derive it in the DB whenever a Gradual event_link is set/changed. This
+-- keeps gradual_eventslug in lock-step with event_link (self-healing if Gradual
+-- ever renames a slug), and is source-agnostic (scraper, admin, or API).
+CREATE OR REPLACE FUNCTION public.set_gradual_eventslug_from_link()
+RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF NEW.event_link ~ 'home\.mlops\.community/public/events/[^/?#]+' THEN
+    NEW.gradual_eventslug := regexp_replace(
+      NEW.event_link, '^.*/public/events/([^/?#]+).*$', '\1');
+  END IF;
+  RETURN NEW;
+END;
+$fn$;
+
+DROP TRIGGER IF EXISTS trg_set_gradual_eventslug ON public.events;
+CREATE TRIGGER trg_set_gradual_eventslug
+  BEFORE INSERT OR UPDATE OF event_link ON public.events
+  FOR EACH ROW EXECUTE FUNCTION public.set_gradual_eventslug_from_link();
+
 -- ---------------------------------------------------------------------------
 -- Inbound webhook side (integrations-gradual-webhook / -import-history)
 -- ---------------------------------------------------------------------------

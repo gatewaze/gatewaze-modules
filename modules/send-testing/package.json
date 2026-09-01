@@ -1,0 +1,23 @@
+{
+  "name": "@gatewaze-modules/send-testing",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Rehearse a large send at scale: synthetic recipients on a dedicated list, real-arrival measurement, completion and latency reporting",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*",
+    "./api/*": "./api/*",
+    "./lib/*": "./lib/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "express": "*"
+  }
+}

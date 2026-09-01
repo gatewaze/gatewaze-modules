@@ -5,7 +5,7 @@
 // including a client that doesn't implement .from() at all, which is how a pre-migration-012
 // instance shows up in the real overview-route mock.
 import { describe, it, expect } from 'vitest';
-import { computeSpendOverview } from '../cost.js';
+import { computeSpendOverview, computeModelUsage } from '../cost.js';
 
 const NOW = Date.now();
 const daysAgo = (n: number) => new Date(NOW - n * 24 * 3600 * 1000).toISOString();
@@ -57,5 +57,32 @@ describe('computeSpendOverview', () => {
   it('returns zeroed totals for an empty result set', async () => {
     const sb = mockSupabase({ data: [] });
     expect(await computeSpendOverview(sb, null)).toEqual({ total_30d: 0, total_7d: 0, by_project: [] });
+  });
+});
+
+// rpc double for computeModelUsage: records the call and returns canned se_model_usage() rows.
+function mockRpc(result: { data?: unknown; error?: unknown }) {
+  const calls: { name: string; args: unknown }[] = [];
+  return {
+    calls,
+    rpc(name: string, args: unknown) { calls.push({ name, args }); return Promise.resolve({ data: result.data ?? null, error: result.error ?? null }); },
+  };
+}
+
+describe('computeModelUsage', () => {
+  it('maps se_model_usage rows and passes the project + days through to the RPC', async () => {
+    const sb = mockRpc({ data: [
+      { model: 'claude-sonnet-5', phases: 12, tokens_input: 900, tokens_output: 270000, tokens_cache_read: 36900000, tokens_cache_creation: 2360000, cost_usd: 18.14 },
+      { model: 'claude-haiku-4-5', phases: 3, tokens_input: 1800, tokens_output: 20, tokens_cache_read: 0, tokens_cache_creation: 0, cost_usd: 0.002 },
+    ] });
+    const rows = await computeModelUsage(sb, 'p1', 30);
+    expect(sb.calls[0]).toEqual({ name: 'se_model_usage', args: { p_project: 'p1', p_days: 30 } });
+    expect(rows[0]).toEqual({ model: 'claude-sonnet-5', phases: 12, input: 900, output: 270000, cacheRead: 36900000, cacheCreation: 2360000, cost: 18.14 });
+    expect(rows[1].model).toBe('claude-haiku-4-5');
+  });
+
+  it('degrades to [] on RPC error or a missing-rpc client (pre-022 instance)', async () => {
+    expect(await computeModelUsage(mockRpc({ error: { message: 'function se_model_usage does not exist' } }), null, 7)).toEqual([]);
+    expect(await computeModelUsage({}, null, 7)).toEqual([]); // client with no .rpc() at all
   });
 });

@@ -9,7 +9,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
-import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.js';
+import { makeMultiWorkspace, hasChanges, commitAndPush, commitsAhead, pushBranch } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, listRunPrs } from '../lib/run-state.js';
@@ -34,10 +34,11 @@ export default async function revise(job, ctx) {
 
   // 'ci' = pr-monitor triggered a bounded CI-fix pass (no new review feedback, CI settled-red).
   const reason = job?.data?.reason;
+  const attempt = job?.data?.attempt ?? 1;
   const openPrs = (await listRunPrs(supabase, run.id)).filter((p) => p.pr_number && p.state === 'open');
   if (openPrs.length === 0) { await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch' }).eq('id', run.id); return { skipped: 'no open prs' }; }
 
-  await recordPhaseStart(supabase, run, 'revise');
+  await recordPhaseStart(supabase, run, 'revise', attempt);
   // Escalation ladder: a 2nd+ revise round means the mapped model's previous attempt didn't stick.
   // Latch escalation BEFORE the session so resolvePhaseModel sees it for this round.
   if ((run.revise_count ?? 0) >= 1 && !run.model_escalated && project.escalationModel) {
@@ -83,8 +84,14 @@ export default async function revise(job, ctx) {
     const commitId = await resolveCommitIdentity(supabase, project, token);
     ws = await makeMultiWorkspace(codeRepos, token, run.branch_name, commitId, true);
 
+    // classification (issue #54): the platform's ci-classify pass already flagged which checks look
+    // addressable, and why. Prepending it focuses the agent on those checks instead of re-diagnosing
+    // everything from scratch. Absent for a `revise` job enqueued before this field existed, or for
+    // any non-CI reason — the prompt is unchanged in that case.
+    const classification = typeof job?.data?.classification === 'string' ? job.data.classification.trim() : '';
     const prompt = ciMode
       ? [
+          ...(classification ? [`CI TRIAGE NOTE (from the platform, before you start):`, classification, ``] : []),
           `The CI checks on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''} are FAILING.`,
           `Reproduce and fix them by editing the code in the relevant WRITABLE repo(s) in your workspace.`,
           `Run the repo's own checks (typecheck, lint, tests, security review) exactly as its CLAUDE.md`,
@@ -101,6 +108,7 @@ export default async function revise(job, ctx) {
     const result = await runAgentSession(supabase, ctx, run, project, 'revise', {
       cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
       systemAppend: 'Address the review feedback per each repo\'s rules. Never use --no-verify or --force.',
+      attempt,
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
@@ -111,11 +119,17 @@ export default async function revise(job, ctx) {
 
     let pushed = 0;
     for (const r of ws.repos.filter((x) => x.writable)) {
-      if (!(await hasChanges(r.dir))) continue;
+      const dirty = await hasChanges(r.dir);
+      const ahead = dirty ? 0 : await commitsAhead(r.dir, r.startSha);
+      if (!dirty && ahead === 0) continue;
       const subject = ciMode
         ? `fix(ci): repair failing checks${run.issue_number ? ` on #${run.issue_number}` : ''}`
         : `fix: address review feedback${run.issue_number ? ` on #${run.issue_number}` : ''}`;
-      try { await commitAndPush(r.dir, run.branch_name, subject); pushed++; }
+      try {
+        if (dirty) await commitAndPush(r.dir, run.branch_name, subject);
+        else await pushBranch(r.dir, run.branch_name);
+        pushed++;
+      }
       catch { /* leave that PR as-is */ }
     }
     const round = (run.revise_count ?? 0) + 1;

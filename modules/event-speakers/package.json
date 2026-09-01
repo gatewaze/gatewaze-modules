@@ -16,8 +16,15 @@
   "peerDependencies": {
     "@gatewaze/shared": "*"
   },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.0",
+    "bullmq": "^5.76.10",
+    "jszip": "^3.10.1",
+    "puppeteer-core": "^23.11.1",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.33.5"
+  },
   "devDependencies": {
-    "@supabase/supabase-js": "^2.45.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.0"
   }

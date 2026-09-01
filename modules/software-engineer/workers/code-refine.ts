@@ -16,11 +16,11 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credentials.js';
-import { makeMultiWorkspace, hasChanges, commitAndPush } from '../lib/worktree.js';
+import { makeMultiWorkspace, hasChanges, commitAndPush, commitsAhead, pushBranch } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
 import { redactToken } from '../lib/git.js';
 import { enqueuePhase } from '../lib/enqueue.js';
-import { listRunPrs, writeMessage, touchRun } from '../lib/run-state.js';
+import { listRunPrs, writeMessage, touchRun, recordPhaseEnd, nextPhaseAttempt } from '../lib/run-state.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -95,10 +95,26 @@ export default async function codeRefine(job, ctx) {
       return { failed: msg };   // stay at ready_to_submit; feedback left undelivered for a retry
     }
 
+    // Attribute this refine's token spend (main + subagents, via modelUsage) as its own costed record.
+    try {
+      await recordPhaseEnd(supabase, run, 'code-refine', 'passed', 'applied reviewer feedback pre-PR', {
+        model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude',
+        input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead,
+        cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage,
+        attempt: await nextPhaseAttempt(supabase, run.id, 'code-refine'),
+      });
+    } catch { /* cost tracking is best-effort — never fail a refine over it */ }
+
     let pushed = 0;
     for (const r of ws.repos.filter((x) => x.writable)) {
-      if (!(await hasChanges(r.dir))) continue;
-      try { await commitAndPush(r.dir, run.branch_name, `fix: address reviewer feedback${run.issue_number ? ` on #${run.issue_number}` : ''}`); pushed++; }
+      const dirty = await hasChanges(r.dir);
+      const ahead = dirty ? 0 : await commitsAhead(r.dir, r.startSha);
+      if (!dirty && ahead === 0) continue;
+      try {
+        if (dirty) await commitAndPush(r.dir, run.branch_name, `fix: address reviewer feedback${run.issue_number ? ` on #${run.issue_number}` : ''}`);
+        else await pushBranch(r.dir, run.branch_name);
+        pushed++;
+      }
       catch { /* leave that repo as-is */ }
     }
 

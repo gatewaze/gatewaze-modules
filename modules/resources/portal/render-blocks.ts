@@ -152,6 +152,10 @@ interface TalkData {
   worth_noting?: string
   quote?: string
   accent?: string
+  /** Additive (conference-recap): 'keynote' | 'workshop' | 'panel' — omitted for plain talks. */
+  session_type?: string
+  /** Additive (conference-recap): spoken language when not English; the quote was translated. */
+  source_language?: string
 }
 
 /** One talk card — a byte-faithful port of md2cards.py card(). */
@@ -188,6 +192,22 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
     ? `\n      <div style="font-size:12.5px; color:var(--ink-3); line-height:1.4; margin-top:2px;">${subHtml}</div>`
     : ''
 
+  // Session-format + language labels (additive conference-recap fields).
+  // Both values are allowlist/character-filtered here regardless of what the
+  // block data carries — this renderer emits raw HTML strings.
+  const metaBits: string[] = []
+  const sessionType = String(data.session_type ?? '').toLowerCase()
+  if (sessionType === 'keynote' || sessionType === 'workshop' || sessionType === 'panel') {
+    metaBits.push(sessionType.charAt(0).toUpperCase() + sessionType.slice(1))
+  }
+  const lang = String(data.source_language ?? '').replace(/[^A-Za-z\s-]/g, '').trim().slice(0, 60)
+  if (lang && lang.toLowerCase() !== 'english') {
+    metaBits.push(`Presented in ${esc(lang)} &middot; quote translated`)
+  }
+  const metaBlock = metaBits.length > 0
+    ? `\n      <div style="font-size:12px; color:${color}; line-height:1.4; margin-top:3px; font-weight:600;">${metaBits.join(' &nbsp;&bull;&nbsp; ')}</div>`
+    : ''
+
   const video = data.youtube_id ? videoEmbed(data.youtube_id, color, title) : ''
 
   return `
@@ -195,7 +215,7 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
     <div style="display:flex; align-items:flex-start; gap:12px;">
       <span style="flex:none; min-width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; background:${color}26; color:${color}; border-radius:9px; font-weight:700; font-size:16px;">${num}</span>
       <div style="min-width:0;">
-      <div style="font-size:15.5px; font-weight:700; color:var(--ink); line-height:1.35;">${namesHtml}</div>${subBlock}
+      <div style="font-size:15.5px; font-weight:700; color:var(--ink); line-height:1.35;">${namesHtml}</div>${subBlock}${metaBlock}
       </div>
       ${copyLinkChip(tid, ctx.pagePath)}
     </div>

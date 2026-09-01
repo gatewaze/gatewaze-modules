@@ -329,6 +329,20 @@ const newslettersModule: GatewazeModule = {
     // 076 tz_local grace-window send timing (per-recipient local target, not
     // default-tz schedule date + hard clamp) — fixes the evening-schedule blast.
     'migrations/076_tz_local_grace_window.sql',
+    // 077 + 078 existed as files but were never registered, so they had never
+    // applied on prod (the "migration file not in the array never runs" trap).
+    // 077 re-checks unsubscribe state at drip-claim time so someone who
+    // unsubscribes after fan-out isn't emailed (compliance); 078 grants
+    // newsletter_replies to authenticated (migration 015 added RLS policies but
+    // never the table grant — the root cause of the admin "mark reply as read
+    // reverts to unread" bug). Both are CREATE-OR-REPLACE / GRANT over existing
+    // objects, safe + idempotent.
+    'migrations/077_claim_recheck_subscription.sql',
+    'migrations/078_newsletter_replies_grant.sql',
+    'migrations/079_block_member_gating.sql',
+    'migrations/080_default_placeholder_signin_cta.sql',
+    'migrations/081_block_gating_via_content.sql',
+    'migrations/082_edition_member_embargo.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
@@ -501,7 +515,10 @@ const newslettersModule: GatewazeModule = {
   publicContentSources: [
     {
       type: 'newsletter_edition',
-      table: 'newsletters_editions',
+      // Gated view (not the base table) so the /api/v1/content aggregator, which
+      // reads this via the service-role client (bypassing RLS), doesn't leak
+      // gated/embargoed edition metadata. See migration 082.
+      table: 'newsletters_public_editions',
       scope: 'newsletters:read',
       fields: { id: 'id', title: 'title', date: 'edition_date', summary: 'preheader' },
       visibilityFilter: [{ column: 'status', eq: 'published' }],

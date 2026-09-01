@@ -15,7 +15,7 @@ export interface ModelCostRow { model: string; costUSD: number }
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Short display label for a model id: 'claude-sonnet-5' → 'sonnet-5', 'gpt-5.2-codex' unchanged. */
-export const shortModel = (m: string): string => m.replace(/^claude-/, '');
+export const shortModel = (m: string): string => m.replace(/^claude-/, '').replace(/-20\d{6}$/, '');
 
 export function aggregateRunModelCosts(phases: Array<Record<string, unknown>>): { total: number; rows: ModelCostRow[] } {
   const perModel: Record<string, number> = {};
@@ -31,7 +31,18 @@ export function aggregateRunModelCosts(phases: Array<Record<string, unknown>>): 
         total += withCost.reduce((s, [, u]) => s + (u.costUSD as number), 0);
         continue;
       }
-      // Live snapshot: tokens known, per-model cost not — attribute the phase estimate to its model.
+      // Live snapshot: tokens known, per-model cost not yet. A running row also has no `model`
+      // column (set at phase end), so attribute the estimate to the DOMINANT model in the usage
+      // map (by token volume) rather than falling through to 'unattributed'.
+      if (Number.isFinite(phaseCost) && phaseCost > 0) {
+        const dominant = entries
+          .map(([m, u]: [string, any]) => [m, (u?.cacheRead ?? 0) + (u?.output ?? 0) + (u?.input ?? 0)] as [string, number])
+          .sort((a, b) => b[1] - a[1])[0]?.[0];
+        const m = dominant ?? String(p?.model ?? 'unattributed');
+        perModel[m] = (perModel[m] ?? 0) + phaseCost;
+        total += phaseCost;
+      }
+      continue;
     }
     if (Number.isFinite(phaseCost) && phaseCost > 0) {
       const m = String(p?.model ?? 'unattributed');

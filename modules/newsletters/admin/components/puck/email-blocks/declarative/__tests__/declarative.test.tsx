@@ -135,6 +135,40 @@ describe('declarative block format', () => {
     expect(html).toContain('https://b');
   });
 
+  it('== / != switches a boolean toggle (value round-trips as a string; safe default)', async () => {
+    // A boolean field's radio value round-trips as the STRING 'true'/'false'
+    // (Puck stringifies radio values), so `if="italic"` would be truthy for
+    // both. Comparison guards pick the variant, and making the "on" variant
+    // `!= false` keeps it as the default so a missing value never blanks the
+    // block. Exactly one variant renders; the shared field is never doubled.
+    const TOGGLE = `
+<!-- SCHEMA: { "text": {"type":"richtext"}, "italic": {"type":"boolean","default":true} } -->
+<Section>
+  <richtext if="italic != false" field="text" style="font-style:italic" />
+  <richtext if="italic == false" field="text" style="font-style:normal" />
+</Section>`;
+    const cases: [unknown, string, string][] = [
+      ['true', 'italic', 'normal'], // Puck "Yes"
+      ['false', 'normal', 'italic'], // Puck "No"
+      [true, 'italic', 'normal'], // a real boolean, if one ever arrives
+      [undefined, 'italic', 'normal'], // legacy instance with no stored value → default italic
+    ];
+    for (const [val, shown, hidden] of cases) {
+      const html = await renderEntry(TOGGLE, { text: '<p>Hi</p>', italic: val });
+      expect(html).toContain(`font-style:${shown}`);
+      expect(html).not.toContain(`font-style:${hidden}`);
+      expect((html.match(/Hi/g) || []).length).toBe(1);
+    }
+  });
+
+  it('`unless` (bare, no ==) still guards on falsiness', async () => {
+    const T = `
+<!-- SCHEMA: { "flag": {"type":"text"} } -->
+<Section><Text unless="flag">SHOWN_WHEN_EMPTY</Text></Section>`;
+    expect(await renderEntry(T, { flag: '' })).toContain('SHOWN_WHEN_EMPTY');
+    expect(await renderEntry(T, { flag: 'x' })).not.toContain('SHOWN_WHEN_EMPTY');
+  });
+
   it('exposes a slot field and renders its children', async () => {
     const SLOT = `
 <!-- SCHEMA: { "children": {"type":"slot"} } -->
@@ -288,6 +322,56 @@ describe('declarative block format', () => {
       });
       expect(html).toContain('src="https://cdn.example.com/path/the%20file.png"');
       expect(html).not.toContain('the%2520file.png');
+    });
+  });
+
+  // A template repo owns 100% of its look, including its own light/dark theme,
+  // by carrying a `<style>` block plus `class` / `data-*` hooks on elements.
+  // The renderer must forward those through untouched (no styling values live
+  // in the platform) — see render.tsx.
+  describe('template-owned styling hooks (class / data-* / <style>)', () => {
+    it('forwards `class` as className while still applying shared-class inline styles', async () => {
+      const SRC = `<!-- SCHEMA: { "t": {"type":"text"} } -->
+<Section class="card dm-card"><Text class="eyebrow dm-h">{{t}}</Text></Section>`;
+      const html = await renderEntry(SRC, { t: 'Hi' });
+      // class emitted for the client-side dark-mode hook…
+      expect(html).toMatch(/class="[^"]*dm-card[^"]*"/);
+      expect(html).toMatch(/class="[^"]*dm-h[^"]*"/);
+      // …and the shared `card` class still contributes its inline style.
+      expect(html).toMatch(/border-radius:\s*15px/);
+    });
+
+    it('forwards `class` onto <richtext> too (dark hooks must reach body copy)', async () => {
+      const SRC = `<!-- SCHEMA: { "body": {"type":"richtext"} } -->
+<Section class="dm-card"><richtext field="body" class="dm-t" style="color:#3c3c3f" /></Section>`;
+      const html = await renderEntry(SRC, { body: '<p>Body copy.</p>' });
+      // The richtext wrapper carries the hook, so a dark-mode `.dm-t` rule can
+      // recolour body copy — not just headings.
+      expect(html).toMatch(/class="dm-t"[^>]*>.*Body copy/s);
+    });
+
+    it('forwards data-* attributes (Outlook.com [data-ogsc] hook)', async () => {
+      const SRC = `<!-- SCHEMA: {} --><Section data-ogsc="x"><Text data-foo="bar">Hi</Text></Section>`;
+      const html = await renderEntry(SRC, {});
+      expect(html).toContain('data-ogsc="x"');
+      expect(html).toContain('data-foo="bar"');
+    });
+
+    it('emits <style> CSS verbatim (media queries + hooks survive; not escaped)', async () => {
+      const SRC = `<!-- SCHEMA: {} --><Section><style>@media (prefers-color-scheme: dark){ .dm-card{ background-color:#171718 !important } }</style><Text>Hi</Text></Section>`;
+      const html = await renderEntry(SRC, {});
+      expect(html).toContain('@media (prefers-color-scheme: dark)');
+      expect(html).toContain('.dm-card{ background-color:#171718 !important }');
+      // Braces must survive un-escaped so the rules actually parse.
+      expect(html).not.toContain('&#123;');
+    });
+
+    it('does not resolve {{bindings}} inside <style> (no break-out via field values)', async () => {
+      const SRC = `<!-- SCHEMA: { "evil": {"type":"text"} } --><Section><style>.x{color:{{evil}}}</style></Section>`;
+      const html = await renderEntry(SRC, { evil: '}</style><script>alert(1)</script>' });
+      // The field value is NOT interpolated into the style element.
+      expect(html).not.toContain('<script>alert(1)</script>');
+      expect(html).toContain('.x{color:{{evil}}}');
     });
   });
 });

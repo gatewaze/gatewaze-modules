@@ -1355,7 +1355,22 @@ function NewsletterCanvasRoot(props: RootProps) {
   //
   // When no wrapper is configured (fresh newsletter, no `wrappers/default.html`
   // in the repo) we fall through to the unwrapped editable body.
-  const wrapperTemplate = props.puck?.metadata?.wrapperTemplate;
+  const rawWrapperTemplate = props.puck?.metadata?.wrapperTemplate;
+  // The canvas light/dark state is an EXPLICIT toggle, so the preview must be
+  // deterministic regardless of the operator's OS. A template's dark theme is
+  // authored twice — as `@media (prefers-color-scheme: dark)` (for real
+  // recipients) and as `[data-ogsc]` (Outlook.com's dark hook). In the canvas
+  // the media query would couple the preview to the OS (dark OS => the light
+  // toggle still renders dark), so we NEUTRALISE that condition for the canvas
+  // ONLY — never the sent email — by ANDing it with an impossible width. Dark
+  // is then driven solely by the `[data-ogsc]` attribute this canvas sets on
+  // the dark toggle (see the .gw-email-card wrapper below), making both toggles
+  // authoritative independent of the OS. The real send uses the untouched
+  // wrapper, so recipients still get OS-driven dark mode.
+  const wrapperTemplate = rawWrapperTemplate?.replace(
+    /@media\s*\(\s*prefers-color-scheme\s*:\s*dark\s*\)/gi,
+    '@media (prefers-color-scheme: dark) and (min-width: 2000000px)',
+  );
   const editionDateRaw = props.puck?.metadata?.editionDate ?? '';
   const editionDateFmt = (() => {
     const s = String(editionDateRaw).slice(0, 10);
@@ -1392,7 +1407,19 @@ function NewsletterCanvasRoot(props: RootProps) {
       <style data-newsletter-canvas-css dangerouslySetInnerHTML={{ __html: BASE_CANVAS_CSS + css }} />
       <FieldsAutoSwitcher />
       <UserBlockSyntheticExpander />
-      <div ref={wrapperRef} className="gw-email-card">
+      {/*
+        Dark preview: the Sun/Moon toggle darkens the canvas backdrop
+        (CANVAS_DARK_CSS) but that alone can't theme the blocks — a template's
+        own dark rules key off `@media (prefers-color-scheme: dark)` (an OS
+        setting we can't force here) or the `[data-ogsc]` attribute hook. So in
+        dark preview we set `data-ogsc` on the email-card wrapper: the same
+        attribute Outlook.com stamps in dark mode, which templates already
+        target. Its `[data-ogsc] .dm-*` rules (emitted by the wrapper's own
+        <style>) then fire, giving a faithful preview of the recipient's dark
+        rendering — logo swap included. No styling lives here; this is purely
+        the trigger. Templates with no dark rules are unaffected.
+      */}
+      <div ref={wrapperRef} className="gw-email-card" {...(mode === 'dark' ? { 'data-ogsc': '' } : {})}>
         {wrappedBody}
       </div>
     </>

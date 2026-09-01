@@ -25,14 +25,18 @@ import SetupPanel from './SetupPanel';
 import RunTimeline from './RunTimeline';
 import TranscriptMarkdown from './TranscriptMarkdown';
 import TestEnvPanel from './TestEnvPanel';
+import TestEnvErrorBoundary from './TestEnvErrorBoundary';
 import TriageCopilot from './TriageCopilot';
 import { ProjectAvatar } from './ProjectAvatar';
 import { projectOptionLabel } from './projectAvatarUtils';
 import { issueKey, mergeIssues, pendingOptimistic } from './issueList';
 import OverviewView from './OverviewView';
-import { ALL_RUN_STATUSES, STATUS_LABELS, toggleStatusInParam, fmtCost } from './overview-filters';
+import { ALL_RUN_STATUSES, STATUS_LABELS, STATUS_COLOR, toggleStatusInParam, fmtCost } from './overview-filters';
 import { aggregateRunModelCosts, shortModel } from '../lib/run-costs';
+import { formatAbsolute, formatRelative } from '../lib/format-time';
 import { isNearBottom } from './autoscroll';
+import { resumeBlockedReason, resumeHintFor, resumeConfirmText } from './resumeButton';
+import { classifyDecision, decisionTextFor } from '../../lib/decision-kind.js';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -53,11 +57,6 @@ async function api(path: string, init?: RequestInit) {
   return r.status === 204 ? null : r.json();
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  merged: 'green', pr_open: 'amber', watching: 'blue', changes_requested: 'amber',
-  running: 'blue', failed: 'red', blocked: 'red', closed: 'gray', cancelled: 'gray', queued: 'gray',
-  awaiting_architecture: 'amber', architecture_in_review: 'amber', ready_to_submit: 'amber', awaiting_spec: 'amber',
-};
 const phaseColor = (s: string) =>
   s === 'passed' ? 'green' : s === 'failed' || s === 'blocked' ? 'red' : s === 'running' ? 'blue' : 'gray';
 
@@ -107,6 +106,11 @@ const runLabel = (r: any): string =>
     ? `Interactive session${r.project?.name ? ` · ${r.project.name}` : ''}`
     : `${r?.repo_owner}/${r?.repo_name} #${r?.issue_number}`;
 
+// List-only headline: the list already shows the title on its own line, so the
+// headline here only needs the issue number, not the owner/repo source.
+const runListNumber = (r: any): string =>
+  r?.kind === 'interactive' ? runLabel(r) : `#${r?.issue_number}`;
+
 // One-line label promoting the latest live event out of the collapsed "Tool activity" block, so the
 // working strip shows what the agent is doing *right now* between turn-boundary transcript messages.
 function eventLabel(ev: any): string {
@@ -150,6 +154,7 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   const [starting, setStarting] = useState(false);
   const [merging, setMerging] = useState(false);            // guard against a double manual-merge submit
   const [submitting, setSubmitting] = useState(false);      // guard against a double PR-submit click
+  const [resuming, setResuming] = useState(false);          // guard against a double resume click
   const lastActivityRef = useRef<number>(Date.now());       // epoch ms of the last realtime signal for `selected`
   const [, tick] = useState(0);                             // 1s ticker so "updated Ns ago" recomputes
   const transcript = useRef<HTMLDivElement | null>(null);   // the transcript scroll container (bounded, scrolls internally)
@@ -336,6 +341,17 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     } catch (e: any) { setErr(String(e.message ?? e)); }
     finally { setMerging(false); }
   };
+  // Resume a FAILED run back into the phase that failed (issue #36) — keeps the run id + full history.
+  const resume = async () => {
+    if (!selected || !window.confirm(resumeConfirmText(detail?.run ?? { status: 'failed' }, detail?.prs ?? []))) return;
+    setResuming(true); setErr(null);
+    try {
+      const r = await api(`/runs/${selected}/resume`, { method: 'POST' });
+      toast.success(`Resuming — retrying ${r?.phase ?? 'the failed phase'} (attempt ${r?.attempt ?? '?'}).`);
+      await loadRuns(); await loadDetail(selected);
+    } catch (e: any) { setErr(String(e.message ?? e)); }
+    finally { setResuming(false); }
+  };
   // Submit a human-gated PR (status ready_to_submit): opens the pull request(s) the agent prepared.
   const submitPr = async () => {
     if (!selected || !window.confirm('Submit the pull request now? This opens it on the code repository.')) return;
@@ -421,6 +437,34 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
     <div className="flex flex-col lg:flex-row gap-6 lg:h-[calc(100dvh-var(--se-runs-chrome,240px))] lg:overflow-hidden">
       {/* Runs board — full width on mobile; hidden once a run is selected so the detail pane takes over. */}
       <div className={`w-full lg:w-80 shrink-0 lg:overflow-y-auto pr-1 ${selected ? 'hidden lg:block' : 'block'}`}>
+        {!showArchived && projectList.length > 0 && (
+          // Leads the sidebar, set off with its own caption + rule, so it reads as an action
+          // rather than as another entry in the project/status filter cluster below it.
+          <div className="mb-3 pb-3 border-b border-[var(--gray-5)]">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)] mb-1.5">
+              Start a new engineer
+            </div>
+            {/* items-stretch: the auto-height select conforms to the fixed-height
+                Button so both controls line up regardless of the kit's sm height. */}
+            <div className="flex items-stretch gap-2">
+              {projectList.length > 1 && (
+                <select
+                  value={startProject}
+                  onChange={(e) => setStartProject(e.target.value)}
+                  // No vertical padding: keep the select's intrinsic height below the
+                  // Button's fixed height so flex stretch grows it to match the Button.
+                  className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 text-sm"
+                  aria-label="Project for a new interactive engineer"
+                >
+                  {projectList.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
+                </select>
+              )}
+              <Button variant="soft" size="sm" onClick={startInteractive} disabled={starting} className={projectList.length > 1 ? 'shrink-0' : 'w-full'}>
+                <PlayCircleIcon className="size-4 mr-1" />{starting ? 'Starting…' : 'Start engineer'}
+              </Button>
+            </div>
+          </div>
+        )}
         {projectList.length > 1 && (
           <select
             value={projectFilter}
@@ -473,27 +517,6 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
             </div>
           );
         })()}
-        {!showArchived && projectList.length > 0 && (
-          // items-stretch: the auto-height select conforms to the fixed-height
-          // Button so both controls line up regardless of the kit's sm height.
-          <div className="mb-2 flex items-stretch gap-2">
-            {projectList.length > 1 && (
-              <select
-                value={startProject}
-                onChange={(e) => setStartProject(e.target.value)}
-                // No vertical padding: keep the select's intrinsic height below the
-                // Button's fixed height so flex stretch grows it to match the Button.
-                className="min-w-0 flex-1 rounded-md border border-[var(--gray-6)] bg-transparent px-2 text-sm"
-                aria-label="Project for a new interactive engineer"
-              >
-                {projectList.map((p) => <option key={p.id} value={p.id}>{projectOptionLabel(p.avatar_emoji, p.name)}</option>)}
-              </select>
-            )}
-            <Button variant="soft" size="sm" onClick={startInteractive} disabled={starting} className={projectList.length > 1 ? 'shrink-0' : 'w-full'}>
-              <PlayCircleIcon className="size-4 mr-1" />{starting ? 'Starting…' : 'Start engineer'}
-            </Button>
-          </div>
-        )}
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs font-semibold uppercase tracking-wide text-[var(--gray-10)]">{showArchived ? 'Archive' : 'Runs'}</div>
           <button onClick={() => { onSelect(null); setDetail(null); setShowArchived((v) => !v); }} className="text-[11px] text-[var(--gray-10)] hover:text-[var(--gray-12)] underline">
@@ -521,11 +544,16 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               selected === r.id ? 'border-[var(--gray-6)] bg-[var(--gray-3)]' : 'border-transparent hover:bg-[var(--gray-2)]'
             }`}
           >
-            <div className="text-sm font-medium truncate text-[var(--gray-12)]">{runLabel(r)}</div>
-            {r.title && r.kind !== 'interactive' && <div className="text-xs text-[var(--gray-11)] truncate">{r.title}</div>}
+            <div className="text-sm font-medium truncate text-[var(--gray-12)]">{runListNumber(r)}</div>
+            {r.title && r.kind !== 'interactive' && <div className="text-xs text-[var(--gray-11)] truncate" title={r.title}>{r.title}</div>}
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <Badge color={STATUS_COLOR[r.status] ?? 'gray'} size="1">{r.status}</Badge>
               <span className="text-xs text-[var(--gray-10)]">{r.current_phase}</span>
+              {formatRelative(r.started_at ?? r.created_at) && (
+                <span className="text-[11px] text-[var(--gray-10)]" title={formatAbsolute(r.started_at ?? r.created_at) ?? undefined}>
+                  started {formatRelative(r.started_at ?? r.created_at)}
+                </span>
+              )}
               {fmtCost(r.cost_usd) && <span className="text-[11px] font-mono text-[var(--gray-10)]" title="Model spend (priced from the AI price book)">{fmtCost(r.cost_usd)}</span>}
               {r.project?.name && <span className="text-[11px] text-[var(--gray-10)] ml-auto inline-flex items-center gap-1"><ProjectAvatar emoji={r.project.avatar_emoji} className="size-3.5" /> {r.project.name}{r.engineer_name ? ` · ${r.engineer_name}` : ''}</span>}
             </div>
@@ -534,7 +562,12 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
       </div>
 
       {/* Live agent view — hidden on mobile until a run is selected, then it takes the full width. */}
-      <div className={`flex-1 min-w-0 min-h-0 flex-col lg:border-l border-[var(--gray-5)] lg:pl-6 ${selected ? 'flex' : 'hidden lg:flex'}`}>
+      {/* The pane's own content (a tall gate panel — spec/architecture/submission review, before the transcript
+          even starts) can exceed the fixed row height on its own. Give the pane its own scroll region so that
+          content — and the gate's action button below it — is always reachable, instead of being clipped by the
+          row's lg:overflow-hidden (issue #61). The transcript below keeps its own independent scroll + tail-pin
+          (issue #18); this only affects the ancestor, not that region. */}
+      <div className={`flex-1 min-w-0 min-h-0 flex-col lg:overflow-y-auto lg:border-l border-[var(--gray-5)] lg:pl-6 ${selected ? 'flex' : 'hidden lg:flex'}`}>
         {/* Mobile-only back control: reuses the URL-driven selection (onSelect(null) → /runs). */}
         {selected && (
           <button
@@ -557,6 +590,11 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   <Badge color={STATUS_COLOR[detail.run.pr_state] ?? 'gray'} variant="soft" size="1">PR: {detail.run.pr_state}</Badge>
                 )}
                 {detail.run.project?.name && <span className="text-xs text-[var(--gray-10)] inline-flex items-center gap-1"><ProjectAvatar emoji={detail.run.project.avatar_emoji} className="size-4" /> {detail.run.project.name}</span>}
+                {formatRelative(detail.run.started_at ?? detail.run.created_at) && (
+                  <span className="text-xs text-[var(--gray-10)]" title={formatAbsolute(detail.run.started_at ?? detail.run.created_at) ?? undefined}>
+                    started {formatRelative(detail.run.started_at ?? detail.run.created_at)}
+                  </span>
+                )}
                 {detail.run.engineer_name && <span className="text-xs text-[var(--gray-10)]">🧑‍💻 {detail.run.engineer_name}</span>}
                 {detail.run.reporter_display_name && <span className="text-xs text-[var(--gray-10)]">· reported by {detail.run.reporter_display_name}</span>}
                 {detail.run.revise_count > 0 && <span className="text-xs text-[var(--gray-10)]">· {detail.run.revise_count} revision{detail.run.revise_count > 1 ? 's' : ''}</span>}
@@ -579,6 +617,27 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
                   {detail.run.kind === 'interactive' && detail.run.status === 'running' && (
                     <Button variant="soft" color="red" size="xs" onClick={closeSession}><StopCircleIcon className="size-3.5 mr-1" />End session</Button>
                   )}
+                  {/* A `blocked` run joined `failed` as resumable (issue #49 §5) — Resume redrafts the
+                      spec, retries `revise`, or just retries the current phase, depending on the run's
+                      DecisionKind. `blockedReason` still hard-disables (archived/interactive); the
+                      DecisionKind hint below it is informational only — even config_blocked stays
+                      resumable, since /resume just retries that phase. */}
+                  {['failed', 'blocked'].includes(detail.run.status) && (() => {
+                    const blockedReason = resumeBlockedReason(detail.run);
+                    const hint = blockedReason ? null : resumeHintFor(detail.run, detail.prs ?? []);
+                    return (
+                      <span className="inline-flex items-center gap-1.5">
+                        <Button
+                          variant="solid" color="amber" size="xs" onClick={resume}
+                          disabled={resuming || !!blockedReason}
+                          title={blockedReason ?? hint ?? 'Retry the phase that failed, keeping this run’s history'}
+                        >
+                          <ArrowPathIcon className="size-3.5 mr-1" />{resuming ? 'Resuming…' : 'Resume'}
+                        </Button>
+                        {(blockedReason || hint) && <span className="text-xs text-[var(--gray-10)]">{blockedReason ?? hint}</span>}
+                      </span>
+                    );
+                  })()}
                   <Button variant="soft" size="xs" onClick={override} disabled={!liveStatus}><ArrowUturnLeftIcon className="size-3.5 mr-1" />Override</Button>
                   {detail.run.kind !== 'interactive' && (
                     <Button variant="soft" color="red" size="xs" onClick={cancel} disabled={!liveStatus}><XCircleIcon className="size-3.5 mr-1" />Cancel</Button>
@@ -723,7 +782,46 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
               </div>
             )}
 
-            <TestEnvPanel prs={detail.prs ?? []} projectId={detail.run.project_id} projectName={detail.run.project?.name} />
+            {/* A `blocked` run disambiguated (issue #49 §1/§6): review_blocked / pr_closed_partial are
+                agent-discussable — there's no live agent to stream to, so the message sits in the
+                mailbox and is read the next time the run is Resumed (button above). config_blocked
+                needs a Setup fix, not a chat, so it only shows the reason. */}
+            {detail.run.status === 'blocked' && (() => {
+              const kind = classifyDecision(detail.run, detail.prs ?? []);
+              const discussable = kind !== 'config_blocked';
+              return (
+                <div className="mt-3 rounded-lg border border-[var(--red-6)] bg-[var(--red-2)] p-3">
+                  <span className="text-sm font-medium text-[var(--gray-12)]">🛑 {kind ? decisionTextFor(kind, detail.run) : 'Blocked'}</span>
+                  {discussable ? (
+                    <>
+                      <p className="text-xs text-[var(--gray-10)] mt-1">Chat below to give the agent context — it’s stored and read the next time you <strong>Resume</strong> above (there’s no live agent to stream to right now).</p>
+                      <div className="mt-3">
+                        <textarea
+                          value={draft}
+                          onChange={(e) => setDraft(e.target.value)}
+                          placeholder="Give the agent context for when this run is resumed…"
+                          rows={2}
+                          className="w-full rounded border border-[var(--gray-6)] bg-[var(--gray-1)] px-2 py-1 text-sm text-[var(--gray-12)]"
+                        />
+                        <div className="mt-2">
+                          <Button variant="soft" size="xs" onClick={send} disabled={!draft.trim()}>
+                            <PaperAirplaneIcon className="size-3.5 mr-1" />Send to agent
+                          </Button>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-[var(--gray-10)] mt-1">This needs a configuration fix (see Setup), not a chat. Fix the issue, then use <strong>Resume</strong> above to retry.</p>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Keyed by run id so a stale error from a previous run's panel doesn't
+                bleed into the next run selected in the same tab. */}
+            <TestEnvErrorBoundary key={detail.run.id} label="Test environment">
+              <TestEnvPanel prs={detail.prs ?? []} projectId={detail.run.project_id} projectName={detail.run.project?.name} />
+            </TestEnvErrorBoundary>
 
             {/* Live "working" strip — persistent while the run is live so progress is visible between
                 turn-boundary transcript messages. Distinct queued (waiting) vs running (active) states,
@@ -1079,7 +1177,7 @@ export default function SoftwareEngineerTab() {
         onTabChange={onTabChange}
       >
         <div className="py-6">
-          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} onOpenRuns={onOpenRuns} />}
+          {activeTab === 'overview' && <OverviewView onGoToSetup={() => onTabChange('setup')} onOpenRuns={onOpenRuns} onOpenRun={onSelectRun} />}
           {activeTab === 'runs' && <RunsView selected={selectedRun} onSelect={onSelectRun} onGoToSetup={() => onTabChange('setup')} />}
           {activeTab === 'issues' && <IssuesView />}
           {activeTab === 'setup' && <SetupPanel routeProjectId={selectedProject} onSelectProject={onSelectProject} />}

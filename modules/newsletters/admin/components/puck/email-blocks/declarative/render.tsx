@@ -67,6 +67,29 @@ function truthy(v: unknown): boolean {
   return !!v;
 }
 
+/**
+ * Evaluate an `if` / `unless` condition against the content.
+ *
+ *   if="field"            — truthy (non-empty) presence check.
+ *   if="field == value"   — value equality (string compare).
+ *   if="field != value"   — value inequality.
+ *
+ * Equality is the robust way to drive a toggle from a radio/select field:
+ * Puck round-trips those field values as strings (every hand-coded radio here
+ * — underline, align, level — uses string values, not booleans), so a
+ * `boolean` field's "Yes"/"No" arrives as `"true"`/`"false"`, both of which are
+ * truthy. Comparing `String(value)` to the expected literal sidesteps that —
+ * and works whether the value arrives as a boolean or a string.
+ */
+function evalCond(expr: string, content: Content): boolean {
+  const m = /^\s*([\w.$]+)\s*(==|!=)\s*(.*?)\s*$/.exec(expr);
+  if (m) {
+    const equal = String(getPath(content, m[1]) ?? '') === m[3];
+    return m[2] === '==' ? equal : !equal;
+  }
+  return truthy(getPath(content, expr));
+}
+
 function resolveBindings(text: string, content: Content): string {
   return text.replace(/\{\{\s*([\w.$]+)\s*\}\}/g, (_, key: string) => {
     const v = getPath(content, key);
@@ -178,8 +201,19 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   // field visible so the operator can click in and fill it (otherwise an empty
   // <Heading if="title"> has nothing to click). Structural guards (arrays,
   // slots) still collapse when empty so the canvas isn't cluttered.
-  if (attrs['if'] !== undefined && !truthy(getPath(ctx.content, attrs['if']))) {
+  if (attrs['if'] !== undefined && !evalCond(attrs['if'], ctx.content)) {
     if (!(ctx.editMode && ctx.editableFields.has(attrs['if']))) return null;
+  }
+
+  // `unless="field"` — the negation of `if`: render only when the field is
+  // FALSY. Lets a boolean toggle choose between two variants of an element
+  // (e.g. an italic vs. upright <richtext>) — the parsed `style` is cached
+  // per node, so a style value itself can't be bound to a field, and picking
+  // the element to render is the email-safe way to switch a style. No
+  // edit-mode exception: the toggle field is never inline-editable, and the
+  // correct variant should always show on the canvas.
+  if (attrs['unless'] !== undefined && evalCond(attrs['unless'], ctx.content)) {
+    return null;
   }
 
   // Loop — repeat this element (minus `each`) per array item.
@@ -248,7 +282,12 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
   if (tag === 'richtext') {
     const field = attrs['field'] ?? bindingKeyFromChildren(children);
     const value = field ? getPath(ctx.content, field) : undefined;
-    return <RichText key={key} value={value} style={nodeStyle(node)} />;
+    // Forward `class` onto the RichText wrapper too — same reason as the generic
+    // element path: a template's dark-mode `<style>` hooks (`.dm-t` etc.) must
+    // reach the body copy, not just headings. Without this, richtext bodies
+    // rendered with only inline light colours and never flipped in dark mode.
+    const rtClass = attrs['class'] ? resolveBindings(attrs['class'], ctx.content).trim() : '';
+    return <RichText key={key} value={value} style={nodeStyle(node)} className={rtClass || undefined} />;
   }
 
   const Comp = TAG_COMPONENTS[tag];
@@ -259,6 +298,21 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
     return <Fragment key={key}>{children.map((c, i) => renderNode(c, ctx, `${key}-${i}`))}</Fragment>;
   }
 
+  // <style> — emit the author's CSS verbatim. Its content is the template
+  // author's own (same trust level as the rest of the block/wrapper file), so
+  // it is written straight through rather than as escaped React children
+  // (which corrupt selectors) or binding-resolved text (a `}` or `</style>` in
+  // a recipient field value could otherwise break out). We deliberately do NOT
+  // resolve {{bindings}} here: style rules are static template text, never
+  // recipient data. This is what lets a wrapper carry a
+  // `@media (prefers-color-scheme: dark)` block + `.dm-*` / `[data-ogsc]` hooks
+  // so each template repo owns its own light/dark theme with no styling baked
+  // into the platform.
+  if (isIntrinsic && tag === 'style') {
+    const css = children.map((c) => (c.kind === 'text' ? c.value : '')).join('');
+    return createElement('style', { key, dangerouslySetInnerHTML: { __html: css } });
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const props: Record<string, any> = { style: nodeStyle(node), key };
   for (const a of PASSTHROUGH_ATTRS) {
@@ -266,6 +320,24 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
       const resolved = resolveBindings(attrs[a], ctx.content);
       props[a] = URL_ATTRS.has(a) ? safeUrlEncode(resolved) : resolved;
     }
+  }
+
+  // Forward `class` → className and any `data-*` attribute onto the emitted
+  // element, so a template can drive its own client-side CSS hooks (dark-mode
+  // `.dm-card` rules, Outlook.com's `[data-ogsc]`) from a `<style>` block it
+  // owns. `class` is STILL also consumed by nodeStyle() above for the shared
+  // inline styles — forwarding here is additive and backward compatible (a
+  // block that only ever used `class="card"` renders identically, now just
+  // also carrying `class="card"` in the output). Values are binding-resolved
+  // and React-escaped as ordinary attribute values, so there is no script
+  // vector — the allowlist still only ever emits react-email components + the
+  // inert intrinsic tags.
+  if (attrs['class'] !== undefined) {
+    const cls = resolveBindings(attrs['class'], ctx.content).trim();
+    if (cls) props.className = cls;
+  }
+  for (const name of Object.keys(attrs)) {
+    if (name.startsWith('data-')) props[name] = resolveBindings(attrs[name], ctx.content);
   }
 
   // `html` attribute — render the bound text as sanitised HTML so admins can

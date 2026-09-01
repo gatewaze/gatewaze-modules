@@ -16,7 +16,7 @@ import {
   ArrowPathIcon, ArrowTopRightOnSquareIcon, UserIcon, UsersIcon, CpuChipIcon, BoltIcon,
   MinusCircleIcon, BellAlertIcon, LinkIcon, BeakerIcon, PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
-import { DEPLOYABLE, deployTestEnv, fetchRelated, useTestEnvStatus } from './testEnv';
+import { DEPLOYABLE, deployTestEnv, fetchRelated, testEnvProfile, useTestEnvStatus } from './testEnv';
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -80,10 +80,14 @@ function PrRow({ pr, onChanged, testEnvAvailable }: { pr: any; onChanged?: () =>
   const [deploying, setDeploying] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
   const [deployMsg, setDeployMsg] = useState('');
   // "Deploy to test" — deployable repos only; replaces the current test env
-  // (single slot). Related PRs (same head branch in the other repos) are
-  // auto-included; the run view offers finer-grained selection.
+  // (single slot per profile). Related PRs (same head branch in the other
+  // repos) are auto-included; the run view offers finer-grained selection.
+  // Profile resolves from the project name(s) that surfaced this PR.
   const [prOwner, prName] = String(pr.repo).split('/');
-  const canDeployTest = !!testEnvAvailable && prOwner === 'gatewaze' && DEPLOYABLE.includes(prName)
+  const envProfile = (Array.isArray(pr.projects) ? pr.projects : [])
+    .map((n: string) => testEnvProfile(n)).find((p: string | null) => p) ?? null;
+  const canDeployTest = !!testEnvAvailable && !!envProfile && DEPLOYABLE[envProfile].includes(prName)
+    && (envProfile !== 'gatewaze' || prOwner === 'gatewaze')
     && pr.status !== 'merged' && pr.status !== 'closed';
   const doDeployTest = async () => {
     if (deploying === 'sending') return;
@@ -92,13 +96,13 @@ function PrRow({ pr, onChanged, testEnvAvailable }: { pr: any; onChanged?: () =>
       let set = [{ repo: prName, number: pr.number }];
       if (pr.project_id) {
         try {
-          const rel = await fetchRelated(String(pr.project_id), prName, pr.number);
+          const rel = await fetchRelated(envProfile, String(pr.project_id), prName, pr.number);
           for (const r of rel?.related ?? []) {
             if (!set.some((x) => x.repo === r.repo)) set.push({ repo: r.repo, number: r.number });
           }
         } catch { /* best-effort — deploy the single PR */ }
       }
-      await deployTestEnv(set);
+      await deployTestEnv(envProfile, set);
       setDeploying('done');
       setDeployMsg(`Deploying ${set.map((s) => `${s.repo}#${s.number}`).join(' + ')} — replaces the current test env. Watch progress on any run or above.`);
     } catch (e: any) {

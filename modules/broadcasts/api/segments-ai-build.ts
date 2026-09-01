@@ -53,7 +53,7 @@ async function loadRunChat(): Promise<RunChat> {
 
 // --- Segment vocabulary (mirrors packages/admin/src/lib/segments/types.ts) --
 const ATTRIBUTE_FIELDS = [
-  'email', 'attributes.first_name', 'attributes.last_name', 'attributes.company',
+  'email', 'full_name', 'attributes.first_name', 'attributes.last_name', 'attributes.company',
   'attributes.job_title', 'attributes.country', 'attributes.state', 'attributes.city',
   'attributes.postal', 'attributes.region',
   'attributes.timezone', 'attributes.linkedin_url', 'attributes.twitter_handle',

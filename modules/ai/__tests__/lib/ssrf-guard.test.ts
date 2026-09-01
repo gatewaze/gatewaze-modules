@@ -1,7 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { checkSsrfSafe } from '../../lib/secrets/ssrf-guard.js';
 
 describe('checkSsrfSafe', () => {
+  // The guard honours AI_MCP_HTTP_ALLOW_PRIVATE as a dev/staging escape hatch.
+  // These cases assert the *enforcing* behaviour, so pin the override off
+  // rather than inheriting whatever the runner's environment happens to set.
+  const previousOverride = process.env.AI_MCP_HTTP_ALLOW_PRIVATE;
+
+  beforeEach(() => {
+    delete process.env.AI_MCP_HTTP_ALLOW_PRIVATE;
+  });
+
+  afterEach(() => {
+    if (previousOverride === undefined) delete process.env.AI_MCP_HTTP_ALLOW_PRIVATE;
+    else process.env.AI_MCP_HTTP_ALLOW_PRIVATE = previousOverride;
+  });
+
   it('rejects non-https URIs', async () => {
     const r = await checkSsrfSafe('http://example.com/mcp');
     expect(r.ok).toBe(false);
@@ -65,5 +79,17 @@ describe('checkSsrfSafe', () => {
     const r = await checkSsrfSafe('https://1.1.1.1/mcp');
     expect(r.ok).toBe(true);
     expect(r.resolvedIps).toContain('1.1.1.1');
+  });
+
+  // The escape hatch is read per call, not captured at module load, so
+  // toggling it after import takes effect (and can be scoped in tests).
+  it('AI_MCP_HTTP_ALLOW_PRIVATE=true bypasses the guard, and only when set', async () => {
+    expect((await checkSsrfSafe('https://127.0.0.1/mcp')).ok).toBe(false);
+
+    process.env.AI_MCP_HTTP_ALLOW_PRIVATE = 'true';
+    expect((await checkSsrfSafe('https://127.0.0.1/mcp')).ok).toBe(true);
+
+    process.env.AI_MCP_HTTP_ALLOW_PRIVATE = 'false';
+    expect((await checkSsrfSafe('https://127.0.0.1/mcp')).ok).toBe(false);
   });
 });

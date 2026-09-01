@@ -43,3 +43,39 @@ This module has no configurable settings.
 |---|---|
 | `events` | Yes |
 | `event-sponsors` | Yes |
+
+## Speaker speaker kits (v2.1)
+
+Once a talk is **confirmed**, the module automatically generates a per-speaker
+**speaker kit** the speaker can use to promote the event:
+
+- **Tracking link** — an umami redirect link (`https://<portal-host>/go/<event>-<speaker-name>`)
+  pointing at the event's registration page with the legacy attribution UTMs
+  (`utm_source=speaker`, `utm_medium=direct`, `utm_campaign=<speaker profile id>`),
+  so registrations keep joining back to the speaker. Requires the `analytics`
+  module's umami instance (`UMAMI_*` env on the worker) and `PORTAL_HOST`.
+  This replaces the old Short.io speaker link.
+- **Share images** — three branded cards (feed 1200×1200, story 1080×1920,
+  link-preview 1200×630) rendered by the worker image's pinned Chromium
+  (puppeteer-core, 2x + Lanczos downscale). Templates, brand colorways/
+  lockups, and the event→brand mapping live in a git template repo
+  (`SPEAKER_CARDS_TEMPLATE_REPO` config, e.g.
+  `github.com/gatewaze/gatewaze-template-speaker-cards`) so designers
+  iterate without a deploy — mapping rules like `title_contains: "finance"`
+  pick each forum's colorway. The repo is fetched with a 10-min cache; the
+  copies vendored in `templates/` are the always-works fallback (and the
+  default Voice colorway applies when no rule matches or no repo is set).
+- **Post text** — four LinkedIn-safe plain-text variants written by the
+  `speaker-promo-posts` goose recipe + skill (gatewaze/lf-agents), embedding
+  the tracking link. Degrades gracefully: if the `ai` module is absent or the
+  run fails, the kit ships with images + link only.
+- **Zip** — everything bundled at
+  `media/speaker-promo-kits/<event>/<talk>/promo-kit.zip`.
+
+Pipeline: the `event-speakers-promo-kit-sweep` cron (2 min) creates
+`speaker_promo_kits` rows for confirmed talks of upcoming events, retries
+bounded failures, and drives the `event-speakers:generate-promo-kit`
+two-phase worker (build → poll text run → finalize). The portal's
+"Promote your talk" checklist item reads the kit through
+`/api/speaker-promo-kit` (edit-token capability auth) and shows the images,
+copyable posts, the link, and the zip download.

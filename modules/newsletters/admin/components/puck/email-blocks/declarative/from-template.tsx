@@ -17,7 +17,7 @@ import { DeclarativeBlock, type Content } from './render.js';
 import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
 
 interface DeclField {
-  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number' | 'slot' | 'image';
+  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number' | 'slot' | 'image' | 'boolean';
   label?: string;
   fields?: Record<string, DeclField>;
   default?: unknown;
@@ -45,6 +45,19 @@ function toField(key: string, def: DeclField): Field {
       // the same field every hand-coded image block uses. Edited in the
       // sidebar, not inline.
       return { type: 'custom', label, render: NewsletterImageFieldAdapter as never } as Field;
+    case 'boolean':
+      // On/off toggle → Puck radio. Values are the STRINGS 'true'/'false'
+      // (Puck round-trips radio values as strings — see the hand-coded
+      // underline/align fields), matched in templates with
+      // `if="field == true"` / `if="field == false"`.
+      return {
+        type: 'radio',
+        label,
+        options: [
+          { label: 'Yes', value: 'true' },
+          { label: 'No', value: 'false' },
+        ],
+      } as Field;
     case 'array': {
       const arrayFields: Record<string, Field> = {};
       const sub = def.fields ?? {};
@@ -57,6 +70,10 @@ function toField(key: string, def: DeclField): Field {
 }
 
 function defaultFor(def: DeclField): unknown {
+  // Boolean toggles round-trip as the strings 'true'/'false' (see toField),
+  // so normalise the default to a matching string regardless of how it was
+  // written in the schema (true / "true" / omitted → 'true'; false → 'false').
+  if (def.type === 'boolean') return def.default === false || def.default === 'false' ? 'false' : 'true';
   if (def.default !== undefined) return def.default;
   if (def.type === 'array' || def.type === 'slot') return [];
   if (def.type === 'number') return 0;

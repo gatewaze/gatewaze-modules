@@ -9,16 +9,150 @@
  * Runs on a cron (scan all) or for a single run (webhook nudge).
  */
 import { createClient } from '@supabase/supabase-js';
-import { getProject } from '../lib/credentials.js';
+import { getProject, getCodeRepos } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
-import { listRunPrs, upsertRunPr } from '../lib/run-state.js';
+import { listRunPrs, upsertRunPr, recordPhaseStart, recordPhaseEnd, writeEvent } from '../lib/run-state.js';
 import { dispatchProject, dispatchAll } from '../lib/dispatch.js';
 import { isTrustedFeedbackAuthor } from '../lib/feedback-authz.js';
 import { approveSpec, approveRunReviewLearnings } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
 import { summarizeChecks } from '../lib/pr-status.js';
+import { classifyDeterministic } from '../lib/ci-classify.js';
+import { InProcessRunner } from '../lib/agent-session.js';
+import { resolvePhaseModel } from '../lib/model-select.js';
+import { createOrSupersedeDecision } from '../lib/decisions.js';
+
+const CHECK_FAILURE_CONCLUSIONS = ['failure', 'timed_out', 'cancelled', 'action_required'];
+
+/**
+ * Classify a red PR's failing checks BEFORE spending a bounded CI-fix pass (issue #54). Cheap
+ * deterministic signals first (base-branch comparison, job step/log infra patterns) — free, no model
+ * call. Only checks that survive both fall through to one no-tools model turn. Fail-SAFE: any
+ * exception here returns 'addressable' (the pre-#54 behaviour), never 'external' — a broken
+ * classifier must not be the reason a run starves in `watching` forever.
+ */
+async function classifyCiFailure(supabase, ctx, gh, project, run, failingChecks) {
+  const FAIL_SAFE = { verdict: 'addressable', reasons: [], addressableSummary: null };
+  if (!failingChecks.length) return { verdict: 'external', reasons: [], addressableSummary: null };
+  try {
+    // Resolve each failing check's Actions job (name match on the check's commit's workflow runs).
+    const jobsBySha = new Map();
+    async function jobsForSha(owner, name, sha) {
+      const key = `${owner}/${name}@${sha}`;
+      if (jobsBySha.has(key)) return jobsBySha.get(key);
+      const jobs = [];
+      try {
+        const runsRes = await gh.listWorkflowRunsForCommit(owner, name, sha);
+        for (const wr of runsRes?.workflow_runs ?? []) {
+          const jobsRes = await gh.listWorkflowRunJobs(owner, name, wr.id).catch(() => null);
+          for (const job of jobsRes?.jobs ?? []) jobs.push(job);
+        }
+      } catch { /* no deterministic job signal available — falls through to ambiguous */ }
+      jobsBySha.set(key, jobs);
+      return jobs;
+    }
+
+    const resolved = [];
+    for (const c of failingChecks) {
+      const jobs = await jobsForSha(c.repoOwner, c.repoName, c.sha);
+      const match = jobs.find((j) => j.name === c.name) ?? null;
+      resolved.push({
+        name: c.name, repoOwner: c.repoOwner, repoName: c.repoName,
+        jobId: match?.id ?? null,
+        job: match ? { name: match.name, steps: match.steps ?? [], conclusion: match.conclusion ?? null } : null,
+      });
+    }
+
+    // Base-branch red check names, once per distinct repo among the failing checks.
+    const baseFailingCheckNames = new Set();
+    const codeRepos = await getCodeRepos(supabase, run.project_id).catch(() => []);
+    const seenRepos = new Set();
+    for (const c of failingChecks) {
+      const key = `${c.repoOwner}/${c.repoName}`;
+      if (seenRepos.has(key)) continue;
+      seenRepos.add(key);
+      try {
+        const repoCfg = codeRepos.find((r) => r.repoOwner === c.repoOwner && r.repoName === c.repoName);
+        const base = repoCfg?.baseBranch || (await gh.defaultBranch(c.repoOwner, c.repoName).catch(() => null));
+        if (!base) continue;
+        const headSha = await gh.getBranchHeadSha(c.repoOwner, c.repoName, base);
+        if (!headSha) continue;
+        const baseChecks = await gh.listCheckRuns(c.repoOwner, c.repoName, headSha).catch(() => null);
+        for (const bc of baseChecks?.check_runs ?? []) {
+          if (bc?.status === 'completed' && CHECK_FAILURE_CONCLUSIONS.includes(String(bc?.conclusion))) {
+            baseFailingCheckNames.add(bc.name);
+          }
+        }
+      } catch { /* best-effort — a repo's base-branch comparison failing just leaves it ambiguous */ }
+    }
+
+    const det1 = classifyDeterministic({ failingChecks: resolved, baseFailingCheckNames });
+    if (det1.verdict !== 'ambiguous') return { verdict: det1.verdict, reasons: det1.reasons, addressableSummary: null };
+
+    // Fetch log tails for only the still-ambiguous checks, then re-run the (still free) deterministic
+    // pass with logs attached — an infra log pattern can resolve a check without a model call.
+    const ambiguous1 = new Set(det1.ambiguousChecks);
+    const withLogs = [];
+    for (const c of resolved) {
+      if (!ambiguous1.has(c.name)) continue;
+      let logTail;
+      if (c.jobId != null) {
+        const raw = await gh.getJobLogTail(c.repoOwner, c.repoName, c.jobId, 8192).catch(() => '');
+        logTail = redactToken(raw, project.githubToken);
+      }
+      withLogs.push({ ...c, job: c.job ? { ...c.job, logTail } : c.job, logTail });
+    }
+    const det2 = classifyDeterministic({ failingChecks: withLogs, baseFailingCheckNames: new Set() });
+    const reasons = [...det1.reasons, ...det2.reasons];
+    if (det2.verdict !== 'ambiguous') return { verdict: det2.verdict, reasons, addressableSummary: null };
+
+    // Still ambiguous — one no-tools model turn over just the unresolved checks' logs.
+    const stillAmbiguous = withLogs.filter((c) => det2.ambiguousChecks.includes(c.name));
+    if (!project?.modelCred) return FAIL_SAFE; // no credential to run the classifier turn — fail open
+    await recordPhaseStart(supabase, run, 'ci-classify');
+    const prompt = [
+      `You are classifying CI failures on a pull request BEFORE a fix pass is attempted.`,
+      `For EACH check below, decide whether it looks ADDRESSABLE by a code change on this branch,`,
+      `or EXTERNAL (an infrastructure incident, flaky runner, or an unrelated upstream failure that no`,
+      `in-repo change could fix).`,
+      ``,
+      `Respond with ONLY one JSON object: {"verdicts":[{"check":"<name>","addressable":true|false,"reason":"<short reason>"}]}`,
+      ``,
+      ...stillAmbiguous.flatMap((c) => [
+        `--- CHECK: ${c.name} (${c.repoOwner}/${c.repoName}) ---`,
+        c.logTail ? c.logTail.slice(-4000) : '(no log tail available)',
+      ]),
+    ].join('\n');
+    const { model } = resolvePhaseModel(project, run, 'ci-classify');
+    const runner = new InProcessRunner();
+    const result = await runner.runPhase({
+      cwd: '/tmp', prompt, model,
+      credential: { kind: project.modelCredKind, value: project.modelCred },
+      noTools: true,
+    });
+    await recordPhaseEnd(supabase, run, 'ci-classify', result?.error ? 'failed' : 'passed', result?.error, {
+      model, engine: 'claude', input: result?.tokensInput, output: result?.tokensOutput,
+      cacheRead: result?.tokensCacheRead, cacheCreation: result?.tokensCacheCreation, cost: result?.costUSD,
+    });
+    if (result?.error) return FAIL_SAFE;
+    const m = /\{[\s\S]*\}/.exec(result?.text ?? '');
+    if (!m) return FAIL_SAFE;
+    let parsed;
+    try { parsed = JSON.parse(m[0]); } catch { return FAIL_SAFE; }
+    const verdicts = Array.isArray(parsed?.verdicts) ? parsed.verdicts : null;
+    if (!verdicts) return FAIL_SAFE;
+    const addressableOnes = verdicts.filter((v) => v?.addressable === true);
+    if (addressableOnes.length > 0) {
+      const summaryLines = verdicts.map((v) => `"${v.check}": ${v.addressable ? 'addressable' : 'external'} — ${v.reason ?? ''}`);
+      return { verdict: 'addressable', reasons, addressableSummary: [`CI TRIAGE (deterministic + model):`, ...reasons.map((r) => `- ${r}`), ...summaryLines.map((s) => `- ${s}`)].join('\n') };
+    }
+    return { verdict: 'external', reasons: [...reasons, ...verdicts.map((v) => `"${v.check}": ${v.reason ?? 'classified external by the model'}`)], addressableSummary: null };
+  } catch {
+    return FAIL_SAFE;
+  }
+}
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -42,6 +176,7 @@ async function reconcile(supabase, ctx, run) {
     let allMerged = true, anyClosedUnmerged = false, firstUrl = null;
     let latestActionable = 0;
     let anyFailingCi = false;   // any open PR whose checks have SETTLED red (→ candidate for a CI-fix pass)
+    const failingChecks = [];  // raw failing check-runs across all open PRs, for classifyCiFailure
     for (const p of prs) {
       firstUrl = firstUrl || p.pr_url;
       try {
@@ -64,8 +199,16 @@ async function reconcile(supabase, ctx, run) {
           for (const c of inline ?? []) if (c.created_at && isTrustedFeedbackAuthor(c.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(c.created_at).getTime());
           // CI health — settled-red counts (still-running does not, to avoid churn).
           if (pr.head?.sha) {
-            const checks = summarizeChecks((await gh.listCheckRuns(p.repo_owner, p.repo_name, pr.head.sha).catch(() => null))?.check_runs);
-            if (checks.failing > 0 && checks.pending === 0) anyFailingCi = true;
+            const checkRunsResult = await gh.listCheckRuns(p.repo_owner, p.repo_name, pr.head.sha).catch(() => null);
+            const checks = summarizeChecks(checkRunsResult?.check_runs);
+            if (checks.failing > 0 && checks.pending === 0) {
+              anyFailingCi = true;
+              for (const c of checkRunsResult?.check_runs ?? []) {
+                if (c?.status === 'completed' && CHECK_FAILURE_CONCLUSIONS.includes(String(c?.conclusion))) {
+                  failingChecks.push({ repoOwner: p.repo_owner, repoName: p.repo_name, name: c.name, sha: pr.head.sha });
+                }
+              }
+            }
           }
         }
       } catch { allMerged = false; }
@@ -97,6 +240,13 @@ async function reconcile(supabase, ctx, run) {
     if (anyClosedUnmerged) {
       if (managesIssue) { try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:blocked'); } catch { /* */ } }
       await supabase.from('se_runs').update({ ...patch, status: 'blocked', pr_state: 'changes_requested', pr_url: firstUrl, error: 'a PR was closed unmerged — partial; needs a human decision' }).eq('id', run.id);
+      try {
+        await createOrSupersedeDecision(supabase, {
+          runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: run.current_phase,
+          question: 'The pull request was closed unmerged, partway through. What should change?',
+          kind: 'text', context: firstUrl, originKind: 'pr_closed_partial',
+        });
+      } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
       return { runId: run.id, action: 'blocked-partial' };
     }
 
@@ -118,11 +268,27 @@ async function reconcile(supabase, ctx, run) {
     // as auto-merge below.)
     const CI_FIX_CAP = 3;
     if (run.kind !== 'external_pr' && anyFailingCi && (run.ci_fix_attempts ?? 0) < CI_FIX_CAP) {
+      // Classify BEFORE spending a fix pass (issue #54): an infra incident or a repo-wide upstream
+      // break (e.g. a new advisory failing an audit gate) burns a fix-pass attempt and model spend for
+      // nothing no in-repo change can fix it. Cheap deterministic signals first; a model read only for
+      // whatever's still ambiguous after that.
+      const classification = await classifyCiFailure(supabase, ctx, gh, project, run, failingChecks);
+      if (classification.verdict === 'external') {
+        const note = `CI failure classified external: ${classification.reasons.join('; ') || 'no addressable signal found'} — waiting instead of spending a fix pass`;
+        try {
+          await writeEvent(supabase, run, 'pr-monitor', 0, 'status', {
+            event: 'ci_classify', verdict: 'external', reasons: classification.reasons,
+            checks: failingChecks.map((c) => c.name),
+          });
+        } catch { /* best-effort audit record */ }
+        await supabase.from('se_runs').update({ ...patch, status: 'watching', pr_state: 'open', pr_url: firstUrl, error: note }).eq('id', run.id);
+        return { runId: run.id, action: 'ci-external-skip' };
+      }
       // Escalation ladder: the first CI-fix ran on the mapped model and CI is still red — latch the
       // run onto the project's escalation model (when configured) for the remaining code phases.
       const escalate = (run.ci_fix_attempts ?? 0) >= 1 && !run.model_escalated && !!project.escalationModel;
       await supabase.from('se_runs').update({ ...patch, status: 'changes_requested', pr_state: 'open', current_phase: 'revise', ci_fix_attempts: (run.ci_fix_attempts ?? 0) + 1, ...(escalate ? { model_escalated: true } : {}), pr_url: firstUrl }).eq('id', run.id);
-      await enqueuePhase(ctx, run.id, 'revise', { reason: 'ci' });
+      await enqueuePhase(ctx, run.id, 'revise', { reason: 'ci', classification: classification.addressableSummary ?? undefined });
       return { runId: run.id, action: 'ci-fix' };
     }
 

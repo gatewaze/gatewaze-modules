@@ -24,13 +24,14 @@ export const FAILED_STATUSES = ['failed', 'blocked'] as const;
 // there), so the chip reads just "Merged". Documented nuance, not a bug.
 export const MERGED_STATUSES = ['merged'] as const;
 
-// The full se_runs.status domain (migration 003, widened by 015/awaiting_architecture and
-// 016/architecture_in_review). Backs the Runs-board status filter chips — every chip the user can
-// toggle, not just the four rolled up into a KPI tile. Kept in lockstep with the CHECK constraint
-// (and the API's own RUN_STATUSES allowlist in admin-routes.ts) by overview-filters.test.ts.
+// The full se_runs.status domain (migration 003, widened by 015/awaiting_architecture,
+// 016/architecture_in_review, 017/ready_to_submit and 018/awaiting_spec). Backs the Runs-board status
+// filter chips — every chip the user can toggle, not just the four rolled up into a KPI tile. Kept in
+// lockstep with the CHECK constraint (and the API's own RUN_STATUSES allowlist in admin-routes.ts) by
+// overview-filters.test.ts.
 export const ALL_RUN_STATUSES = [
   'queued', 'running', 'blocked', 'failed', 'pr_open', 'watching', 'changes_requested', 'merged', 'closed', 'cancelled',
-  'awaiting_architecture', 'architecture_in_review',
+  'awaiting_architecture', 'architecture_in_review', 'ready_to_submit', 'awaiting_spec',
 ] as const;
 
 // Human labels for the filter chips. Falls back to the raw status string (see STATUS_LABELS usage)
@@ -48,6 +49,17 @@ export const STATUS_LABELS: Record<string, string> = {
   cancelled: 'Cancelled',
   awaiting_architecture: 'Awaiting architecture',
   architecture_in_review: 'Architecture in review',
+  ready_to_submit: 'Ready to submit',
+  awaiting_spec: 'Awaiting spec approval',
+};
+
+// Reserved status → Radix badge colour, shared between the Runs board (SoftwareEngineerTab.tsx) and
+// the Overview dashboard's new gate/active/completed run lists (RunListSection.tsx) so a status never
+// renders in two different colours on the same page. Falls back to 'gray' for anything not listed.
+export const STATUS_COLOR: Record<string, string> = {
+  merged: 'green', pr_open: 'amber', watching: 'blue', changes_requested: 'amber',
+  running: 'blue', failed: 'red', blocked: 'red', closed: 'gray', cancelled: 'gray', queued: 'gray',
+  awaiting_architecture: 'amber', architecture_in_review: 'amber', ready_to_submit: 'amber', awaiting_spec: 'amber',
 };
 
 export type OverviewCardKey = 'active' | 'merged' | 'open_prs' | 'failed_blocked';
@@ -92,6 +104,26 @@ export function fmtCost(c: unknown): string {
   const n = Number(c);
   if (!Number.isFinite(n) || n <= 0) return '';
   return n < 0.01 ? '<$0.01' : `$${n.toFixed(2)}`;
+}
+
+/**
+ * Human-readable elapsed time between two timestamps, for the Overview run lists (no stored duration
+ * column on se_runs — see the "Runtime & Cost" note in SPEC.md §14.1). `end` defaults to now, so a
+ * live run's duration ticks up in the UI on each refresh; a completed run passes its own end
+ * timestamp (e.g. `updated_at`). Returns '' for a missing/unparseable start so callers can omit the
+ * sub-label rather than rendering a bogus duration.
+ */
+export function formatDuration(start: unknown, end: unknown = Date.now()): string {
+  const startMs = typeof start === 'number' ? start : Date.parse(String(start ?? ''));
+  const endMs = typeof end === 'number' ? end : Date.parse(String(end ?? ''));
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return '';
+  const totalSec = Math.max(0, Math.round((endMs - startMs) / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
 /**
