@@ -51,30 +51,41 @@ join_contract:
   do_not_use: ["email"]
 
 # -----------------------------------------------------------------------------
-# Segment's actual Snowflake location is configured in the Segment DASHBOARD,
-# not in the app repo (aaif.production.env has only SEGMENT_WRITE_KEY, no
-# SNOWFLAKE_* keys). These MUST be read from the Segment "Marketing Ops"
-# destination settings by whoever has access, then filled in here.
+# VERIFIED against the live account 2026-09-01 (read-only, VIEWER/secondary roles).
+# Account XMB01974 (JNMHVWD-XPB85243) — the SAME account the relational replica
+# lands in (GATEWAZE_INGEST), so the join is intra-account. Segment raw lands in
+# the SEGMENT_INGEST database, one schema per source.
+#
+# ⚠️ The AAIF source schema EXISTS but is EMPTY (0 tables) — SEGMENT_INGEST.
+# AAIF_APP_SERVER_PROD and _DEV have landed NO events. The AAIF Gatewaze Segment
+# → Snowflake sync is not flowing (populated Segment schemas are LF-corporate,
+# e.g. WEB_PROD). So the join has nothing on the AAIF side yet — fix the Segment
+# destination sync before relying on §11. Column shape below is taken from the
+# populated WEB_PROD source (Segment flattens traits into columns, 405 in that
+# IDENTIFIES) and is what AAIF_APP_SERVER_PROD will match once it flows.
 # -----------------------------------------------------------------------------
 segment_snowflake:
-  same_account_as_relational_replica: null   # CONFIRM (open Q2) — same Snowflake account as AAIF.RAW?
-  database: null                             # CONFIRM from Segment dashboard (Segment → Marketing Ops → Snowflake dest)
-  schema: null                               # CONFIRM — Segment source slug (e.g. AAIF_WEB)
+  account: XMB01974                          # = JNMHVWD-XPB85243
+  same_account_as_relational_replica: true   # RESOLVED (open Q2): yes — GATEWAZE_INGEST + SEGMENT_INGEST same account
+  database: SEGMENT_INGEST                    # raw Segment landing (dbt models it into ANALYTICS.SILVER_SEGMENT)
+  schema: AAIF_APP_SERVER_PROD                # AAIF server-side source (⚠️ CURRENTLY EMPTY — sync not flowing)
+  status: empty_no_events_landed              # blocker for §11 join; check Segment "Marketing Ops" destination
   identity_columns:
-    user_id: USER_ID                         # = lfid_sub (Segment lower-cases traits → USER_ID)
-    anonymous_id: ANONYMOUS_ID               # gw_aid cookie, pre-identify
+    user_id: USER_ID                         # = lfid_sub (verified: WEB_PROD.IDENTIFIES has USER_ID)
+    anonymous_id: ANONYMOUS_ID               # gw_aid cookie, pre-identify (verified present)
     timestamp: TIMESTAMP
-  # Segment materialises identify traits as columns on IDENTIFIES/USERS. Confirm
-  # the exact table + that supabase_user_id landed as a column.
+  # Segment flattens identify traits into their own columns (verified on WEB_PROD:
+  # USER_ID, ANONYMOUS_ID, EMAIL, LFID_USERNAME, LFX_USER_ID present). When AAIF
+  # flows, @gatewaze/tracking's supabase_user_id trait lands as SUPABASE_USER_ID.
   trait_columns:
-    supabase_user_id: SUPABASE_USER_ID       # CONFIRM present on IDENTIFIES/USERS
+    supabase_user_id: SUPABASE_USER_ID       # expected once AAIF source flows (trait sent by the relay)
     email: EMAIL
-  tables:
-    tracks: TRACKS                           # CONFIRM
-    pages: PAGES                             # CONFIRM
-    identifies: IDENTIFIES                   # CONFIRM
-    users: USERS                             # CONFIRM (Segment's deduped user table — best for the join)
-    event_tables: []                         # CONFIRM — per-event tables (LINK_CLICKED, RSVP_SUBMITTED, …)
+  tables:                                     # verified present in the populated WEB_PROD source
+    tracks: TRACKS
+    pages: PAGES
+    identifies: IDENTIFIES
+    users: USERS                             # Segment's deduped user table — best for the join
+    event_tables: [EVENT_REGISTERED, LOGGED_IN, USER_AUTHENTICATED, SUBMITTED_FORM]  # per-event, source-dependent
 
 # Resolution of the tracking-SDK question (open Q9): userId is the LFID sub by
 # design; no SDK change is needed. The change is warehouse-side: expose

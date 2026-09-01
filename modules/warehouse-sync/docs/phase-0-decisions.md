@@ -35,7 +35,7 @@ The first-pass manifest was written speculatively. Verified against
 
 | # | Question (§16) | Status | Decision |
 |---|---|---|---|
-| 1 | Mechanism | **DECIDED** | Airbyte OSS, one central in-cluster install, workspace per brand (`docs/airbyte-deployment.md`). |
+| 1 | Mechanism | **DECIDED** | Airbyte OSS, an in-cluster install (`docs/airbyte-deployment.md`). |
 | 2 | Target Snowflake account | **RECOMMENDED** | Land `AAIF.RAW` in the **same** account/warehouse Segment feeds, so the §11 join is intra-account (no cross-account share). LF data team to confirm. |
 | 3 | Connector runtime + IPv4 | **DECIDED** | Airbyte runs in-cluster; the Postgres source uses the Supabase **direct** endpoint. Confirm cluster egress can reach Supabase over IPv6, else enable the Supabase **IPv4 add-on** (go/no-go, §10.3). |
 | 4 | PII posture | **DECIDED (PII-1)** | Plaintext in RAW, masked in STAGING. `people.attributes` is `masking: full` — audited (PR #68/#74) to nest email/phone/name/linkedin/address/coords **and web-push keys**. Break-glass role only for plaintext. |
