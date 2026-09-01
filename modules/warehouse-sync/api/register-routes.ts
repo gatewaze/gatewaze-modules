@@ -19,6 +19,31 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
 import { Router, type Express } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { requireJwt } from '../lib/require-jwt.js';
+import { AirbyteClient } from '../lib/airbyte-client.js';
+import { planTiers } from '../lib/sync-planner.js';
+
+const CRON = {
+  realtime: '0 */5 * * * ?', // every 5 min — near-real-time
+  hourly: '0 0 * * * ?',     // top of every hour
+  daily: '0 0 3 * * ?',      // 03:00 UTC
+};
+
+/** Build the Airbyte client from the persisted module config + find the single source/destination. */
+async function airbyteContext(supabase) {
+  const { data: row } = await supabase
+    .from('installed_modules').select('config').eq('id', 'warehouse-sync').maybeSingle();
+  const cfg = (row?.config ?? {}) as Record<string, unknown>;
+  if (!cfg.airbyteApiUrl || !cfg.airbyteWorkspaceId) return { client: null, cfg };
+  const client = new AirbyteClient({
+    baseUrl: cfg.airbyteApiUrl as string,
+    workspaceId: cfg.airbyteWorkspaceId as string,
+    token: (cfg.airbyteApiToken as string) || undefined,
+  });
+  const [sources, dests] = await Promise.all([client.listSources(), client.listDestinations()]);
+  const sourceId = (cfg.airbyteSourceId as string) || (sources.length === 1 ? sources[0].sourceId : null);
+  const destinationId = (cfg.airbyteDestinationId as string) || (dests.length === 1 ? dests[0].destinationId : null);
+  return { client, cfg, sourceId, destinationId };
+}
 
 function logger() {
   return {
@@ -90,6 +115,105 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
     });
     log.info(`enqueued Airbyte sync for ${connectionId} → job ${id}`);
     return res.json({ enqueued: true, jobId: id, connectionId });
+  });
+
+  // ── Tables tab: list source tables merged with their saved sync config ─────
+  r.get('/tables', async (_req, res) => {
+    try {
+      const { client, sourceId, destinationId } = await airbyteContext(supabase);
+      let discovered: string[] = [];
+      let discoverError: string | null = null;
+      if (client && sourceId && destinationId) {
+        try { discovered = await client.discoverStreams(sourceId, destinationId); }
+        catch (e) { discoverError = e?.message ?? String(e); }
+      } else {
+        discoverError = 'Airbyte not configured (airbyteApiUrl/airbyteWorkspaceId) or source/destination ambiguous';
+      }
+      const { data: cfgs } = await supabase.from('warehouse_sync_table_config').select('*');
+      const cfgByName = new Map((cfgs ?? []).map((c) => [c.table_name, c]));
+      // Union of discovered tables + already-configured ones.
+      const names = new Set<string>([...discovered, ...(cfgs ?? []).map((c) => c.table_name)]);
+      const tables = [...names].sort().map((name) => {
+        const c = cfgByName.get(name);
+        return {
+          table_name: name,
+          enabled: c?.enabled ?? false,
+          sync_mode: c?.sync_mode ?? 'incremental',
+          frequency: c?.frequency ?? 'realtime',
+          cursor_field: c?.cursor_field ?? 'updated_at',
+          primary_key: c?.primary_key ?? 'id',
+          use_cdc: c?.use_cdc ?? false,
+        };
+      });
+      return res.json({ tables, discoverError, configured: !!(client && sourceId && destinationId) });
+    } catch (e) {
+      return res.status(500).json({ error: e?.message ?? 'failed to load tables' });
+    }
+  });
+
+  // Save per-table config + reconcile into Airbyte connections (one per tier).
+  r.put('/tables', async (req, res) => {
+    const rows = Array.isArray(req.body?.tables) ? req.body.tables : null;
+    if (!rows) return res.status(400).json({ error: 'body.tables[] required' });
+    const actor = (req as { userId?: string }).userId ?? null;
+    // 1. persist desired config (allowlist fields; never raw body).
+    const upserts = rows.map((t) => ({
+      table_name: String(t.table_name),
+      namespace: 'public',
+      enabled: !!t.enabled,
+      sync_mode: t.sync_mode === 'full_refresh' ? 'full_refresh' : 'incremental',
+      frequency: ['realtime', 'hourly', 'daily'].includes(t.frequency) ? t.frequency : 'realtime',
+      cursor_field: t.cursor_field ? String(t.cursor_field) : null,
+      primary_key: t.primary_key ? String(t.primary_key) : null,
+      use_cdc: !!t.use_cdc,
+      updated_at: new Date().toISOString(),
+      updated_by: actor,
+    }));
+    const { error: upErr } = await supabase.from('warehouse_sync_table_config').upsert(upserts, { onConflict: 'table_name' });
+    if (upErr) return res.status(500).json({ error: `save failed: ${upErr.message}` });
+
+    // 2. reconcile into Airbyte.
+    try {
+      const { client, sourceId, destinationId } = await airbyteContext(supabase);
+      if (!client || !sourceId || !destinationId) {
+        return res.json({ saved: true, reconciled: false, reason: 'Airbyte not configured / source-destination ambiguous' });
+      }
+      const { data: cfgs } = await supabase.from('warehouse_sync_table_config').select('*');
+      const plans = planTiers(cfgs ?? []);
+      const summary = [];
+      for (const plan of plans) {
+        const { data: tier } = await supabase
+          .from('warehouse_sync_tiers').select('*').eq('frequency', plan.frequency).maybeSingle();
+        const schedule = { scheduleType: 'cron', cronExpression: CRON[plan.frequency], cronTimeZone: 'UTC' };
+        try {
+          if (plan.streams.length === 0) {
+            if (tier?.connection_id) await client.updateConnection(tier.connection_id, { status: 'inactive' });
+            summary.push({ frequency: plan.frequency, streams: 0, action: 'paused' });
+          } else if (tier?.connection_id) {
+            await client.updateConnection(tier.connection_id, {
+              configurations: { streams: plan.streams }, schedule, status: 'active',
+            });
+            summary.push({ frequency: plan.frequency, streams: plan.streams.length, action: 'updated' });
+          } else {
+            const conn = await client.createConnection({
+              name: `wh-sync-${plan.frequency}`, sourceId, destinationId,
+              namespaceDefinition: 'destination',
+              configurations: { streams: plan.streams }, schedule, status: 'active',
+            });
+            await supabase.from('warehouse_sync_tiers')
+              .upsert({ frequency: plan.frequency, connection_id: conn.connectionId, schedule_json: schedule, last_reconciled_at: new Date().toISOString(), reconcile_error: null }, { onConflict: 'frequency' });
+            summary.push({ frequency: plan.frequency, streams: plan.streams.length, action: 'created', connectionId: conn.connectionId });
+          }
+          await supabase.from('warehouse_sync_tiers').update({ last_reconciled_at: new Date().toISOString(), reconcile_error: null }).eq('frequency', plan.frequency);
+        } catch (e) {
+          await supabase.from('warehouse_sync_tiers').update({ reconcile_error: e?.message ?? String(e) }).eq('frequency', plan.frequency);
+          summary.push({ frequency: plan.frequency, streams: plan.streams.length, action: 'error', error: e?.message ?? String(e) });
+        }
+      }
+      return res.json({ saved: true, reconciled: true, tiers: summary });
+    } catch (e) {
+      return res.status(500).json({ error: `reconcile failed: ${e?.message ?? e}` });
+    }
   });
 
   app.use('/api/modules/warehouse-sync', r);

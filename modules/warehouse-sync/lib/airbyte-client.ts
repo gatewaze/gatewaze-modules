@@ -132,6 +132,81 @@ export class AirbyteClient {
   async getJob(jobId: number): Promise<AirbyteJob> {
     return this.request<AirbyteJob>(`/jobs/${jobId}`);
   }
+
+  // ── Connection / stream management (admin Tables tab) ──────────────────────
+
+  /** Sources in this workspace. */
+  async listSources(): Promise<Array<{ sourceId: string; name: string }>> {
+    const d = await this.request<{ data: Array<{ sourceId: string; name: string }> }>(
+      `/sources?workspaceIds=${encodeURIComponent(this.workspaceId)}`,
+    );
+    return d.data ?? [];
+  }
+
+  /** Destinations in this workspace. */
+  async listDestinations(): Promise<Array<{ destinationId: string; name: string }>> {
+    const d = await this.request<{ data: Array<{ destinationId: string; name: string }> }>(
+      `/destinations?workspaceIds=${encodeURIComponent(this.workspaceId)}`,
+    );
+    return d.data ?? [];
+  }
+
+  /** Available streams (tables) for a source→destination pair. */
+  async discoverStreams(sourceId: string, destinationId: string): Promise<string[]> {
+    const raw = await this.request<unknown>(
+      `/streams?sourceId=${encodeURIComponent(sourceId)}&destinationId=${encodeURIComponent(destinationId)}`,
+    );
+    const arr = Array.isArray(raw) ? raw : ((raw as { streams?: unknown[]; data?: unknown[] }).streams ?? (raw as { data?: unknown[] }).data ?? []);
+    return (arr as Array<{ streamName?: string; name?: string }>)
+      .map((s) => s.streamName ?? s.name)
+      .filter((n): n is string => !!n);
+  }
+
+  async getConnection(connectionId: string): Promise<AirbyteConnectionRaw> {
+    return this.request<AirbyteConnectionRaw>(`/connections/${connectionId}`);
+  }
+
+  async createConnection(body: ConnectionWriteBody): Promise<AirbyteConnectionRaw> {
+    return this.request<AirbyteConnectionRaw>('/connections', 'POST', body);
+  }
+
+  /** Update streams + schedule of an existing connection. */
+  async updateConnection(connectionId: string, patch: Partial<ConnectionWriteBody>): Promise<AirbyteConnectionRaw> {
+    return this.request<AirbyteConnectionRaw>(`/connections/${connectionId}`, 'PATCH', patch);
+  }
+}
+
+export interface AirbyteStreamConfig {
+  name: string;
+  syncMode: string;
+  cursorField?: string[];
+  primaryKey?: string[][];
+}
+
+export interface ConnectionSchedule {
+  scheduleType: 'cron' | 'manual';
+  cronExpression?: string;
+  cronTimeZone?: string;
+}
+
+export interface ConnectionWriteBody {
+  name?: string;
+  sourceId?: string;
+  destinationId?: string;
+  namespaceDefinition?: 'destination' | 'source' | 'custom_format';
+  configurations?: { streams: AirbyteStreamConfig[] };
+  schedule?: ConnectionSchedule;
+  status?: 'active' | 'inactive' | 'deprecated';
+}
+
+export interface AirbyteConnectionRaw {
+  connectionId: string;
+  name: string;
+  sourceId: string;
+  destinationId: string;
+  status: string;
+  schedule?: ConnectionSchedule;
+  configurations?: { streams: AirbyteStreamConfig[] };
 }
 
 /** Build a client from module config (returns null when Airbyte isn't configured). */

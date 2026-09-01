@@ -1,19 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import {
-  CircleStackIcon,
   ExclamationTriangleIcon,
   CheckCircleIcon,
   ArrowPathIcon,
   ClockIcon,
 } from '@heroicons/react/24/outline';
+import { useNavigate } from 'react-router';
 import {
   WarehouseSyncService,
   formatBytes,
   formatDuration,
   type CdcHealth,
 } from '../utils/warehouseSyncService';
-import { Card, Badge } from '@/components/ui';
+import { Card, Badge, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
+
+// Shared workspace tabs for the Warehouse Sync module (hero header).
+const WS_TABS = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'tables', label: 'Sync Tables' },
+];
+const tabPath = (id: string) => (id === 'tables' ? '/warehouse-sync/tables' : '/warehouse-sync');
 
 /**
  * CDC Health dashboard (§12.4). Surfaces the slot-monitor's OPERATIONS tables:
@@ -21,6 +28,7 @@ import { Page } from '@/components/shared/Page';
  * thresholds), and the latest source-side reconciliation snapshot (§12.3).
  */
 export default function WarehouseSyncHealth() {
+  const navigate = useNavigate();
   const [health, setHealth] = useState<CdcHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -64,20 +72,22 @@ export default function WarehouseSyncHealth() {
 
   return (
     <Page title="Warehouse Sync">
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CircleStackIcon className="h-6 w-6 text-info-600" />
-            <h1 className="text-xl font-semibold">Supabase → Snowflake replication</h1>
-          </div>
+      <WorkspaceLayout
+        title="Warehouse Sync"
+        subtitle="Supabase → Snowflake replication"
+        tabs={WS_TABS}
+        activeTabId="dashboard"
+        onTabChange={(id) => navigate(tabPath(id))}
+        actions={
           <button
             onClick={refresh}
-            className="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded border border-neutral-300 hover:bg-neutral-50"
+            className="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded bg-white/10 text-white hover:bg-white/20"
           >
             <ArrowPathIcon className="h-4 w-4" /> Sample now
           </button>
-        </div>
-
+        }
+      >
+        <div className="space-y-6">
         {error && (
           <Card className="p-4 border-error-300 bg-error-50 text-error-800">
             Failed to load health: {error}. Have the migrations been applied and is the slot-monitor cron running?
@@ -292,7 +302,8 @@ export default function WarehouseSyncHealth() {
             </table>
           )}
         </Card>
-      </div>
+        </div>
+      </WorkspaceLayout>
     </Page>
   );
 }

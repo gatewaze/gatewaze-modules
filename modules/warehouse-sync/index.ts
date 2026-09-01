@@ -58,6 +58,7 @@ const warehouseSyncModule: GatewazeModule = {
     'migrations/003_source_prerequisites.sql',
     'migrations/004_health_views.sql',
     'migrations/005_airbyte_status.sql',
+    'migrations/006_table_sync_config.sql',
   ],
 
   // File stems MUST equal the job-name suffix — the platform worker derives the
@@ -124,6 +125,13 @@ const warehouseSyncModule: GatewazeModule = {
       // (Matches the analytics module's top-level-nav convention.)
       guard: 'none',
     },
+    {
+      // Per-table sync configuration (which tables, mode, frequency).
+      path: 'warehouse-sync/tables',
+      component: () => import('./admin/pages/tables'),
+      requiredFeature: 'warehouse-sync.health',
+      guard: 'none',
+    },
   ],
 
   adminNavItems: [
@@ -136,6 +144,15 @@ const warehouseSyncModule: GatewazeModule = {
       defaultSection: 'Analytics',
       defaultLocation: 'sidebar',
       order: 80,
+    },
+    {
+      path: '/warehouse-sync/tables',
+      label: 'Sync Tables',
+      icon: 'TableCells',
+      requiredFeature: 'warehouse-sync.health',
+      defaultSection: 'Analytics',
+      defaultLocation: 'sidebar',
+      order: 81,
     },
   ],
 
