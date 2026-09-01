@@ -117,7 +117,12 @@ const warehouseSyncModule: GatewazeModule = {
       path: 'warehouse-sync',
       component: () => import('./admin/pages/health'),
       requiredFeature: 'warehouse-sync.health',
-      guard: 'admin',
+      // 'none' (not 'admin') so the route mounts top-level at /warehouse-sync,
+      // matching the adminNavItem path. guard:'admin' nests it under /admin
+      // (→ /admin/warehouse-sync), which mismatches the nav and 404s. The admin
+      // app is already auth-gated; requiredFeature still gates this route.
+      // (Matches the analytics module's top-level-nav convention.)
+      guard: 'none',
     },
   ],
 
