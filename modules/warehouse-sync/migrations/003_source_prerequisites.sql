@@ -49,10 +49,23 @@ BEGIN
     CREATE ROLE snowflake_slot_monitor WITH
       LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
       PASSWORD NULL;
-    GRANT pg_read_all_stats TO snowflake_slot_monitor;
     RAISE NOTICE '[warehouse-sync/003] created role snowflake_slot_monitor.';
   EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE '[warehouse-sync/003] role snowflake_slot_monitor already exists.';
+  END;
+
+  -- The pg_read_all_stats grant is OPTIONAL and isolated in its own block: on
+  -- managed Postgres (e.g. Supabase) the bootstrap "postgres" superuser is not a
+  -- member of pg_read_all_stats WITH ADMIN OPTION, so it cannot grant it, and an
+  -- uncaught insufficient_privilege here would roll back the whole DO block
+  -- (taking snowflake_reader + the publication with it). The Gatewaze slot-monitor
+  -- worker reads slot stats via the SECURITY DEFINER RPC (migration 002), so this
+  -- role is auxiliary — only an external/trusted direct monitor needs the grant.
+  BEGIN
+    GRANT pg_read_all_stats TO snowflake_slot_monitor;
+    RAISE NOTICE '[warehouse-sync/003] granted pg_read_all_stats to snowflake_slot_monitor.';
+  EXCEPTION WHEN insufficient_privilege OR undefined_object THEN
+    RAISE NOTICE '[warehouse-sync/003] SKIP pg_read_all_stats grant (insufficient privilege on managed Postgres) — the worker uses the SECURITY DEFINER RPC for slot stats.';
   END;
 
   -- Verifier: SELECT-only, for the warehouse reconciliation counts (§12.3).
@@ -66,36 +79,55 @@ BEGIN
     RAISE NOTICE '[warehouse-sync/003] role snowflake_verifier already exists.';
   END;
 
-  -- ── Grants (§10.2). Per-table; do NOT blanket-grant future tables. ───────
-  GRANT USAGE ON SCHEMA public TO snowflake_reader, snowflake_verifier;
-
-  GRANT SELECT ON
-    public.people, public.person_emails, public.people_events,
-    public.events, public.event_registrations,
-    public.send_log, public.email_interactions, public.newsletter_sends
-  TO snowflake_reader;
-
-  GRANT SELECT ON
-    public.people, public.person_emails, public.people_events,
-    public.events, public.event_registrations,
-    public.send_log, public.email_interactions, public.newsletter_sends
-  TO snowflake_verifier;
-
   -- ── Conservative safety timeouts (§10.2) ─────────────────────────────────
   ALTER ROLE snowflake_reader SET statement_timeout = '30min';
   ALTER ROLE snowflake_reader SET idle_in_transaction_session_timeout = '1min';
   ALTER ROLE snowflake_verifier SET statement_timeout = '5min';
 
-  -- ── Publication (§10.1) — explicit table list, NOT FOR ALL TABLES ────────
-  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_publication WHERE pubname = 'snowflake_cdc') THEN
-    CREATE PUBLICATION snowflake_cdc FOR TABLE
-      public.people, public.person_emails, public.people_events,
-      public.events, public.event_registrations,
-      public.send_log, public.email_interactions, public.newsletter_sends;
-    RAISE NOTICE '[warehouse-sync/003] created publication snowflake_cdc.';
-  ELSE
-    RAISE NOTICE '[warehouse-sync/003] publication snowflake_cdc already exists — ALTER PUBLICATION to change scope (§8.1).';
-  END IF;
+  -- ── Grants + publication (§10.1, §10.2) ──────────────────────────────────
+  -- Explicit intended list (§8.1, manifest appendix-a); do NOT blanket-grant
+  -- future tables. Applied to the subset that ACTUALLY exists on this instance —
+  -- table names vary per deployment (a table may be renamed or not installed),
+  -- and an absent one must NOT abort the whole DO block (which would roll back
+  -- the roles + publication too). Missing tables are reported, not fatal.
+  DECLARE
+    v_intended text[] := ARRAY[
+      'people','person_emails','people_events','events',
+      'event_registrations','send_log','email_interactions','newsletter_sends'];
+    v_present text[];
+    v_missing text[];
+    v_list    text;
+  BEGIN
+    SELECT array_agg(t ORDER BY t) INTO v_present
+      FROM unnest(v_intended) AS t
+      WHERE to_regclass('public.' || quote_ident(t)) IS NOT NULL;
+    SELECT array_agg(t ORDER BY t) INTO v_missing
+      FROM unnest(v_intended) AS t
+      WHERE to_regclass('public.' || quote_ident(t)) IS NULL;
+
+    IF v_present IS NULL THEN
+      RAISE EXCEPTION '[warehouse-sync/003] none of the intended tables exist here — reconcile manifest/appendix-a.yaml with this instance''s schema.';
+    END IF;
+
+    SELECT string_agg('public.' || quote_ident(t), ', ' ORDER BY t)
+      INTO v_list FROM unnest(v_present) AS t;
+
+    GRANT USAGE ON SCHEMA public TO snowflake_reader, snowflake_verifier;
+    EXECUTE 'GRANT SELECT ON ' || v_list || ' TO snowflake_reader';
+    EXECUTE 'GRANT SELECT ON ' || v_list || ' TO snowflake_verifier';
+
+    -- Publication — explicit table list, NOT "FOR ALL TABLES".
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_publication WHERE pubname = 'snowflake_cdc') THEN
+      EXECUTE 'CREATE PUBLICATION snowflake_cdc FOR TABLE ' || v_list;
+      RAISE NOTICE '[warehouse-sync/003] created publication snowflake_cdc for: %', v_list;
+    ELSE
+      RAISE NOTICE '[warehouse-sync/003] publication snowflake_cdc already exists — ALTER PUBLICATION to change scope (§8.1).';
+    END IF;
+
+    IF v_missing IS NOT NULL THEN
+      RAISE NOTICE '[warehouse-sync/003] SKIPPED (absent on this instance): % — reconcile manifest/appendix-a.yaml table names before they can replicate.', array_to_string(v_missing, ', ');
+    END IF;
+  END;
 
   RAISE NOTICE '[warehouse-sync/003] NEXT: set snowflake_reader password from the secret store, confirm max_slot_wal_keep_size is bounded (§10.4 control #3), then point the connector at the DIRECT endpoint (§10.3) — NOT the pooler.';
 END $prereqs$;
