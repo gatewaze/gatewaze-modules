@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import {
-  ArrowLeftIcon,
   ArrowPathIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
-import { Badge, Button, Card } from '@/components/ui';
+import { Badge, Button, Card, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { Spinner } from '@/components/ui/Spinner';
 import { ModuleSlot } from '@/components/ModuleSlot';
 import SendTestingService, { type SendTestRun } from '../lib/sendTestingService';
+import { SEND_TESTING_TABS } from './index';
 
 function formatMs(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -144,41 +144,36 @@ export default function SendTestRunPage() {
 
   return (
     <Page title={`Test run — ${run.name}`}>
-      <div className="p-6 space-y-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <button
-              type="button"
-              className="text-sm text-[var(--gray-11)] hover:text-[var(--gray-12)] flex items-center gap-1"
-              onClick={() => navigate('/send-testing')}
-            >
-              <ArrowLeftIcon className="h-4 w-4" />
-              Send Testing
-            </button>
-            <h1 className="text-xl font-semibold text-[var(--gray-12)] mt-1 flex items-center gap-2">
-              {run.name}
-              <Badge color={run.status === 'open' ? 'green' : 'blue'}>{run.status}</Badge>
-            </h1>
-            <p className="text-sm text-[var(--gray-11)] mt-1">
-              Opened {new Date(run.started_at).toLocaleString()}
-              {run.closed_at && ` · closed ${new Date(run.closed_at).toLocaleString()}`}
-              {run.send_source && ` · ${run.send_source}`}
-              {run.subject_filter && ` · subject contains “${run.subject_filter}”`}
-            </p>
-          </div>
-          <div className="flex gap-2 shrink-0">
+      <WorkspaceLayout
+        title="Send Testing"
+        tabs={SEND_TESTING_TABS}
+        activeTabId="runs"
+        onTabChange={(t) => navigate(t === 'runs' ? '/send-testing' : `/send-testing/${t}`)}
+        breadcrumbs={[{ label: 'Runs', to: '/send-testing' }, { label: run.name }]}
+        onBreadcrumbNavigate={(to) => navigate(to)}
+        actions={
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge color={run.status === 'open' ? 'green' : 'blue'}>{run.status}</Badge>
             {run.status === 'open' ? (
-              <Button onClick={handleClose} disabled={busy}>
+              <Button variant="solid" onClick={handleClose} disabled={busy}>
                 Close run
               </Button>
             ) : (
-              <Button variant="secondary" onClick={handleReattribute} disabled={busy}>
+              <Button variant="outline" onClick={handleReattribute} disabled={busy}>
                 <ArrowPathIcon className="h-4 w-4 mr-1" />
                 Re-attribute &amp; recompute
               </Button>
             )}
           </div>
-        </div>
+        }
+      >
+      <div className="p-6 space-y-6">
+        <p className="text-sm text-[var(--gray-11)]">
+          Opened {new Date(run.started_at).toLocaleString()}
+          {run.closed_at && ` · closed ${new Date(run.closed_at).toLocaleString()}`}
+          {run.send_source && ` · ${run.send_source}`}
+          {run.subject_filter && ` · subject contains “${run.subject_filter}”`}
+        </p>
 
         {run.no_sends_detected && (
           <Card className="p-4 border-l-4 border-l-[var(--amber-9)]">
@@ -226,7 +221,7 @@ export default function SendTestRunPage() {
                   landed inside this run's window — most likely stragglers delayed past close.
                 </span>
               </div>
-              <Button size="sm" variant="secondary" onClick={handleReattribute} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={handleReattribute} disabled={busy}>
                 Fold them in
               </Button>
             </div>
@@ -327,6 +322,7 @@ export default function SendTestRunPage() {
           </Card>
         )}
       </div>
+      </WorkspaceLayout>
     </Page>
   );
 }
