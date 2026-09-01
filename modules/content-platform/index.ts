@@ -44,6 +44,9 @@ const contentPlatformModule: GatewazeModule = {
     'migrations/005_fix_verdict_triage_priority.sql',
     'migrations/006_fix_inbox_cache_preview_call.sql',
     'migrations/007_inbox_cache_enrichment.sql',
+    'migrations/008_content_access_registry.sql',
+    'migrations/009_content_access_action_email.sql',
+    'migrations/010_content_access_allowed_tiers.sql',
   ],
 
   adminRoutes: [
@@ -53,11 +56,30 @@ const contentPlatformModule: GatewazeModule = {
       requiredFeature: 'content-platform.inbox',
       guard: 'none',
     },
+    {
+      // Central management view for the content_access_policies registry (member
+      // gating). The inline controls in each editor write the same rows.
+      // guard:'none' keeps it top-level at /content-access (matching the nav item
+      // and the sibling inbox route). Every data operation is admin-gated
+      // server-side by requireAdmin on /api/admin/content-access.
+      path: 'content-access',
+      component: () => import('./admin/pages/ContentAccessPage'),
+      guard: 'none',
+    },
   ],
 
   // Inbox nav lives in the static dashboards segment so it sits at the very top
   // of the sidebar (above all module-contributed nav items).
-  adminNavItems: [],
+  adminNavItems: [
+    {
+      path: '/content-access',
+      label: 'Content Access',
+      icon: 'ShieldCheck',
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      order: 90,
+    },
+  ],
 };
 
 export default contentPlatformModule;

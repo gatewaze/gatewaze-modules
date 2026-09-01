@@ -4,16 +4,24 @@
  * implementation spec for the issue (which lives in the issues repo). The spec is stored as a run
  * artifact — NOT committed to any code repo (§1a) — then adversarial review runs. On a review retry
  * (job.data.objections) it re-drafts resolving every objection.
+ *
+ * The agent writes the spec to ./specs/issue-<n>.md at the workspace root (outside every repo). The
+ * worker reads that file back as the artifact — it does NOT trust the agent's closing chat message,
+ * which is a conversational summary, not the spec (review/implement both read the artifact verbatim).
+ * If the file is missing or too short, the phase fails loud rather than passing prose downstream.
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
-import { redactToken } from '../lib/git.js';
+import { redactToken, branchNameFor } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
 import { writeSpecMemory } from '../lib/memory.js';
+import { parseDependencies, unmetDependencies, ensureWaitingMarker } from '../lib/dependencies.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -24,6 +32,7 @@ const sb = (ctx) =>
 export default async function spec(job, ctx) {
   const supabase = sb(ctx);
   const objections = job?.data?.objections;
+  const attempt = job?.data?.attempt ?? 1;
   const { data: run } = await supabase.from('se_runs').select('*').eq('id', job?.data?.runId).maybeSingle();
   if (!run) return { skipped: 'no run' };
   if (run.status === 'cancelled') return { skipped: 'cancelled' };
@@ -35,17 +44,46 @@ export default async function spec(job, ctx) {
   const codeRepos = await getCodeRepos(supabase, run.project_id);
   if (codeRepos.length === 0) return blockRun(supabase, run, 'spec', 'authorization', 'project has no code repos');
 
-  await recordPhaseStart(supabase, run, 'spec');
+  await recordPhaseStart(supabase, run, 'spec', attempt);
   const gh = githubClient(token);
   let ws;
   try {
     const issue = await gh.getIssue(run.repo_owner, run.repo_name, run.issue_number);
-    const branch = run.branch_name || `agent/se-${run.issue_number}-${String(run.id).slice(0, 8)}`;
+
+    // Re-verify dependencies (issue #59): intake already checked this, but a run can still reach here
+    // with an unmet dependency if the two checks straddled a very short GitHub outage, or the
+    // dependency reopened between intake's check and now. The issue fetch above is already paid for;
+    // this adds one extra per-dependency fetch before any workspace/agent spend.
+    const deps = parseDependencies(String(issue.body ?? ''), run.issue_number);
+    if (deps.length) {
+      const unmet = await unmetDependencies(gh, run.repo_owner, run.repo_name, deps);
+      if (unmet.length) {
+        const msg = `parked at spec start — unmet dependencies: ${unmet.map((n) => `#${n}`).join(', ')}`;
+        await recordPhaseEnd(supabase, run, 'spec', 'skipped', msg);
+        await supabase.from('se_runs').update({ status: 'cancelled', error: null }).eq('id', run.id);
+        // Mirror the manual cleanup operators did for the two staging incidents: drop the in-progress
+        // status label and this instance's claim, then restore the waiting marker so the normal
+        // intake-poll re-check (or the next webhook label event) picks the issue back up once the
+        // dependency genuinely closes. `cancelled` is the one run status intake's dedupe queries treat
+        // as "no live run" (api/webhook-routes.ts:87-90, workers/intake-poll.ts:70-75).
+        try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, null); } catch { /* best-effort */ }
+        try {
+          const claimLabel = run.instance_id ? `agent:claimed@${run.instance_id}` : 'agent:claimed';
+          await gh.removeLabel(run.repo_owner, run.repo_name, run.issue_number, claimLabel);
+        } catch { /* best-effort */ }
+        const issueLabels = (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
+        await ensureWaitingMarker(gh, run.repo_owner, run.repo_name, run.issue_number, issueLabels, unmet, deps);
+        return { parked: unmet };
+      }
+    }
+
+    const branch = run.branch_name || branchNameFor(run, issue.title);
     // Read-only clone of every code repo (up to the cap) so the agent can explore + pick targets.
     const forSpec = codeRepos.slice(0, project.maxCodeReposPerRun).map((r) => ({ ...r, writeMode: 'read_only' }));
     const truncated = codeRepos.length > project.maxCodeReposPerRun;
     ws = await makeMultiWorkspace(forSpec, token, branch);
 
+    const specRelPath = `specs/issue-${run.issue_number}.md`;
     const prompt = [
       `Draft an implementation SPEC for this GitHub issue. The issue lives in a separate issues repo;`,
       `the code lives in the repos in your workspace. Explore them read-only, decide which WRITABLE`,
@@ -54,6 +92,9 @@ export default async function spec(job, ctx) {
       `FIRST: use the wiki_search tool to look for existing related specs in project memory (pages`,
       `under specs/ — every past run's spec is logged there). If a prior spec covers overlapping`,
       `ground, build on it and note the relationship; do not contradict it silently.`,
+      `Write the finished spec to ./${specRelPath} at the workspace ROOT (NOT inside any repo`,
+      `subdirectory) — create the specs/ directory if it doesn't exist. That file, not your chat`,
+      `reply, is what gets reviewed and implemented, so it must be the complete, self-contained spec.`,
       truncated ? `NOTE: the project has more code repos than the ${project.maxCodeReposPerRun}-repo cap; only those in your workspace are available — do not spec against repos not present.` : '',
       ``,
       `Issue #${run.issue_number}: ${issue.title ?? ''}`,
@@ -63,17 +104,34 @@ export default async function spec(job, ctx) {
     ].join('\n');
 
     const result = await runAgentSession(supabase, ctx, run, project, 'spec', {
-      cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob'],
+      cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit'],
+      systemAppend: `Draft a spec, do not implement. All repos here are read-only reference. Write the complete spec to ./${specRelPath} at the workspace root (outside every repo) — that file is what gets reviewed and implemented, not your chat reply.`,
+      attempt,
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
-      await recordPhaseEnd(supabase, run, 'spec', 'failed', msg);
+      if (result.costCeiling) return blockRun(supabase, run, 'spec', 'cost_ceiling', msg);
+      await recordPhaseEnd(supabase, run, 'spec', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
       return { failed: msg };
     }
 
-    const specText = (result.text ?? '').slice(0, 200000);
+    const specPath = join(ws.root, specRelPath);
+    const specText = (existsSync(specPath) ? readFileSync(specPath, 'utf8') : '').slice(0, 200000);
+    if (specText.trim().length < 200) {
+      const msg = 'agent did not write the spec file';
+      await recordPhaseEnd(supabase, run, 'spec', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
+      await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
+      return { failed: msg };
+    }
     await supabase.from('se_artifacts').insert({ run_id: run.id, site_id: run.site_id, phase: 'spec', kind: 'spec', content: specText });
+    // Best-effort transcript of the agent's closing chat message — never treated as the spec itself.
+    try {
+      const summary = String(result.text ?? '').trim();
+      if (summary) {
+        await supabase.from('se_artifacts').insert({ run_id: run.id, site_id: run.site_id, phase: 'spec', kind: 'spec_summary', content: summary.slice(0, 20000) });
+      }
+    } catch { /* best-effort */ }
 
     // Spec log (best-effort, never blocks the pipeline):
     // 1. Commit the spec to the ISSUES repo at specs/issue-<n>.md — one file per issue, updated in

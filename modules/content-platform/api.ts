@@ -12,6 +12,37 @@ function sb() {
   return _sb;
 }
 
+// Bearer token -> is_admin() evaluated WITH the caller's JWT (same predicate RLS
+// uses). Returns a Response on failure (caller returns it), or null when the
+// caller is a verified admin.
+//
+// is_admin() must run AS the caller so auth.uid() resolves to them. supabase-js
+// `.rpc(fn, args, opts)` does NOT accept a per-call `headers` option — passing
+// one is silently ignored and the RPC runs as service_role (auth.uid() = NULL),
+// which makes is_admin() return false for EVERYONE, even super-admins. So we
+// build a short-lived client keyed with the anon key and the caller's bearer in
+// its default headers, exactly like the resources module does.
+async function requireAdmin(req: Request, res: Response): Promise<Response | null> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: { code: 'unauthorized', message: 'Missing bearer token' } });
+  }
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    return res.status(500).json({ error: { code: 'server_misconfigured', message: 'Auth not configured' } });
+  }
+  const asUser = createClient(url, anonKey, {
+    auth: { persistSession: false },
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: isAdmin, error: rpcError } = await asUser.rpc('is_admin');
+  if (rpcError || isAdmin !== true) {
+    return res.status(403).json({ error: { code: 'forbidden', message: 'Admin privileges required' } });
+  }
+  return null;
+}
+
 const INBOX_DEFAULT_STATES = ['pending_review'];
 const ALLOWED_PUBLISH_STATES = [
   'draft', 'pending_review', 'auto_suppressed', 'rejected', 'published', 'unpublished',
@@ -292,9 +323,97 @@ async function listFromContentTables(
 
 export function registerRoutes(app: Express, _ctx?: ModuleContext) {
   // ──────────────────────────────────────────────────────────────────────────
+  // Content access policies (the member-gating registry). Admin-only. Lets an
+  // operator set a per-item or per-type gate: audience (public|members),
+  // min_tier_rank, embargo_days (recent-content window), gated_actions (e.g.
+  // 'register'). Enforcement lives in each content type's RLS/read via
+  // content_access_visible() / content_access_action_allowed().
+  // ──────────────────────────────────────────────────────────────────────────
+  app.get('/api/admin/content-access', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
+    try {
+      let q = sb().from('content_access_policies').select('*').order('content_type').order('entity_id', { nullsFirst: true });
+      if (typeof req.query.content_type === 'string') q = q.eq('content_type', req.query.content_type);
+      const { data, error } = await q;
+      if (error) return res.status(500).json({ error: { code: 'db', message: error.message } });
+      return res.json({ policies: data ?? [] });
+    } catch (e) {
+      return res.status(500).json({ error: { code: 'internal', message: (e as Error).message } });
+    }
+  });
+
+  app.put('/api/admin/content-access', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
+    try {
+      const b = req.body ?? {};
+      const content_type = typeof b.content_type === 'string' ? b.content_type.trim() : '';
+      if (!content_type) return res.status(400).json({ error: { code: 'validation', message: 'content_type required' } });
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (b.entity_id != null && b.entity_id !== '' && !(typeof b.entity_id === 'string' && UUID_RE.test(b.entity_id))) {
+        return res.status(400).json({ error: { code: 'validation', message: 'entity_id must be a uuid' } });
+      }
+      let embargoDays: number | null = null;
+      if (b.embargo_days != null && b.embargo_days !== '') {
+        const n = Number(b.embargo_days);
+        if (!Number.isInteger(n) || n < 1) {
+          return res.status(400).json({ error: { code: 'validation', message: 'embargo_days must be a positive integer' } });
+        }
+        embargoDays = n;
+      }
+      const audience = b.audience === 'members' ? 'members' : 'public';
+      // Allowlisted args only — never spread req.body into the RPC.
+      const args = {
+        p_content_type: content_type,
+        p_entity_id: typeof b.entity_id === 'string' && b.entity_id ? b.entity_id : null,
+        p_audience: audience,
+        p_min_tier_rank: Number.isFinite(Number(b.min_tier_rank)) ? Math.max(0, Math.trunc(Number(b.min_tier_rank))) : 0,
+        // Exact tier set (names). When non-empty it takes precedence over
+        // min_tier_rank; empty/absent -> null (threshold semantics).
+        p_allowed_tiers: Array.isArray(b.allowed_tiers)
+          ? b.allowed_tiers
+              .filter((t: unknown): t is string => typeof t === 'string' && t.trim() !== '')
+              .map((t: string) => t.trim())
+              .slice(0, 50)
+          : null,
+        p_embargo_days: embargoDays,
+        p_gated_actions: Array.isArray(b.gated_actions) ? b.gated_actions.filter((a: unknown) => typeof a === 'string') : [],
+        p_placeholder: b.placeholder && typeof b.placeholder === 'object' ? b.placeholder : null,
+        p_note: typeof b.note === 'string' ? b.note : null,
+      };
+      const { data, error } = await sb().rpc('register_content_access', args);
+      if (error) return res.status(500).json({ error: { code: 'db', message: error.message } });
+      return res.json({ policy: data });
+    } catch (e) {
+      return res.status(500).json({ error: { code: 'internal', message: (e as Error).message } });
+    }
+  });
+
+  app.delete('/api/admin/content-access', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
+    try {
+      const b = req.body ?? {};
+      const content_type = typeof b.content_type === 'string' ? b.content_type.trim() : '';
+      if (!content_type) return res.status(400).json({ error: { code: 'validation', message: 'content_type required' } });
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (b.entity_id != null && b.entity_id !== '' && !(typeof b.entity_id === 'string' && UUID_RE.test(b.entity_id))) {
+        return res.status(400).json({ error: { code: 'validation', message: 'entity_id must be a uuid' } });
+      }
+      const { data, error } = await sb().rpc('clear_content_access', {
+        p_content_type: content_type,
+        p_entity_id: typeof b.entity_id === 'string' && b.entity_id ? b.entity_id : null,
+      });
+      if (error) return res.status(500).json({ error: { code: 'db', message: error.message } });
+      return res.json({ cleared: data });
+    } catch (e) {
+      return res.status(500).json({ error: { code: 'internal', message: (e as Error).message } });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
   // Inbox list
   // ──────────────────────────────────────────────────────────────────────────
   app.get('/api/admin/inbox/list', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
     try {
       const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
       const cursor = decodeCursor(typeof req.query.cursor === 'string' ? req.query.cursor : undefined);
@@ -498,6 +617,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
   // Bulk actions
   // ──────────────────────────────────────────────────────────────────────────
   app.post('/api/admin/inbox/bulk', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
     try {
       // Resolve the calling admin's Supabase Auth user id from the
       // Authorization header. The triage_items_reviewed_consistency
@@ -727,6 +847,7 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
   // "Why is this here?" — single-item explanation
   // ──────────────────────────────────────────────────────────────────────────
   app.get('/api/admin/inbox/explain/:triage_item_id', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
     try {
       const id = req.params.triage_item_id;
       const { data: row, error } = await sb()

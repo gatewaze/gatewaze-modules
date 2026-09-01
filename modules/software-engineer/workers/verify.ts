@@ -13,6 +13,7 @@ import { runAgentSession } from '../lib/phase-runner.js';
 import { githubClient } from '../lib/github.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, listRunPrs } from '../lib/run-state.js';
+import { createOrSupersedeDecision } from '../lib/decisions.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -29,7 +30,10 @@ export default async function verify(job, ctx) {
   if (!project?.intakeEnabled) return blockRun(supabase, run, 'verify', 'kill_switch', 'intake disabled');
   const token = project.githubToken;
 
-  await recordPhaseStart(supabase, run, 'verify');
+  // A resumed run (admin-routes.ts's /resume) passes an incremented attempt so this retry's row
+  // doesn't clobber the FAILED attempt 1 row — both stay visible on the run detail phase badges.
+  const attempt = job?.data?.attempt ?? 1;
+  await recordPhaseStart(supabase, run, 'verify', attempt);
   let ws;
   try {
     // Clone the changed repos on the run branch (read-only) so the reviewer sees the actual diff.
@@ -74,10 +78,11 @@ export default async function verify(job, ctx) {
       `diff introduces a real vulnerability.`,
     ].join('\n');
     const result = await runAgentSession(supabase, ctx, run, project, 'verify', {
-      cwd: ws.root, prompt, repos: ws.repos, allowedTools: ['Read', 'Grep', 'Glob'],
+      cwd: ws.root, prompt, repos: ws.repos, attempt, allowedTools: ['Read', 'Grep', 'Glob'],
     });
     if (result.error) {
       const msg = redactToken(result.error, token);
+      if (result.costCeiling) return blockRun(supabase, run, 'verify', 'cost_ceiling', msg);
       await recordPhaseEnd(supabase, run, 'verify', 'failed', msg, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);
       return { failed: msg };
@@ -90,6 +95,14 @@ export default async function verify(job, ctx) {
       await writeGate(supabase, run, 'security', 'block', { reason });
       await recordPhaseEnd(supabase, run, 'verify', 'blocked', reason, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
       await supabase.from('se_runs').update({ status: 'blocked', error: `security: ${reason}` }).eq('id', run.id);
+      // This block bypasses lib/run-state.ts's blockRun() (it's a phase-verdict block, not a
+      // kill_switch/authorization block), so it emits its own decision row (issue #52).
+      try {
+        await createOrSupersedeDecision(supabase, {
+          runId: run.id, projectId: run.project_id, siteId: run.site_id, phase: 'verify',
+          question: `security: ${reason}`, kind: 'text', context: null, originKind: 'config_blocked',
+        });
+      } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
       return { blocked: reason };
     }
     await writeGate(supabase, run, 'security', 'pass', {});

@@ -71,6 +71,13 @@ const eventsModule: GatewazeModule = {
     // (people.contact_kind='prospect') into an 'event_contact' — counterpart
     // of core migration 00042 which owns the contact_kind column.
     'migrations/018_registration_contact_kind.sql',
+    // 019: wrap auth.uid() in the registration RLS policies + index
+    // people.auth_user_id — a bare auth.uid() seq-scanned 159k people (~7s) and
+    // timed out PostgREST deletes/reads. See the migration header.
+    'migrations/019_registration_rls_authuid_perf.sql',
+    // 020: platform-wide follow-up to 019 — wrap every remaining bare auth.uid()
+    // in a public RLS policy as (SELECT auth.uid()) (idempotent DO block).
+    'migrations/020_wrap_authuid_all_policies.sql',
   ],
 
   edgeFunctions: [
@@ -150,6 +157,7 @@ const eventsModule: GatewazeModule = {
     { action: 'read', description: 'Read public events, including speakers and sponsors via sub-resources' },
     { action: 'metrics', description: 'Read per-event registration metrics (registrants, check-ins) for published events' },
     { action: 'self', description: "Read a person's own registrations (trusted internal callers only — the MCP OAuth surface)" },
+    { action: 'registrants', description: 'Read registrant-level rows (names + emails) across all events — PII; grant deliberately, access is audited' },
   ],
 
   publicApiRoutes: async (router, ctx) => {
@@ -263,6 +271,31 @@ const eventsModule: GatewazeModule = {
             200: { description: 'Talks with title, synopsis, session_type, speakers' },
             403: { $ref: '#/components/responses/Forbidden' },
             404: { description: 'Event not found' },
+          },
+        },
+      },
+      '/registrants': {
+        get: {
+          summary: 'Registrant-level rows (names + emails) — PII, requires events:registrants; group_by=person for distinct people',
+          operationId: 'listEventRegistrants',
+          parameters: [
+            { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Event title filter' },
+            { name: 'id', in: 'query', schema: { type: 'string' }, description: 'Event id or slug' },
+            { name: 'source', in: 'query', schema: { type: 'string' }, description: "Registration source prefix (e.g. 'luma')" },
+            { name: 'status', in: 'query', schema: { type: 'string' } },
+            { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Registered after' },
+            { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Registered before' },
+            { name: 'city', in: 'query', schema: { type: 'string' }, description: 'Event city filter (partial match)' },
+            { name: 'event_from', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Event starts after' },
+            { name: 'event_to', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Event starts before' },
+            { name: 'answers_contain', in: 'query', schema: { type: 'string' }, description: "Free-text match over registration-form answers (e.g. 'engineer')" },
+            { name: 'group_by', in: 'query', schema: { type: 'string', enum: ['person'] } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 100, maximum: 500 } },
+            { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
+          ],
+          responses: {
+            200: { description: 'Registrant rows or per-person aggregates' },
+            403: { $ref: '#/components/responses/Forbidden' },
           },
         },
       },

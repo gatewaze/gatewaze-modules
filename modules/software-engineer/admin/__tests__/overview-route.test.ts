@@ -164,3 +164,47 @@ describe('GET /overview', () => {
     expect(res.body).toEqual(SAMPLE);
   });
 });
+
+describe('GET /overview/model-usage', () => {
+  const MODELS = [{ model: 'claude-sonnet-5', phases: 12, tokens_input: 900, tokens_output: 270000, tokens_cache_read: 36900000, tokens_cache_creation: 2360000, cost_usd: 18.14 }];
+
+  it('returns the per-model rollup and defaults the window to 7 days', async () => {
+    const supabase = mockSupabase({ data: MODELS });
+    const router = mount(supabase);
+    const res = mockRes();
+    await router.handler('GET /overview/model-usage')({ query: {} }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.days).toBe(7);
+    expect(res.body.models[0].model).toBe('claude-sonnet-5');
+    expect(res.body.models[0].cacheRead).toBe(36900000);
+    expect(supabase.calls[0]).toEqual({ rpc: 'se_model_usage', args: { p_project: null, p_days: 7 } });
+  });
+
+  it('clamps ?days to 1..365 and passes a valid ?project through', async () => {
+    const supabase = mockSupabase({ data: MODELS });
+    const router = mount(supabase);
+    const project = '11111111-2222-3333-4444-555555555555';
+    const res = mockRes();
+    await router.handler('GET /overview/model-usage')({ query: { project, days: '999' } }, res);
+    expect(res.statusCode).toBe(200);
+    expect(supabase.calls[0].args).toEqual({ p_project: project, p_days: 365 });
+  });
+
+  it('rejects a malformed ?project with 400 and never hits the RPC', async () => {
+    const supabase = mockSupabase({ data: MODELS });
+    const router = mount(supabase);
+    const res = mockRes();
+    await router.handler('GET /overview/model-usage')({ query: { project: 'nope' } }, res);
+    expect(res.statusCode).toBe(400);
+    expect(supabase.calls).toHaveLength(0);
+  });
+
+  it('returns an empty model list when the RPC errors (best-effort)', async () => {
+    const supabase = mockSupabase({ error: { message: 'no such function' } });
+    const router = mount(supabase);
+    const res = mockRes();
+    await router.handler('GET /overview/model-usage')({ query: {} }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ days: 7, models: [] });
+  });
+});

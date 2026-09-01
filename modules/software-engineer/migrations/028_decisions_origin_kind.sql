@@ -1,0 +1,13 @@
+-- Fixes issue #60: the Decisions Needed panel dropped an answered pr_closed_partial/review_blocked
+-- decision the instant its run's live status left the human-gated set (e.g. resumed to `running`),
+-- even though GET /overview/decisions already has a 15-minute "answered" retention window
+-- (api/admin-routes.ts's persistedByRun) — the row was filtered out by classifyDecision() before that
+-- window was ever consulted, because classifyDecision() only understands the run's CURRENT live
+-- status, not what it was blocked on when the decision was created.
+--
+-- origin_kind freezes the DecisionKind (lib/decision-kind.ts) that was true at decision-creation time
+-- directly on the row, so the retention window can render an answered-but-run-has-moved-on decision
+-- without re-deriving a kind from state that has already changed. Nullable and additive: existing rows
+-- fall back to today's behavior (dropped once their live status leaves the gated set) until a new
+-- decision is created after this migration ships.
+alter table public.se_decisions add column if not exists origin_kind text;

@@ -6,11 +6,14 @@
  * memory, policy, and a concurrency cap. Engineers are ephemeral (one per run, run.engineer_name).
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { encodeEnvLabel, parseEnvLabel, envTierCheck } from '../lib/env-label.js';
+import { ingestEnvEvents } from '../lib/env-events.js';
+import { parseEventQuery, summarizeEvents, SUMMARY_SCAN_CAP } from '../lib/env-events-query.js';
+import { clarityConfig, clarityDashboardUrl, refreshIfStale, latestSnapshot, budgetState, attributeByEnv } from '../lib/clarity.js';
 import { publishInput } from '../lib/input-channel.js';
 import { sealToken, getProject, getCodeRepos } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
-import { upsertRunPr } from '../lib/run-state.js';
 import { mergeRunPrs } from '../lib/merge-prs.js';
 import { dispatchProject } from '../lib/dispatch.js';
 import { enqueuePhase } from '../lib/enqueue.js';
@@ -20,22 +23,26 @@ import { normalizeModel } from '../lib/model-select.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
+import { connectExternalPr } from '../lib/connect-pr.js';
 import { runTriageTurn } from '../lib/triage.js';
 import { dispatchTriageTurn } from '../lib/triage-dispatch.js';
 import { redactToken } from '../lib/git.js';
 import { readLiveMemory, readPendingMemory, approveMemory, rejectMemory, listPendingSpecs, approveSpec, rejectSpec, listMemorySources, linkMemorySource, unlinkMemorySource } from '../lib/memory.js';
 import { syncMemoryToRepo } from '../lib/memory-git.js';
-import { computeSpendOverview } from '../lib/cost.js';
+import { computeSpendOverview, computeModelUsage } from '../lib/cost.js';
+import { classifyDecision, decisionTextFor, blockSummaryFor } from '../lib/decision-kind.js';
+import { createOrSupersedeDecision, resumeRunForDecision, approveArchitecture, ARCHITECTURE_DECISION_OPTIONS } from '../lib/decisions.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Allowlist of valid se_runs.status values (mirrors the CHECK constraint, widened by migrations 015
-// and 016 to add the architecture-review flow's two statuses). The /runs board accepts a comma-
-// separated status set from the Overview KPI tiles or the board's own status filter chips; every
-// value is validated against this set so a caller can't smuggle an arbitrary string into the filter.
+// and 016 to add the architecture-review flow's two statuses, and by 017/018 to add the manual PR
+// submit gate and the human spec-approval gate). The /runs board accepts a comma-separated status set
+// from the Overview KPI tiles or the board's own status filter chips; every value is validated
+// against this set so a caller can't smuggle an arbitrary string into the filter.
 const RUN_STATUSES = new Set([
   'queued', 'running', 'blocked', 'failed', 'pr_open', 'watching', 'changes_requested', 'merged', 'closed', 'cancelled',
-  'awaiting_architecture', 'architecture_in_review',
+  'awaiting_architecture', 'architecture_in_review', 'ready_to_submit', 'awaiting_spec',
 ]);
 
 const PROJECT_MASKED =
@@ -174,20 +181,50 @@ export function mountAdminRoutes(router, deps) {
     res.status(202).json(stagingStatus());
   });
 
-  // ── PR test environment (Phase 1: gatewaze project) ────────────────────────
+  // ── PR test environment ────────────────────────────────────────────────────
   // Same control-channel model as staging-update, but the request CARRIES
   // CONTENT (a PR set), so both sides validate it: here a strict repo enum +
   // integer PR numbers; the host agent (staging-test-env.sh) re-validates and
   // resolves PRs via numeric refs/pull/N/head only — no branch names, no
   // request string ever reaches a shell. Deploying replaces the single test
-  // env slot; the test stack never runs se-runner.
-  const TEST_ENV_REPOS = new Set(['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules']);
-  const TEST_ENV_ACTIVE = new Set(['preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down']);
-  const testEnvStatus = () => {
+  // env slot per PROFILE; the test stack never runs se-runner.
+  //
+  // Profiles: each profile is a separate env slot with its own host-agent
+  // daemon, request/status file pair, GitHub org and repo allowlist. `prs` is an ORDERED
+  // list and may repeat a repo — the host agent merges same-repo PRs onto
+  // origin/main locally, in order (merge-queue semantics); a merge conflict
+  // surfaces as status state:"error" naming the conflicting PR. The profile is
+  // validated as a literal key BEFORE any filename is derived from it.
+  const TEST_ENV_PROFILES = {
+    gatewaze: { org: 'gatewaze', requestFile: 'test-env-request.json', statusFile: 'test-status.json', repos: ['gatewaze', 'gatewaze-modules', 'lf-gatewaze-modules'], maxPrs: 6 },
+    lfx: { org: 'linuxfoundation', requestFile: 'lfx-env-request.json', statusFile: 'lfx-status.json', repos: ['lfx-self-serve', 'lfx-v2-helm', 'lfx-v2-email-service', 'lfx-v2-campaign-service', 'lfx-v2-mailing-list-service', 'lfx-v2-newsletter-service', 'lfx-v2-committee-service'], maxPrs: 8 },
+  } as const;
+  // Strict enum gate (security: the profile selects control-channel FILENAMES —
+  // never let a non-literal value near a path). Missing/empty → 'gatewaze' for
+  // back-compat with pre-profile clients; anything else unknown → null (422).
+  const testEnvProfileOf = (raw: unknown): keyof typeof TEST_ENV_PROFILES | null => {
+    if (raw === undefined || raw === null || raw === '') return 'gatewaze';
+    const s = String(raw);
+    return Object.prototype.hasOwnProperty.call(TEST_ENV_PROFILES, s) ? (s as keyof typeof TEST_ENV_PROFILES) : null;
+  };
+  const TEST_ENV_ACTIVE = new Set([
+    'preparing-worktrees', 'cloning-db', 'cloning-storage', 'building', 'starting', 'tearing-down',
+    // lfx-profile cycle states (same busy semantics)
+    'deploying-helm', 'building-services', 'building-app', 'starting-app',
+    // lfx-profile "fresh" reseed sub-step (staging-lfx-env.sh do_fresh path,
+    // status.json state "seeding-data") — must count as busy too, or a
+    // second deploy/teardown request could be accepted while
+    // lfx-v2-mockdata is mid-write against the live store (race, not just a
+    // progress-bar cosmetic: see testEnv.ts TEST_ENV_ACTIVE/STEPS.lfx, kept
+    // in lockstep with this copy).
+    'seeding-data',
+  ]);
+  const testEnvStatus = (profile: keyof typeof TEST_ENV_PROFILES) => {
+    const { requestFile, statusFile } = TEST_ENV_PROFILES[profile];
     let status = null;
-    try { status = JSON.parse(readFileSync(`${STAGING_CONTROL}/test-status.json`, 'utf8')); } catch { /* none yet */ }
-    const pending = existsSync(`${STAGING_CONTROL}/test-env-request.json`) || existsSync(`${STAGING_CONTROL}/test-env-request.processing`);
-    return { available: true, pending, status };
+    try { status = JSON.parse(readFileSync(`${STAGING_CONTROL}/${statusFile}`, 'utf8')); } catch { /* none yet */ }
+    const pending = existsSync(`${STAGING_CONTROL}/${requestFile}`) || existsSync(`${STAGING_CONTROL}/${requestFile.replace(/\.json$/, '.processing')}`);
+    return { available: true, profile, pending, status };
   };
   const requireSuperAdminBearer = async (req, res) => {
     if (!String(req.headers.authorization ?? '').startsWith('Bearer ')) {
@@ -209,7 +246,9 @@ export function mountAdminRoutes(router, deps) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     }
     if (!existsSync(STAGING_CONTROL)) return res.json({ available: false });
-    res.json(testEnvStatus());
+    const profile = testEnvProfileOf(req.query.profile);
+    if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
+    res.json(testEnvStatus(profile));
   });
 
   router.post('/test-env/deploy', async (req, res) => {
@@ -220,27 +259,62 @@ export function mountAdminRoutes(router, deps) {
       return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no test-env channel' } });
     }
     if (!(await requireSuperAdminBearer(req, res))) return;
-    const raw = Array.isArray(req.body?.prs) ? req.body.prs.slice(0, 6) : [];
+    const profile = testEnvProfileOf(req.body?.profile);
+    if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
+    const { repos, maxPrs, requestFile } = TEST_ENV_PROFILES[profile];
+    const allowed = new Set(repos);
+    const raw = Array.isArray(req.body?.prs) ? req.body.prs : [];
+    // Mainline deploy: an EXPLICIT `mainline: true` (strict boolean) allows an empty prs list — the
+    // host agents treat empty prs as "deploy plain origin/main". Without the flag an empty list is
+    // still a caller mistake (an accidentally-empty selection must not wipe the env), so it 422s.
+    // With a non-empty list the flag changes nothing — the PRs are validated and forwarded as ever.
+    const mainline = req.body?.mainline === true;
+    // Live mode (Tier 1): `live: true` asks the host agent to keep tracking
+    // origin/main + the merged PR heads after the deploy and re-merge/refresh
+    // the env on every push. Strict boolean — absent defaults to false, any
+    // non-boolean value is rejected (the host agent re-validates the same way).
+    const live = req.body?.live;
+    if (live !== undefined && typeof live !== 'boolean') {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'live must be a boolean' } });
+    }
+    // Fresh data: `fresh: true` asks the host agent to wipe the env's data
+    // stores and rerun the full seed after the deploy (lfx profile: newsletter
+    // DB schema drop + mockdata reseed). Strict boolean, validated exactly
+    // like `live` — absent defaults to false, any non-boolean is rejected,
+    // and the host agent re-validates the same way. The lfx agent also
+    // treats ANY deploy starting from a torn-down env as fresh regardless of
+    // this flag; the gatewaze agent currently ignores it (its deploys always
+    // clone data fresh).
+    const fresh = req.body?.fresh;
+    if (fresh !== undefined && typeof fresh !== 'boolean') {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'fresh must be a boolean' } });
+    }
+    if ((raw.length === 0 && !mainline) || raw.length > maxPrs) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: `prs must be an ordered array of 1..${maxPrs} entries (or empty with mainline: true)` } });
+    }
+    // Order is preserved VERBATIM into the request file. Repeated repos are
+    // allowed (same-repo PRs merge sequentially on the host); an exact
+    // duplicate {repo,number} pair is a caller mistake, so reject it.
     const prs = [];
     for (const p of raw) {
       const repo = String(p?.repo ?? '');
       const number = Number(p?.number);
-      if (!TEST_ENV_REPOS.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
+      if (!allowed.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
         return res.status(422).json({ error: { code: 'invalid_input', message: `Bad PR entry: ${repo}#${p?.number}` } });
       }
-      if (prs.some((x) => x.repo === repo)) {
-        return res.status(422).json({ error: { code: 'invalid_input', message: `Multiple PRs for ${repo} — one per repo` } });
+      if (prs.some((x) => x.repo === repo && x.number === number)) {
+        return res.status(422).json({ error: { code: 'invalid_input', message: `Duplicate PR entry: ${repo}#${number}` } });
       }
       prs.push({ repo, number });
     }
-    const cur = testEnvStatus();
+    const cur = testEnvStatus(profile);
     if (cur.pending || TEST_ENV_ACTIVE.has(cur.status?.state)) {
       return res.status(409).json({ error: { code: 'busy', message: 'A test-env operation is already in progress' }, ...cur });
     }
-    writeFileSync(`${STAGING_CONTROL}/test-env-request.json`,
-      JSON.stringify({ action: 'deploy', prs, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
-    logger?.info?.('se: test-env deploy requested', { prs });
-    res.status(202).json(testEnvStatus());
+    writeFileSync(`${STAGING_CONTROL}/${requestFile}`,
+      JSON.stringify({ action: 'deploy', prs, live: live === true, fresh: fresh === true, requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
+    logger?.info?.('se: test-env deploy requested', { profile, prs, mainline, live: live === true, fresh: fresh === true });
+    res.status(202).json(testEnvStatus(profile));
   });
 
   // Cross-repo related PRs for a deployable PR: agent runs reuse ONE head
@@ -252,25 +326,28 @@ export function mountAdminRoutes(router, deps) {
     if (!rateLimit(`se-admin:test-env-related:${clientIp(req)}`, 60, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     }
+    const profile = testEnvProfileOf(req.query.profile);
+    if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
+    const { org, repos: deployable } = TEST_ENV_PROFILES[profile];
     const projectId = String(req.query.project_id ?? '');
     const repo = String(req.query.repo ?? '');
     const number = Number(req.query.number);
-    if (!UUID.test(projectId) || !TEST_ENV_REPOS.has(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
+    if (!UUID.test(projectId) || !deployable.includes(repo) || !Number.isInteger(number) || number < 1 || number > 99999) {
       return res.status(422).json({ error: { code: 'invalid_input', message: 'project_id + deployable repo + PR number required' } });
     }
     const proj = await getProject(supabase, projectId);
     if (!proj?.githubToken) return res.status(404).json({ error: { code: 'not_found', message: 'Project or its GitHub credential not found' } });
     const gh = githubClient(proj.githubToken);
     try {
-      const pull = await gh.getPullRequest('gatewaze', repo, number);
+      const pull = await gh.getPullRequest(org, repo, number);
       const branch = String(pull?.head?.ref ?? '');
-      const headOwner = String(pull?.head?.repo?.owner?.login ?? 'gatewaze');
+      const headOwner = String(pull?.head?.repo?.owner?.login ?? org);
       if (!branch) return res.json({ branch: null, related: [] });
       const related = [];
-      for (const other of TEST_ENV_REPOS) {
+      for (const other of deployable) {
         if (other === repo) continue;
         try {
-          const matches = await gh.listOpenPullsByHead('gatewaze', other, headOwner, branch);
+          const matches = await gh.listOpenPullsByHead(org, other, headOwner, branch);
           for (const m of matches ?? []) {
             related.push({ repo: other, number: m.number, title: m.title, url: m.html_url, branch });
           }
@@ -291,14 +368,410 @@ export function mountAdminRoutes(router, deps) {
       return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no test-env channel' } });
     }
     if (!(await requireSuperAdminBearer(req, res))) return;
-    const cur = testEnvStatus();
+    const profile = testEnvProfileOf(req.body?.profile);
+    if (!profile) return res.status(422).json({ error: { code: 'invalid_input', message: 'Unknown test-env profile' } });
+    const cur = testEnvStatus(profile);
     if (cur.pending || TEST_ENV_ACTIVE.has(cur.status?.state)) {
       return res.status(409).json({ error: { code: 'busy', message: 'A test-env operation is already in progress' }, ...cur });
     }
-    writeFileSync(`${STAGING_CONTROL}/test-env-request.json`,
+    writeFileSync(`${STAGING_CONTROL}/${TEST_ENV_PROFILES[profile].requestFile}`,
       JSON.stringify({ action: 'teardown', requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
-    logger?.info?.('se: test-env teardown requested', {});
-    res.status(202).json(testEnvStatus());
+    logger?.info?.('se: test-env teardown requested', { profile });
+    res.status(202).json(testEnvStatus(profile));
+  });
+
+  // ── Hostname-keyed multi test environments (spec §4.3, phase 2) ────────────
+  // ADDITIONAL lfx envs at {label}.pr-view.com, alongside the primary slot the
+  // routes above manage. Same control-channel model: the request CARRIES a
+  // spec, so both sides validate — here with the TS twin of the host's
+  // grammar (lib/env-label.ts, pinned against lfx-envlabel.py), and the host
+  // agent (staging-multienv.sh) re-validates with the Python original before
+  // anything is deployed. The request FILENAME is always the label THIS
+  // server computed via encodeEnvLabel — user input never names a file. The
+  // label IS the env identity (canonical encode of the spec).
+  const ENVS_DIR = `${STAGING_CONTROL}/envs`;
+  const ENV_REQS_DIR = `${ENVS_DIR}/requests`;
+  // Same shape gate the host agent applies before deriving anything from a
+  // label (path-param rule). Grammar validation happens on top of this.
+  const ENV_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,52}[a-z0-9])?$/;
+  const ENV_CAP = 4; // spec §3.4 lfx cap — the host agent enforces it too (plus measured admission)
+  const readJson = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+  const envPending = (label) =>
+    existsSync(`${ENV_REQS_DIR}/${label}.request.json`) || existsSync(`${ENV_REQS_DIR}/${label}.request.json.processing`);
+  // Registry labels = envs/<label>.json, excluding the .status/.k8s siblings.
+  const envRegistryLabels = () => {
+    let names = [];
+    try { names = readdirSync(ENVS_DIR); } catch { return []; }
+    return names
+      .filter((n) => n.endsWith('.json') && !n.endsWith('.status.json') && !n.endsWith('.k8s.json') && !n.endsWith('.request.json'))
+      .map((n) => n.slice(0, -5))
+      .filter((l) => ENV_LABEL_RE.test(l) && l.startsWith('lfx--'));
+  };
+  // Labels that only have a STATUS file — a refused/failed create leaves an
+  // error status with no registry entry (e.g. measured-admission refusals,
+  // grammar rejections by the host agent). They must surface on the
+  // Overview or the operator never sees the refusal.
+  const envStatusOnlyLabels = () => {
+    let names = [];
+    try { names = readdirSync(ENVS_DIR); } catch { return []; }
+    return names
+      .filter((n) => n.endsWith('.status.json'))
+      .map((n) => n.slice(0, -'.status.json'.length))
+      .filter((l) => ENV_LABEL_RE.test(l) && l.startsWith('lfx--'));
+  };
+  const envEntry = (label) => {
+    const registry = readJson(`${ENVS_DIR}/${label}.json`);
+    const status = readJson(`${ENVS_DIR}/${label}.status.json`);
+    return { label, registry, status, pending: envPending(label) };
+  };
+  // Validate a :label path param: shape first, then the grammar (b- slugs
+  // parse; h- and malformed labels are rejected). Returns null when invalid.
+  const envLabelParam = (raw) => {
+    const label = String(raw ?? '');
+    if (!ENV_LABEL_RE.test(label)) return null;
+    return parseEnvLabel(label).error === null ? label : null;
+  };
+
+  // Root assignment (which env serves lfx.pr-view.com): a singleton pointer
+  // envs/root-assignment.json written only by the host agent; requests ride
+  // the same channel under the RESERVED filename "root-assignment" (never a
+  // valid env label — no lfx-- prefix, so it can't collide or be listed).
+  const rootAssignment = () => {
+    const cur = readJson(`${ENVS_DIR}/root-assignment.json`);
+    const env = typeof cur?.env === 'string' && cur.env ? cur.env : 'primary';
+    return {
+      env,
+      status: readJson(`${ENVS_DIR}/root-assignment.status.json`),
+      pending: envPending('root-assignment'),
+    };
+  };
+
+  router.get('/test-env/envs', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-envs:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) return res.json({ available: false });
+    const profile = req.query.profile === undefined || req.query.profile === '' ? 'lfx' : String(req.query.profile);
+    if (profile !== 'lfx') return res.status(422).json({ error: { code: 'invalid_input', message: 'Only the lfx profile has hostname-keyed envs' } });
+    // Observability ingest rides the poll (best-effort, never blocks the list).
+    try { await ingestEnvEvents(supabase); } catch { /* best-effort */ }
+    const labels = new Set([...envRegistryLabels(), ...envStatusOnlyLabels()]);
+    // Queued creates for brand-new labels (request exists, registry not yet):
+    // surface them so the Overview shows a "queued" card immediately.
+    try {
+      for (const n of readdirSync(ENV_REQS_DIR)) {
+        const m = n.match(/^([a-z0-9-]+)\.request\.json(\.processing)?$/);
+        if (m && ENV_LABEL_RE.test(m[1]) && m[1].startsWith('lfx--')) labels.add(m[1]);
+      }
+    } catch { /* no requests dir yet */ }
+    res.json({ available: true, profile, cap: ENV_CAP, root: rootAssignment(), envs: [...labels].sort().map(envEntry) });
+  });
+
+  // ── Clarity live insights (read-only cache; see lib/clarity.ts) ──────────
+  // The Data Export API allows 10 calls per project PER DAY, so this route
+  // NEVER calls Clarity synchronously for the caller's benefit: it serves the
+  // cached snapshot and, at most once every 3h, rides a refresh in behind it.
+  // The token stays in the API container's env — nothing here returns it, and
+  // the response carries only the project id (public) and aggregate numbers.
+  router.get('/test-env/clarity', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-clarity:${clientIp(req)}`, 120, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const cfg = clarityConfig();
+    if (!cfg.configured) return res.json({ configured: false });
+    try { await refreshIfStale(supabase); } catch { /* best-effort; cache still serves */ }
+    const snapshot = await latestSnapshot(supabase);
+    const budget = await budgetState(supabase);
+    const root = rootAssignment();
+    const metrics = snapshot?.ok && Array.isArray(snapshot.payload) ? snapshot.payload : [];
+    res.json({
+      configured: true,
+      projectId: cfg.projectId,
+      dashboardUrl: clarityDashboardUrl(cfg.projectId),
+      fetchedAt: snapshot?.fetched_at ?? null,
+      lookbackDays: snapshot?.num_of_days ?? null,
+      ok: snapshot?.ok ?? null,
+      error: snapshot?.ok === false ? snapshot.error : null,
+      metrics,
+      byEnv: attributeByEnv(metrics, root.env),
+      budget,
+    });
+  });
+
+  // Operator "Refresh now". Spends from the same daily quota, up to the hard
+  // cap the scheduled path deliberately stays below — so this can always be
+  // used a couple of times, and refuses honestly when the day is spent.
+  router.post('/test-env/clarity/refresh', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-clarity-refresh:${clientIp(req)}`, 6, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    // CSRF hardening (security review), same rationale as /staging-update above: the
+    // platform's requireJwt accepts a Supabase auth COOKIE as a fallback, and a
+    // cross-site form POST sends cookies without CORS stopping it. This route spends
+    // from Clarity's 10-calls/project/day quota with `force: true`, so a forged
+    // request could burn the whole day's budget and blind the feature until 00:00
+    // UTC — require the explicit Bearer header, which the admin SPA already sends.
+    if (!String(req.headers.authorization ?? '').startsWith('Bearer ')) {
+      return res.status(403).json({ error: { code: 'bearer_required', message: 'Explicit Authorization header required for this action' } });
+    }
+    // After the gate, not before it: an unauthenticated caller should not be
+    // able to learn whether this instance has a Clarity credential.
+    const cfg = clarityConfig();
+    if (!cfg.configured) return res.status(422).json({ error: { code: 'not_configured', message: 'Clarity export is not configured' } });
+    const result = await refreshIfStale(supabase, { force: true });
+    if (!result.fetched && result.reason === 'budget_exhausted') {
+      const budget = await budgetState(supabase);
+      return res.status(429).json({ error: { code: 'budget_exhausted', message: `Clarity allows ${budget.dailyCap} calls per day; today's are spent. Resets 00:00 UTC.` }, budget });
+    }
+    logger?.info?.('se: clarity export refreshed', { ok: result.ok === true });
+    res.json({ refreshed: Boolean(result.fetched), ok: result.ok ?? null });
+  });
+
+  // Choose which env serves the root domain lfx.pr-view.com. "primary"
+  // restores the pinned mainline slot. The host agent performs the flip
+  // (PCC_BASE_URL rewrite + app restarts + routing/IngressRoute regen); the
+  // displaced occupant stays reachable at its own hostname (the demoted
+  // primary at lfx--main.pr-view.com). Super-admin: this changes the URL the
+  // LFX team is actively using, with a ~30s blip on each flipped app.
+  router.post('/test-env/envs/root-assignment', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const raw = req.body?.env;
+    const target = raw === 'primary' ? 'primary' : envLabelParam(raw);
+    if (!target) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'env must be "primary" or a valid environment label' } });
+    }
+    if (target !== 'primary') {
+      const registry = readJson(`${ENVS_DIR}/${target}.json`);
+      if (!registry || registry.status === 'reaped') {
+        return res.status(404).json({ error: { code: 'not_found', message: 'No such (live) environment in the registry' } });
+      }
+      const st = readJson(`${ENVS_DIR}/${target}.status.json`);
+      if (st?.state !== 'ready') {
+        return res.status(409).json({ error: { code: 'not_ready', message: 'Environment must be ready to serve the root domain' } });
+      }
+    }
+    if (envPending('root-assignment')) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A root assignment is already in progress' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/root-assignment.request.json`, JSON.stringify({
+      action: 'assign-root', env: target, requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: root assignment requested', { env: target });
+    res.status(202).json({ root: rootAssignment() });
+  });
+
+  router.post('/test-env/envs', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    // Spec entries: {repo, pr} or {repo, branch}. Everything is validated by
+    // the encoder (repo against the alias table, pr 1..99999 integer, branch
+    // against the safe-ref shape with no '..'); nothing user-supplied is used
+    // before it validates.
+    const rawSpec = req.body?.spec;
+    if (!Array.isArray(rawSpec) || rawSpec.length < 1 || rawSpec.length > 8) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'spec must be an ordered array of 1..8 entries' } });
+    }
+    // Live mode defaults TRUE for hostname-keyed envs (host-agent default) —
+    // strict boolean when present, same contract as the primary-slot routes.
+    const live = req.body?.live;
+    if (live !== undefined && typeof live !== 'boolean') {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'live must be a boolean' } });
+    }
+    // TTL (phase 3 reaping): hours from last activity before the env is
+    // reaped. Integer 1..168; default 3 (applied host-side when absent).
+    const ttl = req.body?.ttl_hours;
+    if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 1 || ttl > 168)) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: 'ttl_hours must be an integer between 1 and 168' } });
+    }
+    const spec = rawSpec.map((e) => {
+      const repo = String(e?.repo ?? '');
+      return 'branch' in (e ?? {}) ? { repo, branch: String(e.branch ?? '') } : { repo, pr: Number(e?.pr) };
+    });
+    const enc = encodeEnvLabel(spec);
+    if (enc.error !== null) {
+      return res.status(422).json({ error: { code: 'invalid_input', message: `Invalid env spec: ${enc.error}` } });
+    }
+    const tierErr = envTierCheck(spec);
+    if (tierErr) return res.status(422).json({ error: { code: 'invalid_input', message: tierErr } });
+    const label = enc.label;
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    const existing = readJson(`${ENVS_DIR}/${label}.json`);
+    if (existing && existing.status !== 'reaped') {
+      return res.status(409).json({ error: { code: 'exists', message: `Environment ${label} already exists — refresh or tear it down instead` }, label });
+    }
+    // Cap gate (reaped entries keep their registry file but hold no
+    // resources, so they don't count). The host agent re-checks, plus its
+    // measured memory/disk admission — this is just the fast client-side no.
+    const active = envRegistryLabels().filter((l) => readJson(`${ENVS_DIR}/${l}.json`)?.status !== 'reaped');
+    if (active.length >= ENV_CAP) {
+      return res.status(409).json({ error: { code: 'cap_reached', message: `Environment cap reached (${ENV_CAP}) — tear one down first` } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`, JSON.stringify({
+      action: 'create', spec, live: live !== false, ...(ttl !== undefined ? { ttl_hours: ttl } : {}),
+      requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: multi-env create requested', { label, live: live !== false, ttl_hours: ttl ?? null });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  router.delete('/test-env/envs/:label', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const label = envLabelParam(req.params.label);
+    if (!label) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
+    // HARD GUARANTEE: the env serving lfx.pr-view.com is teardown-proof. The
+    // host agent refuses too (authoritative) — this is the fast client-side
+    // 409 so the request file is never even written.
+    if (rootAssignment().env === label) {
+      return res.status(409).json({ error: { code: 'root_holder', message: 'This environment holds the root domain (lfx.pr-view.com) — demote first: restore the primary at root, then tear down' } });
+    }
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`,
+      JSON.stringify({ action: 'teardown', requested_at: new Date().toISOString(), requested_by: authorOf(req) }));
+    logger?.info?.('se: multi-env teardown requested', { label });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  router.post('/test-env/envs/:label/refresh', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env:${clientIp(req)}`, 10, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    if (!existsSync(ENVS_DIR)) {
+      return res.status(404).json({ error: { code: 'not_available', message: 'This deployment has no multi-env channel' } });
+    }
+    if (!(await requireSuperAdminBearer(req, res))) return;
+    const label = envLabelParam(req.params.label);
+    if (!label) return res.status(422).json({ error: { code: 'invalid_input', message: 'Not a valid environment label' } });
+    const registry = readJson(`${ENVS_DIR}/${label}.json`);
+    if (!registry || !Array.isArray(registry.spec)) {
+      return res.status(404).json({ error: { code: 'not_found', message: 'No such environment in the registry' } });
+    }
+    if (envPending(label)) {
+      return res.status(409).json({ error: { code: 'busy', message: 'A request for this environment is already in progress' } });
+    }
+    // Redeploy from the registry's own spec (the exact branch refs live
+    // there; the hostname slug is lossy). Verify the registry spec still
+    // encodes to this label — a mismatched registry is corrupt, not a deploy.
+    const enc = encodeEnvLabel(registry.spec);
+    if (enc.error !== null || enc.label !== label) {
+      return res.status(409).json({ error: { code: 'registry_mismatch', message: 'Registry spec does not encode to this label — refusing to redeploy' } });
+    }
+    writeFileSync(`${ENV_REQS_DIR}/${label}.request.json`, JSON.stringify({
+      action: 'create', spec: registry.spec, live: registry.live !== false,
+      ...(Number.isInteger(registry.ttl_hours) ? { ttl_hours: registry.ttl_hours } : {}),
+      requested_at: new Date().toISOString(), requested_by: authorOf(req),
+    }));
+    logger?.info?.('se: multi-env refresh requested', { label });
+    res.status(202).json({ label, ...envEntry(label) });
+  });
+
+  // Log explorer for the Environments section — events ingested from the box
+  // by ingestEnvEvents (see lib/env-events.ts). Two modes on one route:
+  //
+  //   ?summary=1  → the at-a-glance strip: per-env counts + sparklines over the
+  //                 selected window, aggregated in-process from a CAPPED scan.
+  //   default     → a page of rows, newest-first, keyset-paged on (ts, id).
+  //
+  // Every filter value that reaches PostgREST is re-derived from a validated
+  // shape by parseEventQuery (lib/env-events-query.ts) — see the injection
+  // notes there. No caller string is ever concatenated into a filter verbatim.
+  const applyEventFilters = (q, query) => {
+    if (query.envFilterPresent) {
+      if (query.envs.length > 0 && query.includeUnattributed) {
+        // Both legs are built from labels that already matched ENV_LABEL_SHAPE
+        // (no comma/paren/quote/dot possible), so nothing here can break out of
+        // the .in.() list. NOTE: the keyset cursor below adds a SECOND .or().
+        // postgrest-js appends each as its own `or=` query param and PostgREST
+        // ANDs top-level params, so the result is
+        //   (env matches OR unattributed) AND (cursor boundary)
+        // which is what we want. Do not "tidy" the two into one .or().
+        q = q.or(`env_label.is.null,env_label.in.(${query.envs.join(',')})`);
+      } else if (query.envs.length > 0) {
+        q = q.in('env_label', query.envs);
+      } else {
+        q = q.is('env_label', null);
+      }
+    }
+    if (query.kinds.length > 0) q = q.in('kind', query.kinds);
+    if (query.since) q = q.gte('ts', query.since);
+    if (query.until) q = q.lte('ts', query.until);
+    return q;
+  };
+
+  router.get('/test-env/env-events', async (req, res) => {
+    if (!rateLimit(`se-admin:test-env-events:${clientIp(req)}`, 240, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const parsed = parseEventQuery(req.query ?? {});
+    if (!parsed.ok) return res.status(422).json({ error: { code: 'invalid_input', message: parsed.message } });
+    const query = parsed.query;
+
+    if (query.summary) {
+      // The window must be bounded for the buckets to mean anything; default
+      // to the last hour when the caller gave no `since`.
+      const to = query.until ?? new Date().toISOString();
+      const from = query.since ?? new Date(Date.parse(to) - 3_600_000).toISOString();
+      let sq = supabase.from('se_env_events')
+        .select('ts, kind, env_label')
+        .gte('ts', from).lte('ts', to)
+        .order('ts', { ascending: false })
+        .limit(SUMMARY_SCAN_CAP + 1);
+      // Reuse the kind/env legs only — the window is explicit above.
+      sq = applyEventFilters(sq, { ...query, since: null, until: null });
+      if (query.search) sq = sq.ilike('detail', `%${query.search}%`);
+      const { data, error } = await sq;
+      if (error) return res.status(500).json({ error: { code: 'query_failed', message: 'Could not summarise env events' } });
+      const rows = data ?? [];
+      const truncated = rows.length > SUMMARY_SCAN_CAP;
+      return res.json({
+        summary: summarizeEvents(truncated ? rows.slice(0, SUMMARY_SCAN_CAP) : rows,
+          { from, to, buckets: query.buckets, truncated }),
+      });
+    }
+
+    let q = applyEventFilters(
+      supabase.from('se_env_events').select('id, ts, kind, env_label, detail, meta'),
+      query,
+    );
+    if (query.search) q = q.ilike('detail', `%${query.search}%`);
+    if (query.beforeTs && query.beforeId !== null) {
+      // Keyset page boundary. Both values are OUR re-serialised ISO instant and
+      // a parsed safe integer, not caller strings (parseEventQuery).
+      q = q.or(`ts.lt.${query.beforeTs},and(ts.eq.${query.beforeTs},id.lt.${query.beforeId})`);
+    }
+    // Fetch one extra row to answer has_more without a second count query.
+    q = q.order('ts', { ascending: false }).order('id', { ascending: false }).limit(query.limit + 1);
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: { code: 'query_failed', message: 'Could not load env events' } });
+    const all = data ?? [];
+    const has_more = all.length > query.limit;
+    const events = has_more ? all.slice(0, query.limit) : all;
+    const last = events[events.length - 1];
+    res.json({
+      events,
+      has_more,
+      next_cursor: has_more && last ? { before_ts: last.ts, before_id: last.id } : null,
+    });
   });
 
   // ── Project memory: review + human approval (memory-poisoning gate) ────────
@@ -419,6 +892,253 @@ export function mountAdminRoutes(router, deps) {
     res.json({ ...(data ?? {}), ...(spend ? { spend } : {}) });
   });
 
+  // Per-model spend, SUBAGENT-inclusive (from se_phases.model_usage via the se_model_usage RPC) — the
+  // flat token columns miss the subagent sessions a phase fans out. ?project scopes it; ?days windows
+  // it (default 7, clamped 1..365). Separate from /overview so the tab can lazy-load it on demand.
+  router.get('/overview/model-usage', async (req, res) => {
+    let project: string | null = null;
+    if (req.query.project !== undefined && req.query.project !== '') {
+      project = String(req.query.project);
+      if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
+    }
+    const days = Math.min(365, Math.max(1, Math.floor(Number(req.query.days)) || 7));
+    const models = await computeModelUsage(supabase, project, days);
+    res.json({ days, models });
+  });
+
+  // ── Decisions needed — every run parked waiting on a human, disambiguated + plain-language ─
+  // (issue #49). Aggregates the human-gated statuses that used to be scattered across two separate
+  // spec/architecture RunListSections plus an undifferentiated `blocked` bucket into one endpoint, so
+  // the admin has one place to see everything waiting on them with a deep link to act on it.
+  router.get('/overview/decisions', async (req, res) => {
+    let project: string | null = null;
+    if (req.query.project !== undefined && req.query.project !== '') {
+      project = String(req.query.project);
+      if (!UUID.test(project)) return res.status(400).json({ error: 'bad project' });
+    }
+    const RUN_SELECT = 'id, project_id, repo_owner, repo_name, issue_number, title, status, error, retry_count, current_phase, cost_usd, created_at, updated_at, architecture_repo, architecture_path, architecture_commit_url, project:se_projects(name, avatar_emoji)';
+    let q = supabase
+      .from('se_runs')
+      .select(RUN_SELECT)
+      .is('archived_at', null)
+      .in('status', ['awaiting_spec', 'awaiting_architecture', 'architecture_in_review', 'ready_to_submit', 'blocked'])
+      .order('updated_at', { ascending: true })
+      .limit(200);
+    if (project) q = q.eq('project_id', project);
+    const { data: gatedRuns, error } = await q;
+    if (error) {
+      logger?.warn?.('se: overview/decisions failed', { error: String(error?.message ?? error) });
+      return res.status(500).json({ error: 'overview/decisions failed' });
+    }
+    const fifteenMinAgo = Date.now() - 15 * 60_000;
+    // A run that was just answered can move its live status OUT of the gated set above in the same
+    // request that answered it (e.g. pr_closed_partial/review_blocked resume straight to `running`) —
+    // the query above would never see it again. Look up se_decisions directly (it carries project_id,
+    // so it doesn't need runIds first) for any 'answered' row still inside its 15-minute retention
+    // window, and pull in whatever runs those point to that the status query missed (issue #60).
+    let recentAnsweredQ = supabase.from('se_decisions').select('run_id').eq('status', 'answered').gte('answered_at', new Date(fifteenMinAgo).toISOString());
+    if (project) recentAnsweredQ = recentAnsweredQ.eq('project_id', project);
+    const { data: recentAnswered } = await recentAnsweredQ;
+    const gatedRunIds = new Set((gatedRuns ?? []).map((r) => r.id));
+    const extraRunIds = [...new Set((recentAnswered ?? []).map((d) => d.run_id))].filter((id) => !gatedRunIds.has(id));
+    const { data: extraRuns } = extraRunIds.length
+      ? await supabase.from('se_runs').select(RUN_SELECT).is('archived_at', null).in('id', extraRunIds)
+      : { data: [] };
+    const runs = [...(gatedRuns ?? []), ...(extraRuns ?? [])];
+    const runIds = runs.map((r) => r.id);
+    const { data: prs } = runIds.length
+      ? await supabase.from('se_run_prs').select('run_id, state').in('run_id', runIds)
+      : { data: [] };
+    const { data: gates } = runIds.length
+      ? await supabase.from('se_gates').select('run_id, detail, created_at').eq('gate', 'adversarial_review').in('run_id', runIds).order('created_at', { ascending: false })
+      : { data: [] };
+    const byRun = {};
+    for (const p of prs ?? []) (byRun[p.run_id] ??= []).push(p);
+    const latestGateByRun = {};
+    for (const g of gates ?? []) if (!latestGateByRun[g.run_id]) latestGateByRun[g.run_id] = g;
+    // Prefer a PERSISTED se_decisions row over the synthetic classifyDecision() label (issue #52): once
+    // a run reaches a blocking point that emits a decision, the panel should show the actual QUESTION
+    // (and, for a choice decision, its answerable options) rather than a plain-language description
+    // re-derived from live state. A run keeps showing here — as answered — for 15 minutes after an
+    // answer that leaves it in a gated status (e.g. an architecture 'reject', which is terminal).
+    const { data: persisted } = runIds.length
+      ? await supabase.from('se_decisions')
+          .select('id, run_id, question, kind, options, context, status, answer, answered_by, answered_at, origin_kind')
+          .in('run_id', runIds).in('status', ['pending', 'answered'])
+          .order('created_at', { ascending: false })
+      : { data: [] };
+    const persistedByRun = {};
+    for (const p of persisted ?? []) {
+      if (persistedByRun[p.run_id]) continue; // keep the newest row per run (order is created_at desc)
+      if (p.status === 'answered' && (!p.answered_at || new Date(p.answered_at).getTime() < fifteenMinAgo)) continue;
+      persistedByRun[p.run_id] = p;
+    }
+    const decisions = runs
+      .map((r) => {
+        const p = persistedByRun[r.id];
+        // classifyDecision() only understands the run's CURRENT live status. Once an answer moves the
+        // run out of the gated statuses it recognizes, fall back to the kind frozen on the decision row
+        // at creation time (origin_kind) so the row stays visible for its retention window instead of
+        // being dropped before persistedByRun is even consulted (issue #60).
+        const kind = classifyDecision(r, byRun[r.id] ?? []) ?? p?.origin_kind ?? null;
+        if (!kind) return null;
+        const gateDetail = kind === 'review_blocked' ? latestGateByRun[r.id]?.detail ?? null : null;
+        const row = { ...r, kind, decision: decisionTextFor(kind, r), objections: gateDetail?.objections ?? undefined };
+        if (p) {
+          row.decisionId = p.id;
+          row.decision = p.question;
+          row.question = p.question;
+          row.answerKind = p.kind;
+          row.options = p.options ?? null;
+          row.context = p.context ?? null;
+          row.answered = p.status === 'answered';
+          row.answer = p.answer ?? null;
+          row.answeredBy = p.answered_by ?? null;
+          row.answeredAt = p.answered_at ?? null;
+        }
+        return row;
+      })
+      .filter(Boolean);
+    res.json({ decisions, count: decisions.length });
+  });
+
+  const sanitizeAnswerText = (v: unknown) => String(v ?? '').replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 500);
+  const ARCH_ANSWER_OPTIONS = new Set(['approve', 'request_changes', 'reject']);
+
+  // Answer a persisted decision (issue #52) — the interactive counterpart of the Decisions panel's
+  // question/options. Reuses the same resume/approve machinery a manual admin action already uses:
+  // review_blocked/pr_closed_partial answers resume the run via resumeRunForDecision(); an
+  // architecture answer approves/sends-back/rejects via approveArchitecture() or an inline CAS. A
+  // decision resolved to config_blocked (kill_switch/authorization, or a security-review block) is
+  // NOT agent-discussable — there is nothing an answer could fix short of Setup — so it is rejected.
+  router.post('/decisions/:id/answer', async (req, res) => {
+    if (!rateLimit(`se-admin:decision-answer:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: decision } = await supabase.from('se_decisions').select('*').eq('id', id).maybeSingle();
+    if (!decision) return res.status(404).json({ error: 'not found' });
+    if (decision.status !== 'pending') {
+      return res.status(409).json({ error: { code: 'already_answered', message: `decision is ${decision.status}` } });
+    }
+    const { data: run } = await supabase.from('se_runs')
+      .select('id, site_id, project_id, status, kind, archived_at, current_phase, error, repo_owner, repo_name, issue_number')
+      .eq('id', decision.run_id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'run not found' });
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
+
+    // ── Validate the answer shape against the decision's kind ──────────────────────────────
+    let optionId: string | null = null;
+    let text = '';
+    if (decision.kind === 'choice') {
+      optionId = typeof req.body?.option_id === 'string' ? req.body.option_id : null;
+      const valid = (decision.options ?? []).some((o: any) => o?.id === optionId);
+      if (!optionId || !valid) return res.status(400).json({ error: { code: 'invalid_option', message: 'option_id must match one of the decision options' } });
+      text = sanitizeAnswerText(req.body?.text);
+    } else {
+      text = sanitizeAnswerText(req.body?.text);
+      if (!text) return res.status(400).json({ error: { code: 'empty_answer', message: 'text is required' } });
+    }
+
+    // A true architecture decision if the run is still at (or past) the architecture gate — the run's
+    // status, not decision.kind alone, disambiguates this from a coincidentally-shaped choice decision.
+    const isArchitecture = ARCH_STATES.includes(run.status) && ARCH_ANSWER_OPTIONS.has(optionId ?? '');
+    if (isArchitecture && (optionId === 'request_changes' || optionId === 'reject') && !text) {
+      return res.status(400).json({ error: { code: 'empty_answer', message: 'text is required for this option' } });
+    }
+
+    // Non-architecture origin: re-derive the same classification the resume route uses, and reject
+    // outright if it resolves to config_blocked — that class is not agent-discussable.
+    let originKind: string | null = null;
+    let gateDetail: any = null;
+    if (!isArchitecture) {
+      const { data: prs } = await supabase.from('se_run_prs').select('state').eq('run_id', run.id);
+      originKind = classifyDecision(run, prs ?? []);
+      if (originKind === 'config_blocked' || originKind == null) {
+        return res.status(400).json({ error: { code: 'not_answerable', message: 'This block is a configuration/credential issue — resolve it in Setup, then resume the run.' } });
+      }
+      if (originKind === 'review_blocked') {
+        const { data: gate } = await supabase.from('se_gates')
+          .select('detail').eq('run_id', run.id).eq('gate', 'adversarial_review').order('created_at', { ascending: false }).limit(1).maybeSingle();
+        gateDetail = gate?.detail ?? null;
+      }
+    }
+
+    const actorId = authorOf(req);
+    const answer = decision.kind === 'choice' ? { option_id: optionId, text: text || undefined } : { text };
+    // A distilled review_blocked decision (workers/review.ts's distillDecision) can ALSO be
+    // kind:'choice' with custom option ids/labels, not just the fixed architecture options. The
+    // resumed agent needs to see WHICH option was picked, not just the optional free-text reason —
+    // so build the human-readable summary from the option's label whenever one was selected.
+    const chosenLabel = decision.kind === 'choice' ? (decision.options ?? []).find((o: any) => o.id === optionId)?.label ?? optionId : null;
+    const answerSummary = chosenLabel ? (text ? `${chosenLabel} — ${text}` : chosenLabel) : text;
+
+    // ── CAS the decision to answered BEFORE acting — a lost race means someone else already
+    // answered it, so bail out rather than double-resume the run. ─────────────────────────────
+    const { data: racedDecision, error: decisionError } = await supabase.from('se_decisions')
+      .update({ status: 'answered', answer, answered_by: actorId, answered_at: new Date().toISOString() })
+      .eq('id', id).eq('status', 'pending')
+      .select().single();
+    if (decisionError) return res.status(500).json({ error: 'update failed' });
+    if (!racedDecision) return res.status(409).json({ error: { code: 'already_answered', message: 'decision was already answered' } });
+
+    let actionResult: any = { ok: true };
+    let auditNote = `Answered decision: "${decision.question}" → `;
+    if (isArchitecture) {
+      if (optionId === 'approve') {
+        if (run.status !== 'architecture_in_review') {
+          actionResult = { status: 409, error: { code: 'not_finalized', message: 'Finalize (commit) the proposal before approving.' } };
+        } else {
+          actionResult = await approveArchitecture(supabase, null, run, { actorId, enqueueJob });
+        }
+        auditNote += 'approved.';
+      } else if (optionId === 'request_changes') {
+        actionResult = await resumeRunForDecision(supabase, null, run, 'architecture', {
+          actorId, enqueueJob, note: `Architecture changes requested by admin: ${text}`,
+        });
+        auditNote += `requested changes — ${text}`;
+      } else {
+        const { data: raced } = await supabase.from('se_runs')
+          .update({ status: 'blocked', error: `architecture proposal rejected: ${text}`, acting_user_id: actorId })
+          .eq('id', run.id).eq('status', run.status)
+          .select('id');
+        actionResult = (!raced || raced.length === 0)
+          ? { status: 409, error: { code: 'state_changed', message: 'Run state changed — refresh and retry if still needed.' } }
+          : { ok: true };
+        auditNote += `rejected — ${text}`;
+      }
+    } else if (originKind === 'review_blocked') {
+      actionResult = await resumeRunForDecision(supabase, null, run, 'spec', {
+        actorId, enqueueJob, extraJobData: { objections: gateDetail?.objections ?? [] },
+        note: `Answered by admin: ${answerSummary}`,
+      });
+      auditNote += answerSummary;
+    } else {
+      // pr_closed_partial (the only remaining non-architecture, non-config_blocked DecisionKind).
+      actionResult = await resumeRunForDecision(supabase, null, run, 'revise', {
+        actorId, enqueueJob, note: `Answered by admin: ${answerSummary}`,
+      });
+      auditNote += answerSummary;
+    }
+
+    if (actionResult?.error) {
+      // Roll the decision back to pending — the action didn't take effect, so the question is still open.
+      await supabase.from('se_decisions').update({ status: 'pending', answer: null, answered_by: null, answered_at: null }).eq('id', id);
+      return res.status(actionResult.status ?? 500).json({ error: actionResult.error });
+    }
+
+    if (run.issue_number) {
+      try {
+        const project = await getProject(supabase, run.project_id);
+        if (project?.githubToken) await githubClient(project.githubToken).postComment(run.repo_owner, run.repo_name, run.issue_number, auditNote);
+      } catch { /* best-effort */ }
+    }
+
+    const { data: freshRun } = await supabase.from('se_runs').select('*').eq('id', run.id).maybeSingle();
+    res.json({ decision: racedDecision, run: freshRun });
+  });
+
   // ── Overview PR board — every open PR AUTHORED by each project's PAT user ─────────────────
   // Live GitHub view (not just se_run_prs): `author:@me` search per project token, so PRs the
   // user opened OUTSIDE Gatewaze appear too. Each PR is enriched (merge state, latest reviews,
@@ -429,6 +1149,9 @@ export function mountAdminRoutes(router, deps) {
   const PR_BOARD_TTL_MS = 60_000;
 
   router.get('/overview/prs', async (req, res) => {
+    if (!rateLimit(`se-admin:pr-board:${clientIp(req)}`, 60, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     let project: string | null = null;
     if (req.query.project !== undefined && req.query.project !== '') {
       project = String(req.query.project);
@@ -643,10 +1366,10 @@ export function mountAdminRoutes(router, deps) {
 
   // Connect an EXISTING external PR (opened outside Gatewaze) to a WATCHING run, so the pr-monitor
   // reconciler tracks it and auto-revises on trusted review feedback — without the platform ever
-  // merging it. Query params (body already parsed upstream). The repo must be one of the project's
-  // CONNECTED code repos. kind='external_pr' makes the reconciler skip issue bookkeeping and never
-  // auto-merge (see workers/pr-monitor.ts). Idempotent: a PR already watched by an active run
-  // returns that run instead of creating a second.
+  // merging it. Query params (body already parsed upstream). Core logic (incl. every validation:
+  // connected repo, kill switch, PR-open + refname-safe branch, active-run dedupe) is SHARED with
+  // the webhook's `agent:adopt` PR-label intake — lib/connect-pr.ts. kind='external_pr' makes the
+  // reconciler skip issue bookkeeping and never auto-merge (see workers/pr-monitor.ts).
   router.post('/prs/connect', async (req, res) => {
     if (!rateLimit(`se-admin:connect:${clientIp(req)}`, 30, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
@@ -660,57 +1383,12 @@ export function mountAdminRoutes(router, deps) {
       return res.status(400).json({ error: 'bad repo or PR number' });
     }
     const proj = await getProject(supabase, projectId);
-    if (!proj?.githubToken) return res.status(400).json({ error: 'project has no GitHub token' });
-    if (!proj.intakeEnabled) return res.status(409).json({ error: 'project is disabled (kill switch)' });
-    const codeRepos = await getCodeRepos(supabase, projectId);
-    if (!new Set(codeRepos.map((r) => `${r.repoOwner}/${r.repoName}`.toLowerCase())).has(`${owner}/${name}`.toLowerCase())) {
-      return res.status(403).json({ error: 'repo is not connected to this project' });
-    }
-    // Idempotent: reuse an active run already watching this PR.
-    const { data: existingPr } = await supabase.from('se_run_prs')
-      .select('run_id, se_runs(id, status, archived_at)')
-      .eq('repo_owner', owner).eq('repo_name', name).eq('pr_number', number).eq('state', 'open').maybeSingle();
-    const existingRun = existingPr && (Array.isArray(existingPr.se_runs) ? existingPr.se_runs[0] : existingPr.se_runs);
-    if (existingRun && !existingRun.archived_at && existingRun.status !== 'cancelled') {
-      return res.json({ runId: existingRun.id, existing: true });
-    }
-
-    const gh = githubClient(proj.githubToken);
-    try {
-      const pull = await gh.getPullRequest(owner, name, number);
-      if (!pull || pull.state !== 'open') return res.status(409).json({ error: 'PR is not open' });
-      const branch = String(pull.head?.ref ?? '');
-      if (!branch) return res.status(409).json({ error: 'could not resolve the PR head branch' });
-      // SECURITY: this ref (attacker-controlled on an external PR) becomes run.branch_name and is
-      // later passed as a bare `git push origin <branch>` refspec. A name like `--mirror` / `--delete`
-      // would be read as a git OPTION, not a ref — arbitrary remote-ref destruction with the project
-      // PAT. Reject a leading '-' and anything outside a safe refname subset before storing it.
-      if (branch.startsWith('-') || branch.includes('..') || branch.endsWith('.lock') || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
-        return res.status(422).json({ error: 'unsupported PR branch name' });
-      }
-      const { data: run, error } = await supabase.from('se_runs').insert({
-        site_id: proj.siteId, project_id: projectId, kind: 'external_pr',
-        instance_id: process.env.SE_INSTANCE_ID || 'default',
-        repo_owner: owner, repo_name: name, issue_number: null, title: sanitize(pull.title) ?? `PR #${number}`,
-        labeller: authorOf(req), status: 'watching', current_phase: 'watch',
-        branch_name: branch, pr_number: number, pr_url: pull.html_url, pr_state: 'open',
-        blast_radius: 'needs_human',   // external PRs never auto-merge — belt + braces with the pr-monitor kind gate
-      }).select('id').single();
-      if (error || !run) {
-        logger?.warn?.('se: connect PR failed', { project: projectId, error: String(error?.message ?? error) });
-        return res.status(500).json({ error: 'connect failed' });
-      }
-      await upsertRunPr(supabase, { id: run.id, site_id: proj.siteId }, owner, name, {
-        branch, pr_number: number, pr_url: pull.html_url, state: 'open',
-      });
-      // Reconcile immediately (start watching now); the pr-monitor cron then keeps it fresh.
-      try { await enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: run.id }, { jobId: `se-prmon-connect-${run.id}` }); }
-      catch (e) { logger?.warn?.('se: connect enqueue pr-monitor failed', { error: String(e) }); }
-      res.status(201).json({ runId: run.id });
-    } catch (e) {
-      logger?.warn?.('se: connect PR failed', { project: projectId, error: String((e as Error)?.message ?? e) });
-      res.status(500).json({ error: 'connect failed' });
-    }
+    const result = await connectExternalPr(supabase, { enqueueJob, logger }, {
+      project: proj, owner, name, number, labeller: authorOf(req),
+    });
+    if (result.ok) return res.status(result.existing ? 200 : 201).json({ runId: result.runId, ...(result.existing ? { existing: true } : {}) });
+    const status = { no_token: 400, intake_disabled: 409, repo_not_connected: 403, pr_not_open: 409, no_branch: 409, bad_branch: 422, insert_failed: 500, connect_failed: 500 }[result.code] ?? 500;
+    res.status(status).json({ error: result.message });
   });
 
   // ── Runs ────────────────────────────────────────────────────────────────
@@ -759,6 +1437,9 @@ export function mountAdminRoutes(router, deps) {
   });
 
   router.post('/runs/:id/message', async (req, res) => {
+    if (!rateLimit(`se-admin:run-message:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
     const id = req.params.id;
     if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
     const content = String(req.body?.content ?? '').slice(0, 8000);
@@ -775,14 +1456,22 @@ export function mountAdminRoutes(router, deps) {
     const images = candidateImages.filter((u: string) => isAllowedAttachmentUrl(u));
     const imagesDropped = candidateImages.length - images.length;
     if (!content.trim() && !images.length) return res.status(400).json({ error: 'empty' });
-    const { data: run } = await supabase.from('se_runs').select('id, site_id, status').eq('id', id).maybeSingle();
+    const { data: run } = await supabase.from('se_runs').select('id, site_id, status, error, retry_count').eq('id', id).maybeSingle();
     if (!run) return res.status(404).json({ error: 'not found' });
     // A run parked at a gate (spec, architecture) is not a live session — a message is feedback on the
     // parked artifact, handled asynchronously by the matching refine job rather than streamed to a live agent.
     const archState = ['awaiting_architecture', 'architecture_in_review'].includes(run.status);
     const specState = run.status === 'awaiting_spec';
     const codeState = run.status === 'ready_to_submit';
-    if (!archState && !specState && !codeState && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
+    // A `blocked` run is only agent-discussable when the block itself is something the agent can act
+    // on (review_blocked, pr_closed_partial) — a config_blocked run (authorization/kill_switch) needs
+    // a config fix, not a chat, so it still 409s and points the admin at Setup (issue #49 §6).
+    let blockedDiscussable = false;
+    if (run.status === 'blocked') {
+      const { data: prs } = await supabase.from('se_run_prs').select('state').eq('run_id', id);
+      blockedDiscussable = classifyDecision(run, prs ?? []) !== 'config_blocked';
+    }
+    if (!archState && !specState && !codeState && !blockedDiscussable && !['queued', 'running', 'changes_requested'].includes(run.status)) return res.status(409).json({ error: `run is ${run.status}` });
     // Persist the images as markdown appended to the stored message so the transcript renders them
     // inline — the same `![](url)` convention se_messages already carries for issue attachments.
     const stored = images.length
@@ -797,6 +1486,9 @@ export function mountAdminRoutes(router, deps) {
       const jobId = specState ? `se-spec-refine-${id}` : codeState ? `se-code-refine-${id}` : `se-arch-refine-${id}`;
       try { await enqueueJob?.('se', worker, { runId: id }, { jobId, removeOnComplete: true }); }
       catch (e) { logger?.warn?.('se: enqueue refine failed', { error: String(e) }); }
+    } else if (blockedDiscussable) {
+      // No live agent to stream to and no refine job to run — the message just sits in the mailbox
+      // (delivered_at=null) and surfaces via drainPendingAdminMessages the next time the run is Resumed.
     } else {
       try { await publishInput(getRedis?.(), id, { kind: 'chat', content, images }); }
       catch (e) { logger?.warn?.('se: publish chat failed', { error: String(e) }); }
@@ -845,6 +1537,70 @@ export function mountAdminRoutes(router, deps) {
     if (error) return res.status(500).json({ error: 'update failed' });
     await dispatchFor(id);   // freed a slot → promote the next queued run
     res.json({ status: 'cancelled' });
+  });
+
+  // Resume a FAILED run back into the phase that failed, keeping the same run id + full message/event
+  // history (issue #36). Modeled on spec/approve below: jump straight to 'running' rather than 'queued'
+  // — a resume is an admin continuing a run that already occupies its concurrency slot, so it bypasses
+  // dispatchProject's promotion path on purpose (that path always re-enqueues 'intake', which would
+  // restart the pipeline instead of retrying the phase that actually failed). Gated the same way as the
+  // other Advance actions (spend tokens + PAT push power) via denyIfNotApprover.
+  router.post('/runs/:id/resume', async (req, res) => {
+    if (!rateLimit(`se-admin:resume:${clientIp(req)}`, 30, 60_000)) {
+      return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+    }
+    const id = req.params.id;
+    if (!UUID.test(id)) return res.status(400).json({ error: 'bad id' });
+    const { data: run } = await supabase.from('se_runs')
+      .select('id, site_id, project_id, status, kind, archived_at, current_phase, error').eq('id', id).maybeSingle();
+    if (!run) return res.status(404).json({ error: 'not found' });
+    // issue #49: `blocked` joined `failed` as a resumable status — a run parked on a closed-unmerged
+    // PR or a skeptic block is just as resumable as a crashed phase, it just resolves a different
+    // target phase below (per its DecisionKind) instead of the last-FAILED se_phases row.
+    if (!['failed', 'blocked'].includes(run.status)) return res.status(409).json({ error: { code: 'not_resumable', message: `run is ${run.status}` } });
+    if (run.archived_at) return res.status(409).json({ error: { code: 'archived', message: 'Unarchive the run before resuming it.' } });
+    if (run.kind === 'interactive') return res.status(409).json({ error: { code: 'not_resumable', message: 'Interactive sessions cannot be resumed this way.' } });
+    if (await denyIfNotApprover(req, res, run)) return;   // Advance action
+
+    let resumePhase = null;
+    let kind = null;
+    let gateDetail = null;
+    let lastFailed = null;
+    let extraJobData = {};
+    if (run.status === 'blocked') {
+      // Disambiguate the block (issue #49 §1) so the run rejoins the pipeline at the RIGHT phase —
+      // a closed-unmerged PR needs `revise`, a skeptic block needs a fresh `spec` draft, and a
+      // config block (authorization/kill_switch) just retries whatever phase it was already on.
+      const { data: prs } = await supabase.from('se_run_prs').select('state').eq('run_id', id);
+      kind = classifyDecision(run, prs ?? []);
+      if (kind === 'review_blocked') {
+        const { data: gate } = await supabase.from('se_gates')
+          .select('detail').eq('run_id', id).eq('gate', 'adversarial_review').order('created_at', { ascending: false }).limit(1).maybeSingle();
+        gateDetail = gate?.detail ?? null;
+        resumePhase = 'spec';
+        extraJobData = { objections: gateDetail?.objections ?? [] };
+      } else if (kind === 'pr_closed_partial') {
+        resumePhase = 'revise';
+      } else {
+        resumePhase = run.current_phase ?? null;
+      }
+    } else {
+      // Ground truth for what actually failed is the latest FAILED se_phases row, not run.current_phase
+      // (they can disagree, e.g. a crash mid-write) — prefer the phase row and fail closed if neither
+      // resolves, rather than guessing and re-cloning into the wrong phase.
+      const { data } = await supabase.from('se_phases')
+        .select('phase, attempt').eq('run_id', id).eq('status', 'failed').order('started_at', { ascending: false }).limit(1).maybeSingle();
+      lastFailed = data;
+      resumePhase = lastFailed?.phase ?? run.current_phase ?? null;
+    }
+    if (!resumePhase) return res.status(409).json({ error: { code: 'no_phase', message: 'Could not determine which phase to resume.' } });
+
+    const result = await resumeRunForDecision(supabase, null, run, resumePhase, {
+      extraJobData, actorId: authorOf(req), enqueueJob,
+      note: (attempt) => `Resumed by admin (attempt ${attempt} of ${resumePhase}). ${blockSummaryFor(kind, run, gateDetail)}`,
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json({ resumed: true, phase: result.phase, attempt: result.attempt });
   });
 
   // Manually merge a run's open, mergeable PR(s) from the Runs dashboard — the human counterpart to the
@@ -946,6 +1702,16 @@ export function mountAdminRoutes(router, deps) {
     }
     await supabase.from('se_runs').update({ status: 'architecture_in_review', architecture_commit_url: url }).eq('id', id).eq('status', 'awaiting_architecture');
     try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: `Proposal committed to ${run.architecture_repo}. Awaiting architectural review.` }); } catch { /* */ }
+    // Refresh the pending decision's context with the real commit URL (it was null at awaiting_architecture
+    // emission time, since nothing was committed yet) — supersede+reinsert keeps the same fixed option set.
+    try {
+      await createOrSupersedeDecision(supabase, {
+        runId: id, projectId: run.project_id, siteId: run.site_id, phase: 'architecture',
+        question: 'An architecture proposal is ready for review. What should happen next?',
+        kind: 'choice', options: ARCHITECTURE_DECISION_OPTIONS,
+        context: url, originKind: 'awaiting_architecture',
+      });
+    } catch { /* best-effort */ }
     res.json({ committed: true, url, status: 'architecture_in_review' });
   });
 
@@ -959,15 +1725,8 @@ export function mountAdminRoutes(router, deps) {
     if (!run) return res.status(404).json({ error: 'not found' });
     if (run.status !== 'architecture_in_review') return res.status(409).json({ error: 'run is not awaiting architecture approval' });
     if (await denyIfNotApprover(req, res, run)) return;   // Advance action
-    const { error } = await supabase.from('se_runs').update({ status: 'running', current_phase: 'implement', acting_user_id: authorOf(req) }).eq('id', id).eq('status', 'architecture_in_review');
-    if (error) return res.status(500).json({ error: 'update failed' });
-    try { await enqueuePhase({ enqueueJob }, id, 'implement'); } catch (e) { logger?.warn?.('se: enqueue implement (arch approve) failed', { error: String(e) }); }
-    try { await supabase.from('se_messages').insert({ run_id: id, site_id: run.site_id, role: 'system', author: authorOf(req), content: 'Architecture approved — resuming implementation.' }); } catch { /* */ }
-    // Best-effort: note it on the internal roadmap issue (private; not LFX-visible).
-    if (run.issue_number) {
-      const project = await getProject(supabase, run.project_id);
-      if (project?.githubToken) { try { await githubClient(project.githubToken).postComment(run.repo_owner, run.repo_name, run.issue_number, 'Architecture approved — resuming implementation.'); } catch { /* */ } }
-    }
+    const result = await approveArchitecture(supabase, null, run, { actorId: authorOf(req), enqueueJob });
+    if (result.error) return res.status(result.status).json({ error: result.error });
     res.json({ approved: true, resuming: true });
   });
 
