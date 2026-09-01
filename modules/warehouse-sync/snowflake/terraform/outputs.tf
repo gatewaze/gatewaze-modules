@@ -1,6 +1,6 @@
 output "database" {
-  description = "Landing database name."
-  value       = snowflake_database.brand.name
+  description = "Ingest landing database name."
+  value       = snowflake_database.ingest.name
 }
 
 output "loading_warehouse" {
@@ -19,6 +19,6 @@ output "roles" {
     cdc            = snowflake_role.cdc.name
     staging        = snowflake_role.staging.name
     analyst        = snowflake_role.analyst.name
-    pii_breakglass = snowflake_role.pii_breakglass.name
+    pii_breakglass = snowflake_role.pii.name
   }
 }

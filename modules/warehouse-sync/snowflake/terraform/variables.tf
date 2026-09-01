@@ -1,22 +1,46 @@
-# Inputs for the AAIF relational-replica Snowflake provisioning (§9).
-# When contributing into lfx-snowflake-terraform, map these onto that repo's
-# module variables / naming conventions.
+# Inputs for the warehouse-sync Snowflake provisioning (§9).
+# On the trial you own ACCOUNTADMIN, so `terraform apply` creates everything.
+# For the LF account this doubles as the CloudOps spec (they adapt names to the
+# datalake's conventions).
 
-variable "svc_cdc_public_key" {
-  description = "RSA public key (PEM body, no header/footer) for SVC_<DB>_CDC key-pair auth. Injected from the LF secret store (§13); never committed."
+variable "platform" {
+  description = "Name prefix for all objects. Database = <platform>_INGEST, service account = SVC_<platform>_CDC, etc."
   type        = string
-  default     = ""
+  default     = "GATEWAZE"
+}
+
+# ── Provider connection (supply via TF_VAR_* or a tfvars file; never commit) ──
+variable "organization_name" {
+  description = "Snowflake organization name (e.g. YKRDQJL)."
+  type        = string
+}
+
+variable "account_name" {
+  description = "Snowflake account name (e.g. QJ53915). Together: <org>-<account>."
+  type        = string
+}
+
+variable "tf_user" {
+  description = "User Terraform authenticates as (e.g. your trial login, or a provisioning service account)."
+  type        = string
+}
+
+variable "tf_role" {
+  description = "Role Terraform runs under — must be able to create databases/warehouses/roles/users. ACCOUNTADMIN on the trial."
+  type        = string
+  default     = "ACCOUNTADMIN"
+}
+
+# ── CDC service account key-pair ──────────────────────────────────────────────
+variable "svc_cdc_public_key" {
+  description = "RSA public key (PEM body, no header/footer) for SVC_<platform>_CDC key-pair auth. Airbyte's Snowflake destination uses the matching private key. From the secret store; never committed."
+  type        = string
   sensitive   = true
 }
 
-variable "network_policy_name" {
-  description = "Optional Snowflake network policy restricting ingress by IP (§9.1 network policy). Empty = none."
-  type        = string
-  default     = ""
-}
-
-variable "analyst_role_grants" {
-  description = "Account roles that should inherit <DB>_ANALYST_ROLE (e.g. an LF analyst functional role). Wire via snowflake_grant_account_role in an environment overlay."
+# ── Network policy (§9.1 / trial PAT requirement) ────────────────────────────
+variable "allowed_ips" {
+  description = "IPs allowed to connect (operator machine + Airbyte cluster egress). Required on trial accounts for PAT auth. Empty = no network policy created."
   type        = list(string)
   default     = []
 }

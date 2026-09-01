@@ -1,91 +1,93 @@
-# LF Snowflake provisioning — message + questions to get this actionable
+# Gatewaze — Snowflake provisioning request (message + questions)
 
-Context for the reader: this is what to send the LF data team / CloudOps to get
-the **destination** side of the Gatewaze → Snowflake pipeline provisioned. At the
-LF, engineers self-serve only `users.tf` / `service_accounts.tf` in
-`lfx-snowflake-terraform`; **databases, schemas, warehouses, and roles are
-CloudOps-owned** (GitHub issue / `#lfx-devops`). So this splits into (1) a CloudOps
-ask for the objects, (2) a service-account request we can submit, and (3) the
-decisions we need back.
+Context: what to send the LF data team / CloudOps to provision the **destination**
+for the Gatewaze → Snowflake pipeline. Grounded in a read-only look at the
+account (2026-09-01, `XMB01974` / `JNMHVWD-XPB85243`):
+
+- Engineers self-serve only `users.tf` / `service_accounts.tf` in
+  `lfx-snowflake-terraform`; **databases, warehouses, and roles are CloudOps-
+  owned** (GitHub issue / `#lfx-devops`).
+- The datalake is a dbt medallion: an **ingest tier** (`SEGMENT_INGEST`,
+  `FIVETRAN_INGEST`, `RAW`, …) → `ANALYTICS` (`SILVER_*`/`GOLD_*`/`PLATINUM_*`).
+  New sources land in a `*_INGEST` database and are modelled by dbt.
+- So **Gatewaze lands as its own ingest source** — a single
+  `GATEWAZE_INGEST` database — beside the existing ingest sources.
+
+> Naming note: `Gatewaze` / `GATEWAZE_INGEST` is the working name for the
+> platform in the LF context; swap it if the final product name differs.
 
 ---
 
 ## Message to post (`#lfx-devops` or a GitHub issue on the datalake repo)
 
-> **Subject: Landing the AAIF (Gatewaze) Supabase database into Snowflake — destination provisioning + an architecture check**
+> **Subject: New ingest source — Gatewaze (Postgres → Snowflake via Airbyte)**
 >
-> Hi CloudOps / data team — we're standing up CDC replication from the AAIF
-> production **Supabase Postgres** into Snowflake (via a self-hosted **Airbyte**
-> on our shared k8s cluster). The behavioural-event stream already lands from
-> Segment ("Marketing Ops" workspace); this adds the **relational** system-of-record
-> tables (people, events, registrations, sends, engagement), curated to an
-> allow-list and PII-governed. DPA/engagement on the LF side is in place.
+> Hi CloudOps / data team — we're adding a new **ingest source**: relational CDC
+> from the **Gatewaze** platform's Postgres (Supabase) into Snowflake, via a
+> self-hosted **Airbyte** already running on our shared k8s cluster (cluster-
+> internal, no public ingress). It's a **single platform instance** — one source,
+> not multiple.
 >
-> **The one decision that gates everything — where should AAIF land?**
-> 1. **Into your existing datalake conventions** — an AAIF *schema* in your RAW
->    database, using your ingest/RAW roles and modelled by your dbt stack. We hand
->    you a clean RAW feed and you own transforms; or
-> 2. **A standalone `AAIF` database** with its own medallion (`RAW`→`STAGING`→
->    `MARTS`→`OPERATIONS`) that we own and model, sitting in the same account.
+> This complements the Segment behavioural stream; it lands the relational
+> system-of-record — community members, foundations, projects, events,
+> registrations, content, and sends — curated to an allow-list and PII-governed.
+> The model is designed to carry the **LFX foundation/project identifiers** so it
+> joins to your existing organization/project dimensions in `ANALYTICS`.
 >
-> We've built for (2) (reference Terraform below) but we'd rather fit your
-> conventions if you prefer (1). Your call — it decides the roles, the warehouse,
-> and who owns the transforms.
->
-> **What we'd need CloudOps to provision** (whichever model):
-> - A landing **database/schema** for AAIF RAW (+ STAGING/OPERATIONS if model 2).
-> - A dedicated **loading warehouse** (XS, auto-suspend 60s) so ingest cost is
->   attributable — e.g. `WH_AAIF_LOADING` + a `WH_AAIF_LOADING_USAGE` role.
-> - A **write role** for the connector to land RAW (an existing `DB_RAW_RW`-style
->   role scoped to the AAIF schema, or a new `DB_AAIF_RAW_RW`).
-> - If we apply PII masking in-warehouse (dynamic data masking, analysts see
->   masked; a narrow break-glass role sees plaintext) — confirm that fits your
->   governance, or tell us it's handled by your existing datalake policies.
+> **What we'd like provisioned** (following the `*_INGEST` convention):
+> - An **`GATEWAZE_INGEST`** database (Airbyte lands the RAW tables here).
+> - A **write role** for the connector — an existing `DB_*_INGEST_RW`-style role
+>   scoped to it, or a new `DB_GATEWAZE_INGEST_RW`.
+> - A dedicated **loading warehouse** — e.g. `GATEWAZE_LOADING_WH` (XS,
+>   auto-suspend 60s) + a `WH_GATEWAZE_LOADING_USAGE` role — so ingest cost
+>   is attributable.
+> - How you'd like it **modelled downstream**: should your dbt stack model
+>   `GATEWAZE_INGEST.*` into `ANALYTICS` (SILVER/GOLD) alongside the other
+>   sources, or should we own an `GATEWAZE_ANALYTICS` DB for staging/marts?
+>   (We have a medallion transform ready either way.)
+> - PII: we can apply Snowflake dynamic data masking in the modelled layer
+>   (analysts masked; a narrow break-glass role for plaintext) — confirm that fits
+>   your governance or that it's covered by existing datalake policies.
 >
 > **Service account (we'll submit to `service_accounts.tf` once you confirm the
 > role/warehouse names):**
 > ```hcl
-> "SVC_AAIF_CDC" = {
->   roles             = ["WH_AAIF_LOADING_USAGE", "DB_AAIF_RAW_RW"],  # confirm names
->   default_warehouse = "AAIF_LOADING_WH",                            # CloudOps to create
->   default_role      = "SVC_AAIF_CDC",
+> "SVC_GATEWAZE_CDC" = {
+>   roles             = ["WH_GATEWAZE_LOADING_USAGE", "DB_GATEWAZE_INGEST_RW"],  # confirm names
+>   default_warehouse = "GATEWAZE_LOADING_WH",                                        # CloudOps to create
+>   default_role      = "SVC_GATEWAZE_CDC",
 >   ip_list           = local.ip_list_k8s_clusters,   # Airbyte runs on the shared k8s cluster
 > },
 > ```
-> Airbyte's Snowflake destination uses **key-pair auth** — happy to generate the
-> RSA keypair and send you the public key to register on the account.
+> Airbyte's Snowflake destination uses **key-pair auth** — we'll generate the RSA
+> keypair and send you the public key to register.
 >
 > **Questions:**
-> 1. Model (1) or (2) above?
-> 2. Which **Snowflake account** — the same one the Segment "Marketing Ops"
->    destination feeds? (We want the relational replica joinable to the events in
->    the same account.)
-> 3. The exact **role + warehouse names** you want the connector SA to hold.
+> 1. OK to create `GATEWAZE_INGEST` as a new ingest source?
+> 2. Preferred **role + warehouse names** for the connector service account.
+> 3. Downstream modelling: your dbt into `ANALYTICS`, or an
+>    `GATEWAZE_ANALYTICS` DB we own?
 > 4. **Key-pair** auth OK, and where do we send the public key?
-> 5. Are the **shared k8s cluster egress IPs** (`local.ip_list_k8s_clusters`) the
->    right allowlist for the SA, or do you need specific IPs?
-> 6. Any network/PrivateLink requirement on the Snowflake ingress side?
+> 5. Are the **shared k8s egress IPs** (`local.ip_list_k8s_clusters`) the right SA
+>    allowlist?
+> 6. Do you have canonical **foundation/project identifiers** (SFID / project_id)
+>    we should key on so the community data joins your org/project dimensions?
 >
-> Reference: the object set we designed (adapt as you see fit) is the Terraform in
-> our `warehouse-sync` module (`snowflake/terraform/main.tf`) — database `AAIF`,
-> schemas `RAW/STAGING/MARTS/OPERATIONS`, warehouse `AAIF_LOADING_WH`, roles
-> `AAIF_CDC_ROLE / AAIF_STAGING_ROLE / AAIF_ANALYST_ROLE / AAIF_PII_BREAKGLASS_ROLE`,
-> service account `SVC_AAIF_CDC`. Happy to hop on a call.
+> **Heads-up (separate issue):** the `SEGMENT_INGEST.AAIF_APP_SERVER_PROD` /
+> `_DEV` schemas are **empty** — that Segment source is registered but has landed
+> no events in Snowflake. Whoever owns that Segment destination may want to check
+> the sync; it's needed for the relational↔event join to have anything to join to.
 
 ---
 
-## What I (Dan) need back to make this actionable
+## What we need back
+| From | What |
+|---|---|
+| CloudOps | Approve `GATEWAZE_INGEST` + `GATEWAZE_LOADING_WH` + a write role; confirm role/warehouse names; register the `SVC_GATEWAZE_CDC` key-pair; confirm downstream modelling; share canonical foundation/project IDs to key on |
+| Segment owner | Why the Segment source schema is empty — get its Snowflake sync flowing |
+| Our side | Airbyte is deployed; needs the destination creds + the source/connection config once the above lands |
 
-| From | What | Why |
-|---|---|---|
-| LF data team / CloudOps | Model (1 vs 2) + account + role/warehouse/db names + key-pair confirmation + IP allowlist | Unblocks the service-account PR and the Airbyte Snowflake destination config |
-| Whoever has Segment access (we do) | The Segment → Snowflake **database / schema / table names** and confirm `supabase_user_id` landed as a column | Fills `manifest/appendix-b.yaml` so the relational↔event join works |
-| Our side (k8s) | Deploy Airbyte on the cluster (full Helm, external Postgres + private S3) and the Airbyte egress IPs | The connector runtime itself; separate from the LF Snowflake ask |
-| DPO (if not already) | Confirm PII-1 posture + `BYPASSRLS` on the Supabase reader role are accepted | Source-side prerequisite (§8.4) |
-
-## Still-ours-to-do (code, in progress)
-
-- Reconcile the allow-list manifest to the real AAIF schema (the committed one is
-  speculative — wrong table names, profile fields in `attributes` jsonb, hard
-  delete) and add jsonb-extract to the generator. Tracked as G1–G3 in
-  `gap-analysis.md`. This is independent of the LF provisioning and I can do it now.
+## Confirmed facts
+- Account `XMB01974` (`JNMHVWD-XPB85243`) — same account Segment feeds, so intra-account joinable.
+- Landing = a single `GATEWAZE_INGEST` database, dbt-modelled — following the `*_INGEST` convention.
+- `dbaker@linuxfoundation.org` is read-only here (no DB/warehouse creation), so this is a CloudOps provision.
