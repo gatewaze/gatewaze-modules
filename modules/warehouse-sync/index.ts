@@ -3,10 +3,10 @@ import type { GatewazeModule } from '@gatewaze/shared';
 /**
  * warehouse-sync — Supabase → data-warehouse relational replication.
  *
- * The mechanism is Airbyte (a central in-cluster install, one workspace per
- * brand — see docs/airbyte-deployment.md), so any Airbyte-supported destination
- * works; Snowflake is the first, and the warehouse-side artifacts below target
- * it. Implements spec-supabase-to-snowflake-pipeline.md. This module owns the
+ * The mechanism is Airbyte (an in-cluster install — see docs/airbyte-deployment.md),
+ * so any Airbyte-supported destination works; Snowflake is the first, and the
+ * warehouse-side artifacts below target it. Implements
+ * spec-supabase-to-snowflake-pipeline.md. This module owns the
  * *Gatewaze/Supabase side* of the pipeline and carries the *warehouse-side*
  * artifacts as reviewed, version-controlled code:
  *
@@ -38,7 +38,7 @@ const warehouseSyncModule: GatewazeModule = {
   visibility: 'public',
   name: 'Warehouse Sync',
   description:
-    'Replicates a curated, governed subset of this brand\'s Supabase Postgres into a data warehouse (Snowflake, BigQuery, Redshift, …) via a central Airbyte, with replication-slot safety monitoring, PII masking, delete/erasure propagation, and reconciliation tests. Snowflake is the first destination.',
+    'Replicates a curated, governed subset of the Gatewaze Supabase Postgres into a data warehouse (Snowflake, BigQuery, Redshift, …) via Airbyte, with replication-slot safety monitoring, PII masking, delete/erasure propagation, and reconciliation tests. Snowflake is the first destination.',
   version: '0.1.0',
 
   features: [
@@ -74,7 +74,7 @@ const warehouseSyncModule: GatewazeModule = {
       concurrency: 1,
     },
     {
-      // Option B: poll the central Airbyte for this brand's workspace.
+      // Option B: poll the in-cluster Airbyte for this instance's workspace.
       name: 'warehouse-sync:airbyte-status',
       handler: './workers/airbyte-status.ts',
       concurrency: 1,
@@ -141,7 +141,6 @@ const warehouseSyncModule: GatewazeModule = {
       key: 'mechanism',
       type: 'select',
       required: false,
-      default: 'openflow',
       label: 'Replication mechanism',
       description:
         'Phase-0 connector choice (§5). RAW semantics and delete-handling differ per mechanism; STAGING is the stable contract regardless.',
@@ -155,8 +154,8 @@ const warehouseSyncModule: GatewazeModule = {
         { label: 'Supabase Pipelines (Option F, when Snowflake dest GA)', value: 'supabase-pipelines' },
       ],
     },
-    // ── Airbyte control plane (Option B). One central Airbyte serves every
-    //    brand; each brand points at the same URL but its OWN workspace. ──
+    // ── Airbyte control plane (Option B). The in-cluster Airbyte, driven via
+    //    its API, scoped to this instance's workspace. ──
     airbyteApiUrl: {
       key: 'airbyteApiUrl',
       type: 'string',
@@ -169,8 +168,8 @@ const warehouseSyncModule: GatewazeModule = {
       key: 'airbyteWorkspaceId',
       type: 'string',
       required: false,
-      label: 'Airbyte workspace ID (this brand)',
-      description: 'The per-brand Airbyte workspace UUID. Scopes every API call so this brand only sees its own connections.',
+      label: 'Airbyte workspace ID',
+      description: 'The Airbyte workspace UUID for this instance. Scopes every API call.',
     },
     airbyteApiToken: {
       key: 'airbyteApiToken',
@@ -196,9 +195,10 @@ const warehouseSyncModule: GatewazeModule = {
       key: 'snowflakeDatabase',
       type: 'string',
       required: false,
-      default: 'AAIF',
-      label: 'Snowflake database',
-      description: 'Landing database name (§9.1). One per brand; AAIF is the first.',
+      default: 'GATEWAZE_INGEST',
+      label: 'Snowflake ingest database',
+      description:
+        'The ingest landing database for this single Gatewaze instance (§9.1), sitting alongside the LF datalake\'s other *_INGEST sources. Airbyte lands the RAW tables here.',
       validationRegex: '^[A-Z][A-Z0-9_]*$',
     },
     replicationSlotName: {

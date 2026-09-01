@@ -32,9 +32,9 @@
 # =============================================================================
 
 version: 1
-brand: aaif
-# Snowflake landing DB (§9.1). Overridable per brand; generator reads config too.
-snowflake_database: AAIF
+brand: gatewaze
+# Snowflake landing DB (§9.1). Overridable via module config (generator reads it too).
+snowflake_database: GATEWAZE_INGEST
 source_schema: public
 # Fixed repo-wide conventions (§7.2, §8.2). Do not vary per table.
 conventions:
@@ -63,6 +63,11 @@ tables:
       - { name: id,            pg_type: uuid,        classification: none,   masking: none, join_key: true }
       - { name: email,         pg_type: text,        classification: direct, masking: domain_only }
       - { name: email_sha256,  derived: sha256_join, source_column: email, classification: none, masking: none, join_key: true }
+      # LFX identity join keys (planned — lift from attributes jsonb to real columns; see docs/gatewaze-lf-schema.md).
+      # Pseudonymous IdP identifiers, treated as non-PII join keys like people.id.
+      - { name: lfid,          pg_type: text,        classification: none,   masking: none, join_key: true }   # LFID username → Segment USER_ID
+      - { name: lfx_user_id,   pg_type: text,        classification: none,   masking: none, join_key: true }   # LFX Unify user id → LF individual dim
+      - { name: auth_user_id,  pg_type: uuid,        classification: none,   masking: none, join_key: true }   # → auth.users; = Segment supabase_user_id trait
       - { name: full_name,     pg_type: text,        classification: direct, masking: "null" }
       - { name: first_name,    pg_type: text,        classification: direct, masking: "null" }
       - { name: last_name,     pg_type: text,        classification: direct, masking: "null" }
@@ -188,6 +193,55 @@ tables:
       - { name: created_at,  pg_type: timestamptz, classification: none, masking: none }
       - { name: updated_at,  pg_type: timestamptz, classification: none, masking: none }
       - { name: deleted_at,  pg_type: timestamptz, classification: none, masking: none }
+
+  # ── Gatewaze foundations/projects (PLANNED — Supabase migrations not yet
+  #    landed; see docs/gatewaze-lf-schema.md). The tenancy + conformance layer.
+  - name: foundations
+    primary_key: id
+    updated_at: updated_at
+    delete: { mode: soft, column: deleted_at }
+    columns:
+      - { name: id,               pg_type: uuid, classification: none, masking: none, join_key: true }
+      - { name: lfx_project_sfid, pg_type: text, classification: none, masking: none, join_key: true }   # → LF org/project dims
+      - { name: lfx_project_id,   pg_type: uuid, classification: none, masking: none, join_key: true }
+      - { name: name,             pg_type: text, classification: none, masking: none }
+      - { name: slug,             pg_type: text, classification: none, masking: none }
+      - { name: status,           pg_type: text, classification: none, masking: none }
+      - { name: created_at,       pg_type: timestamptz, classification: none, masking: none }
+      - { name: updated_at,       pg_type: timestamptz, classification: none, masking: none }
+      - { name: deleted_at,       pg_type: timestamptz, classification: none, masking: none }
+
+  - name: projects
+    primary_key: id
+    updated_at: updated_at
+    delete: { mode: soft, column: deleted_at }
+    columns:
+      - { name: id,                pg_type: uuid, classification: none, masking: none, join_key: true }
+      - { name: foundation_id,     pg_type: uuid, classification: none, masking: none, join_key: true }
+      - { name: parent_project_id, pg_type: uuid, classification: none, masking: none, join_key: true }
+      - { name: lfx_project_sfid,  pg_type: text, classification: none, masking: none, join_key: true }
+      - { name: lfx_project_id,    pg_type: uuid, classification: none, masking: none, join_key: true }
+      - { name: name,              pg_type: text, classification: none, masking: none }
+      - { name: slug,              pg_type: text, classification: none, masking: none }
+      - { name: status,            pg_type: text, classification: none, masking: none }
+      - { name: created_at,        pg_type: timestamptz, classification: none, masking: none }
+      - { name: updated_at,        pg_type: timestamptz, classification: none, masking: none }
+      - { name: deleted_at,        pg_type: timestamptz, classification: none, masking: none }
+
+  - name: project_memberships
+    primary_key: id
+    updated_at: updated_at
+    delete: { mode: soft, column: deleted_at }
+    columns:
+      - { name: id,         pg_type: uuid, classification: none, masking: none }
+      - { name: person_id,  pg_type: uuid, classification: none, masking: none, join_key: true }
+      - { name: project_id, pg_type: uuid, classification: none, masking: none, join_key: true }
+      - { name: role,       pg_type: text, classification: none, masking: none }
+      - { name: status,     pg_type: text, classification: none, masking: none }
+      - { name: joined_at,  pg_type: timestamptz, classification: none, masking: none }
+      - { name: created_at, pg_type: timestamptz, classification: none, masking: none }
+      - { name: updated_at, pg_type: timestamptz, classification: none, masking: none }
+      - { name: deleted_at, pg_type: timestamptz, classification: none, masking: none }
 
   # ── Table families to finalise in Phase 2 (§8.1). Left as explicit TODO so
   #    they are NOT silently in scope: uncomment + column-verify before adding

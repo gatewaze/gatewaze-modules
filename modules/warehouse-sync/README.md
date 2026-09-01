@@ -1,22 +1,21 @@
 # @gatewaze-modules/warehouse-sync
 
-Replicates a curated, governed subset of a brand's Supabase Postgres into the
+Replicates a curated, governed subset of the Gatewaze Supabase Postgres into the
 Linux Foundation's Snowflake warehouse (`RAW → STAGING` medallion), with
 replication-slot safety monitoring, PII masking, delete/erasure propagation, and
 reconciliation tests.
 
-Implements **`spec-supabase-to-snowflake-pipeline.md`**. AAIF is the first brand;
-the design generalises to any Gatewaze-operated Supabase brand by the same steps.
+Implements **`spec-supabase-to-snowflake-pipeline.md`** for a single Gatewaze
+instance.
 
 > **Status: Phase 0/1 scaffold.** The module ships the *source-side* code, the
 > reviewable *warehouse-side* artifacts, and the **Airbyte control plane**.
 >
-> **Chosen mechanism: Option B — one central self-hosted Airbyte OSS on the
-> production k8s cluster, serving every brand** (AAIF, techtickets, …) via a
-> workspace per brand. This generalises the pipeline to *any* Airbyte-supported
-> warehouse, not just Snowflake, and pays the operational cost once across all
-> brands. The generator stays swappable (Openflow etc. remain expressible), but
-> the defaults target Airbyte's CDC semantics. See `docs/airbyte-deployment.md`.
+> **Chosen mechanism: Option B — a self-hosted Airbyte OSS on the production k8s
+> cluster.** This generalises the pipeline to *any* Airbyte-supported warehouse,
+> not just Snowflake. The generator stays swappable (Openflow etc. remain
+> expressible), but the defaults target Airbyte's CDC semantics. See
+> `docs/airbyte-deployment.md`.
 
 ## What this module owns
 
@@ -25,7 +24,7 @@ the design generalises to any Gatewaze-operated Supabase brand by the same steps
 | §10 Source prerequisites | Scoped publication + least-privilege roles (opt-in migration) | `migrations/003_source_prerequisites.sql` |
 | §10.4 Slot-disk hazard | 5-min slot-health monitor + alerting worker/cron | `workers/slot-monitor.ts`, `migrations/002` |
 | §5 Option B | Airbyte control plane: API client, status poller, admin syncs | `lib/airbyte-client.ts`, `workers/airbyte-status.ts`, `api/register-routes.ts` |
-| §5 Option B | One central Airbyte, workspace-per-brand, k8s deploy | `docs/airbyte-deployment.md` |
+| §5 Option B | Airbyte on the cluster (single instance), k8s deploy | `docs/airbyte-deployment.md` |
 | §12.3 Reconciliation | Daily source-side row-count snapshot worker | `workers/reconcile.ts` |
 | §8.1 / Appendix A | Table/column + PII inventory (source of truth) | `manifest/appendix-a.yaml` |
 | §8.1 lockstep | Generator: publication, grants, STAGING, masking | `lib/sql-gen.ts`, `scripts/generate-sql.ts` |

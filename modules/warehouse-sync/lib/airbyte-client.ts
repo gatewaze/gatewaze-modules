@@ -2,10 +2,8 @@
  * Minimal typed client for the Airbyte API (Option B control plane).
  *
  * Targets the supported **public** API (`/api/public/v1`) of a self-hosted
- * Airbyte, scoped to one brand's workspace. One central Airbyte serves every
- * brand; each brand's module instance talks to the SAME baseUrl but its OWN
- * workspaceId, so an admin only ever sees its own workspace's connections
- * (§ multi-brand topology).
+ * Airbyte, scoped to this instance's workspace. The module talks to the
+ * in-cluster Airbyte's baseUrl for its workspaceId.
  *
  * No external deps: `fetch` is injected (defaults to globalThis.fetch) so this
  * file typechecks without DOM/node libs and is trivially testable.
@@ -16,7 +14,7 @@ export interface AirbyteClientOptions {
   baseUrl: string;
   /** Bearer token for the public API (from the LF secret store). */
   token?: string;
-  /** This brand's workspace id — scopes every list call. */
+  /** This instance's workspace id — scopes every list call. */
   workspaceId: string;
   /** Injected fetch (defaults to global). */
   fetchFn?: FetchLike;
@@ -110,7 +108,7 @@ export class AirbyteClient {
     return (await res.json()) as T;
   }
 
-  /** Connections in this brand's workspace. */
+  /** Connections in this instance's workspace. */
   async listConnections(): Promise<AirbyteConnectionSummary[]> {
     const data = await this.request<{ data: AirbyteConnectionSummary[] }>(
       `/connections?workspaceIds=${encodeURIComponent(this.workspaceId)}`,

@@ -63,7 +63,7 @@ destination settings and confirm `supabase_user_id` landed as a column. Blocks t
 
 ### G6 · Airbyte not deployed
 `docs/airbyte-deployment.md` exists; the cluster install (full Helm, external
-Postgres + private S3 + secrets) and the per-brand source→destination→connection
+Postgres + private S3 + secrets) and the source→destination→connection
 are not created. Confirm the RAW metadata columns (`_ab_cdc_deleted_at`, …) match
 `AIRBYTE_RAW_META` once a real sync runs (**G9**).
 

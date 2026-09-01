@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and fill in. NEVER commit the real file.
+platform          = "GATEWAZE"
+
+# From the trial: account id is <org>-<account> (e.g. YKRDQJL-QJ53915).
+organization_name = "YKRDQJL"
+account_name      = "QJ53915"
+
+tf_user = "YOUR_TRIAL_LOGIN"   # the user Terraform authenticates as
+tf_role = "ACCOUNTADMIN"        # trial: you have it
+
+# RSA public key body for SVC_GATEWAZE_CDC (no header/footer, no newlines).
+svc_cdc_public_key = "MIIBIjANBgkq...replace..."
+
+# Operator machine + Airbyte cluster egress. Required on trial for PAT auth.
+allowed_ips = [
+  "148.252.140.117",   # this operator machine
+  # "<Airbyte LKE egress IP>/32",
+]
