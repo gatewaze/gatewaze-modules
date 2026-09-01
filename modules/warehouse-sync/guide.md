@@ -1,13 +1,13 @@
 # Warehouse Sync
 
-Replicates a curated, governed subset of this brand's Supabase Postgres into a data
+Replicates a curated, governed subset of the Gatewaze Supabase Postgres into a data
 warehouse so member, event, sending, and content data can be analysed there and joined
-to the Segment behavioral-event stream. The mechanism is **Airbyte**: one central,
-self-hosted Airbyte on the production Kubernetes cluster serves every brand, so any
-Airbyte-supported destination works. **Snowflake is the first destination**, and the
-warehouse-side artifacts this module carries target it.
+to the Segment behavioral-event stream. The mechanism is **Airbyte**: a self-hosted
+Airbyte on the production Kubernetes cluster, so any Airbyte-supported destination
+works. **Snowflake is the first destination**, and the warehouse-side artifacts this
+module carries target it.
 
-No third-party data processor sits in the path — data flows from the brand's Supabase
+No third-party data processor sits in the path — data flows from the Gatewaze Supabase
 directly to the operator's own warehouse, which keeps the cross-org data-sharing story
 to two parties.
 
@@ -26,25 +26,22 @@ them on the non-PII person UUID** (never email — one person owns many emails).
 
 ## How it works
 
-### 1. One central Airbyte, one workspace per brand
+### 1. Airbyte in the cluster
 
 ```
                          ┌──────────── Kubernetes cluster ────────────┐
-  AAIF Supabase ─(CDC)──▶│  Airbyte (private, ClusterIP, no ingress)   │──▶ AAIF Snowflake
-  (direct endpoint)      │    workspace: AAIF     workspace: techtickets│
-  techtickets ──(CDC)───▶│    external Postgres + private S3            │──▶ techtickets warehouse
+  Gatewaze Supabase ─────▶│  Airbyte (private, ClusterIP, no ingress)  │──▶ Snowflake
+  (direct endpoint, CDC) │    external Postgres + private S3           │   (GATEWAZE_INGEST)
                          └──────────▲──────────────────────────────────┘
                                     │ public API (in-cluster)
-              each brand's Warehouse Sync admin proxy, scoped to its workspaceId
+                      Warehouse Sync admin proxy (token stays server-side)
 ```
 
-The Airbyte platform is deployed **once** (full Helm chart) and shared. Each brand is
-one Airbyte **workspace** holding its own Postgres source (its Supabase direct endpoint
-+ its `snowflake_reader` role), its destination (its own warehouse database), and its
-connection (the streams = that brand's publication tables). This module is installed
-per brand and points at the *same* Airbyte URL but its *own* `workspaceId`, so an admin
-only ever sees and drives its own brand's syncs. The operational cost of Airbyte is
-paid once and amortised across all brands. See `docs/airbyte-deployment.md`.
+The Airbyte platform is deployed on the cluster (full Helm chart), cluster-internal
+(no public ingress). It holds the Postgres source (the Gatewaze Supabase direct
+endpoint + the `snowflake_reader` role), the destination (`GATEWAZE_INGEST`), and the
+connection (the streams = the publication tables). The module drives it through its
+admin proxy, which holds the Airbyte token server-side. See `docs/airbyte-deployment.md`.
 
 ### 2. The medallion in the warehouse
 
@@ -101,8 +98,8 @@ orphaned slot retains write-ahead log and can fill the Supabase disk** — the s
 biggest operational risk. The `warehouse-sync:slot-monitor` worker samples the slot
 every 5 minutes (retained WAL, replication lag, active/inactive) and raises alerts on
 threshold breaches, optionally to a webhook. **Keep it enabled while a slot exists**,
-and always follow the decommission runbook (`docs/runbooks.md`) when tearing a brand's
-sync down — skipping the slot-drop re-triggers the disk hazard.
+and always follow the decommission runbook (`docs/runbooks.md`) when tearing the sync
+down — skipping the slot-drop re-triggers the disk hazard.
 
 ### 6. Correctness checks
 
@@ -119,7 +116,7 @@ A **Warehouse Sync** nav item opens the CDC-Health dashboard: replication-slot s
 (with a "Sync now" button that runs server-side so the Airbyte token never reaches the
 browser), and the latest reconciliation snapshot.
 
-## Setup (per brand)
+## Setup
 
 1. **Enable the module** — migrations create the operations tables, the slot-health
    RPCs, the health views, and the Airbyte-status table; the slot-monitor cron starts.
@@ -135,9 +132,9 @@ browser), and the latest reconciliation snapshot.
    ```
    Confirm `max_slot_wal_keep_size` is bounded, and use the Supabase **direct** endpoint,
    never the pooler.
-4. **Wire Airbyte** — in this brand's workspace on the central Airbyte, create the
-   Postgres (CDC) source, the warehouse destination, and the connection (streams = the
-   in-scope tables). Then set the config below.
+4. **Wire Airbyte** — in the Airbyte workspace, create the Postgres (CDC) source, the
+   warehouse destination, and the connection (streams = the in-scope tables). Then set
+   the config below.
 5. **Build STAGING** — `pnpm generate:sql`, apply `snowflake/staging/` +
    `snowflake/operations/`, wire the tests. Publish to analysts only after the manifest
    is merged and the checks pass for 7 consecutive days.
@@ -148,10 +145,10 @@ browser), and the latest reconciliation snapshot.
 |---|---|---|---|
 | `mechanism` | No | `airbyte` | Replication mechanism. Airbyte is the default; other connectors stay expressible. |
 | `piiPosture` | No | `pii-1` | `pii-1` masks in STAGING; `pii-2` keeps no plaintext PII in the warehouse at all. |
-| `snowflakeDatabase` | No | `AAIF` | Landing database name (one per brand). |
+| `snowflakeDatabase` | No | `GATEWAZE_INGEST` | Ingest landing database for this instance. |
 | `replicationSlotName` | No | `snowflake_cdc` | The slot the connector owns; the slot-monitor watches this name. |
 | `airbyteApiUrl` | No | — | Cluster-internal Airbyte server URL (must be private — no public ingress). |
-| `airbyteWorkspaceId` | No | — | This brand's Airbyte workspace UUID; scopes every API call. |
+| `airbyteWorkspaceId` | No | — | The Airbyte workspace UUID; scopes every API call. |
 | `airbyteApiToken` | No | — | Bearer token for the Airbyte API (from the secret store). |
 | `retainedWalAlertGb` | No | `10` | Alert when a slot retains more WAL than this. |
 | `lagAlertMinutes` | No | `30` | Alert when replication lag exceeds this. |

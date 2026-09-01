@@ -2,7 +2,7 @@
 -- Module: warehouse-sync
 -- Migration: 005_airbyte_status
 -- Description: Airbyte control-plane bookkeeping (Option B). The airbyte-status
---   worker polls the central Airbyte's public API (scoped to this brand's
+--   worker polls the central Airbyte's public API (scoped to this instance's
 --   workspace) and upserts the latest sync state per connection here, so the
 --   CDC-Health dashboard shows Airbyte sync health next to the slot health —
 --   without the admin app calling Airbyte directly on every render.
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS public.warehouse_sync_airbyte_connections (
 );
 
 COMMENT ON TABLE public.warehouse_sync_airbyte_connections IS
-  'Latest Airbyte sync state per connection for this brand workspace (Option B control plane). Refreshed by warehouse-sync:airbyte-status.';
+  'Latest Airbyte sync state per connection for this instance's workspace (Option B control plane). Refreshed by warehouse-sync:airbyte-status.';
 
 CREATE INDEX IF NOT EXISTS warehouse_sync_airbyte_conn_failed
   ON public.warehouse_sync_airbyte_connections (last_job_status)
