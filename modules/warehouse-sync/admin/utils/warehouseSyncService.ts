@@ -111,7 +111,7 @@ export const WarehouseSyncService = {
    */
   async triggerAirbyteSync(connectionId: string): Promise<{ ok: boolean; error?: string }> {
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/modules/warehouse-sync/airbyte/connections/${encodeURIComponent(connectionId)}/sync`,
         { method: 'POST' },
       );
@@ -120,6 +120,26 @@ export const WarehouseSyncService = {
     } catch (e: any) {
       return { ok: false, error: e?.message ?? 'request failed' };
     }
+  },
+
+  /** Source tables merged with their saved per-table sync config (Tables tab). */
+  async getTables(): Promise<{ tables: TableSyncRow[]; discoverError: string | null; configured: boolean }> {
+    const res = await apiFetch('/api/modules/warehouse-sync/tables');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+
+  /** Save per-table config and reconcile into Airbyte connections. */
+  async saveTables(tables: TableSyncRow[]): Promise<{ saved: boolean; reconciled: boolean; tiers?: unknown[]; reason?: string }> {
+    const res = await apiFetch('/api/modules/warehouse-sync/tables', {
+      method: 'PUT',
+      body: JSON.stringify({ tables }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error ?? `HTTP ${res.status}`);
+    }
+    return res.json();
   },
 };
 
@@ -135,4 +155,33 @@ export function formatDuration(seconds: number | null): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+export type SyncFrequency = 'realtime' | 'hourly' | 'daily';
+export type SyncModeOpt = 'incremental' | 'full_refresh';
+
+export interface TableSyncRow {
+  table_name: string;
+  enabled: boolean;
+  sync_mode: SyncModeOpt;
+  frequency: SyncFrequency;
+  cursor_field: string | null;
+  primary_key: string | null;
+  use_cdc: boolean;
+}
+
+/**
+ * Fetch a JWT-gated module API route. The module routes require a verified
+ * session (requireJwt) and admin role — plain fetch carries no session across
+ * the admin→api origin, so attach the Supabase access token, and target the
+ * API host (VITE_API_URL), mirroring mcpAccessService.
+ */
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const base = (import.meta as any).env?.VITE_API_URL ?? '';
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const headers = new Headers(init?.headers);
+  headers.set('Content-Type', 'application/json');
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(`${base}${path}`, { ...init, headers });
 }
