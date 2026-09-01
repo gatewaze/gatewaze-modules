@@ -131,7 +131,7 @@ export default function PlacementPanel({ runId, run }: PlacementPanelProps) {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <Badge color={mode === 'api' ? 'green' : 'gray'}>{mode} mode</Badge>
-          <Button size="sm" variant="secondary" onClick={() => setShowManual(true)}>
+          <Button size="sm" variant="outline" onClick={() => setShowManual(true)}>
             <PlusIcon className="h-4 w-4 mr-1" />
             Enter results
           </Button>
@@ -166,7 +166,7 @@ export default function PlacementPanel({ runId, run }: PlacementPanelProps) {
               value={testIdInput}
               onChange={(e) => setTestIdInput(e.target.value)}
             />
-            <Button size="sm" variant="secondary" onClick={handleStart} disabled={busy}>
+            <Button size="sm" variant="outline" onClick={handleStart} disabled={busy}>
               {mode === 'api' && !testIdInput ? 'Start test' : 'Link test'}
             </Button>
           </div>
@@ -229,7 +229,21 @@ export default function PlacementPanel({ runId, run }: PlacementPanelProps) {
         </div>
       )}
 
-      <Modal isOpen={showManual} onClose={() => setShowManual(false)} title="Enter placement results">
+      <Modal
+        isOpen={showManual}
+        onClose={() => setShowManual(false)}
+        title="Enter placement results"
+        footer={
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => setShowManual(false)}>
+              Cancel
+            </Button>
+            <Button variant="solid" onClick={handleManualSave} disabled={busy}>
+              {busy ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        }
+      >
         <div className="space-y-3">
           <p className="text-sm text-[var(--gray-11)]">
             Copy the per-provider counts from the GlockApps dashboard. Saving the same provider
@@ -261,14 +275,6 @@ export default function PlacementPanel({ runId, run }: PlacementPanelProps) {
                 />
               </label>
             ))}
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => setShowManual(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleManualSave} disabled={busy}>
-              Save
-            </Button>
           </div>
         </div>
       </Modal>

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { ArrowLeftIcon, EnvelopeIcon } from '@heroicons/react/24/outline';
+import { EnvelopeIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
-import { Badge, Button, Card } from '@/components/ui';
+import { Badge, Button, Card, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { Spinner } from '@/components/ui/Spinner';
 import SendTestingService, { type Arrival, type TestPerson } from '../lib/sendTestingService';
+import { SEND_TESTING_TABS } from './index';
 
 /**
  * Test inboxes.
@@ -94,24 +95,21 @@ export default function SendTestInboxPage() {
 
   return (
     <Page title="Test inboxes">
+      <WorkspaceLayout
+        title="Send Testing"
+        tabs={SEND_TESTING_TABS}
+        activeTabId="people"
+        onTabChange={(t) => navigate(t === 'runs' ? '/send-testing' : `/send-testing/${t}`)}
+        breadcrumbs={[{ label: 'Test people', to: '/send-testing/people' }, { label: 'Inboxes' }]}
+        onBreadcrumbNavigate={(to) => navigate(to)}
+      >
       <div className="p-6 space-y-4">
-        <div>
-          <button
-            type="button"
-            className="text-sm text-[var(--gray-11)] hover:text-[var(--gray-12)] flex items-center gap-1"
-            onClick={() => navigate('/send-testing')}
-          >
-            <ArrowLeftIcon className="h-4 w-4" />
-            Send Testing
-          </button>
-          <h1 className="text-xl font-semibold text-[var(--gray-12)] mt-1">Test inboxes</h1>
-          <p className="text-sm text-[var(--gray-11)] mt-1 max-w-3xl">
-            These recipients keep the delivered HTML so a message can be opened and its real links
-            clicked. Clicking unsubscribe runs the genuine flow and actually unsubscribes that test
-            person, which is the point — the next run's expected count will drop by one until you
-            reset subscriptions.
-          </p>
-        </div>
+        <p className="text-sm text-[var(--gray-11)] max-w-3xl">
+          These recipients keep the delivered HTML so a message can be opened and its real links
+          clicked. Clicking unsubscribe runs the genuine flow and actually unsubscribes that test
+          person, which is the point — the next run's expected count drops by one until you reset
+          subscriptions.
+        </p>
 
         {people.length === 0 ? (
           <Card className="p-8 text-center text-sm text-[var(--gray-11)]">
@@ -226,7 +224,7 @@ export default function SendTestInboxPage() {
                     </div>
                   )}
                   <div className="px-4 py-2 border-t border-[var(--gray-a5)] flex justify-end">
-                    <Button size="sm" variant="ghost" onClick={() => selected && loadArrivals(selected)}>
+                    <Button size="sm" variant="outline" onClick={() => selected && loadArrivals(selected)}>
                       Refresh
                     </Button>
                   </div>
@@ -236,6 +234,7 @@ export default function SendTestInboxPage() {
           </div>
         )}
       </div>
+      </WorkspaceLayout>
     </Page>
   );
 }

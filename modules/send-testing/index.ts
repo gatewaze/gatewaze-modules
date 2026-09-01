@@ -67,6 +67,13 @@ const sendTestingModule: GatewazeModule = {
       guard: 'none',
     },
     {
+      // Tab strip is URL-driven so a tab is linkable and survives a refresh.
+      path: 'send-testing/:tab',
+      component: () => import('./admin/pages/index'),
+      requiredFeature: 'send-testing',
+      guard: 'none',
+    },
+    {
       path: 'send-testing/runs/:id',
       component: () => import('./admin/pages/run'),
       requiredFeature: 'send-testing.runs',

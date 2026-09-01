@@ -121,7 +121,7 @@ export default function GlockAppsSettingsPage() {
 
           <div className="mt-3 space-y-3">
             {status?.mode === 'api' && (
-              <Button size="sm" variant="secondary" onClick={() => handleImport(true)} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => handleImport(true)} disabled={busy}>
                 <ArrowPathIcon className="h-4 w-4 mr-1" />
                 Fetch current seed list from GlockApps
               </Button>
@@ -146,7 +146,7 @@ export default function GlockAppsSettingsPage() {
               </Button>
               <Button
                 size="sm"
-                variant="ghost"
+                variant="outline"
                 onClick={() => setShowRemove(true)}
                 disabled={busy || !status?.seed_count}
               >
