@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { CircleStackIcon, ArrowPathIcon, CheckIcon } from '@heroicons/react/24/outline';
+import { useNavigate } from 'react-router';
+import { ArrowPathIcon, CheckIcon } from '@heroicons/react/24/outline';
 import { WarehouseSyncService, type TableSyncRow } from '../utils/warehouseSyncService';
-import { Card, Badge } from '@/components/ui';
+import { Card, Badge, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
+
+const WS_TABS = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'tables', label: 'Sync Tables' },
+];
+const tabPath = (id: string) => (id === 'tables' ? '/warehouse-sync/tables' : '/warehouse-sync');
 
 /**
  * Tables tab — per-table sync configuration, edited here instead of the Airbyte
@@ -11,6 +18,7 @@ import { Page } from '@/components/shared/Page';
  * active tier: Real-time ≈ every 5 min, Hourly, Daily).
  */
 export default function WarehouseSyncTables() {
+  const navigate = useNavigate();
   const [rows, setRows] = useState<TableSyncRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -58,22 +66,25 @@ export default function WarehouseSyncTables() {
 
   return (
     <Page title="Warehouse Sync — Tables">
-      <div className="p-6 space-y-4">
-        <div className="flex items-center justify-between">
+      <WorkspaceLayout
+        title="Warehouse Sync"
+        subtitle="Tables to sync"
+        tabs={WS_TABS}
+        activeTabId="tables"
+        onTabChange={(id) => navigate(tabPath(id))}
+        actions={
           <div className="flex items-center gap-2">
-            <CircleStackIcon className="h-6 w-6 text-info-600" />
-            <h1 className="text-xl font-semibold">Tables to sync</h1>
-            <Badge color="gray">{enabledCount} enabled / {rows.length}</Badge>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={load} className="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded border border-neutral-300 hover:bg-neutral-50">
+            <button onClick={load} className="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded bg-white/10 text-white hover:bg-white/20">
               <ArrowPathIcon className="h-4 w-4" /> Reload
             </button>
-            <button onClick={save} disabled={saving} className="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded bg-info-600 text-white disabled:opacity-50">
+            <button onClick={save} disabled={saving} className="inline-flex items-center gap-1 text-sm px-3 py-1.5 rounded bg-white text-neutral-900 disabled:opacity-50">
               <CheckIcon className="h-4 w-4" /> {saving ? 'Saving…' : 'Save & apply'}
             </button>
           </div>
-        </div>
+        }
+      >
+        <div className="space-y-4">
+        <div><Badge color="gray">{enabledCount} enabled / {rows.length}</Badge></div>
 
         {error && <Card className="p-3 border-error-300 bg-error-50 text-error-800 text-sm">{error}</Card>}
         {notice && <Card className="p-3 border-info-300 bg-info-50 text-info-800 text-sm">{notice}</Card>}
@@ -134,7 +145,8 @@ export default function WarehouseSyncTables() {
           Incremental = change-based; enable <b>Log-based CDC</b> for the most real-time + delete capture (requires the
           source publication / replication slot from migration 003). Save applies changes to Airbyte immediately.
         </p>
-      </div>
+        </div>
+      </WorkspaceLayout>
     </Page>
   );
 }
