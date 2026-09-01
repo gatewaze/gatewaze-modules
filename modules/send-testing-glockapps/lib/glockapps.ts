@@ -11,6 +11,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { normalisePlacement } from './placement-parse';
+import { isPlausibleEmail } from './email';
 import type { PlacementResult, ProviderPlacement } from './placement-parse';
 
 export const MODULE_ID = 'send-testing-glockapps';
@@ -122,7 +123,8 @@ export async function fetchSeedList(config: GlockAppsConfig): Promise<SeedAddres
       email: String(seed?.email ?? '').trim().toLowerCase(),
       provider: seed?.provider ? String(seed.provider).toLowerCase() : undefined,
     }))
-    .filter((seed) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(seed.email));
+    // Same linear check as the paste path: the response is third-party input.
+    .filter((seed) => isPlausibleEmail(seed.email));
 }
 
 export async function startTest(

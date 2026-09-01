@@ -15,6 +15,7 @@
 
 import express from 'express';
 import { requireJwt } from '../lib/require-jwt';
+import { clientIp, rateLimit } from '../lib/rate-limit';
 import {
   PROVISION_CHUNK_SIZE,
   SEND_TESTING_LIST_ID,
@@ -66,9 +67,29 @@ async function fetchAllPages(query: (from: number, to: number) => PromiseLike<an
 
 export function registerRoutes(app: any, ctx?: any): void {
   const router = express.Router();
+
+  // Rate limit ahead of auth so unauthenticated floods are cheap to reject, and
+  // ahead of body parsing so a flood never gets a 1MB buffer allocated.
+  router.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!rateLimit(`send-testing:${clientIp(req)}`, 240, 60_000)) {
+      return fail(res, 429, 'rate_limited', 'Too many requests');
+    }
+    return next();
+  });
+
   router.use(express.json({ limit: '1mb' }));
   router.use(requireJwt());
   router.use(requireAdmin);
+
+  // Provisioning and deprovisioning move tens of thousands of people rows, so
+  // they get a much tighter budget than the read endpoints above.
+  const limitWrites = (name: string, max: number) =>
+    (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (!rateLimit(`send-testing:${name}:${clientIp(req)}`, max, 60_000)) {
+        return fail(res, 429, 'rate_limited', 'Too many requests');
+      }
+      return next();
+    };
 
   // --- Setup / status --------------------------------------------------------
   router.get('/status', async (_req: express.Request, res: express.Response) => {
@@ -191,7 +212,7 @@ export function registerRoutes(app: any, ctx?: any): void {
     return res.status(202).json({ job_id: jobRow.id, queue_job_id: id, action });
   }
 
-  router.post('/provision', async (req: express.Request, res: express.Response) => {
+  router.post('/provision', limitWrites('provision', 10), async (req: express.Request, res: express.Response) => {
     try {
       const target = Number((req.body ?? {}).target_count);
       if (!Number.isInteger(target) || target < 1) {
@@ -203,7 +224,7 @@ export function registerRoutes(app: any, ctx?: any): void {
     }
   });
 
-  router.delete('/provision', async (req: express.Request, res: express.Response) => {
+  router.delete('/provision', limitWrites('deprovision', 10), async (req: express.Request, res: express.Response) => {
     try {
       const raw = (req.body ?? {}).target_count;
       // Omitted means "delete everything"; a number means shrink-to-count.
@@ -217,7 +238,7 @@ export function registerRoutes(app: any, ctx?: any): void {
     }
   });
 
-  router.post('/provision/resubscribe', async (_req: express.Request, res: express.Response) => {
+  router.post('/provision/resubscribe', limitWrites('resubscribe', 20), async (_req: express.Request, res: express.Response) => {
     try {
       return await startJob(res, 'resubscribe', null);
     } catch (err) {
@@ -263,7 +284,7 @@ export function registerRoutes(app: any, ctx?: any): void {
     }
   });
 
-  router.post('/runs', async (req: express.Request, res: express.Response) => {
+  router.post('/runs', limitWrites('runs-create', 30), async (req: express.Request, res: express.Response) => {
     try {
       const supabase = serviceClient();
       const body = req.body ?? {};
@@ -417,7 +438,7 @@ export function registerRoutes(app: any, ctx?: any): void {
     }
   });
 
-  router.post('/runs/:id/attribute', async (req: express.Request, res: express.Response) => {
+  router.post('/runs/:id/attribute', limitWrites('attribute', 30), async (req: express.Request, res: express.Response) => {
     try {
       if (!ctx?.enqueueJob) {
         return fail(res, 503, 'enqueue_unavailable', 'Background jobs are not available on this host');
@@ -443,7 +464,7 @@ export function registerRoutes(app: any, ctx?: any): void {
   });
 
   // --- People: CSV export and the inbox view ---------------------------------
-  router.get('/people/export.csv', async (_req: express.Request, res: express.Response) => {
+  router.get('/people/export.csv', limitWrites('export', 20), async (_req: express.Request, res: express.Response) => {
     try {
       const supabase = serviceClient();
       const config = await loadConfig(supabase);

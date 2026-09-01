@@ -9,6 +9,8 @@
 
 import express from 'express';
 import { requireJwt } from '../lib/require-jwt';
+import { clientIp, rateLimit } from '../lib/rate-limit';
+import { normaliseEmail } from '../lib/email';
 import {
   GlockAppsAccessError,
   fetchSeedList,
@@ -59,9 +61,29 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
 
 export function registerRoutes(app: any, _ctx?: any): void {
   const router = express.Router();
+
+  // Rate limit ahead of auth and body parsing, so an unauthenticated flood is
+  // rejected before either does any work.
+  router.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!rateLimit(`send-testing-glockapps:${clientIp(req)}`, 120, 60_000)) {
+      return fail(res, 429, 'rate_limited', 'Too many requests');
+    }
+    return next();
+  });
+
   router.use(express.json({ limit: '512kb' }));
   router.use(requireJwt());
   router.use(requireAdmin);
+
+  // Seed import writes people rows and starting a test spends against a paid
+  // third-party API, so both get a tighter budget than the read endpoints.
+  const limitWrites = (name: string, max: number) =>
+    (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (!rateLimit(`send-testing-glockapps:${name}:${clientIp(req)}`, max, 60_000)) {
+        return fail(res, 429, 'rate_limited', 'Too many requests');
+      }
+      return next();
+    };
 
   router.get('/status', async (_req: express.Request, res: express.Response) => {
     try {
@@ -92,7 +114,7 @@ export function registerRoutes(app: any, _ctx?: any): void {
    * manual mode accepts a pasted list. Both land as people rows marked is_test
    * so they stay out of the People dashboard.
    */
-  router.post('/seeds/import', async (req: express.Request, res: express.Response) => {
+  router.post('/seeds/import', limitWrites('seed-import', 10), async (req: express.Request, res: express.Response) => {
     try {
       const supabase = serviceClient();
       const config = await loadConfig(supabase);
@@ -103,8 +125,8 @@ export function registerRoutes(app: any, _ctx?: any): void {
 
       if (Array.isArray(pasted) && pasted.length > 0) {
         emails = pasted
-          .map((value: unknown) => String(value ?? '').trim().toLowerCase())
-          .filter((email: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email));
+          .map((value: unknown) => normaliseEmail(value))
+          .filter((email: string | null): email is string => email !== null);
       } else {
         try {
           const seeds = await fetchSeedList(config);
@@ -176,7 +198,7 @@ export function registerRoutes(app: any, _ctx?: any): void {
 
   /** Remove seed people. Kept separate from the core deprovision so refreshing
    *  seeds never disturbs the synthetic population. */
-  router.delete('/seeds', async (_req: express.Request, res: express.Response) => {
+  router.delete('/seeds', limitWrites('seed-remove', 10), async (_req: express.Request, res: express.Response) => {
     try {
       const supabase = serviceClient();
       const { data, error } = await supabase
@@ -218,7 +240,7 @@ export function registerRoutes(app: any, _ctx?: any): void {
   });
 
   /** Start (or record) the GlockApps test backing a run. */
-  router.post('/runs/:runId/placement/start', async (req: express.Request, res: express.Response) => {
+  router.post('/runs/:runId/placement/start', limitWrites('placement-start', 20), async (req: express.Request, res: express.Response) => {
     try {
       const supabase = serviceClient();
       const config = await loadConfig(supabase);
@@ -266,7 +288,7 @@ export function registerRoutes(app: any, _ctx?: any): void {
   });
 
   /** Manual entry: the committed floor when API access is not available. */
-  router.post('/runs/:runId/placement', async (req: express.Request, res: express.Response) => {
+  router.post('/runs/:runId/placement', limitWrites('placement-save', 60), async (req: express.Request, res: express.Response) => {
     try {
       const supabase = serviceClient();
       const body = req.body ?? {};
