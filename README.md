@@ -19,7 +19,7 @@ This repository contains the official open-source module collection for the Gate
 ## Highlights
 
 - **Each module is a mini-application**: a module can ship its own admin UI, API routes, background jobs (on [Redis](https://redis.io) + [BullMQ](https://bullmq.io)), database migrations (on [Supabase](https://supabase.com) Postgres), and public-facing portal pages out of the box. The platform auto-discovers modules from the workspace, and each can be enabled or disabled independently.
-- **Build a module for anything**: start from the `_template`, add your tables, admin pages, and portal, and it goes live. The 76 pre-built modules below cover common community needs; your own modules cover the rest.
+- **Build a module for anything**: start from the `_template`, add your tables, admin pages, and portal, and it goes live. The 86 pre-built modules below cover common community needs, and your own modules cover the rest.
 - **Run AI in production, in-house**: the `ai` module is a self-hosted AI runtime with one provider router (OpenAI, Anthropic, Gemini), an embeddable chat widget, per-user and per-use-case credentials, model allow-lists, and a per-call cost ledger. Pair it with `cost-governance` for hard budget caps.
 - **Bring your own agent**: author a [Goose](https://github.com/aaif-goose/goose) recipe locally and run it unchanged in production. Gatewaze runs Goose, Block's open-source agent runtime, as a server-side CLI, with no rewrite and no local-to-cloud translation.
 - **MCP server library**: bundled [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers expose your platform to agents, including platform data (events, speakers, sponsors, health), a whitelisted API proxy, and a headless browser (local Chromium or [Browserbase](https://www.browserbase.com)).
@@ -30,7 +30,7 @@ This repository contains the official open-source module collection for the Gate
 
 ## Available Modules
 
-The collection ships **76 modules** spanning events, content, people, sites, marketing, communications, integrations, and platform infrastructure. Every module is self-contained: install only what you need; the platform discovers them automatically from the workspace.
+The collection ships **86 modules** spanning events, content, people, sites, marketing, communications, integrations, and platform infrastructure. Every module is self-contained, and the platform discovers them automatically from the source you point it at. Turn on only what you need.
 
 ### Events
 
@@ -67,7 +67,9 @@ The collection ships **76 modules** spanning events, content, people, sites, mar
 | **newsletters** | Edition management, template collections, and subscriber tracking |
 | **newsletters-output-beehiiv** | Export edition HTML for pasting into Beehiiv |
 | **newsletters-output-substack** | Export edition HTML for pasting into Substack |
-| **structured-resources** | Hierarchical resource guides with templated sections and access control |
+| **resources** | Hierarchical resource guides with templated sections and access control |
+| **videos** | Canonical video records, hosted on YouTube, referenced by resources, events, and podcasts, and surfaced in related content |
+| **vehicle-video** | Turns a vehicle listing into a short narrated AI showcase video, with a curated shot plan and human approval before each clip |
 | **lists** | Subscription lists with subscribe/unsubscribe flows and external sync |
 | **host-media** | Shared polymorphic media management consumed by content-bearing modules |
 
@@ -94,6 +96,7 @@ The collection ships **76 modules** spanning events, content, people, sites, mar
 | **redirects** | URL redirects and short links with click tracking |
 | **redirects-bitly** | Bitly backend adapter for the Redirects module |
 | **redirects-shortio** | Short.io backend adapter for the Redirects module |
+| **redirects-umami** | Self-hosted short links backed by Umami, with first-party click analytics and no external provider |
 | **sites-publisher-cloudflare-pages** | Publish built sites to Cloudflare Pages |
 | **sites-publisher-netlify** | Publish built sites to Netlify |
 | **bunny-cdn** | Optimized image delivery via Bunny.net CDN pull zones |
@@ -114,6 +117,9 @@ The collection ships **76 modules** spanning events, content, people, sites, mar
 | Module | Description |
 |--------|-------------|
 | **bulk-emailing** | Transactional and bulk email with lifecycle tracking and bot-filtered analytics |
+| **broadcasts** | One scheduled, timezone-aware email to a segment, with an AI copilot for building the segment |
+| **send-testing** | Rehearse a large send against synthetic recipients, and measure real arrival and latency per run |
+| **send-testing-glockapps** | Inbox placement reporting for send tests, with per-provider inbox, tabs, and spam results |
 | **email-provider-sendgrid** | SendGrid delivery provider for the Bulk Emailing module |
 | **email-bot-detector-signals** | Heuristic detection of non-human email opens and clicks |
 | **slack** | Slack notifications, channel management, and workflows |
@@ -129,6 +135,7 @@ The collection ships **76 modules** spanning events, content, people, sites, mar
 | **gradual** | Sync registrations and attendance with the Gradual platform |
 | **bigquery** | Secure proxy for BigQuery queries, schemas, and materialized views |
 | **prefect** | Self-hosted Prefect server + Python worker for pipeline flows |
+| **warehouse-sync** | Configure which tables sync to your data warehouse, in what mode, and how often |
 
 ### Platform & Infrastructure
 
@@ -142,6 +149,9 @@ The collection ships **76 modules** spanning events, content, people, sites, mar
 | **scheduler** | Job queue and scraper scheduler management dashboard |
 | **gatewaze-fetch** | External web fetch/extraction over REST/MCP with quotas and audit logging |
 | **webhooks** | Mutation-driven outbound webhooks with signed delivery and CDN purge |
+| **signals** | Rules that match content to people and dispatch the result to a channel, recording every decision so you can tune them |
+| **software-engineer** | An autonomous engineering agent: a labelled GitHub issue becomes a spec, a review, an implementation, and a pull request |
+| **residential-egress** | Route fetches that are blocked by IP through a residential proxy provider, opted into per target |
 
 ### Analytics, Commerce, Productivity & Editor
 
