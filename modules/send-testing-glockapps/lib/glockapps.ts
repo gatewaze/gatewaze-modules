@@ -172,8 +172,13 @@ export { normalisePlacement };
 export type { PlacementResult, ProviderPlacement };
 
 /**
- * Results live on the test row in the project's test list; there is no
- * dedicated per-test results endpoint. Pull the list and pick ours out.
+ * Fetch one test's results.
+ *
+ * `GET /projects/{id}/tests` is a SINGLE-test fetch keyed by a `testId` query
+ * parameter, not a list — calling it without one returns 404 "test not found",
+ * which is what an earlier version of this client did on every poll. The list
+ * endpoints are `/tests/list` and `/shortTestResults`; neither is needed here
+ * because we always know the id we started.
  */
 export async function fetchTestResults(
   config: GlockAppsConfig,
@@ -182,21 +187,25 @@ export async function fetchTestResults(
   if (!config.projectId) {
     throw new Error('send-testing-glockapps: project_id is not configured');
   }
-  const body = await request<{ result?: unknown; results?: unknown[] }>(
-    config,
-    `/projects/${encodeURIComponent(config.projectId)}/tests?limit=50`,
-  );
 
-  const rows: any[] = Array.isArray((body as any)?.results)
-    ? (body as any).results
-    : (body as any)?.result
-      ? [(body as any).result]
-      : [];
+  const path =
+    `/projects/${encodeURIComponent(config.projectId)}/tests` +
+    `?testId=${encodeURIComponent(testId)}`;
 
-  const match = rows.find((r) => String(r?.testId ?? '') === testId);
-  if (!match) {
-    // Not an error: a freshly created test may not be listed yet.
+  let body: { result?: unknown };
+  try {
+    body = await request<{ result?: unknown }>(config, path);
+  } catch (err) {
+    // A test that GlockApps has not registered yet answers 404. That is a
+    // normal early state, not a failure worth stopping the poll for.
+    if (err instanceof Error && /\(404\)/.test(err.message)) {
+      return { complete: false, providers: [], auth: null, raw: null };
+    }
+    throw err;
+  }
+
+  if (!body?.result) {
     return { complete: false, providers: [], auth: null, raw: body };
   }
-  return normalisePlacement(match);
+  return normalisePlacement(body.result);
 }
