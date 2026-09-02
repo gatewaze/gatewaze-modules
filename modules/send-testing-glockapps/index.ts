@@ -30,7 +30,7 @@ const sendTestingGlockAppsModule: GatewazeModule = {
   name: 'Send Testing — GlockApps',
   description:
     'Inbox-placement reporting for send tests: GlockApps seed addresses on the test list, per-provider Inbox/Tabs/Spam results on the run page.',
-  version: '0.2.0',
+  version: '0.2.1',
   features: ['send-testing-glockapps'],
 
   // The core module owns the list, the runs, and the slot this fills.
