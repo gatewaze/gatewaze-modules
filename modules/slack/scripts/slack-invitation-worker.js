@@ -64,6 +64,10 @@ export async function processQueue() {
       adminPassword: process.env.SLACK_ADMIN_PASSWORD,
       headless: true,
       proxyUrl,
+      // Session cookie file location — mount the captured session as a Secret at
+      // a stable path and point SLACK_SESSION_PATH at it (else the manager's
+      // in-module default, which apply-update can rebuild).
+      sessionFilePath: process.env.SLACK_SESSION_PATH || undefined,
     });
 
     await invitationManager.initialize();
