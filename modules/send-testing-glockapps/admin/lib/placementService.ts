@@ -50,6 +50,11 @@ export interface PlacementTest {
 
 export interface GlockAppsStatus {
   mode: 'api' | 'manual';
+  api_key_set?: boolean;
+  /** null when no key is configured; false when the key or plan was rejected. */
+  api_reachable?: boolean | null;
+  project_id?: string;
+  projects?: { id: string; name: string }[];
   seed_list_mode: 'shared' | 'separate';
   list_id: string;
   seed_count: number;
@@ -69,7 +74,7 @@ export const PlacementService = {
     ),
 
   startTest: (runId: string, glockappsTestId?: string) =>
-    postJson<PlacementTest>(
+    postJson<PlacementTest & { seeds_imported?: number; insert_header?: string; insert_in_body?: string }>(
       `/runs/${runId}/placement/start`,
       glockappsTestId ? { glockapps_test_id: glockappsTestId } : {},
     ),
