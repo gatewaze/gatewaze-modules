@@ -3,9 +3,13 @@ import { useNavigate, useParams } from 'react-router';
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
+  ChartBarIcon,
   ExclamationTriangleIcon,
   PlayIcon,
+  InboxArrowDownIcon,
+  ShieldCheckIcon,
   TrashIcon,
+  UsersIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Badge, Button, Card, ConfirmModal, Modal, WorkspaceLayout } from '@/components/ui';
@@ -20,12 +24,17 @@ import SendTestingService, {
 const inputCls =
   'w-full rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm disabled:opacity-60';
 
+/** Shared icon size for every tab strip in this module, matching newsletters. */
+export const TAB_ICON = 'size-4';
+
 /** Primary tabs under the hero. Shared with the run and inbox pages so the
- *  strip stays in the same place as you drill in and back out. */
-export const SEND_TESTING_TABS = [
-  { id: 'runs', label: 'Runs' },
-  { id: 'people', label: 'Test people' },
-  { id: 'reputation', label: 'Reputation' },
+ *  strip stays in the same place as you drill in and back out. Exported as a
+ *  factory rather than a constant because the icons are JSX, and a shared
+ *  element instance would be reused across three pages. */
+export const sendTestingTabs = () => [
+  { id: 'runs', label: 'Runs', icon: <ChartBarIcon className={TAB_ICON} /> },
+  { id: 'people', label: 'Test people', icon: <UsersIcon className={TAB_ICON} /> },
+  { id: 'reputation', label: 'Reputation', icon: <ShieldCheckIcon className={TAB_ICON} /> },
 ];
 
 function statusTone(status: SendTestRun['status']): 'green' | 'gray' | 'blue' {
@@ -37,7 +46,7 @@ function statusTone(status: SendTestRun['status']): 'green' | 'gray' | 'blue' {
 export default function SendTestingIndexPage() {
   const navigate = useNavigate();
   const { tab } = useParams<{ tab?: string }>();
-  const activeTab = SEND_TESTING_TABS.some((t) => t.id === tab) ? (tab as string) : 'runs';
+  const activeTab = sendTestingTabs().some((t) => t.id === tab) ? (tab as string) : 'runs';
 
   const [status, setStatus] = useState<ModuleStatus | null>(null);
   const [provision, setProvision] = useState<ProvisionStatus | null>(null);
@@ -223,9 +232,19 @@ export default function SendTestingIndexPage() {
     <Page title="Send Testing">
       <WorkspaceLayout
         title="Send Testing"
-        tabs={SEND_TESTING_TABS}
+        tabs={sendTestingTabs()}
         activeTabId={activeTab}
         onTabChange={(t) => navigate(t === 'runs' ? '/send-testing' : `/send-testing/${t}`)}
+        subTabs={
+          activeTab === 'people'
+            ? [
+                { id: 'population', label: 'Population', icon: <UsersIcon className={TAB_ICON} /> },
+                { id: 'inboxes', label: 'Inboxes', icon: <InboxArrowDownIcon className={TAB_ICON} /> },
+              ]
+            : undefined
+        }
+        activeSubTabId={activeTab === 'people' ? 'population' : undefined}
+        onSubTabChange={(t) => t === 'inboxes' && navigate('/send-testing/inbox/inspectable')}
         actions={
           <div className="flex items-center gap-2 flex-wrap">
             {openRun && <Badge color="green">Run open: {openRun.name}</Badge>}
