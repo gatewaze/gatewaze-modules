@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { EnvelopeIcon } from '@heroicons/react/24/outline';
+import { EnvelopeIcon, InboxArrowDownIcon, UsersIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Badge, Button, Card, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { Spinner } from '@/components/ui/Spinner';
 import SendTestingService, { type Arrival, type TestPerson } from '../lib/sendTestingService';
-import { SEND_TESTING_TABS } from './index';
+import { TAB_ICON, sendTestingTabs } from './index';
 
 /**
  * Test inboxes.
@@ -97,11 +97,17 @@ export default function SendTestInboxPage() {
     <Page title="Test inboxes">
       <WorkspaceLayout
         title="Send Testing"
-        tabs={SEND_TESTING_TABS}
+        tabs={sendTestingTabs()}
         activeTabId="people"
         onTabChange={(t) => navigate(t === 'runs' ? '/send-testing' : `/send-testing/${t}`)}
         breadcrumbs={[{ label: 'Test people', to: '/send-testing/people' }, { label: 'Inboxes' }]}
         onBreadcrumbNavigate={(to) => navigate(to)}
+        subTabs={[
+          { id: 'population', label: 'Population', icon: <UsersIcon className={TAB_ICON} /> },
+          { id: 'inboxes', label: 'Inboxes', icon: <InboxArrowDownIcon className={TAB_ICON} /> },
+        ]}
+        activeSubTabId="inboxes"
+        onSubTabChange={(t) => t === 'population' && navigate('/send-testing/people')}
       >
       <div className="p-6 space-y-4">
         <p className="text-sm text-[var(--gray-11)] max-w-3xl">

@@ -4,6 +4,8 @@ import {
   CheckCircleIcon,
   ArrowPathIcon,
   ClockIcon,
+  ChartBarIcon,
+  TableCellsIcon,
 } from '@heroicons/react/24/outline';
 import { useNavigate } from 'react-router';
 import {
@@ -16,9 +18,11 @@ import { Card, Badge, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 
 // Shared workspace tabs for the Warehouse Sync module (hero header).
-const WS_TABS = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'tables', label: 'Sync Tables' },
+// Icons match the newsletters convention: size-4 heroicons on every tab strip.
+export const WS_TAB_ICON = 'size-4';
+export const wsTabs = () => [
+  { id: 'dashboard', label: 'Dashboard', icon: <ChartBarIcon className={WS_TAB_ICON} /> },
+  { id: 'tables', label: 'Sync Tables', icon: <TableCellsIcon className={WS_TAB_ICON} /> },
 ];
 const tabPath = (id: string) => (id === 'tables' ? '/warehouse-sync/tables' : '/warehouse-sync');
 
@@ -75,7 +79,7 @@ export default function WarehouseSyncHealth() {
       <WorkspaceLayout
         title="Warehouse Sync"
         subtitle="Supabase → Snowflake replication"
-        tabs={WS_TABS}
+        tabs={wsTabs()}
         activeTabId="dashboard"
         onTabChange={(id) => navigate(tabPath(id))}
         actions={
