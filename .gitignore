@@ -5,3 +5,4 @@ dist/
 
 # Machine-local pragma agent learned-memory (never committed — see CLAUDE.md)
 **/.claude/agent-memory/
+modules/slack/data/

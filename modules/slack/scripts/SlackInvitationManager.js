@@ -21,6 +21,10 @@ export class SlackInvitationManager {
     this.adminEmail = config.adminEmail || process.env.SLACK_ADMIN_EMAIL;
     this.adminPassword = config.adminPassword || process.env.SLACK_ADMIN_PASSWORD;
     this.headless = config.headless !== undefined ? config.headless : true;
+    // Optional residential/egress proxy — flag-gated via SLACK_PROXY_URL (or
+    // config.proxyUrl). No credentials are hardcoded; the full proxy URL
+    // (including any auth) is supplied at runtime. Unset => no proxy (default).
+    this.proxyUrl = config.proxyUrl || process.env.SLACK_PROXY_URL || null;
     this.sessionManager = new SlackSessionManager(this.workspaceUrl, config.sessionFilePath);
 
     this.browser = null;
@@ -43,23 +47,45 @@ export class SlackInvitationManager {
     console.log(`🚀 Initializing Slack Invitation Manager...`);
     console.log(`🏢 Workspace: ${this.workspaceUrl}`);
 
+    // Optional proxy: Chrome takes host:port only (rejects inline creds); the
+    // username/password are applied via page.authenticate() after newPage().
+    let proxyAuth = null;
+    let proxyServerArg = null;
+    if (this.proxyUrl) {
+      try {
+        const u = new URL(this.proxyUrl);
+        proxyServerArg = `--proxy-server=${u.protocol}//${u.host}`;
+        if (u.username) proxyAuth = { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) };
+        console.log(`🌐 Egress proxy: ${u.host}${proxyAuth ? ' (authenticated)' : ''}`);
+      } catch (e) {
+        console.warn(`⚠️  Ignoring invalid proxy URL: ${e.message}`);
+      }
+    }
+
+    const baseArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--window-size=1440,900',
+      '--disable-blink-features=AutomationControlled',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--single-process',
+      '--disable-crash-reporter',
+      '--disable-breakpad',
+      '--no-zygote'
+    ];
+    // --single-process breaks Chrome's network service when a proxy is configured,
+    // so drop it (and append the proxy server) only on the proxied path.
+    const args = proxyServerArg
+      ? baseArgs.filter((a) => a !== '--single-process').concat(proxyServerArg)
+      : baseArgs;
+
     const browserOptions = {
       headless: this.headless,
       defaultViewport: { width: 1440, height: 900 },
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--window-size=1440,900',
-        '--disable-blink-features=AutomationControlled',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--single-process',
-        '--disable-crash-reporter',
-        '--disable-breakpad',
-        '--no-zygote'
-      ],
+      args,
       ignoreHTTPSErrors: true,
       timeout: 120000
     };
@@ -90,6 +116,11 @@ export class SlackInvitationManager {
 
       this.page = await this.browser.newPage();
       console.log(`✅ New page created`);
+
+      if (proxyAuth) {
+        await this.page.authenticate(proxyAuth);
+        console.log(`🔐 Proxy authentication applied`);
+      }
     } catch (launchError) {
       console.error(`❌ Browser initialization failed: ${launchError.message}`);
       if (this.browser) {
@@ -98,10 +129,20 @@ export class SlackInvitationManager {
       throw launchError;
     }
 
-    // Set a more recent user agent
-    await this.page.setUserAgent(
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-    );
+    // Match the REAL browser version. A stale/hardcoded UA makes Slack serve its
+    // "browser is not supported" page (no login form / no invite modal), which
+    // is the root of the "workspace menu button" failures. Derive the UA from the
+    // launched browser (stripping any "Headless" token); allow an env override.
+    let userAgent = process.env.SLACK_USER_AGENT;
+    if (!userAgent) {
+      try {
+        userAgent = (await this.browser.userAgent()).replace(/Headless/gi, '');
+      } catch (_e) {
+        userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
+      }
+    }
+    console.log(`🧭 User agent: ${userAgent}`);
+    await this.page.setUserAgent(userAgent);
 
     // Hide automation indicators
     await this.page.evaluateOnNewDocument(() => {
@@ -277,11 +318,16 @@ export class SlackInvitationManager {
       // Ensure we're authenticated
       await this.ensureAuthenticated();
 
-      // Navigate to Slack app (not admin page) - works for regular members
-      // Extract team ID from workspace URL if needed, or use direct client URL
-      const teamId = 'TXXXXXXXXX'; // Your Slack workspace team ID
-      const appUrl = `https://app.slack.com/client/${teamId}`;
-      console.log(`📍 Navigating to Slack app: ${appUrl}`);
+      // Navigate to the workspace's own URL. With a valid session Slack redirects
+      // it to the correct app client (app.slack.com/client/<real team id>). The
+      // previous hardcoded 'TXXXXXXXXX' placeholder team id sent every invite to a
+      // bogus client URL that bounced to the workspace picker — THE root cause of
+      // the "workspace menu button not found" failures. Optionally pin an explicit
+      // id via SLACK_TEAM_ID.
+      const appUrl = process.env.SLACK_TEAM_ID
+        ? `https://app.slack.com/client/${process.env.SLACK_TEAM_ID}`
+        : this.workspaceUrl;
+      console.log(`📍 Navigating to Slack workspace: ${appUrl}`);
 
       try {
         await this.page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });

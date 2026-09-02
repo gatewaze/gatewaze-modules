@@ -216,8 +216,10 @@ export class SlackSessionManager {
 
       console.log(`🔍 Validating Slack session...`);
 
-      // Navigate to workspace
-      await page.goto(this.workspaceUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      // Navigate to workspace. Slack's web client never reaches networkidle2
+      // (persistent websockets/polling), so use domcontentloaded and a longer
+      // budget — especially important behind a slow residential proxy.
+      await page.goto(this.workspaceUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
       // Wait a bit for potential redirects
       const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -253,8 +255,11 @@ export class SlackSessionManager {
 
       return isLoggedIn;
     } catch (error) {
-      console.error(`❌ Failed to validate session: ${error.message}`);
-      return false;
+      // A navigation timeout / transient proxy error is INCONCLUSIVE — it must
+      // not destroy a freshly-captured session. Trust the cookies and let the
+      // actual invite step reveal a genuinely dead session (non-destructively).
+      console.warn(`⚠️  Session validation inconclusive (${error.message}) — trusting the saved session.`);
+      return true;
     }
   }
 
