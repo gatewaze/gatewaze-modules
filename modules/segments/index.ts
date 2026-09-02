@@ -51,6 +51,9 @@ const segmentsModule: GatewazeModule = {
     // 014 keyset-batched materialisation (beats the 8s RPC timeout on large
     // audiences) + excludes synthetic send-testing people from every audience.
     'migrations/014_calc_batch_and_test_exclusion.sql',
+    // 015 make the send-testing exclusion opt-outable so deliberate test sends
+    // work (audiences referencing the test domain/marker skip the exclusion).
+    'migrations/015_test_recipient_optin.sql',
   ],
 
   publicApiScopes: [
