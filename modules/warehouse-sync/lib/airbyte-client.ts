@@ -94,9 +94,14 @@ export class AirbyteClient {
   }
 
   private async request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+    return this.raw<T>(`/api/public/v1${path}`, method, body);
+  }
+
+  /** Call any path on the Airbyte server (used for config-API `/api/v1` calls). */
+  private async raw<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.token) headers.authorization = `Bearer ${this.token}`;
-    const res = await this.fetchFn(`${this.baseUrl}/api/public/v1${path}`, {
+    const res = await this.fetchFn(`${this.baseUrl}${path}`, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -106,6 +111,32 @@ export class AirbyteClient {
       throw new AirbyteError(`Airbyte ${method} ${path} → ${res.status} ${detail.slice(0, 200)}`, res.status);
     }
     return (await res.json()) as T;
+  }
+
+  /**
+   * Full discovered catalog for a source: per-stream fields + source-defined
+   * cursor / primary key + available sync modes. Uses the config API
+   * (`/api/v1/sources/discover_schema`) because the public `/streams` endpoint
+   * omits the column list needed for PII field-selection.
+   */
+  async discoverCatalog(sourceId: string): Promise<CatalogStreamInfo[]> {
+    const d = await this.raw<{ catalog?: { streams?: RawCatalogStream[] } }>(
+      '/api/v1/sources/discover_schema',
+      'POST',
+      { sourceId, disable_cache: true },
+    );
+    const streams = d.catalog?.streams ?? [];
+    return streams.map((s) => {
+      const st = s.stream ?? {};
+      const props = (st.jsonSchema?.properties ?? {}) as Record<string, unknown>;
+      return {
+        name: st.name ?? '',
+        fields: Object.keys(props),
+        defaultCursorField: st.defaultCursorField ?? [],
+        sourceDefinedPrimaryKey: st.sourceDefinedPrimaryKey ?? [],
+        syncModes: st.supportedSyncModes ?? [],
+      };
+    }).filter((s) => s.name);
   }
 
   /** Connections in this instance's workspace. */
@@ -181,6 +212,28 @@ export interface AirbyteStreamConfig {
   syncMode: string;
   cursorField?: string[];
   primaryKey?: string[][];
+  /** Column allowlist for PII redaction; omit to sync all columns. */
+  selectedFields?: { fieldPath: string[] }[];
+}
+
+/** Normalised discovered stream (see AirbyteClient.discoverCatalog). */
+export interface CatalogStreamInfo {
+  name: string;
+  fields: string[];
+  defaultCursorField: string[];
+  sourceDefinedPrimaryKey: string[][];
+  syncModes: string[];
+}
+
+/** Raw shape from the config API discover_schema response. */
+interface RawCatalogStream {
+  stream?: {
+    name?: string;
+    jsonSchema?: { properties?: Record<string, unknown> };
+    defaultCursorField?: string[];
+    sourceDefinedPrimaryKey?: string[][];
+    supportedSyncModes?: string[];
+  };
 }
 
 export interface ConnectionSchedule {
