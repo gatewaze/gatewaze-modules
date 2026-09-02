@@ -72,7 +72,17 @@ export default async function handlePollPlacement(_job: Job): Promise<void> {
           spam: provider.spam,
           missing: provider.missing,
           entered_via: 'api',
-          raw: { test: result.raw, auth: result.auth } as Record<string, unknown>,
+          // Store the whole normalised result, not just the counts: the
+          // results view renders seed rows, sender auth, filter verdicts and
+          // blocklists from here without re-fetching.
+          raw: {
+            test: result.raw,
+            auth: result.auth,
+            seeds: result.seeds,
+            senderAuth: result.senderAuth,
+            filters: result.filters,
+            blocklists: result.blocklists,
+          } as Record<string, unknown>,
           fetched_at: new Date().toISOString(),
         }));
 
