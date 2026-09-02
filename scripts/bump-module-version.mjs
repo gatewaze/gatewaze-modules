@@ -13,7 +13,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const VERSION_RE = /(version:\s*['"`])(\d+)\.(\d+)\.(\d+)(['"`])/;
@@ -58,12 +58,22 @@ function changedModules() {
 
 function applyTo(moduleName, level, explicit) {
   const index = resolve('modules', moduleName, 'index.ts');
-  if (!existsSync(index)) {
-    console.error(`  ${moduleName}: no modules/${moduleName}/index.ts`);
+
+  // Read straight away rather than testing for the file first. Checking and
+  // then reading is a race, and the failure it is meant to catch is the same
+  // ENOENT the read reports anyway.
+  let src;
+  try {
+    src = readFileSync(index, 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      console.error(`  ${moduleName}: no modules/${moduleName}/index.ts`);
+    } else {
+      console.error(`  ${moduleName}: could not read index.ts: ${err?.message ?? err}`);
+    }
     return false;
   }
 
-  const src = readFileSync(index, 'utf8');
   const match = VERSION_RE.exec(src);
   if (!match) {
     console.error(`  ${moduleName}: no semver version field found`);
