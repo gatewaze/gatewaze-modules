@@ -30,7 +30,7 @@ const sendTestingGlockAppsModule: GatewazeModule = {
   name: 'Send Testing — GlockApps',
   description:
     'Inbox-placement reporting for send tests: GlockApps seed addresses on the test list, per-provider Inbox/Tabs/Spam results on the run page.',
-  version: '0.1.0',
+  version: '0.2.0',
   features: ['send-testing-glockapps'],
 
   // The core module owns the list, the runs, and the slot this fills.
@@ -86,6 +86,14 @@ const sendTestingGlockAppsModule: GatewazeModule = {
       label: 'GlockApps API key',
       description:
         'Leave blank to run in manual mode (paste results from the dashboard). API access is plan-gated; confirm your plan grants it before relying on automatic mode.',
+      required: false,
+    },
+    project_id: {
+      key: 'project_id',
+      type: 'string',
+      label: 'GlockApps project id',
+      description:
+        'Every Spamtest v2 endpoint is project-scoped. Find it in the GlockApps dashboard URL, or leave blank and the module will use the account\u2019s first project.',
       required: false,
     },
     seed_list_mode: {

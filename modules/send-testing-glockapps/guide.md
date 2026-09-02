@@ -20,31 +20,34 @@ installs will not have. The core module delivers its whole value without it.
 
 | | Manual | API |
 |---|---|---|
-| Requires | Nothing | An API key on a plan that grants API access |
-| Seed addresses | Paste from the dashboard | Fetched automatically |
+| Requires | Nothing | An API key whose plan allows API access |
+| Seed addresses | Paste from the dashboard | Returned when a test is created |
 | Results | Typed in from the dashboard | Polled every 10 minutes |
 
-**Manual mode is the committed floor.** GlockApps' plan tiering for API access is
-not reliably documented and the sources disagree — one says API access is on
-every plan, another says reads need Enterprise and writes need Large Enterprise.
-Confirm against your own account before relying on API mode.
+**Manual mode is the committed floor.** If the API rejects the key with 401/403,
+polling stops rather than retrying forever, the run panel says so, and manual
+entry stays available.
 
-If the API rejects the key with 401/403, polling **stops** rather than retrying
-forever, the run panel says so, and manual entry stays available. That is a
-plan-level answer, not a transient error.
+## How the GlockApps API actually works
 
-## Setup
+Worth understanding, because it is not the shape you would guess.
 
-Config:
+- Base URL is `https://api.glockapps.com/gateway/spamtest-v2/api`, and auth is
+  an **`x-api-key` header** — not a bearer token.
+- Every endpoint is **project-scoped** (`/projects/{projectId}/...`). Set
+  `project_id` in the module config; the status endpoint lists the projects the
+  key can see.
+- **There is no standing seed list to fetch.** Seed addresses belong to a test:
+  `POST /projects/{id}/manualTest` returns the addresses to send to, a `testId`,
+  and a correlation code (`insertHeader` / `insertInBody`).
+- Results are read off the test row in `GET /projects/{id}/tests`: `stats`
+  carries the whole-test totals (inbox / other / spam / notDelivered) and
+  `inboxes` carries one row per seed mailbox, including per-seed SPF, DKIM and
+  DMARC verdicts.
 
-| Setting | What it is |
-|---|---|
-| `api_key` | GlockApps API key. Leave blank for manual mode. |
-| `seed_list_mode` | `shared` (default) or `separate`. |
-
-**Shared** puts the seed addresses on the same *Bulk Send Testing* list, so one
-send measures completion and placement together. **Separate** keeps them on a
-*Placement Seed Addresses* list for placement-only runs.
+**The correlation code needs a human.** GlockApps uses it to match a message to
+a test, and this module never sends, so it cannot insert it. Starting a test
+shows the code in the run panel; paste it into the campaign before sending.
 
 ## Seed addresses
 

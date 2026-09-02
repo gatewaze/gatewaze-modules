@@ -13,10 +13,10 @@ import { clientIp, rateLimit } from '../lib/rate-limit';
 import { normaliseEmail } from '../lib/email';
 import {
   GlockAppsAccessError,
-  fetchSeedList,
+  listProjects,
   loadConfig,
   serviceClient,
-  startTest,
+  startManualTest,
   targetListId,
 } from '../lib/glockapps';
 
@@ -59,6 +59,67 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
   }
 }
 
+/**
+ * Upsert seed addresses as people and subscribe them to the test list.
+ *
+ * Shared by the pasted-import route and the start-a-test flow, because in
+ * Spamtest v2 creating a test IS how you learn the seed addresses.
+ *
+ * Seeds are real third-party service mailboxes, not natural persons.
+ * contact_kind 'member' exists only to pass send gates; lawful basis is carried
+ * by acquisition_source, and is_test keeps them out of the People dashboard
+ * alongside the synthetic population.
+ */
+async function importSeedEmails(
+  supabase: any,
+  config: { seedListMode: 'shared' | 'separate' },
+  emails: string[],
+): Promise<number> {
+  const unique = Array.from(new Set(emails.filter(Boolean)));
+  if (unique.length === 0) return 0;
+  const listId = targetListId(config as any);
+
+  const rows = unique.map((email) => ({
+    email,
+    contact_kind: 'member',
+    acquisition_source: 'send_testing_glockapps',
+    attributes: { is_test: true, seed_provider: 'glockapps' },
+  }));
+
+  const { error: insertError } = await supabase
+    .from('people')
+    .upsert(rows, { onConflict: 'email', ignoreDuplicates: true });
+  if (insertError) throw new Error(insertError.message);
+
+  // Chunked: a 1000-item .in() serialises into a ~26KB request URL that
+  // PostgREST rejects with 400.
+  const people: { id: string; email: string }[] = [];
+  const IN_CHUNK = 100;
+  for (let i = 0; i < unique.length; i += IN_CHUNK) {
+    const { data, error: readError } = await supabase
+      .from('people')
+      .select('id, email')
+      .in('email', unique.slice(i, i + IN_CHUNK));
+    if (readError) throw new Error(readError.message);
+    people.push(...(data ?? []));
+  }
+
+  const subs = people.map((person: any) => ({
+    list_id: listId,
+    person_id: person.id,
+    email: person.email.toLowerCase(),
+    subscribed: true,
+    source: 'send_testing_glockapps',
+  }));
+
+  const { error: subError } = await supabase
+    .from('list_subscriptions')
+    .upsert(subs, { onConflict: 'list_id,email' });
+  if (subError) throw new Error(subError.message);
+
+  return subs.length;
+}
+
 export function registerRoutes(app: any, _ctx?: any): void {
   const router = express.Router();
 
@@ -98,8 +159,28 @@ export function registerRoutes(app: any, _ctx?: any): void {
         .eq('subscribed', true)
         .neq('source', 'send_testing');
 
+      // Verifying the key costs one cheap GET and no test credits, so the panel
+      // can say "api mode" only when the API genuinely answers.
+      let apiReachable: boolean | null = null;
+      let projects: { id: string; name: string }[] = [];
+      if (config.apiKey) {
+        try {
+          projects = await listProjects(config);
+          apiReachable = true;
+        } catch (err) {
+          apiReachable = false;
+          if (!(err instanceof GlockAppsAccessError)) {
+            console.warn('[send-testing-glockapps] project list failed:', (err as Error).message);
+          }
+        }
+      }
+
       return res.json({
-        mode: config.apiKey ? 'api' : 'manual',
+        mode: config.apiKey && apiReachable ? 'api' : 'manual',
+        api_key_set: Boolean(config.apiKey),
+        api_reachable: apiReachable,
+        project_id: config.projectId || projects[0]?.id || '',
+        projects,
         seed_list_mode: config.seedListMode,
         list_id: listId,
         seed_count: seedCount ?? 0,
@@ -128,20 +209,16 @@ export function registerRoutes(app: any, _ctx?: any): void {
           .map((value: unknown) => normaliseEmail(value))
           .filter((email: string | null): email is string => email !== null);
       } else {
-        try {
-          const seeds = await fetchSeedList(config);
-          emails = seeds.map((seed) => seed.email);
-        } catch (err) {
-          if (err instanceof GlockAppsAccessError) {
-            return fail(
-              res,
-              400,
-              'manual_mode',
-              `${err.message} Paste the seed addresses from the GlockApps dashboard instead.`,
-            );
-          }
-          throw err;
-        }
+        // There is no standing seed list to fetch. In Spamtest v2 the seed
+        // addresses belong to a test: POST manualTest returns them. Starting a
+        // test from a run imports them as a side effect, so send the caller
+        // there rather than silently importing nothing.
+        return fail(
+          res,
+          400,
+          'invalid_request',
+          'Seed addresses come from a placement test. Start one from a run, or paste addresses here.',
+        );
       }
 
       if (emails.length === 0) {
@@ -153,53 +230,9 @@ export function registerRoutes(app: any, _ctx?: any): void {
         return fail(res, 400, 'invalid_request', 'Too many addresses for a seed list (max 1000)');
       }
 
-      const unique = Array.from(new Set(emails));
+      const importedCount = await importSeedEmails(supabase, config, emails);
 
-      // Seeds are real third-party service mailboxes, not natural persons.
-      // contact_kind 'member' only exists to pass send gates; lawful basis is
-      // carried by acquisition_source, and is_test keeps them out of the People
-      // dashboard alongside the synthetic population.
-      const rows = unique.map((email) => ({
-        email,
-        contact_kind: 'member',
-        acquisition_source: 'send_testing_glockapps',
-        attributes: { is_test: true, seed_provider: 'glockapps' },
-      }));
-
-      const { error: insertError } = await supabase
-        .from('people')
-        .upsert(rows, { onConflict: 'email', ignoreDuplicates: true });
-      if (insertError) throw new Error(insertError.message);
-
-      // Chunked: a 1000-item .in() serialises into a ~26KB request URL, which
-      // PostgREST rejects with 400. Seed lists are ~70 addresses today, but the
-      // validation above allows up to 1000, so this must not depend on the list
-      // staying small.
-      const people: { id: string; email: string }[] = [];
-      const IN_CHUNK = 100;
-      for (let i = 0; i < unique.length; i += IN_CHUNK) {
-        const { data, error: readError } = await supabase
-          .from('people')
-          .select('id, email')
-          .in('email', unique.slice(i, i + IN_CHUNK));
-        if (readError) throw new Error(readError.message);
-        people.push(...(data ?? []));
-      }
-
-      const subs = people.map((person: any) => ({
-        list_id: listId,
-        person_id: person.id,
-        email: person.email.toLowerCase(),
-        subscribed: true,
-        source: 'send_testing_glockapps',
-      }));
-
-      const { error: subError } = await supabase
-        .from('list_subscriptions')
-        .upsert(subs, { onConflict: 'list_id,email' });
-      if (subError) throw new Error(subError.message);
-
-      return res.json({ imported: subs.length, list_id: listId });
+      return res.json({ imported: importedCount, list_id: listId });
     } catch (err) {
       return fail(res, 500, 'internal_error', err instanceof Error ? err.message : 'Seed import failed');
     }
@@ -248,7 +281,15 @@ export function registerRoutes(app: any, _ctx?: any): void {
     }
   });
 
-  /** Start (or record) the GlockApps test backing a run. */
+  /**
+   * Start the GlockApps test backing a run.
+   *
+   * In Spamtest v2 this is also where the seed addresses come from: the create
+   * call returns the addresses to send to plus a correlation code. We import
+   * those addresses onto the test list so the next send reaches them, and hand
+   * the code back for the operator to paste into the campaign — the module
+   * cannot inject it, because it never sends.
+   */
   router.post('/runs/:runId/placement/start', limitWrites('placement-start', 20), async (req: express.Request, res: express.Response) => {
     try {
       const supabase = serviceClient();
@@ -262,12 +303,20 @@ export function registerRoutes(app: any, _ctx?: any): void {
         .maybeSingle();
       if (!run) return fail(res, 404, 'not_found', 'Run not found');
 
-      // A manually-created test can be attached by id; otherwise start one.
-      let testId = String((req.body ?? {}).glockapps_test_id ?? '').trim();
+      // A manually-created test can be attached by id instead.
+      const providedId = String((req.body ?? {}).glockapps_test_id ?? '').trim();
+      let testId = providedId;
+      let imported = 0;
+      let insertHeader = '';
+      let insertInBody = '';
+
       if (!testId) {
         try {
-          const started = await startTest(config, { name: `Send test — ${run.name}` });
+          const started = await startManualTest(config, { note: `Gatewaze run: ${run.name}` });
           testId = started.testId;
+          insertHeader = started.insertHeader;
+          insertInBody = started.insertInBody;
+          imported = await importSeedEmails(supabase, config, started.emails);
         } catch (err) {
           if (err instanceof GlockAppsAccessError) {
             return fail(
@@ -290,7 +339,8 @@ export function registerRoutes(app: any, _ctx?: any): void {
         .select()
         .single();
       if (error) throw new Error(error.message);
-      return res.status(201).json(data);
+
+      return res.status(201).json({ ...data, seeds_imported: imported, insert_header: insertHeader, insert_in_body: insertInBody });
     } catch (err) {
       return fail(res, 500, 'internal_error', err instanceof Error ? err.message : 'Starting test failed');
     }
