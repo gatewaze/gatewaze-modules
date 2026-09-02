@@ -27,7 +27,7 @@ const sendTestingModule: GatewazeModule = {
   name: 'Send Testing',
   description:
     'Rehearse a large send: synthetic recipients on a dedicated list, real-arrival measurement via Inbound Parse, completion and latency reporting per run.',
-  version: '0.1.0',
+  version: '0.2.0',
   features: [
     'send-testing',
     'send-testing.provision',

@@ -4,11 +4,9 @@ import { ArrowPathIcon, CheckIcon } from '@heroicons/react/24/outline';
 import { WarehouseSyncService, type TableSyncRow } from '../utils/warehouseSyncService';
 import { Card, Badge, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
-
-const WS_TABS = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'tables', label: 'Sync Tables' },
-];
+// One definition of the tab strip, shared with the dashboard: a duplicate here
+// silently drifts the moment either page gains a tab.
+import { wsTabs } from './health';
 const tabPath = (id: string) => (id === 'tables' ? '/warehouse-sync/tables' : '/warehouse-sync');
 
 /**
@@ -101,7 +99,7 @@ export default function WarehouseSyncTables() {
       <WorkspaceLayout
         title="Warehouse Sync"
         subtitle="Tables to sync"
-        tabs={WS_TABS}
+        tabs={wsTabs()}
         activeTabId="tables"
         onTabChange={(id) => navigate(tabPath(id))}
         actions={

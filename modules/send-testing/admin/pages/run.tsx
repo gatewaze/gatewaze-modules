@@ -3,7 +3,10 @@ import { useNavigate, useParams } from 'react-router';
 import {
   ArrowPathIcon,
   CheckCircleIcon,
+  ChartBarIcon,
   ExclamationTriangleIcon,
+  InboxArrowDownIcon,
+  ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Badge, Button, Card, WorkspaceLayout } from '@/components/ui';
@@ -11,7 +14,7 @@ import { Page } from '@/components/shared/Page';
 import { Spinner } from '@/components/ui/Spinner';
 import { ModuleSlot } from '@/components/ModuleSlot';
 import SendTestingService, { type SendTestRun } from '../lib/sendTestingService';
-import { SEND_TESTING_TABS } from './index';
+import { TAB_ICON, sendTestingTabs } from './index';
 
 function formatMs(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -69,6 +72,9 @@ export default function SendTestRunPage() {
   const [run, setRun] = useState<SendTestRun | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Second row: the run's own sections, mirroring how an edition splits into
+  // Editor / Details / Sending under the newsletter tabs.
+  const [subTab, setSubTab] = useState<'results' | 'placement' | 'notes'>('results');
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -146,11 +152,18 @@ export default function SendTestRunPage() {
     <Page title={`Test run — ${run.name}`}>
       <WorkspaceLayout
         title="Send Testing"
-        tabs={SEND_TESTING_TABS}
+        tabs={sendTestingTabs()}
         activeTabId="runs"
         onTabChange={(t) => navigate(t === 'runs' ? '/send-testing' : `/send-testing/${t}`)}
         breadcrumbs={[{ label: 'Runs', to: '/send-testing' }, { label: run.name }]}
         onBreadcrumbNavigate={(to) => navigate(to)}
+        subTabs={[
+          { id: 'results', label: 'Results', icon: <ChartBarIcon className={TAB_ICON} /> },
+          { id: 'placement', label: 'Placement', icon: <InboxArrowDownIcon className={TAB_ICON} /> },
+          { id: 'notes', label: 'Notes', icon: <ShieldCheckIcon className={TAB_ICON} /> },
+        ]}
+        activeSubTabId={subTab}
+        onSubTabChange={(t) => setSubTab(t as typeof subTab)}
         actions={
           <div className="flex items-center gap-2 flex-wrap">
             <Badge color={run.status === 'open' ? 'green' : 'blue'}>{run.status}</Badge>
@@ -228,6 +241,8 @@ export default function SendTestRunPage() {
           </Card>
         )}
 
+        {subTab === 'results' && (
+          <>
         <div className="grid gap-4 md:grid-cols-4">
           <Stat
             label="Completion"
@@ -310,15 +325,26 @@ export default function SendTestRunPage() {
             </div>
           </Card>
         )}
+          </>
+        )}
 
         {/* Filled by send-testing-glockapps when installed; renders nothing otherwise,
             which is what keeps placement optional rather than a hard dependency. */}
-        <ModuleSlot name="send-test-run-detail:panels" props={{ run, runId: run.id, reload: load }} />
+        {subTab === 'placement' && (
+          <ModuleSlot name="send-test-run-detail:panels" props={{ run, runId: run.id, reload: load }} />
+        )}
 
-        {run.notes && (
+        {subTab === 'notes' && (
           <Card className="p-4">
             <div className="text-sm font-medium text-[var(--gray-12)]">Notes</div>
-            <p className="text-sm text-[var(--gray-11)] mt-1 whitespace-pre-wrap">{run.notes}</p>
+            {run.notes ? (
+              <p className="text-sm text-[var(--gray-11)] mt-1 whitespace-pre-wrap">{run.notes}</p>
+            ) : (
+              <p className="text-sm text-[var(--gray-11)] mt-1">
+                No notes recorded for this run. Pacing, template and sender details are worth
+                capturing here — they are what make an old run comparable to a new one.
+              </p>
+            )}
           </Card>
         )}
       </div>
