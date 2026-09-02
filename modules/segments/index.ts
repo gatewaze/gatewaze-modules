@@ -48,6 +48,9 @@ const segmentsModule: GatewazeModule = {
     // (created_by_person_id/created_via) + service-role preview entry point.
     'migrations/012_smart_geo_and_mcp.sql',
     'migrations/013_statement_timeout_backstop.sql',
+    // 014 keyset-batched materialisation (beats the 8s RPC timeout on large
+    // audiences) + excludes synthetic send-testing people from every audience.
+    'migrations/014_calc_batch_and_test_exclusion.sql',
   ],
 
   publicApiScopes: [
