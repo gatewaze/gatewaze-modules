@@ -97,3 +97,30 @@ surface.
 Manual and API results share one table, keyed by run and provider. API results
 overwrite manual ones for the same provider — the paste-in form is a fallback,
 never a competing source of truth.
+
+## Reading the results without a GlockApps login
+
+The run panel renders everything the module pulls back, so nobody needs a
+GlockApps account to read a test:
+
+- **Per-provider placement** — inbox / tabs / spam / missing, with the overall
+  row taken from GlockApps' own `stats` rather than summed from seed rows.
+- **Sender authentication** — SPF, DKIM and DMARC verdicts, the DMARC record
+  itself, sender IP, reverse DNS and its status, HELO, return-path, sender score
+  and ISP. This is reported against the real message, so unlike the run page's
+  arrival headers it is never blank.
+- **Spam filters** — SpamAssassin, Barracuda, Microsoft EOP (with SCL/BCL),
+  Google and ProofPoint, normalised to pass / spam / unknown with the raw score
+  or detail kept alongside.
+- **Blocklists** — only the DNSBL/URIBL entries that actually list you.
+- **Seed mailboxes** — one row per seed with placement, per-seed SPF/DKIM/DMARC
+  and time to delivery, filterable by provider and by placement.
+
+An unrecognised placement label is shown as-is under an "Unrecognised" filter
+rather than being folded into inbox, because GlockApps types that field as a
+free-text string.
+
+**Caveat worth keeping until the first real run:** this view was built from the
+published OpenAPI definitions, not from an observed response. Every field is
+optional and missing sections simply do not render, but field names may need
+correcting once a real payload arrives.

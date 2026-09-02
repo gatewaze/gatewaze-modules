@@ -271,10 +271,19 @@ export function registerRoutes(app: any, _ctx?: any): void {
           .maybeSingle(),
       ]);
       const config = await loadConfig(supabase);
+      // The detail (seed rows, sender auth, filter verdicts, blocklists) is
+      // stored on the overall row by the poll worker. Manual entries have none,
+      // which the panel handles by simply not rendering those sections.
+      const overall = (reports ?? []).find((r: any) => r.provider === 'overall');
+      const detail = (overall?.raw ?? {}) as Record<string, unknown>;
       return res.json({
         mode: config.apiKey ? 'api' : 'manual',
         reports: reports ?? [],
         test: test ?? null,
+        seeds: detail.seeds ?? [],
+        sender_auth: detail.senderAuth ?? null,
+        filters: detail.filters ?? [],
+        blocklists: detail.blocklists ?? [],
       });
     } catch (err) {
       return fail(res, 500, 'internal_error', err instanceof Error ? err.message : 'Loading placement failed');

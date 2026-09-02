@@ -39,6 +39,42 @@ export interface PlacementReport {
   fetched_at: string;
 }
 
+export interface SeedRow {
+  email: string;
+  provider: string;
+  placement: 'inbox' | 'tabs' | 'spam' | 'missing' | null;
+  placementLabel: string;
+  spf: string | null;
+  dkim: string | null;
+  dmarc: string | null;
+  ip: string | null;
+  deliveredIn: number | null;
+  seedName: string | null;
+}
+
+export interface SenderAuth {
+  senderDomain: string | null;
+  senderIp: string | null;
+  senderScore: number | null;
+  rdns: string | null;
+  rdnsStatus: string | null;
+  helo: string | null;
+  returnPath: string | null;
+  spfAuth: string | null;
+  dkimAuth: string | null;
+  dmarcAuth: string | null;
+  dmarcRecord: string | null;
+  bimi: string | null;
+  isp: string | null;
+}
+
+export interface FilterVerdict {
+  name: string;
+  verdict: 'pass' | 'spam' | 'unknown';
+  score: number | null;
+  detail: string | null;
+}
+
 export interface PlacementTest {
   id: string;
   run_id: string;
@@ -69,9 +105,15 @@ export const PlacementService = {
   removeSeeds: () => postJson<{ deleted: number }>('/seeds', undefined, 'DELETE'),
 
   getPlacement: (runId: string) =>
-    json<{ mode: 'api' | 'manual'; reports: PlacementReport[]; test: PlacementTest | null }>(
-      `/runs/${runId}/placement`,
-    ),
+    json<{
+      mode: 'api' | 'manual';
+      reports: PlacementReport[];
+      test: PlacementTest | null;
+      seeds: SeedRow[];
+      sender_auth: SenderAuth | null;
+      filters: FilterVerdict[];
+      blocklists: string[];
+    }>(`/runs/${runId}/placement`),
 
   startTest: (runId: string, glockappsTestId?: string) =>
     postJson<PlacementTest & { seeds_imported?: number; insert_header?: string; insert_in_body?: string }>(

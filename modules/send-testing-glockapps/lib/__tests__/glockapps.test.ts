@@ -122,3 +122,90 @@ describe('normalisePlacement', () => {
     expect(r.providers[0]).toEqual({ provider: 'overall', inbox: 0, tabs: 0, spam: 0, missing: 2 });
   });
 });
+
+describe('richer detail extracted for the results view', () => {
+  const full = {
+    testId: 't1',
+    finished: true,
+    stats: { inbox: 2, spam: 1, other: 1, notDelivered: 0 },
+    inboxes: [
+      { email: 'a@gmail.com', iType: 'Inbox', spf: 'pass', dkim: 'pass', dmarc: 'pass', ip: '1.2.3.4', deliveredIn: 12, seedName: 'Gmail US', finished: true },
+      { email: 'b@outlook.com', iType: 'Spam', spf: 'pass', dkim: 'fail', dmarc: 'fail', deliveredIn: 40, finished: true },
+    ],
+    authenticationResult: {
+      senderDomain: 'aaif.live', senderIp: '5.6.7.8', senderScore: 98,
+      rdns: 'o1.sendgrid.net', rDNSStatus: 'valid', helo: 'sendgrid.net',
+      returnPath: 'bounces@aaif.live', spfAuth: 'pass', dkimAuth: 'pass',
+      dmarcAuth: 'pass', dmarcRecord: { record: 'v=DMARC1; p=none' }, bimi: '', isp: 'SendGrid',
+    },
+    spamAssassin: { active: true, score: 1.2 },
+    microsoftEOP: { active: true, scl: 1, bcl: 0, cat: 'NONE' },
+    googleApps: { active: true, spam: false, phishy: false },
+    proofPoint: { active: true, spam: true },
+    dnsbl: { finished: true, results: [{ name: 'zen.spamhaus.org', listed: false }, { name: 'bl.example', listed: true }] },
+    uribl: { finished: true, results: [] },
+  };
+
+  it('flattens seed rows for the filterable table', () => {
+    const r = normalisePlacement(full);
+    expect(r.seeds).toHaveLength(2);
+    expect(r.seeds[0]).toMatchObject({
+      email: 'a@gmail.com', provider: 'gmail', placement: 'inbox',
+      spf: 'pass', ip: '1.2.3.4', deliveredIn: 12, seedName: 'Gmail US',
+    });
+    expect(r.seeds[1]).toMatchObject({ provider: 'outlook', placement: 'spam', dkim: 'fail' });
+  });
+
+  it('keeps the raw placement label so an unknown value is still shown', () => {
+    const r = normalisePlacement({ inboxes: [{ email: 'a@gmail.com', iType: 'SomethingNew' }] });
+    expect(r.seeds[0].placement).toBeNull();
+    expect(r.seeds[0].placementLabel).toBe('SomethingNew');
+  });
+
+  it('reads sender-level authentication including the DMARC record', () => {
+    const r = normalisePlacement(full);
+    expect(r.senderAuth).toMatchObject({
+      senderDomain: 'aaif.live', senderIp: '5.6.7.8', senderScore: 98,
+      dmarcAuth: 'pass', dmarcRecord: 'v=DMARC1; p=none', rdnsStatus: 'valid',
+    });
+    // Empty strings become null rather than rendering as blanks.
+    expect(r.senderAuth?.bimi).toBeNull();
+  });
+
+  it('accepts a bare-string dmarcRecord as well as the object form', () => {
+    const r = normalisePlacement({ authenticationResult: { dmarcRecord: 'v=DMARC1; p=reject' } });
+    expect(r.senderAuth?.dmarcRecord).toBe('v=DMARC1; p=reject');
+  });
+
+  it('normalises each filter to one vocabulary', () => {
+    const r = normalisePlacement(full);
+    const byName = Object.fromEntries(r.filters.map((f) => [f.name, f]));
+    expect(byName['SpamAssassin']).toMatchObject({ verdict: 'pass', score: 1.2 });
+    expect(byName['Microsoft EOP']).toMatchObject({ verdict: 'pass', detail: 'SCL 1 · BCL 0 · cat NONE' });
+    expect(byName['Google']).toMatchObject({ verdict: 'pass' });
+    expect(byName['ProofPoint']).toMatchObject({ verdict: 'spam' });
+  });
+
+  it('treats a high SpamAssassin score as spam', () => {
+    const r = normalisePlacement({ spamAssassin: { active: true, score: 7.5 } });
+    expect(r.filters[0]).toMatchObject({ name: 'SpamAssassin', verdict: 'spam', score: 7.5 });
+  });
+
+  it('skips filters that are not active', () => {
+    const r = normalisePlacement({ spamAssassin: { active: false, score: 9 } });
+    expect(r.filters).toEqual([]);
+  });
+
+  it('lists only blocklists that actually list us', () => {
+    const r = normalisePlacement(full);
+    expect(r.blocklists).toEqual(['bl.example']);
+  });
+
+  it('returns empty detail rather than throwing on an unfamiliar payload', () => {
+    const r = normalisePlacement({ inboxes: [], authenticationResult: 'nonsense', dnsbl: 'nope' });
+    expect(r.seeds).toEqual([]);
+    expect(r.senderAuth).toBeNull();
+    expect(r.filters).toEqual([]);
+    expect(r.blocklists).toEqual([]);
+  });
+});
