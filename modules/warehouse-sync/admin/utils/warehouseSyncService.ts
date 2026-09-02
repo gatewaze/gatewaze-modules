@@ -168,6 +168,8 @@ export interface TableSyncRow {
   cursor_field: string | null;
   primary_key: string | null;
   use_cdc: boolean;
+  /** true = replicate full row (prod); false = redact PII columns (test). */
+  include_pii: boolean;
 }
 
 /**

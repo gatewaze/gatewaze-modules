@@ -59,6 +59,7 @@ const warehouseSyncModule: GatewazeModule = {
     'migrations/004_health_views.sql',
     'migrations/005_airbyte_status.sql',
     'migrations/006_table_sync_config.sql',
+    'migrations/007_pii_and_selection.sql',
   ],
 
   // File stems MUST equal the job-name suffix — the platform worker derives the
