@@ -143,6 +143,7 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
           cursor_field: c?.cursor_field ?? 'updated_at',
           primary_key: c?.primary_key ?? 'id',
           use_cdc: c?.use_cdc ?? false,
+          include_pii: c?.include_pii ?? true,
         };
       });
       return res.json({ tables, discoverError, configured: !!(client && sourceId && destinationId) });
@@ -166,6 +167,7 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
       cursor_field: t.cursor_field ? String(t.cursor_field) : null,
       primary_key: t.primary_key ? String(t.primary_key) : null,
       use_cdc: !!t.use_cdc,
+      include_pii: t.include_pii !== false, // default true (full row); false = redact PII
       updated_at: new Date().toISOString(),
       updated_by: actor,
     }));
@@ -179,7 +181,18 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
         return res.json({ saved: true, reconciled: false, reason: 'Airbyte not configured / source-destination ambiguous' });
       }
       const { data: cfgs } = await supabase.from('warehouse_sync_table_config').select('*');
-      const plans = planTiers(cfgs ?? []);
+
+      // Discover the source catalog so streams are validated/repaired against
+      // real cursor/PK/fields (and so PII redaction knows the column list).
+      const catalogByName = new Map();
+      try {
+        const catalog = await client.discoverCatalog(sourceId);
+        for (const s of catalog) catalogByName.set(s.name, s);
+      } catch (e) {
+        log.warn('catalog discovery failed; reconcile will skip validation', e?.message ?? e);
+      }
+
+      const { tiers: plans, skipped } = planTiers(cfgs ?? [], catalogByName);
       const summary = [];
       for (const plan of plans) {
         const { data: tier } = await supabase
@@ -210,7 +223,7 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
           summary.push({ frequency: plan.frequency, streams: plan.streams.length, action: 'error', error: e?.message ?? String(e) });
         }
       }
-      return res.json({ saved: true, reconciled: true, tiers: summary });
+      return res.json({ saved: true, reconciled: true, tiers: summary, skipped });
     } catch (e) {
       return res.status(500).json({ error: `reconcile failed: ${e?.message ?? e}` });
     }
