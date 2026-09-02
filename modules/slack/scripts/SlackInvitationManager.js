@@ -318,11 +318,16 @@ export class SlackInvitationManager {
       // Ensure we're authenticated
       await this.ensureAuthenticated();
 
-      // Navigate to Slack app (not admin page) - works for regular members
-      // Extract team ID from workspace URL if needed, or use direct client URL
-      const teamId = 'TXXXXXXXXX'; // Your Slack workspace team ID
-      const appUrl = `https://app.slack.com/client/${teamId}`;
-      console.log(`📍 Navigating to Slack app: ${appUrl}`);
+      // Navigate to the workspace's own URL. With a valid session Slack redirects
+      // it to the correct app client (app.slack.com/client/<real team id>). The
+      // previous hardcoded 'TXXXXXXXXX' placeholder team id sent every invite to a
+      // bogus client URL that bounced to the workspace picker — THE root cause of
+      // the "workspace menu button not found" failures. Optionally pin an explicit
+      // id via SLACK_TEAM_ID.
+      const appUrl = process.env.SLACK_TEAM_ID
+        ? `https://app.slack.com/client/${process.env.SLACK_TEAM_ID}`
+        : this.workspaceUrl;
+      console.log(`📍 Navigating to Slack workspace: ${appUrl}`);
 
       try {
         await this.page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
