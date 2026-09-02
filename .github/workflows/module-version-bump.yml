@@ -1,0 +1,111 @@
+name: Module version bump
+
+# Requires a version bump when a module's files change.
+#
+# Why: the platform reads `version` from each module's index.ts, and it had
+# drifted into meaning nothing. 65 of the 86 modules sit at 1.0.0, and
+# newsletters accumulated 298 commits in six months against a single change to
+# its version line. That was not only untidy. Both platform update paths used
+# to run a module's migrations only when the version changed, so a migration
+# added without a bump was silently skipped. The platform no longer gates
+# migrations on the version, but the field still drives isNewerVersion() in the
+# update check and minPlatformVersion compatibility, so it needs to be true.
+#
+# The check is deliberately dumb: it asks only that the version differs from
+# the base branch, not that the increment is the semantically correct one.
+# Choosing patch, minor or major stays a human judgement.
+#
+# Docs-only and test-only changes are exempt, so a typo fix in a guide does not
+# force a release.
+#
+# NON-BLOCKING for now (continue-on-error), matching how module-tests landed.
+# Drop the continue-on-error and add "Module version bump" to the required
+# checks once the open pull requests have caught up.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  version-bump:
+    name: Module version bump
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Check each changed module bumped its version
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Modules touched by this PR, ignoring paths that cannot affect
+          # runtime behaviour.
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            | grep -E '^modules/[^/]+/' \
+            | grep -vE '^modules/[^/]+/(guide\.md|README\.md|.*\.test\.[tj]s|__tests__/)' \
+            | cut -d/ -f2 \
+            | sort -u || true)
+
+          if [ -z "$changed" ]; then
+            echo "No module source changed."
+            exit 0
+          fi
+
+          missing=""
+          for m in $changed; do
+            index="modules/$m/index.ts"
+
+            # Deleted module: nothing to bump.
+            if [ ! -f "$index" ]; then
+              echo "  $m: removed, skipping"
+              continue
+            fi
+
+            head_v=$(grep -m1 -oE "version: *['\"][^'\"]+" "$index" \
+              | sed "s/version: *['\"]//" || true)
+            base_v=$(git show "$BASE_SHA:$index" 2>/dev/null \
+              | grep -m1 -oE "version: *['\"][^'\"]+" \
+              | sed "s/version: *['\"]//" || true)
+
+            # New module: no base version to compare against.
+            if [ -z "$base_v" ]; then
+              echo "  $m: new module at ${head_v:-unknown}"
+              continue
+            fi
+
+            if [ -z "$head_v" ]; then
+              echo "  $m: no version field found in $index"
+              missing="$missing $m"
+            elif [ "$head_v" = "$base_v" ]; then
+              echo "  $m: still $head_v"
+              missing="$missing $m"
+            else
+              echo "  $m: $base_v -> $head_v"
+            fi
+          done
+
+          if [ -n "$missing" ]; then
+            echo ""
+            echo "These modules changed without a version bump:"
+            for m in $missing; do echo "  - $m"; done
+            echo ""
+            echo "Bump each one with:"
+            for m in $missing; do echo "  node scripts/bump-module-version.mjs $m patch"; done
+            echo ""
+            echo "Use patch for a fix, minor for new behaviour, major for a breaking change."
+            echo "If a module ships a migration, the version should move too, so the"
+            echo "change is visible in the admin Modules page."
+            exit 1
+          fi
+
+          echo ""
+          echo "Every changed module bumped its version."
