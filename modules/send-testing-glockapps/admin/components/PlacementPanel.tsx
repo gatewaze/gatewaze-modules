@@ -56,6 +56,9 @@ export default function PlacementPanel({ runId, run }: PlacementPanelProps) {
     missing: '',
   });
   const [testIdInput, setTestIdInput] = useState('');
+  // GlockApps hands back a correlation code when a test is created. The module
+  // never sends, so the operator has to paste it into the campaign themselves.
+  const [insertCode, setInsertCode] = useState<{ header: string; body: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -77,8 +80,15 @@ export default function PlacementPanel({ runId, run }: PlacementPanelProps) {
   async function handleStart() {
     setBusy(true);
     try {
-      await PlacementService.startTest(runId, testIdInput.trim() || undefined);
-      toast.success('Placement test linked');
+      const started = await PlacementService.startTest(runId, testIdInput.trim() || undefined);
+      if (started.insert_header || started.insert_in_body) {
+        setInsertCode({ header: started.insert_header ?? '', body: started.insert_in_body ?? '' });
+      }
+      toast.success(
+        started.seeds_imported
+          ? `Test linked; ${started.seeds_imported} seed addresses imported`
+          : 'Placement test linked',
+      );
       setTestIdInput('');
       await load();
     } catch (err) {
@@ -137,6 +147,26 @@ export default function PlacementPanel({ runId, run }: PlacementPanelProps) {
           </Button>
         </div>
       </div>
+
+      {insertCode && (
+        <div className="mt-3 rounded-md bg-[var(--amber-a3)] p-3 text-xs text-[var(--gray-12)] space-y-1">
+          <p className="font-medium">Add this code to the campaign before sending</p>
+          <p>
+            GlockApps uses it to match the message to this test. This module never sends, so it
+            cannot add the code for you.
+          </p>
+          {insertCode.header && (
+            <p className="break-all">
+              <span className="font-medium">Header:</span> <code>{insertCode.header}</code>
+            </p>
+          )}
+          {insertCode.body && (
+            <p className="break-all">
+              <span className="font-medium">Or in the body:</span> <code>{insertCode.body}</code>
+            </p>
+          )}
+        </div>
+      )}
 
       {test?.state === 'failed' && (
         <div className="mt-3 rounded-md bg-[var(--amber-a3)] p-3 text-xs text-[var(--gray-12)] flex gap-2">

@@ -34,9 +34,10 @@ export default async function handlePollPlacement(_job: Job): Promise<void> {
   const supabase = client();
   const config = await loadConfig(supabase);
 
-  if (!config.apiKey) {
-    // Manual mode. Nothing to poll, and this is a normal steady state rather
-    // than a misconfiguration, so it must not throw and retry.
+  if (!config.apiKey || !config.projectId) {
+    // Manual mode, or no project configured. Nothing to poll, and this is a
+    // normal steady state rather than a misconfiguration, so it must not throw
+    // and retry.
     return;
   }
 
@@ -71,7 +72,7 @@ export default async function handlePollPlacement(_job: Job): Promise<void> {
           spam: provider.spam,
           missing: provider.missing,
           entered_via: 'api',
-          raw: result.raw as Record<string, unknown>,
+          raw: { test: result.raw, auth: result.auth } as Record<string, unknown>,
           fetched_at: new Date().toISOString(),
         }));
 
