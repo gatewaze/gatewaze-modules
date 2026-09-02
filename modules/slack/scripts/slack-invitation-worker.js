@@ -15,6 +15,27 @@ function getSupabase() {
   return supabase;
 }
 
+/**
+ * Build the browser worker's egress proxy URL from the residential-egress module
+ * config (single source of truth for the provider credentials), falling back to
+ * the SLACK_PROXY_URL env var. Returns null when no proxy is configured.
+ */
+async function resolveProxyUrl(sb) {
+  try {
+    const { data } = await sb.from('installed_modules').select('config').eq('id', 'residential-egress').maybeSingle();
+    const c = data && data.config;
+    if (c && c.provider === 'dataimpulse' && c.proxy_username && c.proxy_password) {
+      // US-pinned sticky session keeps the send IP consistent with the captured session.
+      const user = encodeURIComponent(`${c.proxy_username}__cr.us__sid.aaifslack1`);
+      const pass = encodeURIComponent(c.proxy_password);
+      return `http://${user}:${pass}@gw.dataimpulse.com:823`;
+    }
+  } catch (e) {
+    console.warn('⚠️  Could not read residential-egress config for proxy:', e.message);
+  }
+  return process.env.SLACK_PROXY_URL || null;
+}
+
 // Worker state
 let isProcessingQueue = false;
 let invitationManager = null;
@@ -35,11 +56,14 @@ export async function processQueue() {
 
   try {
     // Initialize invitation manager once
+    const proxyUrl = await resolveProxyUrl(getSupabase());
+    if (proxyUrl) console.log('🌐 Slack worker egress via residential proxy');
     invitationManager = new SlackInvitationManager({
       workspaceUrl: process.env.SLACK_WORKSPACE_URL,
       adminEmail: process.env.SLACK_ADMIN_EMAIL,
       adminPassword: process.env.SLACK_ADMIN_PASSWORD,
-      headless: true
+      headless: true,
+      proxyUrl,
     });
 
     await invitationManager.initialize();
