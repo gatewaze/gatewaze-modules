@@ -175,11 +175,15 @@ export function BroadcastsTable({ broadcasts, onDeleted }: { broadcasts: Broadca
       size: 130,
       cell: (info) => <span className="text-sm text-[var(--gray-12)] whitespace-nowrap">{formatDate(info.getValue())}</span>,
     }),
+    columnHelper.accessor('name', {
+      header: 'Name',
+      size: 160,
+      cell: (info) => <span className="text-sm text-[var(--gray-12)] truncate max-w-xs block">{info.getValue()}</span>,
+    }),
     columnHelper.accessor('subject', {
       header: 'Subject',
       cell: (info) => {
-        const row = info.row.original;
-        const text = info.getValue() || row.name;
+        const text = info.getValue();
         return <span className="text-sm text-[var(--gray-12)] truncate max-w-md block">{text || <span className="italic text-[var(--gray-9)]">No subject</span>}</span>;
       },
     }),
