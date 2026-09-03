@@ -24,7 +24,7 @@ const softwareEngineerModule: GatewazeModule = {
   name: 'Software Engineer',
   description:
     'Autonomous engineering agent: labelled GitHub issues → spec → adversarial review → implement → verify → PR/merge, driven by in-process Claude Code sessions. Per-brand repos + credentials; live agent monitoring.',
-  version: '0.1.0',
+  version: '0.1.1',
 
   features: ['software-engineer'],
 
