@@ -16,11 +16,31 @@
  * decision yet (classifyDecision()-only label) keeps the old click-to-open-run behavior.
  */
 import React, { useCallback, useEffect, useState } from 'react';
+import {
+  DocumentTextIcon,
+  BuildingLibraryIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  XCircleIcon,
+  Cog6ToothIcon,
+} from '@heroicons/react/24/outline';
 import { supabase } from '@/lib/supabase';
 import { fmtCost, formatDuration } from './overview-filters';
 import { ProjectAvatar } from './ProjectAvatar';
 import { runLabel } from './RunListSection';
-import { KIND_TITLES, groupDecisions, shouldShowArchitectureLink } from './decisionsPanelUtils';
+import { KIND_ICON, KIND_TITLES, groupDecisions, shouldShowArchitectureLink } from './decisionsPanelUtils';
+
+// Maps the string icon names in KIND_ICON (decisionsPanelUtils.ts) to their actual components —
+// kept here rather than in decisionsPanelUtils.ts so that pure module stays free of the heroicons
+// import for its `node`-environment test target.
+const ICON_COMPONENTS: Record<string, React.ComponentType<{ className?: string }>> = {
+  DocumentTextIcon,
+  BuildingLibraryIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  XCircleIcon,
+  Cog6ToothIcon,
+};
 
 // Absolute API base on deployed admins (nginx serves the SPA only — no /api proxy); '' locally → Vite proxy.
 const API = `${(import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? ''}/api/modules/software-engineer/admin`;
@@ -222,11 +242,14 @@ export default function DecisionsPanel({ projectFilter, onOpenRun }: {
               {rows.map((d) => {
                 const showProposalLink = shouldShowArchitectureLink(kind, d);
                 const interactive = Boolean(d.decisionId) && !d.answered;
+                const iconSpec = KIND_ICON[kind];
+                const KindIcon = iconSpec && ICON_COMPONENTS[iconSpec.icon];
                 const label = (
                   <div
                     className="flex items-center gap-2 min-w-0 cursor-pointer"
                     onClick={() => onOpenRun?.(d.id)}
                   >
+                    {KindIcon && <KindIcon className={`size-4 shrink-0 ${iconSpec.className}`} />}
                     <ProjectAvatar emoji={d.project?.avatar_emoji} className="size-4 shrink-0" />
                     <div className="min-w-0">
                       <div className="truncate text-sm text-[var(--gray-12)]">{runLabel(d)}</div>
