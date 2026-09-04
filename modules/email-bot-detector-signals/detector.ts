@@ -29,6 +29,15 @@ const KNOWN_SCANNER_PATTERNS: RegExp[] = [
 
 const BOT_UA_KEYWORDS = /bot|crawler|spider|scan|check|monitor|fetch|prefetch|preview/i;
 
+// Machine-open user-agents: an email client or image proxy fetching the
+// tracking pixel, not a person reading the mail. Apple Mail Privacy Protection
+// reports a bare "Mozilla/5.0"; Gmail's image proxy reports a spoofed
+// Firefox/11.0 "(via ggpht.com)"; Yahoo uses YahooMailProxy. SendGrid's
+// sg_machine_open flag is not persisted, but these UAs are — so this is the
+// backfillable equivalent. OPEN-ONLY: a bare/stripped UA on a *click* is a real
+// click, not a machine, so this must never be applied to clicks.
+const MACHINE_OPEN_UA = /^Mozilla\/5\.0\s*$|GoogleImageProxy|ggpht|Firefox\/11\.0|YahooMailProxy/i;
+
 // Non-browser HTTP clients / scripting runtimes. A genuine human click arrives
 // from a browser or a mail-client webview — never from these libraries, which
 // are what link-checkers, security scanners, and scripts use. Kept
@@ -220,6 +229,14 @@ function detectSignals(ctx: InteractionContext): BotSignal[] {
         id: 'ua_http_client',
         adjustment: -0.90,
         detail: `Non-browser HTTP client / scripting user-agent`,
+      });
+    }
+    // Machine open (MPP / image proxy). OPEN-only — never applied to clicks.
+    if (ctx.eventType === 'open' && MACHINE_OPEN_UA.test(ctx.userAgent)) {
+      signals.push({
+        id: 'ua_machine_open',
+        adjustment: -0.90,
+        detail: `Machine open (MPP / image-proxy user-agent)`,
       });
     }
   }
