@@ -29,6 +29,15 @@ const KNOWN_SCANNER_PATTERNS: RegExp[] = [
 
 const BOT_UA_KEYWORDS = /bot|crawler|spider|scan|check|monitor|fetch|prefetch|preview/i;
 
+// Non-browser HTTP clients / scripting runtimes. A genuine human click arrives
+// from a browser or a mail-client webview — never from these libraries, which
+// are what link-checkers, security scanners, and scripts use. Kept
+// high-precision: tokens are anchored (slash/word-boundary) so we don't catch
+// CFNetwork (legit Apple Mail), "Java"-in-a-plugin strings, or other UAs a real
+// client might emit. Matching this is treated as a strong bot signal.
+const HTTP_CLIENT_UA =
+  /python-requests|python-urllib|python\/|aiohttp|httpx|urllib|\bcurl\/|libcurl|\bwget\b|go-http-client|okhttp|libwww-perl|guzzlehttp|node-fetch|axios\/|scrapy|phantomjs|headlesschrome|java\/|apache-httpclient|winhttp|restsharp|powershell|faraday|postmanruntime|insomnia|\bgot\/|lua-resty|dart\//i;
+
 // ---------------------------------------------------------------------------
 // Known proxy CIDR ranges
 // ---------------------------------------------------------------------------
@@ -138,6 +147,24 @@ function detectSignals(ctx: InteractionContext): BotSignal[] {
         detail: `${uniqueUrls.size} unique links clicked`,
       });
     }
+    // A burst that touches several DISTINCT links in a tight window is a scanner
+    // sweep — the signature that inflates click counts in short emails (2 CTAs +
+    // footer), where the >=5 rule above never trips. Gate on a tight time window
+    // so a person clicking a couple of CTAs over minutes is not caught.
+    if (uniqueUrls.size >= 3) {
+      const clickTimes = ctx.recentInteractions
+        .filter((i) => i.event_type === 'click')
+        .map((i) => new Date(i.event_timestamp).getTime())
+        .concat(ctx.eventTimestamp.getTime());
+      const span = Math.max(...clickTimes) - Math.min(...clickTimes);
+      if (span < 30000) {
+        signals.push({
+          id: 'pattern_link_sweep',
+          adjustment: -0.80,
+          detail: `${uniqueUrls.size} distinct links within ${(span / 1000).toFixed(0)}s`,
+        });
+      }
+    }
 
     // Check for perfectly sequential click pattern
     const clickTimestamps = ctx.recentInteractions
@@ -185,6 +212,14 @@ function detectSignals(ctx: InteractionContext): BotSignal[] {
         id: 'ua_bot_generic',
         adjustment: -0.90,
         detail: `User-agent contains bot keyword`,
+      });
+    }
+    // Non-browser HTTP client / scripting runtime — not a human clicking.
+    if (HTTP_CLIENT_UA.test(ctx.userAgent)) {
+      signals.push({
+        id: 'ua_http_client',
+        adjustment: -0.90,
+        detail: `Non-browser HTTP client / scripting user-agent`,
       });
     }
   }
