@@ -6,13 +6,33 @@
  * tools, max_output_tokens, and daily cost cap.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 
 import { Modal, Button, Tabs, type Tab } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
-import { Select, TextArea, TextField } from '@radix-ui/themes';
+// NOTE: no `@radix-ui/themes` import — module files must never import it
+// (it duplicates the Radix singleton in production builds and crashes
+// useThemeContext). Native elements below carry the styling instead.
+const ucFieldCls =
+  'w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm ' +
+  'outline-none focus:border-neutral-500 dark:bg-neutral-900 dark:border-neutral-700';
+function UcInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return <input {...props} className={ucFieldCls} />;
+}
+function UcTextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea {...props} className={ucFieldCls} />;
+}
+function UcSelect({ value, onValueChange, children }: {
+  value: string; onValueChange: (v: string) => void; children: React.ReactNode;
+}) {
+  return (
+    <select value={value} onChange={(e) => onValueChange(e.target.value)} className={ucFieldCls}>
+      {children}
+    </select>
+  );
+}
 
 import {
   authedFetch,
@@ -295,13 +315,13 @@ function SettingsTab({
     <div className="space-y-4">
       <TemplateAdoptionField editing={editing} setEditing={setEditing} />
       <Field label="Label">
-        <TextField.Root
+        <UcInput
           value={editing.label}
           onChange={(e) => setEditing({ ...editing, label: e.target.value })}
         />
       </Field>
       <Field label="Description">
-        <TextArea
+        <UcTextArea
           rows={2}
           value={editing.description}
           onChange={(e) => setEditing({ ...editing, description: e.target.value })}
@@ -309,7 +329,7 @@ function SettingsTab({
       </Field>
       <div className="grid grid-cols-2 gap-4">
         <Field label="Max output tokens">
-          <TextField.Root
+          <UcInput
             type="number"
             value={String(editing.max_output_tokens)}
             onChange={(e) =>
@@ -318,7 +338,7 @@ function SettingsTab({
           />
         </Field>
         <Field label="Daily cap (micro-USD, blank = no cap)">
-          <TextField.Root
+          <UcInput
             type="number"
             value={editing.daily_cost_cap_micro_usd == null ? '' : String(editing.daily_cost_cap_micro_usd)}
             onChange={(e) => {
@@ -729,7 +749,7 @@ function ModelsTab({
   return (
     <div className="space-y-4">
       <Field label="Default model">
-        <Select.Root
+        <UcSelect
           value={
             editing.default_provider === 'auto'
               ? 'auto'
@@ -752,30 +772,26 @@ function ModelsTab({
             });
           }}
         >
-          <Select.Trigger className="w-full" />
-          <Select.Content>
-            <Select.Item value="auto">Auto (walk allowed_models)</Select.Item>
+            <option value="auto">Auto (walk allowed_models)</option>
             {Array.from(catalogByProvider.entries()).map(([provider, models]) => (
-              <Select.Group key={provider}>
-                <Select.Label>{provider}</Select.Label>
+              <optgroup key={provider} label={provider}>
                 {models.map((m) => (
-                  <Select.Item key={`${provider}:${m.model}`} value={`${provider}:${m.model}`}>
+                  <option key={`${provider}:${m.model}`} value={`${provider}:${m.model}`}>
                     {m.label ? `${m.label} (${m.model})` : m.model}
-                  </Select.Item>
+                  </option>
                 ))}
-              </Select.Group>
+              </optgroup>
             ))}
             {editing.default_provider !== 'auto' &&
               editing.default_model &&
               !catalog.some(
                 (m) => m.provider === editing.default_provider && m.model === editing.default_model,
               ) && (
-                <Select.Item value={`${editing.default_provider}:${editing.default_model}`}>
+                <option value={`${editing.default_provider}:${editing.default_model}`}>
                   {editing.default_provider}:{editing.default_model} (uncatalogued)
-                </Select.Item>
+                </option>
               )}
-          </Select.Content>
-        </Select.Root>
+        </UcSelect>
         {editing.default_provider !== 'auto' &&
           editing.default_model &&
           !catalogByModel.has(editing.default_model) && (
@@ -884,7 +900,7 @@ function PromptTab({
         recipes={recipes}
       />
       <Field label="System prompt (inline fallback)">
-        <TextArea
+        <UcTextArea
           rows={8}
           value={editing.system_prompt}
           onChange={(e) => setEditing({ ...editing, system_prompt: e.target.value })}
@@ -893,7 +909,7 @@ function PromptTab({
         />
       </Field>
       <Field label="Kickoff message (initial user turn for Run Research / Run on all tabs)">
-        <TextArea
+        <UcTextArea
           rows={3}
           value={editing.kickoff_message}
           onChange={(e) => setEditing({ ...editing, kickoff_message: e.target.value })}
@@ -995,7 +1011,7 @@ function BindingPicker({
 
       {kind === 'skill' && (
         <div className="pt-1">
-          <Select.Root
+          <UcSelect
             value={
               editing.skill_source_id && editing.skill_path
                 ? `${editing.skill_source_id}:${editing.skill_path}`
@@ -1014,16 +1030,13 @@ function BindingPicker({
               });
             }}
           >
-            <Select.Trigger className="w-full" placeholder="— Choose a skill —" />
-            <Select.Content>
-              <Select.Item value="__none__">— Choose a skill —</Select.Item>
+              <option value="__none__">— Choose a skill —</option>
               {skills.map((s) => (
-                <Select.Item key={s.id} value={`${s.source_id}:${s.path}`}>
+                <option key={s.id} value={`${s.source_id}:${s.path}`}>
                   {s.source_label} · {s.name} ({s.path})
-                </Select.Item>
+                </option>
               ))}
-            </Select.Content>
-          </Select.Root>
+          </UcSelect>
           <p className="text-xs text-neutral-500 mt-1">
             Skill body becomes the system prompt at runtime. The inline prompt
             below is the fallback when the skill row is missing.
@@ -1040,7 +1053,7 @@ function BindingPicker({
 
       {kind === 'recipe' && (
         <div className="pt-1">
-          <Select.Root
+          <UcSelect
             value={
               editing.recipe_source_id && editing.recipe_file_path
                 ? `${editing.recipe_source_id}:${editing.recipe_file_path}`
@@ -1063,16 +1076,13 @@ function BindingPicker({
               });
             }}
           >
-            <Select.Trigger className="w-full" placeholder="— Choose a recipe —" />
-            <Select.Content>
-              <Select.Item value="__none__">— Choose a recipe —</Select.Item>
+              <option value="__none__">— Choose a recipe —</option>
               {recipes.map((r) => (
-                <Select.Item key={r.id} value={`${r.source_id}:${r.file_path}`}>
+                <option key={r.id} value={`${r.source_id}:${r.file_path}`}>
                   {r.source_label} · {r.title} ({r.file_path})
-                </Select.Item>
+                </option>
               ))}
-            </Select.Content>
-          </Select.Root>
+          </UcSelect>
           <p className="text-xs text-neutral-500 mt-1">
             "Run" on this use case enqueues an <code>ai:run-recipe</code> job
             against the bound recipe. The inline prompt below is ignored.
