@@ -415,6 +415,13 @@ export async function patchUseCase(id: string, patch: Partial<AiUseCase>): Promi
   return body.use_case;
 }
 
+export async function deleteUseCase(id: string, force = false): Promise<{ deleted: boolean; last_invoked_at: string | null }> {
+  const res = await authedFetch(`/api/modules/ai/admin/use-cases/${id}${force ? '?force=1' : ''}`, {
+    method: 'DELETE',
+  });
+  return jsonOrThrow<{ deleted: boolean; id: string; last_invoked_at: string | null }>(res);
+}
+
 export async function listUseCaseModels(useCaseId: string): Promise<AiModelInfo[]> {
   const res = await authedFetch(`/api/modules/ai/admin/use-cases/${useCaseId}/models`);
   const body = await jsonOrThrow<{ models: AiModelInfo[] }>(res);

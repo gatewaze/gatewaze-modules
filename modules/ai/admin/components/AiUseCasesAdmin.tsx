@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { PencilIcon } from '@heroicons/react/24/outline';
+import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 
 import { Modal, Button, Tabs, type Tab } from '@/components/ui';
@@ -22,6 +22,7 @@ import {
   listUseCases,
   microUsdToDollars,
   patchUseCase,
+  deleteUseCase,
   type AiCatalogModel,
   type AiRecipeRef,
   type AiSkillRef,
@@ -84,6 +85,33 @@ export default function AiUseCasesAdmin() {
   const catalogByModel = new Map<string, AiCatalogModel>();
   for (const m of chatCatalog) {
     if (!catalogByModel.has(m.model)) catalogByModel.set(m.model, m);
+  }
+
+  async function handleDelete(id: string) {
+    // Deletion hard-disables every caller (runChat refuses unregistered
+    // use cases) — that is the point: it is the kill switch for automations
+    // that should not run on this deployment.
+    if (!window.confirm(`Delete use case '${id}'?\n\nEverything that calls it will fail fast until re-registered. Usage history is kept.`)) return;
+    try {
+      await deleteUseCase(id);
+      toast.success(`Use case '${id}' deleted`);
+      await load();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Delete failed';
+      if (msg.includes('recently_active') || msg.includes('force')) {
+        if (window.confirm(`'${id}' was invoked in the last 10 minutes — something still calls it.\n\nDelete anyway?`)) {
+          try {
+            await deleteUseCase(id, true);
+            toast.success(`Use case '${id}' deleted`);
+            await load();
+          } catch (err2) {
+            toast.error(err2 instanceof Error ? err2.message : 'Delete failed');
+          }
+        }
+      } else {
+        toast.error(msg);
+      }
+    }
   }
 
   async function handleSave() {
@@ -168,6 +196,14 @@ export default function AiUseCasesAdmin() {
                     className="text-neutral-500 hover:text-neutral-900"
                   >
                     <PencilIcon className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete use case (callers will fail fast — the kill switch for unwanted automations)"
+                    onClick={() => void handleDelete(u.id)}
+                    className="ml-2 text-neutral-500 hover:text-red-600"
+                  >
+                    <TrashIcon className="size-4" />
                   </button>
                 </td>
               </tr>
