@@ -20,6 +20,10 @@ export interface UsageEventInput {
    *  call; lets cost views separate real API spend from nominal
    *  subscription burn (spec-ai-subscription-tokens.md §4). */
   credentialKind?: string;
+  /** Row id + last4 of the credential that served the call — per-key cost
+   *  attribution (env-tier calls have last4 but no id). */
+  credentialId?: string | null;
+  credentialLast4?: string | null;
   occurredAt?: Date;
   userId: string | null;
   useCase: string;
@@ -139,6 +143,8 @@ export async function recordUsage(
       user_id: event.userId,
       use_case: event.useCase,
       credential_kind: event.credentialKind ?? null,
+      credential_id: event.credentialId ?? null,
+      credential_last4: event.credentialLast4 ?? null,
       thread_id: event.threadId,
       message_id: event.messageId,
       kind: event.kind,
