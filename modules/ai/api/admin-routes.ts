@@ -51,6 +51,7 @@ const USE_CASE_WRITE_FIELDS = new Set([
   'allowed_web_tools',
   'max_output_tokens',
   'daily_cost_cap_micro_usd',
+  'daily_call_cap',
   // Phase-1 skill resolution (008_ai_use_cases_skill_ref).
   'system_prompt',
   'kickoff_message',
@@ -651,6 +652,57 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     }
   }
 
+  async function deleteUseCase(req: Request, res: Response): Promise<void> {
+    // Hard-disables every caller of the use case (runChat refuses
+    // unregistered ids) — the intended kill switch for unwanted automations
+    // (spec-ai-subscription-tokens.md §5). Usage history is retained.
+    const id = paramAs(req.params.id);
+    if (!id || !USE_CASE_ID_RE.test(id)) {
+      sendError(res, 400, 'bad_request', 'id (slug) required');
+      return;
+    }
+    const existing = await supabase
+      .from('ai_use_cases').select('id').eq('id', id).maybeSingle();
+    if (!existing.data) {
+      sendError(res, 404, 'not_found', `use_case '${id}' not registered`);
+      return;
+    }
+    const lastUsed = await supabase
+      .from('ai_usage_events')
+      .select('occurred_at')
+      .eq('use_case', id)
+      .order('occurred_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastUsed.error) {
+      // Fail CLOSED: an errored lookup must not read as "never invoked" and
+      // wave the delete through (security review).
+      sendError(res, 500, 'internal', `last-invocation lookup failed: ${lastUsed.error.message}`);
+      return;
+    }
+    const lastInvokedAt: string | null = lastUsed.data?.occurred_at ?? null;
+    const force = req.query.force === '1' || req.query.force === 'true';
+    if (!force && lastInvokedAt
+        && Date.now() - new Date(lastInvokedAt).getTime() < 10 * 60 * 1000) {
+      res.status(409).json({
+        error: {
+          code: 'recently_active',
+          message: `use_case '${id}' was invoked in the last 10 minutes — something still calls it; pass ?force=1 to delete anyway`,
+        },
+        last_invoked_at: lastInvokedAt,
+      });
+      return;
+    }
+    await supabase.from('ai_use_case_credentials').delete().eq('use_case', id);
+    await supabase.from('ai_use_case_mcp_allowlist').delete().eq('use_case', id);
+    const del = await supabase.from('ai_use_cases').delete().eq('id', id);
+    if (del.error) {
+      sendError(res, 500, 'internal', del.error.message);
+      return;
+    }
+    res.status(200).json({ deleted: true, id, last_invoked_at: lastInvokedAt });
+  }
+
   async function listUseCaseModels(req: Request, res: Response): Promise<void> {
     const id = paramAs(req.params.id);
     if (!id || !USE_CASE_ID_RE.test(id)) {
@@ -928,14 +980,52 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     res.status(204).end();
   }
 
+  // Sliding-window throttle for live claude_subscription token validation.
+  let probeTimes: number[] = [];
+
   async function createUseCaseCredential(req: Request, res: Response): Promise<void> {
     const body = (req.body as Record<string, unknown> | undefined) ?? {};
     const useCase = typeof body.use_case === 'string' ? body.use_case : '';
     const provider = typeof body.provider === 'string' ? (body.provider as KnownProvider) : '' as KnownProvider;
     const apiKey = typeof body.api_key === 'string' ? body.api_key : '';
+    const kind = body.kind === 'claude_subscription' ? 'claude_subscription' : 'api_key';
     if (!USE_CASE_ID_RE.test(useCase) || !PROVIDERS.includes(provider) || !apiKey) {
       sendError(res, 400, 'bad_request', 'use_case (slug), provider, api_key required');
       return;
+    }
+    if (kind === 'claude_subscription') {
+      // This is the one admin route that makes a live third-party auth call
+      // with caller-supplied input — throttle it so a compromised admin
+      // session can't use it as a token-testing oracle (security review).
+      const now = Date.now();
+      probeTimes = probeTimes.filter((t) => now - t < 60_000);
+      if (probeTimes.length >= 5) {
+        sendError(res, 429, 'rate_limited', 'too many token validations — wait a minute');
+        return;
+      }
+      probeTimes.push(now);
+      // Subscription tokens are anthropic-only and validated LIVE at write
+      // time — a dead token must fail here, not at 3am in a cron
+      // (spec-ai-subscription-tokens.md §3).
+      if (provider !== 'anthropic') {
+        sendError(res, 400, 'bad_request', 'claude_subscription credentials are anthropic-only');
+        return;
+      }
+      try {
+        const { AnthropicProviderClient } = await import('../lib/providers/anthropic-client.js');
+        const probe = new AnthropicProviderClient(apiKey, undefined, 'claude_subscription');
+        await probe.runConversation({
+          model: 'claude-haiku-4-5',
+          systemPrompt: 'ping',
+          messages: [{ role: 'user', content: 'ping' }],
+          maxOutputTokens: 1,
+          timeoutMs: 20_000,
+        });
+      } catch (err) {
+        sendError(res, 400, 'invalid_token',
+          `token failed live validation: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
     }
     const encrypted = await encryptKey(supabase, apiKey);
     const last4 = apiKey.slice(-4);
@@ -943,6 +1033,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       .from('ai_use_case_credentials')
       .insert({
         use_case: useCase,
+        kind,
         provider,
         api_key_ciphertext: encrypted.ciphertext,
         api_key_nonce: encrypted.nonce,
@@ -1277,6 +1368,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     cancelMessage,
     listUseCases,
     patchUseCase,
+    deleteUseCase,
     listUseCaseModels,
     getUseCasePromptSource,
     listModels,
@@ -1314,6 +1406,7 @@ export function mountAdminAiRoutes(
 
   router.get('/admin/use-cases', routes.listUseCases);
   router.patch('/admin/use-cases/:id', routes.patchUseCase);
+  router.delete('/admin/use-cases/:id', routes.deleteUseCase);
   router.get('/admin/use-cases/:id/models', routes.listUseCaseModels);
   router.get('/admin/use-cases/:id/prompt-source', routes.getUseCasePromptSource);
 

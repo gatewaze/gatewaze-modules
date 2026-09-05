@@ -16,6 +16,10 @@ import type { KnownProvider } from './providers/types.js';
 type SupabaseClient = { from(table: string): any; rpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }> };
 
 export interface UsageEventInput {
+  /** 'api_key' | 'claude_subscription' — which credential kind served the
+   *  call; lets cost views separate real API spend from nominal
+   *  subscription burn (spec-ai-subscription-tokens.md §4). */
+  credentialKind?: string;
   occurredAt?: Date;
   userId: string | null;
   useCase: string;
@@ -134,6 +138,7 @@ export async function recordUsage(
       occurred_at: occurredAt.toISOString(),
       user_id: event.userId,
       use_case: event.useCase,
+      credential_kind: event.credentialKind ?? null,
       thread_id: event.threadId,
       message_id: event.messageId,
       kind: event.kind,

@@ -33,6 +33,9 @@ export interface ResolveCredentialOpts {
 
 export interface ResolvedCredential {
   apiKey: string;
+  /** 'api_key' (default) or 'claude_subscription' (Claude Code OAuth token,
+   *  anthropic only — client authenticates via authToken + oauth beta header). */
+  kind: 'api_key' | 'claude_subscription';
   source: 'user' | 'use_case' | 'env';
   /** Last 4 chars, safe to log. */
   last4: string;
@@ -48,7 +51,7 @@ export async function resolveCredential(
   if (!opts.systemRunOnly && opts.userId) {
     const row = await supabase
       .from('ai_user_credentials')
-      .select('id, api_key_ciphertext, api_key_nonce, last_4, status')
+      .select('id, api_key_ciphertext, api_key_nonce, last_4, status, kind')
       .eq('user_id', opts.userId)
       .eq('provider', opts.provider)
       .eq('status', 'active')
@@ -62,6 +65,7 @@ export async function resolveCredential(
       void touchLastUsed(supabase, 'ai_user_credentials', row.data.id);
       return {
         apiKey: cleartext,
+        kind: row.data.kind === 'claude_subscription' ? 'claude_subscription' : 'api_key',
         source: 'user',
         last4: row.data.last_4,
         credentialId: row.data.id,
@@ -72,7 +76,7 @@ export async function resolveCredential(
   // 2. Per-use-case pin.
   const useCaseRow = await supabase
     .from('ai_use_case_credentials')
-    .select('id, api_key_ciphertext, api_key_nonce, last_4, status')
+    .select('id, api_key_ciphertext, api_key_nonce, last_4, status, kind')
     .eq('use_case', opts.useCase)
     .eq('provider', opts.provider)
     .eq('status', 'active')
@@ -86,6 +90,7 @@ export async function resolveCredential(
     void touchLastUsed(supabase, 'ai_use_case_credentials', useCaseRow.data.id);
     return {
       apiKey: cleartext,
+      kind: useCaseRow.data.kind === 'claude_subscription' ? 'claude_subscription' : 'api_key',
       source: 'use_case',
       last4: useCaseRow.data.last_4,
       credentialId: useCaseRow.data.id,
@@ -97,6 +102,7 @@ export async function resolveCredential(
   if (envKey) {
     return {
       apiKey: envKey,
+      kind: 'api_key',
       source: 'env',
       last4: envKey.slice(-4),
       credentialId: null,

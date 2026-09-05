@@ -33,9 +33,22 @@ export class AnthropicProviderClient implements ProviderClient {
   readonly provider = 'anthropic' as const;
   private readonly client: Anthropic;
 
-  constructor(apiKey: string, baseUrl?: string) {
+  constructor(
+    apiKey: string,
+    baseUrl?: string,
+    kind: 'api_key' | 'claude_subscription' = 'api_key',
+  ) {
+    // 'claude_subscription' = a Claude Code OAuth token: Bearer auth via the
+    // SDK's authToken plus the oauth beta header, billed to the operator's
+    // Claude subscription instead of API token prices
+    // (spec-ai-subscription-tokens.md §3).
     this.client = new Anthropic({
-      apiKey,
+      ...(kind === 'claude_subscription'
+        ? {
+            authToken: apiKey,
+            defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' },
+          }
+        : { apiKey }),
       ...(baseUrl ? { baseURL: baseUrl } : {}),
     });
   }

@@ -88,6 +88,7 @@ const aiModule: GatewazeModule = {
     // Per-use-case wiki participation MODE (tools/context/off) + persist flag.
     // spec-ai-wiki-runtime-integration.md §4.2/§6.
     'migrations/041_ai_use_cases_wiki_mode.sql',
+    'migrations/042_ai_subscription_tokens.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every
