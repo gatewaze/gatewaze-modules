@@ -21,7 +21,7 @@ const aiModule: GatewazeModule = {
   name: 'AI',
   description:
     'Unified AI infrastructure: provider router, per-user credentials, cost ledger, chat widget. Replaces ad-hoc Anthropic/OpenAI/Gemini integrations across the platform.',
-  version: '1.0.0',
+  version: '1.1.0',
 
   features: ['ai', 'ai.manage', 'ai.usage.read'],
 
@@ -88,6 +88,7 @@ const aiModule: GatewazeModule = {
     // Per-use-case wiki participation MODE (tools/context/off) + persist flag.
     // spec-ai-wiki-runtime-integration.md §4.2/§6.
     'migrations/041_ai_use_cases_wiki_mode.sql',
+    'migrations/042_ai_subscription_tokens.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every

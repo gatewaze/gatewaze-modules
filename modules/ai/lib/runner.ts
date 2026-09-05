@@ -190,11 +190,60 @@ export async function runChat(
         kind: 'llm',
         provider: picked.provider,
         model: picked.model,
+        credentialKind: picked.credentialKind,
         status: 'budget_blocked',
         error: `worst-case ${estimate} micro-USD + spent ${spentToday} would exceed cap ${useCase.daily_cost_cap_micro_usd}`,
       });
       throw new ProviderError(
         `budget_exceeded: today's spend for '${opts.useCase}' would breach cap`,
+        picked.provider,
+        429,
+      );
+    }
+  }
+
+  // Daily CALL cap (spec-ai-subscription-tokens.md §4): a blunt per-use-case
+  // invocation ceiling, the guard that keeps automated jobs from draining a
+  // subscription credential. Bounds CHAT (kind='llm') calls only — aiEmbed /
+  // aiGenerateImage are uncapped by this gate (no Anthropic equivalent
+  // exists, so subscription credentials cannot be drained via those paths);
+  // documented in the spec. Best-effort under concurrency, like the cost
+  // gate above (accepted in the spec). Bounded row fetch, not a head-count — this
+  // deployment's PostgREST returns null counts for head:true.
+  if ((useCase as { daily_call_cap?: number | null }).daily_call_cap != null) {
+    const cap = (useCase as { daily_call_cap?: number }).daily_call_cap as number;
+    const probe = await ctx.supabase
+      .from('ai_usage_events')
+      .select('id')
+      .eq('use_case', opts.useCase)
+      .eq('kind', 'llm')                    // one slot per chat call, not per tool/embed event
+      .gte('occurred_at', startOfTodayIso()) // the table's time column (NOT created_at)
+      .limit(cap + 1);
+    if (probe.error) {
+      // Fail CLOSED: a broken count must never become an uncapped day
+      // (security review: a schema mismatch here previously read as 0 calls).
+      throw new ProviderError(
+        `daily_call_cap check failed for '${opts.useCase}': ${probe.error.message}`,
+        picked.provider,
+        500,
+      );
+    }
+    const callsToday = probe.data?.length ?? 0;
+    if (callsToday >= cap) {
+      await recordUsage(ctx.supabase, {
+        userId: opts.userId,
+        useCase: opts.useCase,
+        threadId: opts.threadId,
+        messageId: opts.messageId,
+        kind: 'llm',
+        provider: picked.provider,
+        model: picked.model,
+        credentialKind: picked.credentialKind,
+        status: 'budget_blocked',
+        error: `daily_call_cap ${cap} reached (${callsToday} calls today)`,
+      });
+      throw new ProviderError(
+        `budget_exceeded: daily_call_cap for '${opts.useCase}' reached`,
         picked.provider,
         429,
       );
@@ -288,6 +337,7 @@ export async function runChat(
         kind: 'llm',
         provider: picked.provider,
         model: picked.model,
+        credentialKind: picked.credentialKind,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         cachedTokens: result.cachedTokens,
@@ -382,6 +432,7 @@ export async function runChat(
         kind: 'llm',
         provider: picked.provider,
         model: picked.model,
+        credentialKind: picked.credentialKind,
         status,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -525,6 +576,7 @@ export async function aiEmbed(
     kind: 'embedding',
     provider: picked.provider,
     model: picked.model,
+        credentialKind: picked.credentialKind,
     inputTokens: result.inputTokens,
     bytesIn: opts.texts.reduce((sum, t) => sum + t.length, 0),
     latencyMs: Date.now() - started,
@@ -628,6 +680,7 @@ export async function aiGenerateImage(
     kind: 'image',
     provider: picked.provider,
     model: picked.model,
+        credentialKind: picked.credentialKind,
     imageOutputs: 1,
     latencyMs: Date.now() - started,
     status: 'ok',
@@ -651,7 +704,7 @@ async function loadUseCase(
 ): Promise<UseCaseRow & { default_model: string }> {
   const result = await supabase
     .from('ai_use_cases')
-    .select('id, max_output_tokens, daily_cost_cap_micro_usd, allowed_web_tools, default_model')
+    .select('id, max_output_tokens, daily_cost_cap_micro_usd, daily_call_cap, allowed_web_tools, default_model')
     .eq('id', id)
     .maybeSingle();
   if (result.error) throw new Error(`use_case lookup: ${result.error.message}`);
