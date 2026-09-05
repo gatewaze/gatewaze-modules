@@ -168,7 +168,10 @@ async function touchLastUsed(
   }
 }
 
-function bytesToHex(b: Uint8Array): string {
+function bytesToHex(b: Uint8Array | string): string {
+  // PostgREST serialises bytea columns as '\x…' hex STRINGS — the value that
+  // actually arrives here at runtime. Handle both that and real byte arrays.
+  if (typeof b === 'string') return b.startsWith('\\x') ? b.slice(2) : b;
   return Array.from(b)
     .map((x) => x.toString(16).padStart(2, '0'))
     .join('');
