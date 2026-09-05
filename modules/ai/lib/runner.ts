@@ -217,6 +217,7 @@ export async function runChat(
       .select('id')
       .eq('use_case', opts.useCase)
       .eq('kind', 'llm')                    // one slot per chat call, not per tool/embed event
+      .neq('status', 'budget_blocked')       // blocked attempts must not consume slots (self-inflating cap)
       .gte('occurred_at', startOfTodayIso()) // the table's time column (NOT created_at)
       .limit(cap + 1);
     if (probe.error) {
