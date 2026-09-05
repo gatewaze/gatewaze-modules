@@ -10,8 +10,12 @@
 -- Key material lives only inside Postgres (pgsodium server-managed key).
 
 do $$ begin
-  if not exists (select 1 from pgsodium.valid_key where name = 'gatewaze_ai_credentials') then
-    perform pgsodium.create_key(name => 'gatewaze_ai_credentials');
+  -- key_type must be aead-ietf explicitly: create_key defaults to aead-det,
+  -- whose keys the crypto_aead_ietf_* by-uuid wrappers cannot find.
+  if not exists (select 1 from pgsodium.valid_key
+                 where name = 'gatewaze_ai_credentials_ietf') then
+    perform pgsodium.create_key(key_type => 'aead-ietf',
+                                name => 'gatewaze_ai_credentials_ietf');
   end if;
 end $$;
 
@@ -26,7 +30,7 @@ declare
   n bytea;
   c bytea;
 begin
-  select id into k from pgsodium.valid_key where name = 'gatewaze_ai_credentials' limit 1;
+  select id into k from pgsodium.valid_key where name = 'gatewaze_ai_credentials_ietf' limit 1;
   n := pgsodium.crypto_aead_ietf_noncegen();
   c := pgsodium.crypto_aead_ietf_encrypt(convert_to(p_plaintext, 'utf8'), ''::bytea, n, k);
   return jsonb_build_object(
@@ -44,7 +48,7 @@ as $$
 declare
   k uuid;
 begin
-  select id into k from pgsodium.valid_key where name = 'gatewaze_ai_credentials' limit 1;
+  select id into k from pgsodium.valid_key where name = 'gatewaze_ai_credentials_ietf' limit 1;
   return convert_from(
     pgsodium.crypto_aead_ietf_decrypt(
       decode(replace(p_ciphertext, '\x', ''), 'hex'),
