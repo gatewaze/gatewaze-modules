@@ -347,6 +347,9 @@ const newslettersModule: GatewazeModule = {
     // filter reaches the big-table joins (fixes a 25s+ planner blowup on
     // uncached editions / cache refreshes).
     'migrations/083_engagement_live_not_materialized.sql',
+    // 084 cache EVERY completed edition (not all-but-last-2) so recent
+    // finished sends serve cached stats; young editions re-refresh every 2h.
+    'migrations/084_snapshot_all_completed_editions.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
