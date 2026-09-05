@@ -343,6 +343,10 @@ const newslettersModule: GatewazeModule = {
     'migrations/080_default_placeholder_signin_cta.sql',
     'migrations/081_block_gating_via_content.sql',
     'migrations/082_edition_member_embargo.sql',
+    // 083 mark the engagement-live `sends` CTE NOT MATERIALIZED so the edition
+    // filter reaches the big-table joins (fixes a 25s+ planner blowup on
+    // uncached editions / cache refreshes).
+    'migrations/083_engagement_live_not_materialized.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
