@@ -96,6 +96,46 @@ export async function recordPhaseEnd(
   const sdkUSD = typeof tokens?.cost === 'number' && tokens.cost > 0
     ? Math.round(tokens.cost * 10000) / 10000 : null;
   const costUSD = sdkUSD ?? bookUSD;
+
+  // Mirror the phase's spend into the AI module's unified cost ledger
+  // (spec-ai-subscription-tokens.md §8: ALL model costs live in
+  // ai_usage_events, whether billed to an API key or a Claude subscription,
+  // so one dashboard answers "which token/key paid for what"). Best-effort:
+  // never fail the phase for bookkeeping.
+  if (tokens?.model && costUSD != null) {
+    try {
+      const proj = run.project_id
+        ? await sb.from('se_projects')
+            .select('model_cred_kind, model_cred_last4, name')
+            .eq('id', run.project_id).maybeSingle()
+        : { data: null };
+      const isCodex = tokens.engine === 'codex';
+      const credKind = isCodex
+        ? 'api_key'
+        : proj.data?.model_cred_kind === 'claude_code_oauth_token'
+          ? 'claude_subscription' : 'api_key';
+      await sb.from('ai_usage_events').insert({
+        occurred_at: now(),
+        user_id: null,
+        use_case: 'software-engineer',
+        credential_kind: credKind,
+        credential_id: null,
+        credential_last4: isCodex ? null : (proj.data?.model_cred_last4 ?? null),
+        thread_id: null,
+        message_id: null,
+        kind: 'llm',
+        provider: isCodex ? 'openai' : 'anthropic',
+        model: tokens.model,
+        input_tokens: tokens.input ?? 0,
+        output_tokens: tokens.output ?? 0,
+        cached_tokens: tokens.cacheRead ?? 0,
+        cache_creation_tokens: tokens.cacheCreation ?? 0,
+        cost_micro_usd: Math.round(costUSD * 1_000_000),
+        status: 'ok',
+        error: null,
+      });
+    } catch { /* ledger mirror is best-effort */ }
+  }
   const patch = {
     status,
     summary: summary ?? null,
