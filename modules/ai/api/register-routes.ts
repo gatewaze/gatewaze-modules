@@ -139,6 +139,33 @@ export function registerRoutes(app: Express, ctx?: any): void {
   if (projectRoot) setProjectRoot(projectRoot);
 
   const router = Router();
+  // Verified-JWT + active-admin gate for the whole /admin surface of this
+  // router (credentials, use cases, usage). Signature verification is LOCAL
+  // (the platform does not gate dynamic module routes); the role check reads
+  // admin_profiles with the service-role client. Mounted BEFORE the routes
+  // so Express ordering actually applies it.
+  router.use('/admin', requireJwt() as never);
+  router.use('/admin', (async (req: { userId?: string }, res: {
+    status: (n: number) => { json: (b: unknown) => void };
+  }, next: () => void) => {
+    const userId = req.userId;
+    if (!userId) {
+      res.status(401).json({ error: { code: 'unauthenticated', message: 'No session' } });
+      return;
+    }
+    const { data } = await supabase
+      .from('admin_profiles')
+      .select('role, is_active')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const ok = Boolean(data && (data as { is_active?: boolean }).is_active
+      && ['super_admin', 'admin', 'editor'].includes((data as { role?: string }).role ?? ''));
+    if (!ok) {
+      res.status(403).json({ error: { code: 'forbidden', message: 'Admin access required' } });
+      return;
+    }
+    next();
+  }) as never);
   const routes = createAdminAiRoutes({
     supabase,
     logger,
