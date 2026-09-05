@@ -23,6 +23,7 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
 }
 
 import express, { Router, type Express } from 'express';
+import { requireJwt } from '../lib/require-jwt.js';
 import { createClient } from '@supabase/supabase-js';
 import {
   createAdminAiRoutes,
