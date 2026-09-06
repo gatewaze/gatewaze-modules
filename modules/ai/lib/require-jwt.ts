@@ -44,7 +44,9 @@ function errorResponse(res: Response, status: number, code: string, message: str
 export function requireJwt() {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') {
+      // Test-only bypass. Guarded on NODE_ENV so a stray env var in a real
+      // deployment cannot disable authentication.
+      if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1' && process.env.NODE_ENV !== 'production') {
         (req as Request & { userId?: string }).userId = '00000000-0000-0000-0000-000000000001';
         next();
         return;
@@ -67,8 +69,10 @@ export function requireJwt() {
       }
       (req as Request & { userId?: string }).userId = sub;
       next();
-    } catch {
+    } catch (err) {
       // Absolute backstop: an auth-path bug answers 401, never crashes the api.
+      // Never silent: the gate throwing at all is a bug worth a signal.
+      console.error('[ai requireJwt] auth gate threw; denying request', err);
       try { errorResponse(res, 401, 'invalid_token', 'JWT verification failed'); } catch { /* headers sent */ }
     }
   };
