@@ -350,6 +350,10 @@ const newslettersModule: GatewazeModule = {
     // 084 cache EVERY completed edition (not all-but-last-2) so recent
     // finished sends serve cached stats; young editions re-refresh every 2h.
     'migrations/084_snapshot_all_completed_editions.sql',
+    // 085 make the cached engagement wrapper SECURITY DEFINER — as invoker it
+    // hit per-row RLS on newsletter_sends/snapshots, mismatched the cache, and
+    // fell through to the 25s+ live path -> 8s PostgREST timeout in the admin.
+    'migrations/085_engagement_wrapper_security_definer.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
