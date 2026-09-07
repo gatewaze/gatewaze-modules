@@ -133,6 +133,13 @@ const broadcastsModule: GatewazeModule = {
     // platform_settings global default, so a send never falls back to a
     // spam-flagged no-reply address.
     'migrations/022_default_sender_enforcement.sql',
+    // 023 cache broadcast engagement. The live query over email_send_log/
+    // email_interactions ran ~4s per broadcast (~28s for all), with no cache,
+    // so the broadcasts table timed out under the 8s PostgREST cap. Mirror the
+    // newsletter snapshot cache: broadcast_engagement_live + a snapshot table +
+    // a SECURITY DEFINER wrapper that serves cached (auto-caching completed
+    // broadcasts) and computes live only for still-sending ones.
+    'migrations/023_broadcast_engagement_cache.sql',
   ],
 
   adminRoutes: [
