@@ -21,7 +21,7 @@ const aiModule: GatewazeModule = {
   name: 'AI',
   description:
     'Unified AI infrastructure: provider router, per-user credentials, cost ledger, chat widget. Replaces ad-hoc Anthropic/OpenAI/Gemini integrations across the platform.',
-  version: '1.3.0',
+  version: '1.3.1',
 
   features: ['ai', 'ai.manage', 'ai.usage.read'],
 
