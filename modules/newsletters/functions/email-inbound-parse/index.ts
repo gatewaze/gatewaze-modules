@@ -671,9 +671,16 @@ async function handler(req: Request) {
           .not('subject', 'is', null)
           .order('created_at', { ascending: false })
           .limit(300);
-        const hit = (sends ?? []).find(
-          (s: { subject: string | null }) => normSubject(s.subject) === nsub,
-        ) as { edition_id: string | null; collection_id: string | null } | undefined;
+        type SendMatch = { edition_id: string | null; collection_id: string | null; n: string };
+        const norm: SendMatch[] = (sends ?? []).map((s: { edition_id: string | null; collection_id: string | null; subject: string | null }) => ({
+          edition_id: s.edition_id, collection_id: s.collection_id, n: normSubject(s.subject),
+        }));
+        // Exact first (newest wins), then "reply subject contains the send subject"
+        // for mail whose client prepended a tag the prefix-stripper doesn't remove
+        // (e.g. "[EXTERNAL]", "[Commercial]"). The length guard avoids a very short
+        // subject matching spuriously.
+        const hit = norm.find((s) => s.n && s.n === nsub)
+          ?? norm.find((s) => s.n.length >= 8 && nsub.includes(s.n));
         if (hit?.collection_id) {
           resolvedCollectionId = hit.collection_id;
           resolvedEditionId = hit.edition_id ?? null;
