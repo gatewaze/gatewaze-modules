@@ -14,6 +14,7 @@
 
 import { Router } from 'express';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import { requireJwt } from '../lib/require-jwt.js';
 import { aiTranscribe } from '../lib/transcribe.js';
 import { ProviderError, ProviderTimeoutError } from '../lib/providers/types.js';
@@ -83,8 +84,21 @@ export function mountTranscriptionRoutes(
     return true;
   };
 
+  // Pre-auth, IP-keyed backstop: JWT verification itself costs CPU, so an
+  // unauthenticated flood must be shed before it. The per-person limiter
+  // below is the real budget; this one just has to be generous enough to
+  // never touch legitimate traffic behind a shared NAT.
+  const preAuthLimiter = rateLimit({
+    windowMs: RATE_WINDOW_MS,
+    limit: 60,
+    standardHeaders: false,
+    legacyHeaders: false,
+    message: { error: { code: 'rate_limited', message: 'Too many requests.' } },
+  });
+
   router.post(
     '/transcriptions',
+    preAuthLimiter as never,
     requireJwt() as never,
     // Rate limit FIRST — before the 5 MB body is parsed, so malformed
     // requests still spend the caller's budget (security-review catch:
