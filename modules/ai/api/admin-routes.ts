@@ -983,6 +983,37 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
   // Sliding-window throttle for live claude_subscription token validation.
   let probeTimes: number[] = [];
 
+  /**
+   * Goose authenticates with the env ANTHROPIC_API_KEY and cannot use Claude
+   * subscription tokens (Anthropic only honours those inside Claude Code), so
+   * a subscription credential on a goose-configured use case would be
+   * silently ignored while the env key foots the bill. Reject at save time
+   * when the use case is explicitly goose-configured; runChat enforces the
+   * same rule at call time for the executor-flag cases this can't see.
+   */
+  async function gooseBlocksSubscription(useCase: string): Promise<boolean> {
+    const row = await supabase
+      .from('ai_use_cases')
+      .select('goose_runtime_overrides')
+      .eq('id', useCase)
+      .maybeSingle();
+    const overrides = row.data?.goose_runtime_overrides;
+    return !!overrides && typeof overrides === 'object' && Object.keys(overrides).length > 0;
+  }
+
+  /** Live-validate a subscription token through the sanctioned harness path. */
+  async function probeSubscriptionToken(apiKey: string): Promise<void> {
+    const { ClaudeAgentProviderClient } = await import('../lib/providers/claude-agent-client.js');
+    const probe = new ClaudeAgentProviderClient(apiKey);
+    await probe.runConversation({
+      model: 'claude-haiku-4-5',
+      systemPrompt: 'ping',
+      messages: [{ role: 'user', content: 'ping' }],
+      maxOutputTokens: 32,
+      timeoutMs: 45_000,
+    });
+  }
+
   async function createUseCaseCredential(req: Request, res: Response): Promise<void> {
     const body = (req.body as Record<string, unknown> | undefined) ?? {};
     const useCase = typeof body.use_case === 'string' ? body.use_case : '';
@@ -1012,16 +1043,13 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
         sendError(res, 400, 'bad_request', 'claude_subscription credentials are anthropic-only');
         return;
       }
+      if (await gooseBlocksSubscription(useCase)) {
+        sendError(res, 400, 'bad_request',
+          `use_case '${useCase}' runs through Goose, which cannot use claude_subscription credentials — use an api_key credential`);
+        return;
+      }
       try {
-        const { AnthropicProviderClient } = await import('../lib/providers/anthropic-client.js');
-        const probe = new AnthropicProviderClient(apiKey, undefined, 'claude_subscription');
-        await probe.runConversation({
-          model: 'claude-haiku-4-5',
-          systemPrompt: 'ping',
-          messages: [{ role: 'user', content: 'ping' }],
-          maxOutputTokens: 1,
-          timeoutMs: 20_000,
-        });
+        await probeSubscriptionToken(apiKey);
       } catch (err) {
         sendError(res, 400, 'invalid_token',
           `token failed live validation: ${err instanceof Error ? err.message : String(err)}`);
@@ -1066,7 +1094,7 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     }
     const existing = await supabase
       .from('ai_use_case_credentials')
-      .select('id, provider, kind')
+      .select('id, use_case, provider, kind')
       .eq('id', id)
       .maybeSingle();
     if (!existing.data) {
@@ -1086,16 +1114,13 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
           return;
         }
         probeTimes.push(now);
+        if (await gooseBlocksSubscription(String(existing.data.use_case ?? ''))) {
+          sendError(res, 400, 'bad_request',
+            `use_case '${existing.data.use_case}' runs through Goose, which cannot use claude_subscription credentials — use an api_key credential`);
+          return;
+        }
         try {
-          const { AnthropicProviderClient } = await import('../lib/providers/anthropic-client.js');
-          const probe = new AnthropicProviderClient(apiKey, undefined, 'claude_subscription');
-          await probe.runConversation({
-            model: 'claude-haiku-4-5',
-            systemPrompt: 'ping',
-            messages: [{ role: 'user', content: 'ping' }],
-            maxOutputTokens: 1,
-            timeoutMs: 20_000,
-          });
+          await probeSubscriptionToken(apiKey);
         } catch (err) {
           sendError(res, 400, 'invalid_token',
             `token failed live validation: ${err instanceof Error ? err.message : String(err)}`);

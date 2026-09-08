@@ -149,6 +149,25 @@ export async function runChat(
   opts: RunChatOpts,
 ): Promise<RunChatResult> {
   if (shouldRouteThroughGoose(opts)) {
+    // Goose authenticates with the env ANTHROPIC_API_KEY and cannot use a
+    // Claude subscription token (Anthropic only honours those inside Claude
+    // Code). A subscription credential bound to a goose-routed use case
+    // would be silently ignored while the env key foots the bill — fail
+    // loudly instead so the operator binds an api key or moves the use case
+    // off goose.
+    const subCred = await ctx.supabase
+      .from('ai_use_case_credentials')
+      .select('id')
+      .eq('use_case', opts.useCase)
+      .eq('kind', 'claude_subscription')
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (subCred?.data) {
+      throw new Error(
+        `use_case '${opts.useCase}' routes through Goose, which cannot use claude_subscription credentials — attach an api_key credential or disable its subscription credential`,
+      );
+    }
     return runChatViaGooseAdapter(ctx, opts);
   }
   const useCase = await loadUseCase(ctx.supabase, opts.useCase);
