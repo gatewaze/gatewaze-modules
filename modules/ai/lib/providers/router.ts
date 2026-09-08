@@ -176,6 +176,10 @@ export class ProviderRouter {
  */
 export function inferProvider(model: string): KnownProvider | null {
   if (model.startsWith('claude-')) return 'anthropic';
+  // whisper-1 (hosted) and whisper-local-* (self-hosted OpenAI-shape shim,
+  // resolved by aiTranscribe via AI_TRANSCRIBE_BASE_URL) both speak the
+  // OpenAI audio API.
+  if (model.startsWith('whisper')) return 'openai';
   if (model.startsWith('gpt-') || model.startsWith('o') || model.startsWith('text-embedding-')) {
     return 'openai';
   }

@@ -39,6 +39,7 @@ import { mountMcpAllowlistRoutes } from './mcp-allowlist.js';
 import { mountUseCaseTemplateRoutes } from './use-case-templates.js';
 import { mountMemoryRoutes } from './memory.js';
 import { mountWikiRoutes } from './wiki.js';
+import { mountTranscriptionRoutes } from './transcriptions.js';
 import { setProjectRoot } from '../lib/jobs/redis-client.js';
 
 interface PlatformLogger {
@@ -179,6 +180,11 @@ export function registerRoutes(app: Express, ctx?: any): void {
 
   // spec-ai-job-runner — Jobs tab + SSE endpoints.
   mountJobsRoutes(router, { supabase, enqueueJob, ...(projectRoot && { projectRoot }) });
+
+  // spec-ai-voice-transcription — the mic-button endpoint. Member-facing
+  // (its own requireJwt + audience gate), so mounted on the router root,
+  // not under /admin.
+  mountTranscriptionRoutes(router, { supabase });
 
   // spec-ai-mcp-extensions — MCP server registry CRUD + Test probe.
   // Mounts under the main JWT-gated router so /admin/mcp-servers/* is

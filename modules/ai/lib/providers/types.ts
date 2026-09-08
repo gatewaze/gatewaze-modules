@@ -224,6 +224,28 @@ export interface GenerateImageResult {
   prompt: string;       // echoed back for audit (some providers prepend safety wrappers)
 }
 
+// ─── Audio transcription ───────────────────────────────────────────────────
+
+export interface TranscribeAudioOpts {
+  audio: Buffer;
+  /** Sniffed MIME (never the client header) — drives the upload filename. */
+  mimeType: string;
+  /** Model id AS THE BACKEND KNOWS IT (whisper-local-* prefix stripped). */
+  model: string;
+  /** ISO-639-1 two-letter code. */
+  language?: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
+
+export interface TranscribeAudioResult {
+  text: string;
+  /** Provider-reported seconds; null when the model can't return verbose_json. */
+  durationSeconds: number | null;
+  /** Per-segment no-speech probabilities (verbose_json only). */
+  noSpeechProbs: number[];
+}
+
 // ─── Client interface ──────────────────────────────────────────────────────
 
 export interface ProviderClient {
@@ -240,6 +262,7 @@ export interface ProviderClient {
   runConversation?(opts: RunConversationOpts): Promise<RunConversationResult>;
   generateEmbedding?(opts: GenerateEmbeddingOpts): Promise<GenerateEmbeddingResult>;
   generateImage?(opts: GenerateImageOpts): Promise<GenerateImageResult>;
+  transcribeAudio?(opts: TranscribeAudioOpts): Promise<TranscribeAudioResult>;
 }
 
 // ─── Error types ───────────────────────────────────────────────────────────
