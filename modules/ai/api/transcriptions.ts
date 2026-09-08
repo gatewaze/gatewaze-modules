@@ -154,6 +154,10 @@ export function mountTranscriptionRoutes(
         if (language && !/^[a-z]{2}$/.test(language)) {
           return fail(400, 'bad_request', 'language must be a two-letter ISO-639-1 code.');
         }
+        // P3: deployment-level default when the client sends no hint
+        // (brand locale, e.g. AI_TRANSCRIBE_DEFAULT_LANGUAGE=en).
+        const defaultLang = (process.env.AI_TRANSCRIBE_DEFAULT_LANGUAGE ?? '').toLowerCase();
+        const effectiveLanguage = language || (/^[a-z]{2}$/.test(defaultLang) ? defaultLang : '');
         const audio: Buffer | undefined = req.file?.buffer;
         if (!audio?.length) return fail(400, 'bad_request', 'No audio received.');
 
@@ -162,7 +166,7 @@ export function mountTranscriptionRoutes(
 
         const uc = await supabase
           .from('ai_use_cases')
-          .select('id, modality, audience')
+          .select('id, modality, audience, max_media_seconds')
           .eq('id', useCase)
           .maybeSingle();
         if (!uc.data || uc.data.modality !== 'transcription') {
@@ -184,12 +188,13 @@ export function mountTranscriptionRoutes(
           userId,
           audio,
           mimeType: mime,
-          ...(language ? { language } : {}),
+          ...(effectiveLanguage ? { language: effectiveLanguage } : {}),
           signal: controller.signal,
         });
 
-        if ((out.durationSeconds ?? out.estimatedSeconds) > 180) {
-          return fail(413, 'too_large', 'Voice notes are capped at 3 minutes.');
+        const capSeconds = Number(uc.data.max_media_seconds) || 180;
+        if ((out.durationSeconds ?? out.estimatedSeconds) > capSeconds) {
+          return fail(413, 'too_large', `Voice notes are capped at ${Math.round(capSeconds / 60)} minute${capSeconds >= 120 ? 's' : ''}.`);
         }
         if (out.silence) {
           return fail(422, 'unprocessable', "We couldn't hear anything in that recording.");

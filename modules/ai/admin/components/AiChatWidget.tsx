@@ -18,9 +18,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
+  useComposerRuntime,
   useExternalStoreRuntime,
   type ThreadMessageLike,
 } from '@assistant-ui/react';
+import { useVoiceInput } from '../../portal/lib/useVoiceInput';
 import {
   ArrowPathIcon,
   PaperAirplaneIcon,
@@ -724,6 +726,7 @@ export default function AiChatWidget(props: AiChatWidgetProps) {
                 placeholder={isRunning ? 'Working… (your message will queue)' : 'Type a message…'}
                 className="form-input flex-1 text-sm"
               />
+              <ComposerMicButton />
               <ComposerPrimitive.Send
                 className="inline-flex items-center px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm disabled:opacity-50"
               >
@@ -827,5 +830,50 @@ function ModelPicker({
         </option>
       ))}
     </select>
+  );
+}
+
+/**
+ * Mic button inside the assistant-ui composer (spec-ai-voice-transcription
+ * P2). Dictation lands in the composer draft via the composer runtime — the
+ * operator still reviews before sending. Uses the admin-chat-dictation use
+ * case (admin audience; the route enforces the admin-profile gate).
+ */
+function ComposerMicButton() {
+  const composer = useComposerRuntime();
+  const [token, setToken] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { supabase: sb } = await import('@/lib/supabase');
+      const { data } = await sb.auth.getSession();
+      if (!cancelled) setToken(data.session?.access_token ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const voice = useVoiceInput({
+    useCase: 'admin-chat-dictation',
+    token,
+    apiUrl: '',
+    onTranscript: (text: string) => {
+      const current = composer.getState().text;
+      composer.setText(current ? `${current} ${text}` : text);
+    },
+  });
+  if (!voice.supported || !token) return null;
+  return (
+    <button
+      type="button"
+      title={voice.error ?? (voice.state === 'recording' ? 'Stop recording' : 'Dictate')}
+      disabled={voice.state === 'uploading'}
+      className={`inline-flex items-center px-2 py-1.5 rounded-md text-sm border ${
+        voice.state === 'recording'
+          ? 'border-red-300 bg-red-50 text-red-600 animate-pulse'
+          : 'border-neutral-200 text-neutral-500 hover:bg-neutral-50'
+      } disabled:opacity-50`}
+      onClick={() => { if (voice.state === 'recording') voice.stop(); else void voice.start(); }}
+    >
+      {voice.state === 'uploading' ? '…' : voice.state === 'recording' ? `${voice.seconds}s ◼` : '🎤'}
+    </button>
   );
 }
