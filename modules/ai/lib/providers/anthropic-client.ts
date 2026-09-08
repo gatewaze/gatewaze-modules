@@ -42,9 +42,13 @@ export class AnthropicProviderClient implements ProviderClient {
     // SDK's authToken plus the oauth beta header, billed to the operator's
     // Claude subscription instead of API token prices
     // (spec-ai-subscription-tokens.md §3).
+    // apiKey must be explicitly null on this path: the SDK otherwise reads
+    // process.env.ANTHROPIC_API_KEY and sends x-api-key ALONGSIDE the Bearer
+    // token, and the server bills the api key — not the subscription.
     this.client = new Anthropic({
       ...(kind === 'claude_subscription'
         ? {
+            apiKey: null,
             authToken: apiKey,
             defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' },
           }
