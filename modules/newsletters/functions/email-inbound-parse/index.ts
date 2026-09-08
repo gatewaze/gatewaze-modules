@@ -652,6 +652,35 @@ async function handler(req: Request) {
       }
     }
 
+    // Fallback: match on the SUBJECT LINE. A reply keeps the original subject,
+    // just prepended with Re:/Fwd:/"Automatic reply:" (all stripped by
+    // normSubject), so a send whose subject equals the reply's — scoped to the
+    // collections that matched by address — pins the collection + edition even
+    // when In-Reply-To is missing or unmatchable. This is what routes the
+    // out-of-office auto-replies (which rarely carry a usable In-Reply-To but do
+    // echo the subject) to the right newsletter instead of bleeding into every
+    // collection sharing the Reply-To. Newest matching send wins.
+    if (!resolvedCollectionId && subject) {
+      const nsub = normSubject(subject);
+      if (nsub) {
+        const candidateIds = (collections as Array<{ id: string }>).map((c) => c.id);
+        const { data: sends } = await supabase
+          .from('newsletter_sends')
+          .select('edition_id, collection_id, subject, created_at')
+          .in('collection_id', candidateIds)
+          .not('subject', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(300);
+        const hit = (sends ?? []).find(
+          (s: { subject: string | null }) => normSubject(s.subject) === nsub,
+        ) as { edition_id: string | null; collection_id: string | null } | undefined;
+        if (hit?.collection_id) {
+          resolvedCollectionId = hit.collection_id;
+          resolvedEditionId = hit.edition_id ?? null;
+        }
+      }
+    }
+
     type CollectionRow = {
       id: string; name: string; from_email: string; reply_to: string | null;
       forward_replies_to: string | null; list_id?: string | null;
