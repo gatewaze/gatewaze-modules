@@ -354,6 +354,10 @@ const newslettersModule: GatewazeModule = {
     // hit per-row RLS on newsletter_sends/snapshots, mismatched the cache, and
     // fell through to the 25s+ live path -> 8s PostgREST timeout in the admin.
     'migrations/085_engagement_wrapper_security_definer.sql',
+    // 086 weekly catch-all in the snapshot finder: re-snapshot mature editions
+    // whose snapshot is >7d old, so a late open/click still updates the cache
+    // (young editions already re-snapshot every 2h for their first 30 days).
+    'migrations/086_snapshot_weekly_catchup.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
