@@ -29,6 +29,24 @@ const KNOWN_SCANNER_PATTERNS: RegExp[] = [
 
 const BOT_UA_KEYWORDS = /bot|crawler|spider|scan|check|monitor|fetch|prefetch|preview/i;
 
+// Machine-open user-agents: an email client or image proxy fetching the
+// tracking pixel, not a person reading the mail. Apple Mail Privacy Protection
+// reports a bare "Mozilla/5.0"; Gmail's image proxy reports a spoofed
+// Firefox/11.0 "(via ggpht.com)"; Yahoo uses YahooMailProxy. SendGrid's
+// sg_machine_open flag is not persisted, but these UAs are — so this is the
+// backfillable equivalent. OPEN-ONLY: a bare/stripped UA on a *click* is a real
+// click, not a machine, so this must never be applied to clicks.
+const MACHINE_OPEN_UA = /^Mozilla\/5\.0\s*$|GoogleImageProxy|ggpht|Firefox\/11\.0|YahooMailProxy/i;
+
+// Non-browser HTTP clients / scripting runtimes. A genuine human click arrives
+// from a browser or a mail-client webview — never from these libraries, which
+// are what link-checkers, security scanners, and scripts use. Kept
+// high-precision: tokens are anchored (slash/word-boundary) so we don't catch
+// CFNetwork (legit Apple Mail), "Java"-in-a-plugin strings, or other UAs a real
+// client might emit. Matching this is treated as a strong bot signal.
+const HTTP_CLIENT_UA =
+  /python-requests|python-urllib|python\/|aiohttp|httpx|urllib|\bcurl\/|libcurl|\bwget\b|go-http-client|okhttp|libwww-perl|guzzlehttp|node-fetch|axios\/|scrapy|phantomjs|headlesschrome|java\/|apache-httpclient|winhttp|restsharp|powershell|faraday|postmanruntime|insomnia|\bgot\/|lua-resty|dart\//i;
+
 // ---------------------------------------------------------------------------
 // Known proxy CIDR ranges
 // ---------------------------------------------------------------------------
@@ -138,6 +156,24 @@ function detectSignals(ctx: InteractionContext): BotSignal[] {
         detail: `${uniqueUrls.size} unique links clicked`,
       });
     }
+    // A burst that touches several DISTINCT links in a tight window is a scanner
+    // sweep — the signature that inflates click counts in short emails (2 CTAs +
+    // footer), where the >=5 rule above never trips. Gate on a tight time window
+    // so a person clicking a couple of CTAs over minutes is not caught.
+    if (uniqueUrls.size >= 3) {
+      const clickTimes = ctx.recentInteractions
+        .filter((i) => i.event_type === 'click')
+        .map((i) => new Date(i.event_timestamp).getTime())
+        .concat(ctx.eventTimestamp.getTime());
+      const span = Math.max(...clickTimes) - Math.min(...clickTimes);
+      if (span < 30000) {
+        signals.push({
+          id: 'pattern_link_sweep',
+          adjustment: -0.80,
+          detail: `${uniqueUrls.size} distinct links within ${(span / 1000).toFixed(0)}s`,
+        });
+      }
+    }
 
     // Check for perfectly sequential click pattern
     const clickTimestamps = ctx.recentInteractions
@@ -185,6 +221,22 @@ function detectSignals(ctx: InteractionContext): BotSignal[] {
         id: 'ua_bot_generic',
         adjustment: -0.90,
         detail: `User-agent contains bot keyword`,
+      });
+    }
+    // Non-browser HTTP client / scripting runtime — not a human clicking.
+    if (HTTP_CLIENT_UA.test(ctx.userAgent)) {
+      signals.push({
+        id: 'ua_http_client',
+        adjustment: -0.90,
+        detail: `Non-browser HTTP client / scripting user-agent`,
+      });
+    }
+    // Machine open (MPP / image proxy). OPEN-only — never applied to clicks.
+    if (ctx.eventType === 'open' && MACHINE_OPEN_UA.test(ctx.userAgent)) {
+      signals.push({
+        id: 'ua_machine_open',
+        adjustment: -0.90,
+        detail: `Machine open (MPP / image-proxy user-agent)`,
       });
     }
   }

@@ -118,7 +118,7 @@ export default function TestEnvControls({
           ))}
           {ready && urls.filter((u) => !u.launch).map((u) => (
             <span key={u.url} className="inline-flex items-center gap-1">
-              <a href={u.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 inline-flex items-center gap-0.5">
+              <a href={u.url} target="_blank" rel="noreferrer" className="text-xs text-[#7C93B0] inline-flex items-center gap-0.5">
                 {u.label} <ArrowTopRightOnSquareIcon className="size-3" />
               </a>
               {u.note && <span className="text-[11px] text-neutral-400">{u.note}</span>}
@@ -167,7 +167,7 @@ export default function TestEnvControls({
                 </a>
                 {r.prs.map((pr, i) => (
                   <span key={`${pr.number}-${i}`} className="inline-flex items-center gap-1 rounded border border-neutral-700 px-1.5 py-0.5">
-                    <a href={testEnvPrUrl(profile, r.repo, pr.number)} target="_blank" rel="noreferrer" className="text-blue-500">#{pr.number}</a>
+                    <a href={testEnvPrUrl(profile, r.repo, pr.number)} target="_blank" rel="noreferrer" className="text-[#7C93B0]">#{pr.number}</a>
                     {pr.headSha && (
                       <a href={testEnvCommitUrl(profile, r.repo, pr.headSha)} target="_blank" rel="noreferrer"
                         className="font-mono text-[11px] text-neutral-400 hover:text-neutral-100" title="Resolved PR head — the exact push this env is running">
@@ -185,7 +185,7 @@ export default function TestEnvControls({
       {st?.state !== 'error' && detail.conflict && (
         // A live refresh hit a merge conflict — the env is frozen at its
         // previous state until the branch is fixed and pushed again.
-        <div className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-300 break-words">
+        <div className="mt-2 rounded border border-[#d9a66c]/40 bg-[#d9a66c]/10 px-2 py-1.5 text-xs text-[#d9a66c] break-words">
           Live refresh conflict: {detail.conflict}
         </div>
       )}
@@ -201,13 +201,13 @@ export default function TestEnvControls({
       {(active || info.pending) && (
         <div className="mt-2">
           <div className="h-1.5 rounded-full bg-neutral-700 overflow-hidden">
-            <div className="h-full rounded-full bg-blue-500 transition-all duration-700" style={{ width: `${pct}%` }} />
+            <div className="h-full rounded-full bg-[#7C93B0] transition-all duration-700" style={{ width: `${pct}%` }} />
           </div>
           <div className="mt-1 flex items-center justify-between text-[11px] text-neutral-400">
             <span>
               {STEPS[profile].filter((s) => !['queued', 'tearing-down', 'ready'].includes(s.state)).map((s, i, arr) => (
                 <span key={s.state}>
-                  <span className={s.state === st?.state ? 'text-blue-500 font-medium' : ''}>{s.label}</span>
+                  <span className={s.state === st?.state ? 'text-[#7C93B0] font-medium' : ''}>{s.label}</span>
                   {i < arr.length - 1 ? ' → ' : ''}
                 </span>
               ))}

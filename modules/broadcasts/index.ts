@@ -58,6 +58,13 @@ const broadcastsModule: GatewazeModule = {
       name: 'broadcasts:dispatch-plays-send',
       handler: './workers/dispatch-plays-send.ts',
     },
+    {
+      // Background refresh of the broadcast engagement cache so opens/clicks that
+      // keep arriving after a send finishes are reflected (see
+      // workers/engagement-snapshot.ts). Mirrors newsletters:edition-snapshot.
+      name: 'broadcasts:engagement-snapshot',
+      handler: './workers/engagement-snapshot.ts',
+    },
   ],
 
   crons: [
@@ -72,6 +79,14 @@ const broadcastsModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 60_000 },
       data: { kind: 'broadcasts:dispatch-plays-send' },
+    },
+    {
+      // Refresh broadcast engagement snapshots (young=every 2h, mature=weekly).
+      // Idempotent; every 5 min keeps the cache warm and current.
+      name: 'broadcast-engagement-snapshot',
+      queue: 'jobs',
+      schedule: { every: 5 * 60_000 },
+      data: { kind: 'broadcasts:engagement-snapshot' },
     },
   ],
 
@@ -133,6 +148,16 @@ const broadcastsModule: GatewazeModule = {
     // platform_settings global default, so a send never falls back to a
     // spam-flagged no-reply address.
     'migrations/022_default_sender_enforcement.sql',
+    // 023 cache broadcast engagement. The live query over email_send_log/
+    // email_interactions ran ~4s per broadcast (~28s for all), with no cache,
+    // so the broadcasts table timed out under the 8s PostgREST cap. Mirror the
+    // newsletter snapshot cache: broadcast_engagement_live + a snapshot table +
+    // a SECURITY DEFINER wrapper that serves cached (auto-caching completed
+    // broadcasts) and computes live only for still-sending ones.
+    'migrations/023_broadcast_engagement_cache.sql',
+    // 024 background refresh of the engagement cache (young=2h, mature=weekly)
+    // so late opens/clicks after a send finishes are reflected, not frozen.
+    'migrations/024_engagement_snapshot_refresh.sql',
   ],
 
   adminRoutes: [

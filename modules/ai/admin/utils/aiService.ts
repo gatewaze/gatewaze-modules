@@ -176,6 +176,8 @@ export interface AiUserCredentialMeta {
 }
 
 export interface AiUseCaseCredentialMeta {
+  kind?: 'api_key' | 'claude_subscription';
+  label?: string | null;
   id: string;
   use_case: string;
   provider: AiProvider;
@@ -415,6 +417,13 @@ export async function patchUseCase(id: string, patch: Partial<AiUseCase>): Promi
   return body.use_case;
 }
 
+export async function deleteUseCase(id: string, force = false): Promise<{ deleted: boolean; last_invoked_at: string | null }> {
+  const res = await authedFetch(`/api/modules/ai/admin/use-cases/${id}${force ? '?force=1' : ''}`, {
+    method: 'DELETE',
+  });
+  return jsonOrThrow<{ deleted: boolean; id: string; last_invoked_at: string | null }>(res);
+}
+
 export async function listUseCaseModels(useCaseId: string): Promise<AiModelInfo[]> {
   const res = await authedFetch(`/api/modules/ai/admin/use-cases/${useCaseId}/models`);
   const body = await jsonOrThrow<{ models: AiModelInfo[] }>(res);
@@ -605,6 +614,8 @@ export async function createUseCaseCredential(opts: {
   useCase: string;
   provider: AiProvider;
   apiKey: string;
+  credKind?: 'api_key' | 'claude_subscription';
+  label?: string;
 }): Promise<AiUseCaseCredentialMeta> {
   const res = await authedFetch('/api/modules/ai/admin/credentials/use-case', {
     method: 'POST',
@@ -612,10 +623,38 @@ export async function createUseCaseCredential(opts: {
       use_case: opts.useCase,
       provider: opts.provider,
       api_key: opts.apiKey,
+      kind: opts.credKind ?? 'api_key',
+      label: opts.label ?? null,
     }),
   });
   const body = await jsonOrThrow<{ credential: AiUseCaseCredentialMeta }>(res);
   return body.credential;
+}
+
+export async function patchUseCaseCredential(id: string, patch: {
+  label?: string; api_key?: string;
+}): Promise<AiUseCaseCredentialMeta> {
+  const res = await authedFetch(`/api/modules/ai/admin/credentials/use-case/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  const body = await jsonOrThrow<{ credential: AiUseCaseCredentialMeta }>(res);
+  return body.credential;
+}
+
+export interface CredentialSpendRow {
+  credential_kind: string;
+  credential_last4: string | null;
+  label: string | null;
+  provider: string | null;
+  calls: number;
+  cost_micro_usd: number;
+  by_use_case: Record<string, { calls: number; cost_micro_usd: number }>;
+}
+
+export async function getUsageByCredential(days = 30): Promise<{ days: number; credentials: CredentialSpendRow[] }> {
+  const res = await authedFetch(`/api/modules/ai/admin/usage/by-credential?days=${days}`);
+  return jsonOrThrow<{ days: number; credentials: CredentialSpendRow[] }>(res);
 }
 
 export async function deleteUseCaseCredential(id: string): Promise<void> {

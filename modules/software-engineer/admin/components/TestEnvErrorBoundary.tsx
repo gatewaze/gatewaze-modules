@@ -46,12 +46,12 @@ export default class TestEnvErrorBoundary extends React.Component<
   render() {
     if (this.state.error) {
       return (
-        <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+        <div className="mb-3 rounded-md border border-[#8b5a2b]/40 bg-[#8b5a2b]/10 px-3 py-2 text-xs text-[#8b5a2b] dark:border-[#d9a66c]/40 dark:bg-[#d9a66c]/10 dark:text-[#d9a66c]">
           {this.props.label ?? 'This panel'} hit an error and stopped updating.
           <button
             type="button"
             onClick={this.retry}
-            className="ml-2 underline decoration-amber-600/60 underline-offset-2 hover:text-amber-950 dark:decoration-amber-500/60 dark:hover:text-amber-100"
+            className="ml-2 underline decoration-[#8b5a2b]/60 underline-offset-2 hover:text-[#6b4423] dark:decoration-[#d9a66c]/60 dark:hover:text-[#f0dcc0]"
           >
             Retry
           </button>

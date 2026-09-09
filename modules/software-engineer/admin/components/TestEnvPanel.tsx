@@ -81,7 +81,7 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
           <label key={k} className="inline-flex items-center gap-1.5">
             <input type="checkbox" className="size-3.5" checked={inSet(p.repo_name, p.pr_number)}
               onChange={() => toggle(p.repo_name, p.pr_number)} />
-            <span>{p.repo_name} <a href={p.pr_url} target="_blank" rel="noreferrer" className="text-blue-500">#{p.pr_number}</a></span>
+            <span>{p.repo_name} <a href={p.pr_url} target="_blank" rel="noreferrer" className="text-[#7C93B0]">#{p.pr_number}</a></span>
           </label>
         );
       })}
@@ -91,7 +91,7 @@ export default function TestEnvPanel({ prs, projectId, projectName }: { prs: any
           <label key={k} className="inline-flex items-center gap-1.5" title={`Same head branch (${r.branch}) — auto-detected`}>
             <input type="checkbox" className="size-3.5" checked={inSet(r.repo, r.number)}
               onChange={() => toggle(r.repo, r.number)} />
-            <span>{r.repo} <a href={r.url} target="_blank" rel="noreferrer" className="text-blue-500">#{r.number}</a>
+            <span>{r.repo} <a href={r.url} target="_blank" rel="noreferrer" className="text-[#7C93B0]">#{r.number}</a>
               <Badge color="purple" variant="soft" size="1" className="ml-1">related</Badge></span>
           </label>
         );
