@@ -27,7 +27,7 @@ const vehicleVideoModule: GatewazeModule = {
     "Turns a dealer's Auto Trader vehicle listing into a short narrated AI showcase video: " +
     'lists live stock, curates a shot plan from the gallery, styles the video to the likely ' +
     'buyer, generates per-shot AI clips (Veo) with human approval, and composes a final MP4.',
-  version: '0.1.0',
+  version: '0.1.1',
   features: ['vehicle-video', 'vehicle-video.manage'],
 
   // `ai` is required (recipe runner + cost/credential ledger). residential-egress is

@@ -7,7 +7,7 @@ const newslettersModule: GatewazeModule = {
   visibility: 'public',
   name: 'Newsletters',
   description: 'Create, edit, and distribute newsletters with edition management and subscriber tracking',
-  version: '1.0.0',
+  version: '1.0.1',
   features: [
     'newsletters',
     'newsletters.editor',
@@ -343,6 +343,21 @@ const newslettersModule: GatewazeModule = {
     'migrations/080_default_placeholder_signin_cta.sql',
     'migrations/081_block_gating_via_content.sql',
     'migrations/082_edition_member_embargo.sql',
+    // 083 mark the engagement-live `sends` CTE NOT MATERIALIZED so the edition
+    // filter reaches the big-table joins (fixes a 25s+ planner blowup on
+    // uncached editions / cache refreshes).
+    'migrations/083_engagement_live_not_materialized.sql',
+    // 084 cache EVERY completed edition (not all-but-last-2) so recent
+    // finished sends serve cached stats; young editions re-refresh every 2h.
+    'migrations/084_snapshot_all_completed_editions.sql',
+    // 085 make the cached engagement wrapper SECURITY DEFINER — as invoker it
+    // hit per-row RLS on newsletter_sends/snapshots, mismatched the cache, and
+    // fell through to the 25s+ live path -> 8s PostgREST timeout in the admin.
+    'migrations/085_engagement_wrapper_security_definer.sql',
+    // 086 weekly catch-all in the snapshot finder: re-snapshot mature editions
+    // whose snapshot is >7d old, so a late open/click still updates the cache
+    // (young editions already re-snapshot every 2h for their first 30 days).
+    'migrations/086_snapshot_weekly_catchup.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
