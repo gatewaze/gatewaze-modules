@@ -19,7 +19,7 @@ const hostMediaModule: GatewazeModule = {
   name: 'Host Media',
   description:
     'Shared media management — table, API, admin tab, upload pipeline (Sharp variants, YouTube delegation, ZIP unpack, chunked upload), reference tracking, quotas. Consumed by sites/events/newsletters/blog/podcasts via the hostMediaConsumer registry block.',
-  version: '0.1.0',
+  version: '0.1.1',
 
   features: [
     'host-media',

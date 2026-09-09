@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  htmlparser2>entities: ^7.0.1
+
 importers:
 
   .:
@@ -848,6 +851,9 @@ importers:
 
   modules/ai:
     dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: ^0.3.220
+        version: 0.3.220(@anthropic-ai/sdk@0.40.1)(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(zod@3.25.76)
       '@anthropic-ai/sdk':
         specifier: ^0.40.0
         version: 0.40.1
@@ -860,6 +866,9 @@ importers:
       bullmq:
         specifier: ^5.25.0
         version: 5.76.10
+      express-rate-limit:
+        specifier: ^8.5.2
+        version: 8.5.2(express@4.22.2)
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
@@ -869,6 +878,9 @@ importers:
       js-yaml:
         specifier: ^4.1.0
         version: 4.1.1
+      multer:
+        specifier: ^1.4.5-lts.1
+        version: 1.4.5-lts.2
       openai:
         specifier: ^4.50.0
         version: 4.104.0(ws@8.20.1)(zod@3.25.76)
@@ -12889,6 +12901,21 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.220':
     optional: true
 
+  '@anthropic-ai/claude-agent-sdk@0.3.220(@anthropic-ai/sdk@0.40.1)(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(zod@3.25.76)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.40.1
+      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
+      zod: 3.25.76
+    optionalDependencies:
+      '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.220
+      '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.220
+      '@anthropic-ai/claude-agent-sdk-linux-arm64': 0.3.220
+      '@anthropic-ai/claude-agent-sdk-linux-arm64-musl': 0.3.220
+      '@anthropic-ai/claude-agent-sdk-linux-x64': 0.3.220
+      '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.3.220
+      '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.220
+      '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.220
+
   '@anthropic-ai/claude-agent-sdk@0.3.220(@anthropic-ai/sdk@0.91.1(zod@3.25.76))(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
@@ -20811,6 +20838,11 @@ snapshots:
       jest-mock: 30.4.1
       jest-util: 30.4.1
 
+  express-rate-limit@8.5.2(express@4.22.2):
+    dependencies:
+      express: 4.22.2
+      ip-address: 10.2.0
+
   express-rate-limit@8.5.2(express@5.2.1):
     dependencies:
       express: 5.2.1
@@ -21535,7 +21567,7 @@ snapshots:
       domelementtype: 2.3.0
       domhandler: 5.0.3
       domutils: 3.2.2
-      entities: 4.5.0
+      entities: 7.0.1
 
   http-errors@2.0.1:
     dependencies:
