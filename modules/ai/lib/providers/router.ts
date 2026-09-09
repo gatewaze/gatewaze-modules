@@ -13,6 +13,7 @@
  */
 
 import { AnthropicProviderClient } from './anthropic-client.js';
+import { ClaudeAgentProviderClient } from './claude-agent-client.js';
 import { OpenAIProviderClient } from './openai-client.js';
 import { GeminiProviderClient } from './gemini-client.js';
 import { resolveCredential } from '../credentials.js';
@@ -40,6 +41,7 @@ export interface PickedClient {
   credentialSource: 'user' | 'use_case' | 'env';
   credentialLast4: string;
   credentialId: string | null;
+  credentialKind: 'api_key' | 'claude_subscription';
 }
 
 interface UseCaseRow {
@@ -64,7 +66,7 @@ export class ProviderRouter {
     });
 
     const baseUrl = providerBaseUrl(provider);
-    const client = makeClient(provider, credential.apiKey, baseUrl);
+    const client = makeClient(provider, credential.apiKey, baseUrl, credential.kind);
 
     return {
       client,
@@ -73,6 +75,7 @@ export class ProviderRouter {
       credentialSource: credential.source,
       credentialLast4: credential.last4,
       credentialId: credential.credentialId,
+      credentialKind: credential.kind,
     };
   }
 
@@ -105,6 +108,26 @@ export class ProviderRouter {
     opts: PickClientOpts,
   ): Promise<{ provider: KnownProvider; model: string }> {
     if (opts.provider === 'auto') {
+      // An EXPLICIT model wins: infer its provider and use it directly
+      // (subject to the allow-list). Before this, 'auto' silently ignored
+      // opts.model and returned the first resolvable allow-list entry —
+      // callers requesting five different models all ran on one
+      // (spec-ai-subscription-tokens.md §2).
+      if (opts.model) {
+        const inferred = inferProvider(opts.model);
+        if (!inferred) {
+          throw new Error(`cannot infer provider for model '${opts.model}'`);
+        }
+        if (
+          useCase.allowed_models.length > 0 &&
+          !useCase.allowed_models.includes(opts.model)
+        ) {
+          throw new Error(
+            `model '${opts.model}' is not in use_case '${useCase.id}' allowed_models`,
+          );
+        }
+        return { provider: inferred, model: opts.model };
+      }
       // Walk allowed_models in order; pick the first whose key exists.
       for (const candidate of useCase.allowed_models) {
         const candidateProvider = inferProvider(candidate);
@@ -153,6 +176,10 @@ export class ProviderRouter {
  */
 export function inferProvider(model: string): KnownProvider | null {
   if (model.startsWith('claude-')) return 'anthropic';
+  // whisper-1 (hosted) and whisper-local-* (self-hosted OpenAI-shape shim,
+  // resolved by aiTranscribe via AI_TRANSCRIBE_BASE_URL) both speak the
+  // OpenAI audio API.
+  if (model.startsWith('whisper')) return 'openai';
   if (model.startsWith('gpt-') || model.startsWith('o') || model.startsWith('text-embedding-')) {
     return 'openai';
   }
@@ -164,10 +191,18 @@ function makeClient(
   provider: KnownProvider,
   apiKey: string,
   baseUrl?: string,
+  kind: 'api_key' | 'claude_subscription' = 'api_key',
 ): ProviderClient {
   switch (provider) {
     case 'anthropic':
-      return new AnthropicProviderClient(apiKey, baseUrl);
+      // Claude Code OAuth tokens are only honoured for requests from Claude
+      // Code itself — Anthropic rejects direct messages.create calls on them.
+      // Route them through the Agent SDK harness (the sanctioned surface);
+      // api keys keep the direct SDK client.
+      if (kind === 'claude_subscription') {
+        return new ClaudeAgentProviderClient(apiKey);
+      }
+      return new AnthropicProviderClient(apiKey, baseUrl, kind);
     case 'openai':
       return new OpenAIProviderClient(apiKey, baseUrl);
     case 'gemini':

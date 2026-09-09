@@ -182,6 +182,26 @@ export async function runRecipe(
 ): Promise<RunRecipeResult> {
   const executor = process.env.AI_RECIPE_EXECUTOR ?? 'goose';
   if (executor === 'goose') {
+    // Goose authenticates with the env ANTHROPIC_API_KEY and cannot use a
+    // Claude subscription token (Anthropic only honours those inside Claude
+    // Code). Same fence as runChat's goose branch: a subscription credential
+    // bound to a goose-executed use case would be silently ignored while the
+    // env key foots the bill — fail loudly instead. Recipes default to goose
+    // with NO env var set, so this guard, not the admin save-time check, is
+    // what actually protects recipe use cases.
+    const subCred = await supabase
+      .from('ai_use_case_credentials')
+      .select('id')
+      .eq('use_case', args.useCase)
+      .eq('kind', 'claude_subscription')
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (subCred?.data) {
+      throw new Error(
+        `use_case '${args.useCase}' runs recipes through Goose, which cannot use claude_subscription credentials — attach an api_key credential or disable its subscription credential`,
+      );
+    }
     const { runRecipeViaGoose } = await import('./run-recipe-goose.js');
     const result = await runRecipeViaGoose(supabase, ctx, {
       recipe: args.recipe,

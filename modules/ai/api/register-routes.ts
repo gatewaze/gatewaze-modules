@@ -23,6 +23,7 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
 }
 
 import express, { Router, type Express } from 'express';
+import { requireJwt } from '../lib/require-jwt.js';
 import { createClient } from '@supabase/supabase-js';
 import {
   createAdminAiRoutes,
@@ -38,6 +39,7 @@ import { mountMcpAllowlistRoutes } from './mcp-allowlist.js';
 import { mountUseCaseTemplateRoutes } from './use-case-templates.js';
 import { mountMemoryRoutes } from './memory.js';
 import { mountWikiRoutes } from './wiki.js';
+import { mountTranscriptionRoutes } from './transcriptions.js';
 import { setProjectRoot } from '../lib/jobs/redis-client.js';
 
 interface PlatformLogger {
@@ -139,6 +141,33 @@ export function registerRoutes(app: Express, ctx?: any): void {
   if (projectRoot) setProjectRoot(projectRoot);
 
   const router = Router();
+  // Verified-JWT + active-admin gate for the whole /admin surface of this
+  // router (credentials, use cases, usage). Signature verification is LOCAL
+  // (the platform does not gate dynamic module routes); the role check reads
+  // admin_profiles with the service-role client. Mounted BEFORE the routes
+  // so Express ordering actually applies it.
+  router.use('/admin', requireJwt() as never);
+  router.use('/admin', (async (req: { userId?: string }, res: {
+    status: (n: number) => { json: (b: unknown) => void };
+  }, next: () => void) => {
+    const userId = req.userId;
+    if (!userId) {
+      res.status(401).json({ error: { code: 'unauthenticated', message: 'No session' } });
+      return;
+    }
+    const { data } = await supabase
+      .from('admin_profiles')
+      .select('role, is_active')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const ok = Boolean(data && (data as { is_active?: boolean }).is_active
+      && ['super_admin', 'admin', 'editor'].includes((data as { role?: string }).role ?? ''));
+    if (!ok) {
+      res.status(403).json({ error: { code: 'forbidden', message: 'Admin access required' } });
+      return;
+    }
+    next();
+  }) as never);
   const routes = createAdminAiRoutes({
     supabase,
     logger,
@@ -151,6 +180,11 @@ export function registerRoutes(app: Express, ctx?: any): void {
 
   // spec-ai-job-runner — Jobs tab + SSE endpoints.
   mountJobsRoutes(router, { supabase, enqueueJob, ...(projectRoot && { projectRoot }) });
+
+  // spec-ai-voice-transcription — the mic-button endpoint. Member-facing
+  // (its own requireJwt + audience gate), so mounted on the router root,
+  // not under /admin.
+  mountTranscriptionRoutes(router, { supabase });
 
   // spec-ai-mcp-extensions — MCP server registry CRUD + Test probe.
   // Mounts under the main JWT-gated router so /admin/mcp-servers/* is
