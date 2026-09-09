@@ -13,6 +13,7 @@
  */
 
 import { AnthropicProviderClient } from './anthropic-client.js';
+import { ClaudeAgentProviderClient } from './claude-agent-client.js';
 import { OpenAIProviderClient } from './openai-client.js';
 import { GeminiProviderClient } from './gemini-client.js';
 import { resolveCredential } from '../credentials.js';
@@ -175,6 +176,10 @@ export class ProviderRouter {
  */
 export function inferProvider(model: string): KnownProvider | null {
   if (model.startsWith('claude-')) return 'anthropic';
+  // whisper-1 (hosted) and whisper-local-* (self-hosted OpenAI-shape shim,
+  // resolved by aiTranscribe via AI_TRANSCRIBE_BASE_URL) both speak the
+  // OpenAI audio API.
+  if (model.startsWith('whisper')) return 'openai';
   if (model.startsWith('gpt-') || model.startsWith('o') || model.startsWith('text-embedding-')) {
     return 'openai';
   }
@@ -190,6 +195,13 @@ function makeClient(
 ): ProviderClient {
   switch (provider) {
     case 'anthropic':
+      // Claude Code OAuth tokens are only honoured for requests from Claude
+      // Code itself — Anthropic rejects direct messages.create calls on them.
+      // Route them through the Agent SDK harness (the sanctioned surface);
+      // api keys keep the direct SDK client.
+      if (kind === 'claude_subscription') {
+        return new ClaudeAgentProviderClient(apiKey);
+      }
       return new AnthropicProviderClient(apiKey, baseUrl, kind);
     case 'openai':
       return new OpenAIProviderClient(apiKey, baseUrl);

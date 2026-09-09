@@ -149,6 +149,25 @@ export async function runChat(
   opts: RunChatOpts,
 ): Promise<RunChatResult> {
   if (shouldRouteThroughGoose(opts)) {
+    // Goose authenticates with the env ANTHROPIC_API_KEY and cannot use a
+    // Claude subscription token (Anthropic only honours those inside Claude
+    // Code). A subscription credential bound to a goose-routed use case
+    // would be silently ignored while the env key foots the bill — fail
+    // loudly instead so the operator binds an api key or moves the use case
+    // off goose.
+    const subCred = await ctx.supabase
+      .from('ai_use_case_credentials')
+      .select('id')
+      .eq('use_case', opts.useCase)
+      .eq('kind', 'claude_subscription')
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (subCred?.data) {
+      throw new Error(
+        `use_case '${opts.useCase}' routes through Goose, which cannot use claude_subscription credentials — attach an api_key credential or disable its subscription credential`,
+      );
+    }
     return runChatViaGooseAdapter(ctx, opts);
   }
   const useCase = await loadUseCase(ctx.supabase, opts.useCase);
@@ -191,6 +210,8 @@ export async function runChat(
         provider: picked.provider,
         model: picked.model,
         credentialKind: picked.credentialKind,
+        credentialId: picked.credentialId,
+        credentialLast4: picked.credentialLast4,
         status: 'budget_blocked',
         error: `worst-case ${estimate} micro-USD + spent ${spentToday} would exceed cap ${useCase.daily_cost_cap_micro_usd}`,
       });
@@ -240,6 +261,8 @@ export async function runChat(
         provider: picked.provider,
         model: picked.model,
         credentialKind: picked.credentialKind,
+        credentialId: picked.credentialId,
+        credentialLast4: picked.credentialLast4,
         status: 'budget_blocked',
         error: `daily_call_cap ${cap} reached (${callsToday} calls today)`,
       });
@@ -339,6 +362,8 @@ export async function runChat(
         provider: picked.provider,
         model: picked.model,
         credentialKind: picked.credentialKind,
+        credentialId: picked.credentialId,
+        credentialLast4: picked.credentialLast4,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         cachedTokens: result.cachedTokens,
@@ -434,6 +459,8 @@ export async function runChat(
         provider: picked.provider,
         model: picked.model,
         credentialKind: picked.credentialKind,
+        credentialId: picked.credentialId,
+        credentialLast4: picked.credentialLast4,
         status,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -578,6 +605,8 @@ export async function aiEmbed(
     provider: picked.provider,
     model: picked.model,
         credentialKind: picked.credentialKind,
+        credentialId: picked.credentialId,
+        credentialLast4: picked.credentialLast4,
     inputTokens: result.inputTokens,
     bytesIn: opts.texts.reduce((sum, t) => sum + t.length, 0),
     latencyMs: Date.now() - started,
@@ -682,6 +711,8 @@ export async function aiGenerateImage(
     provider: picked.provider,
     model: picked.model,
         credentialKind: picked.credentialKind,
+        credentialId: picked.credentialId,
+        credentialLast4: picked.credentialLast4,
     imageOutputs: 1,
     latencyMs: Date.now() - started,
     status: 'ok',
