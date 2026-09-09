@@ -547,6 +547,47 @@ function OutreachToggle({ b, editable, onChanged }: { b: Broadcast; editable: bo
   );
 }
 
+// --- Content: inline broadcast rename ----------------------------------------
+// Local, small edit control (input + Save), mirroring OutreachToggle's plain
+// controls rather than importing the events module's table-cell InlineEditCell.
+function BroadcastNameEditor({ b, editable, onSaved }: { b: Broadcast; editable: boolean; onSaved: (b: Broadcast) => void }) {
+  const [draft, setDraft] = useState(b.name);
+  const [saving, setSaving] = useState(false);
+
+  // Resync when the broadcast reloads elsewhere (e.g. after the linked-event save).
+  useEffect(() => { setDraft(b.name); }, [b.name]);
+
+  const trimmed = draft.trim();
+  const canSave = editable && !saving && trimmed.length > 0 && trimmed !== b.name;
+
+  async function save() {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      const nb = await updateBroadcast(b.id, { name: trimmed } as Partial<Broadcast>);
+      onSaved(nb);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to rename broadcast');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <label className="text-sm font-medium text-[var(--gray-12)] shrink-0">Name</label>
+      <input
+        className={`${inputCls} max-w-md`}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+        disabled={!editable || saving}
+      />
+      <Button size="sm" onClick={save} disabled={!canSave}>Save</Button>
+    </div>
+  );
+}
+
 // --- Step 2: Content (block-based body) -------------------------------------
 // The body is a list of blocks (spec-broadcasts-blocks), edited in the reused
 // newsletters Puck canvas (palette + drag/drop + live email preview). A `text`
@@ -577,17 +618,20 @@ function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSendin
     // lines up with the config row's left edge and the page's right margin, so
     // it reads as a bordered editor within the page rather than edge-to-edge.
     <div className="space-y-2">
-      {/* Slim config row (no card): optional event link + merge-field hint. */}
-      <div className="flex flex-wrap items-center gap-2 max-w-3xl">
-        <label className="text-sm font-medium text-[var(--gray-12)] shrink-0">Linked event</label>
-        <select className={`${inputCls} max-w-md`} value={eventId} onChange={(e) => linkEvent(e.target.value)} disabled={!editable}>
-          <option value="">No linked event (optional — for CFP / event promotion)</option>
-          {events.map((ev) => (
-            <option key={ev.id} value={ev.id}>
-              {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
-            </option>
-          ))}
-        </select>
+      {/* Slim config row (no card): optional event link + rename control + merge-field hint. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-sm font-medium text-[var(--gray-12)] shrink-0">Linked event</label>
+          <select className={`${inputCls} max-w-md`} value={eventId} onChange={(e) => linkEvent(e.target.value)} disabled={!editable}>
+            <option value="">No linked event (optional — for CFP / event promotion)</option>
+            {events.map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        <BroadcastNameEditor b={b} editable={editable} onSaved={onSaved} />
       </div>
       <p className="text-xs text-[var(--gray-10)]">Recipient merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.{eventId ? ` Event variables: ${EVENT_VARIABLES.map((v) => v.token).join(' ')}.` : ''}</p>
 
