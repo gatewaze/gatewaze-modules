@@ -125,13 +125,19 @@ another route either.
 
 ### Moving people around
 
-- Drag a table to move it and its seats together. Snap to grid keeps rows tidy;
-  turn it off in the toolbar for fine adjustments.
+- Drag a table to move it and its seats together. With **Snap** on, a table
+  lines itself up with its neighbours: edges flush, centres in line, or butted
+  right up against another table, with a guide line showing what it caught.
+  Each direction is decided separately, so a table can sit against one
+  neighbour while lining up with another. Anything not near a neighbour falls
+  back to the grid. Turn Snap off in the toolbar for free placement.
 - Drag a name from the guest list onto a seat to seat them.
 - Drag a seated guest onto another seat to move them. If that seat is taken, the
   two guests swap.
 - Drag a seated guest anywhere off a seat to return them to the guest list.
 - Right-click a seat to empty it.
+- Select a table and press Backspace or Delete to remove it. A table with
+  guests in it asks first; an empty one just goes.
 - Press Escape to cancel a drag in progress.
 
 The board opens showing the whole plan. Zoom in with the **+ / −** controls in

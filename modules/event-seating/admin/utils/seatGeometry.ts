@@ -278,6 +278,90 @@ export function findSeatNear(
   return best;
 }
 
+/** How close two edges must come, in centimetres, before they snap together. */
+export const EDGE_SNAP_DISTANCE = 14;
+
+export interface SnapGuide {
+  /** 'x' is a vertical line at `position`; 'y' is a horizontal one. */
+  axis: 'x' | 'y';
+  position: number;
+}
+
+export interface SnapResult {
+  x: number;
+  y: number;
+  guides: SnapGuide[];
+}
+
+/** Half the extent of a table on each axis, seats excluded. */
+function halfExtents(table: Pick<SeatingTable, 'shape' | 'width' | 'height'>) {
+  return {
+    x: table.width / 2,
+    y: (table.shape === 'round' ? table.width : table.height) / 2,
+  };
+}
+
+/**
+ * Candidate centre positions on one axis that leave the moving table aligned
+ * with, or butted against, a neighbour. Each carries the coordinate of the
+ * line they share, which is what gets drawn as a guide.
+ */
+function axisCandidates(moving: number, other: number, otherCentre: number) {
+  return [
+    // Edges flush — the two tables read as one row or one column.
+    { at: otherCentre - other + moving, guide: otherCentre - other },
+    { at: otherCentre + other - moving, guide: otherCentre + other },
+    // Centres in line.
+    { at: otherCentre, guide: otherCentre },
+    // Butted together, which is how a U shape or a long bank gets built.
+    { at: otherCentre - other - moving, guide: otherCentre - other },
+    { at: otherCentre + other + moving, guide: otherCentre + other },
+  ];
+}
+
+/**
+ * Pull a dragged table into line with its neighbours.
+ *
+ * Each axis is resolved independently, so a table can butt against another
+ * horizontally while its top edge lines up with a third. The nearest
+ * candidate within `threshold` wins; anything further away is left alone so
+ * the drag still feels free.
+ */
+export function snapToNeighbours(
+  moving: Pick<SeatingTable, 'id' | 'shape' | 'width' | 'height'>,
+  candidate: { x: number; y: number },
+  others: SeatingTable[],
+  threshold = EDGE_SNAP_DISTANCE,
+): SnapResult {
+  const half = halfExtents(moving);
+  const result: SnapResult = { x: candidate.x, y: candidate.y, guides: [] };
+
+  for (const axis of ['x', 'y'] as const) {
+    const movingHalf = half[axis];
+    const raw = candidate[axis];
+    let best: { at: number; guide: number; distance: number } | null = null;
+
+    for (const other of others) {
+      if (other.id === moving.id) continue;
+      const otherHalf = halfExtents(other)[axis];
+      const otherCentre = axis === 'x' ? other.x : other.y;
+      for (const option of axisCandidates(movingHalf, otherHalf, otherCentre)) {
+        const distance = Math.abs(option.at - raw);
+        if (distance <= threshold && (!best || distance < best.distance)) {
+          best = { ...option, distance };
+        }
+      }
+    }
+
+    if (best) {
+      result[axis] = best.at;
+      result.guides.push({ axis, position: best.guide });
+    }
+  }
+
+  return result;
+}
+
 /** Snap a value to the plan grid; `grid` of 0 disables snapping. */
 export function snap(value: number, grid: number): number {
   if (!grid || grid <= 0) return value;

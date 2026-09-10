@@ -26,6 +26,7 @@ import {
   type SeatingTable,
 } from '../utils/seatingService';
 import { maxSeatsFor, minSeatSpacing, MIN_SEAT_SPACING } from '../utils/seatGeometry';
+import { isDeleteTableShortcut } from '../utils/deleteShortcut';
 import { TABLE_PRESETS } from '../utils/tablePresets';
 import { useBackgroundImage } from '../utils/useBackgroundImage';
 import {
@@ -229,11 +230,14 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
 
   const handleDeleteTable = useCallback(async () => {
     if (!selectedTable) return;
+    // Confirm in proportion to what is lost: an empty table can go without
+    // ceremony, one with guests in it displaces people.
     const seated = assignments.filter((a) => a.table_id === selectedTable.id).length;
-    const message = seated > 0
-      ? `Delete ${selectedTable.label}? ${seated} guest${seated === 1 ? '' : 's'} will go back to the guest list.`
-      : `Delete ${selectedTable.label}?`;
-    if (!window.confirm(message)) return;
+    if (seated > 0) {
+      const message =
+        `Delete ${selectedTable.label}? ${seated} guest${seated === 1 ? '' : 's'} will go back to the guest list.`;
+      if (!window.confirm(message)) return;
+    }
     try {
       await deleteTableRow(selectedTable.id);
       setTables((prev) => prev.filter((t) => t.id !== selectedTable.id));
@@ -367,6 +371,26 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
       toast.error('Could not remove that guest from their seat');
     }
   }, []);
+
+  /**
+   * Backspace or Delete removes the selected table. Whether a given keypress
+   * counts is decided by isDeleteTableShortcut, which keeps the shortcut from
+   * eating typing in the board's many text fields; preventDefault stops the
+   * browser treating a stray Backspace as "go back".
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isDeleteTableShortcut(e, {
+        dragging: drag !== null,
+        dialogOpen: cateringOpen,
+        hasSelection: selectedTableId !== null,
+      })) return;
+      e.preventDefault();
+      handleDeleteTable();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedTableId, drag, cateringOpen, handleDeleteTable]);
 
   // Escape cancels a pick-up mid-drag.
   useEffect(() => {
@@ -522,7 +546,9 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
             onChange={(e) => patchPlan({ snap_to_grid: e.target.checked })}
             className="cursor-pointer"
           />
-          Snap to grid
+          <span title="Lines tables up with each other's edges and centres, and falls back to the grid">
+            Snap
+          </span>
         </label>
 
         <div className="ml-auto flex items-center gap-2">
@@ -575,7 +601,9 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
           />
           <p className="mt-1 text-[11px] text-[var(--gray-9)]">
             Drag a table to move it. Drag a name from the list onto a seat, or drag a seated guest to
-            another seat to swap them. Right-click a seat to empty it.
+            another seat to swap them. Right-click a seat to empty it. Select a table and
+            press Backspace to delete it. Dragging a table lines it up with its neighbours'
+            edges and centres.
           </p>
         </div>
 
