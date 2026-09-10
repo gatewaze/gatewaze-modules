@@ -7,7 +7,7 @@ const eventSeatingModule: GatewazeModule = {
   group: 'events',
   name: 'Event Seating',
   description: 'Drag-and-drop seating plans for guests who have accepted their invite',
-  version: '1.0.0',
+  version: '1.0.1',
 
   features: [
     'event-seating',
@@ -22,7 +22,10 @@ const eventSeatingModule: GatewazeModule = {
       component: () => import('./admin/EventSeatingTab'),
       order: 55,
       requiredFeature: 'event-seating',
-      meta: { tabId: 'seating', label: 'Seating', icon: 'TableCellsIcon' },
+      // Icon names resolve through admin's heroIconResolver ICON_MAP, which
+      // falls back to a generic cube for anything it does not carry.
+      // TableCellsIcon is not in that map; UserGroupIcon is.
+      meta: { tabId: 'seating', label: 'Seating', icon: 'UserGroupIcon' },
     },
   ],
 
