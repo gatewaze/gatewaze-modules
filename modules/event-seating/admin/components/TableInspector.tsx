@@ -29,6 +29,7 @@ interface Props {
 const LAYOUT_LABELS: Record<SeatLayout, string> = {
   around: 'All the way round',
   both_sides: 'Both long sides',
+  sides_balanced: 'Equal sides, odd one at the end',
   one_side: 'One side (top table)',
 };
 

@@ -10,17 +10,26 @@ place cards. A final decorated plan is normally produced elsewhere.
 
 ## How it works
 
-### Plans
+### Layouts
 
-A **plan** is one canvas belonging to one event. If the event has sub-events
+Each event holds as many **layouts** as you want, shown as tabs across the top.
+A layout is one canvas with its own tables, its own seating and its own
+exports, so you can try three arrangements of the same room side by side and
+compare them.
+
+The **+** button copies the current layout's tables into a new one with the
+seats left empty, which is usually what you want when trying a variation.
+**Duplicate with seating** copies where everyone is sitting too, for when you
+only mean to nudge one table. **Empty** starts from a blank canvas.
+Double-click a tab to rename it.
+
+A layout belongs to one event. If the event has sub-events
 (from the Event Invites module), a plan can be tied to one of them, so a wedding
 with a day event and an evening event gets a separate plan for each, each with
 its own guest list. A plan not tied to a sub-event draws on everyone invited to
 the event itself.
 
-You can hold several plans for the same sub-event at once. Duplicating a plan
-copies its tables, and optionally the seated guests too, which is the easy way
-to try a different arrangement without losing the one you have.
+Layouts are how you keep alternatives around without losing the one you have.
 
 ### Guests
 
@@ -43,10 +52,15 @@ A table has a shape (round or rectangular), a size, a rotation and a seat count.
 Seat positions are worked out from those, never stored, so changing the seat
 count or turning a table rearranges its seats immediately.
 
-Rectangular tables offer three arrangements:
+Rectangular tables offer four arrangements:
 
-- **All the way round** — seats spread evenly over the whole perimeter.
+- **All the way round** — seats spread evenly over the whole perimeter, in
+  proportion to edge length.
 - **Both long sides** — banquet style, with nobody on the ends.
+- **Equal sides, odd one at the end** — the same number down each long side so
+  guests sit directly opposite one another, with any odd seat at the far end.
+  A nine-seater reads 4 / 4 / 1. Use this when "all the way round" leaves the
+  two sides uneven and nobody lines up.
 - **One side** — a top table, where everyone faces the room.
 
 Seats are numbered from the top of the table, clockwise, which is how a printed
@@ -62,6 +76,12 @@ plan reads.
 - Drag a seated guest anywhere off a seat to return them to the guest list.
 - Right-click a seat to empty it.
 - Press Escape to cancel a drag in progress.
+
+The board opens showing the whole plan. Zoom in with the **+ / −** controls in
+the corner, or hold Ctrl (Cmd on a Mac) and scroll — zooming follows the
+cursor, so the part you are pointing at stays put. Above the fit level the
+board scrolls; the percentage button resets it. Names on seats become readable
+from about 150%.
 
 Every change saves as you make it. Table geometry saves on a short delay so that
 dragging stays smooth.
@@ -79,6 +99,17 @@ is visible.
 **PNG** gives a bitmap of the plan. **PDF** places the same image on an A3
 landscape page. Both are drawn from the stored geometry rather than screenshot
 from the screen, so the output matches what you arranged at full resolution.
+
+**Meal sheets** produces the document the venue actually needs. Pick which RSVP
+questions count as courses — anything that looks like one is preselected — and
+each becomes its own sheet listing every seated guest under their table in seat
+order, with their choice. Each sheet opens with a total per option for the
+kitchen ("24 x Salmon"), and a seat with no answer recorded is marked rather
+than left blank, so nothing is missed quietly. A course with more guests than
+fits one page continues onto the next.
+
+Every layout exports independently, so you can send the venue the arrangement
+you settled on without deleting the ones you rejected.
 
 ## Data
 
