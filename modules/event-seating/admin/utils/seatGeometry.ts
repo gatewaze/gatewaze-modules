@@ -15,11 +15,21 @@ export const SEAT_GAP = 26;
 export const SEAT_SIZE = 34;
 
 export interface SeatPoint {
+  /** Geometric index. Stable when neighbouring seats are blocked. */
   index: number;
   x: number;
   y: number;
   /** Direction the seated guest faces, degrees clockwise from "up". */
   facing: number;
+}
+
+export interface UsableSeat extends SeatPoint {
+  /**
+   * 1-based position among the seats actually in use, in geometric order.
+   * This is what guests and the venue see, so blocking a seat closes the gap
+   * in the numbering rather than leaving a hole.
+   */
+  displayNumber: number;
 }
 
 function rotatePoint(x: number, y: number, cx: number, cy: number, degrees: number) {
@@ -159,6 +169,34 @@ export function seatPositions(table: SeatingTable): SeatPoint[] {
   return rectSeats(table);
 }
 
+/** Is this seat index out of use on this table? */
+export function isSeatBlocked(table: SeatingTable, index: number): boolean {
+  return (table.disabled_seats || []).includes(index);
+}
+
+/**
+ * The seats a guest can actually sit in, numbered consecutively. Everything
+ * user-facing — the canvas, the roster, the exports — works from this, so a
+ * table pushed against another simply has fewer seats rather than gaps.
+ */
+export function usableSeats(table: SeatingTable): UsableSeat[] {
+  const blocked = table.disabled_seats || [];
+  const out: UsableSeat[] = [];
+  for (const seat of seatPositions(table)) {
+    if (blocked.includes(seat.index)) continue;
+    out.push({ ...seat, displayNumber: out.length + 1 });
+  }
+  return out;
+}
+
+/** How many people this table can actually take. */
+export function usableSeatCount(table: SeatingTable): number {
+  const blocked = table.disabled_seats || [];
+  let n = 0;
+  for (let i = 0; i < table.seat_count; i++) if (!blocked.includes(i)) n++;
+  return n;
+}
+
 /** Bounding box of a table including its seats — used to keep drags in-canvas. */
 export function tableBounds(table: SeatingTable) {
   const pad = SEAT_GAP + SEAT_SIZE / 2;
@@ -185,7 +223,8 @@ export function findSeatNear(
   let best: { tableId: string; seatIndex: number } | null = null;
   let bestDistance = maxDistance;
   for (const table of tables) {
-    for (const seat of seatPositions(table)) {
+    // Blocked seats are not drop targets — a dragged guest passes over them.
+    for (const seat of usableSeats(table)) {
       const distance = Math.hypot(seat.x - x, seat.y - y);
       if (distance < bestDistance) {
         bestDistance = distance;

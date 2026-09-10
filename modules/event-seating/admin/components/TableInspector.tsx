@@ -1,6 +1,6 @@
 import { TrashIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui';
-import { seatPositions } from '../utils/seatGeometry';
+import { seatPositions, usableSeatCount, isSeatBlocked } from '../utils/seatGeometry';
 import type {
   SeatingTable,
   SeatingAssignment,
@@ -24,6 +24,8 @@ interface Props {
   onDelete: () => void;
   onClearSeats: () => void;
   onUnseat: (assignmentId: string) => void;
+  /** Toggle a seat in or out of use. */
+  onToggleSeat: (seatIndex: number, blocked: boolean) => void;
 }
 
 const LAYOUT_LABELS: Record<SeatLayout, string> = {
@@ -46,6 +48,7 @@ export function TableInspector({
   onDelete,
   onClearSeats,
   onUnseat,
+  onToggleSeat,
 }: Props) {
   if (!table) {
     return (
@@ -189,7 +192,10 @@ export function TableInspector({
       <div className="border-t border-[var(--gray-6)] pt-2">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[10px] font-medium text-[var(--gray-9)]">
-            Seated here — {tableAssignments.length}/{table.seat_count}
+            Seated here — {tableAssignments.length}/{usableSeatCount(table)}
+            {table.disabled_seats.length > 0 && (
+              <span className="text-[var(--gray-9)]"> · {table.disabled_seats.length} out of use</span>
+            )}
           </span>
           {tableAssignments.length > 0 && (
             <Button variant="soft" size="1" onClick={onClearSeats}>Clear</Button>
@@ -203,32 +209,62 @@ export function TableInspector({
           </p>
         )}
 
+        <p className="mb-1 text-[10px] text-[var(--gray-9)]">
+          Untick a seat to take it out of use — for the edge where another table
+          butts against this one. Alt-click a seat on the plan does the same.
+        </p>
         <div className="space-y-0.5">
-          {seats.map((seat) => {
-            const assignment = tableAssignments.find((a) => a.seat_index === seat.index);
-            return (
-              <div
-                key={seat.index}
-                className="flex items-center justify-between gap-1 rounded px-1.5 py-0.5 text-[11px] hover:bg-[var(--gray-3)]"
-              >
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="w-4 flex-shrink-0 text-[var(--gray-9)]">{seat.index + 1}</span>
-                  <span className={`truncate ${assignment ? 'text-[var(--gray-12)]' : 'text-[var(--gray-9)] italic'}`}>
-                    {assignment ? namesByAssignment.get(assignment.id) || 'Guest' : 'empty'}
+          {(() => {
+            let position = 0;
+            return seats.map((seat) => {
+              const blocked = isSeatBlocked(table, seat.index);
+              if (!blocked) position += 1;
+              const assignment = tableAssignments.find((a) => a.seat_index === seat.index);
+              return (
+                <div
+                  key={seat.index}
+                  className={`flex items-center justify-between gap-1 rounded px-1.5 py-0.5 text-[11px] hover:bg-[var(--gray-3)] ${
+                    blocked ? 'opacity-50' : ''
+                  }`}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={!blocked}
+                      onChange={(e) => onToggleSeat(seat.index, !e.target.checked)}
+                      title={blocked ? 'Bring this seat back into use' : 'Take this seat out of use'}
+                      className="flex-shrink-0 cursor-pointer"
+                    />
+                    <span className="w-4 flex-shrink-0 text-[var(--gray-9)]">
+                      {blocked ? '—' : position}
+                    </span>
+                    <span className={`truncate ${
+                      blocked
+                        ? 'text-[var(--gray-9)] line-through'
+                        : assignment
+                        ? 'text-[var(--gray-12)]'
+                        : 'text-[var(--gray-9)] italic'
+                    }`}>
+                      {blocked
+                        ? 'out of use'
+                        : assignment
+                        ? namesByAssignment.get(assignment.id) || 'Guest'
+                        : 'empty'}
+                    </span>
                   </span>
-                </span>
-                {assignment && (
-                  <button
-                    onClick={() => onUnseat(assignment.id)}
-                    title="Return to the guest list"
-                    className="flex-shrink-0 text-[var(--gray-9)] hover:text-red-600"
-                  >
-                    <TrashIcon className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-            );
-          })}
+                  {assignment && !blocked && (
+                    <button
+                      onClick={() => onUnseat(assignment.id)}
+                      title="Return to the guest list"
+                      className="flex-shrink-0 text-[var(--gray-9)] hover:text-red-600"
+                    >
+                      <TrashIcon className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              );
+            });
+          })()}
           {overflow.map((assignment) => (
             <div
               key={assignment.id}
