@@ -298,27 +298,32 @@ export function EventSeatingTab({ eventUuid, eventTitle }: Props) {
           ))}
         </div>
 
-        <div className="ml-auto flex gap-1">
+        {/* `soft`, not `ghost`: a Radix ghost button offsets itself by its own
+            padding (--button-ghost-padding-x, 8px at size 1), so its hover
+            surface bleeds 8px past its layout box on each side and adjacent
+            ghosts visibly overlap in a tight row. Soft matches the board
+            toolbar below anyway. */}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button
-            variant="ghost"
+            variant="soft"
             size="1"
             disabled={creating}
             title="Copy this layout including where everyone is sitting"
             onClick={() => handleAddLayout(true)}
           >
-            <DocumentDuplicateIcon className="mr-0.5 h-3 w-3" />Duplicate with seating
+            <DocumentDuplicateIcon className="mr-1 h-3 w-3" />Duplicate with seating
           </Button>
           <Button
-            variant="ghost"
+            variant="soft"
             size="1"
             disabled={creating}
             title="Start a layout from an empty canvas"
             onClick={handleEmptyLayout}
           >
-            <PlusIcon className="mr-0.5 h-3 w-3" />Empty
+            <PlusIcon className="mr-1 h-3 w-3" />Empty
           </Button>
-          <Button variant="ghost" size="1" onClick={handleDelete}>
-            <TrashIcon className="mr-0.5 h-3 w-3" />Delete
+          <Button variant="soft" size="1" color="red" onClick={handleDelete}>
+            <TrashIcon className="mr-1 h-3 w-3" />Delete
           </Button>
         </div>
       </div>

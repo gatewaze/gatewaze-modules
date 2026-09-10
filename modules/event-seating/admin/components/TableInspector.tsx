@@ -192,7 +192,7 @@ export function TableInspector({
             Seated here — {tableAssignments.length}/{table.seat_count}
           </span>
           {tableAssignments.length > 0 && (
-            <Button variant="ghost" size="1" onClick={onClearSeats}>Clear</Button>
+            <Button variant="soft" size="1" onClick={onClearSeats}>Clear</Button>
           )}
         </div>
 
