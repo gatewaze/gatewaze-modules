@@ -46,12 +46,29 @@ function answerToString(answer: unknown): string {
   return JSON.stringify(answer);
 }
 
+/**
+ * Remove markup without a regex. Tracking `<`/`>` depth means nested or
+ * malformed forms like "<scr<script>ipt>" cannot leave a live tag behind,
+ * which a `/<[^>]*>/g` strip does — that is a known-bad tag filter, and one
+ * CodeQL rightly rejects.
+ */
+function stripTags(input: string): string {
+  let out = '';
+  let depth = 0;
+  for (const ch of input) {
+    if (ch === '<') depth++;
+    else if (ch === '>') { if (depth > 0) depth--; }
+    else if (depth === 0) out += ch;
+  }
+  return out;
+}
+
 /** Strip the rich-text wrapper a question is authored with. */
 function plainText(html: string | null | undefined): string {
   if (!html) return '';
   const spaced = html.replace(/<\/(?:p|div|li|ul|ol|h[1-6]|blockquote|tr)>|<br\s*\/?>/gi, ' ');
   if (typeof DOMParser === 'undefined') {
-    return spaced.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    return stripTags(spaced).replace(/\s+/g, ' ').trim();
   }
   const doc = new DOMParser().parseFromString(spaced, 'text/html');
   doc.body.querySelectorAll('script, style, noscript, template').forEach((el) => el.remove());

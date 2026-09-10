@@ -108,6 +108,25 @@ function rectSeats(table: SeatingTable): SeatPoint[] {
     for (const dy of spread(left, table.height).reverse()) {
       points.push({ x: table.x - halfW - SEAT_GAP, y: table.y + dy, facing: 90 });
     }
+  } else if (table.seat_layout === 'sides_balanced') {
+    // Equal numbers down both long sides so guests sit directly opposite one
+    // another, with an odd one out at the far end. A 9-seat table reads
+    // 4 / 4 / 1 rather than 'around'\'s 4 / 3 with both ends used, where
+    // nobody lines up.
+    const perSide = Math.floor(n / 2);
+    const odd = n - perSide * 2; // 0 or 1
+    const offsets = spread(perSide, table.width);
+    for (const dx of offsets) {
+      points.push({ x: table.x + dx, y: table.y - halfH - SEAT_GAP, facing: 180 });
+    }
+    if (odd) {
+      points.push({ x: table.x + halfW + SEAT_GAP, y: table.y, facing: 270 });
+    }
+    // Reversed so numbering runs round the table rather than back along it,
+    // and so each seat faces the one opposite.
+    for (const dx of [...offsets].reverse()) {
+      points.push({ x: table.x + dx, y: table.y + halfH + SEAT_GAP, facing: 0 });
+    }
   } else {
     // 'both_sides' — banquet style, nobody on the ends.
     const top = Math.ceil(n / 2);

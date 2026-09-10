@@ -52,10 +52,15 @@ A table has a shape (round or rectangular), a size, a rotation and a seat count.
 Seat positions are worked out from those, never stored, so changing the seat
 count or turning a table rearranges its seats immediately.
 
-Rectangular tables offer three arrangements:
+Rectangular tables offer four arrangements:
 
-- **All the way round** — seats spread evenly over the whole perimeter.
+- **All the way round** — seats spread evenly over the whole perimeter, in
+  proportion to edge length.
 - **Both long sides** — banquet style, with nobody on the ends.
+- **Equal sides, odd one at the end** — the same number down each long side so
+  guests sit directly opposite one another, with any odd seat at the far end.
+  A nine-seater reads 4 / 4 / 1. Use this when "all the way round" leaves the
+  two sides uneven and nobody lines up.
 - **One side** — a top table, where everyone faces the room.
 
 Seats are numbered from the top of the table, clockwise, which is how a printed
