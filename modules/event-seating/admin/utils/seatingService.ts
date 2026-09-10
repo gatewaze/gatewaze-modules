@@ -18,6 +18,7 @@ export interface SeatingPlan {
   event_id: string;
   sub_event_id: string | null;
   name: string;
+  /** Room size in centimetres — one canvas unit is one centimetre. */
   canvas_width: number;
   canvas_height: number;
   grid_size: number;
