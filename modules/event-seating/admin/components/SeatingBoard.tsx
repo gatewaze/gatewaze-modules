@@ -25,7 +25,7 @@ import {
   type SeatingPlan,
   type SeatingTable,
 } from '../utils/seatingService';
-import { maxSeatsFor, minSeatSpacing, MIN_SEAT_SPACING } from '../utils/seatGeometry';
+import { maxSeatsFor, minSeatSpacing, usableSeatCount, MIN_SEAT_SPACING } from '../utils/seatGeometry';
 import { isDeleteTableShortcut } from '../utils/deleteShortcut';
 import { TABLE_PRESETS } from '../utils/tablePresets';
 import { useBackgroundImage } from '../utils/useBackgroundImage';
@@ -52,7 +52,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
   const [assignments, setAssignments] = useState<SeatingAssignment[]>([]);
   const [guests, setGuests] = useState<Guest[]>([]);
   const [assets, setAssets] = useState<SeatingAsset[]>([]);
-  const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
+  const [selectedTableIds, setSelectedTableIds] = useState<string[]>([]);
   const [drag, setDrag] = useState<DragState>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -119,7 +119,9 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
     return set;
   }, [assignments]);
 
+  const selectedTableId = selectedTableIds.length === 1 ? selectedTableIds[0] : null;
   const selectedTable = tables.find((t) => t.id === selectedTableId) || null;
+  const selectedTables = tables.filter((t) => selectedTableIds.includes(t.id));
   const seatTotal = tables.reduce((sum, t) => sum + t.seat_count, 0);
 
   // ---- table writes ------------------------------------------------------
@@ -159,10 +161,23 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
     setTables((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }, []);
 
-  const handleMoveTable = useCallback((tableId: string, x: number, y: number, commit: boolean) => {
-    patchTableLocal(tableId, { x, y });
-    if (commit) queueTableWrite(tableId, { x, y }, true);
-  }, [patchTableLocal, queueTableWrite]);
+  const handleMoveTables = useCallback(
+    (moves: Array<{ id: string; x: number; y: number }>, commit: boolean) => {
+      // One state update for the whole group, so a group drag doesn't
+      // re-render once per table per frame.
+      setTables((prev) => {
+        const byId = new Map(moves.map((m) => [m.id, m]));
+        return prev.map((t) => {
+          const move = byId.get(t.id);
+          return move ? { ...t, x: move.x, y: move.y } : t;
+        });
+      });
+      if (commit) {
+        for (const move of moves) queueTableWrite(move.id, { x: move.x, y: move.y }, true);
+      }
+    },
+    [queueTableWrite],
+  );
 
   const handleTablePatch = useCallback((patch: Partial<SeatingTable>) => {
     if (!selectedTableId) return;
@@ -221,7 +236,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
         sort_order: tables.length,
       });
       setTables((prev) => [...prev, created]);
-      setSelectedTableId(created.id);
+      setSelectedTableIds([created.id]);
     } catch (err) {
       console.error('[event-seating] Failed to add a table:', err);
       toast.error('Could not add the table');
@@ -229,25 +244,32 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
   }, [plan.id, tables]);
 
   const handleDeleteTable = useCallback(async () => {
-    if (!selectedTable) return;
-    // Confirm in proportion to what is lost: an empty table can go without
-    // ceremony, one with guests in it displaces people.
-    const seated = assignments.filter((a) => a.table_id === selectedTable.id).length;
+    if (selectedTables.length === 0) return;
+    const ids = selectedTables.map((t) => t.id);
+
+    // Confirm in proportion to what is lost: empty tables can go without
+    // ceremony, ones with guests in them displace people.
+    const seated = assignments.filter((a) => ids.includes(a.table_id)).length;
+    const what = selectedTables.length === 1
+      ? selectedTables[0].label
+      : `${selectedTables.length} tables`;
     if (seated > 0) {
       const message =
-        `Delete ${selectedTable.label}? ${seated} guest${seated === 1 ? '' : 's'} will go back to the guest list.`;
+        `Delete ${what}? ${seated} guest${seated === 1 ? '' : 's'} will go back to the guest list.`;
       if (!window.confirm(message)) return;
     }
+
     try {
-      await deleteTableRow(selectedTable.id);
-      setTables((prev) => prev.filter((t) => t.id !== selectedTable.id));
-      setAssignments((prev) => prev.filter((a) => a.table_id !== selectedTable.id));
-      setSelectedTableId(null);
+      await Promise.all(ids.map((id) => deleteTableRow(id)));
+      setTables((prev) => prev.filter((t) => !ids.includes(t.id)));
+      setAssignments((prev) => prev.filter((a) => !ids.includes(a.table_id)));
+      setSelectedTableIds([]);
     } catch (err) {
       console.error('[event-seating] Failed to delete the table:', err);
-      toast.error('Could not delete the table');
+      toast.error(selectedTables.length === 1 ? 'Could not delete the table' : 'Could not delete those tables');
+      load();
     }
-  }, [selectedTable, assignments]);
+  }, [selectedTables, assignments, load]);
 
   /**
    * Take a seat in or out of use. Blocking a seat someone is sitting in
@@ -383,14 +405,14 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
       if (!isDeleteTableShortcut(e, {
         dragging: drag !== null,
         dialogOpen: cateringOpen,
-        hasSelection: selectedTableId !== null,
+        hasSelection: selectedTableIds.length > 0,
       })) return;
       e.preventDefault();
       handleDeleteTable();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedTableId, drag, cateringOpen, handleDeleteTable]);
+  }, [selectedTableIds, drag, cateringOpen, handleDeleteTable]);
 
   // Escape cancels a pick-up mid-drag.
   useEffect(() => {
@@ -590,11 +612,11 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
             assignments={assignments}
             namesByAssignment={namesByAssignment}
             backgroundUrl={backgroundUrl}
-            selectedTableId={selectedTableId}
+            selectedTableIds={selectedTableIds}
             drag={drag}
             onDragChange={setDrag}
-            onSelectTable={setSelectedTableId}
-            onMoveTable={handleMoveTable}
+            onSelectTables={setSelectedTableIds}
+            onMoveTables={handleMoveTables}
             onDropGuest={handleDropGuest}
             onSeatContextMenu={handleUnseat}
             onBlockSeat={(tableId, seatIndex) => handleToggleSeat(tableId, seatIndex, true)}
@@ -603,11 +625,39 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
             Drag a table to move it. Drag a name from the list onto a seat, or drag a seated guest to
             another seat to swap them. Right-click a seat to empty it. Select a table and
             press Backspace to delete it. Dragging a table lines it up with its neighbours'
-            edges and centres.
+            edges and centres. Drag across empty space to select several tables and move
+            them together; shift-click to add one to the selection.
           </p>
         </div>
 
         <div className="w-60 flex-shrink-0 overflow-y-auto rounded-lg border border-[var(--gray-6)] p-2">
+          {selectedTables.length > 1 ? (
+            <div className="space-y-2">
+              <h4 className="text-xs font-semibold text-[var(--gray-12)]">
+                {selectedTables.length} tables selected
+              </h4>
+              <p className="text-[11px] text-[var(--gray-11)]">
+                Drag any one of them to move the group. Shift-click a table to add or
+                remove it. Backspace deletes them all.
+              </p>
+              <ul className="space-y-0.5 text-[11px] text-[var(--gray-11)]">
+                {selectedTables.map((t) => {
+                  const seated = assignments.filter((a) => a.table_id === t.id).length;
+                  return (
+                    <li key={t.id} className="flex justify-between gap-2">
+                      <span className="truncate">{t.label}</span>
+                      <span className="flex-shrink-0 text-[var(--gray-9)]">
+                        {seated}/{usableSeatCount(t)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <Button variant="soft" size="1" color="red" onClick={handleDeleteTable}>
+                Delete {selectedTables.length} tables
+              </Button>
+            </div>
+          ) : (
           <TableInspector
             table={selectedTable}
             assignments={assignments}
@@ -619,6 +669,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
             onToggleSeat={(seatIndex, blocked) =>
               selectedTableId && handleToggleSeat(selectedTableId, seatIndex, blocked)}
           />
+          )}
         </div>
       </div>
 

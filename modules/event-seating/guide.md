@@ -136,8 +136,13 @@ another route either.
   two guests swap.
 - Drag a seated guest anywhere off a seat to return them to the guest list.
 - Right-click a seat to empty it.
-- Select a table and press Backspace or Delete to remove it. A table with
-  guests in it asks first; an empty one just goes.
+- Drag the canvas itself to move around the plan — useful once zoomed in.
+  A click on bare canvas with no drag clears the selection.
+- **Shift-drag across the canvas** to rubber-band a selection: every table the
+  box touches is taken. Drag any one of them to move the whole group, keeping
+  its arrangement. Shift-click a table to add it to the selection or drop it.
+- Select a table and press Backspace or Delete to remove it — or several, to
+  remove them all. Tables with guests in them ask first; empty ones just go.
 - Press Escape to cancel a drag in progress.
 
 The board opens showing the whole plan. Zoom in with the **+ / −** controls in
