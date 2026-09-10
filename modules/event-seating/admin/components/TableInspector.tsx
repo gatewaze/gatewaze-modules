@@ -1,6 +1,6 @@
 import { TrashIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui';
-import { seatPositions, usableSeatCount, isSeatBlocked } from '../utils/seatGeometry';
+import { seatPositions, usableSeatCount, isSeatBlocked, maxSeatsFor, MIN_SEAT_SPACING } from '../utils/seatGeometry';
 import type {
   SeatingTable,
   SeatingAssignment,
@@ -59,6 +59,9 @@ export function TableInspector({
   }
 
   const seats = seatPositions(table);
+  // What this table's size supports — guests need elbow room, so the seat
+  // count is capped by the dimensions rather than the other way round.
+  const seatCapacity = maxSeatsFor({ ...table, seat_count: 0 });
   const tableAssignments = assignments
     .filter((a) => a.table_id === table.id)
     .sort((a, b) => a.seat_index - b.seat_index);
@@ -115,7 +118,7 @@ export function TableInspector({
           <input
             type="number"
             min={0}
-            max={40}
+            max={seatCapacity}
             value={table.seat_count}
             onChange={(e) => {
               const n = parseInt(e.target.value, 10);
@@ -123,6 +126,9 @@ export function TableInspector({
             }}
             className={field}
           />
+          <p className="mt-0.5 text-[9px] text-[var(--gray-9)]">
+            Fits {seatCapacity} at {MIN_SEAT_SPACING}cm each
+          </p>
         </div>
       </div>
 

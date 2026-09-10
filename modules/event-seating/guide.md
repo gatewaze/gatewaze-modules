@@ -71,6 +71,22 @@ The larger rectangles continue at 60cm of table edge per guest, which is where
 the 6ft six-seater and 8ft eight-seater come from. Any table can still be
 resized by hand in the table panel, in centimetres.
 
+### Elbow room
+
+Every guest needs **60cm to themselves**, measured centre to centre between
+seats, so a table cannot be given more seats than its size supports. The table
+panel shows what the current dimensions fit, and asking for more is refused
+with the number it will take. Shrinking a table below what its existing seats
+need is refused the same way, rather than quietly dropping seats and unseating
+someone.
+
+The limit is worked out from where the seats actually land, not from a formula
+per shape, so it holds for round tables, banquet rows and top tables alike. It
+also means a rectangle seats one more than its name suggests if you put someone
+on the end: a 180cm six-seater takes three a side at exactly 60cm, and a
+seventh on the end who has 88cm of clearance. The eighth is refused, because
+that would be four a side at 45cm.
+
 A table has a shape (round or rectangular), a size, a rotation and a seat count.
 Seat positions are worked out from those, never stored, so changing the seat
 count or turning a table rearranges its seats immediately.

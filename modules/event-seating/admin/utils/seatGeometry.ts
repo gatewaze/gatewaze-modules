@@ -17,6 +17,12 @@ import type { SeatingTable } from './seatingService';
 export const SEAT_GAP = 26;
 /** Diameter of a seat marker, in centimetres. */
 export const SEAT_SIZE = 34;
+/**
+ * Minimum space per guest, centre to centre, in centimetres. Below this
+ * people are eating elbow to elbow, so a table is not allowed to take more
+ * seats than its size supports.
+ */
+export const MIN_SEAT_SPACING = 60;
 
 export interface SeatPoint {
   /** Geometric index. Stable when neighbouring seats are blocked. */
@@ -199,6 +205,39 @@ export function usableSeatCount(table: SeatingTable): number {
   let n = 0;
   for (let i = 0; i < table.seat_count; i++) if (!blocked.includes(i)) n++;
   return n;
+}
+
+/**
+ * The closest any two seats sit to each other, centre to centre. Measured
+ * across every pair rather than just neighbours along an edge, so the corners
+ * of an 'around' table — where a side seat meets an end seat — are caught too.
+ * Infinity when there is nothing to crowd.
+ */
+export function minSeatSpacing(table: SeatingTable): number {
+  const seats = seatPositions(table);
+  let min = Infinity;
+  for (let i = 0; i < seats.length; i++) {
+    for (let j = i + 1; j < seats.length; j++) {
+      min = Math.min(min, Math.hypot(seats[i].x - seats[j].x, seats[i].y - seats[j].y));
+    }
+  }
+  return min;
+}
+
+/**
+ * The most seats this table's size supports at MIN_SEAT_SPACING. Found by
+ * adding seats until they crowd, rather than a per-layout formula, so round,
+ * banquet and top tables are all judged by the same rule.
+ */
+export function maxSeatsFor(table: SeatingTable): number {
+  let last = 0;
+  for (let n = 1; n <= 40; n++) {
+    // A tolerance below a centimetre: a 5ft round seating 8 works out at
+    // 59.99cm and should not be refused on floating-point dust.
+    if (minSeatSpacing({ ...table, seat_count: n }) < MIN_SEAT_SPACING - 0.5) break;
+    last = n;
+  }
+  return last;
 }
 
 /** Bounding box of a table including its seats — used to keep drags in-canvas. */

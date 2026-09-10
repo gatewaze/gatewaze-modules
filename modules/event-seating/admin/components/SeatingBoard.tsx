@@ -25,6 +25,7 @@ import {
   type SeatingPlan,
   type SeatingTable,
 } from '../utils/seatingService';
+import { maxSeatsFor, minSeatSpacing, MIN_SEAT_SPACING } from '../utils/seatGeometry';
 import { TABLE_PRESETS } from '../utils/tablePresets';
 import { useBackgroundImage } from '../utils/useBackgroundImage';
 import {
@@ -166,12 +167,43 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
     if (!selectedTableId) return;
     const table = tables.find((t) => t.id === selectedTableId);
     const next = { ...patch };
-    // Shrinking a table can strand blocked indices past the last seat, which
-    // would then reappear if it were grown again. Drop them as we go.
-    if (table && typeof next.seat_count === 'number') {
-      const pruned = table.disabled_seats.filter((i) => i < next.seat_count!);
-      if (pruned.length !== table.disabled_seats.length) next.disabled_seats = pruned;
+
+    if (table) {
+      const proposed = { ...table, ...next };
+
+      // Every guest needs MIN_SEAT_SPACING of table to themselves. Adding
+      // seats past what the table's size supports is refused rather than
+      // silently drawn on top of itself.
+      if (typeof next.seat_count === 'number' && next.seat_count > table.seat_count) {
+        const capacity = maxSeatsFor({ ...proposed, seat_count: 0 });
+        if (next.seat_count > capacity) {
+          toast.error(
+            `A ${Math.round(proposed.width)}cm table seats ${capacity} at ${MIN_SEAT_SPACING}cm each. Make it bigger to fit more.`,
+          );
+          return;
+        }
+      }
+
+      // Shrinking the table is the same rule from the other direction. Refuse
+      // rather than quietly dropping seats, which could unseat a guest.
+      const resizing = typeof next.width === 'number' || typeof next.height === 'number'
+        || typeof next.seat_layout === 'string' || typeof next.shape === 'string';
+      if (resizing && proposed.seat_count > 1
+          && minSeatSpacing(proposed) < MIN_SEAT_SPACING - 0.5) {
+        toast.error(
+          `That leaves under ${MIN_SEAT_SPACING}cm per guest for ${proposed.seat_count} seats. Reduce the seats first.`,
+        );
+        return;
+      }
+
+      // Shrinking the seat count can strand blocked indices past the last
+      // seat, which would then reappear if it were grown again.
+      if (typeof next.seat_count === 'number') {
+        const pruned = table.disabled_seats.filter((i) => i < next.seat_count!);
+        if (pruned.length !== table.disabled_seats.length) next.disabled_seats = pruned;
+      }
     }
+
     patchTableLocal(selectedTableId, next);
     queueTableWrite(selectedTableId, next);
   }, [selectedTableId, tables, patchTableLocal, queueTableWrite]);
