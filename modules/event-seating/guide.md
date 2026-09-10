@@ -115,10 +115,21 @@ tables, covered with linen and joined, is one table to the people serving it:
 the table names are invisible, and eleven seat 1s identify nothing. A number
 that is unique across the room is the only thing a waiter can act on.
 
-Numbering runs the way you read the room — the top row left to right, then the
-next row down — so neighbouring seats have neighbouring numbers, and the seats
-on any one table are a consecutive run. Seats taken out of use are skipped, so
-the last number is the number of places laid.
+Numbering follows the way the room gets served. Tables pushed together are
+treated as one run, and its seats are numbered as a walk: **round the outside
+first** — up one arm, across the top, down the other — **then back along the
+inside the other way**, up the far arm, across the top and down the near one.
+Neighbouring numbers are therefore neighbouring seats.
+
+A table standing on its own is numbered from the top, clockwise, as before, and
+several separate tables are taken in reading order — top row left to right,
+then the next row down.
+
+Because the walk passes a joined table's outer seats on the way round and its
+inner seats on the way back, one table's numbers are deliberately not
+consecutive. That is the point: the numbers follow the room, not the furniture.
+Seats taken out of use are skipped, so the last number is the number of places
+laid.
 
 If your room is separate round tables, "Table 4, seat 3" reads perfectly well;
 switch **Seat numbers** in the toolbar to *Restart on each table*.
