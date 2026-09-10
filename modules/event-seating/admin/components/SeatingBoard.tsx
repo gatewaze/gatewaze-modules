@@ -451,6 +451,38 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
           </label>
         )}
 
+        {/* Tables are drawn at real size, so the room has to be the real room
+            or nothing lines up. Metres here, centimetres in the database. */}
+        <label className="flex items-center gap-1 text-xs text-[var(--gray-11)]">
+          Room
+          <input
+            type="number"
+            min={2}
+            max={200}
+            step={0.5}
+            value={plan.canvas_width / 100}
+            onChange={(e) => {
+              const m = parseFloat(e.target.value);
+              if (Number.isFinite(m) && m >= 2) patchPlan({ canvas_width: Math.round(m * 100) });
+            }}
+            className="w-14 rounded border border-[var(--gray-6)] bg-[var(--color-background)] px-1 py-0.5 text-xs text-[var(--gray-12)]"
+          />
+          ×
+          <input
+            type="number"
+            min={2}
+            max={200}
+            step={0.5}
+            value={plan.canvas_height / 100}
+            onChange={(e) => {
+              const m = parseFloat(e.target.value);
+              if (Number.isFinite(m) && m >= 2) patchPlan({ canvas_height: Math.round(m * 100) });
+            }}
+            className="w-14 rounded border border-[var(--gray-6)] bg-[var(--color-background)] px-1 py-0.5 text-xs text-[var(--gray-12)]"
+          />
+          m
+        </label>
+
         <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-[var(--gray-11)]">
           <input
             type="checkbox"

@@ -48,11 +48,28 @@ placed on a seat as a plain name.
 
 ### Tables and seats
 
-Add a table from the **Add a table** menu, which carries the usual sizes:
-2, 4, 6, 8, 10 and 12-person rectangles that seat guests directly opposite one
-another, round tables from 6 to 12, and top tables seating 4 to 10 along one
-side. The rectangle widens with the number per side so the spacing stays
-sensible.
+**The plan is drawn at real scale: one unit is one centimetre.** Tables are
+the size the venue's tables actually are, so a room that looks full is full,
+and a scaled floor plan behind the tables lines up with them.
+
+Set the room to your venue's dimensions with the **Room** boxes in the toolbar
+(in metres). The default is 14 × 9m.
+
+Add a table from the **Add a table** menu, which carries the sizes tables are
+actually hired in:
+
+| Rectangular, guests opposite | Round | Top table |
+|---|---|---|
+| 2 · 70 × 70cm square | 6 · 122cm (4ft) | 4 along one side |
+| 4 · 120 × 75cm | 8 · 152cm (5ft) | 6 along one side |
+| 6 · 180 × 85cm | 10 · 168cm (5ft 6) | 8 along one side |
+| 8 · 240 × 90cm | 12 · 183cm (6ft) | 10 along one side |
+| 10 · 300 × 90cm | | |
+| 12 · 360 × 90cm | | |
+
+The larger rectangles continue at 60cm of table edge per guest, which is where
+the 6ft six-seater and 8ft eight-seater come from. Any table can still be
+resized by hand in the table panel, in centimetres.
 
 A table has a shape (round or rectangular), a size, a rotation and a seat count.
 Seat positions are worked out from those, never stored, so changing the seat

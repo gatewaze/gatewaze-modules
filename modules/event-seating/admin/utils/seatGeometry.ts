@@ -3,15 +3,19 @@
  * size, rotation, seat count and layout; this module turns that into the
  * concrete seat coordinates used by both the editor and the export.
  *
- * All coordinates are in canvas units with a top-left origin (x right,
- * y down), matching the plan's canvas_width / canvas_height.
+ * All coordinates are in centimetres with a top-left origin (x right, y down),
+ * matching the plan's canvas_width / canvas_height — so the plan is drawn at
+ * the room's real scale.
  */
 
 import type { SeatingTable } from './seatingService';
 
-/** Gap between the table edge and the centre of a seat, in canvas units. */
+/**
+ * Gap between the table edge and the centre of a seat, in centimetres —
+ * roughly where a seated guest's chair sits.
+ */
 export const SEAT_GAP = 26;
-/** Diameter of a seat marker, in canvas units. */
+/** Diameter of a seat marker, in centimetres. */
 export const SEAT_SIZE = 34;
 
 export interface SeatPoint {

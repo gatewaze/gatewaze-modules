@@ -143,7 +143,7 @@ export function TableInspector({
 
       <div className="grid grid-cols-2 gap-1">
         <div>
-          <label className={label}>{table.shape === 'round' ? 'Diameter' : 'Width'}</label>
+          <label className={label}>{table.shape === 'round' ? 'Diameter (cm)' : 'Width (cm)'}</label>
           <input
             type="number"
             min={20}
@@ -154,7 +154,7 @@ export function TableInspector({
           />
         </div>
         <div>
-          <label className={label}>Height</label>
+          <label className={label}>Depth (cm)</label>
           <input
             type="number"
             min={20}
