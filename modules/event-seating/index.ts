@@ -7,7 +7,7 @@ const eventSeatingModule: GatewazeModule = {
   group: 'events',
   name: 'Event Seating',
   description: 'Drag-and-drop seating plans for guests who have accepted their invite',
-  version: '1.0.0',
+  version: '1.0.1',
 
   features: [
     'event-seating',
