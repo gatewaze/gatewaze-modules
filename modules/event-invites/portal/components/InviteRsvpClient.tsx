@@ -1,6 +1,16 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
+import DOMPurify from 'isomorphic-dompurify'
+
+/** Sanitize HTML for display in question text. Mirrors event-pages/rsvp.tsx. */
+function safeHtml(html: string | null | undefined): string {
+  if (!html) return ''
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'b', 'i', 'u', 's', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'code', 'pre', 'span'],
+    ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
+  })
+}
 
 interface Question {
   id: string
@@ -303,8 +313,9 @@ export function InviteRsvpClient({ party, members, token, primaryColor, brandNam
                     <div className="space-y-3 pl-4 border-l-2" style={{ borderColor: `${primaryColor}40` }}>
                       {event.questions.map(q => (
                         <div key={q.id}>
-                          <label className="block text-sm font-medium text-gray-800 mb-1">
-                            {q.question_text}{q.is_required && <span className="text-red-500 ml-0.5">*</span>}
+                          <label className="block text-sm font-medium text-gray-800 mb-1 [&_p]:m-0 [&_p+p]:mt-1">
+                            <span dangerouslySetInnerHTML={{ __html: safeHtml(q.question_text) }} />
+                            {q.is_required && <span className="text-red-500 ml-0.5">*</span>}
                           </label>
                           {q.question_type === 'select' && q.options && (
                             <select value={(entry?.answers[q.id] as string) || ''} onChange={e => updateAnswer(event.member_event_id, q.id, e.target.value)}

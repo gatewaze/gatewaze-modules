@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { Card, Badge, Button, Table, THead, TBody, Tr, Th, Td } from '@/components/ui';
 import { ArrowDownTrayIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
+import { questionPlainText } from './utils/questionText';
 
 interface RsvpResponsesTableProps {
   eventUuid: string;
@@ -222,6 +223,13 @@ export function RsvpResponsesTable({ eventUuid }: RsvpResponsesTableProps) {
     return out;
   }, [rows]);
 
+  // `answers` is keyed by the raw question_text, which carries the rich-text
+  // editor's HTML. Keep that as the lookup key and show the flattened text.
+  const questionColumns = useMemo(
+    () => questionTexts.map((raw) => ({ key: raw, label: questionPlainText(raw) })),
+    [questionTexts],
+  );
+
   const csvEscape = (v: string | number | boolean): string => {
     const s = String(v ?? '');
     // RFC 4180 quoting
@@ -247,7 +255,7 @@ export function RsvpResponsesTable({ eventUuid }: RsvpResponsesTableProps) {
       'Sub-Event',
       'RSVP Status',
       'Responded At',
-      ...questionTexts,
+      ...questionColumns.map((c) => c.label),
     ];
     const lines: string[] = [headers.map(csvEscape).join(',')];
     for (const r of filtered) {
@@ -262,7 +270,7 @@ export function RsvpResponsesTable({ eventUuid }: RsvpResponsesTableProps) {
         r.sub_event_name,
         r.rsvp_status,
         formatRespondedAt(r.responded_at),
-        ...questionTexts.map(q => r.answers[q] || ''),
+        ...questionColumns.map((c) => r.answers[c.key] || ''),
       ];
       lines.push(row.map(csvEscape).join(','));
     }
@@ -351,7 +359,7 @@ export function RsvpResponsesTable({ eventUuid }: RsvpResponsesTableProps) {
               <Th>Sub-Event</Th>
               <Th>Status</Th>
               <Th>Responded</Th>
-              {questionTexts.map(q => <Th key={q}>{q}</Th>)}
+              {questionColumns.map(c => <Th key={c.key}>{c.label}</Th>)}
             </Tr>
           </THead>
           <TBody>
@@ -388,8 +396,8 @@ export function RsvpResponsesTable({ eventUuid }: RsvpResponsesTableProps) {
                     </Badge>
                   </Td>
                   <Td><span className="text-xs text-[var(--gray-9)]">{formatRespondedAt(r.responded_at)}</span></Td>
-                  {questionTexts.map(q => (
-                    <Td key={q}><span className="text-sm">{r.answers[q] || ''}</span></Td>
+                  {questionColumns.map(c => (
+                    <Td key={c.key}><span className="text-sm">{r.answers[c.key] || ''}</span></Td>
                   ))}
                 </Tr>
               ))
