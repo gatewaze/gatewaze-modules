@@ -240,6 +240,43 @@ export function maxSeatsFor(table: SeatingTable): number {
   return last;
 }
 
+export interface Rect { left: number; top: number; right: number; bottom: number; }
+
+/** The table top itself, seats excluded. */
+export function tableBodyBounds(table: SeatingTable): Rect {
+  const halfW = table.width / 2;
+  const halfH = (table.shape === 'round' ? table.width : table.height) / 2;
+  return {
+    left: table.x - halfW,
+    top: table.y - halfH,
+    right: table.x + halfW,
+    bottom: table.y + halfH,
+  };
+}
+
+/** A rectangle from two corners, in either drag direction. */
+export function rectFromPoints(a: { x: number; y: number }, b: { x: number; y: number }): Rect {
+  return {
+    left: Math.min(a.x, b.x),
+    top: Math.min(a.y, b.y),
+    right: Math.max(a.x, b.x),
+    bottom: Math.max(a.y, b.y),
+  };
+}
+
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top;
+}
+
+/**
+ * Tables caught by a selection rectangle. Touching counts, rather than
+ * requiring the table to sit wholly inside — dragging a box roughly over a
+ * row of tables should take the row.
+ */
+export function tablesInRect(tables: SeatingTable[], rect: Rect): string[] {
+  return tables.filter((t) => rectsOverlap(tableBodyBounds(t), rect)).map((t) => t.id);
+}
+
 /** Bounding box of a table including its seats — used to keep drags in-canvas. */
 export function tableBounds(table: SeatingTable) {
   const pad = SEAT_GAP + SEAT_SIZE / 2;
