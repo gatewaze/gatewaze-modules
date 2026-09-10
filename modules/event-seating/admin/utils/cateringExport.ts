@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import type { SeatingPlan, SeatingTable, SeatingAssignment, Guest } from './seatingService';
-import { usableSeats } from './seatGeometry';
+import { planSeatNumbers, seatKey } from './seatNumbering';
 // Value import, but cateringPdf has no data-layer imports of its own, so this
 // stays free of the supabase client.
 import { NO_CHOICE } from './cateringPdf';
@@ -180,12 +180,7 @@ export async function buildCourseSheets(input: {
   const questionById = new Map(questions.map((q) => [q.id, q]));
 
   // Seats in use, numbered as guests and the venue see them.
-  const seatNumberByTableSeat = new Map<string, number>();
-  for (const table of tables) {
-    for (const seat of usableSeats(table)) {
-      seatNumberByTableSeat.set(`${table.id}:${seat.index}`, seat.displayNumber);
-    }
-  }
+  const seatNumberByTableSeat = planSeatNumbers(tables, plan.seat_numbering);
 
   return selectedQuestionIds
     .map((questionId) => {
@@ -201,7 +196,7 @@ export async function buildCourseSheets(input: {
 
         // A guest stranded in a seat that has since been taken out of use
         // must not reach the venue's sheet as a phantom place setting.
-        const seat = seatNumberByTableSeat.get(`${table.id}:${assignment.seat_index}`);
+        const seat = seatNumberByTableSeat.get(seatKey(table.id, assignment.seat_index));
         if (seat === undefined) continue;
 
         const guest = assignment.party_member_id ? guestsById.get(assignment.party_member_id) : undefined;
@@ -223,12 +218,15 @@ export async function buildCourseSheets(input: {
         });
       }
 
-      rows.sort(
-        (a, b) =>
-          a.tableSort - b.tableSort ||
-          a.tableLabel.localeCompare(b.tableLabel) ||
-          a.seatNumber - b.seatNumber,
-      );
+      // Continuous numbering already walks the room, so the seat number is
+      // the running order; per-table numbering needs the table first or the
+      // 1s from every table interleave.
+      rows.sort((a, b) =>
+        plan.seat_numbering === 'continuous'
+          ? a.seatNumber - b.seatNumber
+          : a.tableSort - b.tableSort
+            || a.tableLabel.localeCompare(b.tableLabel)
+            || a.seatNumber - b.seatNumber);
 
       const counts = new Map<string, number>();
       for (const row of rows) counts.set(row.choice, (counts.get(row.choice) || 0) + 1);

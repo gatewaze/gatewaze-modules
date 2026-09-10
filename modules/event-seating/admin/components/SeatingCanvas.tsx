@@ -3,6 +3,7 @@ import {
   usableSeats, SEAT_SIZE, snap, findSeatNear, snapToNeighbours,
   rectFromPoints, tablesInRect, type SnapGuide,
 } from '../utils/seatGeometry';
+import { seatKey, type SeatNumberMap } from '../utils/seatNumbering';
 import type { SeatingPlan, SeatingTable, SeatingAssignment } from '../utils/seatingService';
 
 /**
@@ -70,6 +71,8 @@ interface Props {
   namesByAssignment: Map<string, string>;
   backgroundUrl: string | null;
   selectedTableIds: string[];
+  /** Seat numbers as the venue will see them. */
+  seatNumbers: SeatNumberMap;
   drag: DragState;
   onDragChange: (drag: DragState) => void;
   onSelectTables: (tableIds: string[]) => void;
@@ -87,6 +90,7 @@ export function SeatingCanvas({
   namesByAssignment,
   backgroundUrl,
   selectedTableIds,
+  seatNumbers,
   drag,
   onDragChange,
   onSelectTables,
@@ -520,8 +524,8 @@ export function SeatingCanvas({
                       key={`${table.id}-${seat.index}`}
                       title={
                         name
-                          ? `${name} — seat ${seat.displayNumber}`
-                          : `Seat ${seat.displayNumber} — alt-click to take it out of use`
+                          ? `${name} — seat ${seatNumbers.get(seatKey(table.id, seat.index)) ?? seat.displayNumber}`
+                          : `Seat ${seatNumbers.get(seatKey(table.id, seat.index)) ?? seat.displayNumber} — alt-click to take it out of use`
                       }
                       className={`absolute flex items-center justify-center rounded-full border text-center ${
                         isDropTarget
@@ -567,7 +571,7 @@ export function SeatingCanvas({
                         </span>
                       ) : (
                         <span className="pointer-events-none text-[10px] text-[var(--gray-9)]">
-                          {seat.displayNumber}
+                          {seatNumbers.get(seatKey(table.id, seat.index)) ?? seat.displayNumber}
                         </span>
                       )}
                     </div>

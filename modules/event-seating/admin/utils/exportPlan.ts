@@ -7,6 +7,7 @@
  */
 
 import { usableSeats, usableSeatCount, SEAT_SIZE } from './seatGeometry';
+import { seatKey, type SeatNumberMap } from './seatNumbering';
 import type { SeatingPlan, SeatingTable, SeatingAssignment } from './seatingService';
 
 export interface ExportInput {
@@ -18,6 +19,14 @@ export interface ExportInput {
   /** Already-rendered floor plan, or null to export on plain paper. */
   background: CanvasImageSource | null;
   title: string;
+  /** Seat numbers as guests and the venue see them. */
+  seatNumbers: SeatNumberMap;
+  /**
+   * 'names' is the working plan. 'numbers' is the one the venue gets: the seat
+   * number leads, because on the day it is the only thing that identifies a
+   * place — the tables are covered and pushed together.
+   */
+  seatLabels?: 'names' | 'numbers';
 }
 
 const INK = '#1f2933';
@@ -60,6 +69,13 @@ function drawTable(ctx: CanvasRenderingContext2D, table: SeatingTable) {
   ctx.fillText(table.label, table.x, table.y);
 }
 
+/** First name plus a surname initial, for the tight label under a seat number. */
+function shortName(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 9);
+  return `${parts[0].slice(0, 8)} ${parts[parts.length - 1].charAt(0)}`;
+}
+
 /** Split a name so long ones stay inside the seat chip. */
 function nameLines(name: string): string[] {
   const parts = name.trim().split(/\s+/);
@@ -70,7 +86,10 @@ function nameLines(name: string): string[] {
 }
 
 export function renderPlanToCanvas(input: ExportInput, scale = 2): HTMLCanvasElement {
-  const { plan, tables, assignments, namesByAssignment, background, title } = input;
+  const {
+    plan, tables, assignments, namesByAssignment, background, title,
+    seatNumbers, seatLabels = 'names',
+  } = input;
   const headerHeight = 70;
 
   const canvas = document.createElement('canvas');
@@ -128,7 +147,20 @@ export function renderPlanToCanvas(input: ExportInput, scale = 2): HTMLCanvasEle
 
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      if (name) {
+      const number = seatNumbers.get(seatKey(table.id, seat.index)) ?? seat.displayNumber;
+
+      if (seatLabels === 'numbers') {
+        // The number is what the meal sheet is keyed on, so it leads; the
+        // name goes underneath as a cross-check where there is room.
+        ctx.fillStyle = INK;
+        ctx.font = '700 15px system-ui, sans-serif';
+        ctx.fillText(String(number), seat.x, name ? seat.y - 5 : seat.y);
+        if (name) {
+          ctx.fillStyle = MUTED;
+          ctx.font = '8px system-ui, sans-serif';
+          ctx.fillText(shortName(name), seat.x, seat.y + 8);
+        }
+      } else if (name) {
         ctx.fillStyle = INK;
         ctx.font = '600 11px system-ui, sans-serif';
         const lines = nameLines(name);
@@ -138,7 +170,7 @@ export function renderPlanToCanvas(input: ExportInput, scale = 2): HTMLCanvasEle
       } else {
         ctx.fillStyle = MUTED;
         ctx.font = '11px system-ui, sans-serif';
-        ctx.fillText(String(seat.displayNumber), seat.x, seat.y);
+        ctx.fillText(String(number), seat.x, seat.y);
       }
     }
   }

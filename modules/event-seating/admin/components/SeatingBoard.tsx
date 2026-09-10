@@ -34,6 +34,7 @@ import {
   EMPTY_UNDO, canRedo, canUndo, recordChange, redo as redoStep, redoLabel,
   undo as undoStep, undoLabel, undoShortcut, type UndoState,
 } from '../utils/undoStack';
+import { planSeatNumbers, seatKey } from '../utils/seatNumbering';
 import { TABLE_PRESETS } from '../utils/tablePresets';
 import { useBackgroundImage } from '../utils/useBackgroundImage';
 import {
@@ -185,6 +186,13 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
   const selectedTableId = selectedTableIds.length === 1 ? selectedTableIds[0] : null;
   const selectedTable = tables.find((t) => t.id === selectedTableId) || null;
   const selectedTables = tables.filter((t) => selectedTableIds.includes(t.id));
+
+  // One numbering for the whole board — canvas, inspector and exports all read
+  // from it, so what is on screen is what the venue receives.
+  const seatNumbers = useMemo(
+    () => planSeatNumbers(tables, plan.seat_numbering),
+    [tables, plan.seat_numbering],
+  );
   const seatTotal = tables.reduce((sum, t) => sum + t.seat_count, 0);
 
   // ---- table writes ------------------------------------------------------
@@ -563,6 +571,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
         namesByAssignment,
         background: backgroundImage,
         title: subEventName ? `${plan.name} — ${subEventName}` : plan.name,
+        seatNumbers,
       });
       if (format === 'png') downloadCanvasAsPng(canvas, planFilename(plan.name, 'png'));
       else await downloadCanvasAsPdf(canvas, planFilename(plan.name, 'pdf'));
@@ -572,7 +581,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
     } finally {
       setExporting(false);
     }
-  }, [plan, tables, assignments, namesByAssignment, backgroundImage, subEventName]);
+  }, [plan, tables, assignments, namesByAssignment, backgroundImage, subEventName, seatNumbers]);
 
   // ---- render ------------------------------------------------------------
 
@@ -628,6 +637,20 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
 
         {/* Tables are drawn at real size, so the room has to be the real room
             or nothing lines up. Metres here, centimetres in the database. */}
+        <label className="flex items-center gap-1.5 text-xs text-[var(--gray-11)]">
+          <span title="Number every seat in the room 1..N, so a place can be found from its number alone once the tables are covered and joined">
+            Seat numbers
+          </span>
+          <select
+            value={plan.seat_numbering}
+            onChange={(e) => patchPlan({ seat_numbering: e.target.value as 'continuous' | 'per_table' })}
+            className="rounded border border-[var(--gray-6)] bg-[var(--color-background)] px-1 py-0.5 text-xs text-[var(--gray-12)]"
+          >
+            <option value="continuous">Across the whole plan</option>
+            <option value="per_table">Restart on each table</option>
+          </select>
+        </label>
+
         <label className="flex items-center gap-1 text-xs text-[var(--gray-11)]">
           Room
           <input
@@ -730,6 +753,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
             namesByAssignment={namesByAssignment}
             backgroundUrl={backgroundUrl}
             selectedTableIds={selectedTableIds}
+            seatNumbers={seatNumbers}
             drag={drag}
             onDragChange={setDrag}
             onSelectTables={setSelectedTableIds}
@@ -783,6 +807,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
             onDelete={handleDeleteTable}
             onClearSeats={handleClearSeats}
             onUnseat={handleUnseat}
+            seatNumbers={seatNumbers}
             onToggleSeat={(seatIndex, blocked) =>
               selectedTableId && handleToggleSeat(selectedTableId, seatIndex, blocked)}
           />
@@ -799,6 +824,8 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
         guests={guests}
         documentTitle={plan.name}
         subtitle={subEventName || 'All guests'}
+        namesByAssignment={namesByAssignment}
+        background={backgroundImage}
       />
     </div>
   );
