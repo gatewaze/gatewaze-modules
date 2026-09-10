@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { seatPositions, SEAT_SIZE, snap, findSeatNear } from '../utils/seatGeometry';
 import type { SeatingPlan, SeatingTable, SeatingAssignment } from '../utils/seatingService';
 
@@ -56,21 +56,23 @@ export function SeatingCanvas({
   onSeatContextMenu,
 }: Props) {
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const scaleRef = useRef(1);
 
-  // The surface is laid out at canvas-unit size and scaled with a CSS
-  // transform, so one set of coordinates drives layout, drag maths and export.
+  // `fitScale` shows the whole plan in the available width; `zoom` multiplies
+  // it. At zoom 1 the board looks exactly as it always has; above that the
+  // viewport scrolls, which is what makes seat names readable on a full plan.
+  const [fitScale, setFitScale] = useState(1);
+  const [zoom, setZoom] = useState(1);
+  const scale = fitScale * zoom;
+  scaleRef.current = scale;
+
   const measure = useCallback(() => {
-    const el = surfaceRef.current?.parentElement;
+    const el = viewportRef.current;
     if (!el) return;
-    const scale = Math.min(1, el.clientWidth / plan.canvas_width);
-    scaleRef.current = scale;
-    if (surfaceRef.current) {
-      surfaceRef.current.style.transform = `scale(${scale})`;
-      const wrapper = surfaceRef.current.parentElement;
-      if (wrapper) wrapper.style.height = `${plan.canvas_height * scale}px`;
-    }
-  }, [plan.canvas_width, plan.canvas_height]);
+    // clientWidth excludes the scrollbar, so fit never fights its own bars.
+    setFitScale(Math.min(1, el.clientWidth / plan.canvas_width));
+  }, [plan.canvas_width]);
 
   useEffect(() => {
     measure();
@@ -78,12 +80,53 @@ export function SeatingCanvas({
     return () => window.removeEventListener('resize', measure);
   }, [measure]);
 
+  /**
+   * Change zoom while keeping the point under the cursor put — without this,
+   * zooming walks the plan away from whatever you were looking at.
+   */
+  const zoomAt = useCallback((nextZoom: number, clientX?: number, clientY?: number) => {
+    const clamped = Math.min(4, Math.max(1, nextZoom));
+    const el = viewportRef.current;
+    setZoom((current) => {
+      if (!el || clamped === current) return clamped;
+      const rect = el.getBoundingClientRect();
+      // Anchor on the cursor, or the viewport centre for button presses.
+      const ax = clientX === undefined ? rect.width / 2 : clientX - rect.left;
+      const ay = clientY === undefined ? rect.height / 2 : clientY - rect.top;
+      const ratio = clamped / current;
+      const left = (el.scrollLeft + ax) * ratio - ax;
+      const top = (el.scrollTop + ay) * ratio - ay;
+      // Scroll after the new size has been laid out.
+      requestAnimationFrame(() => {
+        el.scrollLeft = left;
+        el.scrollTop = top;
+      });
+      return clamped;
+    });
+  }, []);
+
+  // Ctrl/Cmd + wheel zooms; a plain wheel scrolls the viewport as normal.
+  // Registered non-passively so preventDefault actually suppresses the
+  // browser's own page zoom.
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY / 240);
+      zoomAt(scaleRef.current / fitScale * factor, e.clientX, e.clientY);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [zoomAt, fitScale]);
+
   /** Pointer position in canvas units. */
   const toCanvasPoint = useCallback((clientX: number, clientY: number) => {
     const rect = surfaceRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
-    const scale = scaleRef.current || 1;
-    return { x: (clientX - rect.left) / scale, y: (clientY - rect.top) / scale };
+    const current = scaleRef.current || 1;
+    return { x: (clientX - rect.left) / current, y: (clientY - rect.top) / current };
   }, []);
 
   const occupantBySeat = useMemo(() => {
@@ -168,13 +211,67 @@ export function SeatingCanvas({
       }
     : undefined;
 
+  // Viewport height is driven by the fitted plan, not the zoom, so zooming
+  // scrolls within a stable frame instead of growing the page.
+  const viewportHeight = Math.round(
+    Math.min(760, Math.max(360, plan.canvas_height * fitScale)),
+  );
+  const zoomPercent = Math.round(zoom * 100);
+
   return (
-    <div className="w-full overflow-hidden rounded-lg border border-[var(--gray-6)] bg-[var(--color-background)]">
-      <div className="relative w-full">
+    <div className="relative w-full rounded-lg border border-[var(--gray-6)] bg-[var(--color-background)]">
+      {/* Zoom controls */}
+      <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-md border border-[var(--gray-6)] bg-[var(--color-background)] p-0.5 shadow-sm">
+        <button
+          type="button"
+          title="Zoom out"
+          disabled={zoom <= 1}
+          onClick={() => zoomAt(zoom / 1.25)}
+          className="rounded px-2 py-0.5 text-sm text-[var(--gray-11)] hover:bg-[var(--gray-3)] disabled:opacity-40"
+        >
+          −
+        </button>
+        <button
+          type="button"
+          title="Reset to fit"
+          onClick={() => zoomAt(1)}
+          className="min-w-[46px] rounded px-1 py-0.5 text-xs tabular-nums text-[var(--gray-11)] hover:bg-[var(--gray-3)]"
+        >
+          {zoomPercent}%
+        </button>
+        <button
+          type="button"
+          title="Zoom in"
+          disabled={zoom >= 4}
+          onClick={() => zoomAt(zoom * 1.25)}
+          className="rounded px-2 py-0.5 text-sm text-[var(--gray-11)] hover:bg-[var(--gray-3)] disabled:opacity-40"
+        >
+          +
+        </button>
+      </div>
+
+      <div
+        ref={viewportRef}
+        className="w-full overflow-auto rounded-lg"
+        style={{ height: viewportHeight }}
+      >
+        {/* Sized to the scaled plan so the viewport gets real scroll extents. */}
+        <div
+          className="relative"
+          style={{
+            width: Math.round(plan.canvas_width * scale),
+            height: Math.round(plan.canvas_height * scale),
+          }}
+        >
         <div
           ref={surfaceRef}
           className="absolute left-0 top-0 origin-top-left select-none bg-white"
-          style={{ width: plan.canvas_width, height: plan.canvas_height, ...gridBackground }}
+          style={{
+            width: plan.canvas_width,
+            height: plan.canvas_height,
+            transform: `scale(${scale})`,
+            ...gridBackground,
+          }}
           onPointerDown={() => onSelectTable(null)}
         >
           {backgroundUrl && !plan.background_hidden && (
@@ -280,6 +377,7 @@ export function SeatingCanvas({
               </div>
             );
           })}
+        </div>
         </div>
       </div>
 

@@ -8,10 +8,10 @@ export type RsvpStatus = 'pending' | 'accepted' | 'declined' | 'maybe';
 export const RSVP_STATUSES: RsvpStatus[] = ['pending', 'accepted', 'declined', 'maybe'];
 
 export type TableShape = 'round' | 'rect';
-export type SeatLayout = 'around' | 'both_sides' | 'one_side';
+export type SeatLayout = 'around' | 'both_sides' | 'sides_balanced' | 'one_side';
 
 export const TABLE_SHAPES: TableShape[] = ['round', 'rect'];
-export const SEAT_LAYOUTS: SeatLayout[] = ['around', 'both_sides', 'one_side'];
+export const SEAT_LAYOUTS: SeatLayout[] = ['around', 'both_sides', 'sides_balanced', 'one_side'];
 
 export interface SeatingPlan {
   id: string;

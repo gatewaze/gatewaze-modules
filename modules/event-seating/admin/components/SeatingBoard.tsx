@@ -33,6 +33,7 @@ import {
   renderPlanToCanvas,
 } from '../utils/exportPlan';
 import { SeatingCanvas, type DragState } from './SeatingCanvas';
+import { CateringPdfModal } from './CateringPdfModal';
 import { GuestTray } from './GuestTray';
 import { TableInspector } from './TableInspector';
 
@@ -53,6 +54,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [cateringOpen, setCateringOpen] = useState(false);
 
   // Table geometry edits fire on every keystroke and every drag frame; the
   // canvas updates from local state and the database catches up on a debounce.
@@ -418,6 +420,9 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
           <Button variant="soft" size="1" disabled={exporting} onClick={() => runExport('pdf')}>
             <ArrowDownTrayIcon className="mr-0.5 h-3 w-3" />PDF
           </Button>
+          <Button variant="soft" size="1" onClick={() => setCateringOpen(true)}>
+            <ArrowDownTrayIcon className="mr-0.5 h-3 w-3" />Meal sheets
+          </Button>
         </div>
       </div>
 
@@ -470,6 +475,17 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
           />
         </div>
       </div>
+
+      <CateringPdfModal
+        isOpen={cateringOpen}
+        onClose={() => setCateringOpen(false)}
+        plan={plan}
+        tables={tables}
+        assignments={assignments}
+        guests={guests}
+        documentTitle={plan.name}
+        subtitle={subEventName || 'All guests'}
+      />
     </div>
   );
 }
