@@ -154,6 +154,25 @@ from about 150%.
 Every change saves as you make it. Table geometry saves on a short delay so that
 dragging stays smooth.
 
+### Undoing
+
+The arrows in the toolbar step back and forward, as do **Ctrl+Z** and
+**Ctrl+Shift+Z** (**⌘Z** and **⇧⌘Z** on a Mac; Ctrl+Y also redoes). Hovering an
+arrow says what it will undo — "Undo move 3 tables".
+
+Everything on the board is covered: moving tables, adding and deleting them,
+changing a table's shape or size, taking seats out of use, seating and
+unseating guests. A burst of related edits counts as one step, so typing a
+table name is a single undo rather than one per letter, and dragging a bank of
+tables across the room is one step rather than one per frame.
+
+Pressing Ctrl+Z while the cursor is in a text box does what it always does —
+undoes your typing — rather than reaching for the plan.
+
+History belongs to the layout tab you are on and lasts as long as the page is
+open. Switching tabs or reloading starts it fresh; the plan itself is saved
+either way.
+
 ### Floor plan background
 
 Upload the venue's floor plan as a PNG, JPEG, WebP or PDF and it renders behind
