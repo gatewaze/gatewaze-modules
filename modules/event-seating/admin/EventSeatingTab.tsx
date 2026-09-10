@@ -26,6 +26,15 @@ interface Props {
   eventTitle?: string;
 }
 
+/** "Layout 3" — the lowest number not already taken, so deletes can be reused. */
+function nextLayoutName(plans: SeatingPlan[]): string {
+  const taken = new Set(plans.map((p) => p.name.trim().toLowerCase()));
+  for (let n = plans.length + 1; ; n++) {
+    const candidate = `Layout ${n}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
 const STATUS_LABELS: Record<RsvpStatus, string> = {
   accepted: 'Accepted',
   pending: 'Not replied',
@@ -39,6 +48,7 @@ export function EventSeatingTab({ eventUuid, eventTitle }: Props) {
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,26 +96,6 @@ export function EventSeatingTab({ eventUuid, eventTitle }: Props) {
     }
   }, [eventUuid, subEvents]);
 
-  const handleDuplicate = useCallback(async () => {
-    if (!activePlan) return;
-    setCreating(true);
-    try {
-      const copy = await duplicatePlan(activePlan, {
-        name: `${activePlan.name} (copy)`,
-        sub_event_id: activePlan.sub_event_id,
-        copyGuests: window.confirm('Copy the seated guests too? Cancel to copy the tables only.'),
-      });
-      setPlans((prev) => [...prev, copy]);
-      setActivePlanId(copy.id);
-      toast.success('Plan duplicated');
-    } catch (err) {
-      console.error('[event-seating] Failed to duplicate the plan:', err);
-      toast.error('Could not duplicate the plan');
-    } finally {
-      setCreating(false);
-    }
-  }, [activePlan]);
-
   const handleDelete = useCallback(async () => {
     if (!activePlan) return;
     if (!window.confirm(`Delete "${activePlan.name}"? Its tables and seat assignments go with it.`)) return;
@@ -124,16 +114,65 @@ export function EventSeatingTab({ eventUuid, eventTitle }: Props) {
     setPlans((prev) => prev.map((p) => (p.id === next.id ? next : p)));
   }, []);
 
-  const handleRenamePlan = useCallback(async (name: string) => {
-    if (!activePlan) return;
-    handlePlanChange({ ...activePlan, name });
+  const handleRenamePlan = useCallback(async (planId: string, rawName: string) => {
+    const name = rawName.trim().slice(0, 120);
+    const target = plans.find((p) => p.id === planId);
+    if (!target || !name || name === target.name) return;
+    handlePlanChange({ ...target, name });
     try {
-      await updatePlan(activePlan.id, { name });
+      await updatePlan(planId, { name });
     } catch (err) {
-      console.error('[event-seating] Failed to rename the plan:', err);
-      toast.error('Could not rename the plan');
+      console.error('[event-seating] Failed to rename the layout:', err);
+      toast.error('Could not rename the layout');
+      handlePlanChange(target);
     }
-  }, [activePlan, handlePlanChange]);
+  }, [plans, handlePlanChange]);
+
+  /**
+   * A new layout is nearly always a variation on one that already exists, so
+   * "+" copies the current layout's tables rather than starting from nothing.
+   * `copyGuests` decides whether the seating comes with it: keeping it lets
+   * you nudge one table without re-seating everyone, dropping it gives the
+   * same room to fill differently. An empty canvas is a separate action.
+   */
+  const handleAddLayout = useCallback(async (copyGuests: boolean) => {
+    if (!activePlan) { handleCreate(null); return; }
+    setCreating(true);
+    try {
+      const created = await duplicatePlan(activePlan, {
+        name: nextLayoutName(plans),
+        sub_event_id: activePlan.sub_event_id,
+        copyGuests,
+      });
+      setPlans((prev) => [...prev, created]);
+      setActivePlanId(created.id);
+      toast.success(copyGuests ? 'Layout copied with its seating' : 'Layout copied — tables only');
+    } catch (err) {
+      console.error('[event-seating] Failed to add a layout:', err);
+      toast.error('Could not add the layout');
+    } finally {
+      setCreating(false);
+    }
+  }, [activePlan, plans, handleCreate]);
+
+  const handleEmptyLayout = useCallback(async () => {
+    setCreating(true);
+    try {
+      const created = await createPlan({
+        event_id: eventUuid,
+        sub_event_id: activePlan?.sub_event_id ?? null,
+        name: nextLayoutName(plans),
+        guest_statuses: activePlan?.guest_statuses ?? ['accepted'],
+      });
+      setPlans((prev) => [...prev, created]);
+      setActivePlanId(created.id);
+    } catch (err) {
+      console.error('[event-seating] Failed to create a layout:', err);
+      toast.error('Could not create the layout');
+    } finally {
+      setCreating(false);
+    }
+  }, [eventUuid, activePlan, plans]);
 
   const handleStatusToggle = useCallback(async (status: RsvpStatus, include: boolean) => {
     if (!activePlan) return;
@@ -190,27 +229,56 @@ export function EventSeatingTab({ eventUuid, eventTitle }: Props) {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={activePlanId ?? ''}
-          onChange={(e) => setActivePlanId(e.target.value)}
-          className="rounded-md border border-[var(--gray-6)] bg-[var(--color-background)] px-2 py-1.5 text-sm text-[var(--gray-12)]"
+      {/* Layout tabs — one per plan. Each keeps its own tables, seating and
+          exports, so alternative arrangements sit side by side. */}
+      <div className="flex items-end gap-1 overflow-x-auto border-b border-[var(--gray-6)]">
+        {plans.map((plan) => {
+          const isActive = plan.id === activePlanId;
+          return (
+            <button
+              key={plan.id}
+              type="button"
+              onClick={() => setActivePlanId(plan.id)}
+              onDoubleClick={() => setRenamingId(plan.id)}
+              title={`${plan.name} — double-click to rename`}
+              className={`-mb-px max-w-[240px] whitespace-nowrap border-b-2 px-3 py-2 text-sm transition-colors ${
+                isActive
+                  ? 'border-[var(--accent-9)] font-medium text-[var(--gray-12)]'
+                  : 'border-transparent text-[var(--gray-11)] hover:text-[var(--gray-12)]'
+              }`}
+            >
+              {renamingId === plan.id ? (
+                <input
+                  autoFocus
+                  type="text"
+                  defaultValue={plan.name}
+                  maxLength={120}
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={(e) => { handleRenamePlan(plan.id, e.target.value); setRenamingId(null); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { handleRenamePlan(plan.id, e.currentTarget.value); setRenamingId(null); }
+                    if (e.key === 'Escape') setRenamingId(null);
+                  }}
+                  className="w-40 rounded border border-[var(--gray-6)] bg-[var(--color-background)] px-1 py-0.5 text-sm text-[var(--gray-12)]"
+                />
+              ) : (
+                <span className="block truncate">{plan.name}</span>
+              )}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          disabled={creating}
+          title="Add a layout — copies the current tables, seats left empty"
+          onClick={() => handleAddLayout(false)}
+          className="-mb-px border-b-2 border-transparent px-2 py-2 text-sm text-[var(--gray-9)] hover:text-[var(--accent-11)] disabled:opacity-40"
         >
-          {plans.map((plan) => (
-            <option key={plan.id} value={plan.id}>{plan.name}</option>
-          ))}
-        </select>
+          <PlusIcon className="h-4 w-4" />
+        </button>
+      </div>
 
-        {activePlan && (
-          <input
-            type="text"
-            value={activePlan.name}
-            maxLength={120}
-            onChange={(e) => handleRenamePlan(e.target.value)}
-            className="w-56 rounded-md border border-[var(--gray-6)] bg-[var(--color-background)] px-2 py-1.5 text-sm text-[var(--gray-12)]"
-          />
-        )}
-
+      <div className="flex flex-wrap items-center gap-2">
         {subEventName && (
           <span className="text-xs text-[var(--gray-9)]">for {subEventName}</span>
         )}
@@ -231,11 +299,23 @@ export function EventSeatingTab({ eventUuid, eventTitle }: Props) {
         </div>
 
         <div className="ml-auto flex gap-1">
-          <Button variant="ghost" size="1" disabled={creating} onClick={handleDuplicate}>
-            <DocumentDuplicateIcon className="mr-0.5 h-3 w-3" />Duplicate
+          <Button
+            variant="ghost"
+            size="1"
+            disabled={creating}
+            title="Copy this layout including where everyone is sitting"
+            onClick={() => handleAddLayout(true)}
+          >
+            <DocumentDuplicateIcon className="mr-0.5 h-3 w-3" />Duplicate with seating
           </Button>
-          <Button variant="ghost" size="1" disabled={creating} onClick={() => handleCreate(null)}>
-            <PlusIcon className="mr-0.5 h-3 w-3" />New
+          <Button
+            variant="ghost"
+            size="1"
+            disabled={creating}
+            title="Start a layout from an empty canvas"
+            onClick={handleEmptyLayout}
+          >
+            <PlusIcon className="mr-0.5 h-3 w-3" />Empty
           </Button>
           <Button variant="ghost" size="1" onClick={handleDelete}>
             <TrashIcon className="mr-0.5 h-3 w-3" />Delete
