@@ -42,10 +42,17 @@ export interface SeatingTable {
   width: number;
   height: number;
   rotation: number;
+  /**
+   * Geometric seat indices taken out of use — the edge where another table
+   * abuts this one, typically. Blocked seats are not drawn, cannot be sat in,
+   * and do not count towards capacity.
+   */
+  disabled_seats: number[];
   colour: string | null;
   notes: string | null;
   sort_order: number;
 }
+
 
 export interface SeatingAssignment {
   id: string;
@@ -107,13 +114,24 @@ function toStatusList(values: unknown): RsvpStatus[] {
   return allowed.length > 0 ? allowed : ['accepted'];
 }
 
+/** Whole seat indices in range, de-duplicated and ordered — matches the CHECK. */
+function toSeatIndexList(value: unknown): number[] {
+  const list = Array.isArray(value) ? value : [];
+  const seen = new Set<number>();
+  for (const raw of list) {
+    const n = Math.round(Number(raw));
+    if (Number.isFinite(n) && n >= 0 && n <= 39) seen.add(n);
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 
 // Only these columns may be written from the editor. Anything else in a
 // caller-supplied patch is dropped rather than forwarded to the database.
 const TABLE_WRITABLE = [
-  'label', 'shape', 'seat_layout', 'seat_count',
+  'label', 'shape', 'seat_layout', 'seat_count', 'disabled_seats',
   'x', 'y', 'width', 'height', 'rotation', 'colour', 'notes', 'sort_order',
 ] as const;
 
@@ -142,6 +160,7 @@ function sanitiseTablePatch(patch: Partial<SeatingTable>): Record<string, unknow
     throw new Error('Invalid seat layout');
   }
   if ('seat_count' in clean) clean.seat_count = Math.round(clamp(Number(clean.seat_count), 0, 40));
+  if ('disabled_seats' in clean) clean.disabled_seats = toSeatIndexList(clean.disabled_seats);
   if ('width' in clean) clean.width = clamp(Number(clean.width), 20, 5000);
   if ('height' in clean) clean.height = clamp(Number(clean.height), 20, 5000);
   if ('rotation' in clean) clean.rotation = clamp(Number(clean.rotation), -360, 360);
@@ -303,7 +322,11 @@ export async function getTables(planId: string): Promise<SeatingTable[]> {
     .order('sort_order')
     .order('created_at');
   if (error) throw error;
-  return (data || []) as SeatingTable[];
+  // Older rows predate the column; treat a missing array as nothing blocked.
+  return (data || []).map((t) => ({
+    ...t,
+    disabled_seats: toSeatIndexList(t.disabled_seats),
+  })) as SeatingTable[];
 }
 
 export async function createTable(
@@ -316,7 +339,7 @@ export async function createTable(
     .select()
     .single();
   if (error) throw error;
-  return data as SeatingTable;
+  return { ...data, disabled_seats: toSeatIndexList(data.disabled_seats) } as SeatingTable;
 }
 
 export async function updateTable(id: string, patch: Partial<SeatingTable>): Promise<void> {

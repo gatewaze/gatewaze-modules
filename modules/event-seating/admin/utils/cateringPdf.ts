@@ -122,7 +122,7 @@ export async function buildCateringPdfBytes(input: {
       }
 
       ensure(15);
-      const seatLabel = `${row.seatIndex + 1}.`;
+      const seatLabel = `${row.seatNumber}.`;
       page.drawText(seatLabel, { x: MARGIN + 6, y, size: 10, font: regular, color: muted });
       page.drawText(fit(row.guestName, regular, 10, 190), {
         x: MARGIN + 26, y, size: 10, font: regular, color: ink,

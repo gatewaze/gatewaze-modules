@@ -25,6 +25,7 @@ import {
   type SeatingPlan,
   type SeatingTable,
 } from '../utils/seatingService';
+import { TABLE_PRESETS } from '../utils/tablePresets';
 import { useBackgroundImage } from '../utils/useBackgroundImage';
 import {
   downloadCanvasAsPdf,
@@ -163,20 +164,24 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
 
   const handleTablePatch = useCallback((patch: Partial<SeatingTable>) => {
     if (!selectedTableId) return;
-    patchTableLocal(selectedTableId, patch);
-    queueTableWrite(selectedTableId, patch);
-  }, [selectedTableId, patchTableLocal, queueTableWrite]);
+    const table = tables.find((t) => t.id === selectedTableId);
+    const next = { ...patch };
+    // Shrinking a table can strand blocked indices past the last seat, which
+    // would then reappear if it were grown again. Drop them as we go.
+    if (table && typeof next.seat_count === 'number') {
+      const pruned = table.disabled_seats.filter((i) => i < next.seat_count!);
+      if (pruned.length !== table.disabled_seats.length) next.disabled_seats = pruned;
+    }
+    patchTableLocal(selectedTableId, next);
+    queueTableWrite(selectedTableId, next);
+  }, [selectedTableId, tables, patchTableLocal, queueTableWrite]);
 
-  const handleAddTable = useCallback(async (shape: 'round' | 'rect') => {
+  const handleAddTable = useCallback(async (presetId: string) => {
+    const preset = TABLE_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
     try {
-      const roundCount = tables.filter((t) => t.shape === 'round').length;
       const created = await createTable(plan.id, {
-        label: shape === 'round' ? `Table ${roundCount + 1}` : 'Top table',
-        shape,
-        seat_layout: shape === 'round' ? 'around' : 'one_side',
-        seat_count: shape === 'round' ? 8 : 6,
-        width: shape === 'round' ? 180 : 380,
-        height: shape === 'round' ? 180 : 90,
+        ...preset.build(tables.length + 1),
         // Stagger new tables so they don't stack on top of each other.
         x: 220 + (tables.length % 4) * 260,
         y: 200 + Math.floor(tables.length / 4) * 260,
@@ -207,6 +212,42 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
       toast.error('Could not delete the table');
     }
   }, [selectedTable, assignments]);
+
+  /**
+   * Take a seat in or out of use. Blocking a seat someone is sitting in
+   * returns them to the guest list first — the alternative is a guest who
+   * exists in the data but appears nowhere on the plan.
+   */
+  const handleToggleSeat = useCallback(async (tableId: string, seatIndex: number, blocked: boolean) => {
+    const table = tables.find((t) => t.id === tableId);
+    if (!table) return;
+
+    const next = blocked
+      ? [...new Set([...table.disabled_seats, seatIndex])].sort((a, b) => a - b)
+      : table.disabled_seats.filter((i) => i !== seatIndex);
+
+    const occupant = blocked
+      ? assignments.find((a) => a.table_id === tableId && a.seat_index === seatIndex)
+      : undefined;
+
+    patchTableLocal(tableId, { disabled_seats: next });
+    if (occupant) setAssignments((prev) => prev.filter((a) => a.id !== occupant.id));
+
+    try {
+      // Unseat before blocking: the database rejects an assignment in a
+      // blocked seat, so the order matters.
+      if (occupant) await unseatRow(occupant.id);
+      await updateTable(tableId, { disabled_seats: next });
+      if (occupant) {
+        const name = namesByAssignment.get(occupant.id) || 'That guest';
+        toast.info(`${name} went back to the guest list`);
+      }
+    } catch (err) {
+      console.error('[event-seating] Failed to change the seat:', err);
+      toast.error('Could not change that seat');
+      load();
+    }
+  }, [tables, assignments, patchTableLocal, namesByAssignment, load]);
 
   const handleClearSeats = useCallback(async () => {
     if (!selectedTable) return;
@@ -368,12 +409,22 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
     <div className="flex flex-col gap-3">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="soft" size="1" onClick={() => handleAddTable('round')}>
-          <PlusIcon className="mr-0.5 h-3 w-3" />Round table
-        </Button>
-        <Button variant="soft" size="1" onClick={() => handleAddTable('rect')}>
-          <PlusIcon className="mr-0.5 h-3 w-3" />Long table
-        </Button>
+        {/* A native select keeps every preset in one control without a custom
+            popover, and groups them the way people describe tables. */}
+        <select
+          value=""
+          onChange={(e) => { if (e.target.value) handleAddTable(e.target.value); }}
+          className="rounded-md border border-[var(--gray-6)] bg-[var(--color-background)] px-2 py-1 text-xs text-[var(--gray-12)]"
+        >
+          <option value="">+ Add a table…</option>
+          {['Rectangular — guests opposite', 'Round', 'Top table'].map((group) => (
+            <optgroup key={group} label={group}>
+              {TABLE_PRESETS.filter((p) => p.group === group).map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
 
         <label className="cursor-pointer">
           <input
@@ -456,6 +507,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
             onMoveTable={handleMoveTable}
             onDropGuest={handleDropGuest}
             onSeatContextMenu={handleUnseat}
+            onBlockSeat={(tableId, seatIndex) => handleToggleSeat(tableId, seatIndex, true)}
           />
           <p className="mt-1 text-[11px] text-[var(--gray-9)]">
             Drag a table to move it. Drag a name from the list onto a seat, or drag a seated guest to
@@ -472,6 +524,8 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
             onDelete={handleDeleteTable}
             onClearSeats={handleClearSeats}
             onUnseat={handleUnseat}
+            onToggleSeat={(seatIndex, blocked) =>
+              selectedTableId && handleToggleSeat(selectedTableId, seatIndex, blocked)}
           />
         </div>
       </div>
