@@ -105,6 +105,24 @@ Rectangular tables offer four arrangements:
 Seats are numbered from the top of the table, clockwise, which is how a printed
 plan reads.
 
+### Seat numbers
+
+By default every seat in the room is numbered once — 1 up to however many
+places are laid — rather than each table starting again at 1.
+
+This matters as soon as tables are pushed together. A U shape built from eleven
+tables, covered with linen and joined, is one table to the people serving it:
+the table names are invisible, and eleven seat 1s identify nothing. A number
+that is unique across the room is the only thing a waiter can act on.
+
+Numbering runs the way you read the room — the top row left to right, then the
+next row down — so neighbouring seats have neighbouring numbers, and the seats
+on any one table are a consecutive run. Seats taken out of use are skipped, so
+the last number is the number of places laid.
+
+If your room is separate round tables, "Table 4, seat 3" reads perfectly well;
+switch **Seat numbers** in the toolbar to *Restart on each table*.
+
 ### Tables pushed together
 
 Tables get arranged into U shapes, horseshoes and long banks, and where two
@@ -187,10 +205,11 @@ is visible.
 landscape page. Both are drawn from the stored geometry rather than screenshot
 from the screen, so the output matches what you arranged at full resolution.
 
-**Meal sheets** produces the document the venue actually needs. Pick which RSVP
-questions count as courses — anything that looks like one is preselected — and
-each becomes its own sheet listing every seated guest under their table in seat
-order, with their choice. Each sheet opens with a total per option for the
+**Meal sheets** produces the document the venue actually needs. It opens with a
+map of the room showing every seat number, so a place can be found from its
+number alone. Then pick which RSVP questions count as courses — anything that
+looks like one is preselected — and each becomes its own sheet listing every
+seated guest by seat number with their choice. Each sheet opens with a total per option for the
 kitchen ("24 x Salmon"), and a seat with no answer recorded is marked rather
 than left blank, so nothing is missed quietly. A course with more guests than
 fits one page continues onto the next.

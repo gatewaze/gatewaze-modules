@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import type { SeatNumbering } from './seatNumbering';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,6 +27,8 @@ export interface SeatingPlan {
   background_asset_id: string | null;
   background_hidden: boolean;
   guest_statuses: RsvpStatus[];
+  /** How seats are numbered for guests and the venue. */
+  seat_numbering: SeatNumbering;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -138,7 +141,7 @@ const TABLE_WRITABLE = [
 
 const PLAN_WRITABLE = [
   'name', 'canvas_width', 'canvas_height', 'grid_size', 'snap_to_grid',
-  'background_asset_id', 'background_hidden', 'guest_statuses', 'notes',
+  'background_asset_id', 'background_hidden', 'guest_statuses', 'seat_numbering', 'notes',
 ] as const;
 
 function pickWritable<T extends string>(
@@ -182,7 +185,11 @@ export async function getPlans(eventUuid: string): Promise<SeatingPlan[]> {
     .eq('event_id', assertUuid(eventUuid, 'event id'))
     .order('created_at');
   if (error) throw error;
-  return (data || []).map((p) => ({ ...p, guest_statuses: toStatusList(p.guest_statuses) }));
+  return (data || []).map((p) => ({
+    ...p,
+    guest_statuses: toStatusList(p.guest_statuses),
+    seat_numbering: p.seat_numbering === 'per_table' ? 'per_table' : 'continuous',
+  }));
 }
 
 export async function createPlan(input: {
@@ -202,13 +209,20 @@ export async function createPlan(input: {
     .select()
     .single();
   if (error) throw error;
-  return { ...data, guest_statuses: toStatusList(data.guest_statuses) };
+  return {
+    ...data,
+    guest_statuses: toStatusList(data.guest_statuses),
+    seat_numbering: data.seat_numbering === 'per_table' ? 'per_table' : 'continuous',
+  };
 }
 
 export async function updatePlan(id: string, patch: Partial<SeatingPlan>): Promise<void> {
   const planId = assertUuid(id, 'plan id');
   const clean = pickWritable(patch as Record<string, unknown>, PLAN_WRITABLE);
   if ('guest_statuses' in clean) clean.guest_statuses = toStatusList(clean.guest_statuses);
+  if ('seat_numbering' in clean && !['per_table', 'continuous'].includes(String(clean.seat_numbering))) {
+    throw new Error('Invalid seat numbering');
+  }
   if (clean.background_asset_id) {
     // The FK only proves the asset exists. Confirm it belongs to this plan's
     // own event so a plan can never point at another event's floor plan.

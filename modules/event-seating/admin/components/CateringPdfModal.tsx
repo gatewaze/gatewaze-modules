@@ -8,6 +8,8 @@ import {
   type CourseQuestion,
 } from '../utils/cateringExport';
 import { downloadCateringPdf } from '../utils/cateringPdf';
+import { renderPlanToCanvas } from '../utils/exportPlan';
+import { planSeatNumbers } from '../utils/seatNumbering';
 import type { Guest, SeatingAssignment, SeatingPlan, SeatingTable } from '../utils/seatingService';
 
 /**
@@ -25,6 +27,10 @@ interface Props {
   guests: Guest[];
   documentTitle: string;
   subtitle: string;
+  /** Names for seated guests, so the layout page can cross-check the numbers. */
+  namesByAssignment: Map<string, string>;
+  /** The venue's floor plan, if one is set, so the map matches the room. */
+  background: CanvasImageSource | null;
 }
 
 export function CateringPdfModal({
@@ -36,6 +42,8 @@ export function CateringPdfModal({
   guests,
   documentTitle,
   subtitle,
+  namesByAssignment,
+  background,
 }: Props) {
   const [questions, setQuestions] = useState<CourseQuestion[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -100,12 +108,33 @@ export function CateringPdfModal({
         return;
       }
 
+      // The sheets identify a place by its number alone, so the PDF opens
+      // with a map of the room carrying those numbers.
+      const layout = renderPlanToCanvas({
+        plan,
+        tables,
+        assignments,
+        namesByAssignment,
+        background,
+        title: documentTitle,
+        seatNumbers: planSeatNumbers(tables, plan.seat_numbering),
+        seatLabels: 'numbers',
+      });
+      const layoutPng = await new Promise<ArrayBuffer | null>((resolve) => {
+        layout.toBlob((blob) => {
+          if (!blob) { resolve(null); return; }
+          blob.arrayBuffer().then(resolve, () => resolve(null));
+        }, 'image/png');
+      });
+
       const stem = plan.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       await downloadCateringPdf({
         sheets,
         title: documentTitle,
         subtitle,
         filename: `${stem || 'seating'}-meal-selections.pdf`,
+        groupByTable: plan.seat_numbering === 'per_table',
+        layoutPng,
       });
 
       const withoutChoice = sheets.reduce((sum, s) => sum + s.missing, 0);
@@ -149,8 +178,9 @@ export function CateringPdfModal({
     >
       <div className="space-y-3 p-1">
         <p className="text-sm text-[var(--gray-11)]">
-          Each course you pick becomes its own sheet, listing every seated guest under their
-          table in seat order, with a total per option for the kitchen.
+          The PDF opens with a map of the room showing every seat number. Each course you
+          pick then becomes its own sheet, listing every seated guest by that number with a
+          total per option for the kitchen.
         </p>
 
         {loading ? (

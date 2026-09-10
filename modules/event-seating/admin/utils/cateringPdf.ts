@@ -32,6 +32,13 @@ export async function buildCateringPdfBytes(input: {
   sheets: CourseSheet[];
   title: string;
   subtitle: string;
+  /** Group rows under table headings; off when seats are numbered plan-wide. */
+  groupByTable?: boolean;
+  /**
+   * PNG of the plan with the seat numbers on it. The sheets identify a place
+   * only by its number, so without the map they cannot be acted on.
+   */
+  layoutPng?: ArrayBuffer | null;
 }): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
   const pdf = await PDFDocument.create();
@@ -42,6 +49,31 @@ export async function buildCateringPdfBytes(input: {
   const muted = rgb(0.45, 0.5, 0.55);
   const rule = rgb(0.82, 0.85, 0.88);
   const bandFill = rgb(0.94, 0.96, 0.97);
+
+  // The map comes first: landscape, because rooms are wider than they are deep.
+  if (input.layoutPng) {
+    const image = await pdf.embedPng(input.layoutPng);
+    const pageWidth = A4.height;
+    const pageHeight = A4.width;
+    const page = pdf.addPage([pageWidth, pageHeight]);
+
+    page.drawText(pdfSafe(input.title), { x: MARGIN, y: pageHeight - MARGIN, size: 15, font: bold, color: ink });
+    page.drawText(fit(`${input.subtitle} — seat numbers`, regular, 10, pageWidth - MARGIN * 2), {
+      x: MARGIN, y: pageHeight - MARGIN - 16, size: 10, font: regular, color: muted,
+    });
+
+    const top = pageHeight - MARGIN - 34;
+    const available = { width: pageWidth - MARGIN * 2, height: top - MARGIN };
+    const fitScale = Math.min(available.width / image.width, available.height / image.height);
+    const drawWidth = image.width * fitScale;
+    const drawHeight = image.height * fitScale;
+    page.drawImage(image, {
+      x: (pageWidth - drawWidth) / 2,
+      y: top - drawHeight,
+      width: drawWidth,
+      height: drawHeight,
+    });
+  }
 
   for (const sheet of input.sheets) {
     let page = pdf.addPage([A4.width, A4.height]);
@@ -100,9 +132,29 @@ export async function buildCateringPdfBytes(input: {
     });
     y -= 22;
 
-    // Per-table listing
+    // Per-table listing. With continuous numbering the table headings are
+    // dropped: the tables are covered and joined on the day, so grouping by
+    // one is noise — the seat number is the only handle anyone has.
     let currentTable: string | null = null;
     for (const row of sheet.rows) {
+      if (!input.groupByTable) {
+        ensure(15);
+        const seatLabel = `${row.seatNumber}`;
+        page.drawText(seatLabel, {
+          x: MARGIN + 6 + (26 - bold.widthOfTextAtSize(seatLabel, 11)),
+          y, size: 11, font: bold, color: ink,
+        });
+        page.drawText(fit(row.guestName, regular, 10, 180), {
+          x: MARGIN + 40, y, size: 10, font: regular, color: ink,
+        });
+        const choiceX = MARGIN + 232;
+        page.drawText(fit(row.choice, bold, 10, A4.width - MARGIN - choiceX), {
+          x: choiceX, y, size: 10, font: bold,
+          color: row.choice === NO_CHOICE ? muted : ink,
+        });
+        y -= 15;
+        continue;
+      }
       if (row.tableLabel !== currentTable) {
         ensure(46);
         currentTable = row.tableLabel;
@@ -156,6 +208,8 @@ export async function downloadCateringPdf(input: {
   title: string;
   subtitle: string;
   filename: string;
+  groupByTable?: boolean;
+  layoutPng?: ArrayBuffer | null;
 }): Promise<void> {
   const bytes = await buildCateringPdfBytes(input);
   const blob = new Blob([bytes as BlobPart], { type: 'application/pdf' });

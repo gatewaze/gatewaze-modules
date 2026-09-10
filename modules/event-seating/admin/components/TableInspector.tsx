@@ -1,6 +1,7 @@
 import { TrashIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui';
 import { seatPositions, usableSeatCount, isSeatBlocked, maxSeatsFor, MIN_SEAT_SPACING } from '../utils/seatGeometry';
+import { seatKey, type SeatNumberMap } from '../utils/seatNumbering';
 import type {
   SeatingTable,
   SeatingAssignment,
@@ -26,6 +27,8 @@ interface Props {
   onUnseat: (assignmentId: string) => void;
   /** Toggle a seat in or out of use. */
   onToggleSeat: (seatIndex: number, blocked: boolean) => void;
+  /** Seat numbers as the venue will see them. */
+  seatNumbers: SeatNumberMap;
 }
 
 const LAYOUT_LABELS: Record<SeatLayout, string> = {
@@ -49,6 +52,7 @@ export function TableInspector({
   onClearSeats,
   onUnseat,
   onToggleSeat,
+  seatNumbers,
 }: Props) {
   if (!table) {
     return (
@@ -225,6 +229,7 @@ export function TableInspector({
             return seats.map((seat) => {
               const blocked = isSeatBlocked(table, seat.index);
               if (!blocked) position += 1;
+              const shown = seatNumbers.get(seatKey(table.id, seat.index)) ?? position;
               const assignment = tableAssignments.find((a) => a.seat_index === seat.index);
               return (
                 <div
@@ -241,8 +246,8 @@ export function TableInspector({
                       title={blocked ? 'Bring this seat back into use' : 'Take this seat out of use'}
                       className="flex-shrink-0 cursor-pointer"
                     />
-                    <span className="w-4 flex-shrink-0 text-[var(--gray-9)]">
-                      {blocked ? '—' : position}
+                    <span className="w-6 flex-shrink-0 text-right text-[var(--gray-9)]">
+                      {blocked ? '—' : shown}
                     </span>
                     <span className={`truncate ${
                       blocked
