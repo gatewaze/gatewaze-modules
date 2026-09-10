@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  usableSeats, SEAT_SIZE, snap, findSeatNear, snapToNeighbours, type SnapGuide,
+  usableSeats, SEAT_SIZE, snap, findSeatNear, snapToNeighbours,
+  rectFromPoints, tablesInRect, type SnapGuide,
 } from '../utils/seatGeometry';
 import type { SeatingPlan, SeatingTable, SeatingAssignment } from '../utils/seatingService';
 
@@ -23,6 +24,31 @@ export type DragState =
       y: number;
       /** Alignment lines to draw while the table is snapped to a neighbour. */
       guides: SnapGuide[];
+      /**
+       * Everything moving with it, as offsets from the dragged table. Captured
+       * at pointer-down so the group keeps its shape however far it travels.
+       */
+      followers: Array<{ id: string; dx: number; dy: number }>;
+    }
+  | {
+      /** Dragging the canvas itself to move around a zoomed-in plan. */
+      kind: 'pan';
+      clientX: number;
+      clientY: number;
+      scrollLeft: number;
+      scrollTop: number;
+      /** Whether the pointer ever really moved, which separates a pan from a click. */
+      moved: boolean;
+    }
+  | {
+      /** Rubber-band selection over empty canvas. */
+      kind: 'marquee';
+      startX: number;
+      startY: number;
+      x: number;
+      y: number;
+      /** Selection to keep when the marquee is additive (shift held). */
+      base: string[];
     }
   | {
       kind: 'guest';
@@ -43,11 +69,11 @@ interface Props {
   assignments: SeatingAssignment[];
   namesByAssignment: Map<string, string>;
   backgroundUrl: string | null;
-  selectedTableId: string | null;
+  selectedTableIds: string[];
   drag: DragState;
   onDragChange: (drag: DragState) => void;
-  onSelectTable: (tableId: string | null) => void;
-  onMoveTable: (tableId: string, x: number, y: number, commit: boolean) => void;
+  onSelectTables: (tableIds: string[]) => void;
+  onMoveTables: (moves: Array<{ id: string; x: number; y: number }>, commit: boolean) => void;
   onDropGuest: (target: { tableId: string; seatIndex: number } | null) => void;
   onSeatContextMenu: (assignmentId: string) => void;
   /** Take a seat out of use (alt-click). */
@@ -60,11 +86,11 @@ export function SeatingCanvas({
   assignments,
   namesByAssignment,
   backgroundUrl,
-  selectedTableId,
+  selectedTableIds,
   drag,
   onDragChange,
-  onSelectTable,
-  onMoveTable,
+  onSelectTables,
+  onMoveTables,
   onDropGuest,
   onSeatContextMenu,
   onBlockSeat,
@@ -173,7 +199,35 @@ export function SeatingCanvas({
         const snappedY = aligned.guides.some((g) => g.axis === 'y') ? aligned.y : snap(aligned.y, grid);
 
         onDragChange({ ...drag, x: snappedX, y: snappedY, guides: aligned.guides });
-        onMoveTable(drag.tableId, snappedX, snappedY, false);
+        onMoveTables(
+          [
+            { id: drag.tableId, x: snappedX, y: snappedY },
+            ...drag.followers.map((f) => ({
+              id: f.id,
+              x: Math.max(0, Math.min(snappedX + f.dx, plan.canvas_width)),
+              y: Math.max(0, Math.min(snappedY + f.dy, plan.canvas_height)),
+            })),
+          ],
+          false,
+        );
+      } else if (drag.kind === 'pan') {
+        const el = viewportRef.current;
+        if (!el) return;
+        const dx = e.clientX - drag.clientX;
+        const dy = e.clientY - drag.clientY;
+        // Deltas are measured against the scroll offset captured at
+        // pointer-down, so scrolling as we go cannot feed back on itself.
+        el.scrollLeft = drag.scrollLeft - dx;
+        el.scrollTop = drag.scrollTop - dy;
+        if (!drag.moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+          onDragChange({ ...drag, moved: true });
+        }
+      } else if (drag.kind === 'marquee') {
+        onDragChange({
+          ...drag,
+          x: Math.max(0, Math.min(point.x, plan.canvas_width)),
+          y: Math.max(0, Math.min(point.y, plan.canvas_height)),
+        });
       } else {
         const target = findSeatNear(tables, point.x, point.y, SEAT_SIZE * 0.9);
         onDragChange({ ...drag, clientX: e.clientX, clientY: e.clientY, target });
@@ -182,7 +236,33 @@ export function SeatingCanvas({
 
     const handleUp = () => {
       if (drag.kind === 'table') {
-        onMoveTable(drag.tableId, drag.x, drag.y, true);
+        onMoveTables(
+          [
+            { id: drag.tableId, x: drag.x, y: drag.y },
+            ...drag.followers.map((f) => ({
+              id: f.id,
+              x: Math.max(0, Math.min(drag.x + f.dx, plan.canvas_width)),
+              y: Math.max(0, Math.min(drag.y + f.dy, plan.canvas_height)),
+            })),
+          ],
+          true,
+        );
+        onDragChange(null);
+      } else if (drag.kind === 'pan') {
+        // A press that never moved is a click on bare canvas, which clears
+        // the selection.
+        if (!drag.moved) onSelectTables([]);
+        onDragChange(null);
+      } else if (drag.kind === 'marquee') {
+        const rect = rectFromPoints(
+          { x: drag.startX, y: drag.startY },
+          { x: drag.x, y: drag.y },
+        );
+        // A marquee that never really moved is a click on empty canvas, which
+        // clears the selection rather than selecting nothing in particular.
+        const moved = rect.right - rect.left > 3 || rect.bottom - rect.top > 3;
+        const caught = moved ? tablesInRect(tables, rect) : [];
+        onSelectTables(moved ? [...new Set([...drag.base, ...caught])] : []);
         onDragChange(null);
       } else {
         onDropGuest(drag.target);
@@ -197,12 +277,31 @@ export function SeatingCanvas({
       window.removeEventListener('pointerup', handleUp);
       window.removeEventListener('pointercancel', handleUp);
     };
-  }, [drag, tables, plan, toCanvasPoint, onDragChange, onMoveTable, onDropGuest]);
+  }, [drag, tables, plan, toCanvasPoint, onDragChange, onMoveTables, onSelectTables, onDropGuest]);
 
   const startTableDrag = (table: SeatingTable, e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    onSelectTable(table.id);
+
+    // Shift adds to or removes from the selection instead of dragging.
+    if (e.shiftKey) {
+      onSelectTables(
+        selectedTableIds.includes(table.id)
+          ? selectedTableIds.filter((id) => id !== table.id)
+          : [...selectedTableIds, table.id],
+      );
+      return;
+    }
+
+    // Dragging a table that is part of a selection moves the whole selection;
+    // dragging any other table selects just that one first.
+    const group = selectedTableIds.includes(table.id) ? selectedTableIds : [table.id];
+    if (!selectedTableIds.includes(table.id)) onSelectTables([table.id]);
+
+    const followers = tables
+      .filter((t) => t.id !== table.id && group.includes(t.id))
+      .map((t) => ({ id: t.id, dx: t.x - table.x, dy: t.y - table.y }));
+
     const point = toCanvasPoint(e.clientX, e.clientY);
     onDragChange({
       kind: 'table',
@@ -212,6 +311,7 @@ export function SeatingCanvas({
       x: table.x,
       y: table.y,
       guides: [],
+      followers,
     });
   };
 
@@ -297,9 +397,38 @@ export function SeatingCanvas({
             width: plan.canvas_width,
             height: plan.canvas_height,
             transform: `scale(${scale})`,
+            cursor: drag?.kind === 'pan' ? 'grabbing' : 'grab',
             ...gridBackground,
           }}
-          onPointerDown={() => onSelectTable(null)}
+          onPointerDown={(e) => {
+            // Presses on a table or seat stop propagation before reaching here,
+            // so this is bare canvas. Dragging it moves around the plan, which
+            // is what you want most of the time once zoomed in; shift-drag
+            // rubber-bands a selection instead, matching shift-click's role of
+            // adding to one.
+            if (e.button !== 0) return;
+            if (e.shiftKey) {
+              const point = toCanvasPoint(e.clientX, e.clientY);
+              onDragChange({
+                kind: 'marquee',
+                startX: point.x,
+                startY: point.y,
+                x: point.x,
+                y: point.y,
+                base: selectedTableIds,
+              });
+              return;
+            }
+            const el = viewportRef.current;
+            onDragChange({
+              kind: 'pan',
+              clientX: e.clientX,
+              clientY: e.clientY,
+              scrollLeft: el?.scrollLeft ?? 0,
+              scrollTop: el?.scrollTop ?? 0,
+              moved: false,
+            });
+          }}
         >
           {backgroundUrl && !plan.background_hidden && (
             <img
@@ -308,6 +437,23 @@ export function SeatingCanvas({
               className="pointer-events-none absolute inset-0 h-full w-full object-fill opacity-50"
             />
           )}
+
+          {/* Rubber band. */}
+          {drag?.kind === 'marquee' && (() => {
+            const r = rectFromPoints(
+              { x: drag.startX, y: drag.startY },
+              { x: drag.x, y: drag.y },
+            );
+            return (
+              <div
+                className="pointer-events-none absolute border border-dashed border-[var(--accent-9)] bg-[var(--accent-4)] opacity-60"
+                style={{
+                  left: r.left, top: r.top,
+                  width: r.right - r.left, height: r.bottom - r.top,
+                }}
+              />
+            );
+          })()}
 
           {/* Alignment guides, drawn while a dragged table is snapped. */}
           {drag?.kind === 'table' && drag.guides.map((guide) => (
@@ -323,7 +469,7 @@ export function SeatingCanvas({
           ))}
 
           {tables.map((table) => {
-            const isSelected = selectedTableId === table.id;
+            const isSelected = selectedTableIds.includes(table.id);
             const seats = usableSeats(table);
             const isRound = table.shape === 'round';
             const width = table.width;
