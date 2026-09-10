@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usableSeats, SEAT_SIZE, snap, findSeatNear } from '../utils/seatGeometry';
+import {
+  usableSeats, SEAT_SIZE, snap, findSeatNear, snapToNeighbours, type SnapGuide,
+} from '../utils/seatGeometry';
 import type { SeatingPlan, SeatingTable, SeatingAssignment } from '../utils/seatingService';
 
 /**
@@ -12,7 +14,16 @@ import type { SeatingPlan, SeatingTable, SeatingAssignment } from '../utils/seat
  */
 
 export type DragState =
-  | { kind: 'table'; tableId: string; grabX: number; grabY: number; x: number; y: number }
+  | {
+      kind: 'table';
+      tableId: string;
+      grabX: number;
+      grabY: number;
+      x: number;
+      y: number;
+      /** Alignment lines to draw while the table is snapped to a neighbour. */
+      guides: SnapGuide[];
+    }
   | {
       kind: 'guest';
       label: string;
@@ -146,11 +157,23 @@ export function SeatingCanvas({
     const handleMove = (e: PointerEvent) => {
       const point = toCanvasPoint(e.clientX, e.clientY);
       if (drag.kind === 'table') {
+        const moving = tables.find((t) => t.id === drag.tableId);
+        const rawX = Math.max(0, Math.min(point.x - drag.grabX, plan.canvas_width));
+        const rawY = Math.max(0, Math.min(point.y - drag.grabY, plan.canvas_height));
+
+        // Neighbouring edges win over the grid: lining two tables up is the
+        // point, and a 20cm grid would fight a 70cm table trying to sit flush
+        // against a 180cm one.
+        const aligned = plan.snap_to_grid && moving
+          ? snapToNeighbours(moving, { x: rawX, y: rawY }, tables)
+          : { x: rawX, y: rawY, guides: [] as SnapGuide[] };
+
         const grid = plan.snap_to_grid ? plan.grid_size : 0;
-        const x = snap(Math.max(0, Math.min(point.x - drag.grabX, plan.canvas_width)), grid);
-        const y = snap(Math.max(0, Math.min(point.y - drag.grabY, plan.canvas_height)), grid);
-        onDragChange({ ...drag, x, y });
-        onMoveTable(drag.tableId, x, y, false);
+        const snappedX = aligned.guides.some((g) => g.axis === 'x') ? aligned.x : snap(aligned.x, grid);
+        const snappedY = aligned.guides.some((g) => g.axis === 'y') ? aligned.y : snap(aligned.y, grid);
+
+        onDragChange({ ...drag, x: snappedX, y: snappedY, guides: aligned.guides });
+        onMoveTable(drag.tableId, snappedX, snappedY, false);
       } else {
         const target = findSeatNear(tables, point.x, point.y, SEAT_SIZE * 0.9);
         onDragChange({ ...drag, clientX: e.clientX, clientY: e.clientY, target });
@@ -188,6 +211,7 @@ export function SeatingCanvas({
       grabY: point.y - table.y,
       x: table.x,
       y: table.y,
+      guides: [],
     });
   };
 
@@ -284,6 +308,19 @@ export function SeatingCanvas({
               className="pointer-events-none absolute inset-0 h-full w-full object-fill opacity-50"
             />
           )}
+
+          {/* Alignment guides, drawn while a dragged table is snapped. */}
+          {drag?.kind === 'table' && drag.guides.map((guide) => (
+            <div
+              key={`${guide.axis}-${guide.position}`}
+              className="pointer-events-none absolute bg-[var(--accent-9)]"
+              style={
+                guide.axis === 'x'
+                  ? { left: guide.position, top: 0, width: 1, height: plan.canvas_height }
+                  : { top: guide.position, left: 0, height: 1, width: plan.canvas_width }
+              }
+            />
+          ))}
 
           {tables.map((table) => {
             const isSelected = selectedTableId === table.id;
