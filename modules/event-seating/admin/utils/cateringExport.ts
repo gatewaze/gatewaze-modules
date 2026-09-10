@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import type { SeatingPlan, SeatingTable, SeatingAssignment, Guest } from './seatingService';
+import { usableSeats } from './seatGeometry';
 // Value import, but cateringPdf has no data-layer imports of its own, so this
 // stays free of the supabase client.
 import { NO_CHOICE } from './cateringPdf';
@@ -24,7 +25,8 @@ export interface CourseQuestion {
 export interface CourseRow {
   tableLabel: string;
   tableSort: number;
-  seatIndex: number;
+  /** 1-based position among the seats in use, as guests and the venue see it. */
+  seatNumber: number;
   guestName: string;
   choice: string;
 }
@@ -177,6 +179,14 @@ export async function buildCourseSheets(input: {
 
   const questionById = new Map(questions.map((q) => [q.id, q]));
 
+  // Seats in use, numbered as guests and the venue see them.
+  const seatNumberByTableSeat = new Map<string, number>();
+  for (const table of tables) {
+    for (const seat of usableSeats(table)) {
+      seatNumberByTableSeat.set(`${table.id}:${seat.index}`, seat.displayNumber);
+    }
+  }
+
   return selectedQuestionIds
     .map((questionId) => {
       const question = questionById.get(questionId);
@@ -188,6 +198,11 @@ export async function buildCourseSheets(input: {
       for (const assignment of seated) {
         const table = tablesById.get(assignment.table_id);
         if (!table) continue;
+
+        // A guest stranded in a seat that has since been taken out of use
+        // must not reach the venue's sheet as a phantom place setting.
+        const seat = seatNumberByTableSeat.get(`${table.id}:${assignment.seat_index}`);
+        if (seat === undefined) continue;
 
         const guest = assignment.party_member_id ? guestsById.get(assignment.party_member_id) : undefined;
         const guestName = guest?.full_name || assignment.guest_label || 'Guest';
@@ -202,7 +217,7 @@ export async function buildCourseSheets(input: {
         rows.push({
           tableLabel: table.label,
           tableSort: table.sort_order,
-          seatIndex: assignment.seat_index,
+          seatNumber: seat,
           guestName,
           choice: choice || NO_CHOICE,
         });
@@ -212,7 +227,7 @@ export async function buildCourseSheets(input: {
         (a, b) =>
           a.tableSort - b.tableSort ||
           a.tableLabel.localeCompare(b.tableLabel) ||
-          a.seatIndex - b.seatIndex,
+          a.seatNumber - b.seatNumber,
       );
 
       const counts = new Map<string, number>();

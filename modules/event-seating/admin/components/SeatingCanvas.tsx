@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { seatPositions, SEAT_SIZE, snap, findSeatNear } from '../utils/seatGeometry';
+import { usableSeats, SEAT_SIZE, snap, findSeatNear } from '../utils/seatGeometry';
 import type { SeatingPlan, SeatingTable, SeatingAssignment } from '../utils/seatingService';
 
 /**
@@ -39,6 +39,8 @@ interface Props {
   onMoveTable: (tableId: string, x: number, y: number, commit: boolean) => void;
   onDropGuest: (target: { tableId: string; seatIndex: number } | null) => void;
   onSeatContextMenu: (assignmentId: string) => void;
+  /** Take a seat out of use (alt-click). */
+  onBlockSeat: (tableId: string, seatIndex: number) => void;
 }
 
 export function SeatingCanvas({
@@ -54,6 +56,7 @@ export function SeatingCanvas({
   onMoveTable,
   onDropGuest,
   onSeatContextMenu,
+  onBlockSeat,
 }: Props) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -284,7 +287,7 @@ export function SeatingCanvas({
 
           {tables.map((table) => {
             const isSelected = selectedTableId === table.id;
-            const seats = seatPositions(table);
+            const seats = usableSeats(table);
             const isRound = table.shape === 'round';
             const width = table.width;
             const height = isRound ? table.width : table.height;
@@ -332,7 +335,11 @@ export function SeatingCanvas({
                   return (
                     <div
                       key={`${table.id}-${seat.index}`}
-                      title={name ? `${name} — seat ${seat.index + 1}` : `Seat ${seat.index + 1}`}
+                      title={
+                        name
+                          ? `${name} — seat ${seat.displayNumber}`
+                          : `Seat ${seat.displayNumber} — alt-click to take it out of use`
+                      }
                       className={`absolute flex items-center justify-center rounded-full border text-center ${
                         isDropTarget
                           ? 'border-[var(--accent-9)] bg-[var(--accent-4)] ring-2 ring-[var(--accent-8)]'
@@ -353,6 +360,15 @@ export function SeatingCanvas({
                       // above: it resolves the seat under the cursor for every
                       // drop, wherever it lands.
                       onPointerDown={(e) => {
+                        // Alt-click takes a seat out of use — the quick way to
+                        // clear the edge where another table butts against
+                        // this one.
+                        if (e.altKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onBlockSeat(table.id, seat.index);
+                          return;
+                        }
                         if (assignment) startSeatedGuestDrag(assignment, e);
                         else e.stopPropagation();
                       }}
@@ -368,7 +384,7 @@ export function SeatingCanvas({
                         </span>
                       ) : (
                         <span className="pointer-events-none text-[10px] text-[var(--gray-9)]">
-                          {seat.index + 1}
+                          {seat.displayNumber}
                         </span>
                       )}
                     </div>

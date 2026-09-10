@@ -48,6 +48,12 @@ placed on a seat as a plain name.
 
 ### Tables and seats
 
+Add a table from the **Add a table** menu, which carries the usual sizes:
+2, 4, 6, 8, 10 and 12-person rectangles that seat guests directly opposite one
+another, round tables from 6 to 12, and top tables seating 4 to 10 along one
+side. The rectangle widens with the number per side so the spacing stays
+sensible.
+
 A table has a shape (round or rectangular), a size, a rotation and a seat count.
 Seat positions are worked out from those, never stored, so changing the seat
 count or turning a table rearranges its seats immediately.
@@ -65,6 +71,24 @@ Rectangular tables offer four arrangements:
 
 Seats are numbered from the top of the table, clockwise, which is how a printed
 plan reads.
+
+### Tables pushed together
+
+Tables get arranged into U shapes, horseshoes and long banks, and where two
+tables meet the seats on the touching edges cannot be sat in. Take a seat out
+of use by unticking it in the table panel, or alt-clicking it on the plan.
+
+A seat out of use is not drawn, cannot be dropped on, and does not count
+towards the table's capacity, so "4/6 seated" always reflects real places. The
+numbering closes up rather than leaving holes: block two seats on an eight-
+seater and the remaining six read 1 to 6, on the plan and in every export.
+Underneath, the seat keeps its original position, so bringing it back into use
+restores the table exactly as it was.
+
+Blocking a seat somebody is sitting in returns them to the guest list first —
+better than a guest who exists in the data but appears nowhere on the plan. The
+database refuses to seat anyone in a blocked seat, so it cannot happen by
+another route either.
 
 ### Moving people around
 

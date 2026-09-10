@@ -6,7 +6,7 @@
  * arrange is what comes out, at whatever resolution you ask for.
  */
 
-import { seatPositions, SEAT_SIZE } from './seatGeometry';
+import { usableSeats, usableSeatCount, SEAT_SIZE } from './seatGeometry';
 import type { SeatingPlan, SeatingTable, SeatingAssignment } from './seatingService';
 
 export interface ExportInput {
@@ -90,7 +90,7 @@ export function renderPlanToCanvas(input: ExportInput, scale = 2): HTMLCanvasEle
   ctx.textBaseline = 'alphabetic';
   ctx.fillText(title, 24, 42);
   const seated = assignments.length;
-  const seats = tables.reduce((sum, t) => sum + t.seat_count, 0);
+  const seats = tables.reduce((sum, t) => sum + usableSeatCount(t), 0);
   ctx.fillStyle = MUTED;
   ctx.font = '16px system-ui, sans-serif';
   ctx.fillText(`${tables.length} tables · ${seated} of ${seats} seats filled`, 24, 62);
@@ -116,7 +116,7 @@ export function renderPlanToCanvas(input: ExportInput, scale = 2): HTMLCanvasEle
     drawTable(ctx, table);
 
     const occupants = byTable.get(table.id);
-    for (const seat of seatPositions(table)) {
+    for (const seat of usableSeats(table)) {
       const name = occupants?.get(seat.index);
       ctx.beginPath();
       ctx.arc(seat.x, seat.y, SEAT_SIZE / 2, 0, Math.PI * 2);
@@ -138,7 +138,7 @@ export function renderPlanToCanvas(input: ExportInput, scale = 2): HTMLCanvasEle
       } else {
         ctx.fillStyle = MUTED;
         ctx.font = '11px system-ui, sans-serif';
-        ctx.fillText(String(seat.index + 1), seat.x, seat.y);
+        ctx.fillText(String(seat.displayNumber), seat.x, seat.y);
       }
     }
   }
