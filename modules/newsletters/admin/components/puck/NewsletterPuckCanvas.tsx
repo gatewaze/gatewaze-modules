@@ -1257,18 +1257,33 @@ const usePuckSelected = createUsePuck();
 // had happened. Subscribing to selectedItem in-context bypasses the
 // event pipeline entirely and works for every selection path: click,
 // inline-text focus, breadcrumb, programmatic, undo/redo.
+//
+// Selecting a block does NOT open the sidebar. It used to also set
+// `leftSideBarVisible: true`, which meant clicking a block on the canvas
+// re-opened a panel the user had deliberately closed — every time, with
+// no way to work with the sidebar shut. Switching the tab is only useful
+// to someone who can see the tabs, so when the sidebar is closed this
+// does nothing at all and the selection is left to the canvas.
 function FieldsAutoSwitcher(): null {
   const selectedId = usePuckSelected((s) => s.selectedItem?.props?.id ?? null);
+  const sideBarVisible = usePuckSelected((s) => s.appState.ui.leftSideBarVisible);
   const dispatch = usePuckSelected((s) => s.dispatch);
   const lastIdRef = useRef<string | null>(null);
+  // Read through a ref so opening the sidebar while a block is already
+  // selected doesn't retroactively switch the tab — the effect stays
+  // keyed on selection changes alone.
+  const sideBarVisibleRef = useRef(sideBarVisible);
+  sideBarVisibleRef.current = sideBarVisible;
 
   useEffect(() => {
-    if (selectedId && selectedId !== lastIdRef.current) {
+    if (selectedId && selectedId !== lastIdRef.current && sideBarVisibleRef.current) {
       dispatch({
         type: 'setUi',
-        ui: { plugin: { current: 'fields' }, leftSideBarVisible: true },
+        ui: { plugin: { current: 'fields' } },
       });
     }
+    // Tracked even when the sidebar is closed, so re-opening it and
+    // clicking the same block still counts as "no new selection".
     lastIdRef.current = selectedId;
   }, [selectedId, dispatch]);
 
