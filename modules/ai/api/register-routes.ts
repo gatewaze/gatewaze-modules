@@ -181,10 +181,29 @@ export function registerRoutes(app: Express, ctx?: any): void {
   // spec-ai-job-runner — Jobs tab + SSE endpoints.
   mountJobsRoutes(router, { supabase, enqueueJob, ...(projectRoot && { projectRoot }) });
 
-  // spec-ai-voice-transcription — the mic-button endpoint. Member-facing
-  // (its own requireJwt + audience gate), so mounted on the router root,
-  // not under /admin.
-  mountTranscriptionRoutes(router, { supabase });
+  /**
+   * spec-ai-voice-transcription — the mic-button endpoint.
+   *
+   * ── WHY THIS IS NOT ON THE MODULE ROUTER ──────────────────────────────
+   *
+   * It used to be, and that made it super-admin only. The platform mounts
+   * everything under /api/modules behind requireSuperAdmin() before any
+   * module code runs, so an ordinary member pressing the mic got
+   * "This action requires the super_admin role." It was never noticed
+   * because every test of it was run from an admin session, which is the
+   * one kind of account the gate lets through.
+   *
+   * So it mounts at /api/ai instead — the path this file's own header has
+   * always claimed — which is the same move health-body-metrics makes for
+   * the same reason. Nothing is loosened by it: this endpoint carries its
+   * own JWT check, use-case audience gate (a member token cannot spend an
+   * admin use case's budget), per-person rate limit, 5 MB cap and
+   * magic-byte sniff. It was written to be member-facing; it was simply
+   * mounted where members could not reach it.
+   */
+  const transcriptionRouter = Router();
+  mountTranscriptionRoutes(transcriptionRouter, { supabase });
+  app.use('/api/ai', transcriptionRouter);
 
   // spec-ai-mcp-extensions — MCP server registry CRUD + Test probe.
   // Mounts under the main JWT-gated router so /admin/mcp-servers/* is
