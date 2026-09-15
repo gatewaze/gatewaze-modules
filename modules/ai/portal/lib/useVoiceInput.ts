@@ -4,7 +4,7 @@
 // (spec-ai-voice-transcription.md §3.4).
 //
 // Tap → record (MediaRecorder, speech bitrate) → tap → POST to
-// /api/modules/ai/transcriptions → transcript handed to the caller to append into
+// /api/ai/transcriptions → transcript handed to the caller to append into
 // the draft. Cross-repo consumers vendor this file verbatim (the portal
 // build cannot import across repos); the HTTP endpoint is the contract, so
 // keep this boring: bearer token, multipart POST, JSON out.
@@ -80,7 +80,7 @@ export function useVoiceInput({ useCase, token, apiUrl, onTranscript, maxSeconds
           form.append('use_case', useCase)
           const lang = (navigator.language || '').slice(0, 2).toLowerCase()
           if (/^[a-z]{2}$/.test(lang)) form.append('language', lang)
-          const res = await fetch(`${apiUrl ?? ''}/api/modules/ai/transcriptions`, {
+          const res = await fetch(`${apiUrl ?? ''}/api/ai/transcriptions`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${token}` },
             body: form,
