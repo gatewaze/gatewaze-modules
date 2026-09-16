@@ -190,6 +190,31 @@ function noteLocalResult(ok: boolean, httpStatus: number): void {
   }
 }
 
+/**
+ * Whisper's repetition hallucination, which the no-speech gate does not catch.
+ *
+ * Given quiet, noisy or clipped audio the model can fall into a loop and emit
+ * one short phrase over and over, often having guessed the wrong language on
+ * the way in. A member reported a text box filled with "meddwl i'r meddwl i'r
+ * meddwl i'r…" — Welsh, from an English speaker, several hundred characters of
+ * it. It is confident output, so every no_speech_prob is LOW and the existing
+ * gate waves it through.
+ *
+ * Detected by how little the text says rather than by matching phrases: a
+ * genuine sentence does not consist of one or two distinct words repeated
+ * dozens of times. Deliberately narrow, because the cost of a false positive
+ * is telling somebody we could not hear them when we could. It needs a long
+ * transcript AND almost no variety in it, which ordinary speech never is,
+ * including "no no no no" and someone counting reps.
+ */
+export function isRepetitionLoop(text: string): boolean {
+  const words = text.toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, ' ').split(/\s+/).filter(Boolean);
+  if (words.length < 30) return false;
+  const distinct = new Set(words).size;
+  // 30+ words carrying fewer than 5 distinct ones is not a sentence.
+  return distinct <= 4 || distinct / words.length < 0.08;
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────
 
 export async function aiTranscribe(
@@ -307,7 +332,8 @@ export async function aiTranscribe(
   const probs = result.noSpeechProbs;
   const silence = (result.durationSeconds != null && result.durationSeconds < 1)
     || !result.text.trim()
-    || (probs.length > 0 && probs.every((p) => p > 0.6));
+    || (probs.length > 0 && probs.every((p) => p > 0.6))
+    || isRepetitionLoop(result.text);
 
   const perSecond = PRICE_MICRO_USD_PER_SECOND[servedBy] ?? 0;
   // ~32 kbps floor when the model reports nothing (gpt-4o-* can't return
