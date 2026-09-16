@@ -28,7 +28,45 @@ import { recordUsage } from './cost.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseClient = { from(table: string): any };
 
-const LOCAL_PREFIX = 'whisper-local-';
+/**
+ * The self-hosted model families, by the alias a use case names them with.
+ *
+ * `whisper-local-*` was the only one, back when self-hosted meant Whisper. It
+ * no longer does: a transducer like Parakeet is several times faster on the
+ * same hardware and, because it can emit a blank, it stays quiet on silence
+ * instead of inventing speech there. Calling that "whisper-local" in the
+ * config and in the usage ledger would be recording something untrue about
+ * what actually ran.
+ *
+ * The alias determines only which repository the suffix is resolved against.
+ * Every family speaks the OpenAI audio API, so the calling code below is the
+ * same for all of them.
+ */
+const LOCAL_FAMILIES = [
+  {
+    alias: 'whisper-local-',
+    env: 'AI_TRANSCRIBE_LOCAL_MODEL_PREFIX',
+    fallback: 'Systran/faster-whisper-',
+  },
+  {
+    alias: 'parakeet-local-',
+    env: 'AI_TRANSCRIBE_PARAKEET_MODEL_PREFIX',
+    fallback: 'mlx-community/parakeet-tdt-0.6b-',
+  },
+] as const;
+
+/** The family a use case's model belongs to, or null when it is hosted. */
+function localFamily(model: string) {
+  return LOCAL_FAMILIES.find((f) => model.startsWith(f.alias)) ?? null;
+}
+
+/** `parakeet-local-v2` → `mlx-community/parakeet-tdt-0.6b-v2`. */
+function resolveLocalModel(model: string): string {
+  const family = localFamily(model);
+  if (!family) return model;
+  const prefix = process.env[family.env] ?? family.fallback;
+  return `${prefix}${model.slice(family.alias.length)}`;
+}
 /**
  * How long a queued request waits for a slot.
  *
@@ -234,7 +272,7 @@ export async function aiTranscribe(
 
   const model: string = row.data.default_model;
   const started = Date.now();
-  const isLocal = model.startsWith(LOCAL_PREFIX);
+  const isLocal = localFamily(model) !== null;
 
   let result: TranscribeAudioResult | null = null;
   let servedBy = model;
@@ -285,15 +323,15 @@ export async function aiTranscribe(
       const release = await acquireLocalSlot(opts.signal);
       try {
         const client = new OpenAIProviderClient(sharedSecret!, baseUrl);
-        // speaches/faster-whisper address models by HF repo id, so
-        // `whisper-local-small` → `Systran/faster-whisper-small` by default;
-        // deployments running other weights override the prefix.
-        const localModelPrefix = process.env.AI_TRANSCRIBE_LOCAL_MODEL_PREFIX
-          ?? 'Systran/faster-whisper-';
+        // Self-hosted backends address models by repo id, so the use case's
+        // alias is resolved against its family's prefix: `whisper-local-small`
+        // → `Systran/faster-whisper-small`, `parakeet-local-v2` →
+        // `mlx-community/parakeet-tdt-0.6b-v2`. Deployments running other
+        // weights override the prefix per family.
         result = await client.transcribeAudio!({
           audio: opts.audio,
           mimeType: opts.mimeType,
-          model: `${localModelPrefix}${model.slice(LOCAL_PREFIX.length)}`,
+          model: resolveLocalModel(model),
           ...(opts.language ? { language: opts.language } : {}),
           timeoutMs: localTimeoutMs(
             opts.audio.length,
