@@ -26,6 +26,12 @@ interface BroadcastRow {
   status: BroadcastStatus;
   sentCount: number;              // total emails sent across this broadcast's sends
   folder_id: string | null;
+  // latest send instance's fields, for the status detail line
+  scheduledAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  totalRecipients: number;
+  sendSentCount: number;
   engagement?: BroadcastEngagement | null;
 }
 
@@ -39,6 +45,32 @@ function fmtNum(n: number): string { return n.toLocaleString(); }
 function pct(n: number, d: number): string { return d > 0 ? `${((n / d) * 100).toFixed(1)}%` : '—'; }
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function formatDateTime(dateString: string): string {
+  return new Date(dateString).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+// A short line shown under the status badge: when a scheduled send fires, how far
+// a sending one has got, and when a completed one went out.
+function statusDetail(r: BroadcastRow): string | null {
+  switch (r.status) {
+    case 'scheduled':
+      return r.scheduledAt ? formatDateTime(r.scheduledAt) : null;
+    case 'sending':
+    case 'cancelling':
+    case 'paused':
+      return r.totalRecipients > 0
+        ? `${Math.min(100, Math.round((r.sendSentCount / r.totalRecipients) * 100))}% · ${fmtNum(r.sendSentCount)}/${fmtNum(r.totalRecipients)}`
+        : (r.sendSentCount > 0 ? `${fmtNum(r.sendSentCount)} sent` : null);
+    case 'sent': {
+      const when = r.completedAt || r.startedAt;
+      return when ? formatDateTime(when) : null;
+    }
+    default:
+      return null;
+  }
 }
 
 const CellSpin = () => (
@@ -136,7 +168,14 @@ export function BroadcastsTable({ broadcasts, folders = [], organizeMode = false
       const { status, latest } = broadcastSummary(b);
       const date = latest?.completed_at || latest?.started_at || latest?.scheduled_at || b.created_at;
       const sentCount = (b.sends || []).reduce((n, s) => n + (s.sent_count || 0), 0);
-      return { id: b.id, name: b.name, subject: b.subject, date, status, sentCount, folder_id: b.folder_id };
+      return {
+        id: b.id, name: b.name, subject: b.subject, date, status, sentCount, folder_id: b.folder_id,
+        scheduledAt: latest?.scheduled_at ?? null,
+        startedAt: latest?.started_at ?? null,
+        completedAt: latest?.completed_at ?? null,
+        totalRecipients: latest?.total_recipients ?? 0,
+        sendSentCount: latest?.sent_count ?? 0,
+      };
     });
     setRows(base);
 
@@ -213,10 +252,16 @@ export function BroadcastsTable({ broadcasts, folders = [], organizeMode = false
     }),
     columnHelper.accessor('status', {
       header: 'Status',
-      size: 110,
+      size: 150,
       cell: (info) => {
         const v = info.getValue();
-        return <Badge color={STATUS_TONE[v]}>{v.charAt(0).toUpperCase() + v.slice(1)}</Badge>;
+        const detail = statusDetail(info.row.original);
+        return (
+          <div className="flex flex-col items-start gap-0.5">
+            <Badge color={STATUS_TONE[v]}>{v.charAt(0).toUpperCase() + v.slice(1)}</Badge>
+            {detail && <span className="text-[11px] text-[var(--gray-10)] whitespace-nowrap">{detail}</span>}
+          </div>
+        );
       },
     }),
     columnHelper.accessor((r) => r.engagement?.sent ?? -1, {
