@@ -161,6 +161,9 @@ const broadcastsModule: GatewazeModule = {
     // 025 count unsubscribes/suppressions on a send's category_list_id, not just
     // list_ids — segment/category sends have list_ids={} so unsubscribed showed 0.
     'migrations/025_engagement_unsub_category_list.sql',
+    // 026 broadcast folders (nested tree) + broadcasts.folder_id + a first-class
+    // duplicate_broadcast RPC (copies content, no sends/metrics).
+    'migrations/026_broadcast_folders.sql',
   ],
 
   adminRoutes: [
