@@ -54,11 +54,23 @@ export interface Broadcast {
   rendered_html: string | null;
   body_text: string | null;
   content_json: Record<string, unknown>;
+  /** Organisational folder this broadcast lives in (null = unfiled). */
+  folder_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
   /** Embedded send instances (when listed) — used to derive a summary status. */
   sends?: BroadcastSendInstance[];
+}
+
+/** A broadcast organisational folder (nested via parent_id). */
+export interface BroadcastFolder {
+  id: string;
+  parent_id: string | null;
+  brand: string;
+  name: string;
+  sort_order: number;
+  created_at: string;
 }
 
 export interface CreateBroadcastInput {
@@ -279,6 +291,60 @@ export async function updateBroadcast(id: string, patch: Partial<Broadcast>): Pr
 
 export async function deleteBroadcast(id: string): Promise<void> {
   const { error } = await supabase.from('broadcasts').delete().eq('id', id);
+  if (error) throw error;
+}
+
+/** Duplicate a broadcast's content into a fresh draft (no sends/metrics) via the
+ *  duplicate_broadcast RPC, which atomically copies the row + blocks + bricks and
+ *  remaps content_json. Returns the new broadcast id. */
+export async function duplicateBroadcast(id: string): Promise<string> {
+  const { data, error } = await supabase.rpc('duplicate_broadcast', { p_broadcast_id: id });
+  if (error) throw error;
+  return data as string;
+}
+
+/** Move a broadcast into a folder (or null to unfile it). */
+export async function moveBroadcastToFolder(id: string, folderId: string | null): Promise<void> {
+  const { error } = await supabase.from('broadcasts').update({ folder_id: folderId }).eq('id', id);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Folders (organisational tree; a broadcast belongs to one folder or none)
+// ---------------------------------------------------------------------------
+
+export async function listBroadcastFolders(): Promise<BroadcastFolder[]> {
+  const { data, error } = await supabase
+    .from('broadcast_folders')
+    .select('id, parent_id, brand, name, sort_order, created_at')
+    .order('sort_order', { ascending: true })
+    .order('name', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as BroadcastFolder[];
+}
+
+export async function createBroadcastFolder(name: string, parentId: string | null = null): Promise<BroadcastFolder> {
+  const { data, error } = await supabase
+    .from('broadcast_folders')
+    .insert({ name: name.trim(), parent_id: parentId })
+    .select('id, parent_id, brand, name, sort_order, created_at')
+    .single();
+  if (error) throw error;
+  return data as BroadcastFolder;
+}
+
+export async function renameBroadcastFolder(id: string, name: string): Promise<void> {
+  const { error } = await supabase
+    .from('broadcast_folders')
+    .update({ name: name.trim(), updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+/** Delete a folder. Its broadcasts fall back to unfiled and any subfolders rise
+ *  to the root (both via ON DELETE SET NULL on the FKs). */
+export async function deleteBroadcastFolder(id: string): Promise<void> {
+  const { error } = await supabase.from('broadcast_folders').delete().eq('id', id);
   if (error) throw error;
 }
 
