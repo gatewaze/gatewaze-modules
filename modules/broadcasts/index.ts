@@ -158,6 +158,9 @@ const broadcastsModule: GatewazeModule = {
     // 024 background refresh of the engagement cache (young=2h, mature=weekly)
     // so late opens/clicks after a send finishes are reflected, not frozen.
     'migrations/024_engagement_snapshot_refresh.sql',
+    // 025 count unsubscribes/suppressions on a send's category_list_id, not just
+    // list_ids — segment/category sends have list_ids={} so unsubscribed showed 0.
+    'migrations/025_engagement_unsub_category_list.sql',
   ],
 
   adminRoutes: [
