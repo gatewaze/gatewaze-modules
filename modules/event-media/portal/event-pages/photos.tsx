@@ -686,7 +686,14 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
 
   if (mobileTakeover) {
     return createPortal(
-      <div className={`fixed inset-0 z-50 overflow-y-auto overscroll-contain ${darkMode ? 'bg-gray-950' : 'bg-gray-50'}`}>
+      // Inline background: the portal's Tailwind predates gray-950, so
+      // the class silently doesn't exist and the takeover rendered
+      // WHITE (live finding 2026-09-19). Never rely on newer palette
+      // classes in module portal pages.
+      <div
+        className="fixed inset-0 z-50 overflow-y-auto overscroll-contain"
+        style={{ backgroundColor: darkMode ? '#0b0b10' : '#f7f7f8' }}
+      >
         {pageContent}
       </div>,
       document.body,

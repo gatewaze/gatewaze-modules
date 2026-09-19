@@ -48,9 +48,12 @@ interface DisplayItem {
   created_at: string
 }
 
+type SlideEffect = 'kenburns' | 'fade' | 'slide' | 'zoom' | 'blur'
+
 interface DisplaySettings {
   mode: 'slideshow' | 'wall'
   intervalMs: number
+  effect: SlideEffect
   qrMode: 'corner' | 'interleave' | 'hidden'
   qrEveryN: number
   liveSource: 'whep' | 'webcam' | 'youtube'
@@ -63,6 +66,7 @@ interface DisplaySettings {
 const DEFAULT_SETTINGS: DisplaySettings = {
   mode: 'slideshow',
   intervalMs: 8000,
+  effect: 'kenburns',
   qrMode: 'interleave',
   qrEveryN: 10,
   liveSource: 'whep',
@@ -71,6 +75,44 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   statusUrl: DEFAULT_STATUS_URL,
   youtubeId: '',
 }
+
+// Slide-entry animation per effect. Ken Burns additionally runs a slow
+// pan/zoom for the WHOLE display interval — the pan direction cycles
+// per photo (derived from the photo id) so consecutive slides drift
+// differently.
+const KB_VARIANTS = ['emkb-a', 'emkb-b', 'emkb-c', 'emkb-d'] as const
+
+function kbVariantFor(id: string): string {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i)) % 4
+  return KB_VARIANTS[h]!
+}
+
+function slideAnimation(effect: SlideEffect, photoId: string, intervalMs: number): string {
+  switch (effect) {
+    case 'kenburns':
+      return `emfade 900ms ease, ${kbVariantFor(photoId)} ${Math.max(intervalMs, 2000) + 1200}ms linear forwards`
+    case 'slide':
+      return 'emslide 700ms cubic-bezier(0.22, 1, 0.36, 1)'
+    case 'zoom':
+      return 'emzoom 800ms cubic-bezier(0.22, 1, 0.36, 1)'
+    case 'blur':
+      return 'emblur 900ms ease'
+    default:
+      return 'emfade 700ms ease'
+  }
+}
+
+const EFFECT_KEYFRAMES = `
+@keyframes emfade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes emslide { from { opacity: 0; transform: translateX(5%) } to { opacity: 1; transform: none } }
+@keyframes emzoom { from { opacity: 0; transform: scale(1.12) } to { opacity: 1; transform: scale(1) } }
+@keyframes emblur { from { opacity: 0; filter: blur(14px) } to { opacity: 1; filter: none } }
+@keyframes emkb-a { from { transform: scale(1.02) } to { transform: scale(1.12) translate(1.5%, -1%) } }
+@keyframes emkb-b { from { transform: scale(1.02) } to { transform: scale(1.12) translate(-1.5%, 1%) } }
+@keyframes emkb-c { from { transform: scale(1.12) translate(1%, 1%) } to { transform: scale(1.02) } }
+@keyframes emkb-d { from { transform: scale(1.02) translate(-1%, 0) } to { transform: scale(1.1) translate(1%, -1.5%) } }
+`
 
 interface DisplayViewProps {
   code: string
@@ -438,7 +480,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               key={current.id}
               src={current.url}
               alt={current.guest_name ? `Photo by ${current.guest_name}` : ''}
-              className="absolute inset-0 w-full h-full object-contain animate-[fadein_700ms_ease]"
+              className="absolute inset-0 w-full h-full object-contain"
+              style={{ animation: slideAnimation(settings.effect, current.id, settings.intervalMs) }}
             />
           )}
           {current?.guest_name && !showQrSlide && (
@@ -531,6 +574,18 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               ⛶
             </button>
           </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="w-16 text-white/60">Effect</span>
+            {(['kenburns', 'fade', 'slide', 'zoom', 'blur'] as const).map((e) => (
+              <button
+                key={e}
+                onClick={() => updateSettings({ effect: e })}
+                className={`rounded px-2 py-0.5 text-xs capitalize ${settings.effect === e ? 'bg-white/25' : 'bg-white/5'}`}
+              >
+                {e === 'kenburns' ? 'Ken Burns' : e}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-2">
             <span className="w-16 text-white/60">QR</span>
             {(['corner', 'interleave', 'hidden'] as const).map((m) => (
@@ -595,7 +650,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
       {/* plain <style>, not styled-jsx — module pages must not depend on
           compiler transforms beyond what every sibling page uses */}
-      <style>{'@keyframes fadein { from { opacity: 0 } to { opacity: 1 } }'}</style>
+      <style>{EFFECT_KEYFRAMES}</style>
     </div>,
     document.body,
   )
