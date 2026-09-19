@@ -27,7 +27,9 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
+// Same-origin — proxied to the api service by the portal's
+// /api/public/* rewrite (see photos.tsx note).
+const API_BASE = ''
 const POLL_MS = 10_000
 const MAX_PHOTOS = 500
 const MENU_HIDE_MS = 4_000
