@@ -79,6 +79,14 @@ interface DisplaySettings {
   subjectPop: boolean
   /** Opt-in GPU backend for the models (see ai-pipeline note). */
   webgpu: boolean
+  /** Rotation order through the pool. */
+  order: 'newest' | 'oldest' | 'shuffle'
+  /**
+   * Cut to a photo the moment it lands instead of waiting for the
+   * current slide to run out — a guest sees their upload appear while
+   * they are still holding the phone.
+   */
+  instantNew: boolean
 }
 
 const DEFAULT_SETTINGS: DisplaySettings = {
@@ -96,6 +104,17 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   fillBars: true,
   subjectPop: true,
   webgpu: false,
+  order: 'newest',
+  instantNew: true,
+}
+
+/**
+ * The pool is held newest-first (the feed returns created_at DESC and
+ * arrivals are prepended), so 'newest' walks it as-is.
+ */
+function orderedPool(list: DisplayItem[], order: DisplaySettings['order']): DisplayItem[] {
+  if (order === 'oldest') return [...list].reverse()
+  return list
 }
 
 // Slide-entry animation per effect. Ken Burns additionally runs a slow
@@ -184,6 +203,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const newestRef = useRef<string | null>(null)
 
   const [current, setCurrent] = useState<DisplayItem | null>(null)
+  /** Bumped when fresh uploads land, to trigger an instant cut. */
+  const [freshArrivals, setFreshArrivals] = useState(0)
+  /** Bumped on an interrupt so the slide timer restarts cleanly. */
+  const [slideTick, setSlideTick] = useState(0)
   const [previous, setPrevious] = useState<DisplayItem | null>(null)
   const [showQrSlide, setShowQrSlide] = useState(false)
   const advanceCountRef = useRef(0)
@@ -256,7 +279,13 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       const seen = new Set(prev.map((p) => p.id))
       const add = clean.filter((i) => !seen.has(i.id))
       if (add.length === 0) return prev
-      if (fresh) freshQueueRef.current.push(...add)
+      if (fresh) {
+        freshQueueRef.current.push(...add)
+        // Signal the instant-cut effect (setState during another
+        // component's updater is fine here — different state atom,
+        // and React batches it into the same commit).
+        setFreshArrivals((n) => n + 1)
+      }
       const merged = [...add, ...prev].slice(0, MAX_PHOTOS)
       photosRef.current = merged
       const newest = merged[0]?.created_at
@@ -336,23 +365,47 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
     setCurrent((prev) => {
       setPrevious(prev)
+      // A just-uploaded photo always wins the next slot.
       if (fresh) {
         indexRef.current = 0
         return fresh
       }
-      const list = photosRef.current
+      const list = orderedPool(photosRef.current, settings.order)
       if (list.length === 0) return prev
-      indexRef.current = (indexRef.current + 1) % list.length
+      if (settings.order === 'shuffle' && list.length > 1) {
+        // Never repeat the photo that is already up.
+        let pick = indexRef.current
+        for (let i = 0; i < 8 && pick === indexRef.current; i++) {
+          pick = Math.floor(Math.random() * list.length)
+        }
+        indexRef.current = pick
+      } else {
+        indexRef.current = (indexRef.current + 1) % list.length
+      }
       return list[indexRef.current]
     })
-  }, [settings.qrMode, settings.qrEveryN])
+  }, [settings.qrMode, settings.qrEveryN, settings.order])
 
   useEffect(() => {
     if (settings.mode !== 'slideshow') return
     if (!current && photosRef.current.length > 0) setCurrent(photosRef.current[0])
     const interval = setInterval(advance, Math.max(settings.intervalMs, 2000))
     return () => clearInterval(interval)
-  }, [settings.mode, settings.intervalMs, advance, current, photos.length])
+    // slideTick restarts the timer after an interrupt so a photo cut to
+    // early still gets its full time on screen.
+  }, [settings.mode, settings.intervalMs, advance, current, photos.length, slideTick])
+
+  // Cut to new arrivals immediately. The poll finds them within ~10 s;
+  // without this they would then wait out the rest of the current
+  // slide too, so a guest could stand there for 18 s. One interrupt
+  // per burst — the rest of the batch drains through the normal
+  // fresh-queue priority rather than strobing past.
+  useEffect(() => {
+    if (!settings.instantNew || settings.mode !== 'slideshow') return
+    if (freshArrivals === 0) return
+    advance()
+    setSlideTick((t) => t + 1)
+  }, [freshArrivals, settings.instantNew, settings.mode, advance])
 
   // Preload the next slide.
   useEffect(() => {
@@ -372,11 +425,17 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     const interval = Math.max(settings.intervalMs, 2000)
 
     const pickNext = (displayed: Set<string>): DisplayItem | null => {
-      const list = photosRef.current
+      const list = orderedPool(photosRef.current, settings.order)
       if (list.length === 0) return null
       // Fresh uploads jump straight onto the wall.
       const fresh = freshQueueRef.current.shift()
       if (fresh) return fresh
+      if (settings.order === 'shuffle') {
+        for (let i = 0; i < 12; i++) {
+          const cand = list[Math.floor(Math.random() * list.length)]!
+          if (!displayed.has(cand.id)) return cand
+        }
+      }
       for (let i = 0; i < list.length; i++) {
         wallPointerRef.current = (wallPointerRef.current + 1) % list.length
         const cand = list[wallPointerRef.current]!
@@ -405,7 +464,13 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             }
           })
         }
-        const dueIdx = prev.findIndex((c) => c.nextAt <= now)
+        // A new upload claims the next cell straight away rather than
+        // waiting for that cell's own clock, so the wall reacts as
+        // fast as the slideshow does.
+        const wantsInstant = settings.instantNew && freshQueueRef.current.length > 0
+        const dueIdx = wantsInstant
+          ? prev.reduce((oldest, c, i) => (c.nextAt < prev[oldest]!.nextAt ? i : oldest), 0)
+          : prev.findIndex((c) => c.nextAt <= now)
         if (dueIdx === -1) return prev
         const displayed = new Set(prev.map((c) => c.current?.id).filter(Boolean) as string[])
         const next = pickNext(displayed)
@@ -424,7 +489,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     tick()
     const iv = setInterval(tick, 500)
     return () => clearInterval(iv)
-  }, [settings.mode, settings.intervalMs])
+  }, [settings.mode, settings.intervalMs, settings.order, settings.instantNew])
 
   // ── Ambient colour spill ──────────────────────────────────────────
 
@@ -880,6 +945,29 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               {aiState === 'unavailable' && 'AI unavailable — using Ken Burns'}
             </div>
           )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="w-16 text-white/60">Order</span>
+            {([
+              ['newest', 'Newest'],
+              ['oldest', 'Oldest'],
+              ['shuffle', 'Shuffle'],
+            ] as const).map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => updateSettings({ order: val })}
+                className={`rounded px-2 py-0.5 text-xs ${settings.order === val ? 'bg-white/25' : 'bg-white/5'}`}
+              >
+                {label}
+              </button>
+            ))}
+            <button
+              onClick={() => updateSettings({ instantNew: !settings.instantNew })}
+              className={`rounded px-2 py-0.5 text-xs ${settings.instantNew ? 'bg-white/25' : 'bg-white/5'}`}
+              title="Cut to a photo the moment it is uploaded"
+            >
+              Show new instantly
+            </button>
+          </div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="w-16 text-white/60">Look</span>
             {([
