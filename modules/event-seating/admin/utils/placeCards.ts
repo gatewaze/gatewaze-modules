@@ -273,8 +273,15 @@ export const SAMPLE_PLACE_CARD_CONTEXT: PlaceCardContext = {
 };
 
 // ---------------------------------------------------------------------------
-// Card data — one card per seated guest
+// Card data — one card per guest
 // ---------------------------------------------------------------------------
+
+/**
+ * Who gets a card. 'seated' walks the seat assignments; 'attending' covers
+ * the plan's whole guest list (everyone whose RSVP matches the plan's
+ * statuses), so cards can be printed before any table planning has happened.
+ */
+export type PlaceCardScope = 'seated' | 'attending';
 
 export interface PlaceCard {
   context: PlaceCardContext;
@@ -287,10 +294,12 @@ export interface PlaceCard {
 }
 
 /**
- * One card per seated guest, in the order the venue lays the room: table
- * order then seat number (or straight seat number when the plan numbers
- * seats continuously). Custom guests seated as a plain label get a card
- * with the label as their name and no meal choices.
+ * One card per guest. Seated guests come out in the order the venue lays the
+ * room: table order then seat number (or straight seat number when the plan
+ * numbers seats continuously). With scope 'attending', guests not yet given
+ * a seat follow, grouped by party — same grouping as the guest tray — with
+ * empty table/seat variables. Custom guests seated as a plain label get a
+ * card with the label as their name and no meal choices.
  */
 export async function buildPlaceCards(input: {
   plan: SeatingPlan;
@@ -299,18 +308,27 @@ export async function buildPlaceCards(input: {
   guests: Guest[];
   questions: CourseQuestion[];
   selectedQuestionIds: string[];
+  scope: PlaceCardScope;
   eventTitle: string;
   subEventName: string;
 }): Promise<PlaceCard[]> {
-  const { plan, tables, assignments, guests, questions, selectedQuestionIds } = input;
+  const { plan, tables, assignments, guests, questions, selectedQuestionIds, scope } = input;
 
   const guestsById = new Map(guests.map((g) => [g.id, g]));
   const tablesById = new Map(tables.map((t) => [t.id, t]));
 
   const seated = assignments.filter((a) => a.party_member_id || a.guest_label);
-  const memberIds = seated
-    .map((a) => a.party_member_id)
-    .filter((id): id is string => !!id);
+  const seatedMemberIds = new Set(
+    seated.map((a) => a.party_member_id).filter((id): id is string => !!id),
+  );
+  const unseatedGuests = scope === 'attending'
+    ? guests.filter((g) => !seatedMemberIds.has(g.id))
+    : [];
+
+  const memberIds = [
+    ...seatedMemberIds,
+    ...unseatedGuests.map((g) => g.id),
+  ];
 
   // member → the member_event carrying this plan's RSVP, which the answers
   // hang off. Same join the catering sheets use.
@@ -358,7 +376,51 @@ export async function buildPlaceCards(input: {
 
   const seatNumberByTableSeat = planSeatNumbers(tables, plan.seat_numbering);
 
-  const cards: PlaceCard[] = [];
+  const mealFor = (memberId: string | null | undefined) => {
+    const memberEventId = memberId ? memberEventIdByMember.get(memberId) : undefined;
+    const choices: string[] = [];
+    const labelled: string[] = [];
+    for (const q of orderedQuestions) {
+      const raw = memberEventId ? answerByKey.get(`${memberEventId}:${q.id}`) : undefined;
+      const choice = (raw || '').trim();
+      if (!choice) continue;
+      choices.push(choice);
+      labelled.push(`${q.label}: ${choice}`);
+    }
+    return { choices, labelled };
+  };
+
+  const makeCard = (args: {
+    firstName: string;
+    lastName: string;
+    fullName: string;
+    partyName: string;
+    memberId: string | null;
+    tableLabel: string;
+    tableSort: number;
+    seatNumber: number;
+  }): PlaceCard => {
+    const { choices, labelled } = mealFor(args.memberId);
+    // A guest with no name parts at all still gets a readable card.
+    const firstName = !args.firstName && !args.lastName ? args.fullName : args.firstName;
+    return {
+      context: {
+        guest: { first_name: firstName, last_name: args.lastName, full_name: args.fullName },
+        party: { name: args.partyName },
+        table: { label: args.tableLabel },
+        seat: { number: args.seatNumber > 0 ? String(args.seatNumber) : '' },
+        meal: { choices: choices.join('\n'), choices_with_labels: labelled.join('\n') },
+        event: { title: input.eventTitle },
+        sub_event: { name: input.subEventName },
+      },
+      tableSort: args.tableSort,
+      tableLabel: args.tableLabel,
+      seatNumber: args.seatNumber,
+      missingMeal: selectedQuestionIds.length > 0 && choices.length === 0,
+    };
+  };
+
+  const seatedCards: PlaceCard[] = [];
   for (const assignment of seated) {
     const table = tablesById.get(assignment.table_id);
     if (!table) continue;
@@ -369,46 +431,41 @@ export async function buildPlaceCards(input: {
     if (seat === undefined) continue;
 
     const guest = assignment.party_member_id ? guestsById.get(assignment.party_member_id) : undefined;
-    const firstName = guest ? (guest.first_name || '') : (assignment.guest_label || 'Guest');
-    const lastName = guest ? (guest.last_name || '') : '';
-    const fullName = guest ? guest.full_name : (assignment.guest_label || 'Guest');
-
-    const memberEventId = assignment.party_member_id
-      ? memberEventIdByMember.get(assignment.party_member_id)
-      : undefined;
-    const choices: string[] = [];
-    const labelled: string[] = [];
-    for (const q of orderedQuestions) {
-      const raw = memberEventId ? answerByKey.get(`${memberEventId}:${q.id}`) : undefined;
-      const choice = (raw || '').trim();
-      if (!choice) continue;
-      choices.push(choice);
-      labelled.push(`${q.label}: ${choice}`);
-    }
-
-    cards.push({
-      context: {
-        guest: { first_name: firstName, last_name: lastName, full_name: fullName },
-        party: { name: guest?.party_name || '' },
-        table: { label: table.label },
-        seat: { number: String(seat) },
-        meal: { choices: choices.join('\n'), choices_with_labels: labelled.join('\n') },
-        event: { title: input.eventTitle },
-        sub_event: { name: input.subEventName },
-      },
-      tableSort: table.sort_order,
+    seatedCards.push(makeCard({
+      firstName: guest ? (guest.first_name || '') : (assignment.guest_label || 'Guest'),
+      lastName: guest ? (guest.last_name || '') : '',
+      fullName: guest ? guest.full_name : (assignment.guest_label || 'Guest'),
+      partyName: guest?.party_name || '',
+      memberId: assignment.party_member_id,
       tableLabel: table.label,
+      tableSort: table.sort_order,
       seatNumber: seat,
-      missingMeal: selectedQuestionIds.length > 0 && choices.length === 0,
-    });
+    }));
   }
 
-  cards.sort((a, b) =>
+  seatedCards.sort((a, b) =>
     plan.seat_numbering === 'continuous'
       ? a.seatNumber - b.seatNumber
       : a.tableSort - b.tableSort
         || a.tableLabel.localeCompare(b.tableLabel)
         || a.seatNumber - b.seatNumber);
 
-  return cards;
+  // Guests without a seat follow the seated block, grouped the way the guest
+  // tray lists them, so cards for one party stay together in the stack.
+  const unseatedCards = unseatedGuests
+    .slice()
+    .sort((a, b) =>
+      a.party_name.localeCompare(b.party_name) || a.full_name.localeCompare(b.full_name))
+    .map((g) => makeCard({
+      firstName: g.first_name || '',
+      lastName: g.last_name || '',
+      fullName: g.full_name,
+      partyName: g.party_name,
+      memberId: g.id,
+      tableLabel: '',
+      tableSort: Number.MAX_SAFE_INTEGER,
+      seatNumber: 0,
+    }));
+
+  return [...seatedCards, ...unseatedCards];
 }

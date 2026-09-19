@@ -234,6 +234,12 @@ once folded — and their meal choices on the inside. Pick which RSVP questions
 count as courses, exactly as with the meal sheets; anything that looks like one
 is preselected.
 
+Cards do not need a finished table plan: choose **Everyone attending** to print
+a card for every guest on the plan's list (everyone whose RSVP matches the
+plan's statuses) before anyone has a seat, grouped by party. Once seats are
+assigned, **Seated guests only** prints in table-and-seat order; anyone still
+unseated in the attending view simply has empty table and seat variables.
+
 The layout comes from a template you can adjust visually — drag the fields,
 change sizes, colours and alignment, and upload TTF/OTF fonts, which are
 shared with the Event Invites PDF templates. Cards come out one per guest in

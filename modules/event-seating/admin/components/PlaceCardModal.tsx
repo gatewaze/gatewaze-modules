@@ -12,6 +12,7 @@ import {
   defaultPlaceCardFields,
   findPlaceCardTemplate,
   getFontAssets,
+  type PlaceCardScope,
   type PlaceCardTemplate,
 } from '../utils/placeCards';
 import { downloadPlaceCardPdf } from '../utils/placeCardPdf';
@@ -43,6 +44,7 @@ export function PlaceCardModal({ isOpen, onClose, plan, tables, assignments, gue
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [scope, setScope] = useState<PlaceCardScope | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -75,6 +77,18 @@ export function PlaceCardModal({ isOpen, onClose, plan, tables, assignments, gue
     [assignments],
   );
 
+  // 'attending' = the plan's guest list plus any seated custom names, minus
+  // double-counting guests who hold a seat.
+  const attendingCount = useMemo(() => {
+    const seatedCustom = assignments.filter((a) => !a.party_member_id && a.guest_label).length;
+    return guests.length + seatedCustom;
+  }, [guests, assignments]);
+
+  // Before any table planning, default to everyone attending; once seats
+  // exist, default to the seated set. Explicit choice always wins.
+  const effectiveScope: PlaceCardScope = scope ?? (seatedCount > 0 ? 'seated' : 'attending');
+  const cardCount = effectiveScope === 'attending' ? attendingCount : seatedCount;
+
   const toggle = (id: string, on: boolean) => {
     setSelected((current) =>
       on ? [...current, id] : current.filter((existing) => existing !== id));
@@ -99,12 +113,15 @@ export function PlaceCardModal({ isOpen, onClose, plan, tables, assignments, gue
         guests,
         questions,
         selectedQuestionIds: selected,
+        scope: effectiveScope,
         eventTitle,
         subEventName,
       });
 
       if (cards.length === 0) {
-        toast.error('Nobody is seated yet, so there are no place cards to print');
+        toast.error(effectiveScope === 'seated'
+          ? 'Nobody is seated yet — switch to "Everyone attending" to print before planning tables'
+          : 'No guests match this plan yet, so there are no place cards to print');
         return;
       }
 
@@ -142,14 +159,14 @@ export function PlaceCardModal({ isOpen, onClose, plan, tables, assignments, gue
         footer={
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-[var(--gray-9)]">
-              {seatedCount} seated guest{seatedCount === 1 ? '' : 's'}
+              {cardCount} card{cardCount === 1 ? '' : 's'}
             </span>
             <div className="flex gap-2">
               <Button variant="soft" size="2" onClick={onClose}>Cancel</Button>
               <Button variant="outline" size="2" onClick={() => setEditorOpen(true)} disabled={loading}>
                 Edit template
               </Button>
-              <Button size="2" disabled={generating || loading || seatedCount === 0} onClick={handleGenerate}>
+              <Button size="2" disabled={generating || loading || cardCount === 0} onClick={handleGenerate}>
                 {generating ? 'Generating…' : 'Generate PDF'}
               </Button>
             </div>
@@ -158,10 +175,36 @@ export function PlaceCardModal({ isOpen, onClose, plan, tables, assignments, gue
       >
         <div className="space-y-3 p-1">
           <p className="text-sm text-[var(--gray-11)]">
-            One card per seated guest, in table and seat order, sized for the flat
-            83 × 108mm cards that fold into an 83 × 54mm tent. The guest&apos;s name
-            prints on the outside; the courses you tick below print on the inside.
+            One card per guest, sized for the flat 83 × 108mm cards that fold into an
+            83 × 54mm tent. The guest&apos;s name prints on the outside; the courses you
+            tick below print on the inside.
           </p>
+
+          <div className="space-y-1">
+            <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--gray-6)] px-2 py-1.5 text-sm text-[var(--gray-12)] hover:border-[var(--accent-8)]">
+              <input
+                type="radio"
+                name="place-card-scope"
+                checked={effectiveScope === 'attending'}
+                onChange={() => setScope('attending')}
+                className="cursor-pointer"
+              />
+              <span>
+                Everyone attending ({attendingCount}) — works before the table plan
+                exists; cards come out grouped by party
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--gray-6)] px-2 py-1.5 text-sm text-[var(--gray-12)] hover:border-[var(--accent-8)]">
+              <input
+                type="radio"
+                name="place-card-scope"
+                checked={effectiveScope === 'seated'}
+                onChange={() => setScope('seated')}
+                className="cursor-pointer"
+              />
+              <span>Seated guests only ({seatedCount}) — in table and seat order</span>
+            </label>
+          </div>
 
           {loading ? (
             <p className="py-4 text-center text-sm text-[var(--gray-9)]">Loading questions…</p>
