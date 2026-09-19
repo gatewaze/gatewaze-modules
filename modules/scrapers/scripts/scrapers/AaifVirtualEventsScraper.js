@@ -38,7 +38,14 @@
  *       webCoverImageUrl, liveMeetupInfo: { posterUrl }, registrationUrl,
  *       onlineUrl, location }
  *   props.pageProps.event (detail):
- *     { ...same..., description (HTML), tags: [{name}], topics: [] }
+ *     { ...same..., description, tags: [{name}], topics: [] }
+ *
+ * `description` has shipped in two shapes:
+ *   - HTML string (verified July 2026)
+ *   - serialised Plate-style rich-text JSON (observed Sept 2026): an array of
+ *     nodes like {"type":"p","children":[{"text":"...","bold":true}],"id":".."}
+ * Both are handled — the JSON shape is converted to portal-safe HTML; passing
+ * it through verbatim dumps raw JSON onto the portal event page.
  */
 
 import { BaseScraper } from './BaseScraper.js';
@@ -84,6 +91,111 @@ function cleanDescriptionHtml(html) {
   out = out.trim();
   if (out.length > MAX_PAGE_CONTENT) out = out.slice(0, MAX_PAGE_CONTENT);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Plate-style rich-text JSON → HTML / plain text.
+//
+// Gradual (home.mlops.community) switched `event.description` from HTML to a
+// serialised rich-text document. Nodes are either leaves ({text, bold?,
+// italic?, ...}) or elements ({type, children, url?}). Everything is escaped;
+// only http(s) links keep their href. Unknown block types degrade to <p> so a
+// future upstream change can never dump raw JSON into the portal again.
+
+// Recursion guard for attacker-controlled nesting (stack-overflow DoS) and a
+// pre-parse size cap: past these, the payload is not worth converting.
+const MAX_RICH_TEXT_DEPTH = 100;
+const MAX_RICH_TEXT_JSON = 2_000_000;
+
+function parseRichTextNodes(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (!s.startsWith('[') || s.length > MAX_RICH_TEXT_JSON) return null;
+  let nodes;
+  try {
+    nodes = JSON.parse(s);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(nodes) || nodes.length === 0) return null;
+  const looksLikeNode = (n) =>
+    n && typeof n === 'object' && !Array.isArray(n) &&
+    (typeof n.type === 'string' || typeof n.text === 'string' || Array.isArray(n.children));
+  return nodes.every(looksLikeNode) ? nodes : null;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function richTextLeafToHtml(leaf) {
+  let out = escapeHtml(leaf.text ?? '').replace(/\n/g, '<br/>');
+  if (!out) return '';
+  if (leaf.code) out = `<code>${out}</code>`;
+  if (leaf.bold) out = `<strong>${out}</strong>`;
+  if (leaf.italic) out = `<em>${out}</em>`;
+  if (leaf.underline) out = `<u>${out}</u>`;
+  if (leaf.strikethrough) out = `<s>${out}</s>`;
+  return out;
+}
+
+// h1 maps to h2: the portal page already renders the event title as its h1.
+const RICH_TEXT_BLOCK_TAGS = {
+  h1: 'h2', h2: 'h2', h3: 'h3', h4: 'h4', h5: 'h5', h6: 'h6',
+  blockquote: 'blockquote', ul: 'ul', ol: 'ol', li: 'li',
+};
+
+function richTextNodeToHtml(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > MAX_RICH_TEXT_DEPTH) return '';
+  if (typeof node.text === 'string') return richTextLeafToHtml(node);
+  const inner = Array.isArray(node.children)
+    ? node.children.map((n) => richTextNodeToHtml(n, depth + 1)).join('')
+    : '';
+  switch (node.type) {
+    case 'a': {
+      const url = typeof node.url === 'string' ? node.url.trim() : '';
+      if (/^https?:\/\//i.test(url)) {
+        return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`;
+      }
+      return inner;
+    }
+    case 'p':
+      return inner ? `<p>${inner}</p>` : '';
+    case 'lic': // Plate's list-item-content wrapper — the parent <li> is enough
+      return inner;
+    default: {
+      // Object.hasOwn: node.type is attacker-controlled — a bare bracket
+      // lookup would resolve prototype members like "constructor".
+      const tag = Object.hasOwn(RICH_TEXT_BLOCK_TAGS, node.type)
+        ? RICH_TEXT_BLOCK_TAGS[node.type]
+        : null;
+      if (tag) return `<${tag}>${inner}</${tag}>`;
+      return inner ? `<p>${inner}</p>` : '';
+    }
+  }
+}
+
+function richTextNodesToHtml(nodes) {
+  return nodes.map(richTextNodeToHtml).join('');
+}
+
+function richTextNodesToText(nodes) {
+  const parts = [];
+  const walk = (n, depth = 0) => {
+    if (depth > MAX_RICH_TEXT_DEPTH) return;
+    if (Array.isArray(n)) { n.forEach((x) => walk(x, depth + 1)); return; }
+    if (!n || typeof n !== 'object') return;
+    if (typeof n.text === 'string') { parts.push(n.text); return; }
+    walk(n.children, depth + 1);
+    parts.push(' ');
+  };
+  walk(nodes);
+  return parts.join('').replace(/\s+/g, ' ').trim();
 }
 
 // Decode HTML entities — named, decimal (&#39;) AND hex (&#x27;). Scraped pages
@@ -194,14 +306,25 @@ export class AaifVirtualEventsScraper extends BaseScraper {
     const enrich = {};
 
     if (ev.description) {
-      let desc = stripTags(ev.description);
+      // Two upstream shapes (see header): rich-text JSON gets converted to
+      // HTML; anything else takes the original HTML-cleanup path.
+      const richNodes = parseRichTextNodes(ev.description);
+      let desc;
+      let bodyHtml;
+      if (richNodes) {
+        desc = richTextNodesToText(richNodes);
+        bodyHtml = richTextNodesToHtml(richNodes);
+        if (bodyHtml.length > MAX_PAGE_CONTENT) bodyHtml = bodyHtml.slice(0, MAX_PAGE_CONTENT);
+      } else {
+        desc = stripTags(ev.description);
+        bodyHtml = cleanDescriptionHtml(ev.description);
+      }
       if (desc.length > MAX_DESCRIPTION) desc = desc.slice(0, MAX_DESCRIPTION);
       if (desc.length > 20) {
         enrich.eventDescription = desc;
         // Full HTML body → events.page_content (first in the portal's
         // content-render priority). Without this the event detail page renders
         // blank even though we captured the description.
-        const bodyHtml = cleanDescriptionHtml(ev.description);
         if (bodyHtml.length > 20) enrich.pageContentHtml = bodyHtml;
       }
     }
