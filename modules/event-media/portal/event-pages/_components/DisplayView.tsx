@@ -26,6 +26,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
@@ -402,11 +403,19 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     }
   }, [pokeMenu])
 
+  // Portal to document.body: fixed positioning inside the event shell
+  // gets re-anchored/dimmed by transform/opacity ancestors (same issue
+  // the photos tab hit on mobile, 2026-09-19).
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+  if (!mounted) return null
+
   if (!code) {
-    return (
+    return createPortal(
       <div className="fixed inset-0 z-50 bg-black text-white flex items-center justify-center">
         Unknown display link.
-      </div>
+      </div>,
+      document.body,
     )
   }
 
@@ -414,7 +423,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const showYoutube = settings.liveSource === 'youtube' && settings.liveOverride === 'live' && settings.youtubeId
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 bg-black overflow-hidden" style={{ cursor: menuVisible ? 'default' : 'none' }}>
       {/* Photo layer — never unmounts */}
       {settings.mode === 'slideshow' ? (
@@ -587,6 +596,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       {/* plain <style>, not styled-jsx — module pages must not depend on
           compiler transforms beyond what every sibling page uses */}
       <style>{'@keyframes fadein { from { opacity: 0 } to { opacity: 1 } }'}</style>
-    </div>
+    </div>,
+    document.body,
   )
 }
