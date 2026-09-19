@@ -225,6 +225,32 @@ kitchen ("24 x Salmon"), and a seat with no answer recorded is marked rather
 than left blank, so nothing is missed quietly. A course with more guests than
 fits one page continues onto the next.
 
+**Place cards** prints a folded place-name card for every seated guest, sized
+for the standard A-cards that come flat with a scored fold across the middle:
+83mm wide, 54mm per face. Each card carries the guest's first name large over
+their last name smaller on the outside of the tent — upright on the front and
+repeated upside-down on the back, so the name stands correctly on both sides
+once folded — and their meal choices on the inside. Pick which RSVP questions
+count as courses, exactly as with the meal sheets; anything that looks like one
+is preselected.
+
+Cards do not need a finished table plan: choose **Everyone attending** to print
+a card for every guest on the plan's list (everyone whose RSVP matches the
+plan's statuses) before anyone has a seat, grouped by party. Once seats are
+assigned, **Seated guests only** prints in table-and-seat order; anyone still
+unseated in the attending view simply has empty table and seat variables.
+
+The layout comes from a template you can adjust visually — drag the fields,
+change sizes, colours and alignment, and upload TTF/OTF fonts, which are
+shared with the Event Invites PDF templates. A designed card (a Canva export,
+say) uploads as a **background PDF** at 83 × 108mm — page 1 prints behind the
+outside face and page 2 behind the inside — with the dynamic fields laid over
+it, so artwork, graphics and static styling come straight from the design
+tool. Cards come out one per guest in table-and-seat order. When the template
+has inside content, the PDF alternates outside and inside pages, so printing
+it double-sided (flipped on the long edge) puts each guest's choices on their
+own card's reverse.
+
 Every layout exports independently, so you can send the venue the arrangement
 you settled on without deleting the ones you rejected.
 
@@ -243,6 +269,12 @@ than a picture.
 
 A guest can hold at most one seat per plan, and a seat at most one guest, both
 enforced in the database rather than only in the interface.
+
+Place-card templates are stored in the Event Invites template system
+(`invite_templates`, channel `place_card`) with the same
+sub-event-then-default matching as invite PDFs, and fonts come from the shared
+`invite_template_assets` uploads, so a font uploaded for the invitations is
+available on the place cards too.
 
 ## Requirements
 

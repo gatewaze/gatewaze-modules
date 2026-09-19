@@ -7,7 +7,7 @@ const eventSeatingModule: GatewazeModule = {
   group: 'events',
   name: 'Event Seating',
   description: 'Drag-and-drop seating plans for guests who have accepted their invite',
-  version: '1.9.0',
+  version: '1.11.0',
 
   features: [
     'event-seating',
@@ -34,6 +34,7 @@ const eventSeatingModule: GatewazeModule = {
     'migrations/002_seat_layout_sides_balanced.sql',
     'migrations/003_blocked_seats.sql',
     'migrations/004_seat_numbering.sql',
+    'migrations/005_place_card_channel.sql',
   ],
 
   configSchema: {},

@@ -1,0 +1,517 @@
+import { supabase } from '@/lib/supabase';
+import { assertUuid, type Guest, type SeatingAssignment, type SeatingPlan, type SeatingTable } from './seatingService';
+import { planSeatNumbers, seatKey } from './seatNumbering';
+import { answerToString, type CourseQuestion } from './cateringExport';
+
+/**
+ * Folded table place-name cards.
+ *
+ * The physical card is an A-card: 83mm wide, 54mm tall per face, supplied
+ * flat with a scored fold across the middle. It prints flat in portrait at
+ * 83 x 108mm — the bottom half is the front of the standing tent, the top
+ * half is the back (so anything on it prints rotated 180 degrees), and the
+ * reverse side of the sheet is the inside of the card.
+ *
+ * Templates live in the event-invites template system (`invite_templates`,
+ * channel 'place_card'), so they share the event's uploaded fonts and the
+ * same sub-event-then-default matching as invite PDFs. Fields reuse the
+ * invites `pdf_fields` shape plus a `face` marker saying which side of the
+ * card ('outside' or 'inside') the field belongs to.
+ */
+
+const MM_TO_PT = 72 / 25.4;
+
+/** Flat-card page size in PDF points: 83mm wide, 2 x 54mm tall. */
+export const CARD_WIDTH_PT = Math.round(83 * MM_TO_PT * 100) / 100;   // 235.28
+export const CARD_HEIGHT_PT = Math.round(108 * MM_TO_PT * 100) / 100; // 306.14
+/** The scored fold, halfway up the flat card. */
+export const CARD_FOLD_PT = Math.round(54 * MM_TO_PT * 100) / 100;    // 153.07
+
+export type CardFace = 'outside' | 'inside';
+
+export interface PlaceCardField {
+  face: CardFace;
+  /** Variable path (e.g. 'guest.first_name') — ignored when `text` is set. */
+  variable?: string;
+  /** Literal static text — when set, overrides `variable`. */
+  text?: string;
+  /** Baseline anchor in PDF points, origin bottom-left of the flat card. */
+  x: number;
+  y: number;
+  /** Degrees, counter-clockwise (matches pdf-lib). 180 = upside-down. */
+  rotation?: number;
+  fontSize?: number;
+  /** Multiplier applied to fontSize (default 1.0). */
+  lineHeight?: number;
+  /** invite_template_assets id of an uploaded font; Helvetica when unset. */
+  fontAssetId?: string;
+  color?: string;
+  align?: 'left' | 'center' | 'right';
+  /** Wrap width in points; no wrapping when unset. */
+  maxWidth?: number;
+}
+
+export interface PlaceCardTemplate {
+  id: string;
+  event_id: string;
+  sub_event_id: string | null;
+  channel: 'place_card';
+  name: string;
+  pdf_fields: PlaceCardField[];
+  /**
+   * Storage path of an uploaded background PDF (e.g. a Canva export at
+   * 83 x 108mm): page 1 prints behind the outside face, page 2 behind the
+   * inside. A single-page background leaves the inside plain.
+   */
+  pdf_background_path: string | null;
+  is_active: boolean;
+  updated_at: string;
+}
+
+/** Fonts uploaded through the invites template editor — shared per event. */
+export interface FontAsset {
+  id: string;
+  filename: string;
+  storage_path: string;
+  storage_bucket: string;
+}
+
+// ---------------------------------------------------------------------------
+// Default layout
+// ---------------------------------------------------------------------------
+
+/**
+ * The starting layout: first name large over last name smaller, upright on
+ * the front face and repeated rotated 180 on the back face so the name reads
+ * from both sides of the standing tent. Meal choices go on the inside bottom
+ * half, upright, reading when the card is opened like a book. Mirrored
+ * positions reflect the glyph box through the fold (y' = 2 * fold - y),
+ * which is why the rotated pair reuses the upright y.
+ */
+export function defaultPlaceCardFields(): PlaceCardField[] {
+  const cx = CARD_WIDTH_PT / 2;
+  const firstY = 92;
+  const lastY = 60;
+  return [
+    // Front of the tent (bottom half, upright)
+    { face: 'outside', variable: 'guest.first_name', x: cx, y: firstY, fontSize: 30, align: 'center', color: '#000000', maxWidth: 220 },
+    { face: 'outside', variable: 'guest.last_name', x: cx, y: lastY, fontSize: 16, align: 'center', color: '#000000', maxWidth: 220 },
+    // Back of the tent (top half, printed upside-down so it stands upright)
+    { face: 'outside', variable: 'guest.first_name', x: cx, y: 2 * CARD_FOLD_PT - firstY, rotation: 180, fontSize: 30, align: 'center', color: '#000000', maxWidth: 220 },
+    { face: 'outside', variable: 'guest.last_name', x: cx, y: 2 * CARD_FOLD_PT - lastY, rotation: 180, fontSize: 16, align: 'center', color: '#000000', maxWidth: 220 },
+    // Inside: meal choices on the bottom half, upright — they read when the
+    // card is picked up and opened like a book.
+    { face: 'inside', variable: 'meal.choices', x: cx, y: 110, fontSize: 11, lineHeight: 1.4, align: 'center', color: '#000000', maxWidth: 210 },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Template storage (invite_templates, channel 'place_card')
+// ---------------------------------------------------------------------------
+
+function normalizeFields(raw: unknown): PlaceCardField[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as PlaceCardField[]).map((f) => ({
+    ...f,
+    face: f.face === 'inside' ? 'inside' : 'outside',
+  }));
+}
+
+/**
+ * The template the generator will use for a plan: a sub-event-specific one
+ * when the plan is tied to a sub-event, otherwise the event default — the
+ * same matching the invites channels use.
+ */
+export async function findPlaceCardTemplate(
+  eventId: string,
+  subEventId: string | null,
+): Promise<PlaceCardTemplate | null> {
+  assertUuid(eventId, 'event id');
+  if (subEventId) {
+    assertUuid(subEventId, 'sub-event id');
+    const { data } = await supabase
+      .from('invite_templates')
+      .select('id, event_id, sub_event_id, channel, name, pdf_fields, pdf_background_path, is_active, updated_at')
+      .eq('event_id', eventId)
+      .eq('sub_event_id', subEventId)
+      .eq('channel', 'place_card')
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (data && data.length > 0) {
+      return { ...data[0], pdf_fields: normalizeFields(data[0].pdf_fields) } as PlaceCardTemplate;
+    }
+  }
+
+  const { data } = await supabase
+    .from('invite_templates')
+    .select('id, event_id, sub_event_id, channel, name, pdf_fields, pdf_background_path, is_active, updated_at')
+    .eq('event_id', eventId)
+    .is('sub_event_id', null)
+    .eq('channel', 'place_card')
+    .eq('is_active', true)
+    .order('updated_at', { ascending: false })
+    .limit(1);
+  if (data && data.length > 0) {
+    return { ...data[0], pdf_fields: normalizeFields(data[0].pdf_fields) } as PlaceCardTemplate;
+  }
+  return null;
+}
+
+export async function savePlaceCardTemplate(input: {
+  id?: string;
+  event_id: string;
+  sub_event_id: string | null;
+  name: string;
+  pdf_fields: PlaceCardField[];
+  pdf_background_path: string | null;
+}): Promise<PlaceCardTemplate> {
+  const row = {
+    event_id: assertUuid(input.event_id, 'event id'),
+    sub_event_id: input.sub_event_id ? assertUuid(input.sub_event_id, 'sub-event id') : null,
+    channel: 'place_card' as const,
+    name: input.name,
+    pdf_fields: input.pdf_fields,
+    pdf_background_path: input.pdf_background_path,
+    is_active: true,
+  };
+  const query = input.id
+    ? supabase.from('invite_templates').update(row).eq('id', assertUuid(input.id, 'template id'))
+    : supabase.from('invite_templates').insert(row);
+  const { data, error } = await query
+    .select('id, event_id, sub_event_id, channel, name, pdf_fields, pdf_background_path, is_active, updated_at')
+    .single();
+  if (error) throw error;
+  return { ...data, pdf_fields: normalizeFields(data.pdf_fields) } as PlaceCardTemplate;
+}
+
+export async function getFontAssets(eventId: string): Promise<FontAsset[]> {
+  const { data, error } = await supabase
+    .from('invite_template_assets')
+    .select('id, filename, storage_path, storage_bucket')
+    .eq('event_id', assertUuid(eventId, 'event id'))
+    .eq('asset_type', 'font')
+    .order('created_at');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function uploadFontAsset(eventId: string, file: File): Promise<FontAsset> {
+  assertUuid(eventId, 'event id');
+  const assetId = crypto.randomUUID();
+  const ext = /\.otf$/i.test(file.name) ? 'otf' : 'ttf';
+  const storagePath = `${eventId}/fonts/${assetId}.${ext}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('invite-templates')
+    .upload(storagePath, file, { upsert: false });
+  if (uploadError) throw uploadError;
+
+  const { data, error } = await supabase
+    .from('invite_template_assets')
+    .insert({
+      id: assetId,
+      event_id: eventId,
+      asset_type: 'font',
+      filename: file.name,
+      storage_path: storagePath,
+      mime_type: file.type,
+      file_size: file.size,
+      metadata: { font_family: file.name.replace(/\.(ttf|otf)$/i, '') },
+    })
+    .select('id, filename, storage_path, storage_bucket')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export function fontAssetPublicUrl(asset: FontAsset): string {
+  const { data } = supabase.storage.from(asset.storage_bucket).getPublicUrl(asset.storage_path);
+  return data.publicUrl;
+}
+
+/**
+ * Upload a card background PDF (page 1 = outside, page 2 = inside) into the
+ * shared invites asset store, and return its storage path for the template.
+ */
+export async function uploadBackgroundAsset(eventId: string, file: File): Promise<string> {
+  assertUuid(eventId, 'event id');
+  const assetId = crypto.randomUUID();
+  const storagePath = `${eventId}/backgrounds/${assetId}.pdf`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('invite-templates')
+    .upload(storagePath, file, { upsert: false });
+  if (uploadError) throw uploadError;
+
+  const { error } = await supabase
+    .from('invite_template_assets')
+    .insert({
+      id: assetId,
+      event_id: eventId,
+      asset_type: 'pdf_background',
+      filename: file.name,
+      storage_path: storagePath,
+      mime_type: file.type,
+      file_size: file.size,
+      metadata: {},
+    });
+  if (error) throw error;
+  return storagePath;
+}
+
+/** Public URL for any path in the shared invite-templates bucket. */
+export function templateAssetUrl(storagePath: string): string {
+  const { data } = supabase.storage.from('invite-templates').getPublicUrl(storagePath);
+  return data.publicUrl;
+}
+
+// ---------------------------------------------------------------------------
+// Per-guest context and variables
+// ---------------------------------------------------------------------------
+
+export interface PlaceCardContext {
+  guest: { first_name: string; last_name: string; full_name: string };
+  party: { name: string };
+  table: { label: string };
+  seat: { number: string };
+  meal: { choices: string; choices_with_labels: string };
+  event: { title: string };
+  sub_event: { name: string };
+}
+
+export function resolvePlaceCardVariable(variable: string, context: PlaceCardContext): string {
+  const [scope, field] = variable.split('.');
+  if (!scope || !field) return '';
+  const scopeObj = context[scope as keyof PlaceCardContext];
+  if (!scopeObj) return '';
+  return (scopeObj as Record<string, string>)[field] || '';
+}
+
+export function getPlaceCardVariables(): Array<{ variable: string; description: string; example: string }> {
+  return [
+    { variable: 'guest.first_name', description: 'Guest first name', example: 'Sarah' },
+    { variable: 'guest.last_name', description: 'Guest last name', example: 'Swift' },
+    { variable: 'guest.full_name', description: 'Guest full name', example: 'Sarah Swift' },
+    { variable: 'meal.choices', description: 'Selected meal answers, one per line', example: 'Soup\nBeef Wellington' },
+    { variable: 'meal.choices_with_labels', description: 'Course label before each answer', example: 'Starter: Soup' },
+    { variable: 'table.label', description: 'Table name', example: 'Table 4' },
+    { variable: 'seat.number', description: 'Seat number as shown on the plan', example: '23' },
+    { variable: 'party.name', description: 'Invite party name', example: 'The Smiths' },
+    { variable: 'event.title', description: 'Event title', example: 'Baker-Swift Wedding' },
+    { variable: 'sub_event.name', description: 'Sub-event name', example: 'Day Ceremony' },
+  ];
+}
+
+export const SAMPLE_PLACE_CARD_CONTEXT: PlaceCardContext = {
+  guest: { first_name: 'Sarah', last_name: 'Swift', full_name: 'Sarah Swift' },
+  party: { name: 'The Smiths' },
+  table: { label: 'Table 4' },
+  seat: { number: '23' },
+  meal: {
+    choices: 'Roasted Tomato Soup\n\nBeef Wellington\n\nChocolate Tart',
+    choices_with_labels: 'Starter: Roasted Tomato Soup\n\nMain: Beef Wellington\n\nDessert: Chocolate Tart',
+  },
+  event: { title: 'Baker-Swift Wedding' },
+  sub_event: { name: 'Day Ceremony' },
+};
+
+// ---------------------------------------------------------------------------
+// Card data — one card per guest
+// ---------------------------------------------------------------------------
+
+/**
+ * Who gets a card. 'seated' walks the seat assignments; 'attending' covers
+ * the plan's whole guest list (everyone whose RSVP matches the plan's
+ * statuses), so cards can be printed before any table planning has happened.
+ */
+export type PlaceCardScope = 'seated' | 'attending';
+
+export interface PlaceCard {
+  context: PlaceCardContext;
+  /** Sort keys so cards come out in the order the room is walked. */
+  tableSort: number;
+  tableLabel: string;
+  seatNumber: number;
+  /** True when no answer was recorded for any selected course. */
+  missingMeal: boolean;
+}
+
+/**
+ * One card per guest. Seated guests come out in the order the venue lays the
+ * room: table order then seat number (or straight seat number when the plan
+ * numbers seats continuously). With scope 'attending', guests not yet given
+ * a seat follow, grouped by party — same grouping as the guest tray — with
+ * empty table/seat variables. Custom guests seated as a plain label get a
+ * card with the label as their name and no meal choices.
+ */
+export async function buildPlaceCards(input: {
+  plan: SeatingPlan;
+  tables: SeatingTable[];
+  assignments: SeatingAssignment[];
+  guests: Guest[];
+  questions: CourseQuestion[];
+  selectedQuestionIds: string[];
+  scope: PlaceCardScope;
+  eventTitle: string;
+  subEventName: string;
+}): Promise<PlaceCard[]> {
+  const { plan, tables, assignments, guests, questions, selectedQuestionIds, scope } = input;
+
+  const guestsById = new Map(guests.map((g) => [g.id, g]));
+  const tablesById = new Map(tables.map((t) => [t.id, t]));
+
+  const seated = assignments.filter((a) => a.party_member_id || a.guest_label);
+  const seatedMemberIds = new Set(
+    seated.map((a) => a.party_member_id).filter((id): id is string => !!id),
+  );
+  const unseatedGuests = scope === 'attending'
+    ? guests.filter((g) => !seatedMemberIds.has(g.id))
+    : [];
+
+  const memberIds = [
+    ...seatedMemberIds,
+    ...unseatedGuests.map((g) => g.id),
+  ];
+
+  // member → the member_event carrying this plan's RSVP, which the answers
+  // hang off. Same join the catering sheets use.
+  const memberEventIdByMember = new Map<string, string>();
+  if (memberIds.length > 0 && selectedQuestionIds.length > 0) {
+    const BATCH = 100;
+    for (let i = 0; i < memberIds.length; i += BATCH) {
+      const slice = memberIds.slice(i, i + BATCH);
+      let query = supabase
+        .from('invite_party_member_events')
+        .select('id, party_member_id, sub_event_id')
+        .eq('event_id', plan.event_id)
+        .in('party_member_id', slice);
+      query = plan.sub_event_id
+        ? query.eq('sub_event_id', plan.sub_event_id)
+        : query.is('sub_event_id', null);
+      const { data, error } = await query;
+      if (error) throw error;
+      for (const row of data || []) {
+        if (row.party_member_id) memberEventIdByMember.set(row.party_member_id, row.id);
+      }
+    }
+  }
+
+  const answerByKey = new Map<string, string>();
+  const memberEventIds = [...memberEventIdByMember.values()];
+  if (memberEventIds.length > 0 && selectedQuestionIds.length > 0) {
+    const BATCH = 100;
+    for (let i = 0; i < memberEventIds.length; i += BATCH) {
+      const slice = memberEventIds.slice(i, i + BATCH);
+      const { data, error } = await supabase
+        .from('invite_responses')
+        .select('party_member_event_id, question_id, answer')
+        .in('party_member_event_id', slice)
+        .in('question_id', selectedQuestionIds);
+      if (error) throw error;
+      for (const row of data || []) {
+        answerByKey.set(`${row.party_member_event_id}:${row.question_id}`, answerToString(row.answer));
+      }
+    }
+  }
+
+  // Keep courses in the order the questions were asked.
+  const orderedQuestions = questions.filter((q) => selectedQuestionIds.includes(q.id));
+
+  const seatNumberByTableSeat = planSeatNumbers(tables, plan.seat_numbering);
+
+  const mealFor = (memberId: string | null | undefined) => {
+    const memberEventId = memberId ? memberEventIdByMember.get(memberId) : undefined;
+    const choices: string[] = [];
+    const labelled: string[] = [];
+    for (const q of orderedQuestions) {
+      const raw = memberEventId ? answerByKey.get(`${memberEventId}:${q.id}`) : undefined;
+      const choice = (raw || '').trim();
+      if (!choice) continue;
+      choices.push(choice);
+      labelled.push(`${q.label}: ${choice}`);
+    }
+    return { choices, labelled };
+  };
+
+  const makeCard = (args: {
+    firstName: string;
+    lastName: string;
+    fullName: string;
+    partyName: string;
+    memberId: string | null;
+    tableLabel: string;
+    tableSort: number;
+    seatNumber: number;
+  }): PlaceCard => {
+    const { choices, labelled } = mealFor(args.memberId);
+    // A guest with no name parts at all still gets a readable card.
+    const firstName = !args.firstName && !args.lastName ? args.fullName : args.firstName;
+    return {
+      context: {
+        guest: { first_name: firstName, last_name: args.lastName, full_name: args.fullName },
+        party: { name: args.partyName },
+        table: { label: args.tableLabel },
+        seat: { number: args.seatNumber > 0 ? String(args.seatNumber) : '' },
+        // A blank line between courses: within one choice, wrapped lines stay
+        // at the field's line height, so courses read as separate blocks.
+        meal: { choices: choices.join('\n\n'), choices_with_labels: labelled.join('\n\n') },
+        event: { title: input.eventTitle },
+        sub_event: { name: input.subEventName },
+      },
+      tableSort: args.tableSort,
+      tableLabel: args.tableLabel,
+      seatNumber: args.seatNumber,
+      missingMeal: selectedQuestionIds.length > 0 && choices.length === 0,
+    };
+  };
+
+  const seatedCards: PlaceCard[] = [];
+  for (const assignment of seated) {
+    const table = tablesById.get(assignment.table_id);
+    if (!table) continue;
+
+    // A guest stranded in a seat that has since been taken out of use gets
+    // no card — there is no place setting to put it on.
+    const seat = seatNumberByTableSeat.get(seatKey(table.id, assignment.seat_index));
+    if (seat === undefined) continue;
+
+    const guest = assignment.party_member_id ? guestsById.get(assignment.party_member_id) : undefined;
+    seatedCards.push(makeCard({
+      firstName: guest ? (guest.first_name || '') : (assignment.guest_label || 'Guest'),
+      lastName: guest ? (guest.last_name || '') : '',
+      fullName: guest ? guest.full_name : (assignment.guest_label || 'Guest'),
+      partyName: guest?.party_name || '',
+      memberId: assignment.party_member_id,
+      tableLabel: table.label,
+      tableSort: table.sort_order,
+      seatNumber: seat,
+    }));
+  }
+
+  seatedCards.sort((a, b) =>
+    plan.seat_numbering === 'continuous'
+      ? a.seatNumber - b.seatNumber
+      : a.tableSort - b.tableSort
+        || a.tableLabel.localeCompare(b.tableLabel)
+        || a.seatNumber - b.seatNumber);
+
+  // Guests without a seat follow the seated block, grouped the way the guest
+  // tray lists them, so cards for one party stay together in the stack.
+  const unseatedCards = unseatedGuests
+    .slice()
+    .sort((a, b) =>
+      a.party_name.localeCompare(b.party_name) || a.full_name.localeCompare(b.full_name))
+    .map((g) => makeCard({
+      firstName: g.first_name || '',
+      lastName: g.last_name || '',
+      fullName: g.full_name,
+      partyName: g.party_name,
+      memberId: g.id,
+      tableLabel: '',
+      tableSort: Number.MAX_SAFE_INTEGER,
+      seatNumber: 0,
+    }));
+
+  return [...seatedCards, ...unseatedCards];
+}
