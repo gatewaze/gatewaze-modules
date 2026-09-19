@@ -73,9 +73,12 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   const [pending, setPending] = useState<PendingMedia[]>([]);
 
   // Custom-domain lookup so copied URLs + QR codes use dan-sarah.com
-  // instead of the shared portal host (QrCodeExport precedent).
+  // instead of the shared portal host. MUST be an authed fetch —
+  // /api/modules/* is JWT+super-admin gated upstream, so the plain
+  // fetch the QrCodeExport precedent uses silently 401s and every
+  // copied URL falls back to the portal host (found live 2026-09-19).
   useEffect(() => {
-    fetch(`${apiUrl}/api/modules/custom-domains/lookup/events/${eventId}`)
+    authedFetch(`/api/modules/custom-domains/lookup/events/${eventId}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (data?.url) setCustomDomainUrl(data.url); })
       .catch(() => { /* custom domains module may not be enabled */ });
