@@ -46,50 +46,42 @@ export async function processImage(imageBuffer: Uint8Array): Promise<ProcessedIm
     let thumbnailHeight = 0
     let mediumWidth = 0
     let mediumHeight = 0
-    let thumbnail: Uint8Array
-    let medium: Uint8Array
+    let thumbnail: Uint8Array = new Uint8Array(0)
+    let medium: Uint8Array = new Uint8Array(0)
 
-    // First, create a copy of the buffer to avoid detached buffer issues
-    const buffer1 = new Uint8Array(imageBuffer)
-    const buffer2 = new Uint8Array(imageBuffer)
+    // ONE decode for both variants. The previous shape (two buffer
+    // copies + two full-resolution decodes) blew the edge function's
+    // memory ceiling (WORKER_RESOURCE_LIMIT) on ordinary multi-MP
+    // phone photos, live 2026-09-20. Medium is written from the full
+    // decode, then the already-shrunk image is downscaled again for
+    // the thumb — peak memory is one decoded image instead of two.
+    const buffer = new Uint8Array(imageBuffer)
 
-    // Create thumbnail (350px wide) with lower quality for speed
-    thumbnail = ImageMagick.read(buffer1, (img) => {
+    ImageMagick.read(buffer, (img) => {
+      // Bake EXIF orientation in — the re-encode drops the tag, so
+      // without this portrait phone photos render sideways.
+      img.autoOrient()
+
       const aspectRatio = img.height / img.width
-      thumbnailWidth = 350
-      thumbnailHeight = Math.round(thumbnailWidth * aspectRatio)
 
-      // Resize
-      img.resize(thumbnailWidth, thumbnailHeight)
-
-      // Very light sharpening to reduce CPU time
-      img.sharpen(0, 0.3)
-
-      // Encode as JPEG with 80% quality (lower for speed).
-      // MUST copy inside the callback: `data` is a view into WASM
-      // memory that is freed when the callback returns — returning it
-      // directly yields a zero-filled buffer (live bug 2026-09-19:
-      // every variant uploaded as N kilobytes of 0x00).
-      img.quality = 80
-      return img.write(MagickFormat.Jpeg, (data) => new Uint8Array(data))
-    })
-
-    // Create medium (800px wide, or original if smaller)
-    medium = ImageMagick.read(buffer2, (img) => {
-      const aspectRatio = img.height / img.width
+      // Medium (800px wide, or original if smaller)
       mediumWidth = Math.min(800, img.width)
       mediumHeight = Math.round(mediumWidth * aspectRatio)
-
-      // Resize
       img.resize(mediumWidth, mediumHeight)
-
-      // Very light sharpening to reduce CPU time
       img.sharpen(0, 0.3)
-
-      // Encode as JPEG with 85% quality (lower for speed).
-      // Copy inside the callback — see thumbnail note above.
+      // MUST copy inside the callback: `data` is a view into WASM
+      // memory that is freed when the callback returns — returning it
+      // directly yields a zero-filled buffer (live bug 2026-09-19).
       img.quality = 85
-      return img.write(MagickFormat.Jpeg, (data) => new Uint8Array(data))
+      medium = img.write(MagickFormat.Jpeg, (data) => new Uint8Array(data))
+
+      // Thumbnail (350px wide) — downscaled from the medium-sized
+      // image already in memory, never from the full decode.
+      thumbnailWidth = Math.min(350, mediumWidth)
+      thumbnailHeight = Math.round(thumbnailWidth * aspectRatio)
+      img.resize(thumbnailWidth, thumbnailHeight)
+      img.quality = 80
+      thumbnail = img.write(MagickFormat.Jpeg, (data) => new Uint8Array(data))
     })
 
     return {

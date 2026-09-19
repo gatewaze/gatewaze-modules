@@ -114,6 +114,29 @@ const EFFECT_KEYFRAMES = `
 @keyframes emkb-d { from { transform: scale(1.02) translate(-1%, 0) } to { transform: scale(1.1) translate(1%, -1.5%) } }
 `
 
+interface WallCell {
+  current: DisplayItem | null
+  previous: DisplayItem | null
+  nextAt: number
+}
+
+// Largest exact 16:9-friendly grid the photo count can fill — a
+// partially filled last row looks broken on a projector, so counts
+// between layouts round DOWN (rotation still cycles every photo in).
+const WALL_LAYOUTS: Array<{ cells: number; cols: number; rows: number }> = [
+  { cells: 12, cols: 4, rows: 3 },
+  { cells: 9, cols: 3, rows: 3 },
+  { cells: 8, cols: 4, rows: 2 },
+  { cells: 6, cols: 3, rows: 2 },
+  { cells: 4, cols: 2, rows: 2 },
+  { cells: 3, cols: 3, rows: 1 },
+  { cells: 2, cols: 2, rows: 1 },
+  { cells: 1, cols: 1, rows: 1 },
+]
+function wallLayoutFor(count: number) {
+  return WALL_LAYOUTS.find((l) => l.cells <= count) ?? WALL_LAYOUTS[WALL_LAYOUTS.length - 1]!
+}
+
 interface DisplayViewProps {
   code: string
 }
@@ -134,6 +157,12 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const [showQrSlide, setShowQrSlide] = useState(false)
   const advanceCountRef = useRef(0)
   const indexRef = useRef(0)
+
+  // Wall mode: a fixed best-fit grid where every cell runs its own
+  // mini-slideshow on a staggered clock — cells change at different
+  // moments (at most one per tick), each with ±15% period jitter.
+  const [wallCells, setWallCells] = useState<WallCell[]>([])
+  const wallPointerRef = useRef(0)
 
   const [menuVisible, setMenuVisible] = useState(true)
   const menuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -298,6 +327,67 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       img.src = next.url
     }
   }, [current])
+
+  // ── Wall mode: staggered per-cell slides ──────────────────────────
+
+  useEffect(() => {
+    if (settings.mode !== 'wall') return
+    const interval = Math.max(settings.intervalMs, 2000)
+
+    const pickNext = (displayed: Set<string>): DisplayItem | null => {
+      const list = photosRef.current
+      if (list.length === 0) return null
+      // Fresh uploads jump straight onto the wall.
+      const fresh = freshQueueRef.current.shift()
+      if (fresh) return fresh
+      for (let i = 0; i < list.length; i++) {
+        wallPointerRef.current = (wallPointerRef.current + 1) % list.length
+        const cand = list[wallPointerRef.current]!
+        if (!displayed.has(cand.id)) return cand
+      }
+      return list[wallPointerRef.current] ?? null
+    }
+
+    const tick = () => {
+      const now = Date.now()
+      setWallCells((prev) => {
+        const count = photosRef.current.length
+        if (count === 0) return prev.length ? [] : prev
+        const layout = wallLayoutFor(count)
+        if (prev.length !== layout.cells) {
+          // (Re)build the grid with staggered clocks so the first
+          // round of changes is already spread across the interval.
+          const displayed = new Set<string>()
+          return Array.from({ length: layout.cells }, (_, i) => {
+            const item = pickNext(displayed)
+            if (item) displayed.add(item.id)
+            return {
+              current: item,
+              previous: null,
+              nextAt: now + Math.round((interval * (i + 1)) / layout.cells) + Math.round(Math.random() * 400),
+            }
+          })
+        }
+        const dueIdx = prev.findIndex((c) => c.nextAt <= now)
+        if (dueIdx === -1) return prev
+        const displayed = new Set(prev.map((c) => c.current?.id).filter(Boolean) as string[])
+        const next = pickNext(displayed)
+        if (!next) return prev
+        const copy = [...prev]
+        const cell = copy[dueIdx]!
+        copy[dueIdx] = {
+          current: next,
+          previous: cell.current,
+          nextAt: now + interval + Math.round((Math.random() - 0.5) * interval * 0.3),
+        }
+        return copy
+      })
+    }
+
+    tick()
+    const iv = setInterval(tick, 500)
+    return () => clearInterval(iv)
+  }, [settings.mode, settings.intervalMs])
 
   // ── QR overlay ────────────────────────────────────────────────────
 
@@ -466,7 +556,17 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
   return createPortal(
-    <div className="fixed inset-0 z-50 bg-black overflow-hidden" style={{ cursor: menuVisible ? 'default' : 'none' }}>
+    <div
+      className="fixed inset-0 z-50 bg-black overflow-hidden flex items-center justify-center"
+      style={{ cursor: menuVisible ? 'default' : 'none' }}
+    >
+      {/* 16:9 stage — every visual layer lives inside it. On a 16:9
+          projector it fills the screen exactly; on any other display
+          it letterboxes rather than reflowing. */}
+      <div
+        className="relative bg-black overflow-hidden"
+        style={{ width: 'min(100vw, calc(100vh * 16 / 9))', aspectRatio: '16 / 9' }}
+      >
       {/* Photo layer — never unmounts */}
       {settings.mode === 'slideshow' ? (
         <div className="absolute inset-0">
@@ -485,7 +585,14 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             />
           )}
           {current?.guest_name && !showQrSlide && (
-            <div className="absolute bottom-6 left-6 text-white/70 text-xl drop-shadow">📷 {current.guest_name}</div>
+            <div className="absolute bottom-6 left-6 flex items-center gap-2 text-white/70 text-xl drop-shadow">
+              {/* house line-style (outline) camera icon — no emoji */}
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z" />
+              </svg>
+              <span>{current.guest_name}</span>
+            </div>
           )}
           {photos.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-white/60 gap-6">
@@ -498,13 +605,44 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
           )}
         </div>
       ) : (
-        <div className="absolute inset-0 overflow-y-auto p-2">
-          <div className="columns-4 xl:columns-5 gap-2">
-            {photos.map((p) => (
-              // eslint-disable-next-line @next/next/no-img-element -- wall grid
-              <img key={p.id} src={p.variants?.medium || p.url} alt="" className="w-full mb-2 rounded-lg break-inside-avoid" loading="lazy" />
-            ))}
-          </div>
+        <div
+          className="absolute inset-0 grid gap-1 p-1"
+          style={{
+            gridTemplateColumns: `repeat(${wallLayoutFor(Math.max(photos.length, 1)).cols}, 1fr)`,
+            gridTemplateRows: `repeat(${wallLayoutFor(Math.max(photos.length, 1)).rows}, 1fr)`,
+          }}
+        >
+          {wallCells.map((cell, i) => (
+            <div key={i} className="relative overflow-hidden bg-black">
+              {cell.previous && cell.previous.id !== cell.current?.id && (
+                // eslint-disable-next-line @next/next/no-img-element -- wall cell (outgoing)
+                <img
+                  src={cell.previous.variants?.medium || cell.previous.url}
+                  alt=""
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+              )}
+              {cell.current && (
+                // eslint-disable-next-line @next/next/no-img-element -- wall cell; object-cover crops to fill
+                <img
+                  key={cell.current.id}
+                  src={cell.current.variants?.medium || cell.current.url}
+                  alt={cell.current.guest_name ? `Photo by ${cell.current.guest_name}` : ''}
+                  className="absolute inset-0 w-full h-full object-cover"
+                  style={{ animation: slideAnimation(settings.effect, cell.current.id, settings.intervalMs) }}
+                />
+              )}
+            </div>
+          ))}
+          {photos.length === 0 && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-white/60 gap-6">
+              {qrDataUrl && (
+                // eslint-disable-next-line @next/next/no-img-element -- data-URL QR
+                <img src={qrDataUrl} alt="Upload QR" className="w-64 h-64 rounded-xl bg-white p-3" />
+              )}
+              <p className="text-2xl">Scan to add the first photo</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -539,6 +677,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
           />
         </div>
       )}
+      </div>{/* /16:9 stage */}
 
       {/* Corner QR + logo card */}
       {qrCorner && (
