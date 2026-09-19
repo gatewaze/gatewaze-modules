@@ -25,8 +25,18 @@
  * Per spec-event-media-guest-uploads §6.3 + §15.4.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import CinematicPhoto from './CinematicPhoto'
+import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
+import {
+  analysePhoto,
+  analysisFor,
+  ensureModels,
+  lastAnalysisMs,
+  setPreferWebGPU,
+  type PhotoAnalysis,
+} from './_lib/ai-pipeline'
 
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
@@ -48,7 +58,7 @@ interface DisplayItem {
   created_at: string
 }
 
-type SlideEffect = 'kenburns' | 'fade' | 'slide' | 'zoom' | 'blur'
+type SlideEffect = 'cinematic' | 'kenburns' | 'grade' | 'fade' | 'slide' | 'zoom' | 'blur'
 
 interface DisplaySettings {
   mode: 'slideshow' | 'wall'
@@ -61,6 +71,22 @@ interface DisplaySettings {
   whepUrl: string
   statusUrl: string
   youtubeId: string
+  /** Ambient colour spill: the room's light follows the photo. */
+  ambient: boolean
+  /** Fill 16:9 letterbox bars with a blurred copy of the photo. */
+  fillBars: boolean
+  /** Background-melt half of the cinematic effect. */
+  subjectPop: boolean
+  /** Opt-in GPU backend for the models (see ai-pipeline note). */
+  webgpu: boolean
+  /** Rotation order through the pool. */
+  order: 'newest' | 'oldest' | 'shuffle'
+  /**
+   * Cut to a photo the moment it lands instead of waiting for the
+   * current slide to run out — a guest sees their upload appear while
+   * they are still holding the phone.
+   */
+  instantNew: boolean
 }
 
 const DEFAULT_SETTINGS: DisplaySettings = {
@@ -74,6 +100,21 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   whepUrl: DEFAULT_WHEP_URL,
   statusUrl: DEFAULT_STATUS_URL,
   youtubeId: '',
+  ambient: true,
+  fillBars: true,
+  subjectPop: true,
+  webgpu: false,
+  order: 'newest',
+  instantNew: true,
+}
+
+/**
+ * The pool is held newest-first (the feed returns created_at DESC and
+ * arrivals are prepended), so 'newest' walks it as-is.
+ */
+function orderedPool(list: DisplayItem[], order: DisplaySettings['order']): DisplayItem[] {
+  if (order === 'oldest') return [...list].reverse()
+  return list
 }
 
 // Slide-entry animation per effect. Ken Burns additionally runs a slow
@@ -89,9 +130,13 @@ function kbVariantFor(id: string): string {
 }
 
 function slideAnimation(effect: SlideEffect, photoId: string, intervalMs: number): string {
+  const kb = `${kbVariantFor(photoId)} ${Math.max(intervalMs, 2000) + 1200}ms linear forwards`
   switch (effect) {
     case 'kenburns':
-      return `emfade 900ms ease, ${kbVariantFor(photoId)} ${Math.max(intervalMs, 2000) + 1200}ms linear forwards`
+      return `emfade 900ms ease, ${kb}`
+    case 'grade':
+      // Arrives monochrome and blooms into colour, still drifting.
+      return `emgrade ${Math.min(2200, Math.max(intervalMs * 0.3, 1200))}ms ease forwards, ${kb}`
     case 'slide':
       return 'emslide 700ms cubic-bezier(0.22, 1, 0.36, 1)'
     case 'zoom':
@@ -112,6 +157,11 @@ const EFFECT_KEYFRAMES = `
 @keyframes emkb-b { from { transform: scale(1.02) } to { transform: scale(1.12) translate(-1.5%, 1%) } }
 @keyframes emkb-c { from { transform: scale(1.12) translate(1%, 1%) } to { transform: scale(1.02) } }
 @keyframes emkb-d { from { transform: scale(1.02) translate(-1%, 0) } to { transform: scale(1.1) translate(1%, -1.5%) } }
+@keyframes emgrade {
+  from { opacity: 0; filter: grayscale(1) contrast(1.15) brightness(0.92) }
+  40%  { opacity: 1 }
+  to   { opacity: 1; filter: none }
+}
 `
 
 interface WallCell {
@@ -137,6 +187,31 @@ function wallLayoutFor(count: number) {
   return WALL_LAYOUTS.find((l) => l.cells <= count) ?? WALL_LAYOUTS[WALL_LAYOUTS.length - 1]!
 }
 
+/** One labelled settings row. The label sits above its options so a
+ *  long option list wraps cleanly instead of clipping off the panel. */
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <span className="block text-xs uppercase tracking-wide text-white/50">{label}</span>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+    </div>
+  )
+}
+
+/** Toggle/segment button. Sized for a finger as well as a trackpad. */
+function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-lg px-3 py-1.5 text-sm leading-none transition-colors ${
+        on ? 'bg-white/90 text-gray-900 font-medium' : 'bg-white/10 text-white/90 hover:bg-white/20'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
 interface DisplayViewProps {
   code: string
 }
@@ -153,6 +228,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const newestRef = useRef<string | null>(null)
 
   const [current, setCurrent] = useState<DisplayItem | null>(null)
+  /** Bumped when fresh uploads land, to trigger an instant cut. */
+  const [freshArrivals, setFreshArrivals] = useState(0)
+  /** Bumped on an interrupt so the slide timer restarts cleanly. */
+  const [slideTick, setSlideTick] = useState(0)
   const [previous, setPrevious] = useState<DisplayItem | null>(null)
   const [showQrSlide, setShowQrSlide] = useState(false)
   const advanceCountRef = useRef(0)
@@ -163,6 +242,12 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // moments (at most one per tick), each with ±15% period jitter.
   const [wallCells, setWallCells] = useState<WallCell[]>([])
   const wallPointerRef = useRef(0)
+
+  // Ambient colour spill + on-device analysis for the current photo.
+  const [palette, setPalette] = useState<PhotoPalette | null>(null)
+  const [analysis, setAnalysis] = useState<PhotoAnalysis | null>(null)
+  const [aiState, setAiState] = useState<string>('idle')
+  const [aiProgress, setAiProgress] = useState<number>(0)
 
   const [menuVisible, setMenuVisible] = useState(true)
   const menuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -219,7 +304,13 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       const seen = new Set(prev.map((p) => p.id))
       const add = clean.filter((i) => !seen.has(i.id))
       if (add.length === 0) return prev
-      if (fresh) freshQueueRef.current.push(...add)
+      if (fresh) {
+        freshQueueRef.current.push(...add)
+        // Signal the instant-cut effect (setState during another
+        // component's updater is fine here — different state atom,
+        // and React batches it into the same commit).
+        setFreshArrivals((n) => n + 1)
+      }
       const merged = [...add, ...prev].slice(0, MAX_PHOTOS)
       photosRef.current = merged
       const newest = merged[0]?.created_at
@@ -299,23 +390,47 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
     setCurrent((prev) => {
       setPrevious(prev)
+      // A just-uploaded photo always wins the next slot.
       if (fresh) {
         indexRef.current = 0
         return fresh
       }
-      const list = photosRef.current
+      const list = orderedPool(photosRef.current, settings.order)
       if (list.length === 0) return prev
-      indexRef.current = (indexRef.current + 1) % list.length
+      if (settings.order === 'shuffle' && list.length > 1) {
+        // Never repeat the photo that is already up.
+        let pick = indexRef.current
+        for (let i = 0; i < 8 && pick === indexRef.current; i++) {
+          pick = Math.floor(Math.random() * list.length)
+        }
+        indexRef.current = pick
+      } else {
+        indexRef.current = (indexRef.current + 1) % list.length
+      }
       return list[indexRef.current]
     })
-  }, [settings.qrMode, settings.qrEveryN])
+  }, [settings.qrMode, settings.qrEveryN, settings.order])
 
   useEffect(() => {
     if (settings.mode !== 'slideshow') return
     if (!current && photosRef.current.length > 0) setCurrent(photosRef.current[0])
     const interval = setInterval(advance, Math.max(settings.intervalMs, 2000))
     return () => clearInterval(interval)
-  }, [settings.mode, settings.intervalMs, advance, current, photos.length])
+    // slideTick restarts the timer after an interrupt so a photo cut to
+    // early still gets its full time on screen.
+  }, [settings.mode, settings.intervalMs, advance, current, photos.length, slideTick])
+
+  // Cut to new arrivals immediately. The poll finds them within ~10 s;
+  // without this they would then wait out the rest of the current
+  // slide too, so a guest could stand there for 18 s. One interrupt
+  // per burst — the rest of the batch drains through the normal
+  // fresh-queue priority rather than strobing past.
+  useEffect(() => {
+    if (!settings.instantNew || settings.mode !== 'slideshow') return
+    if (freshArrivals === 0) return
+    advance()
+    setSlideTick((t) => t + 1)
+  }, [freshArrivals, settings.instantNew, settings.mode, advance])
 
   // Preload the next slide.
   useEffect(() => {
@@ -335,11 +450,17 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     const interval = Math.max(settings.intervalMs, 2000)
 
     const pickNext = (displayed: Set<string>): DisplayItem | null => {
-      const list = photosRef.current
+      const list = orderedPool(photosRef.current, settings.order)
       if (list.length === 0) return null
       // Fresh uploads jump straight onto the wall.
       const fresh = freshQueueRef.current.shift()
       if (fresh) return fresh
+      if (settings.order === 'shuffle') {
+        for (let i = 0; i < 12; i++) {
+          const cand = list[Math.floor(Math.random() * list.length)]!
+          if (!displayed.has(cand.id)) return cand
+        }
+      }
       for (let i = 0; i < list.length; i++) {
         wallPointerRef.current = (wallPointerRef.current + 1) % list.length
         const cand = list[wallPointerRef.current]!
@@ -368,7 +489,13 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             }
           })
         }
-        const dueIdx = prev.findIndex((c) => c.nextAt <= now)
+        // A new upload claims the next cell straight away rather than
+        // waiting for that cell's own clock, so the wall reacts as
+        // fast as the slideshow does.
+        const wantsInstant = settings.instantNew && freshQueueRef.current.length > 0
+        const dueIdx = wantsInstant
+          ? prev.reduce((oldest, c, i) => (c.nextAt < prev[oldest]!.nextAt ? i : oldest), 0)
+          : prev.findIndex((c) => c.nextAt <= now)
         if (dueIdx === -1) return prev
         const displayed = new Set(prev.map((c) => c.current?.id).filter(Boolean) as string[])
         const next = pickNext(displayed)
@@ -387,7 +514,80 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     tick()
     const iv = setInterval(tick, 500)
     return () => clearInterval(iv)
-  }, [settings.mode, settings.intervalMs])
+  }, [settings.mode, settings.intervalMs, settings.order, settings.instantNew])
+
+  // ── Ambient colour spill ──────────────────────────────────────────
+
+  useEffect(() => {
+    if (!settings.ambient || !current) { setPalette(null); return }
+    let cancelled = false
+    const src = current.variants?.thumb || current.url
+    void extractPalette(src, current.id).then((p) => {
+      if (!cancelled && p) setPalette(p)
+    })
+    return () => { cancelled = true }
+  }, [current, settings.ambient])
+
+  // ── On-device analysis (cinematic mode) ───────────────────────────
+
+  useEffect(() => {
+    setPreferWebGPU(settings.webgpu)
+  }, [settings.webgpu])
+
+  // Warm the models up as soon as cinematic is selected, so the first
+  // slide of the evening is not the one that waits for a 50 MB
+  // download over venue wifi.
+  useEffect(() => {
+    if (settings.effect !== 'cinematic') return
+    let cancelled = false
+    setAiState('loading')
+    void ensureModels((pct) => { if (!cancelled) setAiProgress(pct) }).then((ok) => {
+      if (!cancelled) setAiState(ok ? 'ready' : 'unavailable')
+    })
+    return () => { cancelled = true }
+  }, [settings.effect, settings.webgpu])
+
+  // Analyse the CURRENT photo (usually already cached from look-ahead)
+  // and queue the NEXT one, so by the time it appears its depth map
+  // and matte are ready.
+  useEffect(() => {
+    if (settings.effect !== 'cinematic' || !current) { setAnalysis(null); return }
+    let cancelled = false
+
+    const srcFor = (p: DisplayItem) => p.variants?.medium || p.url
+
+    const existing = analysisFor(current.id)
+    setAnalysis(existing)
+    if (!existing) {
+      analysePhoto(current.id, srcFor(current), (a) => {
+        if (!cancelled) setAnalysis(a)
+      })
+    }
+
+    // Look ahead one slide.
+    const list = photosRef.current
+    const upcoming = freshQueueRef.current[0] ?? list[(indexRef.current + 1) % Math.max(list.length, 1)]
+    if (upcoming && upcoming.id !== current.id) {
+      analysePhoto(upcoming.id, srcFor(upcoming))
+    }
+
+    return () => { cancelled = true }
+  }, [current, settings.effect])
+
+  // Keep the backlog warm. Analysis costs ~10 s per photo (measured
+  // 2026-09-20, WASM), which is slower than an 8 s slide — so waiting
+  // until a photo is next would mean new uploads never get the effect
+  // during a burst. Instead every photo in the pool is queued in the
+  // background; by the time one comes round it is already cached, and
+  // anything not yet done just shows with a flat pan.
+  useEffect(() => {
+    if (settings.effect !== 'cinematic' || aiState !== 'ready') return
+    const iv = setInterval(() => {
+      const pending = photosRef.current.filter((p) => !analysisFor(p.id)).slice(0, 3)
+      for (const p of pending) analysePhoto(p.id, p.variants?.medium || p.url)
+    }, 5000)
+    return () => clearInterval(iv)
+  }, [settings.effect, aiState, photos.length])
 
   // ── QR overlay ────────────────────────────────────────────────────
 
@@ -555,26 +755,64 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const showYoutube = settings.liveSource === 'youtube' && settings.liveOverride === 'live' && settings.youtubeId
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
+  const cinematicActive = settings.effect === 'cinematic' && aiState !== 'unavailable'
+
   return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black overflow-hidden flex items-center justify-center"
       style={{ cursor: menuVisible ? 'default' : 'none' }}
     >
+      {/* Ambient colour spill — the surround takes the photo's own
+          dominant colour, so the room's light shifts with each slide. */}
+      <div
+        className="absolute inset-0 transition-[background-color] duration-[1600ms] ease-out"
+        style={{ backgroundColor: settings.ambient && palette ? palette.ambient : '#000' }}
+      />
       {/* 16:9 stage — every visual layer lives inside it. On a 16:9
           projector it fills the screen exactly; on any other display
           it letterboxes rather than reflowing. */}
       <div
-        className="relative bg-black overflow-hidden"
-        style={{ width: 'min(100vw, calc(100vh * 16 / 9))', aspectRatio: '16 / 9' }}
+        className="relative overflow-hidden"
+        style={{
+          width: 'min(100vw, calc(100vh * 16 / 9))',
+          aspectRatio: '16 / 9',
+          backgroundColor: settings.ambient && palette ? palette.ambient : '#000',
+          boxShadow: settings.ambient && palette ? `0 0 140px 20px ${palette.accent}22` : undefined,
+          transition: 'background-color 1600ms ease-out, box-shadow 1600ms ease-out',
+        }}
       >
       {/* Photo layer — never unmounts */}
       {settings.mode === 'slideshow' ? (
         <div className="absolute inset-0">
+          {/* Blurred cover fill — replaces dead black letterbox bars,
+              and in cinematic mode it is what the melted-away
+              background dissolves INTO. */}
+          {settings.fillBars && current && (
+            // eslint-disable-next-line @next/next/no-img-element -- decorative fill
+            <img
+              key={`fill-${current.id}`}
+              src={current.variants?.medium || current.url}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ filter: 'blur(48px) saturate(1.25) brightness(0.55)', transform: 'scale(1.15)' }}
+            />
+          )}
           {previous && previous.id !== current?.id && (
             // eslint-disable-next-line @next/next/no-img-element -- projector shows originals full-screen
             <img src={previous.url} alt="" className="absolute inset-0 w-full h-full object-contain opacity-0 transition-opacity duration-700" />
           )}
-          {current && (
+          {current && cinematicActive ? (
+            <div key={`cine-${current.id}`} className="absolute inset-0" style={{ animation: 'emfade 900ms ease' }}>
+              <CinematicPhoto
+                src={current.url}
+                analysis={analysis}
+                durationMs={Math.max(settings.intervalMs, 2000)}
+                enablePop={settings.subjectPop}
+                className="absolute inset-0 w-full h-full"
+              />
+            </div>
+          ) : current ? (
             // eslint-disable-next-line @next/next/no-img-element -- projector shows originals full-screen
             <img
               key={current.id}
@@ -583,7 +821,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               className="absolute inset-0 w-full h-full object-contain"
               style={{ animation: slideAnimation(settings.effect, current.id, settings.intervalMs) }}
             />
-          )}
+          ) : null}
           {current?.guest_name && !showQrSlide && (
             <div className="absolute bottom-6 left-6 flex items-center gap-2 text-white/70 text-xl drop-shadow">
               {/* house line-style (outline) camera icon — no emoji */}
@@ -692,98 +930,157 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         </div>
       )}
 
-      {/* Corner menu */}
-      <div className={`absolute top-4 right-4 transition-opacity duration-300 ${menuVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-        <div className="bg-black/70 backdrop-blur rounded-xl p-3 text-white text-sm space-y-2 w-64">
-          <div className="flex gap-1">
-            {(['slideshow', 'wall'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => updateSettings({ mode: m })}
-                className={`flex-1 rounded px-2 py-1 capitalize ${settings.mode === m ? 'bg-white/25' : 'bg-white/5'}`}
+      {/* Settings panel. Sized for a laptop trackpad AND a phone held
+          at arm's length next to a projector: one labelled row per
+          setting, options on their own line so nothing clips, and the
+          whole panel scrolls rather than overflowing the screen. */}
+      <div
+        className={`absolute top-3 right-3 left-3 sm:left-auto transition-opacity duration-300 ${menuVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+      >
+        <div data-menu className="ml-auto bg-black/80 backdrop-blur-md rounded-2xl shadow-2xl ring-1 ring-white/10 text-white w-full sm:w-[24rem] max-h-[86vh] overflow-y-auto">
+          <div className="p-4 space-y-4">
+
+            <Row label="Display">
+              {(['slideshow', 'wall'] as const).map((m) => (
+                <Chip key={m} on={settings.mode === m} onClick={() => updateSettings({ mode: m })}>
+                  {m === 'slideshow' ? 'Slideshow' : 'Wall'}
+                </Chip>
+              ))}
+              <Chip
+                on={false}
+                onClick={() => document.documentElement.requestFullscreen?.().catch(() => { /* ignore */ })}
               >
-                {m}
-              </button>
-            ))}
-            <button
-              onClick={() => document.documentElement.requestFullscreen?.().catch(() => { /* ignore */ })}
-              className="rounded px-2 py-1 bg-white/5"
-              title="Fullscreen"
-            >
-              ⛶
-            </button>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="w-16 text-white/60">Effect</span>
-            {(['kenburns', 'fade', 'slide', 'zoom', 'blur'] as const).map((e) => (
-              <button
-                key={e}
-                onClick={() => updateSettings({ effect: e })}
-                className={`rounded px-2 py-0.5 text-xs capitalize ${settings.effect === e ? 'bg-white/25' : 'bg-white/5'}`}
+                Fullscreen
+              </Chip>
+            </Row>
+
+            <Row label="Effect">
+              {([
+                ['cinematic', 'Cinematic'],
+                ['kenburns', 'Ken Burns'],
+                ['grade', 'B&W bloom'],
+                ['fade', 'Fade'],
+                ['slide', 'Slide'],
+                ['zoom', 'Zoom'],
+                ['blur', 'Blur'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.effect === val} onClick={() => updateSettings({ effect: val })}>
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            {settings.effect === 'cinematic' && (
+              <p className="text-xs text-white/50 -mt-2">
+                {aiState === 'loading' && `Loading models… ${aiProgress}%`}
+                {aiState === 'ready' && `On-device AI ready${lastAnalysisMs() ? ` · ${(lastAnalysisMs() / 1000).toFixed(1)}s per photo` : ''}`}
+                {aiState === 'unavailable' && 'AI unavailable — showing Ken Burns instead'}
+              </p>
+            )}
+
+            <Row label="Order">
+              {([
+                ['newest', 'Newest first'],
+                ['oldest', 'Oldest first'],
+                ['shuffle', 'Shuffle'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.order === val} onClick={() => updateSettings({ order: val })}>
+                  {label}
+                </Chip>
+              ))}
+              <Chip on={settings.instantNew} onClick={() => updateSettings({ instantNew: !settings.instantNew })}>
+                Show new instantly
+              </Chip>
+            </Row>
+
+            <Row label="Look">
+              <Chip on={settings.ambient} onClick={() => updateSettings({ ambient: !settings.ambient })}>Ambient colour</Chip>
+              <Chip on={settings.fillBars} onClick={() => updateSettings({ fillBars: !settings.fillBars })}>Blurred fill</Chip>
+              <Chip on={settings.subjectPop} onClick={() => updateSettings({ subjectPop: !settings.subjectPop })}>Subject pop</Chip>
+            </Row>
+
+            <Row label="QR code">
+              {([
+                ['corner', 'Corner'],
+                ['interleave', 'Interleave'],
+                ['hidden', 'Hidden'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.qrMode === val} onClick={() => updateSettings({ qrMode: val })}>
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs uppercase tracking-wide text-white/50">Time per photo</span>
+                <span className="text-sm tabular-nums text-white/80">{settings.intervalMs / 1000}s</span>
+              </div>
+              <input
+                type="range"
+                min={4}
+                max={30}
+                value={settings.intervalMs / 1000}
+                onChange={(e) => updateSettings({ intervalMs: Number(e.target.value) * 1000 })}
+                className="w-full accent-white/80"
+              />
+            </div>
+
+            <hr className="border-white/10" />
+
+            <Row label="Live camera">
+              {([
+                ['auto', 'Auto'],
+                ['live', 'Force live'],
+                ['photos', 'Photos only'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.liveOverride === val} onClick={() => updateSettings({ liveOverride: val })}>
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            <Row label="Camera source">
+              {([
+                ['whep', 'RTMP / MediaMTX'],
+                ['webcam', 'USB webcam'],
+                ['youtube', 'YouTube'],
+              ] as const).map(([val, label]) => (
+                <Chip
+                  key={val}
+                  on={settings.liveSource === val}
+                  onClick={() => {
+                    teardownLive()
+                    updateSettings({ liveSource: val })
+                    if (val === 'webcam') void startWebcam()
+                  }}
+                >
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            {settings.liveSource === 'youtube' && (
+              <input
+                type="text"
+                value={settings.youtubeId}
+                onChange={(e) => updateSettings({ youtubeId: e.target.value.trim().slice(0, 20) })}
+                placeholder="YouTube video id"
+                className="w-full rounded-lg bg-white/10 px-3 py-2 text-sm placeholder:text-white/40"
+              />
+            )}
+
+            <Row label="Advanced">
+              <Chip
+                on={settings.webgpu}
+                onClick={() => updateSettings({ webgpu: !settings.webgpu })}
               >
-                {e === 'kenburns' ? 'Ken Burns' : e}
-              </button>
-            ))}
+                WebGPU
+              </Chip>
+              <span className="text-xs text-white/40 self-center">rehearse before using</span>
+            </Row>
+
           </div>
-          <div className="flex items-center gap-2">
-            <span className="w-16 text-white/60">QR</span>
-            {(['corner', 'interleave', 'hidden'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => updateSettings({ qrMode: m })}
-                className={`rounded px-2 py-0.5 text-xs capitalize ${settings.qrMode === m ? 'bg-white/25' : 'bg-white/5'}`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-16 text-white/60">Every</span>
-            <input
-              type="range" min={4} max={30} value={settings.intervalMs / 1000}
-              onChange={(e) => updateSettings({ intervalMs: Number(e.target.value) * 1000 })}
-              className="flex-1"
-            />
-            <span className="text-xs w-8">{settings.intervalMs / 1000}s</span>
-          </div>
-          <hr className="border-white/20" />
-          <div className="flex items-center gap-2">
-            <span className="w-16 text-white/60">Camera</span>
-            {(['auto', 'live', 'photos'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => updateSettings({ liveOverride: m })}
-                className={`rounded px-2 py-0.5 text-xs capitalize ${settings.liveOverride === m ? 'bg-white/25' : 'bg-white/5'}`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-16 text-white/60">Source</span>
-            {(['whep', 'webcam', 'youtube'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => {
-                  teardownLive()
-                  updateSettings({ liveSource: s })
-                  if (s === 'webcam') void startWebcam()
-                }}
-                className={`rounded px-2 py-0.5 text-xs uppercase ${settings.liveSource === s ? 'bg-white/25' : 'bg-white/5'}`}
-              >
-                {s === 'whep' ? 'RTMP' : s}
-              </button>
-            ))}
-          </div>
-          {settings.liveSource === 'youtube' && (
-            <input
-              type="text"
-              value={settings.youtubeId}
-              onChange={(e) => updateSettings({ youtubeId: e.target.value.trim().slice(0, 20) })}
-              placeholder="YouTube video id"
-              className="w-full rounded bg-white/10 px-2 py-1 text-xs"
-            />
-          )}
         </div>
       </div>
 
