@@ -230,6 +230,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     created_at: string;
   }
 
+  /** Supabase image-transformation URL (imgproxy render endpoint). */
+  function toRenderUrl(storagePath: string, width: number): string {
+    return `${publicSupabaseUrl}/storage/v1/render/image/public/${storageBucket}/${storagePath}?width=${width}&resize=contain&quality=80`;
+  }
+
   function mapFeedItem(r: FeedRow) {
     const meta = (r.metadata ?? {}) as Record<string, unknown>;
     const variants: Record<string, string> = {};
@@ -237,6 +242,15 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       for (const [k, v] of Object.entries(r.variants)) {
         if (typeof v === 'string' && v) variants[k] = toPublicUrl(v);
       }
+    }
+    // Fill missing variants with on-the-fly render URLs: the magick-wasm
+    // edge fn cannot decode multi-MP photos inside the edge memory
+    // ceiling (WORKER_RESOURCE_LIMIT, live 2026-09-20), but this
+    // project's imgproxy transformation endpoint resizes anything —
+    // so every photo gets a thumb/medium regardless of the fn's fate.
+    if (r.mime_type.startsWith('image/')) {
+      if (!variants['thumb']) variants['thumb'] = toRenderUrl(r.storage_path, 350);
+      if (!variants['medium']) variants['medium'] = toRenderUrl(r.storage_path, 800);
     }
     return {
       id: r.id,

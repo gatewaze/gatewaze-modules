@@ -278,6 +278,20 @@ describe('listMedia', () => {
     expect(res.body.items[0].kind).toBe('photo');
   });
 
+  it('fills missing variants with render-endpoint URLs for photos only', async () => {
+    const bare = { ...ROW, id: '33333333-2222-3333-4444-555555555555', variants: null };
+    const vid = { ...ROW, id: '44444444-2222-3333-4444-555555555555', variants: null, mime_type: 'video/mp4' };
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, mediaRows: [bare, vid] });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.listMedia(req(), res);
+    const [photo, video] = res.body.items;
+    expect(photo.variants.thumb).toContain('/storage/v1/render/image/public/media/');
+    expect(photo.variants.thumb).toContain('width=350');
+    expect(photo.variants.medium).toContain('width=800');
+    expect(video.variants.thumb).toBeUndefined();
+  });
+
   it('emits next_cursor when a full page came back', async () => {
     const rows = Array.from({ length: 3 }, (_, i) => ({ ...ROW, id: `${i}1111111-2222-3333-4444-555555555555` }));
     const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, mediaRows: rows });
