@@ -20,6 +20,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
 
@@ -132,6 +133,22 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
 
+  // Mobile detection for the upload takeover. Tracked via matchMedia so
+  // the takeover can render through a PORTAL to document.body —
+  // position:fixed inside the event shell gets re-anchored (and dimmed)
+  // by an ancestor with transform/opacity, which is exactly what the
+  // 2026-09-19 phone test showed (grey wash on white).
+  const [mounted, setMounted] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+  useEffect(() => {
+    setMounted(true)
+    const mq = window.matchMedia('(max-width: 767px)')
+    const apply = () => setIsMobile(mq.matches)
+    apply()
+    mq.addEventListener?.('change', apply)
+    return () => mq.removeEventListener?.('change', apply)
+  }, [])
+
   // ── Code + guest bootstrap ────────────────────────────────────────
 
   useEffect(() => {
@@ -219,12 +236,14 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
 
   // ── Upload queue ──────────────────────────────────────────────────
 
+  // queueRef is the SYNCHRONOUS source of truth; React state mirrors it
+  // for rendering. Updating the ref inside setQueue's updater is too
+  // late — React defers updaters, so pumpQueue read an empty ref right
+  // after enqueue and exited, leaving items stuck "queued" (found live
+  // on mobile 2026-09-19).
   const setQueueSafe = useCallback((updater: (prev: QueueItem[]) => QueueItem[]) => {
-    setQueue((prev) => {
-      const next = updater(prev)
-      queueRef.current = next
-      return next
-    })
+    queueRef.current = updater(queueRef.current)
+    setQueue(queueRef.current)
   }, [])
 
   const patchItem = useCallback((key: string, patch: Partial<QueueItem>) => {
@@ -379,13 +398,15 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   }, [patchItem, pumpQueue])
 
   // Safety net: retry stranded completion tickets (a failed flush keeps
-  // them pending; complete is idempotent so re-sending is safe).
+  // them pending; complete is idempotent so re-sending is safe), and
+  // re-kick the pump if waiting items ever exist without one running.
   useEffect(() => {
     const iv = setInterval(() => {
       if (pendingTicketsRef.current.length > 0) void flushCompletes(true)
+      if (!pumpingRef.current && queueRef.current.some((q) => q.status === 'waiting')) void pumpQueue()
     }, 10_000)
     return () => clearInterval(iv)
-  }, [flushCompletes])
+  }, [flushCompletes, pumpQueue])
 
   // Warn before leaving mid-upload.
   useEffect(() => {
@@ -446,17 +467,16 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
 
   // On phones, a guest with an upload code gets a full-viewport
   // takeover — the event hero eats half the screen otherwise and this
-  // page is about uploading, not browsing the event. Desktop keeps the
-  // normal in-page layout; the takeover overlays the chrome instead of
-  // touching the core event layout.
-  const takeover = canUpload
-    ? `max-md:fixed max-md:inset-0 max-md:z-40 max-md:overflow-y-auto ${darkMode ? 'max-md:bg-gray-950' : 'max-md:bg-gray-50'}`
-    : ''
+  // page is about uploading, not browsing the event. Rendered through a
+  // PORTAL to document.body so no event-shell ancestor (transform/
+  // opacity) can re-anchor the fixed positioning or dim the content.
+  // Desktop keeps the normal in-page layout.
+  const mobileTakeover = canUpload && mounted && isMobile
 
-  return (
-    <div className={`max-w-5xl mx-auto px-4 py-6 ${takeover}`}>
-      {canUpload && (
-        <div className="md:hidden mb-3 pt-2">
+  const pageContent = (
+    <div className="max-w-5xl mx-auto px-4 py-6">
+      {mobileTakeover && (
+        <div className="mb-3 pt-2">
           <p className={`text-base font-semibold ${text}`}>{link!.event.name ?? 'Event photos'}</p>
           <p className={`text-xs ${subText}`}>Share your photos from the day</p>
         </div>
@@ -663,4 +683,15 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       )}
     </div>
   )
+
+  if (mobileTakeover) {
+    return createPortal(
+      <div className={`fixed inset-0 z-50 overflow-y-auto overscroll-contain ${darkMode ? 'bg-gray-950' : 'bg-gray-50'}`}>
+        {pageContent}
+      </div>,
+      document.body,
+    )
+  }
+
+  return pageContent
 }
