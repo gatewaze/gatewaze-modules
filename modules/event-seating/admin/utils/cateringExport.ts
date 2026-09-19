@@ -40,7 +40,7 @@ export interface CourseSheet {
   missing: number;
 }
 
-function answerToString(answer: unknown): string {
+export function answerToString(answer: unknown): string {
   if (answer == null) return '';
   if (typeof answer === 'string') return answer;
   if (Array.isArray(answer)) return (answer as unknown[]).map((a) => String(a)).join(', ');

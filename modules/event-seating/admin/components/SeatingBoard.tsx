@@ -45,6 +45,7 @@ import {
 } from '../utils/exportPlan';
 import { SeatingCanvas, type DragState } from './SeatingCanvas';
 import { CateringPdfModal } from './CateringPdfModal';
+import { PlaceCardModal } from './PlaceCardModal';
 import { GuestTray } from './GuestTray';
 import { TableInspector } from './TableInspector';
 
@@ -72,6 +73,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [cateringOpen, setCateringOpen] = useState(false);
+  const [placeCardsOpen, setPlaceCardsOpen] = useState(false);
   const [undoState, setUndoState] = useState<UndoState>(EMPTY_UNDO);
   const [restoring, setRestoring] = useState(false);
 
@@ -495,7 +497,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
     const onKey = (e: KeyboardEvent) => {
       if (!isDeleteTableShortcut(e, {
         dragging: drag !== null,
-        dialogOpen: cateringOpen,
+        dialogOpen: cateringOpen || placeCardsOpen,
         hasSelection: selectedTableIds.length > 0,
       })) return;
       e.preventDefault();
@@ -503,13 +505,13 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedTableIds, drag, cateringOpen, handleDeleteTable]);
+  }, [selectedTableIds, drag, cateringOpen, placeCardsOpen, handleDeleteTable]);
 
   // Ctrl/Cmd+Z steps back, Ctrl/Cmd+Shift+Z (or Ctrl+Y) forward. Text fields
   // keep their own undo — see undoShortcut.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (cateringOpen || drag) return;
+      if (cateringOpen || placeCardsOpen || drag) return;
       const action = undoShortcut(e);
       if (!action) return;
       e.preventDefault();
@@ -517,7 +519,7 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [step, cateringOpen, drag]);
+  }, [step, cateringOpen, placeCardsOpen, drag]);
 
   // Escape cancels a pick-up mid-drag.
   useEffect(() => {
@@ -726,6 +728,9 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
           <Button variant="soft" size="1" onClick={() => setCateringOpen(true)}>
             <ArrowDownTrayIcon className="mr-0.5 h-3 w-3" />Meal sheets
           </Button>
+          <Button variant="soft" size="1" onClick={() => setPlaceCardsOpen(true)}>
+            <ArrowDownTrayIcon className="mr-0.5 h-3 w-3" />Place cards
+          </Button>
         </div>
       </div>
 
@@ -826,6 +831,16 @@ export function SeatingBoard({ plan, eventUuid, subEventName, onPlanChange }: Pr
         subtitle={subEventName || 'All guests'}
         namesByAssignment={namesByAssignment}
         background={backgroundImage}
+      />
+
+      <PlaceCardModal
+        isOpen={placeCardsOpen}
+        onClose={() => setPlaceCardsOpen(false)}
+        plan={plan}
+        tables={tables}
+        assignments={assignments}
+        guests={guests}
+        subEventName={subEventName}
       />
     </div>
   );
