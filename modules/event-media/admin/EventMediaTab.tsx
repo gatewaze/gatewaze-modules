@@ -12,6 +12,7 @@
  */
 
 import { HostMediaTab } from '@gatewaze-modules/host-media/admin';
+import { GuestUploadLinksPanel } from './components/GuestUploadLinksPanel';
 
 interface EventMediaTabProps {
   eventId: string; // host_id — events.id (uuid)
@@ -19,16 +20,19 @@ interface EventMediaTabProps {
 
 export function EventMediaTab({ eventId }: EventMediaTabProps) {
   return (
-    <HostMediaTab
-      hostId={eventId}
-      consumer={{
-        hostKind: 'event',
-        enableAlbums: true,
-        enableSponsorTagging: true,
-        enableYouTube: true,
-        enableZipUnpack: true,
-      }}
-    />
+    <>
+      <GuestUploadLinksPanel eventId={eventId} />
+      <HostMediaTab
+        hostId={eventId}
+        consumer={{
+          hostKind: 'event',
+          enableAlbums: true,
+          enableSponsorTagging: true,
+          enableYouTube: true,
+          enableZipUnpack: true,
+        }}
+      />
+    </>
   );
 }
 

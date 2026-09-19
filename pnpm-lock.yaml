@@ -1214,6 +1214,19 @@ importers:
       '@gatewaze/shared':
         specifier: '*'
         version: link:../../../gatewaze/packages/shared
+      express-rate-limit:
+        specifier: ^8.5.2
+        version: 8.5.2(express@4.22.2)
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.0
+        version: 5.0.6
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.19
+      vitest:
+        specifier: ^4.0.0
+        version: 4.1.6(@opentelemetry/api@1.9.1)(@types/node@22.19.19)(happy-dom@20.9.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@7.3.3(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.2)(yaml@2.9.0))
 
   modules/event-reports:
     dependencies:

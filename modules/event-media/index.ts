@@ -7,17 +7,24 @@ const eventMediaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Media',
   description: 'Photo and video galleries, media uploads, and album management for events',
-  version: '1.0.0',
+  version: '1.1.3',
   features: [
     'event-media',
     'event-media.upload',
     'event-media.albums',
+    'event-media.guest-uploads',
   ],
 
   migrations: [
     'migrations/001_event_media_tables.sql',
     'migrations/002_event_media_albums.sql',
+    'migrations/003_guest_upload_links.sql',
   ],
+
+  apiRoutes: async (app: unknown, context?: unknown) => {
+    const { registerRoutes } = await import('./api/register-routes.js');
+    await registerRoutes(app as never, context as never);
+  },
 
   edgeFunctions: [
     'media-combine-chunks',
