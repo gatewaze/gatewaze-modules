@@ -21,6 +21,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
+import DisplayView from './_components/DisplayView'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 const MINT_BATCH = 20
@@ -36,7 +37,7 @@ interface Props {
 }
 
 interface LinkInfo {
-  event: { identifier: string | null; slug: string | null; name: string | null }
+  event: { identifier: string | null; slug: string | null; event_id?: string | null; name: string | null }
   settings: {
     require_name: boolean
     allow_video: boolean
@@ -114,7 +115,9 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const [queue, setQueue] = useState<QueueItem[]>([])
   const queueRef = useRef<QueueItem[]>([])
   const pumpingRef = useRef(false)
-  const pendingTicketsRef = useRef<string[]>([])
+  // Tickets awaiting the complete call, paired with their queue key so
+  // ✓ is only shown once the row actually exists server-side.
+  const pendingTicketsRef = useRef<Array<{ ticket: string; key: string }>>([])
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [items, setItems] = useState<GalleryItem[]>([])
@@ -162,7 +165,9 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         // Cross-event guard: a stale stored code for another event must
         // not light this page up (invites rsvp.tsx:200-207 lesson).
         if (data && data.event) {
-          const ids = [data.event.identifier, data.event.slug].filter(Boolean)
+          // Accept every URL spelling the event page resolves (slug OR
+          // text event_id) — rejecting one wrongly clears a valid code.
+          const ids = [data.event.identifier, data.event.slug, data.event.event_id].filter(Boolean)
           if (ids.length > 0 && !ids.includes(eventIdentifier)) {
             try { localStorage.removeItem(codeKey) } catch { /* ignore */ }
             setCode(null)
@@ -235,9 +240,20 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/uploads/complete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tickets: batch }),
+          body: JSON.stringify({ tickets: batch.map((b) => b.ticket) }),
         })
         if (res.ok || res.status === 207) {
+          // Per-item results come back in ticket order — only now does
+          // an item earn its ✓ (or surface a completion failure).
+          const data = await res.json().catch(() => null)
+          batch.forEach((b, i) => {
+            const item = data?.items?.[i]
+            if (item && (item.status === 'created' || item.status === 'already_created')) {
+              patchItem(b.key, { status: 'done' })
+            } else {
+              patchItem(b.key, { status: 'failed', error: item?.error ?? 'completion failed' })
+            }
+          })
           loadGallery() // fresh uploads appear immediately
         } else {
           // put them back; the timer retries (complete is idempotent)
@@ -267,10 +283,11 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     const mime = effectiveMime(item.file)
     try {
       await putWithProgress(minted.upload_url, item.file, mime, (pct) => patchItem(item.key, { progress: pct }))
+      // "finishing…" until the complete call confirms the row exists —
+      // flushCompletes flips it to done/failed per the server's answer.
       patchItem(item.key, { status: 'processing', progress: 100 })
-      pendingTicketsRef.current.push(minted.ticket)
+      pendingTicketsRef.current.push({ ticket: minted.ticket, key: item.key })
       scheduleFlush()
-      patchItem(item.key, { status: 'done' })
     } catch (err) {
       patchItem(item.key, { status: 'failed', error: err instanceof Error ? err.message : 'upload failed' })
     }
@@ -405,6 +422,14 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const text = darkMode ? 'text-white' : 'text-gray-900'
   const subText = darkMode ? 'text-gray-300' : 'text-gray-600'
   const cardBg = darkMode ? 'bg-white/10' : 'bg-white'
+
+  // Projector mode: ?display=1 swaps the whole tab for the full-bleed
+  // display view (renders position:fixed above the event chrome). This
+  // is the reachable home for the projector — module portal pages are
+  // nav-visibility-gated and event-media has no nav entry.
+  if (searchParams.get('display') === '1' && code) {
+    return <DisplayView code={code} />
+  }
 
   if (loading) {
     return <div className={`p-8 text-center ${subText}`}>Loading…</div>

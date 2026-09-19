@@ -105,15 +105,23 @@ export function newMediaId(): string {
 // ── Rate limits ─────────────────────────────────────────────────────
 // All windows in ms; consumed via the platform rateLimiter.check contract.
 
+// Per-IP caps are sized for ONE venue NAT carrying the whole event —
+// projector polling every 10 s plus ~100 guests browsing/uploading all
+// present as a single IP at a wedding venue (evidence review 2026-09-19).
+// Each op gets its OWN bucket (per-op key discriminator) so gallery
+// polling can never starve uploads.
 export const GUEST_RATE_LIMITS = {
-  resolvePerIp: { max: 30, windowMs: 60_000 },
-  mediaListPerIp: { max: 60, windowMs: 60_000 },
+  resolvePerIp: { max: 120, windowMs: 60_000 },
+  mediaListPerIp: { max: 300, windowMs: 60_000 },
   mintPerClient: { max: 20, windowMs: 60_000 },
-  mintPerIp: { max: 60, windowMs: 60_000 },
+  mintPerIp: { max: 120, windowMs: 60_000 },
   completePerClient: { max: 20, windowMs: 60_000 },
-  // Hard per-link circuit breaker: client_id is client-chosen (spoofable),
-  // so the windowed per-code cap is the real backstop against a leaked QR.
-  completePerLinkHourly: { max: 600, windowMs: 3_600_000 },
+  completePerIp: { max: 120, windowMs: 60_000 },
+  // Per-link circuit breaker: client_id is client-chosen (spoofable), so
+  // the windowed per-code cap is the real backstop against a leaked QR.
+  // NOTE this caps COMPLETE CALLS; each call carries ≤20 tickets, so the
+  // true file ceiling is 20× this (240 calls/hr ≈ ≤4,800 files/hr).
+  completePerLinkHourly: { max: 240, windowMs: 3_600_000 },
 } as const;
 
 export function guestRateKey(op: string, discriminator: string): string {

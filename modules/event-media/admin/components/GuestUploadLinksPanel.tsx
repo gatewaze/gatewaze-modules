@@ -81,8 +81,33 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
       .catch(() => { /* custom domains module may not be enabled */ });
   }, [eventId]);
 
+  // Event identifier for the display URL (custom domains imply the
+  // event; the shared portal host needs /events/<identifier>).
+  const [eventIdentifier, setEventIdentifier] = useState<string | null>(null);
+  useEffect(() => {
+    supabase
+      .from('events')
+      .select('event_slug, event_id')
+      .eq('id', eventId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) setEventIdentifier(data.event_slug || data.event_id || null);
+      });
+  }, [eventId]);
+
   const baseUrl = (customDomainUrl || portalUrl).replace(/\/+$/, '');
   const linkUrl = useCallback((link: UploadLink) => `${baseUrl}/u/${link.short_code}`, [baseUrl]);
+  // Projector display = the photos tab in ?display=1 mode (module portal
+  // pages are nav-gated, so there is no standalone display route).
+  const displayUrl = useCallback(
+    (link: UploadLink) =>
+      customDomainUrl
+        ? `${baseUrl}/photos?u=${link.short_code}&display=1`
+        : eventIdentifier
+          ? `${baseUrl}/events/${eventIdentifier}/photos?u=${link.short_code}&display=1`
+          : null,
+    [baseUrl, customDomainUrl, eventIdentifier],
+  );
 
   const loadLinks = useCallback(async () => {
     try {
@@ -111,11 +136,16 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     setPending((data ?? []) as PendingMedia[]);
   }, [eventId]);
 
+  // Pending moderation loads on MOUNT (not first expand) so the
+  // collapsed-header badge is actually visible when a queue exists.
+  useEffect(() => {
+    void loadPending();
+  }, [loadPending]);
+
   useEffect(() => {
     if (!expanded || loaded) return;
     void loadLinks();
-    void loadPending();
-  }, [expanded, loaded, loadLinks, loadPending]);
+  }, [expanded, loaded, loadLinks]);
 
   const createLink = async () => {
     if (!form.label.trim()) return;
@@ -192,6 +222,16 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     } else {
       const { error } = await supabase.from('host_media').delete().eq('id', media.id);
       if (error) { toast.error('Reject failed'); return; }
+      // Best-effort storage cleanup (original + variants); anything a
+      // policy blocks is picked up by the orphan sweep script.
+      const dir = media.storage_path.replace(/\/[^/]+$/, '');
+      try {
+        await supabase.storage.from('media').remove([
+          media.storage_path,
+          `${dir}/variants/thumb.jpg`,
+          `${dir}/variants/medium.jpg`,
+        ]);
+      } catch { /* sweep script catches leftovers */ }
       toast.success('Rejected');
     }
     await loadPending();
@@ -226,6 +266,17 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
               <span className="text-xs text-gray-500">{link.uploads_count} uploads</span>
               <span className="flex-1" />
               <button className="text-xs underline" onClick={() => copyUrl(link)}>Copy URL</button>
+              <button
+                className="text-xs underline"
+                onClick={async () => {
+                  const url = displayUrl(link);
+                  if (!url) { toast.error('Event identifier still loading'); return; }
+                  try { await navigator.clipboard.writeText(url); toast.success('Display URL copied'); }
+                  catch { toast.error('Could not copy URL'); }
+                }}
+              >
+                Copy display URL
+              </button>
               <button className="text-xs underline" onClick={() => downloadQr(link, 1200)}>QR 1200px</button>
               <button className="text-xs underline" onClick={() => downloadQr(link, 600)}>QR 600px</button>
               <button className="text-xs underline text-red-600" onClick={() => toggleActive(link)}>

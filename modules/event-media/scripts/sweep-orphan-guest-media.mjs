@@ -69,7 +69,20 @@ for (const folder of mediaFolders) {
   }
 
   orphans += 1;
-  const paths = (files ?? []).map((f) => `${prefix}/${mediaId}/${f.name}`);
+  // storage list() is non-recursive and returns folder entries (no
+  // metadata) alongside objects; remove() on a folder path is a no-op —
+  // recurse one level so variants/{thumb,medium}.jpg don't survive.
+  const paths = [];
+  for (const f of files ?? []) {
+    if (f.metadata) {
+      paths.push(`${prefix}/${mediaId}/${f.name}`);
+    } else {
+      const { data: sub } = await supabase.storage.from(BUCKET).list(`${prefix}/${mediaId}/${f.name}`, { limit: 100 });
+      for (const s of sub ?? []) {
+        if (s.metadata) paths.push(`${prefix}/${mediaId}/${f.name}/${s.name}`);
+      }
+    }
+  }
   console.log(`orphan: ${prefix}/${mediaId} (${paths.length} object(s))`);
 
   if (doDelete && paths.length > 0) {

@@ -32,6 +32,8 @@ Deno.serve(async (req: Request) => {
     // `variants` jsonb ({ thumb, medium } storage paths) instead of the
     // legacy thumbnail_path columns.
     if (table === 'host_media') {
+      // Honour the same bucket override the API layer uses.
+      const hostBucket = Deno.env.get('HOST_MEDIA_BUCKET') ?? 'media'
       const { data: hostMedia, error: hostFetchError } = await supabase
         .from('host_media')
         .select('id, storage_path, mime_type, variants')
@@ -58,7 +60,7 @@ Deno.serve(async (req: Request) => {
       }
 
       const { data: blob, error: dlError } = await supabase.storage
-        .from('media')
+        .from(hostBucket)
         .download(hostMedia.storage_path)
       if (dlError || !blob) {
         throw new Error(`Failed to download image: ${dlError?.message}`)
@@ -75,7 +77,7 @@ Deno.serve(async (req: Request) => {
 
       for (const [path, bytes] of [[thumbPath, processed.thumbnail], [mediumPath, processed.medium]] as const) {
         const { error: upError } = await supabase.storage
-          .from('media')
+          .from(hostBucket)
           .upload(path, bytes, { contentType: 'image/jpeg', cacheControl: '31536000', upsert: true })
         if (upError) {
           throw new Error(`Failed to upload variant ${path}: ${upError.message}`)

@@ -54,8 +54,12 @@ export interface GuestRoutesDeps {
   internalSupabaseUrl: string;
   rateLimit: (key: string, max: number, windowMs: number) => Promise<{ allowed: boolean; resetAt: number }>;
   logger: PlatformLogger;
-  /** Injected for tests; defaults to env-derived secret. */
-  ticketSecret?: string;
+  /** Resolved ONCE at mount (register-routes) — never per-request, so a
+   *  missing SUPABASE_JWT_SECRET can't throw inside an unauthenticated
+   *  handler (Express 4 turns that into an unhandledRejection →
+   *  process.exit via the Sentry hook; evidence review 2026-09-19, F3).
+   *  null → mint/complete answer 503 not_configured. */
+  ticketSecret: string | null;
 }
 
 interface UploadLinkRow {
@@ -124,13 +128,18 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
   /** Shared resolution: rate limit → code shape → link row → liveness →
    *  parent event. All failure shapes are the same 404 (no enumeration
-   *  oracle). Returns null after responding. */
+   *  oracle). Returns null after responding.
+   *
+   *  `op` keeps each endpoint in its OWN per-IP bucket — a wedding venue
+   *  is one NAT IP, and a shared bucket would let gallery polling starve
+   *  uploads (evidence review 2026-09-19, F2). */
   async function resolveLink(
     req: Request,
     res: Response,
+    op: string,
     ipLimit: { max: number; windowMs: number },
   ): Promise<{ link: UploadLinkRow; event: EventRow } | null> {
-    if (!(await checkRate(res, guestRateKey('ip', clientIp(req)), ipLimit))) return null;
+    if (!(await checkRate(res, guestRateKey(`${op}:ip`, clientIp(req)), ipLimit))) return null;
 
     const code = paramAsShortCode(req.params['code']);
     if (!code) {
@@ -174,7 +183,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   // GET /public/event-media/links/:code
   // ────────────────────────────────────────────────────────────────────
   async function getLink(req: Request, res: Response): Promise<void> {
-    const ctx = await resolveLink(req, res, GUEST_RATE_LIMITS.resolvePerIp);
+    const ctx = await resolveLink(req, res, 'resolve', GUEST_RATE_LIMITS.resolvePerIp);
     if (!ctx) return;
     const { link, event } = ctx;
 
@@ -185,6 +194,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         id: event.id,
         identifier: event.event_slug || event.event_id,
         slug: event.event_slug,
+        // Text event_id included separately: the portal event page
+        // resolves BOTH slug and event_id URLs, and the client's
+        // cross-event guard must accept either spelling.
+        event_id: event.event_id,
         name: event.event_title,
       },
       settings: {
@@ -255,7 +268,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   async function listMedia(req: Request, res: Response): Promise<void> {
-    const ctx = await resolveLink(req, res, GUEST_RATE_LIMITS.mediaListPerIp);
+    const ctx = await resolveLink(req, res, 'list', GUEST_RATE_LIMITS.mediaListPerIp);
     if (!ctx) return;
     const { link } = ctx;
 
@@ -286,9 +299,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     else if (filter === 'video') query = query.like('mime_type', 'video/%');
 
     if (after) {
-      // Incremental poll (display page): everything newer than the
-      // newest item the client has, same DESC ordering.
-      query = query.gt('created_at', after);
+      // Incremental poll (display page): everything at-or-newer than the
+      // newest item the client has, same DESC ordering. gte (not gt) so a
+      // row committing later with an EQUAL timestamp is never permanently
+      // missed — clients dedup by id, so re-delivering ties is free.
+      query = query.gte('created_at', after);
     } else if (cursor) {
       // Keyset page: (created_at, id) < (t, i). Both values validated
       // (ISO / UUID) before interpolation — no user-shaped bytes reach
@@ -317,7 +332,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   // POST /public/event-media/links/:code/uploads   (mint)
   // ────────────────────────────────────────────────────────────────────
   async function mintUploads(req: Request, res: Response): Promise<void> {
-    const ctx = await resolveLink(req, res, GUEST_RATE_LIMITS.mintPerIp);
+    if (!deps.ticketSecret) {
+      sendError(res, 503, 'not_configured', 'uploads are not available right now');
+      return;
+    }
+    const ctx = await resolveLink(req, res, 'mint', GUEST_RATE_LIMITS.mintPerIp);
     if (!ctx) return;
     const { link } = ctx;
 
@@ -448,7 +467,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   async function completeUploads(req: Request, res: Response): Promise<void> {
-    const ctx = await resolveLink(req, res, GUEST_RATE_LIMITS.mintPerIp);
+    if (!deps.ticketSecret) {
+      sendError(res, 503, 'not_configured', 'uploads are not available right now');
+      return;
+    }
+    const ctx = await resolveLink(req, res, 'complete', GUEST_RATE_LIMITS.completePerIp);
     if (!ctx) return;
     const { link } = ctx;
 
@@ -550,10 +573,20 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       items.push({ media_id: p.media_id, status: 'created', item: mapFeedItem(inserted as FeedRow) });
 
       if (p.mime_type.startsWith('image/')) {
-        // Fire-and-forget variant generation (same functions.invoke
-        // convention host-media's upload route uses).
+        // Fire-and-forget variant generation. invoke() resolves
+        // { data, error } on a non-2xx rather than rejecting, so the
+        // error envelope must be checked or edge-fn failures are
+        // invisible (evidence review 2026-09-19, F4).
         void supabase.functions
           .invoke('media-process-image', { body: { mediaId: p.media_id, table: 'host_media' } })
+          .then(({ error }: { error: { message?: string } | null }) => {
+            if (error) {
+              logger.warn('media-process-image returned an error', {
+                mediaId: p.media_id,
+                error: error.message ?? String(error),
+              });
+            }
+          })
           .catch((err: unknown) => {
             logger.warn('media-process-image invoke failed', {
               mediaId: p.media_id,
@@ -575,7 +608,34 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     res.status(anyFailed ? 207 : 200).json({ items });
   }
 
-  return { getLink, listMedia, mintUploads, completeUploads };
+  // Crash guard: these are the platform's first UNAUTHENTICATED express
+  // handlers in module space — an uncaught rejection here would become
+  // an unhandledRejection and take the whole API process down (Sentry
+  // hook exits). Degrade to a 500 envelope instead.
+  function guarded(fn: (req: Request, res: Response) => Promise<void>) {
+    return async (req: Request, res: Response): Promise<void> => {
+      try {
+        await fn(req, res);
+      } catch (err) {
+        logger.error('guest route crashed', {
+          path: req.path,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        try {
+          if (!res.headersSent) sendError(res, 500, 'internal_error', 'unexpected failure');
+        } catch {
+          // response already gone — nothing further to do
+        }
+      }
+    };
+  }
+
+  return {
+    getLink: guarded(getLink),
+    listMedia: guarded(listMedia),
+    mintUploads: guarded(mintUploads),
+    completeUploads: guarded(completeUploads),
+  };
 }
 
 export function mountGuestRoutes(router: Router, routes: ReturnType<typeof createGuestRoutes>): void {

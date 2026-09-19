@@ -192,13 +192,41 @@ describe('link resolution', () => {
   });
 
   it('rate-limits by IP before resolution', async () => {
-    const { deps, rateCalls } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, denyRateKeys: ['guest:ip'] });
+    const { deps, rateCalls } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, denyRateKeys: ['resolve:ip'] });
     const routes = createGuestRoutes(deps);
     const res = mockRes();
     await routes.getLink(req(), res);
     expect(res.statusCode).toBe(429);
     expect(res.headers['Retry-After']).toBeDefined();
     expect(rateCalls[0].key).toContain('203.0.113.9');
+  });
+
+  it('keeps each op in its own per-IP bucket (list starvation cannot block mint)', async () => {
+    // Venue-NAT scenario: the list bucket is exhausted; mint must still work.
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, denyRateKeys: ['list:ip'] });
+    const routes = createGuestRoutes(deps);
+
+    const listRes = mockRes();
+    await routes.listMedia(req(), listRes);
+    expect(listRes.statusCode).toBe(429);
+
+    const mintRes = mockRes();
+    await routes.mintUploads(req({
+      body: { client_id: CLIENT_ID, guest_name: 'C', files: [{ filename: 'a.jpg', mime_type: 'image/jpeg', bytes: 10 }] },
+    }), mintRes);
+    expect(mintRes.statusCode).toBe(200);
+  });
+
+  it('answers 503 not_configured when the ticket secret is unavailable', async () => {
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW });
+    deps.ticketSecret = null;
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.mintUploads(req({
+      body: { client_id: CLIENT_ID, guest_name: 'C', files: [{ filename: 'a.jpg', mime_type: 'image/jpeg', bytes: 10 }] },
+    }), res);
+    expect(res.statusCode).toBe(503);
+    expect(res.body.error).toBe('not_configured');
   });
 
   it('resolves an active link with settings + no-store', async () => {

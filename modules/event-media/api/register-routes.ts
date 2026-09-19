@@ -124,6 +124,21 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   // public/signed URLs handed to them must use the external one.
   const publicSupabaseUrl = (process.env.SUPABASE_PUBLIC_URL || supabaseUrl).replace(/\/+$/, '');
 
+  // Resolve the ticket secret ONCE at mount. A per-request resolve
+  // would throw inside an unauthenticated handler when the env is
+  // missing — Express 4 turns that into an unhandledRejection and the
+  // Sentry hook exits the process (evidence review 2026-09-19, F3).
+  let ticketSecret: string | null = null;
+  try {
+    const { getTicketSecret } = await import('../lib/upload-tickets.js');
+    ticketSecret = getTicketSecret();
+  } catch (err) {
+    logger.error(
+      'SUPABASE_JWT_SECRET not set — guest upload mint/complete will answer 503 until it is configured',
+      { error: err instanceof Error ? err.message : String(err) },
+    );
+  }
+
   // Public guest endpoints — /api/public/event-media/*.
   const publicRouter = Router();
   const guestRoutes = createGuestRoutes({
@@ -133,6 +148,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     internalSupabaseUrl: supabaseUrl,
     rateLimit: rateLimiter.check.bind(rateLimiter),
     logger,
+    ticketSecret,
   });
   mountGuestRoutes(publicRouter, guestRoutes);
   app.use('/api', publicRouter);

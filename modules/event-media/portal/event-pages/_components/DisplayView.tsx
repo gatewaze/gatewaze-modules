@@ -3,10 +3,14 @@
 // @ts-nocheck — portal deps are resolved at build time via webpack alias
 
 /**
- * Projector display page — full-bleed live gallery/slideshow of an
+ * Projector display view — full-bleed live gallery/slideshow of an
  * event's guest photos, with an optional live-camera layer on top.
  *
- *   /event-media/display/<code>
+ * Rendered by the photos event tab when `?display=1` is present:
+ *   /events/<identifier>/photos?u=<code>&display=1
+ * (A standalone module portal page is NOT used — module pages under
+ * /m/[...path] are gated on portal-nav visibility, which event-media
+ * deliberately doesn't have; evidence review 2026-09-19, F1.)
  *
  * - Photos only, ever (server filter=photo + defensive client check).
  * - The photo montage NEVER stops running underneath; the live camera
@@ -65,15 +69,11 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   youtubeId: '',
 }
 
-interface DisplayPageProps {
-  // Module portal pages are mounted via /m/[...path]; the platform
-  // extracts route-pattern params and passes them as a prop —
-  // next/navigation's useParams() would only see the catch-all here.
-  params?: { code?: string }
+interface DisplayViewProps {
+  code: string
 }
 
-export default function DisplayPage({ params }: DisplayPageProps) {
-  const rawCode = params?.code
+export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const code = typeof rawCode === 'string' && /^[a-z0-9]{6,16}$/.test(rawCode) ? rawCode : null
 
   const settingsKey = `event_media_display:${code ?? ''}`
