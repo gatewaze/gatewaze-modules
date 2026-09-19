@@ -159,19 +159,19 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   // cross-module shape events/index.ts uses for the consumer registry).
   const { requireJwt } = await import('../../host-media/lib/require-jwt.js');
   const adminRouter = Router();
-  adminRouter.use(requireJwt());
-  // Rate limit the admin CRUD too (per authenticated user, IP fallback)
-  // — authorization-performing handlers should never be unthrottled
-  // (CodeQL js/missing-rate-limiting; the ai module's express-rate-limit
-  // posture, which the scanner recognises).
+  // Rate limiter FIRST, auth second — throttling must cover the JWT
+  // verification work itself, and CodeQL's js/missing-rate-limiting
+  // anchors on the authorization middleware being unprotected.
+  // Default key = client IP (userId doesn't exist pre-auth; the
+  // library's default generator is IPv6-safe).
   adminRouter.use(expressRateLimit({
     windowMs: 60_000,
-    limit: 120,
+    limit: 240,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req: Request & { userId?: string }) => req.userId ?? req.ip ?? 'unknown',
     message: { error: 'rate_limited', message: 'too many requests' },
   }));
+  adminRouter.use(requireJwt());
   const adminRoutes = createAdminLinksRoutes({
     userClient: (req) => {
       if (!supabaseAnonKey) return null;
