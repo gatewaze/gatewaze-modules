@@ -12,12 +12,19 @@ const eventMediaModule: GatewazeModule = {
     'event-media',
     'event-media.upload',
     'event-media.albums',
+    'event-media.guest-uploads',
   ],
 
   migrations: [
     'migrations/001_event_media_tables.sql',
     'migrations/002_event_media_albums.sql',
+    'migrations/003_guest_upload_links.sql',
   ],
+
+  apiRoutes: async (app: unknown, context?: unknown) => {
+    const { registerRoutes } = await import('./api/register-routes.js');
+    await registerRoutes(app as never, context as never);
+  },
 
   edgeFunctions: [
     'media-combine-chunks',

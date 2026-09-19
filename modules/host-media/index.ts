@@ -44,6 +44,8 @@ const hostMediaModule: GatewazeModule = {
     'migrations/009_host_media_signed_url_log.sql',
     'migrations/010_host_media_chunked_uploads.sql',
     'migrations/011_host_media_sync_refs_fn.sql',
+    'migrations/012_host_media_event_public_feed_index.sql',
+    'migrations/013_host_media_public_read_approved_realtime.sql',
   ],
 
   // edgeFunctions: deferred to Phase 2 (per spec-host-media-module §11.2).

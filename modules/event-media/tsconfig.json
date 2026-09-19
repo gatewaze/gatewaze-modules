@@ -16,5 +16,17 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["*.ts"]
+  "include": [
+    "lib/**/*.ts",
+    "api/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "**/*.test.ts",
+    "api/register-routes.ts",
+    "api/public-guest-routes.ts",
+    "api/admin-links-routes.ts",
+    "functions/**"
+  ]
 }
