@@ -13,6 +13,8 @@ import {
   getPlaceCardVariables,
   resolvePlaceCardVariable,
   savePlaceCardTemplate,
+  templateAssetUrl,
+  uploadBackgroundAsset,
   uploadFontAsset,
   type CardFace,
   type FontAsset,
@@ -69,7 +71,9 @@ export function PlaceCardTemplateEditor({ isOpen, onClose, eventUuid, template, 
   const [dragging, setDragging] = useState<{ index: number; face: CardFace } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [bgPath, setBgPath] = useState<string | null>(null);
   const panelRefs = useRef<Partial<Record<CardFace, HTMLDivElement | null>>>({});
+  const bgCanvasRefs = useRef<Partial<Record<CardFace, HTMLCanvasElement | null>>>({});
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   if (!measureCtxRef.current && typeof document !== 'undefined') {
     measureCtxRef.current = document.createElement('canvas').getContext('2d');
@@ -81,6 +85,7 @@ export function PlaceCardTemplateEditor({ isOpen, onClose, eventUuid, template, 
     if (!isOpen) return;
     setName(template?.name || 'Place cards');
     setFields(template?.pdf_fields?.length ? template.pdf_fields : defaultPlaceCardFields());
+    setBgPath(template?.pdf_background_path || null);
     setSelectedIndex(null);
     getFontAssets(eventUuid)
       .then(setFontAssets)
@@ -98,6 +103,79 @@ export function PlaceCardTemplateEditor({ isOpen, onClose, eventUuid, template, 
     document.head.appendChild(styleEl);
     return () => { document.getElementById('place-card-template-fonts')?.remove(); };
   }, [isOpen, fontAssets]);
+
+  // Render the background PDF's faces behind the panels: page 1 under the
+  // outside, page 2 under the inside. pdf.js gives exact control of the
+  // render scale so the preview lines up with the field coordinates.
+  useEffect(() => {
+    const clear = () => {
+      for (const face of ['outside', 'inside'] as CardFace[]) {
+        const canvas = bgCanvasRefs.current[face];
+        canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    };
+    if (!isOpen || !bgPath) { clear(); return; }
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const pdfjsLib: any = await import('pdfjs-dist');
+        // Worker from CDN — avoids Vite worker-loader issues when this module
+        // is resolved from an external module directory (same as invites).
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc =
+            `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+        }
+        const doc = await pdfjsLib.getDocument(templateAssetUrl(bgPath)).promise;
+        if (cancelled) return;
+
+        const faces: Array<[CardFace, number]> = [['outside', 1]];
+        if (doc.numPages >= 2) faces.push(['inside', 2]);
+
+        for (const [face, pageNum] of faces) {
+          const page = await doc.getPage(pageNum);
+          if (cancelled) return;
+          const canvas = bgCanvasRefs.current[face];
+          if (!canvas) continue;
+          const v1 = page.getViewport({ scale: 1 });
+          const viewport = page.getViewport({ scale: PANEL_WIDTH / v1.width });
+          const dpr = window.devicePixelRatio || 1;
+          canvas.width = Math.round(viewport.width * dpr);
+          canvas.height = Math.round(viewport.height * dpr);
+          canvas.style.width = `${PANEL_WIDTH}px`;
+          canvas.style.height = `${PANEL_HEIGHT}px`;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) continue;
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.clearRect(0, 0, viewport.width, viewport.height);
+          await page.render({ canvasContext: ctx, viewport }).promise;
+        }
+      } catch (err) {
+        console.error('[event-seating] Failed to render the card background:', err);
+        if (!cancelled) toast.error('Could not preview the background PDF');
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [isOpen, bgPath]);
+
+  const handleUploadBackground = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.type !== 'application/pdf') { toast.error('Only PDF backgrounds'); return; }
+    setUploading(true);
+    try {
+      const path = await uploadBackgroundAsset(eventUuid, file);
+      setBgPath(path);
+      toast.success('Background uploaded — page 1 is the outside, page 2 the inside');
+    } catch (err) {
+      console.error('[event-seating] Background upload failed:', err);
+      toast.error('Failed to upload the background');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!dragging) return;
@@ -176,6 +254,7 @@ export function PlaceCardTemplateEditor({ isOpen, onClose, eventUuid, template, 
         sub_event_id: template ? template.sub_event_id : null,
         name: name.trim(),
         pdf_fields: fields,
+        pdf_background_path: bgPath,
       });
       toast.success('Place-card template saved');
       onSaved(saved);
@@ -208,6 +287,13 @@ export function PlaceCardTemplateEditor({ isOpen, onClose, eventUuid, template, 
         className="relative select-none overflow-hidden rounded border border-[var(--gray-6)] bg-white"
         style={{ width: PANEL_WIDTH, height: PANEL_HEIGHT, cursor: dragging ? 'grabbing' : 'default' }}
       >
+        {/* Background face (page 1 = outside, page 2 = inside) */}
+        <canvas
+          ref={(el) => { bgCanvasRefs.current[face.id] = el; }}
+          className="absolute inset-0"
+          style={{ pointerEvents: 'none' }}
+        />
+
         {/* Fold line and face hints */}
         <div
           className="pointer-events-none absolute left-0 right-0 border-t border-dashed border-[var(--gray-8)]"
@@ -515,6 +601,27 @@ export function PlaceCardTemplateEditor({ isOpen, onClose, eventUuid, template, 
                   {uploading ? 'Uploading…' : '+ Add font'}
                 </span>
               </label>
+            </div>
+
+            {/* Background */}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <label className="cursor-pointer">
+                <input type="file" accept=".pdf" onChange={handleUploadBackground} className="hidden" />
+                <span className="cursor-pointer text-[10px] text-[var(--accent-9)] hover:underline">
+                  {uploading ? 'Uploading…' : (bgPath ? 'Change background PDF' : '+ Add background PDF')}
+                </span>
+              </label>
+              {bgPath && (
+                <button
+                  onClick={() => setBgPath(null)}
+                  className="cursor-pointer text-[10px] text-[var(--gray-9)] hover:text-red-600"
+                >
+                  Remove background
+                </button>
+              )}
+              <span className="text-[9px] text-[var(--gray-9)]">
+                Design at 83 × 108mm: page 1 = outside, page 2 = inside.
+              </span>
             </div>
           </div>
         </div>

@@ -12,6 +12,7 @@ import {
   defaultPlaceCardFields,
   findPlaceCardTemplate,
   getFontAssets,
+  templateAssetUrl,
   type PlaceCardScope,
   type PlaceCardTemplate,
 } from '../utils/placeCards';
@@ -95,7 +96,7 @@ export function PlaceCardModal({ isOpen, onClose, plan, tables, assignments, gue
   };
 
   const fields = template?.pdf_fields?.length ? template.pdf_fields : defaultPlaceCardFields();
-  const hasInside = fields.some((f) => f.face === 'inside');
+  const hasInside = fields.some((f) => f.face === 'inside') || !!template?.pdf_background_path;
 
   const scopeLabel = template
     ? (template.sub_event_id
@@ -131,6 +132,9 @@ export function PlaceCardModal({ isOpen, onClose, plan, tables, assignments, gue
         fields,
         cards,
         fontAssets,
+        backgroundUrl: template?.pdf_background_path
+          ? templateAssetUrl(template.pdf_background_path)
+          : null,
         filename: `${stem || 'seating'}-place-cards.pdf`,
       });
 
