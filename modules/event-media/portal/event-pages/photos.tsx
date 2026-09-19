@@ -23,7 +23,11 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
+// Same-origin ALWAYS: the portal proxies /api/public/* to the api
+// service (next.config rewrites). NEXT_PUBLIC_API_URL is unreliable in
+// the browser — on k8s portals it's the in-cluster service DNS, which
+// a phone can't resolve (found live on autodb 2026-09-19).
+const API_BASE = ''
 const MINT_BATCH = 20
 const CONCURRENCY = 3
 const GALLERY_PAGE = 50
@@ -440,8 +444,23 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const activeCount = queue.filter((q) => q.status === 'waiting' || q.status === 'uploading' || q.status === 'processing').length
   const failedItems = queue.filter((q) => q.status === 'failed')
 
+  // On phones, a guest with an upload code gets a full-viewport
+  // takeover — the event hero eats half the screen otherwise and this
+  // page is about uploading, not browsing the event. Desktop keeps the
+  // normal in-page layout; the takeover overlays the chrome instead of
+  // touching the core event layout.
+  const takeover = canUpload
+    ? `max-md:fixed max-md:inset-0 max-md:z-40 max-md:overflow-y-auto ${darkMode ? 'max-md:bg-gray-950' : 'max-md:bg-gray-50'}`
+    : ''
+
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6">
+    <div className={`max-w-5xl mx-auto px-4 py-6 ${takeover}`}>
+      {canUpload && (
+        <div className="md:hidden mb-3 pt-2">
+          <p className={`text-base font-semibold ${text}`}>{link!.event.name ?? 'Event photos'}</p>
+          <p className={`text-xs ${subText}`}>Share your photos from the day</p>
+        </div>
+      )}
       {/* Upload bar */}
       {canUpload && (
         <div className={`${cardBg} rounded-2xl shadow p-5 mb-6`}>
