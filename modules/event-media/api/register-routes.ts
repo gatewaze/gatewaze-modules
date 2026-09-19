@@ -159,6 +159,19 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   const { requireJwt } = await import('../../host-media/lib/require-jwt.js');
   const adminRouter = Router();
   adminRouter.use(requireJwt());
+  // Rate limit the admin CRUD too (per authenticated user, IP fallback)
+  // — cheap, and authorization-performing handlers should never be
+  // unthrottled (CodeQL js/missing-rate-limiting).
+  adminRouter.use(async (req: Request & { userId?: string }, res, next) => {
+    const who = req.userId ?? req.ip ?? 'unknown';
+    const rl = await rateLimiter.check(`event_media:admin:${who}`, 120, 60_000);
+    if (!rl.allowed) {
+      res.setHeader('Retry-After', Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000)).toString());
+      res.status(429).json({ error: 'rate_limited', message: 'too many requests' });
+      return;
+    }
+    next();
+  });
   const adminRoutes = createAdminLinksRoutes({
     userClient: (req) => {
       if (!supabaseAnonKey) return null;
