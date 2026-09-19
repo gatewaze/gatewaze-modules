@@ -27,6 +27,16 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import CinematicPhoto from './CinematicPhoto'
+import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
+import {
+  analysePhoto,
+  analysisFor,
+  ensureModels,
+  lastAnalysisMs,
+  setPreferWebGPU,
+  type PhotoAnalysis,
+} from './_lib/ai-pipeline'
 
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
@@ -48,7 +58,7 @@ interface DisplayItem {
   created_at: string
 }
 
-type SlideEffect = 'kenburns' | 'fade' | 'slide' | 'zoom' | 'blur'
+type SlideEffect = 'cinematic' | 'kenburns' | 'grade' | 'fade' | 'slide' | 'zoom' | 'blur'
 
 interface DisplaySettings {
   mode: 'slideshow' | 'wall'
@@ -61,6 +71,14 @@ interface DisplaySettings {
   whepUrl: string
   statusUrl: string
   youtubeId: string
+  /** Ambient colour spill: the room's light follows the photo. */
+  ambient: boolean
+  /** Fill 16:9 letterbox bars with a blurred copy of the photo. */
+  fillBars: boolean
+  /** Background-melt half of the cinematic effect. */
+  subjectPop: boolean
+  /** Opt-in GPU backend for the models (see ai-pipeline note). */
+  webgpu: boolean
 }
 
 const DEFAULT_SETTINGS: DisplaySettings = {
@@ -74,6 +92,10 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   whepUrl: DEFAULT_WHEP_URL,
   statusUrl: DEFAULT_STATUS_URL,
   youtubeId: '',
+  ambient: true,
+  fillBars: true,
+  subjectPop: true,
+  webgpu: false,
 }
 
 // Slide-entry animation per effect. Ken Burns additionally runs a slow
@@ -89,9 +111,13 @@ function kbVariantFor(id: string): string {
 }
 
 function slideAnimation(effect: SlideEffect, photoId: string, intervalMs: number): string {
+  const kb = `${kbVariantFor(photoId)} ${Math.max(intervalMs, 2000) + 1200}ms linear forwards`
   switch (effect) {
     case 'kenburns':
-      return `emfade 900ms ease, ${kbVariantFor(photoId)} ${Math.max(intervalMs, 2000) + 1200}ms linear forwards`
+      return `emfade 900ms ease, ${kb}`
+    case 'grade':
+      // Arrives monochrome and blooms into colour, still drifting.
+      return `emgrade ${Math.min(2200, Math.max(intervalMs * 0.3, 1200))}ms ease forwards, ${kb}`
     case 'slide':
       return 'emslide 700ms cubic-bezier(0.22, 1, 0.36, 1)'
     case 'zoom':
@@ -112,6 +138,11 @@ const EFFECT_KEYFRAMES = `
 @keyframes emkb-b { from { transform: scale(1.02) } to { transform: scale(1.12) translate(-1.5%, 1%) } }
 @keyframes emkb-c { from { transform: scale(1.12) translate(1%, 1%) } to { transform: scale(1.02) } }
 @keyframes emkb-d { from { transform: scale(1.02) translate(-1%, 0) } to { transform: scale(1.1) translate(1%, -1.5%) } }
+@keyframes emgrade {
+  from { opacity: 0; filter: grayscale(1) contrast(1.15) brightness(0.92) }
+  40%  { opacity: 1 }
+  to   { opacity: 1; filter: none }
+}
 `
 
 interface WallCell {
@@ -163,6 +194,12 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // moments (at most one per tick), each with ±15% period jitter.
   const [wallCells, setWallCells] = useState<WallCell[]>([])
   const wallPointerRef = useRef(0)
+
+  // Ambient colour spill + on-device analysis for the current photo.
+  const [palette, setPalette] = useState<PhotoPalette | null>(null)
+  const [analysis, setAnalysis] = useState<PhotoAnalysis | null>(null)
+  const [aiState, setAiState] = useState<string>('idle')
+  const [aiProgress, setAiProgress] = useState<number>(0)
 
   const [menuVisible, setMenuVisible] = useState(true)
   const menuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -389,6 +426,79 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     return () => clearInterval(iv)
   }, [settings.mode, settings.intervalMs])
 
+  // ── Ambient colour spill ──────────────────────────────────────────
+
+  useEffect(() => {
+    if (!settings.ambient || !current) { setPalette(null); return }
+    let cancelled = false
+    const src = current.variants?.thumb || current.url
+    void extractPalette(src, current.id).then((p) => {
+      if (!cancelled && p) setPalette(p)
+    })
+    return () => { cancelled = true }
+  }, [current, settings.ambient])
+
+  // ── On-device analysis (cinematic mode) ───────────────────────────
+
+  useEffect(() => {
+    setPreferWebGPU(settings.webgpu)
+  }, [settings.webgpu])
+
+  // Warm the models up as soon as cinematic is selected, so the first
+  // slide of the evening is not the one that waits for a 50 MB
+  // download over venue wifi.
+  useEffect(() => {
+    if (settings.effect !== 'cinematic') return
+    let cancelled = false
+    setAiState('loading')
+    void ensureModels((pct) => { if (!cancelled) setAiProgress(pct) }).then((ok) => {
+      if (!cancelled) setAiState(ok ? 'ready' : 'unavailable')
+    })
+    return () => { cancelled = true }
+  }, [settings.effect, settings.webgpu])
+
+  // Analyse the CURRENT photo (usually already cached from look-ahead)
+  // and queue the NEXT one, so by the time it appears its depth map
+  // and matte are ready.
+  useEffect(() => {
+    if (settings.effect !== 'cinematic' || !current) { setAnalysis(null); return }
+    let cancelled = false
+
+    const srcFor = (p: DisplayItem) => p.variants?.medium || p.url
+
+    const existing = analysisFor(current.id)
+    setAnalysis(existing)
+    if (!existing) {
+      analysePhoto(current.id, srcFor(current), (a) => {
+        if (!cancelled) setAnalysis(a)
+      })
+    }
+
+    // Look ahead one slide.
+    const list = photosRef.current
+    const upcoming = freshQueueRef.current[0] ?? list[(indexRef.current + 1) % Math.max(list.length, 1)]
+    if (upcoming && upcoming.id !== current.id) {
+      analysePhoto(upcoming.id, srcFor(upcoming))
+    }
+
+    return () => { cancelled = true }
+  }, [current, settings.effect])
+
+  // Keep the backlog warm. Analysis costs ~10 s per photo (measured
+  // 2026-09-20, WASM), which is slower than an 8 s slide — so waiting
+  // until a photo is next would mean new uploads never get the effect
+  // during a burst. Instead every photo in the pool is queued in the
+  // background; by the time one comes round it is already cached, and
+  // anything not yet done just shows with a flat pan.
+  useEffect(() => {
+    if (settings.effect !== 'cinematic' || aiState !== 'ready') return
+    const iv = setInterval(() => {
+      const pending = photosRef.current.filter((p) => !analysisFor(p.id)).slice(0, 3)
+      for (const p of pending) analysePhoto(p.id, p.variants?.medium || p.url)
+    }, 5000)
+    return () => clearInterval(iv)
+  }, [settings.effect, aiState, photos.length])
+
   // ── QR overlay ────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -555,26 +665,64 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const showYoutube = settings.liveSource === 'youtube' && settings.liveOverride === 'live' && settings.youtubeId
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
+  const cinematicActive = settings.effect === 'cinematic' && aiState !== 'unavailable'
+
   return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black overflow-hidden flex items-center justify-center"
       style={{ cursor: menuVisible ? 'default' : 'none' }}
     >
+      {/* Ambient colour spill — the surround takes the photo's own
+          dominant colour, so the room's light shifts with each slide. */}
+      <div
+        className="absolute inset-0 transition-[background-color] duration-[1600ms] ease-out"
+        style={{ backgroundColor: settings.ambient && palette ? palette.ambient : '#000' }}
+      />
       {/* 16:9 stage — every visual layer lives inside it. On a 16:9
           projector it fills the screen exactly; on any other display
           it letterboxes rather than reflowing. */}
       <div
-        className="relative bg-black overflow-hidden"
-        style={{ width: 'min(100vw, calc(100vh * 16 / 9))', aspectRatio: '16 / 9' }}
+        className="relative overflow-hidden"
+        style={{
+          width: 'min(100vw, calc(100vh * 16 / 9))',
+          aspectRatio: '16 / 9',
+          backgroundColor: settings.ambient && palette ? palette.ambient : '#000',
+          boxShadow: settings.ambient && palette ? `0 0 140px 20px ${palette.accent}22` : undefined,
+          transition: 'background-color 1600ms ease-out, box-shadow 1600ms ease-out',
+        }}
       >
       {/* Photo layer — never unmounts */}
       {settings.mode === 'slideshow' ? (
         <div className="absolute inset-0">
+          {/* Blurred cover fill — replaces dead black letterbox bars,
+              and in cinematic mode it is what the melted-away
+              background dissolves INTO. */}
+          {settings.fillBars && current && (
+            // eslint-disable-next-line @next/next/no-img-element -- decorative fill
+            <img
+              key={`fill-${current.id}`}
+              src={current.variants?.medium || current.url}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ filter: 'blur(48px) saturate(1.25) brightness(0.55)', transform: 'scale(1.15)' }}
+            />
+          )}
           {previous && previous.id !== current?.id && (
             // eslint-disable-next-line @next/next/no-img-element -- projector shows originals full-screen
             <img src={previous.url} alt="" className="absolute inset-0 w-full h-full object-contain opacity-0 transition-opacity duration-700" />
           )}
-          {current && (
+          {current && cinematicActive ? (
+            <div key={`cine-${current.id}`} className="absolute inset-0" style={{ animation: 'emfade 900ms ease' }}>
+              <CinematicPhoto
+                src={current.url}
+                analysis={analysis}
+                durationMs={Math.max(settings.intervalMs, 2000)}
+                enablePop={settings.subjectPop}
+                className="absolute inset-0 w-full h-full"
+              />
+            </div>
+          ) : current ? (
             // eslint-disable-next-line @next/next/no-img-element -- projector shows originals full-screen
             <img
               key={current.id}
@@ -583,7 +731,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               className="absolute inset-0 w-full h-full object-contain"
               style={{ animation: slideAnimation(settings.effect, current.id, settings.intervalMs) }}
             />
-          )}
+          ) : null}
           {current?.guest_name && !showQrSlide && (
             <div className="absolute bottom-6 left-6 flex items-center gap-2 text-white/70 text-xl drop-shadow">
               {/* house line-style (outline) camera icon — no emoji */}
@@ -715,13 +863,38 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="w-16 text-white/60">Effect</span>
-            {(['kenburns', 'fade', 'slide', 'zoom', 'blur'] as const).map((e) => (
+            {(['cinematic', 'kenburns', 'grade', 'fade', 'slide', 'zoom', 'blur'] as const).map((e) => (
               <button
                 key={e}
                 onClick={() => updateSettings({ effect: e })}
                 className={`rounded px-2 py-0.5 text-xs capitalize ${settings.effect === e ? 'bg-white/25' : 'bg-white/5'}`}
               >
-                {e === 'kenburns' ? 'Ken Burns' : e}
+                {e === 'kenburns' ? 'Ken Burns' : e === 'grade' ? 'B&W bloom' : e}
+              </button>
+            ))}
+          </div>
+          {settings.effect === 'cinematic' && (
+            <div className="text-[11px] text-white/50 pl-[4.5rem] -mt-1">
+              {aiState === 'loading' && `loading models… ${aiProgress}%`}
+              {aiState === 'ready' && `on-device AI ready${lastAnalysisMs() ? ` · ${(lastAnalysisMs() / 1000).toFixed(1)}s/photo` : ''}`}
+              {aiState === 'unavailable' && 'AI unavailable — using Ken Burns'}
+            </div>
+          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="w-16 text-white/60">Look</span>
+            {([
+              ['ambient', 'Ambient'],
+              ['fillBars', 'Fill bars'],
+              ['subjectPop', 'Subject pop'],
+              ['webgpu', 'WebGPU'],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => updateSettings({ [key]: !settings[key] } as Partial<DisplaySettings>)}
+                className={`rounded px-2 py-0.5 text-xs ${settings[key] ? 'bg-white/25' : 'bg-white/5'}`}
+                title={key === 'webgpu' ? 'GPU backend for the models — rehearse before using; can hang on some drivers' : undefined}
+              >
+                {label}
               </button>
             ))}
           </div>
