@@ -65,9 +65,13 @@ export async function processImage(imageBuffer: Uint8Array): Promise<ProcessedIm
       // Very light sharpening to reduce CPU time
       img.sharpen(0, 0.3)
 
-      // Encode as JPEG with 80% quality (lower for speed)
+      // Encode as JPEG with 80% quality (lower for speed).
+      // MUST copy inside the callback: `data` is a view into WASM
+      // memory that is freed when the callback returns — returning it
+      // directly yields a zero-filled buffer (live bug 2026-09-19:
+      // every variant uploaded as N kilobytes of 0x00).
       img.quality = 80
-      return img.write(MagickFormat.Jpeg, (data) => data)
+      return img.write(MagickFormat.Jpeg, (data) => new Uint8Array(data))
     })
 
     // Create medium (800px wide, or original if smaller)
@@ -82,9 +86,10 @@ export async function processImage(imageBuffer: Uint8Array): Promise<ProcessedIm
       // Very light sharpening to reduce CPU time
       img.sharpen(0, 0.3)
 
-      // Encode as JPEG with 85% quality (lower for speed)
+      // Encode as JPEG with 85% quality (lower for speed).
+      // Copy inside the callback — see thumbnail note above.
       img.quality = 85
-      return img.write(MagickFormat.Jpeg, (data) => data)
+      return img.write(MagickFormat.Jpeg, (data) => new Uint8Array(data))
     })
 
     return {
