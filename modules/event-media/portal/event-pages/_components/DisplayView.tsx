@@ -25,7 +25,7 @@
  * Per spec-event-media-guest-uploads §6.3 + §15.4.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import CinematicPhoto from './CinematicPhoto'
 import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
@@ -185,6 +185,31 @@ const WALL_LAYOUTS: Array<{ cells: number; cols: number; rows: number }> = [
 ]
 function wallLayoutFor(count: number) {
   return WALL_LAYOUTS.find((l) => l.cells <= count) ?? WALL_LAYOUTS[WALL_LAYOUTS.length - 1]!
+}
+
+/** One labelled settings row. The label sits above its options so a
+ *  long option list wraps cleanly instead of clipping off the panel. */
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <span className="block text-xs uppercase tracking-wide text-white/50">{label}</span>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+    </div>
+  )
+}
+
+/** Toggle/segment button. Sized for a finger as well as a trackpad. */
+function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-lg px-3 py-1.5 text-sm leading-none transition-colors ${
+        on ? 'bg-white/90 text-gray-900 font-medium' : 'bg-white/10 text-white/90 hover:bg-white/20'
+      }`}
+    >
+      {children}
+    </button>
+  )
 }
 
 interface DisplayViewProps {
@@ -905,146 +930,157 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         </div>
       )}
 
-      {/* Corner menu */}
-      <div className={`absolute top-4 right-4 transition-opacity duration-300 ${menuVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-        <div className="bg-black/70 backdrop-blur rounded-xl p-3 text-white text-sm space-y-2 w-64">
-          <div className="flex gap-1">
-            {(['slideshow', 'wall'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => updateSettings({ mode: m })}
-                className={`flex-1 rounded px-2 py-1 capitalize ${settings.mode === m ? 'bg-white/25' : 'bg-white/5'}`}
+      {/* Settings panel. Sized for a laptop trackpad AND a phone held
+          at arm's length next to a projector: one labelled row per
+          setting, options on their own line so nothing clips, and the
+          whole panel scrolls rather than overflowing the screen. */}
+      <div
+        className={`absolute top-3 right-3 left-3 sm:left-auto transition-opacity duration-300 ${menuVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+      >
+        <div data-menu className="ml-auto bg-black/80 backdrop-blur-md rounded-2xl shadow-2xl ring-1 ring-white/10 text-white w-full sm:w-[24rem] max-h-[86vh] overflow-y-auto">
+          <div className="p-4 space-y-4">
+
+            <Row label="Display">
+              {(['slideshow', 'wall'] as const).map((m) => (
+                <Chip key={m} on={settings.mode === m} onClick={() => updateSettings({ mode: m })}>
+                  {m === 'slideshow' ? 'Slideshow' : 'Wall'}
+                </Chip>
+              ))}
+              <Chip
+                on={false}
+                onClick={() => document.documentElement.requestFullscreen?.().catch(() => { /* ignore */ })}
               >
-                {m}
-              </button>
-            ))}
-            <button
-              onClick={() => document.documentElement.requestFullscreen?.().catch(() => { /* ignore */ })}
-              className="rounded px-2 py-1 bg-white/5"
-              title="Fullscreen"
-            >
-              ⛶
-            </button>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="w-16 text-white/60">Effect</span>
-            {(['cinematic', 'kenburns', 'grade', 'fade', 'slide', 'zoom', 'blur'] as const).map((e) => (
-              <button
-                key={e}
-                onClick={() => updateSettings({ effect: e })}
-                className={`rounded px-2 py-0.5 text-xs capitalize ${settings.effect === e ? 'bg-white/25' : 'bg-white/5'}`}
-              >
-                {e === 'kenburns' ? 'Ken Burns' : e === 'grade' ? 'B&W bloom' : e}
-              </button>
-            ))}
-          </div>
-          {settings.effect === 'cinematic' && (
-            <div className="text-[11px] text-white/50 pl-[4.5rem] -mt-1">
-              {aiState === 'loading' && `loading models… ${aiProgress}%`}
-              {aiState === 'ready' && `on-device AI ready${lastAnalysisMs() ? ` · ${(lastAnalysisMs() / 1000).toFixed(1)}s/photo` : ''}`}
-              {aiState === 'unavailable' && 'AI unavailable — using Ken Burns'}
+                Fullscreen
+              </Chip>
+            </Row>
+
+            <Row label="Effect">
+              {([
+                ['cinematic', 'Cinematic'],
+                ['kenburns', 'Ken Burns'],
+                ['grade', 'B&W bloom'],
+                ['fade', 'Fade'],
+                ['slide', 'Slide'],
+                ['zoom', 'Zoom'],
+                ['blur', 'Blur'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.effect === val} onClick={() => updateSettings({ effect: val })}>
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            {settings.effect === 'cinematic' && (
+              <p className="text-xs text-white/50 -mt-2">
+                {aiState === 'loading' && `Loading models… ${aiProgress}%`}
+                {aiState === 'ready' && `On-device AI ready${lastAnalysisMs() ? ` · ${(lastAnalysisMs() / 1000).toFixed(1)}s per photo` : ''}`}
+                {aiState === 'unavailable' && 'AI unavailable — showing Ken Burns instead'}
+              </p>
+            )}
+
+            <Row label="Order">
+              {([
+                ['newest', 'Newest first'],
+                ['oldest', 'Oldest first'],
+                ['shuffle', 'Shuffle'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.order === val} onClick={() => updateSettings({ order: val })}>
+                  {label}
+                </Chip>
+              ))}
+              <Chip on={settings.instantNew} onClick={() => updateSettings({ instantNew: !settings.instantNew })}>
+                Show new instantly
+              </Chip>
+            </Row>
+
+            <Row label="Look">
+              <Chip on={settings.ambient} onClick={() => updateSettings({ ambient: !settings.ambient })}>Ambient colour</Chip>
+              <Chip on={settings.fillBars} onClick={() => updateSettings({ fillBars: !settings.fillBars })}>Blurred fill</Chip>
+              <Chip on={settings.subjectPop} onClick={() => updateSettings({ subjectPop: !settings.subjectPop })}>Subject pop</Chip>
+            </Row>
+
+            <Row label="QR code">
+              {([
+                ['corner', 'Corner'],
+                ['interleave', 'Interleave'],
+                ['hidden', 'Hidden'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.qrMode === val} onClick={() => updateSettings({ qrMode: val })}>
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-xs uppercase tracking-wide text-white/50">Time per photo</span>
+                <span className="text-sm tabular-nums text-white/80">{settings.intervalMs / 1000}s</span>
+              </div>
+              <input
+                type="range"
+                min={4}
+                max={30}
+                value={settings.intervalMs / 1000}
+                onChange={(e) => updateSettings({ intervalMs: Number(e.target.value) * 1000 })}
+                className="w-full accent-white/80"
+              />
             </div>
-          )}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="w-16 text-white/60">Order</span>
-            {([
-              ['newest', 'Newest'],
-              ['oldest', 'Oldest'],
-              ['shuffle', 'Shuffle'],
-            ] as const).map(([val, label]) => (
-              <button
-                key={val}
-                onClick={() => updateSettings({ order: val })}
-                className={`rounded px-2 py-0.5 text-xs ${settings.order === val ? 'bg-white/25' : 'bg-white/5'}`}
+
+            <hr className="border-white/10" />
+
+            <Row label="Live camera">
+              {([
+                ['auto', 'Auto'],
+                ['live', 'Force live'],
+                ['photos', 'Photos only'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.liveOverride === val} onClick={() => updateSettings({ liveOverride: val })}>
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            <Row label="Camera source">
+              {([
+                ['whep', 'RTMP / MediaMTX'],
+                ['webcam', 'USB webcam'],
+                ['youtube', 'YouTube'],
+              ] as const).map(([val, label]) => (
+                <Chip
+                  key={val}
+                  on={settings.liveSource === val}
+                  onClick={() => {
+                    teardownLive()
+                    updateSettings({ liveSource: val })
+                    if (val === 'webcam') void startWebcam()
+                  }}
+                >
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            {settings.liveSource === 'youtube' && (
+              <input
+                type="text"
+                value={settings.youtubeId}
+                onChange={(e) => updateSettings({ youtubeId: e.target.value.trim().slice(0, 20) })}
+                placeholder="YouTube video id"
+                className="w-full rounded-lg bg-white/10 px-3 py-2 text-sm placeholder:text-white/40"
+              />
+            )}
+
+            <Row label="Advanced">
+              <Chip
+                on={settings.webgpu}
+                onClick={() => updateSettings({ webgpu: !settings.webgpu })}
               >
-                {label}
-              </button>
-            ))}
-            <button
-              onClick={() => updateSettings({ instantNew: !settings.instantNew })}
-              className={`rounded px-2 py-0.5 text-xs ${settings.instantNew ? 'bg-white/25' : 'bg-white/5'}`}
-              title="Cut to a photo the moment it is uploaded"
-            >
-              Show new instantly
-            </button>
+                WebGPU
+              </Chip>
+              <span className="text-xs text-white/40 self-center">rehearse before using</span>
+            </Row>
+
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="w-16 text-white/60">Look</span>
-            {([
-              ['ambient', 'Ambient'],
-              ['fillBars', 'Fill bars'],
-              ['subjectPop', 'Subject pop'],
-              ['webgpu', 'WebGPU'],
-            ] as const).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => updateSettings({ [key]: !settings[key] } as Partial<DisplaySettings>)}
-                className={`rounded px-2 py-0.5 text-xs ${settings[key] ? 'bg-white/25' : 'bg-white/5'}`}
-                title={key === 'webgpu' ? 'GPU backend for the models — rehearse before using; can hang on some drivers' : undefined}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-16 text-white/60">QR</span>
-            {(['corner', 'interleave', 'hidden'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => updateSettings({ qrMode: m })}
-                className={`rounded px-2 py-0.5 text-xs capitalize ${settings.qrMode === m ? 'bg-white/25' : 'bg-white/5'}`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-16 text-white/60">Every</span>
-            <input
-              type="range" min={4} max={30} value={settings.intervalMs / 1000}
-              onChange={(e) => updateSettings({ intervalMs: Number(e.target.value) * 1000 })}
-              className="flex-1"
-            />
-            <span className="text-xs w-8">{settings.intervalMs / 1000}s</span>
-          </div>
-          <hr className="border-white/20" />
-          <div className="flex items-center gap-2">
-            <span className="w-16 text-white/60">Camera</span>
-            {(['auto', 'live', 'photos'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => updateSettings({ liveOverride: m })}
-                className={`rounded px-2 py-0.5 text-xs capitalize ${settings.liveOverride === m ? 'bg-white/25' : 'bg-white/5'}`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-16 text-white/60">Source</span>
-            {(['whep', 'webcam', 'youtube'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => {
-                  teardownLive()
-                  updateSettings({ liveSource: s })
-                  if (s === 'webcam') void startWebcam()
-                }}
-                className={`rounded px-2 py-0.5 text-xs uppercase ${settings.liveSource === s ? 'bg-white/25' : 'bg-white/5'}`}
-              >
-                {s === 'whep' ? 'RTMP' : s}
-              </button>
-            ))}
-          </div>
-          {settings.liveSource === 'youtube' && (
-            <input
-              type="text"
-              value={settings.youtubeId}
-              onChange={(e) => updateSettings({ youtubeId: e.target.value.trim().slice(0, 20) })}
-              placeholder="YouTube video id"
-              className="w-full rounded bg-white/10 px-2 py-1 text-xs"
-            />
-          )}
         </div>
       </div>
 
