@@ -19,7 +19,7 @@ const hostMediaModule: GatewazeModule = {
   name: 'Host Media',
   description:
     'Shared media management — table, API, admin tab, upload pipeline (Sharp variants, YouTube delegation, ZIP unpack, chunked upload), reference tracking, quotas. Consumed by sites/events/newsletters/blog/podcasts via the hostMediaConsumer registry block.',
-  version: '0.1.1',
+  version: '0.2.0',
 
   features: [
     'host-media',
@@ -44,6 +44,8 @@ const hostMediaModule: GatewazeModule = {
     'migrations/009_host_media_signed_url_log.sql',
     'migrations/010_host_media_chunked_uploads.sql',
     'migrations/011_host_media_sync_refs_fn.sql',
+    'migrations/012_host_media_event_public_feed_index.sql',
+    'migrations/013_host_media_public_read_approved_realtime.sql',
   ],
 
   // edgeFunctions: deferred to Phase 2 (per spec-host-media-module §11.2).

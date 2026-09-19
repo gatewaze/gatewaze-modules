@@ -10,9 +10,19 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "echo 'no lint configured'"
+  },
+  "dependencies": {
+    "express-rate-limit": "^8.5.2"
   },
   "peerDependencies": {
     "@gatewaze/shared": "*"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0"
   }
 }
