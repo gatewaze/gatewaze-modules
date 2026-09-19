@@ -225,6 +225,22 @@ kitchen ("24 x Salmon"), and a seat with no answer recorded is marked rather
 than left blank, so nothing is missed quietly. A course with more guests than
 fits one page continues onto the next.
 
+**Place cards** prints a folded place-name card for every seated guest, sized
+for the standard A-cards that come flat with a scored fold across the middle:
+83mm wide, 54mm per face. Each card carries the guest's first name large over
+their last name smaller on the outside of the tent — upright on the front and
+repeated upside-down on the back, so the name stands correctly on both sides
+once folded — and their meal choices on the inside. Pick which RSVP questions
+count as courses, exactly as with the meal sheets; anything that looks like one
+is preselected.
+
+The layout comes from a template you can adjust visually — drag the fields,
+change sizes, colours and alignment, and upload TTF/OTF fonts, which are
+shared with the Event Invites PDF templates. Cards come out one per guest in
+table-and-seat order. When the template has inside fields, the PDF alternates
+outside and inside pages, so printing it double-sided (flipped on the long
+edge) puts each guest's choices on their own card's reverse.
+
 Every layout exports independently, so you can send the venue the arrangement
 you settled on without deleting the ones you rejected.
 
@@ -243,6 +259,12 @@ than a picture.
 
 A guest can hold at most one seat per plan, and a seat at most one guest, both
 enforced in the database rather than only in the interface.
+
+Place-card templates are stored in the Event Invites template system
+(`invite_templates`, channel `place_card`) with the same
+sub-event-then-default matching as invite PDFs, and fonts come from the shared
+`invite_template_assets` uploads, so a font uploaded for the invitations is
+available on the place cards too.
 
 ## Requirements
 
