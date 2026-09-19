@@ -58,6 +58,12 @@ export interface PlaceCardTemplate {
   channel: 'place_card';
   name: string;
   pdf_fields: PlaceCardField[];
+  /**
+   * Storage path of an uploaded background PDF (e.g. a Canva export at
+   * 83 x 108mm): page 1 prints behind the outside face, page 2 behind the
+   * inside. A single-page background leaves the inside plain.
+   */
+  pdf_background_path: string | null;
   is_active: boolean;
   updated_at: string;
 }
@@ -77,10 +83,10 @@ export interface FontAsset {
 /**
  * The starting layout: first name large over last name smaller, upright on
  * the front face and repeated rotated 180 on the back face so the name reads
- * from both sides of the standing tent. Meal choices go on the inside, on
- * the half that reads upright when you look into the standing card from the
- * front. Mirrored positions reflect the glyph box through the fold
- * (y' = 2 * fold - y), which is why the rotated pair reuses the upright y.
+ * from both sides of the standing tent. Meal choices go on the inside bottom
+ * half, upright, reading when the card is opened like a book. Mirrored
+ * positions reflect the glyph box through the fold (y' = 2 * fold - y),
+ * which is why the rotated pair reuses the upright y.
  */
 export function defaultPlaceCardFields(): PlaceCardField[] {
   const cx = CARD_WIDTH_PT / 2;
@@ -93,9 +99,9 @@ export function defaultPlaceCardFields(): PlaceCardField[] {
     // Back of the tent (top half, printed upside-down so it stands upright)
     { face: 'outside', variable: 'guest.first_name', x: cx, y: 2 * CARD_FOLD_PT - firstY, rotation: 180, fontSize: 30, align: 'center', color: '#000000', maxWidth: 220 },
     { face: 'outside', variable: 'guest.last_name', x: cx, y: 2 * CARD_FOLD_PT - lastY, rotation: 180, fontSize: 16, align: 'center', color: '#000000', maxWidth: 220 },
-    // Inside: meal choices on the top half, rotated so they read upright
-    // when the standing card is viewed from the front.
-    { face: 'inside', variable: 'meal.choices', x: cx, y: CARD_FOLD_PT + 26, rotation: 180, fontSize: 11, lineHeight: 1.5, align: 'center', color: '#000000', maxWidth: 210 },
+    // Inside: meal choices on the bottom half, upright — they read when the
+    // card is picked up and opened like a book.
+    { face: 'inside', variable: 'meal.choices', x: cx, y: 110, fontSize: 11, lineHeight: 1.4, align: 'center', color: '#000000', maxWidth: 210 },
   ];
 }
 
@@ -125,7 +131,7 @@ export async function findPlaceCardTemplate(
     assertUuid(subEventId, 'sub-event id');
     const { data } = await supabase
       .from('invite_templates')
-      .select('id, event_id, sub_event_id, channel, name, pdf_fields, is_active, updated_at')
+      .select('id, event_id, sub_event_id, channel, name, pdf_fields, pdf_background_path, is_active, updated_at')
       .eq('event_id', eventId)
       .eq('sub_event_id', subEventId)
       .eq('channel', 'place_card')
@@ -139,7 +145,7 @@ export async function findPlaceCardTemplate(
 
   const { data } = await supabase
     .from('invite_templates')
-    .select('id, event_id, sub_event_id, channel, name, pdf_fields, is_active, updated_at')
+    .select('id, event_id, sub_event_id, channel, name, pdf_fields, pdf_background_path, is_active, updated_at')
     .eq('event_id', eventId)
     .is('sub_event_id', null)
     .eq('channel', 'place_card')
@@ -158,6 +164,7 @@ export async function savePlaceCardTemplate(input: {
   sub_event_id: string | null;
   name: string;
   pdf_fields: PlaceCardField[];
+  pdf_background_path: string | null;
 }): Promise<PlaceCardTemplate> {
   const row = {
     event_id: assertUuid(input.event_id, 'event id'),
@@ -165,13 +172,14 @@ export async function savePlaceCardTemplate(input: {
     channel: 'place_card' as const,
     name: input.name,
     pdf_fields: input.pdf_fields,
+    pdf_background_path: input.pdf_background_path,
     is_active: true,
   };
   const query = input.id
     ? supabase.from('invite_templates').update(row).eq('id', assertUuid(input.id, 'template id'))
     : supabase.from('invite_templates').insert(row);
   const { data, error } = await query
-    .select('id, event_id, sub_event_id, channel, name, pdf_fields, is_active, updated_at')
+    .select('id, event_id, sub_event_id, channel, name, pdf_fields, pdf_background_path, is_active, updated_at')
     .single();
   if (error) throw error;
   return { ...data, pdf_fields: normalizeFields(data.pdf_fields) } as PlaceCardTemplate;
@@ -222,6 +230,42 @@ export function fontAssetPublicUrl(asset: FontAsset): string {
   return data.publicUrl;
 }
 
+/**
+ * Upload a card background PDF (page 1 = outside, page 2 = inside) into the
+ * shared invites asset store, and return its storage path for the template.
+ */
+export async function uploadBackgroundAsset(eventId: string, file: File): Promise<string> {
+  assertUuid(eventId, 'event id');
+  const assetId = crypto.randomUUID();
+  const storagePath = `${eventId}/backgrounds/${assetId}.pdf`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('invite-templates')
+    .upload(storagePath, file, { upsert: false });
+  if (uploadError) throw uploadError;
+
+  const { error } = await supabase
+    .from('invite_template_assets')
+    .insert({
+      id: assetId,
+      event_id: eventId,
+      asset_type: 'pdf_background',
+      filename: file.name,
+      storage_path: storagePath,
+      mime_type: file.type,
+      file_size: file.size,
+      metadata: {},
+    });
+  if (error) throw error;
+  return storagePath;
+}
+
+/** Public URL for any path in the shared invite-templates bucket. */
+export function templateAssetUrl(storagePath: string): string {
+  const { data } = supabase.storage.from('invite-templates').getPublicUrl(storagePath);
+  return data.publicUrl;
+}
+
 // ---------------------------------------------------------------------------
 // Per-guest context and variables
 // ---------------------------------------------------------------------------
@@ -265,8 +309,8 @@ export const SAMPLE_PLACE_CARD_CONTEXT: PlaceCardContext = {
   table: { label: 'Table 4' },
   seat: { number: '23' },
   meal: {
-    choices: 'Roasted Tomato Soup\nBeef Wellington\nChocolate Tart',
-    choices_with_labels: 'Starter: Roasted Tomato Soup\nMain: Beef Wellington\nDessert: Chocolate Tart',
+    choices: 'Roasted Tomato Soup\n\nBeef Wellington\n\nChocolate Tart',
+    choices_with_labels: 'Starter: Roasted Tomato Soup\n\nMain: Beef Wellington\n\nDessert: Chocolate Tart',
   },
   event: { title: 'Baker-Swift Wedding' },
   sub_event: { name: 'Day Ceremony' },
@@ -409,7 +453,9 @@ export async function buildPlaceCards(input: {
         party: { name: args.partyName },
         table: { label: args.tableLabel },
         seat: { number: args.seatNumber > 0 ? String(args.seatNumber) : '' },
-        meal: { choices: choices.join('\n'), choices_with_labels: labelled.join('\n') },
+        // A blank line between courses: within one choice, wrapped lines stay
+        // at the field's line height, so courses read as separate blocks.
+        meal: { choices: choices.join('\n\n'), choices_with_labels: labelled.join('\n\n') },
         event: { title: input.eventTitle },
         sub_event: { name: input.subEventName },
       },
