@@ -80,6 +80,8 @@ export async function buildPlaceCardPdfBytes(input: {
   fields: PlaceCardField[];
   cards: PlaceCard[];
   fontAssets: FontAsset[];
+  /** Background PDF (page 1 = outside, page 2 = inside), e.g. a Canva export. */
+  backgroundUrl?: string | null;
 }): Promise<Uint8Array> {
   const pdfLib = await import('pdf-lib');
   const fontkitModule = await import('@pdf-lib/fontkit');
@@ -89,6 +91,31 @@ export async function buildPlaceCardPdfBytes(input: {
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
   const helvetica = await pdf.embedFont(StandardFonts.Helvetica);
+
+  // Embed the background's faces once; drawn scaled to the exact card size on
+  // every page, so a Canva export a point or two off 83 x 108mm still lines
+  // up with the field coordinates.
+  let bgOutside: Awaited<ReturnType<typeof pdf.embedPage>> | null = null;
+  let bgInside: Awaited<ReturnType<typeof pdf.embedPage>> | null = null;
+  if (input.backgroundUrl) {
+    try {
+      const bgBytes = await fetch(input.backgroundUrl).then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.arrayBuffer();
+      });
+      const bgDoc = await PDFDocument.load(bgBytes);
+      const indices = bgDoc.getPageCount() >= 2 ? [0, 1] : [0];
+      const embedded = await pdf.embedPdf(bgDoc, indices);
+      bgOutside = embedded[0] || null;
+      bgInside = embedded[1] || null;
+    } catch (err) {
+      console.warn('[event-seating] Failed to load the card background:', err);
+    }
+  }
+  const drawBackground = (page: ReturnType<typeof pdf.addPage>, bg: typeof bgOutside) => {
+    if (!bg) return;
+    page.drawPage(bg, { x: 0, y: 0, width: CARD_WIDTH_PT, height: CARD_HEIGHT_PT });
+  };
 
   // Only fetch fonts the template actually uses.
   const usedFontIds = new Set(
@@ -110,7 +137,7 @@ export async function buildPlaceCardPdfBytes(input: {
 
   const outsideFields = input.fields.filter((f) => f.face !== 'inside');
   const insideFields = input.fields.filter((f) => f.face === 'inside');
-  const hasInside = insideFields.length > 0;
+  const hasInside = insideFields.length > 0 || bgInside !== null;
 
   const drawFace = (page: ReturnType<typeof pdf.addPage>, fields: PlaceCardField[], card: PlaceCard) => {
     for (const field of fields) {
@@ -171,9 +198,11 @@ export async function buildPlaceCardPdfBytes(input: {
 
   for (const card of input.cards) {
     const outsidePage = pdf.addPage([CARD_WIDTH_PT, CARD_HEIGHT_PT]);
+    drawBackground(outsidePage, bgOutside);
     drawFace(outsidePage, outsideFields, card);
     if (hasInside) {
       const insidePage = pdf.addPage([CARD_WIDTH_PT, CARD_HEIGHT_PT]);
+      drawBackground(insidePage, bgInside);
       drawFace(insidePage, insideFields, card);
     }
   }
@@ -185,6 +214,7 @@ export async function downloadPlaceCardPdf(input: {
   fields: PlaceCardField[];
   cards: PlaceCard[];
   fontAssets: FontAsset[];
+  backgroundUrl?: string | null;
   filename: string;
 }): Promise<void> {
   const bytes = await buildPlaceCardPdfBytes(input);

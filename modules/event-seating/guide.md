@@ -242,10 +242,14 @@ unseated in the attending view simply has empty table and seat variables.
 
 The layout comes from a template you can adjust visually — drag the fields,
 change sizes, colours and alignment, and upload TTF/OTF fonts, which are
-shared with the Event Invites PDF templates. Cards come out one per guest in
-table-and-seat order. When the template has inside fields, the PDF alternates
-outside and inside pages, so printing it double-sided (flipped on the long
-edge) puts each guest's choices on their own card's reverse.
+shared with the Event Invites PDF templates. A designed card (a Canva export,
+say) uploads as a **background PDF** at 83 × 108mm — page 1 prints behind the
+outside face and page 2 behind the inside — with the dynamic fields laid over
+it, so artwork, graphics and static styling come straight from the design
+tool. Cards come out one per guest in table-and-seat order. When the template
+has inside content, the PDF alternates outside and inside pages, so printing
+it double-sided (flipped on the long edge) puts each guest's choices on their
+own card's reverse.
 
 Every layout exports independently, so you can send the venue the arrangement
 you settled on without deleting the ones you rejected.
