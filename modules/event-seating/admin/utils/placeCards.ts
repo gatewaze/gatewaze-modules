@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import type { Guest, SeatingAssignment, SeatingPlan, SeatingTable } from './seatingService';
+import { assertUuid, type Guest, type SeatingAssignment, type SeatingPlan, type SeatingTable } from './seatingService';
 import { planSeatNumbers, seatKey } from './seatNumbering';
 import { answerToString, type CourseQuestion } from './cateringExport';
 
@@ -120,7 +120,9 @@ export async function findPlaceCardTemplate(
   eventId: string,
   subEventId: string | null,
 ): Promise<PlaceCardTemplate | null> {
+  assertUuid(eventId, 'event id');
   if (subEventId) {
+    assertUuid(subEventId, 'sub-event id');
     const { data } = await supabase
       .from('invite_templates')
       .select('id, event_id, sub_event_id, channel, name, pdf_fields, is_active, updated_at')
@@ -158,15 +160,15 @@ export async function savePlaceCardTemplate(input: {
   pdf_fields: PlaceCardField[];
 }): Promise<PlaceCardTemplate> {
   const row = {
-    event_id: input.event_id,
-    sub_event_id: input.sub_event_id,
+    event_id: assertUuid(input.event_id, 'event id'),
+    sub_event_id: input.sub_event_id ? assertUuid(input.sub_event_id, 'sub-event id') : null,
     channel: 'place_card' as const,
     name: input.name,
     pdf_fields: input.pdf_fields,
     is_active: true,
   };
   const query = input.id
-    ? supabase.from('invite_templates').update(row).eq('id', input.id)
+    ? supabase.from('invite_templates').update(row).eq('id', assertUuid(input.id, 'template id'))
     : supabase.from('invite_templates').insert(row);
   const { data, error } = await query
     .select('id, event_id, sub_event_id, channel, name, pdf_fields, is_active, updated_at')
@@ -179,7 +181,7 @@ export async function getFontAssets(eventId: string): Promise<FontAsset[]> {
   const { data, error } = await supabase
     .from('invite_template_assets')
     .select('id, filename, storage_path, storage_bucket')
-    .eq('event_id', eventId)
+    .eq('event_id', assertUuid(eventId, 'event id'))
     .eq('asset_type', 'font')
     .order('created_at');
   if (error) throw error;
@@ -187,8 +189,9 @@ export async function getFontAssets(eventId: string): Promise<FontAsset[]> {
 }
 
 export async function uploadFontAsset(eventId: string, file: File): Promise<FontAsset> {
+  assertUuid(eventId, 'event id');
   const assetId = crypto.randomUUID();
-  const ext = file.name.split('.').pop() || '';
+  const ext = /\.otf$/i.test(file.name) ? 'otf' : 'ttf';
   const storagePath = `${eventId}/fonts/${assetId}.${ext}`;
 
   const { error: uploadError } = await supabase.storage
