@@ -23,6 +23,7 @@
 import type { ModuleContext } from '@gatewaze/shared';
 import { Router, type Express, type Request } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import { rateLimit as expressRateLimit } from 'express-rate-limit';
 
 import { createGuestRoutes, mountGuestRoutes } from './public-guest-routes.js';
 import { createAdminLinksRoutes, mountAdminLinksRoutes } from './admin-links-routes.js';
@@ -160,18 +161,17 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   const adminRouter = Router();
   adminRouter.use(requireJwt());
   // Rate limit the admin CRUD too (per authenticated user, IP fallback)
-  // — cheap, and authorization-performing handlers should never be
-  // unthrottled (CodeQL js/missing-rate-limiting).
-  adminRouter.use(async (req: Request & { userId?: string }, res, next) => {
-    const who = req.userId ?? req.ip ?? 'unknown';
-    const rl = await rateLimiter.check(`event_media:admin:${who}`, 120, 60_000);
-    if (!rl.allowed) {
-      res.setHeader('Retry-After', Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000)).toString());
-      res.status(429).json({ error: 'rate_limited', message: 'too many requests' });
-      return;
-    }
-    next();
-  });
+  // — authorization-performing handlers should never be unthrottled
+  // (CodeQL js/missing-rate-limiting; the ai module's express-rate-limit
+  // posture, which the scanner recognises).
+  adminRouter.use(expressRateLimit({
+    windowMs: 60_000,
+    limit: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request & { userId?: string }) => req.userId ?? req.ip ?? 'unknown',
+    message: { error: 'rate_limited', message: 'too many requests' },
+  }));
   const adminRoutes = createAdminLinksRoutes({
     userClient: (req) => {
       if (!supabaseAnonKey) return null;

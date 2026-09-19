@@ -1214,6 +1214,9 @@ importers:
       '@gatewaze/shared':
         specifier: '*'
         version: link:../../../gatewaze/packages/shared
+      express-rate-limit:
+        specifier: ^8.5.2
+        version: 8.5.2(express@4.22.2)
     devDependencies:
       '@types/express':
         specifier: ^5.0.0
