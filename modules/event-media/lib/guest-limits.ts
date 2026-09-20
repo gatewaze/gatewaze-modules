@@ -130,6 +130,15 @@ export const GUEST_RATE_LIMITS = {
   // hourly ceiling is what stops a leaked QR running up a bill.
   faceFilterPerClient: { max: 25, windowMs: 600_000 },
   faceFilterPerLinkHourly: { max: 400, windowMs: 3_600_000 },
+  // client_id is client-chosen, so the per-client cap above does not
+  // bind an attacker who sends a fresh uuid each time; and the per-IP
+  // bucket cannot be tightened to compensate, because a wedding venue
+  // is one NAT and every guest shares it. Without this, one caller
+  // could drain the whole hourly budget in about three minutes and
+  // leave the real guests 429'd for the rest of the hour. A per-link
+  // burst cap spreads the damage over the full hour instead: 30/min is
+  // far more than a room full of guests will ever ask for together.
+  faceFilterPerLinkBurst: { max: 30, windowMs: 60_000 },
 } as const;
 
 export function guestRateKey(op: string, discriminator: string): string {

@@ -823,6 +823,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Generation costs money per call, so it is capped harder than
     // anything else on the guest path — per device AND per link.
     if (!(await checkRate(res, guestRateKey('facefilter', clientId), GUEST_RATE_LIMITS.faceFilterPerClient))) return;
+    if (!(await checkRate(res, guestRateKey('facefilter_burst', link.short_code), GUEST_RATE_LIMITS.faceFilterPerLinkBurst))) return;
     if (!(await checkRate(res, guestRateKey('facefilter_link', link.short_code), GUEST_RATE_LIMITS.faceFilterPerLinkHourly))) return;
 
     let filter: { id: string; label: string; source_path: string } | null = null;

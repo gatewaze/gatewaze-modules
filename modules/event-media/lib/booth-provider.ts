@@ -188,9 +188,13 @@ async function runFal(modelSlug: string, input: Record<string, unknown>): Promis
       return { ok: false, error: 'provider_error', detail: `result ${resp.status} ${detail}` };
     }
     const result = await resp.json() as Record<string, unknown>;
+    // Pin the output host too. This URL comes from fal's own
+    // authenticated response rather than from a guest, so it is not an
+    // SSRF guests can reach — but a fetch driven by a remote JSON field
+    // should not be able to point anywhere it likes.
     const url = outputUrl(result);
-    if (!/^https:\/\//.test(url)) {
-      return { ok: false, error: 'provider_error', detail: 'no output image' };
+    if (!/^https:\/\/([a-z0-9-]+\.)*fal\.(run|media|ai)\//.test(url)) {
+      return { ok: false, error: 'provider_error', detail: 'no usable output image' };
     }
 
     const img = await withTimeout(fetch(url), DOWNLOAD_TIMEOUT_MS);

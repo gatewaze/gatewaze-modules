@@ -47,6 +47,19 @@ describe('the effect catalogue', () => {
   });
 });
 
+describe('paid-call rate limits', () => {
+  it('caps a burst well below the hourly budget', async () => {
+    const { GUEST_RATE_LIMITS: L } = await import('../guest-limits.js');
+    // client_id is spoofable and a venue is one NAT, so this per-link
+    // burst cap is the only thing stopping one caller draining the
+    // hour's paid budget in minutes. If it ever stops being much
+    // smaller than the hourly cap it has stopped doing its job.
+    const burstPerHour = L.faceFilterPerLinkBurst.max * (3_600_000 / L.faceFilterPerLinkBurst.windowMs);
+    expect(burstPerHour).toBeGreaterThan(L.faceFilterPerLinkHourly.max);
+    expect(L.faceFilterPerLinkBurst.max).toBeLessThan(L.faceFilterPerLinkHourly.max / 4);
+  });
+});
+
 describe('boothStatus', () => {
   const saved = { ...process.env };
   beforeEach(() => {
