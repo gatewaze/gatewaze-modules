@@ -32,7 +32,7 @@ import {
   validateMintFile,
 } from '../lib/guest-limits.js';
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
-import { runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { runDepth, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -253,6 +253,54 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     variants: Record<string, string> | null;
     metadata: Record<string, unknown> | null;
     created_at: string;
+  }
+
+  /**
+   * Compute and cache a depth map for one photo.
+   *
+   * The projector's 3D effect samples this; without it a photo simply
+   * gets a flat camera move. Depth belongs to the photo, so it is
+   * generated once here rather than in every browser that displays it
+   * — the previous client-side approach froze the display for seconds
+   * per photo.
+   *
+   * Fire-and-forget and defensively total: this runs detached from the
+   * request, so anything thrown here would surface as an
+   * unhandledRejection and take the API process down.
+   */
+  async function generateDepth(mediaId: string, storagePath: string): Promise<void> {
+    try {
+      const result = await runDepth(toPublicUrl(storagePath));
+      if (!result.ok) {
+        logger.warn('depth generation failed', { mediaId, error: result.error, detail: result.detail });
+        return;
+      }
+      const dir = storagePath.slice(0, storagePath.lastIndexOf('/'));
+      if (!dir) return;
+      const depthPath = `${dir}/variants/depth.png`;
+      const { error: upErr } = await supabase.storage
+        .from(storageBucket)
+        .upload(depthPath, result.image, { contentType: 'image/png', upsert: true });
+      if (upErr) {
+        logger.warn('depth upload failed', { mediaId, error: upErr.message });
+        return;
+      }
+      // Merge rather than replace: the image-variant edge function
+      // writes thumb/medium into the same column and may land either
+      // side of this.
+      const { data: row } = await supabase
+        .from('host_media')
+        .select('variants')
+        .eq('id', mediaId)
+        .maybeSingle();
+      const variants = { ...((row?.variants ?? {}) as Record<string, unknown>), depth: depthPath };
+      await supabase.from('host_media').update({ variants }).eq('id', mediaId);
+    } catch (err) {
+      logger.warn('depth generation crashed', {
+        mediaId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Supabase image-transformation URL (imgproxy render endpoint). */
@@ -613,6 +661,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       items.push({ media_id: p.media_id, status: 'created', item: mapFeedItem(inserted as FeedRow) });
 
       if (p.mime_type.startsWith('image/')) {
+        // Depth for the projector's 3D effect, alongside the thumbnails.
+        void generateDepth(p.media_id, p.storage_path);
+
         // Fire-and-forget variant generation. invoke() resolves
         // { data, error } on a non-2xx rather than rejecting, so the
         // error envelope must be checked or edge-fn failures are

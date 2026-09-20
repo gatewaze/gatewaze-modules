@@ -44,6 +44,7 @@ const MAX_OUTPUT_BYTES = 25 * 1024 * 1024;
 
 const DEFAULT_STYLE_MODEL = 'fal-ai/nano-banana/edit';
 const DEFAULT_SWAP_MODEL = 'fal-ai/face-swap';
+const DEFAULT_DEPTH_MODEL = 'fal-ai/image-preprocessors/depth-anything/v2';
 
 /**
  * fal model slugs reach the request URL, so they are constrained to the
@@ -212,6 +213,22 @@ async function runFal(modelSlug: string, input: Record<string, unknown>): Promis
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: msg === 'timeout' ? 'timeout' : 'provider_error', detail: msg.slice(0, 200) };
   }
+}
+
+/**
+ * Monocular depth map for a photo, near = white.
+ *
+ * Depth is a property of the PHOTO, not of the viewing session, so it
+ * is computed once here and cached alongside the image. The previous
+ * approach ran the model in every projector browser, on the main
+ * thread, for every photo in the library — which froze the display for
+ * seconds at a time (p95 frame gap 3.9 s, measured 2026-09-20). Doing
+ * it once, server-side, costs pennies and leaves the projector with
+ * nothing to do but sample a texture.
+ */
+export async function runDepth(imageUrl: string): Promise<BoothResult> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  return runFal(model('BOOTH_DEPTH_MODEL', DEFAULT_DEPTH_MODEL), { image_url: imageUrl });
 }
 
 /** Restyle `imageUrl` with a catalogue prompt, keeping the faces. */

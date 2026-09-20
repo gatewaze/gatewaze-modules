@@ -3,74 +3,76 @@
 // @ts-nocheck — portal deps are resolved at build time via webpack alias
 
 /**
- * Cinematic photo renderer — the "video showroom" layer.
+ * Cinematic photo renderer — the "3D photo" layer.
  *
- * Draws photos into a transparent WebGL canvas with:
- *  - 2.5D depth parallax: the monocular depth map displaces sampling
- *    UVs against a slow camera drift, so foreground subjects move
- *    against their background. Stills read as motion footage.
- *  - Subject pop: the alpha matte fades the BACKGROUND of the photo to
- *    transparent mid-slide, revealing the blurred cover-fill layer
- *    behind it — the background appears to melt away and the people
- *    float forward.
- *  - Subject-aware framing: zoom/drift centre on the matte centroid,
- *    so the camera moves toward people rather than drifting blindly.
+ * Each photo is drawn as a shallow relief rather than a flat picture,
+ * using a cached depth map:
  *
- * The component OWNS THE WHOLE SLIDESHOW, not one photo. That is
- * deliberate and was a bug fix (2026-09-20): it used to be remounted
- * per slide with a React key, which destroyed the canvas, took a fresh
- * WebGL context every slide, and left the photo layer empty until the
- * next original had downloaded — measured at 265-546 ms on a fast
- * connection and up to 9.1 s on venue wifi. For that whole window the
- * only thing on screen was the blurred, 1.15x-scaled cover fill, which
- * read as the photo "jumping" to a zoomed-in blurry copy of itself.
+ *  - parallax occlusion: the view ray is walked through the depth
+ *    field, so as the camera drifts, near subjects genuinely move
+ *    against — and cover — what is behind them
+ *  - depth of field: distance from the focus plane defocuses, which is
+ *    what actually convinces the eye there is volume
+ *  - aerial perspective: far pixels lose colour and sit back
  *
- * So instead: one context for the life of the display, the outgoing
- * photo stays on screen until the incoming one is decoded and uploaded
- * to the GPU, and the two cross-dissolve. Nothing is ever blank.
+ * The depth map is FETCHED, not computed. Depth is a property of the
+ * photo, so the API generates it once on upload and caches it beside
+ * the image. The previous version ran two ML models in the browser for
+ * every photo, on the main thread, and froze the display for seconds
+ * at a time (p95 frame gap 3.9 s against 0.2 s for Ken Burns, measured
+ * 2026-09-20). Sampling a texture costs nothing.
  *
- * Degrades cleanly at every step: no WebGL → caller falls back to the
- * CSS effects; no depth → flat pan/zoom; no matte → no pop. The canvas
- * is transparent so the blurred fill behind always shows.
+ * The component OWNS THE WHOLE SLIDESHOW, not one photo — it used to
+ * be remounted per slide with a React key, which destroyed the canvas
+ * every slide and left the screen on the blurred fill until the next
+ * image downloaded. One context, and the outgoing photo holds the
+ * screen until the incoming one is ready to cross-dissolve.
+ *
+ * Degrades cleanly: no WebGL → the caller falls back to CSS effects;
+ * no depth map → a plain camera move, no relief. The canvas is
+ * transparent, so the blurred fill behind always shows.
  */
 
 import { useEffect, useRef } from 'react'
-import type { PhotoAnalysis } from './_lib/ai-pipeline'
 
 interface Props {
   /** Current photo. Changing this cross-fades to the new one. */
   src: string
-  analysis: PhotoAnalysis | null
-  /** Slide duration; the pop cycle is timed against it. */
+  /** Cached depth map for `src`, near = white. Absent → flat move. */
+  depthSrc?: string | null
+  /** 0 disables the relief entirely; 1 is the tuned default. */
+  depthStrength?: number
+  /** Slide duration; the camera move is timed against it. */
   durationMs: number
-  /** Disable the background-melt half of the effect. */
-  enablePop?: boolean
   className?: string
 }
 
 const FADE_MS = 900
 
+/** Tuned against real photos; `depthStrength` scales all three. */
+const PARALLAX = 0.055
+const DOF = 3.0
+const AERIAL = 0.5
+/** Depth held sharp. Near is 1.0, so this keeps faces crisp. */
+const FOCUS_PLANE = 0.82
+
 /**
  * Camera moves, in the Ken Burns sense: a slow zoom combined with a
- * pan. Pan is expressed as a FRACTION OF THE SLACK the zoom creates
- * (±1 = right to the edge), so a move can never sample past the edge
- * of the photo whatever the zoom is.
- *
- * The amounts are deliberately much larger than the original effect's:
- * that pushed in 6% over a whole slide and displaced by under 3%, which
- * is invisible across a room. These run 8-26%.
+ * pan. Pan is a FRACTION OF THE SLACK the zoom creates (±1 = right to
+ * the edge), so a move can never sample past the edge of the photo.
+ * The pan also drives the parallax, so the relief tracks the motion.
  */
 interface Move { z0: number; z1: number; x0: number; y0: number; x1: number; y1: number }
 
 const MOVES: Move[] = [
-  { z0: 1.08, z1: 1.26, x0: 0, y0: 0, x1: 0, y1: 0 },              // push in
-  { z0: 1.26, z1: 1.08, x0: 0, y0: 0, x1: 0, y1: 0 },              // pull back
-  { z0: 1.16, z1: 1.22, x0: -0.85, y0: 0, x1: 0.85, y1: 0 },       // pan right
-  { z0: 1.22, z1: 1.16, x0: 0.85, y0: 0, x1: -0.85, y1: 0 },       // pan left
-  { z0: 1.10, z1: 1.24, x0: -0.7, y0: 0.7, x1: 0.5, y1: -0.5 },    // dive in, diagonal
-  { z0: 1.24, z1: 1.10, x0: 0.6, y0: -0.6, x1: -0.4, y1: 0.4 },    // rise out, diagonal
-  { z0: 1.12, z1: 1.28, x0: 0.5, y0: 0.6, x1: -0.2, y1: -0.3 },    // push in from low
-  { z0: 1.20, z1: 1.14, x0: 0, y0: -0.8, x1: 0, y1: 0.8 },         // tilt down
+  { z0: 1.08, z1: 1.26, x0: 0, y0: 0, x1: 0, y1: 0 },
+  { z0: 1.26, z1: 1.08, x0: 0, y0: 0, x1: 0, y1: 0 },
+  { z0: 1.16, z1: 1.22, x0: -0.85, y0: 0, x1: 0.85, y1: 0 },
+  { z0: 1.22, z1: 1.16, x0: 0.85, y0: 0, x1: -0.85, y1: 0 },
+  { z0: 1.10, z1: 1.24, x0: -0.7, y0: 0.7, x1: 0.5, y1: -0.5 },
+  { z0: 1.24, z1: 1.10, x0: 0.6, y0: -0.6, x1: -0.4, y1: 0.4 },
+  { z0: 1.12, z1: 1.28, x0: 0.5, y0: 0.6, x1: -0.2, y1: -0.3 },
+  { z0: 1.20, z1: 1.14, x0: 0, y0: -0.8, x1: 0, y1: 0.8 },
 ]
 
 /** Same photo always gets the same move, different photos differ. */
@@ -95,67 +97,87 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D uPhoto;
 uniform sampler2D uDepth;
-uniform sampler2D uMatte;
-uniform vec2  uContain;   // vUv -> photo uv (letterboxed fit)
-uniform vec2  uCam;       // camera drift, roughly -1..1
-uniform vec2  uFocus;     // subject centroid in photo uv
-uniform float uParallax;  // displacement strength
-uniform float uZoom;      // >1 pushes in
-uniform float uPop;       // 0..1 background melt
-uniform float uBgFloor;   // how far the background is allowed to fade
+uniform vec2  uContain;    // vUv -> photo uv (letterboxed fit)
+uniform vec2  uPan;        // frame offset in photo uv
+uniform vec2  uCam;        // camera direction driving the parallax
+uniform vec2  uTexel;      // one photo pixel, for the defocus taps
+uniform float uZoom;
+uniform float uParallax;
+uniform float uDof;
+uniform float uAerial;
+uniform float uFocusPlane;
 uniform float uHasDepth;
-uniform float uHasMatte;
-uniform float uOpacity;   // cross-dissolve weight for this layer
+uniform float uOpacity;
+
+float depthAt(vec2 p) { return texture2D(uDepth, clamp(p, 0.0, 1.0)).r; }
 
 void main() {
-  // Map the stage pixel into the photo's contained rect.
   vec2 uv = (vUv - 0.5) * uContain + 0.5;
 
-  // Outside the photo rect: fully transparent, so the blurred cover
-  // layer behind shows through as the letterbox fill.
+  // Outside the photo rect: transparent, so the blurred cover layer
+  // behind shows through as the letterbox fill.
   if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
     gl_FragColor = vec4(0.0);
     return;
   }
 
-  // Push in around the subject, not the geometric centre.
-  vec2 zuv = (uv - uFocus) / uZoom + uFocus;
+  // Zoom about the centre, then slide the framing.
+  vec2 zuv = (uv - 0.5) / uZoom + 0.5 + uPan;
 
-  // Subject scales fractionally more than the frame during the pop.
-  vec2 suv = (zuv - uFocus) / (1.0 + uPop * 0.05) + uFocus;
-
-  float d = uHasDepth > 0.5 ? texture2D(uDepth, suv).r : 0.5;
-  // Near (bright depth) displaces most — that is the parallax.
-  vec2 puv = suv + (d - 0.5) * uParallax * uCam;
-  puv = clamp(puv, vec2(0.0), vec2(1.0));
-
-  vec3 rgb = texture2D(uPhoto, puv).rgb;
-
-  float alpha = 1.0;
-  if (uHasMatte > 0.5) {
-    float m = texture2D(uMatte, suv).a;
-    // Soften the matte edge so the melt never looks cut out.
-    m = smoothstep(0.35, 0.75, m);
-    // The background never goes fully transparent: it recedes to a
-    // floor. An imperfect mask then reads as a soft vignette toward the
-    // blurred fill behind, instead of a hole punched in the photo.
-    alpha = 1.0 - uPop * (1.0 - m) * (1.0 - uBgFloor);
+  vec2 p = zuv;
+  float d = 0.5;
+  if (uHasDepth > 0.5) {
+    // Walk the view ray through the depth field rather than applying a
+    // single flat shift: near things then cover what is behind them
+    // instead of smearing into it.
+    vec2 dir = uCam * uParallax;
+    d = depthAt(zuv);
+    p = zuv + dir * (d - 0.5);
+    for (int i = 0; i < 4; i++) {
+      d = depthAt(p);
+      p = zuv + dir * (d - 0.5);
+    }
   }
 
-  gl_FragColor = vec4(rgb, alpha * uOpacity);
+  vec3 rgb = texture2D(uPhoto, clamp(p, 0.0, 1.0)).rgb;
+
+  if (uHasDepth > 0.5) {
+    // Defocus by distance from the plane held sharp. This is what
+    // actually convinces the eye the picture has volume.
+    float blur = abs(d - uFocusPlane) * uDof;
+    if (blur > 0.002) {
+      vec3 acc = rgb;
+      float w = 1.0;
+      for (int i = 1; i <= 3; i++) {
+        vec2 o = uTexel * blur * float(i) * 3.0;
+        acc += texture2D(uPhoto, clamp(p + vec2( o.x, 0.0), 0.0, 1.0)).rgb;
+        acc += texture2D(uPhoto, clamp(p + vec2(-o.x, 0.0), 0.0, 1.0)).rgb;
+        acc += texture2D(uPhoto, clamp(p + vec2(0.0,  o.y), 0.0, 1.0)).rgb;
+        acc += texture2D(uPhoto, clamp(p + vec2(0.0, -o.y), 0.0, 1.0)).rgb;
+        w += 4.0;
+      }
+      rgb = acc / w;
+    }
+
+    // Aerial perspective: distance desaturates and cools.
+    float far = 1.0 - d;
+    float g = dot(rgb, vec3(0.299, 0.587, 0.114));
+    rgb = mix(rgb, vec3(g) * vec3(0.94, 0.97, 1.05), far * uAerial);
+    rgb *= 1.0 - far * uAerial * 0.30;
+  }
+
+  gl_FragColor = vec4(rgb, uOpacity);
 }`
 
 interface Layer {
   photo: WebGLTexture
   depth: WebGLTexture | null
-  matte: WebGLTexture | null
   /** Natural aspect ratio of the source photo. */
   ar: number
-  focus: { x: number; y: number }
-  popSafe: boolean
-  /** Clock origin for this layer's own pan/zoom/pop cycle. */
+  /** One photo pixel in UV, for the defocus taps. */
+  texel: [number, number]
+  /** Clock origin for this layer's own camera move. */
   startedAt: number
-  /** The camera move this photo was dealt. */
   move: Move
   src: string
 }
@@ -210,23 +232,10 @@ function makeTexture(gl: WebGLRenderingContext, source: TexImageSource | null): 
   return tex
 }
 
-/**
- * Attach depth/matte to a layer in place. Never rebuilds the layer:
- * that would reset its clock and snap the zoom back mid-slide, which is
- * what the old single effect did whenever analysis arrived late.
- */
-function applyAnalysis(gl: WebGLRenderingContext, layer: Layer, analysis: PhotoAnalysis | null): void {
-  if (!analysis) return
-  if (analysis.depth && !layer.depth) layer.depth = makeTexture(gl, analysis.depth)
-  if (analysis.matte && !layer.matte) layer.matte = makeTexture(gl, analysis.matte)
-  if (analysis.subject) layer.focus = analysis.subject
-  layer.popSafe = Boolean(analysis.popSafe)
-}
-
 function loadImage(src: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
-    // The photo must be CORS-clean or texImage2D throws (storage and
-    // render endpoints both send ACAO:*, verified 2026-09-20).
+    // Must be CORS-clean or texImage2D throws (storage and render
+    // endpoints both send ACAO:*, verified 2026-09-20).
     const i = new window.Image()
     i.crossOrigin = 'anonymous'
     i.onload = () => resolve(i)
@@ -235,7 +244,9 @@ function loadImage(src: string): Promise<HTMLImageElement | null> {
   })
 }
 
-export default function CinematicPhoto({ src, analysis, durationMs, enablePop = true, className }: Props) {
+export default function CinematicPhoto({
+  src, depthSrc, depthStrength = 1, durationMs, className,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const glRef = useRef<WebGLRenderingContext | null>(null)
   const progRef = useRef<WebGLProgram | null>(null)
@@ -246,17 +257,11 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
   const prevRef = useRef<Layer | null>(null)
   const fadeFromRef = useRef(0)
 
-  // Props the render loop reads without wanting to restart on change.
+  // Read by the render loop without restarting it.
   const durationRef = useRef(durationMs)
-  const popRef = useRef(enablePop)
-  // The photo loads asynchronously, so by the time a layer exists the
-  // analysis for it may ALREADY have arrived and its effect long since
-  // run. Without this the photo would keep a flat pan for its whole
-  // slide despite having a depth map ready.
-  const analysisRef = useRef<PhotoAnalysis | null>(analysis)
+  const strengthRef = useRef(depthStrength)
   durationRef.current = durationMs
-  popRef.current = enablePop
-  analysisRef.current = analysis
+  strengthRef.current = depthStrength
 
   // ── One context, one program, one loop, for the whole display ─────
   useEffect(() => {
@@ -293,18 +298,18 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
 
     const u = {
       contain: gl.getUniformLocation(prog, 'uContain'),
+      pan: gl.getUniformLocation(prog, 'uPan'),
       cam: gl.getUniformLocation(prog, 'uCam'),
-      focus: gl.getUniformLocation(prog, 'uFocus'),
-      parallax: gl.getUniformLocation(prog, 'uParallax'),
+      texel: gl.getUniformLocation(prog, 'uTexel'),
       zoom: gl.getUniformLocation(prog, 'uZoom'),
-      pop: gl.getUniformLocation(prog, 'uPop'),
-      bgFloor: gl.getUniformLocation(prog, 'uBgFloor'),
+      parallax: gl.getUniformLocation(prog, 'uParallax'),
+      dof: gl.getUniformLocation(prog, 'uDof'),
+      aerial: gl.getUniformLocation(prog, 'uAerial'),
+      focusPlane: gl.getUniformLocation(prog, 'uFocusPlane'),
       hasDepth: gl.getUniformLocation(prog, 'uHasDepth'),
-      hasMatte: gl.getUniformLocation(prog, 'uHasMatte'),
       opacity: gl.getUniformLocation(prog, 'uOpacity'),
       photo: gl.getUniformLocation(prog, 'uPhoto'),
       depth: gl.getUniformLocation(prog, 'uDepth'),
-      matte: gl.getUniformLocation(prog, 'uMatte'),
     }
 
     gl.enable(gl.BLEND)
@@ -312,44 +317,34 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
     gl.clearColor(0, 0, 0, 0)
 
     const drawLayer = (layer: Layer, now: number, stageAR: number, opacity: number) => {
-      // Contain mapping: stage aspect vs photo aspect.
       const cx = layer.ar > stageAR ? 1 : stageAR / layer.ar
       const cy = layer.ar > stageAR ? layer.ar / stageAR : 1
       gl.uniform2f(u.contain, cx, cy)
 
       const t = (now - layer.startedAt) / Math.max(durationRef.current, 2000)
-      // Linear, like a real camera move — easing makes the middle rush.
-      // Clamped so a slide held open does not drift forever.
+      // Linear, like a real camera move; easing makes the middle rush.
       const k = Math.max(0, Math.min(1, t))
       const m = layer.move
       const zoom = lerp(m.z0, m.z1, k)
-      // How far the centre can move before the window leaves the photo.
+      // How far the framing can slide before the window leaves the photo.
       const slack = Math.max(0, (1 - 1 / zoom) / 2)
+      const panX = lerp(m.x0, m.x1, k)
+      const panY = lerp(m.y0, m.y1, k)
+
+      const strength = Math.max(0, Math.min(2, strengthRef.current))
+      const hasDepth = Boolean(layer.depth) && strength > 0.001
+
       gl.uniform1f(u.zoom, zoom)
-      gl.uniform2f(
-        u.focus,
-        0.5 + lerp(m.x0, m.x1, k) * slack,
-        0.5 + lerp(m.y0, m.y1, k) * slack,
-      )
-      // Parallax rides the move; zero without a depth map.
-      gl.uniform2f(u.cam, Math.sin(k * Math.PI), Math.cos(k * Math.PI) * 0.6)
-      gl.uniform1f(u.parallax, layer.depth ? 0.055 : 0)
-      gl.uniform1f(u.bgFloor, 0.28)
-      gl.uniform1f(u.hasDepth, layer.depth ? 1 : 0)
-
-      const popOk = Boolean(layer.matte && popRef.current && layer.popSafe)
-      gl.uniform1f(u.hasMatte, popOk ? 1 : 0)
-
-      // Background melt: hold, ease in, hold, ease back out.
-      let pop = 0
-      if (popOk) {
-        if (t > 0.32 && t <= 0.5) pop = (t - 0.32) / 0.18
-        else if (t > 0.5 && t <= 0.78) pop = 1
-        else if (t > 0.78 && t <= 0.92) pop = 1 - (t - 0.78) / 0.14
-        pop = Math.max(0, Math.min(1, pop))
-        pop = pop * pop * (3 - 2 * pop) // smoothstep
-      }
-      gl.uniform1f(u.pop, pop)
+      gl.uniform2f(u.pan, panX * slack, panY * slack)
+      // The same pan direction drives the parallax, so the relief moves
+      // with the camera rather than independently of it.
+      gl.uniform2f(u.cam, panX, panY)
+      gl.uniform1f(u.parallax, PARALLAX * strength)
+      gl.uniform1f(u.dof, DOF * strength)
+      gl.uniform1f(u.aerial, AERIAL * strength)
+      gl.uniform1f(u.focusPlane, FOCUS_PLANE)
+      gl.uniform1f(u.hasDepth, hasDepth ? 1 : 0)
+      gl.uniform2f(u.texel, layer.texel[0], layer.texel[1])
       gl.uniform1f(u.opacity, opacity)
 
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, layer.photo)
@@ -357,10 +352,6 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
       if (layer.depth) {
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, layer.depth)
         gl.uniform1i(u.depth, 1)
-      }
-      if (layer.matte) {
-        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, layer.matte)
-        gl.uniform1i(u.matte, 2)
       }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
     }
@@ -371,15 +362,10 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
       const cur = curRef.current
       if (!cur) return
 
-      // Render at the display's real pixels: without the ratio the
-      // canvas is half resolution on a 2x screen and every cinematic
-      // slide looks soft next to the plain-<img> effects.
-      //
-      // Measure the PARENT and pin the canvas's CSS size from it. Sizing
-      // the backing store from the canvas's own clientWidth is a
-      // feedback loop — the new backing store becomes the element's
-      // intrinsic size, so at dpr 2 it doubles every frame until it
-      // explodes (caught in the harness at 67 megapixels).
+      // Render at the display's real pixels. Measure the PARENT and pin
+      // the canvas CSS size from it: sizing the backing store from the
+      // canvas's own clientWidth is a feedback loop that doubles every
+      // frame at dpr 2 (caught in the harness at 67 megapixels).
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
       const host = canvas.parentElement
       const rect = host?.getBoundingClientRect()
@@ -409,7 +395,6 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
       if (prev && f >= 1) {
         gl.deleteTexture(prev.photo)
         if (prev.depth) gl.deleteTexture(prev.depth)
-        if (prev.matte) gl.deleteTexture(prev.matte)
         prevRef.current = null
       }
     }
@@ -422,7 +407,6 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
         if (!l) continue
         gl.deleteTexture(l.photo)
         if (l.depth) gl.deleteTexture(l.depth)
-        if (l.matte) gl.deleteTexture(l.matte)
       }
       curRef.current = null
       prevRef.current = null
@@ -437,23 +421,22 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const img = await loadImage(src)
+      // Depth is optional: a missing map costs the relief, not the
+      // slide, so a failed fetch must not hold the photo back.
+      const [img, depthImg] = await Promise.all([
+        loadImage(src),
+        depthSrc ? loadImage(depthSrc) : Promise.resolve(null),
+      ])
       const gl = glRef.current
-      // Nothing is torn down on failure: the photo already on screen
-      // simply stays until the next one arrives.
       if (cancelled || !img || !gl) return
       const photo = makeTexture(gl, fitForGpu(gl, img))
       if (!photo) return
 
       const incoming: Layer = {
         photo,
-        depth: null,
-        matte: null,
+        depth: depthImg ? makeTexture(gl, fitForGpu(gl, depthImg)) : null,
         ar: img.naturalWidth / img.naturalHeight,
-        // Aim at the subject; fall back to slightly above centre, which
-        // is where faces sit in most group photos.
-        focus: { x: 0.5, y: 0.42 },
-        popSafe: false,
+        texel: [1 / Math.max(img.naturalWidth, 1), 1 / Math.max(img.naturalHeight, 1)],
         startedAt: performance.now(),
         move: moveFor(src),
         src,
@@ -465,23 +448,13 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
       if (stale) {
         gl.deleteTexture(stale.photo)
         if (stale.depth) gl.deleteTexture(stale.depth)
-        if (stale.matte) gl.deleteTexture(stale.matte)
       }
-      applyAnalysis(gl, incoming, analysisRef.current)
       prevRef.current = curRef.current
       curRef.current = incoming
       fadeFromRef.current = performance.now()
     })()
     return () => { cancelled = true }
-  }, [src])
-
-  // ── Upgrade the current photo when its analysis lands late ────────
-  useEffect(() => {
-    const gl = glRef.current
-    const cur = curRef.current
-    if (!gl || !cur || cur.src !== src) return
-    applyAnalysis(gl, cur, analysis)
-  }, [analysis, src])
+  }, [src, depthSrc])
 
   return <canvas ref={canvasRef} className={className} />
 }
