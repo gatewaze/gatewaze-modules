@@ -22,6 +22,7 @@
 
 import type { Request, Response, Router } from 'express';
 import { generateShortCode } from '../lib/guest-limits.js';
+import { faceSwapStatus } from '../lib/face-swap.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -55,10 +56,13 @@ export const LINK_WRITE_FIELDS = [
   'max_photo_bytes',
   'max_video_bytes',
   'logo_url',
+  'allow_face_filter',
 ] as const;
 
 const LINK_SELECT =
-  'id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, uploads_count, created_by, created_at, updated_at';
+  'id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, uploads_count, created_by, created_at, updated_at';
+
+const FILTER_SELECT = 'id, event_id, label, source_path, is_active, sort_order, created_at';
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: code, message });
@@ -258,7 +262,83 @@ export function createAdminLinksRoutes(deps: AdminLinksDeps) {
     res.status(200).json({ action: 'deleted' });
   }
 
-  return { listLinks, createLink, patchLink, deleteLink };
+  // ── Face filters (reference faces for the guest camera filter) ────
+
+  async function listFilters(req: RequestWithUser, res: Response): Promise<void> {
+    const eventId = paramEventId(req, res); if (!eventId) return;
+    const supabase = client(req, res); if (!supabase) return;
+    const { data, error } = await supabase
+      .from('events_media_face_filters')
+      .select(FILTER_SELECT)
+      .eq('event_id', eventId)
+      .order('sort_order', { ascending: true });
+    if (error) { sendError(res, 500, 'list_failed', error.message); return; }
+    res.status(200).json({ items: data ?? [], provider: faceSwapStatus() });
+  }
+
+  async function createFilter(req: RequestWithUser, res: Response): Promise<void> {
+    const eventId = paramEventId(req, res); if (!eventId) return;
+    const supabase = client(req, res); if (!supabase) return;
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const label = typeof body['label'] === 'string' ? body['label'].trim().slice(0, 40) : '';
+    const sourcePath = typeof body['source_path'] === 'string' ? body['source_path'].trim().slice(0, 512) : '';
+    // Storage path only — never a URL, and never anything that could
+    // walk out of this event's own prefix.
+    if (!label || !sourcePath || sourcePath.includes('..') || /^[a-z]+:/i.test(sourcePath)) {
+      sendError(res, 400, 'invalid_request', 'label and a storage source_path are required');
+      return;
+    }
+    const { data, error } = await supabase
+      .from('events_media_face_filters')
+      .insert({ event_id: eventId, label, source_path: sourcePath.replace(/^\/+/, ''), created_by: req.userId ?? null })
+      .select(FILTER_SELECT)
+      .single();
+    if (error) {
+      const denied = error.code === '42501' || /row-level security/i.test(error.message ?? '');
+      sendError(res, denied ? 403 : 500, denied ? 'forbidden' : 'create_failed', error.message);
+      return;
+    }
+    res.status(201).json({ item: data });
+  }
+
+  async function patchFilter(req: RequestWithUser, res: Response): Promise<void> {
+    const eventId = paramEventId(req, res); if (!eventId) return;
+    const id = req.params['id'];
+    if (typeof id !== 'string' || !UUID_RE.test(id)) { sendError(res, 400, 'invalid_id', 'id must be a UUID'); return; }
+    const supabase = client(req, res); if (!supabase) return;
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const fields: Record<string, unknown> = {};
+    if (typeof body['label'] === 'string') fields['label'] = body['label'].trim().slice(0, 40);
+    if (typeof body['is_active'] === 'boolean') fields['is_active'] = body['is_active'];
+    if (Number.isInteger(body['sort_order'])) fields['sort_order'] = body['sort_order'];
+    if (Object.keys(fields).length === 0) { sendError(res, 400, 'no_fields', 'nothing to update'); return; }
+    const { data, error } = await supabase
+      .from('events_media_face_filters')
+      .update(fields)
+      .eq('id', id)
+      .eq('event_id', eventId)
+      .select(FILTER_SELECT)
+      .maybeSingle();
+    if (error) { sendError(res, 500, 'update_failed', error.message); return; }
+    if (!data) { sendError(res, 404, 'not_found', 'filter not found'); return; }
+    res.status(200).json({ item: data });
+  }
+
+  async function deleteFilter(req: RequestWithUser, res: Response): Promise<void> {
+    const eventId = paramEventId(req, res); if (!eventId) return;
+    const id = req.params['id'];
+    if (typeof id !== 'string' || !UUID_RE.test(id)) { sendError(res, 400, 'invalid_id', 'id must be a UUID'); return; }
+    const supabase = client(req, res); if (!supabase) return;
+    const { error } = await supabase
+      .from('events_media_face_filters')
+      .delete()
+      .eq('id', id)
+      .eq('event_id', eventId);
+    if (error) { sendError(res, 500, 'delete_failed', error.message); return; }
+    res.status(200).json({ deleted: id });
+  }
+
+  return { listLinks, createLink, patchLink, deleteLink, listFilters, createFilter, patchFilter, deleteFilter };
 }
 
 export function mountAdminLinksRoutes(router: Router, routes: ReturnType<typeof createAdminLinksRoutes>): void {
@@ -266,4 +346,8 @@ export function mountAdminLinksRoutes(router: Router, routes: ReturnType<typeof 
   router.post('/events/:eventId/media-upload-links', routes.createLink);
   router.patch('/events/:eventId/media-upload-links/:id', routes.patchLink);
   router.delete('/events/:eventId/media-upload-links/:id', routes.deleteLink);
+  router.get('/events/:eventId/face-filters', routes.listFilters);
+  router.post('/events/:eventId/face-filters', routes.createFilter);
+  router.patch('/events/:eventId/face-filters/:id', routes.patchFilter);
+  router.delete('/events/:eventId/face-filters/:id', routes.deleteFilter);
 }

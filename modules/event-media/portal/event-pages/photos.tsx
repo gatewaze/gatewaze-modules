@@ -51,6 +51,7 @@ interface LinkInfo {
     max_video_bytes: number
   }
   logo_url: string | null
+  face_filters?: Array<{ id: string; label: string; preview: string }>
 }
 
 interface GalleryItem {
@@ -142,6 +143,15 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const [mine, setMine] = useState<GalleryItem[]>([])
   const [mineLoading, setMineLoading] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  // A camera shot held back for the filter step: nothing is uploaded
+  // until the guest picks a version.
+  const [shot, setShot] = useState<{
+    original: string
+    preview: string | null
+    filterLabel: string | null
+    busy: boolean
+    error: string | null
+  } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -280,6 +290,79 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     const interval = setInterval(() => loadGallery(), GALLERY_REFRESH_MS)
     return () => clearInterval(interval)
   }, [link, loadGallery])
+
+  // ── Face filters (camera shots only) ──────────────────────────────
+
+  /** Shrink before sending: a 24 MP selfie is pointless to swap and
+   *  slow to upload twice. 1600px is plenty for the result. */
+  const toDataUrl = useCallback((file: File): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const img = new window.Image()
+      const url = URL.createObjectURL(file)
+      img.onload = () => {
+        URL.revokeObjectURL(url)
+        const longEdge = Math.max(img.naturalWidth, img.naturalHeight)
+        const scale = longEdge > 1600 ? 1600 / longEdge : 1
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.round(img.naturalWidth * scale)
+        canvas.height = Math.round(img.naturalHeight * scale)
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { resolve(null); return }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        resolve(canvas.toDataURL('image/jpeg', 0.9))
+      }
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null) }
+      img.src = url
+    })
+  }, [])
+
+  const onCameraShot = useCallback(async (files: FileList | null) => {
+    const file = files?.[0]
+    if (!file) return
+    const filters = link?.face_filters ?? []
+    // No filters configured → behave exactly as before.
+    if (filters.length === 0) { enqueueFiles(files, true); return }
+    const dataUrl = await toDataUrl(file)
+    if (!dataUrl) { enqueueFiles(files, true); return }
+    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: false, error: null })
+  }, [link, enqueueFiles, toDataUrl])
+
+  const applyFilter = useCallback(async (filterId: string) => {
+    if (!code || !guest || !shot) return
+    setShot((s) => (s ? { ...s, busy: true, error: null } : s))
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/face-filter`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: guest.client_id, filter_id: filterId, image: shot.original }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.image) {
+        setShot((s) => (s ? {
+          ...s,
+          busy: false,
+          error: data?.message ?? 'that filter did not work — you can still upload your photo',
+        } : s))
+        return
+      }
+      setShot((s) => (s ? { ...s, busy: false, preview: data.image, filterLabel: data.filter?.label ?? null } : s))
+    } catch {
+      setShot((s) => (s ? { ...s, busy: false, error: 'could not reach the filter' } : s))
+    }
+  }, [code, guest, shot])
+
+  /** Upload whichever version the guest settled on. */
+  const acceptShot = useCallback(async () => {
+    if (!shot) return
+    const chosen = shot.preview ?? shot.original
+    const blob = await (await fetch(chosen)).blob()
+    const name = shot.preview ? `filtered-${Date.now()}.jpg` : `photo-${Date.now()}.jpg`
+    const file = new File([blob], name, { type: 'image/jpeg' })
+    const dt = new DataTransfer()
+    dt.items.add(file)
+    enqueueFiles(dt.files, true)
+    setShot(null)
+  }, [shot, enqueueFiles])
 
   // ── "Yours": the guest's own uploads ──────────────────────────────
 
@@ -653,7 +736,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
                 accept="image/*"
                 capture="environment"
                 className="hidden"
-                onChange={(e) => { enqueueFiles(e.target.files, true); e.target.value = '' }}
+                onChange={(e) => { onCameraShot(e.target.files); e.target.value = '' }}
               />
               <input
                 ref={fileInputRef}
@@ -853,6 +936,78 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Camera shot + filter step. Nothing here has been uploaded:
+          the guest chooses the original or a filtered version, and
+          can always back out entirely. */}
+      {shot && (
+        <div className="fixed inset-0 z-[60] bg-black/95 flex flex-col">
+          <div className="flex-1 min-h-0 flex items-center justify-center p-3">
+            {/* eslint-disable-next-line @next/next/no-img-element -- local data URL preview */}
+            <img
+              src={shot.preview ?? shot.original}
+              alt=""
+              className="max-w-full max-h-full object-contain rounded-xl"
+            />
+          </div>
+
+          <div className="p-4 pb-6 space-y-3 bg-black/80">
+            {shot.error && <p className="text-amber-300 text-sm">{shot.error}</p>}
+            {shot.preview && (
+              <p className="text-white/70 text-sm">
+                Filtered{shot.filterLabel ? ` — ${shot.filterLabel}` : ''}. Happy with it?
+              </p>
+            )}
+
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {(link?.face_filters ?? []).map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => applyFilter(f.id)}
+                  disabled={shot.busy}
+                  className="flex-shrink-0 flex flex-col items-center gap-1 disabled:opacity-50"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- reference face */}
+                  <img src={f.preview} alt="" className="w-14 h-14 rounded-full object-cover ring-2 ring-white/30" />
+                  <span className="text-white/80 text-xs">{f.label}</span>
+                </button>
+              ))}
+              {shot.preview && (
+                <button
+                  onClick={() => setShot((s) => (s ? { ...s, preview: null, filterLabel: null } : s))}
+                  disabled={shot.busy}
+                  className="flex-shrink-0 flex flex-col items-center gap-1 disabled:opacity-50"
+                >
+                  <span className="w-14 h-14 rounded-full bg-white/10 ring-2 ring-white/30 flex items-center justify-center text-white text-xs">
+                    Original
+                  </span>
+                  <span className="text-white/80 text-xs">No filter</span>
+                </button>
+              )}
+            </div>
+
+            {shot.busy && <p className="text-white/60 text-sm">Applying the filter…</p>}
+
+            <div className="flex gap-2">
+              <button
+                onClick={acceptShot}
+                disabled={shot.busy}
+                className="flex-1 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50"
+                style={{ backgroundColor: primaryColor }}
+              >
+                {shot.preview ? 'Upload this one' : 'Upload photo'}
+              </button>
+              <button
+                onClick={() => setShot(null)}
+                disabled={shot.busy}
+                className="rounded-lg px-4 py-2.5 text-white/80 bg-white/10 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
