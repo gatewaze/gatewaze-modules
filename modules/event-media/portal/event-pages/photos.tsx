@@ -293,93 +293,6 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     return () => clearInterval(interval)
   }, [link, loadGallery])
 
-  // ── Face filters (camera shots only) ──────────────────────────────
-
-  /** Shrink before sending: a 24 MP selfie is pointless to swap and
-   *  slow to upload twice. 1600px is plenty for the result. */
-  const toDataUrl = useCallback((file: File): Promise<string | null> => {
-    return new Promise((resolve) => {
-      const img = new window.Image()
-      const url = URL.createObjectURL(file)
-      img.onload = () => {
-        URL.revokeObjectURL(url)
-        const longEdge = Math.max(img.naturalWidth, img.naturalHeight)
-        const scale = longEdge > 1600 ? 1600 / longEdge : 1
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.round(img.naturalWidth * scale)
-        canvas.height = Math.round(img.naturalHeight * scale)
-        const ctx = canvas.getContext('2d')
-        if (!ctx) { resolve(null); return }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-        resolve(canvas.toDataURL('image/jpeg', 0.9))
-      }
-      img.onerror = () => { URL.revokeObjectURL(url); resolve(null) }
-      img.src = url
-    })
-  }, [])
-
-  const onCameraShot = useCallback(async (files: FileList | null) => {
-    const file = files?.[0]
-    if (!file) return
-    // Nothing to choose between → behave exactly as before.
-    const hasBooth = (link?.face_filters?.length ?? 0) > 0 || (link?.booth_effects?.length ?? 0) > 0
-    if (!hasBooth) { enqueueFiles(files, true); return }
-    const dataUrl = await toDataUrl(file)
-    if (!dataUrl) { enqueueFiles(files, true); return }
-    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
-  }, [link, enqueueFiles, toDataUrl])
-
-  /**
-   * Generate one booth effect. `key` doubles as the busy marker so the
-   * picker can show which tile is working; the server takes either a
-   * reference-face id or a catalogue effect id, never both.
-   */
-  const applyEffect = useCallback(async (
-    key: string,
-    payload: { filter_id: string } | { effect: string },
-  ) => {
-    if (!code || !guest || !shot) return
-    setShot((s) => (s ? { ...s, busy: key, error: null } : s))
-    try {
-      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/booth`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Always send the ORIGINAL, never the current preview: effects
-        // must not stack on top of one another.
-        body: JSON.stringify({ client_id: guest.client_id, image: shot.original, ...payload }),
-      })
-      const data = await res.json().catch(() => null)
-      if (!res.ok || !data?.image) {
-        setShot((s) => (s ? {
-          ...s,
-          busy: null,
-          error: data?.message ?? 'that one did not work — you can still upload your photo',
-        } : s))
-        return
-      }
-      setShot((s) => (s ? {
-        ...s,
-        busy: null,
-        preview: data.image,
-        filterLabel: data.effect?.label ?? data.filter?.label ?? null,
-      } : s))
-    } catch {
-      setShot((s) => (s ? { ...s, busy: null, error: 'could not reach the photo booth' } : s))
-    }
-  }, [code, guest, shot])
-
-  /** Upload whichever version the guest settled on. */
-  const acceptShot = useCallback(async () => {
-    if (!shot) return
-    const chosen = shot.preview ?? shot.original
-    const blob = await (await fetch(chosen)).blob()
-    const name = shot.preview ? `filtered-${Date.now()}.jpg` : `photo-${Date.now()}.jpg`
-    const file = new File([blob], name, { type: 'image/jpeg' })
-    const dt = new DataTransfer()
-    dt.items.add(file)
-    enqueueFiles(dt.files, true)
-    setShot(null)
-  }, [shot, enqueueFiles])
 
   // ── "Yours": the guest's own uploads ──────────────────────────────
 
@@ -593,6 +506,94 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     patchItem(key, { status: 'waiting', progress: 0, error: undefined })
     void pumpQueue()
   }, [patchItem, pumpQueue])
+
+  // ── Face filters (camera shots only) ──────────────────────────────
+
+  /** Shrink before sending: a 24 MP selfie is pointless to swap and
+   *  slow to upload twice. 1600px is plenty for the result. */
+  const toDataUrl = useCallback((file: File): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const img = new window.Image()
+      const url = URL.createObjectURL(file)
+      img.onload = () => {
+        URL.revokeObjectURL(url)
+        const longEdge = Math.max(img.naturalWidth, img.naturalHeight)
+        const scale = longEdge > 1600 ? 1600 / longEdge : 1
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.round(img.naturalWidth * scale)
+        canvas.height = Math.round(img.naturalHeight * scale)
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { resolve(null); return }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        resolve(canvas.toDataURL('image/jpeg', 0.9))
+      }
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null) }
+      img.src = url
+    })
+  }, [])
+
+  const onCameraShot = useCallback(async (files: FileList | null) => {
+    const file = files?.[0]
+    if (!file) return
+    // Nothing to choose between → behave exactly as before.
+    const hasBooth = (link?.face_filters?.length ?? 0) > 0 || (link?.booth_effects?.length ?? 0) > 0
+    if (!hasBooth) { enqueueFiles(files, true); return }
+    const dataUrl = await toDataUrl(file)
+    if (!dataUrl) { enqueueFiles(files, true); return }
+    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
+  }, [link, enqueueFiles, toDataUrl])
+
+  /**
+   * Generate one booth effect. `key` doubles as the busy marker so the
+   * picker can show which tile is working; the server takes either a
+   * reference-face id or a catalogue effect id, never both.
+   */
+  const applyEffect = useCallback(async (
+    key: string,
+    payload: { filter_id: string } | { effect: string },
+  ) => {
+    if (!code || !guest || !shot) return
+    setShot((s) => (s ? { ...s, busy: key, error: null } : s))
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/booth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Always send the ORIGINAL, never the current preview: effects
+        // must not stack on top of one another.
+        body: JSON.stringify({ client_id: guest.client_id, image: shot.original, ...payload }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.image) {
+        setShot((s) => (s ? {
+          ...s,
+          busy: null,
+          error: data?.message ?? 'that one did not work — you can still upload your photo',
+        } : s))
+        return
+      }
+      setShot((s) => (s ? {
+        ...s,
+        busy: null,
+        preview: data.image,
+        filterLabel: data.effect?.label ?? data.filter?.label ?? null,
+      } : s))
+    } catch {
+      setShot((s) => (s ? { ...s, busy: null, error: 'could not reach the photo booth' } : s))
+    }
+  }, [code, guest, shot])
+
+  /** Upload whichever version the guest settled on. */
+  const acceptShot = useCallback(async () => {
+    if (!shot) return
+    const chosen = shot.preview ?? shot.original
+    const blob = await (await fetch(chosen)).blob()
+    const name = shot.preview ? `filtered-${Date.now()}.jpg` : `photo-${Date.now()}.jpg`
+    const file = new File([blob], name, { type: 'image/jpeg' })
+    const dt = new DataTransfer()
+    dt.items.add(file)
+    enqueueFiles(dt.files, true)
+    setShot(null)
+  }, [shot, enqueueFiles])
 
   // Safety net: retry stranded completion tickets (a failed flush keeps
   // them pending; complete is idempotent so re-sending is safe), and
