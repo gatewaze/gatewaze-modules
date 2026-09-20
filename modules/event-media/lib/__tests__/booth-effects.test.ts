@@ -1,7 +1,7 @@
 // @ts-nocheck — vitest harness.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { BOOTH_EFFECTS, boothEffect, publicEffects } from '../booth-effects.js';
+import { BOOTH_EFFECTS, boothEffect, buildPrompt, publicEffects } from '../booth-effects.js';
 import { boothStatus, styleConfigured, swapConfigured } from '../booth-provider.js';
 
 describe('boothEffect', () => {
@@ -19,18 +19,42 @@ describe('boothEffect', () => {
 });
 
 describe('the effect catalogue', () => {
-  it('gives every style effect a prompt', () => {
+  it('gives every style effect a look to render', () => {
     for (const e of BOOTH_EFFECTS) {
-      if (e.kind === 'style') expect(e.prompt, e.id).toBeTruthy();
+      if (e.kind === 'style') expect(e.style, e.id).toBeTruthy();
     }
   });
 
-  it('pins identity and bans invented names on every style prompt', () => {
+  it('pins identity and bans invented names on every built prompt', () => {
     // Both were real failures: restyling drifts faces, and poster
     // styles printed made-up cast names across a wedding photo.
     for (const e of BOOTH_EFFECTS.filter((x) => x.kind === 'style')) {
-      expect(e.prompt, e.id).toMatch(/exact same faces/);
-      expect(e.prompt, e.id).toMatch(/Do not add any personal names/);
+      const p = buildPrompt(e);
+      expect(p, e.id).toMatch(/exact same faces/);
+      expect(p, e.id).toMatch(/Do not add any personal names/);
+    }
+  });
+
+  it('brackets every style with the people-count rule', () => {
+    // A solo guest came back standing beside an invented partner. Only
+    // stating the rule BEFORE the style as well as after fixed it, so
+    // assert the order, not merely the presence.
+    for (const e of BOOTH_EFFECTS.filter((x) => x.kind === 'style')) {
+      const p = buildPrompt(e);
+      const first = p.indexOf('CRITICAL RULE');
+      const style = p.indexOf(e.style!.slice(0, 30));
+      const last = p.indexOf('Reminder: do not add');
+      expect(first, e.id).toBe(0);
+      expect(style, e.id).toBeGreaterThan(first);
+      expect(last, e.id).toBeGreaterThan(style);
+    }
+  });
+
+  it('describes wardrobe without counting people', () => {
+    // Naming one garment per gender reads as a cast list and is what
+    // made the model populate the frame in the first place.
+    for (const e of BOOTH_EFFECTS.filter((x) => x.kind === 'style')) {
+      expect(e.style, e.id).not.toMatch(/tuxedo and (a )?(taffeta )?(prom )?dress/i);
     }
   });
 

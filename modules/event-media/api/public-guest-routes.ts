@@ -31,7 +31,7 @@ import {
   sanitiseGuestFilename,
   validateMintFile,
 } from '../lib/guest-limits.js';
-import { boothEffect, publicEffects } from '../lib/booth-effects.js';
+import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
 import { runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import {
   TICKET_TTL_SECONDS,
@@ -805,7 +805,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         'client_id, a base64 image and exactly one of effect or filter_id are required');
       return;
     }
-    if (effect && (effect.kind !== 'style' || !effect.prompt || !styleConfigured())) {
+    if (effect && (effect.kind !== 'style' || !effect.style || !styleConfigured())) {
       sendError(res, 404, 'not_available', 'that effect is not available');
       return;
     }
@@ -857,7 +857,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     try {
       const result = filter
         ? await runSwap(toPublicUrl(filter.source_path), toPublicUrl(scratchPath))
-        : await runStyle(toPublicUrl(scratchPath), effect!.prompt!);
+        : await runStyle(toPublicUrl(scratchPath), buildPrompt(effect!));
       if (!result.ok) {
         const status = result.error === 'no_face' ? 422 : result.error === 'timeout' ? 504 : 502;
         if (result.error !== 'no_face') {
