@@ -31,13 +31,20 @@ const REQUEST_TIMEOUT_MS = 90_000;
 // Replicate's hosted inswapper-style endpoint. Pinned by env when a
 // deployment wants a different model; left unpinned here so the token
 // owner chooses what they are comfortable running.
-const DEFAULT_MODEL = process.env.FACE_SWAP_MODEL ?? '';
+//
+// Read on each call rather than captured at import: a module-level
+// const freezes whatever the environment happened to be when this file
+// was first imported, which made the feature's own status lie whenever
+// the module loaded before the env was populated.
+function configuredModel(): string {
+  return process.env.FACE_SWAP_MODEL ?? '';
+}
 
 export function faceSwapConfigured(): boolean {
   return Boolean(
     (process.env.FACE_SWAP_PROVIDER ?? '').toLowerCase() === 'replicate' &&
     process.env.REPLICATE_API_TOKEN &&
-    DEFAULT_MODEL,
+    configuredModel(),
   );
 }
 
@@ -47,7 +54,7 @@ export function faceSwapStatus(): { configured: boolean; reason?: string } {
   if (!provider) return { configured: false, reason: 'FACE_SWAP_PROVIDER is not set' };
   if (provider !== 'replicate') return { configured: false, reason: `unknown provider "${provider}"` };
   if (!process.env.REPLICATE_API_TOKEN) return { configured: false, reason: 'REPLICATE_API_TOKEN is not set' };
-  if (!DEFAULT_MODEL) return { configured: false, reason: 'FACE_SWAP_MODEL is not set' };
+  if (!configuredModel()) return { configured: false, reason: 'FACE_SWAP_MODEL is not set' };
   return { configured: true };
 }
 
@@ -66,6 +73,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 export async function runFaceSwap(sourceUrl: string, targetUrl: string): Promise<FaceSwapResult> {
   if (!faceSwapConfigured()) return { ok: false, error: 'not_configured' };
   const token = process.env.REPLICATE_API_TOKEN!;
+  const configured = configuredModel();
 
   try {
     const create = await withTimeout(
@@ -79,8 +87,8 @@ export async function runFaceSwap(sourceUrl: string, targetUrl: string): Promise
           Prefer: 'wait=60',
         },
         body: JSON.stringify({
-          version: DEFAULT_MODEL.includes(':') ? DEFAULT_MODEL.split(':')[1] : undefined,
-          model: DEFAULT_MODEL.includes(':') ? undefined : DEFAULT_MODEL,
+          version: configured.includes(':') ? configured.split(':')[1] : undefined,
+          model: configured.includes(':') ? undefined : configured,
           input: { swap_image: sourceUrl, input_image: targetUrl },
         }),
       }),

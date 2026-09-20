@@ -129,7 +129,12 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   // ── Face filters ──────────────────────────────────────────────────
 
   const [filters, setFilters] = useState<FaceFilter[]>([]);
-  const [provider, setProvider] = useState<{ configured: boolean; reason?: string } | null>(null);
+  const [provider, setProvider] = useState<{
+    configured: boolean;
+    reason?: string;
+    styles?: boolean;
+    swaps?: boolean;
+  } | null>(null);
   const [filterLabel, setFilterLabel] = useState('');
   const [uploadingFace, setUploadingFace] = useState(false);
   const faceInputRef = useRef<HTMLInputElement | null>(null);
@@ -417,20 +422,24 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
             <button className="text-sm underline" onClick={() => setShowCreate(true)}>+ New upload link</button>
           )}
 
-          {/* Face filters — reference faces a guest can apply to a
-              selfie. Only offered to guests when a generation provider
-              is configured AND the individual link opts in. */}
+          {/* Photo booth. Style effects need only the provider; face
+              swaps also need the reference faces uploaded below. Both
+              are offered to guests only when the link opts in. */}
           <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
-            <p className="text-sm font-medium mb-1">Face filters</p>
+            <p className="text-sm font-medium mb-1">Photo booth</p>
             {provider && !provider.configured ? (
               <p className="text-xs text-gray-500 mb-2">
-                Not available — {provider.reason}. Set FACE_SWAP_PROVIDER, REPLICATE_API_TOKEN and
-                FACE_SWAP_MODEL to enable, then tick &quot;Face filter&quot; on a link.
+                Not available — {provider.reason}. Set BOOTH_PROVIDER=fal and FAL_API_KEY to
+                enable, then tick &quot;Face filter&quot; on a link.
               </p>
             ) : (
               <p className="text-xs text-gray-500 mb-2">
-                Guests taking a photo can apply one of these faces. Upload a clear, front-facing
-                photo of each person.
+                {provider?.styles
+                  ? 'Guests taking a photo can pick a style effect. '
+                  : 'Style effects are off. '}
+                {provider?.swaps
+                  ? 'Add a reference face below to also let them wear it — upload a clear, front-facing photo of each person.'
+                  : 'Face swaps are off.'}
               </p>
             )}
 

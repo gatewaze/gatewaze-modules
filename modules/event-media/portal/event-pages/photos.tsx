@@ -52,6 +52,7 @@ interface LinkInfo {
   }
   logo_url: string | null
   face_filters?: Array<{ id: string; label: string; preview: string }>
+  booth_effects?: Array<{ id: string; label: string; blurb: string; kind: 'swap' | 'style' }>
 }
 
 interface GalleryItem {
@@ -149,7 +150,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     original: string
     preview: string | null
     filterLabel: string | null
-    busy: boolean
+    /** Which effect is generating, so the picker can show it working. */
+    busy: string | null
     error: string | null
   } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -319,35 +321,50 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const onCameraShot = useCallback(async (files: FileList | null) => {
     const file = files?.[0]
     if (!file) return
-    const filters = link?.face_filters ?? []
-    // No filters configured → behave exactly as before.
-    if (filters.length === 0) { enqueueFiles(files, true); return }
+    // Nothing to choose between → behave exactly as before.
+    const hasBooth = (link?.face_filters?.length ?? 0) > 0 || (link?.booth_effects?.length ?? 0) > 0
+    if (!hasBooth) { enqueueFiles(files, true); return }
     const dataUrl = await toDataUrl(file)
     if (!dataUrl) { enqueueFiles(files, true); return }
-    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: false, error: null })
+    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
   }, [link, enqueueFiles, toDataUrl])
 
-  const applyFilter = useCallback(async (filterId: string) => {
+  /**
+   * Generate one booth effect. `key` doubles as the busy marker so the
+   * picker can show which tile is working; the server takes either a
+   * reference-face id or a catalogue effect id, never both.
+   */
+  const applyEffect = useCallback(async (
+    key: string,
+    payload: { filter_id: string } | { effect: string },
+  ) => {
     if (!code || !guest || !shot) return
-    setShot((s) => (s ? { ...s, busy: true, error: null } : s))
+    setShot((s) => (s ? { ...s, busy: key, error: null } : s))
     try {
-      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/face-filter`, {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/booth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: guest.client_id, filter_id: filterId, image: shot.original }),
+        // Always send the ORIGINAL, never the current preview: effects
+        // must not stack on top of one another.
+        body: JSON.stringify({ client_id: guest.client_id, image: shot.original, ...payload }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok || !data?.image) {
         setShot((s) => (s ? {
           ...s,
-          busy: false,
-          error: data?.message ?? 'that filter did not work — you can still upload your photo',
+          busy: null,
+          error: data?.message ?? 'that one did not work — you can still upload your photo',
         } : s))
         return
       }
-      setShot((s) => (s ? { ...s, busy: false, preview: data.image, filterLabel: data.filter?.label ?? null } : s))
+      setShot((s) => (s ? {
+        ...s,
+        busy: null,
+        preview: data.image,
+        filterLabel: data.effect?.label ?? data.filter?.label ?? null,
+      } : s))
     } catch {
-      setShot((s) => (s ? { ...s, busy: false, error: 'could not reach the filter' } : s))
+      setShot((s) => (s ? { ...s, busy: null, error: 'could not reach the photo booth' } : s))
     }
   }, [code, guest, shot])
 
@@ -955,45 +972,76 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
 
           <div className="p-4 pb-6 space-y-3 bg-black/80">
             {shot.error && <p className="text-amber-300 text-sm">{shot.error}</p>}
-            {shot.preview && (
+            {shot.preview && !shot.busy && (
               <p className="text-white/70 text-sm">
-                Filtered{shot.filterLabel ? ` — ${shot.filterLabel}` : ''}. Happy with it?
+                {shot.filterLabel ?? 'Done'} — happy with it?
+              </p>
+            )}
+            {shot.busy && (
+              <p className="text-white/70 text-sm">
+                Working on it… this takes about 15 seconds.
               </p>
             )}
 
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {(link?.face_filters ?? []).map((f) => (
-                <button
-                  key={f.id}
-                  onClick={() => applyFilter(f.id)}
-                  disabled={shot.busy}
-                  className="flex-shrink-0 flex flex-col items-center gap-1 disabled:opacity-50"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element -- reference face */}
-                  <img src={f.preview} alt="" className="w-14 h-14 rounded-full object-cover ring-2 ring-white/30" />
-                  <span className="text-white/80 text-xs">{f.label}</span>
-                </button>
-              ))}
-              {shot.preview && (
-                <button
-                  onClick={() => setShot((s) => (s ? { ...s, preview: null, filterLabel: null } : s))}
-                  disabled={shot.busy}
-                  className="flex-shrink-0 flex flex-col items-center gap-1 disabled:opacity-50"
-                >
-                  <span className="w-14 h-14 rounded-full bg-white/10 ring-2 ring-white/30 flex items-center justify-center text-white text-xs">
-                    Original
-                  </span>
-                  <span className="text-white/80 text-xs">No filter</span>
-                </button>
-              )}
-            </div>
+            {/* Reference faces first — they are the ones with a picture
+                to show. Styles follow as labelled tiles. */}
+            {(link?.face_filters?.length ?? 0) > 0 && (
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {(link?.face_filters ?? []).map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => applyEffect(`filter:${f.id}`, { filter_id: f.id })}
+                    disabled={shot.busy !== null}
+                    className="flex-shrink-0 flex flex-col items-center gap-1 disabled:opacity-40"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- reference face */}
+                    <img
+                      src={f.preview}
+                      alt=""
+                      className={`w-14 h-14 rounded-full object-cover ring-2 ${
+                        shot.busy === `filter:${f.id}` ? 'ring-white animate-pulse' : 'ring-white/30'
+                      }`}
+                    />
+                    <span className="text-white/80 text-xs">Be {f.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
-            {shot.busy && <p className="text-white/60 text-sm">Applying the filter…</p>}
+            {(link?.booth_effects?.length ?? 0) > 0 && (
+              <div className="grid grid-cols-3 gap-2">
+                {(link?.booth_effects ?? []).map((e) => (
+                  <button
+                    key={e.id}
+                    onClick={() => applyEffect(e.id, { effect: e.id })}
+                    disabled={shot.busy !== null}
+                    className={`rounded-lg px-2 py-2 text-left ring-1 disabled:opacity-40 ${
+                      shot.busy === e.id
+                        ? 'bg-white/20 ring-white animate-pulse'
+                        : 'bg-white/10 ring-white/20'
+                    }`}
+                  >
+                    <span className="block text-white text-xs font-medium leading-tight">{e.label}</span>
+                    <span className="block text-white/50 text-[10px] leading-tight mt-0.5">{e.blurb}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {shot.preview && (
+              <button
+                onClick={() => setShot((s) => (s ? { ...s, preview: null, filterLabel: null } : s))}
+                disabled={shot.busy !== null}
+                className="text-white/60 text-xs underline disabled:opacity-40"
+              >
+                Back to my original photo
+              </button>
+            )}
 
             <div className="flex gap-2">
               <button
                 onClick={acceptShot}
-                disabled={shot.busy}
+                disabled={shot.busy !== null}
                 className="flex-1 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50"
                 style={{ backgroundColor: primaryColor }}
               >
@@ -1001,7 +1049,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
               </button>
               <button
                 onClick={() => setShot(null)}
-                disabled={shot.busy}
+                disabled={shot.busy !== null}
                 className="rounded-lg px-4 py-2.5 text-white/80 bg-white/10 disabled:opacity-50"
               >
                 Cancel

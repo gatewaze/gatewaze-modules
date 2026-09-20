@@ -31,7 +31,8 @@ import {
   sanitiseGuestFilename,
   validateMintFile,
 } from '../lib/guest-limits.js';
-import { faceSwapConfigured, runFaceSwap } from '../lib/face-swap.js';
+import { boothEffect, publicEffects } from '../lib/booth-effects.js';
+import { runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -192,7 +193,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Face filters are only offered when the deployment has a provider
     // AND this link allows them — otherwise the guest never sees it.
     let faceFilters: Array<{ id: string; label: string; preview: string }> = [];
-    if (link.allow_face_filter && faceSwapConfigured()) {
+    if (link.allow_face_filter && swapConfigured()) {
       const { data: rows } = await supabase
         .from('events_media_face_filters')
         .select('id, label, source_path')
@@ -228,6 +229,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         max_video_bytes: link.max_video_bytes,
       },
       face_filters: faceFilters,
+      // Style effects need no per-event setup, so they turn on with the
+      // provider — unlike swaps, which need reference faces uploaded.
+      booth_effects: link.allow_face_filter && styleConfigured() ? publicEffects() : [],
       logo_url: link.logo_url && /^https?:\/\//.test(link.logo_url)
         ? link.logo_url
         : link.logo_url
@@ -761,21 +765,22 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   // ────────────────────────────────────────────────────────────────────
-  // POST /public/event-media/links/:code/face-filter
+  // POST /public/event-media/links/:code/booth
   //
-  // Preview-only: swaps the reference face onto the guest's freshly
-  // taken selfie and hands back a TEMPORARY image. Nothing is added to
-  // the gallery here — the guest still has to choose to upload it, and
-  // can always keep their original instead. Somebody's face is being
-  // altered, so this is opt-in per deployment, per link and per tap.
+  // Preview-only: applies one booth effect — a reference-face swap or a
+  // whole-scene restyle — to the guest's freshly taken photo and hands
+  // back a TEMPORARY image. Nothing is added to the gallery here: the
+  // guest still has to choose to upload it, and can always keep their
+  // original instead. Somebody's face is being altered, so this is
+  // opt-in per deployment, per link and per tap.
   // ────────────────────────────────────────────────────────────────────
   async function faceFilter(req: Request, res: Response): Promise<void> {
     const ctx = await resolveLink(req, res, 'facefilter', GUEST_RATE_LIMITS.mintPerIp);
     if (!ctx) return;
     const { link } = ctx;
 
-    if (!link.allow_face_filter || !faceSwapConfigured()) {
-      sendError(res, 404, 'not_available', 'filters are not enabled for this link');
+    if (!link.allow_face_filter || (!styleConfigured() && !swapConfigured())) {
+      sendError(res, 404, 'not_available', 'the photo booth is not enabled for this link');
       return;
     }
 
@@ -783,15 +788,29 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const clientId = typeof body['client_id'] === 'string' && UUID_RE.test(body['client_id'])
       ? body['client_id']
       : null;
+    // Two shapes of request, one handler: `filter_id` puts a reference
+    // face on the guest, `effect` restyles the whole scene. Exactly one
+    // must be present, so a malformed request cannot silently do the
+    // other thing.
     const filterId = typeof body['filter_id'] === 'string' && UUID_RE.test(body['filter_id'])
       ? body['filter_id']
       : null;
+    const effect = typeof body['effect'] === 'string' ? boothEffect(body['effect']) : null;
     // The guest's photo arrives as a data URL from the camera step so
     // it never has to be published before they have seen the result.
     const dataUrl = typeof body['image'] === 'string' ? body['image'] : '';
     const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
-    if (!clientId || !filterId || !m) {
-      sendError(res, 400, 'invalid_request', 'client_id, filter_id and a base64 image are required');
+    if (!clientId || !m || (filterId === null) === (effect === null)) {
+      sendError(res, 400, 'invalid_request',
+        'client_id, a base64 image and exactly one of effect or filter_id are required');
+      return;
+    }
+    if (effect && (effect.kind !== 'style' || !effect.prompt || !styleConfigured())) {
+      sendError(res, 404, 'not_available', 'that effect is not available');
+      return;
+    }
+    if (filterId && !swapConfigured()) {
+      sendError(res, 404, 'not_available', 'face swaps are not available');
       return;
     }
     const mimeType = m[1]!;
@@ -806,14 +825,18 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (!(await checkRate(res, guestRateKey('facefilter', clientId), GUEST_RATE_LIMITS.faceFilterPerClient))) return;
     if (!(await checkRate(res, guestRateKey('facefilter_link', link.short_code), GUEST_RATE_LIMITS.faceFilterPerLinkHourly))) return;
 
-    const { data: filter } = await supabase
-      .from('events_media_face_filters')
-      .select('id, label, source_path, is_active, event_id')
-      .eq('id', filterId)
-      .maybeSingle();
-    if (!filter || !filter.is_active || filter.event_id !== link.event_id) {
-      sendError(res, 404, 'not_available', 'unknown filter');
-      return;
+    let filter: { id: string; label: string; source_path: string } | null = null;
+    if (filterId) {
+      const { data } = await supabase
+        .from('events_media_face_filters')
+        .select('id, label, source_path, is_active, event_id')
+        .eq('id', filterId)
+        .maybeSingle();
+      if (!data || !data.is_active || data.event_id !== link.event_id) {
+        sendError(res, 404, 'not_available', 'unknown filter');
+        return;
+      }
+      filter = data;
     }
 
     // Both images must be fetchable by the provider. The guest's photo
@@ -831,22 +854,29 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
 
     try {
-      const result = await runFaceSwap(toPublicUrl(filter.source_path), toPublicUrl(scratchPath));
+      const result = filter
+        ? await runSwap(toPublicUrl(filter.source_path), toPublicUrl(scratchPath))
+        : await runStyle(toPublicUrl(scratchPath), effect!.prompt!);
       if (!result.ok) {
         const status = result.error === 'no_face' ? 422 : result.error === 'timeout' ? 504 : 502;
         if (result.error !== 'no_face') {
-          logger.warn('face swap failed', { error: result.error, detail: result.detail });
+          logger.warn('booth effect failed', {
+            effect: filter ? `swap:${filter.id}` : effect!.id,
+            error: result.error,
+            detail: result.detail,
+          });
         }
         sendError(res, status, result.error, result.error === 'no_face'
           ? 'we could not find a face in that photo'
-          : 'the filter could not be applied right now');
+          : 'that effect could not be applied right now');
         return;
       }
 
       // Hand the preview back inline: it exists only in the guest's
       // browser until they choose to upload it.
       res.status(200).json({
-        filter: { id: filter.id, label: filter.label },
+        filter: filter ? { id: filter.id, label: filter.label } : null,
+        effect: effect ? { id: effect.id, label: effect.label } : null,
         image: `data:${result.contentType};base64,${Buffer.from(result.image).toString('base64')}`,
       });
     } finally {
@@ -896,5 +926,8 @@ export function mountGuestRoutes(router: Router, routes: ReturnType<typeof creat
   // a query string ends up in access logs and browser history.
   router.post('/public/event-media/links/:code/mine', routes.listMine);
   router.post('/public/event-media/links/:code/mine/delete', routes.deleteMine);
+  // `/booth` is the current spelling; `/face-filter` is kept because
+  // phones that already have the page open are still posting to it.
+  router.post('/public/event-media/links/:code/booth', routes.faceFilter);
   router.post('/public/event-media/links/:code/face-filter', routes.faceFilter);
 }

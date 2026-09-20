@@ -22,7 +22,7 @@
 
 import type { Request, Response, Router } from 'express';
 import { generateShortCode } from '../lib/guest-limits.js';
-import { faceSwapStatus } from '../lib/face-swap.js';
+import { boothStatus } from '../lib/booth-provider.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -273,7 +273,7 @@ export function createAdminLinksRoutes(deps: AdminLinksDeps) {
       .eq('event_id', eventId)
       .order('sort_order', { ascending: true });
     if (error) { sendError(res, 500, 'list_failed', error.message); return; }
-    res.status(200).json({ items: data ?? [], provider: faceSwapStatus() });
+    res.status(200).json({ items: data ?? [], provider: boothStatus() });
   }
 
   async function createFilter(req: RequestWithUser, res: Response): Promise<void> {
