@@ -45,6 +45,7 @@ const MAX_OUTPUT_BYTES = 25 * 1024 * 1024;
 const DEFAULT_STYLE_MODEL = 'fal-ai/nano-banana/edit';
 const DEFAULT_SWAP_MODEL = 'fal-ai/face-swap';
 const DEFAULT_DEPTH_MODEL = 'fal-ai/image-preprocessors/depth-anything/v2';
+const DEFAULT_CUTOUT_MODEL = 'fal-ai/birefnet/v2';
 
 /**
  * fal model slugs reach the request URL, so they are constrained to the
@@ -229,6 +230,41 @@ async function runFal(modelSlug: string, input: Record<string, unknown>): Promis
 export async function runDepth(imageUrl: string): Promise<BoothResult> {
   if (!falEnabled()) return { ok: false, error: 'not_configured' };
   return runFal(model('BOOTH_DEPTH_MODEL', DEFAULT_DEPTH_MODEL), { image_url: imageUrl });
+}
+
+/**
+ * The people, cut out with a soft alpha edge.
+ *
+ * Half of the projector's 3D effect: the near layer. Paired with the
+ * plate below, the two can be moved at different rates to give real
+ * parallax — as opposed to displacing one flat image by a depth map,
+ * which smears at every edge because there is nothing behind the
+ * subject to reveal.
+ */
+export async function runCutout(imageUrl: string): Promise<BoothResult> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  return runFal(model('BOOTH_CUTOUT_MODEL', DEFAULT_CUTOUT_MODEL), { image_url: imageUrl });
+}
+
+/**
+ * The scene as if nobody had been standing in it — the far layer.
+ *
+ * This is the piece that makes parallax honest. When the camera drifts
+ * and the people move against the background, what is revealed behind
+ * them is real reconstructed scene rather than stretched neighbouring
+ * pixels.
+ */
+export async function runPlate(imageUrl: string): Promise<BoothResult> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  return runFal(model('BOOTH_STYLE_MODEL', DEFAULT_STYLE_MODEL), {
+    prompt:
+      'Remove the people from this photograph completely. Reconstruct the scene behind them ' +
+      'plausibly and seamlessly, continuing the walls, furniture, floor and background exactly as ' +
+      'they would appear with nobody standing there. Keep the camera angle, framing, lighting, ' +
+      'colour and every remaining detail identical. The result must contain no people at all.',
+    image_urls: [imageUrl],
+    output_format: 'jpeg',
+  });
 }
 
 /** Restyle `imageUrl` with a catalogue prompt, keeping the faces. */
