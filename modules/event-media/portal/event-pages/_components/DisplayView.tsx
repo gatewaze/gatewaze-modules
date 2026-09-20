@@ -45,6 +45,8 @@ const POLL_MS = 10_000
 const MAX_PHOTOS = 500
 const MENU_HIDE_MS = 4_000
 const LIVE_STATUS_POLL_MS = 2_000
+// Cadence once the stream host looks absent (see the poll loop).
+const LIVE_STATUS_SLOW_MS = 20_000
 const LIVE_DEAD_MS = 4_000
 const DEFAULT_WHEP_URL = 'http://localhost:8889/live/whep'
 const DEFAULT_STATUS_URL = 'http://localhost:9997/v3/paths/get/live'
@@ -668,10 +670,26 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     if (settings.liveSource !== 'whep') return
     if (settings.liveOverride === 'photos') { teardownLive(); return }
     let cancelled = false
-    const interval = setInterval(async () => {
+    // Back off once the control API is clearly absent. On a projector
+    // with no MediaMTX running, a fixed 2 s poll throws a failed fetch
+    // into the console ~1,800 times an hour (seen in the live check
+    // 2026-09-20) — harmless but alarming to anyone who opens devtools,
+    // and pointless load. Recovers to the fast cadence the moment the
+    // stream host appears.
+    let misses = 0
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const schedule = () => {
+      if (cancelled) return
+      const delay = misses >= 3 ? LIVE_STATUS_SLOW_MS : LIVE_STATUS_POLL_MS
+      timer = setTimeout(tick, delay)
+    }
+
+    const tick = async () => {
       if (cancelled) return
       try {
         const res = await fetch(settings.statusUrl, { cache: 'no-store' })
+        misses = 0
         const ready = res.ok ? Boolean((await res.json())?.ready) : false
         if (ready || settings.liveOverride === 'live') {
           if (!pcRef.current) void connectWhep()
@@ -681,6 +699,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       } catch {
         // Status API unreachable: try the WHEP handshake directly when
         // forced live; in auto mode treat as absent.
+        misses += 1
         if (settings.liveOverride === 'live' && !pcRef.current) void connectWhep()
         else if (settings.liveOverride === 'auto' && pcRef.current) {
           // watchdog below decides based on frames
@@ -690,8 +709,11 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       if (pcRef.current && liveVisible && Date.now() - lastFrameAtRef.current > LIVE_DEAD_MS) {
         teardownLive()
       }
-    }, LIVE_STATUS_POLL_MS)
-    return () => { cancelled = true; clearInterval(interval) }
+      schedule()
+    }
+
+    void tick()
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
   }, [settings.liveSource, settings.liveOverride, settings.statusUrl, connectWhep, teardownLive, liveVisible])
 
   const startWebcam = useCallback(async () => {
