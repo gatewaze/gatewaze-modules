@@ -154,6 +154,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   // 2026-09-19 phone test showed (grey wash on white).
   const [mounted, setMounted] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  const takeoverRef = useRef<HTMLDivElement | null>(null)
+  // Mirrors the render-time canUpload so the backdrop effect can read
+  // it without depending on render order.
+  const canUploadRef = useRef(false)
   useEffect(() => {
     setMounted(true)
     const mq = window.matchMedia('(max-width: 767px)')
@@ -162,6 +166,35 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     mq.addEventListener?.('change', apply)
     return () => mq.removeEventListener?.('change', apply)
   }, [])
+
+  // While the mobile takeover is up, hide the event page itself but
+  // keep the brand's animated gradient. That gradient is a decorative
+  // fixed body-child (pointer-events:none, z-0), so everything EXCEPT
+  // those layers and our own portal gets visibility:hidden — which
+  // leaves the backdrop intact without us having to know anything
+  // about the brand's markup. visibility, not display, so the page
+  // does not reflow or lose its scroll position underneath.
+  useEffect(() => {
+    if (!(canUploadRef.current && mounted && isMobile)) return
+    const node = takeoverRef.current
+    if (!node) return
+    const touched: Array<[HTMLElement, string]> = []
+    for (const el of Array.from(document.body.children)) {
+      if (!(el instanceof HTMLElement)) continue
+      if (el === node || el.contains(node)) continue
+      const cs = getComputedStyle(el)
+      const decorative = cs.position === 'fixed' && cs.pointerEvents === 'none'
+      if (decorative) continue
+      touched.push([el, el.style.visibility])
+      el.style.visibility = 'hidden'
+    }
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      for (const [el, prev] of touched) el.style.visibility = prev
+      document.body.style.overflow = prevOverflow
+    }
+  })
 
   // ── Code + guest bootstrap ────────────────────────────────────────
 
@@ -525,6 +558,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   }
 
   const canUpload = Boolean(code && link)
+  canUploadRef.current = canUpload
   const needsName = canUpload && link!.settings.require_name && !guest
   const activeCount = queue.filter((q) => q.status === 'waiting' || q.status === 'uploading' || q.status === 'processing').length
   const failedItems = queue.filter((q) => q.status === 'failed')
@@ -853,11 +887,13 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
 
   if (mobileTakeover) {
     return createPortal(
-      // Deliberately NO background: the event page paints its animated
-      // gradient as its own fixed body-child layer beneath this one, so
-      // a transparent takeover keeps the brand background visible (a
-      // solid colour here flattened it to plain navy — Dan, 2026-09-20).
-      <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain">
+      // No background of its own: the page content underneath is
+      // hidden by the effect above, leaving only the brand's animated
+      // gradient layer visible behind the upload UI. Painting a solid
+      // colour here instead flattened it to plain navy, and leaving it
+      // transparent without hiding the content showed the event hero
+      // straight through (both reported by Dan, 2026-09-20).
+      <div ref={takeoverRef} className="fixed inset-0 z-50 overflow-y-auto overscroll-contain">
         {pageContent}
       </div>,
       document.body,
