@@ -1057,8 +1057,6 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               />
             )}
 
-            </Row>
-
           </div>
         </div>
       </div>
