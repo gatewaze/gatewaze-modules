@@ -376,6 +376,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       variants,
       guest_name: meta['source'] === 'guest' && typeof meta['guest_name'] === 'string' ? meta['guest_name'] : null,
       card: meta['card'] && typeof meta['card'] === 'object' ? meta['card'] : null,
+      // 'booth' | 'day' | 'seed'. Older rows predate this and read as
+      // 'seed', which is what they are.
+      album: typeof meta['album'] === 'string' ? meta['album'] : 'seed',
       created_at: r.created_at,
     };
   }
@@ -531,6 +534,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         guest_name: guestName ?? '',
         client_id: clientId,
         captured: v.file.captured,
+        booth: v.file.booth,
         exp: nowSeconds + TICKET_TTL_SECONDS,
       };
 
@@ -572,6 +576,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         guest_name: p.guest_name || null,
         client_id: p.client_id,
         captured: p.captured,
+        // Which stream this belongs to. The booth's posters are shown
+        // on their own rather than mixed into the day's photos.
+        album: p.booth ? 'booth' : 'day',
       },
     };
   }

@@ -165,3 +165,52 @@ describe('hidden photos', () => {
     expect(visible({ hidden: 1 })).toBe(true);
   });
 });
+
+describe('display pool', () => {
+  // Mirrors poolFor in DisplayView: the seed selfies exist so the
+  // screen is not empty before anyone uploads, and retreat as real
+  // photos arrive.
+  const POOL_TARGET = 20;
+  const poolFor = (all: Array<{ id: string; album?: string }>, mode: 'booth' | 'day') => {
+    const booth = all.filter((p) => p.album === 'booth');
+    if (mode === 'booth') return booth;
+    const day = all.filter((p) => p.album === 'day');
+    const seed = all.filter((p) => p.album !== 'booth' && p.album !== 'day');
+    return [...day, ...seed.slice(0, Math.max(0, POOL_TARGET - day.length))];
+  };
+  const make = (n: number, album?: string) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${album}-${i}`, album }));
+
+  it('pads with seeds up to twenty while uploads are scarce', () => {
+    const all = [...make(1, 'day'), ...make(50, 'seed')];
+    const pool = poolFor(all, 'day');
+    expect(pool.length).toBe(20);
+    expect(pool.filter((p) => p.album === 'day').length).toBe(1);
+    expect(pool.filter((p) => p.album === 'seed').length).toBe(19);
+  });
+
+  it('splits evenly at ten uploads', () => {
+    const pool = poolFor([...make(10, 'day'), ...make(50, 'seed')], 'day');
+    expect(pool.filter((p) => p.album === 'day').length).toBe(10);
+    expect(pool.filter((p) => p.album === 'seed').length).toBe(10);
+  });
+
+  it('drops the seeds entirely once there are twenty real photos', () => {
+    const pool = poolFor([...make(25, 'day'), ...make(50, 'seed')], 'day');
+    expect(pool.length).toBe(25);
+    expect(pool.some((p) => p.album === 'seed')).toBe(false);
+  });
+
+  it('never shows booth posters in the day stream', () => {
+    const all = [...make(5, 'day'), ...make(5, 'booth'), ...make(5, 'seed')];
+    expect(poolFor(all, 'day').some((p) => p.album === 'booth')).toBe(false);
+    expect(poolFor(all, 'booth').every((p) => p.album === 'booth')).toBe(true);
+  });
+
+  it('treats rows predating albums as seeds', () => {
+    // Older uploads carry no album at all and are exactly what the
+    // seed stream is for.
+    const pool = poolFor([{ id: 'old' }, { id: 'old2', album: undefined }], 'day');
+    expect(pool.length).toBe(2);
+  });
+});

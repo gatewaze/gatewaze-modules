@@ -117,6 +117,8 @@ type QueueStatus = 'waiting' | 'uploading' | 'processing' | 'done' | 'failed'
 interface QueueItem {
   key: string
   file: File
+  /** Booth output — goes in its own album, not the day's photos. */
+  booth?: boolean
   status: QueueStatus
   progress: number
   error?: string
@@ -531,6 +533,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
                 mime_type: effectiveMime(q.file),
                 bytes: q.file.size,
                 captured: q.key.startsWith('cam-'),
+                booth: Boolean(q.booth),
               })),
             }),
           })
@@ -571,12 +574,13 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     }
   }, [code, guest, patchItem, putMinted, flushCompletes])
 
-  const enqueueFiles = useCallback((files: FileList | null, camera: boolean) => {
+  const enqueueFiles = useCallback((files: FileList | null, camera: boolean, booth = false) => {
     if (!files || files.length === 0) return
     const stamp = Date.now()
     const fresh: QueueItem[] = Array.from(files).map((file, i) => ({
       key: `${camera ? 'cam' : 'pick'}-${stamp}-${i}-${file.name}`,
       file,
+      booth,
       status: 'waiting',
       progress: 0,
     }))
@@ -701,11 +705,12 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     if (!shot) return
     const chosen = shot.preview ?? shot.original
     const blob = await (await fetch(chosen)).blob()
-    const name = shot.preview ? `filtered-${Date.now()}.jpg` : `photo-${Date.now()}.jpg`
+    const fromBooth = Boolean(shot.preview)
+    const name = fromBooth ? `filtered-${Date.now()}.jpg` : `photo-${Date.now()}.jpg`
     const file = new File([blob], name, { type: 'image/jpeg' })
     const dt = new DataTransfer()
     dt.items.add(file)
-    enqueueFiles(dt.files, true)
+    enqueueFiles(dt.files, true, fromBooth)
     setShot(null)
   }, [shot, enqueueFiles])
 

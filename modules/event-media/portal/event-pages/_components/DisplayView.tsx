@@ -52,6 +52,8 @@ interface DisplayItem {
   guest_name: string | null
   /** Browse-card copy, generated per photo. Absent until it lands. */
   card?: CardCopy | null
+  /** 'booth' | 'day' | 'seed'. Older rows read as 'seed'. */
+  album?: string
   created_at: string
 }
 
@@ -73,6 +75,8 @@ interface DisplaySettings {
   /** Fill 16:9 letterbox bars with a blurred copy of the photo. */
   fillBars: boolean
   /** Background-melt half of the cinematic effect. */
+  /** Which stream to show: the day's photos, or the booth's posters. */
+  stream: 'day' | 'booth'
   /** How pronounced the 3D relief is. 0 is a flat camera move. */
   depthStrength: number
   /** @deprecated cinematic is GPU-only; kept so stored settings parse. */
@@ -103,6 +107,7 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   youtubeId: '',
   ambient: true,
   fillBars: true,
+  stream: 'day',
   depthStrength: 1,
   subjectPop: true,
   webgpu: false,
@@ -136,6 +141,33 @@ function rankFor(id: string): boolean {
   let h = 0
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
   return Math.abs(h) % 3 === 0
+}
+
+/**
+ * How many seed photos to pad with.
+ *
+ * The seed selfies exist so the screen is not empty before anyone has
+ * uploaded anything, and they should retreat as real photos of the day
+ * arrive. One upload leaves nineteen selfies; ten leaves ten; at twenty
+ * the seeds are gone entirely.
+ */
+const POOL_TARGET = 20
+
+/**
+ * Split the incoming media into the stream a mode wants.
+ *
+ * booth mode  the booth's posters only
+ * otherwise   the day's photos, padded with seed selfies up to
+ *             POOL_TARGET while there are not yet enough real ones
+ */
+function poolFor(all: DisplayItem[], mode: 'booth' | 'day'): DisplayItem[] {
+  const booth = all.filter((p) => p.album === 'booth')
+  if (mode === 'booth') return booth
+  const day = all.filter((p) => p.album === 'day')
+  const seed = all.filter((p) => p.album !== 'booth' && p.album !== 'day')
+  const padding = Math.max(0, POOL_TARGET - day.length)
+  // Day photos first so the newest real ones lead.
+  return [...day, ...seed.slice(0, padding)]
 }
 
 function slideAnimation(effect: SlideEffect, photoId: string, intervalMs: number): string {
@@ -232,6 +264,15 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const [settings, setSettings] = useState<DisplaySettings>(DEFAULT_SETTINGS)
   const [linkInfo, setLinkInfo] = useState<{ eventId: string | null; logoUrl: string | null; identifier: string | null } | null>(null)
   const [photos, setPhotos] = useState<DisplayItem[]>([])
+  // Mirrored so the upload handler can pool without depending on
+  // settings, which would re-create it on every unrelated change.
+  const streamRef = useRef<'day' | 'booth'>('day')
+
+  // What the projector is actually showing, so counts and layout agree
+  // with what advance() walks. Declared here, above every hook that
+  // names it in a dependency array — a dependency array is evaluated
+  // during render, so a later const would throw before anything paints.
+  const pool = poolFor(photos, settings.stream)
   const photosRef = useRef<DisplayItem[]>([])
   const freshQueueRef = useRef<DisplayItem[]>([])
   const newestRef = useRef<string | null>(null)
@@ -303,7 +344,9 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
   const ingest = useCallback((incoming: DisplayItem[], fresh: boolean) => {
     // Defensive: never let a non-photo reach the projector even if the
-    // API were to return one.
+    // API were to return one. Booth posters are a separate stream and
+    // are filtered by the pool builder below, not here, so they still
+    // arrive and can be shown in booth mode.
     const clean = incoming.filter((i) => i.kind === 'photo')
     if (clean.length === 0) return
     setPhotos((prev) => {
@@ -318,7 +361,9 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         setFreshArrivals((n) => n + 1)
       }
       const merged = [...add, ...prev].slice(0, MAX_PHOTOS)
-      photosRef.current = merged
+      // The projector draws from the pooled stream, not everything that
+      // has ever been uploaded.
+      photosRef.current = poolFor(merged, streamRef.current)
       const newest = merged[0]?.created_at
       if (newest && (!newestRef.current || newest > newestRef.current)) newestRef.current = newest
       return merged
@@ -424,7 +469,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     return () => clearInterval(interval)
     // slideTick restarts the timer after an interrupt so a photo cut to
     // early still gets its full time on screen.
-  }, [settings.mode, settings.intervalMs, advance, current, photos.length, slideTick])
+  }, [settings.mode, settings.intervalMs, advance, current, pool.length, slideTick])
 
   // Cut to new arrivals immediately. The poll finds them within ~10 s;
   // without this they would then wait out the rest of the current
@@ -754,6 +799,15 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
   // Both modes drive the layered renderer; wedflix adds the overlay.
+  useEffect(() => {
+    streamRef.current = settings.stream
+    // Switching stream re-pools from everything already loaded.
+    setPhotos((all) => {
+      photosRef.current = poolFor(all, settings.stream)
+      return all
+    })
+  }, [settings.stream])
+
   const wedflixActive = settings.effect === 'wedflix'
   const cinematicActive = settings.effect === 'cinematic' || wedflixActive
   const cardCopy = (current?.card ?? null) as CardCopy | null
@@ -848,7 +902,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               <span>{current.guest_name}</span>
             </div>
           )}
-          {photos.length === 0 && (
+          {pool.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-white/60 gap-6">
               {qrDataUrl && (
                 // eslint-disable-next-line @next/next/no-img-element -- data-URL QR
@@ -862,8 +916,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         <div
           className="absolute inset-0 grid gap-1 p-1"
           style={{
-            gridTemplateColumns: `repeat(${wallLayoutFor(Math.max(photos.length, 1)).cols}, 1fr)`,
-            gridTemplateRows: `repeat(${wallLayoutFor(Math.max(photos.length, 1)).rows}, 1fr)`,
+            gridTemplateColumns: `repeat(${wallLayoutFor(Math.max(pool.length, 1)).cols}, 1fr)`,
+            gridTemplateRows: `repeat(${wallLayoutFor(Math.max(pool.length, 1)).rows}, 1fr)`,
           }}
         >
           {wallCells.map((cell, i) => (
@@ -888,7 +942,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               )}
             </div>
           ))}
-          {photos.length === 0 && (
+          {pool.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-white/60 gap-6">
               {qrDataUrl && (
                 // eslint-disable-next-line @next/next/no-img-element -- data-URL QR
@@ -1024,6 +1078,17 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               <Chip on={settings.instantNew} onClick={() => updateSettings({ instantNew: !settings.instantNew })}>
                 Show new instantly
               </Chip>
+            </Row>
+
+            <Row label="Showing">
+              {([
+                ['day', "The day"],
+                ['booth', 'Photo booth'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.stream === val} onClick={() => updateSettings({ stream: val })}>
+                  {label}
+                </Chip>
+              ))}
             </Row>
 
             <Row label="Look">
