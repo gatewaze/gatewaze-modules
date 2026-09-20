@@ -63,6 +63,8 @@ interface GalleryItem {
   variants: Record<string, string>
   guest_name: string | null
   created_at: string
+  /** Only present in the "yours" listing: awaiting admin approval. */
+  pending?: boolean
 }
 
 type QueueStatus = 'waiting' | 'uploading' | 'processing' | 'done' | 'failed'
@@ -129,6 +131,18 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [galleryLoading, setGalleryLoading] = useState(false)
   const [lightbox, setLightbox] = useState<GalleryItem | null>(null)
+
+  // "Yours" view: a guest's own uploads, so a wrong photo can be
+  // removed. Ownership is the device's client_id.
+  const [tab, setTab] = useState<'all' | 'mine'>('all')
+  // Mirrored in a ref so the upload-completion callback can check the
+  // active tab without being re-created on every tab change.
+  const tabRef = useRef<'all' | 'mine'>('all')
+  useEffect(() => { tabRef.current = tab }, [tab])
+  const [mine, setMine] = useState<GalleryItem[]>([])
+  const [mineLoading, setMineLoading] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
@@ -234,6 +248,55 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     return () => clearInterval(interval)
   }, [link, loadGallery])
 
+  // ── "Yours": the guest's own uploads ──────────────────────────────
+
+  const loadMine = useCallback(async () => {
+    if (!code || !guest) return
+    setMineLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/mine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: guest.client_id }),
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      setMine(data.items ?? [])
+    } catch {
+      // transient — the tab can be reopened
+    } finally {
+      setMineLoading(false)
+    }
+  }, [code, guest])
+
+  useEffect(() => {
+    if (tab === 'mine') void loadMine()
+  }, [tab, loadMine])
+
+  const deleteMine = useCallback(async (id: string) => {
+    if (!code || !guest) return
+    setDeleting(id)
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/mine/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: guest.client_id, media_id: id }),
+      })
+      if (res.ok) {
+        // Drop it from both lists straight away rather than waiting
+        // for the next poll.
+        setMine((prev) => prev.filter((i) => i.id !== id))
+        setItems((prev) => prev.filter((i) => i.id !== id))
+        setLightbox((l) => (l && l.id === id ? null : l))
+      }
+    } catch {
+      // leave the item in place; the guest can try again
+    } finally {
+      setDeleting(null)
+      setConfirmDelete(null)
+    }
+  }, [code, guest])
+
   // ── Upload queue ──────────────────────────────────────────────────
 
   // queueRef is the SYNCHRONOUS source of truth; React state mirrors it
@@ -278,6 +341,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
             }
           })
           loadGallery() // fresh uploads appear immediately
+          if (tabRef.current === 'mine') void loadMine()
         } else {
           // put them back; the timer retries (complete is idempotent)
           pendingTicketsRef.current = [...batch, ...pendingTicketsRef.current]
@@ -613,11 +677,109 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       {/* Gallery */}
       {link?.settings.show_gallery && (
         <div>
-          <h2 className={`text-lg font-semibold mb-3 ${text}`}>Photos so far</h2>
-          {items.length === 0 && !galleryLoading && (
+          <div className="flex items-center gap-2 mb-3">
+            <h2 className={`text-lg font-semibold ${text}`}>
+              {tab === 'all' ? 'Photos so far' : 'Your uploads'}
+            </h2>
+            <span className="flex-1" />
+            {guest && (
+              <div className="flex gap-1">
+                {([
+                  ['all', 'Everyone'],
+                  ['mine', 'Yours'],
+                ] as const).map(([val, label]) => (
+                  <button
+                    key={val}
+                    onClick={() => setTab(val)}
+                    className={`rounded-lg px-3 py-1 text-sm ${
+                      tab === val
+                        ? 'bg-white text-gray-900 font-medium'
+                        : darkMode ? 'bg-white/10 text-white/80' : 'bg-black/5 text-gray-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {tab === 'mine' && (
+            <>
+              {mineLoading && mine.length === 0 && (
+                <p className={`text-sm ${subText}`}>Loading your uploads…</p>
+              )}
+              {!mineLoading && mine.length === 0 && (
+                <p className={`text-sm ${subText}`}>
+                  You haven&apos;t added anything yet. Anything you upload from this device shows here,
+                  and you can remove it if it was the wrong one.
+                </p>
+              )}
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1.5">
+                {mine.map((item) => (
+                  <div key={item.id} className="relative aspect-square overflow-hidden rounded-lg bg-gray-200">
+                    <button className="absolute inset-0" onClick={() => setLightbox(item)}>
+                      {item.kind === 'video' ? (
+                        <>
+                          <video src={item.url} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+                          <span className="absolute inset-0 flex items-center justify-center text-white text-2xl drop-shadow">▶</span>
+                        </>
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element -- module gallery grid
+                        <img
+                          src={item.variants?.thumb || item.url}
+                          alt=""
+                          loading="lazy"
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+                    </button>
+                    {item.pending && (
+                      <span className="absolute top-1 left-1 rounded bg-amber-500/90 text-white text-[10px] px-1.5 py-0.5">
+                        awaiting approval
+                      </span>
+                    )}
+                    {confirmDelete === item.id ? (
+                      <div className="absolute inset-0 bg-black/75 flex flex-col items-center justify-center gap-1.5 p-2">
+                        <span className="text-white text-xs text-center">Remove this?</span>
+                        <div className="flex gap-1.5">
+                          <button
+                            className="rounded bg-red-600 text-white text-xs px-2.5 py-1 disabled:opacity-60"
+                            disabled={deleting === item.id}
+                            onClick={() => deleteMine(item.id)}
+                          >
+                            {deleting === item.id ? 'Removing…' : 'Remove'}
+                          </button>
+                          <button
+                            className="rounded bg-white/20 text-white text-xs px-2.5 py-1"
+                            onClick={() => setConfirmDelete(null)}
+                          >
+                            Keep
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        aria-label="Remove this upload"
+                        onClick={() => setConfirmDelete(item.id)}
+                        className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80"
+                      >
+                        {/* line-style trash icon */}
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {tab === 'all' && items.length === 0 && !galleryLoading && (
             <p className={`text-sm ${subText}`}>No photos yet — be the first!</p>
           )}
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1.5">
+          <div className={`grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1.5 ${tab === 'all' ? '' : 'hidden'}`}>
             {items.map((item) => (
               <button
                 key={item.id}
@@ -646,7 +808,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
               </button>
             ))}
           </div>
-          {nextCursor && (
+          {tab === 'all' && nextCursor && (
             <div className="mt-4 text-center">
               <button
                 onClick={() => loadGallery(nextCursor)}

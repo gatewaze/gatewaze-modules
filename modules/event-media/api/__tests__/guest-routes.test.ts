@@ -46,6 +46,7 @@ function makeSupabase(config) {
   const state = {
     inserted: [],
     removed: [],
+    deleted: [],
     rpcCalls: [],
     invoked: [],
     signedUploadErr: config.signedUploadErr ?? null,
@@ -57,10 +58,17 @@ function makeSupabase(config) {
       select: () => b,
       eq: () => b,
       gt: () => b,
+      gte: () => b,
       like: () => b,
       or: () => b,
+      contains: () => b,
       order: () => b,
       limit: () => b,
+      delete: () => {
+        state.deleted.push(table);
+        const d = { eq: () => d, then: (resolve) => resolve({ data: null, error: null }) };
+        return d;
+      },
       maybeSingle: () => {
         if (table === 'events_media_upload_links') return Promise.resolve({ data: config.link ?? null, error: null });
         if (table === 'events') return Promise.resolve({ data: config.event ?? null, error: null });
@@ -391,6 +399,96 @@ describe('mintUploads', () => {
     const routes = createGuestRoutes(deps);
     const res = mockRes();
     await routes.mintUploads(req({ body: { client_id: CLIENT_ID, guest_name: 'C', files: [{ filename: 'a.jpg', mime_type: 'image/jpeg', bytes: 10 }] } }), res);
+    expect(res.statusCode).toBe(429);
+  });
+});
+
+describe('mine (a guest managing their own uploads)', () => {
+  const OWNED = {
+    id: '77777777-2222-3333-4444-555555555555',
+    storage_path: `event/${EVENT_ID}/x/mine.jpg`,
+    mime_type: 'image/jpeg',
+    bytes: 100, width: null, height: null,
+    variants: { thumb: `event/${EVENT_ID}/x/variants/thumb.jpg` },
+    metadata: { source: 'guest', client_id: CLIENT_ID, guest_name: 'Dan' },
+    host_kind: 'event', host_id: EVENT_ID, is_approved: true,
+    created_at: '2026-09-20T10:00:00.000Z',
+  };
+
+  it('requires a UUID client_id', async () => {
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.listMine(req({ body: { client_id: 'nope' } }), res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('lists the caller’s own uploads and flags pending ones', async () => {
+    const pending = { ...OWNED, id: '88888888-2222-3333-4444-555555555555', is_approved: false };
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, mediaRows: [OWNED, pending] });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.listMine(req({ body: { client_id: CLIENT_ID } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.items[0].pending).toBe(false);
+    expect(res.body.items[1].pending).toBe(true);
+    // The credential is never echoed back to the page.
+    expect(JSON.stringify(res.body)).not.toContain(CLIENT_ID);
+  });
+
+  it('deletes a row the caller owns, and its stored variants', async () => {
+    const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: OWNED });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.deleteMine(req({ body: { client_id: CLIENT_ID, media_id: OWNED.id } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.deleted).toBe(OWNED.id);
+    expect(supabase.state.removed).toContain(OWNED.storage_path);
+    expect(supabase.state.removed).toContain(OWNED.variants.thumb);
+  });
+
+  it('refuses another guest’s upload', async () => {
+    const theirs = { ...OWNED, metadata: { source: 'guest', client_id: '99999999-1111-4111-8111-111111111111' } };
+    const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: theirs });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.deleteMine(req({ body: { client_id: CLIENT_ID, media_id: OWNED.id } }), res);
+    expect(res.statusCode).toBe(404);
+    expect(supabase.state.removed).toHaveLength(0);
+  });
+
+  it('refuses admin-uploaded media even with a matching client_id', async () => {
+    const adminRow = { ...OWNED, metadata: { client_id: CLIENT_ID } }; // no source:'guest'
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: adminRow });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.deleteMine(req({ body: { client_id: CLIENT_ID, media_id: OWNED.id } }), res);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses media belonging to a different event', async () => {
+    const otherEvent = { ...OWNED, host_id: '12121212-3434-4545-8656-767878789090' };
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: otherEvent });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.deleteMine(req({ body: { client_id: CLIENT_ID, media_id: OWNED.id } }), res);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('404s a missing row rather than leaking that it is absent', async () => {
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: null });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.deleteMine(req({ body: { client_id: CLIENT_ID, media_id: OWNED.id } }), res);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('rate-limits deletes per client', async () => {
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: OWNED, denyRateKeys: [`delete:${CLIENT_ID}`] });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.deleteMine(req({ body: { client_id: CLIENT_ID, media_id: OWNED.id } }), res);
     expect(res.statusCode).toBe(429);
   });
 });
