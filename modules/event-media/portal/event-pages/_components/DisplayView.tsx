@@ -70,6 +70,8 @@ interface DisplaySettings {
   /** Fill 16:9 letterbox bars with a blurred copy of the photo. */
   fillBars: boolean
   /** Background-melt half of the cinematic effect. */
+  /** How pronounced the 3D relief is. 0 is a flat camera move. */
+  depthStrength: number
   /** @deprecated cinematic is GPU-only; kept so stored settings parse. */
   subjectPop: boolean
   /** Opt-in GPU backend for the models (see ai-pipeline note). */
@@ -98,6 +100,7 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   youtubeId: '',
   ambient: true,
   fillBars: true,
+  depthStrength: 1,
   subjectPop: true,
   webgpu: false,
   order: 'newest',
@@ -797,7 +800,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             <div className="absolute inset-0">
               <CinematicPhoto
                 src={displaySrc(current)}
-                analysis={null}
+                depthSrc={current.variants?.depth ?? null}
+                depthStrength={settings.depthStrength ?? 1}
                 durationMs={Math.max(settings.intervalMs, 2000)}
                 className="absolute inset-0 w-full h-full"
               />
@@ -961,9 +965,27 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             </Row>
 
             {settings.effect === 'cinematic' && (
-              <p className="text-xs text-white/50 -mt-2">
-                Slow camera moves, cross-dissolves, rendered on the GPU.
-              </p>
+              <div className="space-y-1.5 -mt-1">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-xs uppercase tracking-wide text-white/50">3D depth</span>
+                  <span className="text-sm tabular-nums text-white/80">
+                    {settings.depthStrength === 0 ? 'off' : `${Math.round((settings.depthStrength ?? 1) * 100)}%`}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  step={10}
+                  value={Math.round((settings.depthStrength ?? 1) * 100)}
+                  onChange={(e) => updateSettings({ depthStrength: Number(e.target.value) / 100 })}
+                  className="w-full accent-white/80"
+                />
+                <p className="text-xs text-white/40">
+                  Parallax, defocus and haze from each photo&apos;s depth map. Photos without one
+                  still get the camera move.
+                </p>
+              </div>
             )}
 
             <Row label="Order">
