@@ -34,6 +34,49 @@ const CONCURRENCY = 3
 const GALLERY_PAGE = 50
 const GALLERY_REFRESH_MS = 30_000
 
+// Booth generation takes 13-20 seconds and the provider reports no
+// progress at all. So the bar is honest about that: it eases toward 90%
+// and only finishes when the picture actually lands. A faked percentage
+// parks at 99% and reads as a hang, which is worse than a bar that is
+// plainly just saying "still working".
+const BOOTH_TAU_MS = 6_000
+const BOOTH_CEILING = 90
+const BOOTH_STATUS_MS = 4_000
+
+// What "Save to my photos" is allowed to put on a camera roll, and the
+// extension each one gets. An allowlist rather than a passthrough: the
+// media type comes off a data: URL and ends up on a File handed to the
+// OS share sheet.
+const BOOTH_SAVE_TYPES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+}
+const BOOTH_STATUS = [
+  'Setting the scene…',
+  'Finding your best side…',
+  'Adding the 80s…',
+  'Almost there…',
+]
+
+// Plain <style>, not styled-jsx: module portal pages must not depend on
+// compiler transforms beyond what every sibling page already uses. Same
+// pattern as _components/DisplayView.tsx.
+const BOOTH_KEYFRAMES = `
+@keyframes booth-sheen {
+  from { transform: translateX(-100%) }
+  to   { transform: translateX(300%) }
+}
+@keyframes booth-say {
+  from { opacity: 0; transform: translateY(4px) }
+  to   { opacity: 1; transform: none }
+}
+@media (prefers-reduced-motion: reduce) {
+  .booth-sheen { animation: none }
+  .booth-say { animation: none }
+}
+`
+
 interface Props {
   eventIdentifier: string
   primaryColor: string
@@ -154,6 +197,32 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     busy: string | null
     error: string | null
   } | null>(null)
+  // Can this browser hand a FILE to the share sheet? On iOS that sheet
+  // is what puts "Save Image" in front of a guest; long-pressing the
+  // preview works too, but nobody finds it. Probed once on mount, never
+  // during render: building the probe File can throw in old WebViews,
+  // and a throw during render takes the whole page down.
+  const [canShareFiles, setCanShareFiles] = useState(false)
+  useEffect(() => {
+    try {
+      const probe = new File([new Uint8Array([0])], 'probe.jpg', { type: 'image/jpeg' })
+      setCanShareFiles(Boolean(navigator.canShare?.({ files: [probe] })))
+    } catch {
+      setCanShareFiles(false)
+    }
+  }, [])
+  // Progress for the generating state. `finishing` keeps the bar on
+  // screen just long enough to run to 100% when the picture lands,
+  // rather than snapping away mid-stride.
+  const [boothProgress, setBoothProgress] = useState(0)
+  const [boothStatus, setBoothStatus] = useState(0)
+  const [boothFinishing, setBoothFinishing] = useState(false)
+  // Read here, next to the state it drives; the timers that use it live
+  // down beside applyEffect, which is what sets `busy` in the first
+  // place. Declared ABOVE those effects on purpose — a dependency array
+  // is evaluated during render, so naming a const declared lower throws
+  // "Cannot access before initialization" and kills the page.
+  const boothBusy = shot?.busy ?? null
   const [deleting, setDeleting] = useState<string | null>(null)
   // Top-level section. The booth needs its own tab because it was
   // otherwise invisible: nothing on the upload card hinted it existed,
@@ -595,6 +664,38 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     }
   }, [code, guest, shot])
 
+  // Drive the progress bar and the rotating status line for as long as
+  // applyEffect is working. Nothing here talks to the server — there is
+  // no progress to read — so it is purely a clock.
+  useEffect(() => {
+    if (!boothBusy) return
+    setBoothFinishing(false)
+    setBoothStatus(0)
+    setBoothProgress(4)
+    const started = Date.now()
+    const iv = setInterval(() => {
+      const elapsed = Date.now() - started
+      setBoothProgress(4 + (BOOTH_CEILING - 4) * (1 - Math.exp(-elapsed / BOOTH_TAU_MS)))
+      setBoothStatus(Math.min(BOOTH_STATUS.length - 1, Math.floor(elapsed / BOOTH_STATUS_MS)))
+    }, 120)
+    // Cleanup runs the moment the picture lands (or fails), which is the
+    // only honest signal we get that it is done — so that is where the
+    // bar is allowed to reach 100%.
+    return () => {
+      clearInterval(iv)
+      setBoothProgress(100)
+      setBoothFinishing(true)
+    }
+  }, [boothBusy])
+
+  // Hold the finished bar on screen briefly, so it visibly completes
+  // instead of vanishing mid-stride.
+  useEffect(() => {
+    if (!boothFinishing) return
+    const t = setTimeout(() => setBoothFinishing(false), 500)
+    return () => clearTimeout(t)
+  }, [boothFinishing])
+
   /** Upload whichever version the guest settled on. */
   const acceptShot = useCallback(async () => {
     if (!shot) return
@@ -607,6 +708,77 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     enqueueFiles(dt.files, true)
     setShot(null)
   }, [shot, enqueueFiles])
+
+  /**
+   * Keep whichever version is on screen.
+   *
+   * Synchronous on purpose, right down to navigator.share(). Safari only
+   * honours share() while the tap's user activation is still live, and
+   * an awaited fetch() of the data URL can outlive it — so the bytes are
+   * decoded here rather than fetched. Both `original` (canvas
+   * toDataURL) and `preview` (the booth API) are data URLs, so there is
+   * nothing to go to the network for anyway.
+   */
+  const saveShot = useCallback(() => {
+    if (!shot) return
+    const source = shot.preview ?? shot.original
+    let file: File | null = null
+    try {
+      // Both sources are data: URLs by construction (canvas toDataURL,
+      // and the booth API's base64 payload), but the booth response is
+      // only `res.json()` with no shape check behind it, so prove it
+      // rather than assume it.
+      if (!source.startsWith('data:')) return
+      const comma = source.indexOf(',')
+      if (comma < 0) return
+      const meta = source.slice(0, comma)
+      // Allowlisted, not taken as given: the media type ends up on a File
+      // handed to the OS share sheet, and the only thing that should ever
+      // reach the camera roll from here is a picture.
+      const declared = /^data:([a-z]+\/[a-z0-9.+-]+)/i.exec(meta)?.[1]?.toLowerCase()
+      const type = declared && BOOTH_SAVE_TYPES[declared] ? declared : 'image/jpeg'
+      // Named after the EVENT, not a couple: every tenant installs this
+      // module, and a hardcoded name would put one wedding's branding on
+      // every other event's downloads.
+      const stem = (link?.event?.slug || link?.event?.identifier || eventIdentifier || 'photo')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40) || 'photo'
+      const name = `${stem}-${Date.now()}.${BOOTH_SAVE_TYPES[type]}`
+      const body = source.slice(comma + 1)
+      const binary = meta.includes(';base64') ? atob(body) : decodeURIComponent(body)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+      file = new File([bytes], name, { type })
+    } catch {
+      setShot((s) => (s ? { ...s, error: 'could not save that one — you can still upload it' } : s))
+      return
+    }
+    if (canShareFiles) {
+      // A cancelled share sheet (AbortError) is the guest changing their
+      // mind, NOT a failure: falling through to the download would leave
+      // them with a file they just declined. Either way we are done.
+      try {
+        void navigator.share({ files: [file] }).catch(() => {})
+      } catch {
+        // Nothing useful to say — the sheet simply did not open.
+      }
+      return
+    }
+    // Desktop and anything without file sharing: a plain download.
+    const url = URL.createObjectURL(file)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = file.name
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // Revoked on a delay: revoking straight away races the browser's own
+    // read of the blob in some WebViews and saves a zero-byte file.
+    setTimeout(() => URL.revokeObjectURL(url), 30_000)
+  }, [shot, canShareFiles, link, eventIdentifier])
 
   // ── Photo booth ───────────────────────────────────────────────────
 
@@ -1118,10 +1290,41 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
                 {shot.filterLabel ?? 'Done'} — happy with it?
               </p>
             )}
-            {shot.busy && (
-              <p className="text-white/70 text-sm">
-                Working on it… this takes about 15 seconds.
-              </p>
+            {(shot.busy || boothFinishing) && (
+              <div className="space-y-2" aria-live="polite">
+                <div
+                  className="relative h-1 w-full rounded-full overflow-hidden"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}
+                  role="progressbar"
+                  aria-label="Making your picture"
+                >
+                  <div
+                    className="absolute inset-y-0 left-0 rounded-full"
+                    style={{
+                      width: `${boothProgress}%`,
+                      backgroundColor: primaryColor,
+                      transition: 'width 240ms linear',
+                    }}
+                  />
+                  {shot.busy && (
+                    <div
+                      className="booth-sheen absolute inset-y-0 w-1/4"
+                      style={{
+                        background:
+                          'linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.55) 50%, rgba(255,255,255,0) 100%)',
+                        animation: 'booth-sheen 1.6s ease-in-out infinite',
+                      }}
+                    />
+                  )}
+                </div>
+                <p
+                  key={boothStatus}
+                  className="booth-say text-white/70 text-sm"
+                  style={{ animation: 'booth-say 420ms ease-out both' }}
+                >
+                  {shot.busy ? BOOTH_STATUS[boothStatus] : 'Here you go…'}
+                </p>
+              </div>
             )}
 
             {/* Reference faces first — they are the ones with a picture
@@ -1179,14 +1382,25 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
               </button>
             )}
 
-            <div className="flex gap-2">
+            {/* Wraps rather than squeezing: three labels do not fit one
+                row at 390px, and a clipped "Save to my photos" is worse
+                than a second line. */}
+            <div className="flex flex-wrap gap-2">
               <button
                 onClick={acceptShot}
                 disabled={shot.busy !== null}
                 className="flex-1 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50"
-                style={{ backgroundColor: primaryColor }}
+                style={{ backgroundColor: primaryColor, minWidth: '9rem' }}
               >
                 {shot.preview ? 'Upload this one' : 'Upload photo'}
+              </button>
+              <button
+                onClick={saveShot}
+                disabled={shot.busy !== null}
+                className="flex-1 rounded-lg px-4 py-2.5 text-white/80 bg-white/10 disabled:opacity-50"
+                style={{ minWidth: '9rem' }}
+              >
+                Save to my photos
               </button>
               <button
                 onClick={() => setShot(null)}
@@ -1197,6 +1411,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
               </button>
             </div>
           </div>
+          <style>{BOOTH_KEYFRAMES}</style>
         </div>
       )}
 
