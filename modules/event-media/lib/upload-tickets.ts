@@ -28,6 +28,8 @@ export interface UploadTicketPayload {
   guest_name: string;
   client_id: string;
   captured: boolean;
+  /** Booth output rather than a plain photo; picks the album. */
+  booth?: boolean;
   exp: number; // unix seconds
 }
 

@@ -155,6 +155,8 @@ export interface MintFileInput {
   mime_type: string;
   bytes: number;
   captured: boolean;
+  /** Came out of the photo booth rather than the camera or library. */
+  booth: boolean;
 }
 
 export type MintFileValidation =
@@ -188,5 +190,6 @@ export function validateMintFile(
     return { ok: false, filename, error: 'file_too_large', message: `file exceeds the ${kind} limit`, };
   }
   const captured = r['captured'] === true;
-  return { ok: true, file: { filename, mime_type: mimeType, bytes, captured }, kind };
+  const booth = r['booth'] === true;
+  return { ok: true, file: { filename, mime_type: mimeType, bytes, captured, booth }, kind };
 }
