@@ -72,3 +72,38 @@ describe('portal sources parse', () => {
     });
   }
 });
+
+/**
+ * React requires hooks to run in the same order on every render, so a
+ * hook placed after an early return runs on some renders and not
+ * others. That is React error #310, and in a portal page it takes the
+ * whole display out.
+ *
+ * Live incident 2026-09-21: an effect added below `if (!mounted)
+ * return null` in DisplayView crashed the projector. Typecheck and the
+ * parse gate both passed — the code is perfectly valid, it just breaks
+ * at runtime.
+ */
+describe('hooks run before any early return', () => {
+  const HOOK = /^\s*(?:const\s+\w+\s*=\s*)?use(?:Effect|LayoutEffect|Callback|Memo|State|Ref)\s*\(/;
+  // A bare `return` or `return null/undefined/<jsx>` at component
+  // indentation, i.e. not inside a nested function or a hook body.
+  const EARLY_RETURN = /^ {2}(?:if \(.*\) )?return(?: null| undefined)?\s*$/;
+
+  for (const file of files.filter((f) => f.endsWith('.tsx'))) {
+    const rel = file.slice(PORTAL.length + 1);
+    it(`has no hook after an early return in ${rel}`, () => {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      let firstReturn = -1;
+      const offenders: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]!;
+        if (firstReturn === -1 && EARLY_RETURN.test(line)) firstReturn = i;
+        if (firstReturn !== -1 && HOOK.test(line)) {
+          offenders.push(`${rel}:${i + 1} after early return at line ${firstReturn + 1}`);
+        }
+      }
+      expect(offenders).toEqual([]);
+    });
+  }
+});
