@@ -5,26 +5,40 @@
 /**
  * Cinematic photo renderer — the "video showroom" layer.
  *
- * Draws one photo into a transparent WebGL canvas with:
+ * Draws photos into a transparent WebGL canvas with:
  *  - 2.5D depth parallax: the monocular depth map displaces sampling
  *    UVs against a slow camera drift, so foreground subjects move
  *    against their background. Stills read as motion footage.
  *  - Subject pop: the alpha matte fades the BACKGROUND of the photo to
  *    transparent mid-slide, revealing the blurred cover-fill layer
  *    behind it — the background appears to melt away and the people
- *    float forward. This is the "background removed by animation".
+ *    float forward.
  *  - Subject-aware framing: zoom/drift centre on the matte centroid,
  *    so the camera moves toward people rather than drifting blindly.
  *
+ * The component OWNS THE WHOLE SLIDESHOW, not one photo. That is
+ * deliberate and was a bug fix (2026-09-20): it used to be remounted
+ * per slide with a React key, which destroyed the canvas, took a fresh
+ * WebGL context every slide, and left the photo layer empty until the
+ * next original had downloaded — measured at 265-546 ms on a fast
+ * connection and up to 9.1 s on venue wifi. For that whole window the
+ * only thing on screen was the blurred, 1.15x-scaled cover fill, which
+ * read as the photo "jumping" to a zoomed-in blurry copy of itself.
+ *
+ * So instead: one context for the life of the display, the outgoing
+ * photo stays on screen until the incoming one is decoded and uploaded
+ * to the GPU, and the two cross-dissolve. Nothing is ever blank.
+ *
  * Degrades cleanly at every step: no WebGL → caller falls back to the
- * CSS effects; no depth → flat pan/zoom; no matte → no pop. The
- * canvas is transparent so the blurred fill behind always shows.
+ * CSS effects; no depth → flat pan/zoom; no matte → no pop. The canvas
+ * is transparent so the blurred fill behind always shows.
  */
 
 import { useEffect, useRef } from 'react'
 import type { PhotoAnalysis } from './_lib/ai-pipeline'
 
 interface Props {
+  /** Current photo. Changing this cross-fades to the new one. */
   src: string
   analysis: PhotoAnalysis | null
   /** Slide duration; the pop cycle is timed against it. */
@@ -33,6 +47,8 @@ interface Props {
   enablePop?: boolean
   className?: string
 }
+
+const FADE_MS = 900
 
 const VERT = `
 attribute vec2 aPos;
@@ -57,6 +73,7 @@ uniform float uPop;       // 0..1 background melt
 uniform float uBgFloor;   // how far the background is allowed to fade
 uniform float uHasDepth;
 uniform float uHasMatte;
+uniform float uOpacity;   // cross-dissolve weight for this layer
 
 void main() {
   // Map the stage pixel into the photo's contained rect.
@@ -88,13 +105,26 @@ void main() {
     // Soften the matte edge so the melt never looks cut out.
     m = smoothstep(0.35, 0.75, m);
     // The background never goes fully transparent: it recedes to a
-    // floor. A imperfect mask then reads as a soft vignette toward the
+    // floor. An imperfect mask then reads as a soft vignette toward the
     // blurred fill behind, instead of a hole punched in the photo.
     alpha = 1.0 - uPop * (1.0 - m) * (1.0 - uBgFloor);
   }
 
-  gl_FragColor = vec4(rgb, alpha);
+  gl_FragColor = vec4(rgb, alpha * uOpacity);
 }`
+
+interface Layer {
+  photo: WebGLTexture
+  depth: WebGLTexture | null
+  matte: WebGLTexture | null
+  /** Natural aspect ratio of the source photo. */
+  ar: number
+  focus: { x: number; y: number }
+  popSafe: boolean
+  /** Clock origin for this layer's own pan/zoom/pop cycle. */
+  startedAt: number
+  src: string
+}
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
   const sh = gl.createShader(type)
@@ -112,10 +142,9 @@ function compile(gl: WebGLRenderingContext, type: number, source: string): WebGL
  * Downscale to something every GPU can hold. Guest phones produce
  * 24 MP files (4284x5712 seen live) — above MAX_TEXTURE_SIZE on plenty
  * of laptop GPUs, where texImage2D fails and the slide renders black.
- * A projector is 1920 wide, so 2048 loses nothing visible.
  */
 function fitForGpu(gl: WebGLRenderingContext, img: HTMLImageElement): TexImageSource {
-  const maxGpu = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 2048, 2048)
+  const maxGpu = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 2048, 4096)
   const longEdge = Math.max(img.naturalWidth, img.naturalHeight)
   if (longEdge <= maxGpu) return img
   const scale = maxGpu / longEdge
@@ -147,180 +176,272 @@ function makeTexture(gl: WebGLRenderingContext, source: TexImageSource | null): 
   return tex
 }
 
+/**
+ * Attach depth/matte to a layer in place. Never rebuilds the layer:
+ * that would reset its clock and snap the zoom back mid-slide, which is
+ * what the old single effect did whenever analysis arrived late.
+ */
+function applyAnalysis(gl: WebGLRenderingContext, layer: Layer, analysis: PhotoAnalysis | null): void {
+  if (!analysis) return
+  if (analysis.depth && !layer.depth) layer.depth = makeTexture(gl, analysis.depth)
+  if (analysis.matte && !layer.matte) layer.matte = makeTexture(gl, analysis.matte)
+  if (analysis.subject) layer.focus = analysis.subject
+  layer.popSafe = Boolean(analysis.popSafe)
+}
+
+function loadImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    // The photo must be CORS-clean or texImage2D throws (storage and
+    // render endpoints both send ACAO:*, verified 2026-09-20).
+    const i = new window.Image()
+    i.crossOrigin = 'anonymous'
+    i.onload = () => resolve(i)
+    i.onerror = () => resolve(null)
+    i.src = src
+  })
+}
+
 export default function CinematicPhoto({ src, analysis, durationMs, enablePop = true, className }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const rafRef = useRef<number | null>(null)
   const glRef = useRef<WebGLRenderingContext | null>(null)
+  const progRef = useRef<WebGLProgram | null>(null)
+  const bufRef = useRef<WebGLBuffer | null>(null)
+  const rafRef = useRef<number | null>(null)
 
-  // Release the GPU context ONLY when the component goes away. It must
-  // not happen in the per-photo cleanup: a lost context can never be
-  // re-acquired from the same canvas, so doing it there left every
-  // slide after the first one blank (caught in the harness
-  // 2026-09-20 — the effect re-runs the moment analysis arrives).
-  useEffect(() => {
-    return () => {
-      glRef.current?.getExtension('WEBGL_lose_context')?.loseContext()
-      glRef.current = null
-    }
-  }, [])
+  const curRef = useRef<Layer | null>(null)
+  const prevRef = useRef<Layer | null>(null)
+  const fadeFromRef = useRef(0)
 
+  // Props the render loop reads without wanting to restart on change.
+  const durationRef = useRef(durationMs)
+  const popRef = useRef(enablePop)
+  // The photo loads asynchronously, so by the time a layer exists the
+  // analysis for it may ALREADY have arrived and its effect long since
+  // run. Without this the photo would keep a flat pan for its whole
+  // slide despite having a depth map ready.
+  const analysisRef = useRef<PhotoAnalysis | null>(analysis)
+  durationRef.current = durationMs
+  popRef.current = enablePop
+  analysisRef.current = analysis
+
+  // ── One context, one program, one loop, for the whole display ─────
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     let disposed = false
-    let gl: WebGLRenderingContext | null = null
-    const textures: WebGLTexture[] = []
-    let program: WebGLProgram | null = null
-    let buffer: WebGLBuffer | null = null
 
-    const start = async () => {
-      // The photo must be CORS-clean or texImage2D throws (storage and
-      // render endpoints both send ACAO:*, verified 2026-09-20).
-      const img = await new Promise<HTMLImageElement | null>((resolve) => {
-        const i = new window.Image()
-        i.crossOrigin = 'anonymous'
-        i.onload = () => resolve(i)
-        i.onerror = () => resolve(null)
-        i.src = src
-      })
-      if (disposed || !img) return
+    const gl = (canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, antialias: true }) ??
+      canvas.getContext('experimental-webgl', { alpha: true })) as WebGLRenderingContext | null
+    if (!gl) return
+    glRef.current = gl
 
-      // Reuse the context across photos — see the unmount effect above.
-      gl = glRef.current
-      if (!gl || gl.isContextLost()) {
-        gl = (canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, antialias: true }) ??
-          canvas.getContext('experimental-webgl', { alpha: true })) as WebGLRenderingContext | null
-        glRef.current = gl
-      }
-      if (!gl) return
+    const vs = compile(gl, gl.VERTEX_SHADER, VERT)
+    const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG)
+    if (!vs || !fs) return
+    const prog = gl.createProgram()
+    if (!prog) return
+    gl.attachShader(prog, vs)
+    gl.attachShader(prog, fs)
+    gl.linkProgram(prog)
+    gl.deleteShader(vs)
+    gl.deleteShader(fs)
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return
+    gl.useProgram(prog)
+    progRef.current = prog
 
-      const vs = compile(gl, gl.VERTEX_SHADER, VERT)
-      const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG)
-      if (!vs || !fs) return
-      const prog = gl.createProgram()
-      if (!prog) return
-      program = prog
-      gl.attachShader(prog, vs)
-      gl.attachShader(prog, fs)
-      gl.linkProgram(prog)
-      gl.deleteShader(vs)
-      gl.deleteShader(fs)
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return
-      gl.useProgram(prog)
+    const buf = gl.createBuffer()
+    bufRef.current = buf
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf)
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW)
+    const aPos = gl.getAttribLocation(prog, 'aPos')
+    gl.enableVertexAttribArray(aPos)
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0)
 
-      const buf = gl.createBuffer()
-      buffer = buf
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf)
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW)
-      const aPos = gl.getAttribLocation(prog, 'aPos')
-      gl.enableVertexAttribArray(aPos)
-      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0)
-
-      const photoTex = makeTexture(gl, fitForGpu(gl, img))
-      const depthTex = makeTexture(gl, analysis?.depth ?? null)
-      const matteTex = makeTexture(gl, analysis?.matte ?? null)
-      if (!photoTex) return
-      textures.push(photoTex)
-      if (depthTex) textures.push(depthTex)
-      if (matteTex) textures.push(matteTex)
-
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, photoTex)
-      gl.uniform1i(gl.getUniformLocation(prog, 'uPhoto'), 0)
-      if (depthTex) {
-        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, depthTex)
-        gl.uniform1i(gl.getUniformLocation(prog, 'uDepth'), 1)
-      }
-      if (matteTex) {
-        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, matteTex)
-        gl.uniform1i(gl.getUniformLocation(prog, 'uMatte'), 2)
-      }
-
-      const uContain = gl.getUniformLocation(prog, 'uContain')
-      const uCam = gl.getUniformLocation(prog, 'uCam')
-      const uFocus = gl.getUniformLocation(prog, 'uFocus')
-      const uParallax = gl.getUniformLocation(prog, 'uParallax')
-      const uZoom = gl.getUniformLocation(prog, 'uZoom')
-      const uPop = gl.getUniformLocation(prog, 'uPop')
-      // Pop only with a mask the analyser judged coherent.
-      const popOk = Boolean(matteTex && enablePop && analysis && analysis.popSafe)
-      gl.uniform1f(gl.getUniformLocation(prog, 'uHasDepth'), depthTex ? 1 : 0)
-      gl.uniform1f(gl.getUniformLocation(prog, 'uHasMatte'), popOk ? 1 : 0)
-      gl.uniform1f(gl.getUniformLocation(prog, 'uBgFloor'), 0.28)
-      gl.uniform1f(uParallax, depthTex ? 0.055 : 0)
-
-      // Aim at the subject; fall back to slightly above centre, which
-      // is where faces sit in most group photos.
-      const focus = analysis?.subject ?? { x: 0.5, y: 0.42 }
-      gl.uniform2f(uFocus, focus.x, focus.y)
-
-      gl.enable(gl.BLEND)
-      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-      gl.clearColor(0, 0, 0, 0)
-
-      const t0 = performance.now()
-      const duration = Math.max(durationMs, 2000)
-
-      const frame = (now: number) => {
-        if (disposed || !gl) return
-        const w = canvas.clientWidth || 1920
-        const h = canvas.clientHeight || 1080
-        if (canvas.width !== w || canvas.height !== h) {
-          canvas.width = w
-          canvas.height = h
-        }
-        gl.viewport(0, 0, canvas.width, canvas.height)
-
-        // Contain mapping: stage aspect vs photo aspect.
-        const stageAR = w / h
-        const photoAR = img.naturalWidth / img.naturalHeight
-        const cx = photoAR > stageAR ? 1 : stageAR / photoAR
-        const cy = photoAR > stageAR ? photoAR / stageAR : 1
-        gl.uniform2f(uContain, cx, cy)
-
-        const t = (now - t0) / duration // 0..1 across the slide
-        // Lissajous drift — never repeats exactly, never snaps.
-        const drift = Math.min(1, t * 4) // ease in over the first quarter
-        gl.uniform2f(
-          uCam,
-          Math.sin(t * Math.PI * 1.1) * drift,
-          Math.cos(t * Math.PI * 0.7) * 0.6 * drift,
-        )
-        // Slow push-in across the whole slide.
-        gl.uniform1f(uZoom, 1.0 + Math.min(t, 1) * 0.06)
-
-        // Background melt: hold, ease in, hold, ease back out.
-        let pop = 0
-        if (enablePop && matteTex) {
-          if (t > 0.32 && t <= 0.5) pop = (t - 0.32) / 0.18
-          else if (t > 0.5 && t <= 0.78) pop = 1
-          else if (t > 0.78 && t <= 0.92) pop = 1 - (t - 0.78) / 0.14
-          pop = Math.max(0, Math.min(1, pop))
-          pop = pop * pop * (3 - 2 * pop) // smoothstep
-        }
-        gl.uniform1f(uPop, pop)
-
-        gl.clear(gl.COLOR_BUFFER_BIT)
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
-        rafRef.current = requestAnimationFrame(frame)
-      }
-      rafRef.current = requestAnimationFrame(frame)
+    const u = {
+      contain: gl.getUniformLocation(prog, 'uContain'),
+      cam: gl.getUniformLocation(prog, 'uCam'),
+      focus: gl.getUniformLocation(prog, 'uFocus'),
+      parallax: gl.getUniformLocation(prog, 'uParallax'),
+      zoom: gl.getUniformLocation(prog, 'uZoom'),
+      pop: gl.getUniformLocation(prog, 'uPop'),
+      bgFloor: gl.getUniformLocation(prog, 'uBgFloor'),
+      hasDepth: gl.getUniformLocation(prog, 'uHasDepth'),
+      hasMatte: gl.getUniformLocation(prog, 'uHasMatte'),
+      opacity: gl.getUniformLocation(prog, 'uOpacity'),
+      photo: gl.getUniformLocation(prog, 'uPhoto'),
+      depth: gl.getUniformLocation(prog, 'uDepth'),
+      matte: gl.getUniformLocation(prog, 'uMatte'),
     }
 
-    void start()
+    gl.enable(gl.BLEND)
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+    gl.clearColor(0, 0, 0, 0)
+
+    const drawLayer = (layer: Layer, now: number, stageAR: number, opacity: number) => {
+      // Contain mapping: stage aspect vs photo aspect.
+      const cx = layer.ar > stageAR ? 1 : stageAR / layer.ar
+      const cy = layer.ar > stageAR ? layer.ar / stageAR : 1
+      gl.uniform2f(u.contain, cx, cy)
+
+      const t = (now - layer.startedAt) / Math.max(durationRef.current, 2000)
+      // Lissajous drift — never repeats exactly, never snaps.
+      const drift = Math.min(1, t * 4) // ease in over the first quarter
+      gl.uniform2f(
+        u.cam,
+        Math.sin(t * Math.PI * 1.1) * drift,
+        Math.cos(t * Math.PI * 0.7) * 0.6 * drift,
+      )
+      // Slow push-in across the whole slide.
+      gl.uniform1f(u.zoom, 1.0 + Math.min(t, 1) * 0.06)
+      gl.uniform2f(u.focus, layer.focus.x, layer.focus.y)
+      gl.uniform1f(u.parallax, layer.depth ? 0.055 : 0)
+      gl.uniform1f(u.bgFloor, 0.28)
+      gl.uniform1f(u.hasDepth, layer.depth ? 1 : 0)
+
+      const popOk = Boolean(layer.matte && popRef.current && layer.popSafe)
+      gl.uniform1f(u.hasMatte, popOk ? 1 : 0)
+
+      // Background melt: hold, ease in, hold, ease back out.
+      let pop = 0
+      if (popOk) {
+        if (t > 0.32 && t <= 0.5) pop = (t - 0.32) / 0.18
+        else if (t > 0.5 && t <= 0.78) pop = 1
+        else if (t > 0.78 && t <= 0.92) pop = 1 - (t - 0.78) / 0.14
+        pop = Math.max(0, Math.min(1, pop))
+        pop = pop * pop * (3 - 2 * pop) // smoothstep
+      }
+      gl.uniform1f(u.pop, pop)
+      gl.uniform1f(u.opacity, opacity)
+
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, layer.photo)
+      gl.uniform1i(u.photo, 0)
+      if (layer.depth) {
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, layer.depth)
+        gl.uniform1i(u.depth, 1)
+      }
+      if (layer.matte) {
+        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, layer.matte)
+        gl.uniform1i(u.matte, 2)
+      }
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+    }
+
+    const frame = (now: number) => {
+      if (disposed) return
+      rafRef.current = requestAnimationFrame(frame)
+      const cur = curRef.current
+      if (!cur) return
+
+      // Render at the display's real pixels: without the ratio the
+      // canvas is half resolution on a 2x screen and every cinematic
+      // slide looks soft next to the plain-<img> effects.
+      //
+      // Measure the PARENT and pin the canvas's CSS size from it. Sizing
+      // the backing store from the canvas's own clientWidth is a
+      // feedback loop — the new backing store becomes the element's
+      // intrinsic size, so at dpr 2 it doubles every frame until it
+      // explodes (caught in the harness at 67 megapixels).
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      const host = canvas.parentElement
+      const rect = host?.getBoundingClientRect()
+      const cssW = Math.max(1, Math.min(Math.round(rect?.width || 1920), 4096))
+      const cssH = Math.max(1, Math.min(Math.round(rect?.height || 1080), 2304))
+      if (canvas.style.width !== `${cssW}px`) canvas.style.width = `${cssW}px`
+      if (canvas.style.height !== `${cssH}px`) canvas.style.height = `${cssH}px`
+      const w = Math.round(cssW * dpr)
+      const h = Math.round(cssH * dpr)
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w
+        canvas.height = h
+      }
+      gl.viewport(0, 0, canvas.width, canvas.height)
+      const stageAR = w / h
+
+      gl.clear(gl.COLOR_BUFFER_BIT)
+
+      const prev = prevRef.current
+      const f = prev ? Math.min(1, (now - fadeFromRef.current) / FADE_MS) : 1
+      // The outgoing photo is drawn at full strength and the incoming
+      // one dissolves over it, so the blurred fill behind never shows
+      // through mid-transition.
+      if (prev && f < 1) drawLayer(prev, now, stageAR, 1)
+      drawLayer(cur, now, stageAR, f)
+
+      if (prev && f >= 1) {
+        gl.deleteTexture(prev.photo)
+        if (prev.depth) gl.deleteTexture(prev.depth)
+        if (prev.matte) gl.deleteTexture(prev.matte)
+        prevRef.current = null
+      }
+    }
+    rafRef.current = requestAnimationFrame(frame)
 
     return () => {
       disposed = true
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      // Free this photo's GPU resources but KEEP the context alive —
-      // a projector runs for hours, so the per-photo allocations must
-      // be released, while the context is reused for the next slide.
-      if (gl) {
-        for (const t of textures) gl.deleteTexture(t)
-        if (buffer) gl.deleteBuffer(buffer)
-        if (program) gl.deleteProgram(program)
+      for (const l of [curRef.current, prevRef.current]) {
+        if (!l) continue
+        gl.deleteTexture(l.photo)
+        if (l.depth) gl.deleteTexture(l.depth)
+        if (l.matte) gl.deleteTexture(l.matte)
       }
+      curRef.current = null
+      prevRef.current = null
+      if (bufRef.current) gl.deleteBuffer(bufRef.current)
+      if (progRef.current) gl.deleteProgram(progRef.current)
+      gl.getExtension('WEBGL_lose_context')?.loseContext()
+      glRef.current = null
     }
-  }, [src, analysis, durationMs, enablePop])
+  }, [])
+
+  // ── Swap in a new photo, once it is actually ready ────────────────
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const img = await loadImage(src)
+      const gl = glRef.current
+      // Nothing is torn down on failure: the photo already on screen
+      // simply stays until the next one arrives.
+      if (cancelled || !img || !gl) return
+      const photo = makeTexture(gl, fitForGpu(gl, img))
+      if (!photo) return
+
+      const incoming: Layer = {
+        photo,
+        depth: null,
+        matte: null,
+        ar: img.naturalWidth / img.naturalHeight,
+        // Aim at the subject; fall back to slightly above centre, which
+        // is where faces sit in most group photos.
+        focus: { x: 0.5, y: 0.42 },
+        popSafe: false,
+        startedAt: performance.now(),
+        src,
+      }
+
+      // Retire whatever the previous transition left behind, so a run
+      // of fast slide changes cannot stack up textures.
+      const stale = prevRef.current
+      if (stale) {
+        gl.deleteTexture(stale.photo)
+        if (stale.depth) gl.deleteTexture(stale.depth)
+        if (stale.matte) gl.deleteTexture(stale.matte)
+      }
+      applyAnalysis(gl, incoming, analysisRef.current)
+      prevRef.current = curRef.current
+      curRef.current = incoming
+      fadeFromRef.current = performance.now()
+    })()
+    return () => { cancelled = true }
+  }, [src])
+
+  // ── Upgrade the current photo when its analysis lands late ────────
+  useEffect(() => {
+    const gl = glRef.current
+    const cur = curRef.current
+    if (!gl || !cur || cur.src !== src) return
+    applyAnalysis(gl, cur, analysis)
+  }, [analysis, src])
 
   return <canvas ref={canvasRef} className={className} />
 }
