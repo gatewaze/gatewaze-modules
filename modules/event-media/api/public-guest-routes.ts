@@ -472,9 +472,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
   }
 
-  async function removeObject(storagePath: string): Promise<void> {
+  async function removeObject(storagePath: string | string[]): Promise<void> {
     try {
-      await supabase.storage.from(storageBucket).remove([storagePath]);
+      const paths = Array.isArray(storagePath) ? storagePath : [storagePath];
+      if (paths.length > 0) await supabase.storage.from(storageBucket).remove(paths);
     } catch {
       // best-effort cleanup; the sweep script catches leftovers
     }
@@ -622,6 +623,122 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     res.status(anyFailed ? 207 : 200).json({ items });
   }
 
+  // ────────────────────────────────────────────────────────────────────
+  // POST /public/event-media/links/:code/mine
+  // A guest's own uploads, so they can undo a mistake. Ownership is
+  // the localStorage client_id recorded in metadata at upload time —
+  // the same device-identity model the rest of the feature uses. It
+  // never leaves that device except in these two request bodies, and
+  // it is never echoed back in any listing.
+  // ────────────────────────────────────────────────────────────────────
+  async function listMine(req: Request, res: Response): Promise<void> {
+    const ctx = await resolveLink(req, res, 'mine', GUEST_RATE_LIMITS.mediaListPerIp);
+    if (!ctx) return;
+    const { link } = ctx;
+
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const clientId = typeof body['client_id'] === 'string' && UUID_RE.test(body['client_id'])
+      ? body['client_id']
+      : null;
+    if (!clientId) {
+      sendError(res, 400, 'invalid_request', 'client_id must be a UUID');
+      return;
+    }
+
+    // Videos are included here even though the projector never shows
+    // them — a guest who uploaded the wrong video needs to remove it.
+    const { data, error } = await supabase
+      .from('host_media')
+      .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at, is_approved')
+      .eq('host_kind', 'event')
+      .eq('host_id', link.event_id)
+      .contains('metadata', { source: 'guest', client_id: clientId })
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (error) {
+      logger.error('guest mine list failed', { error: error.message });
+      sendError(res, 500, 'list_failed', 'could not list your uploads');
+      return;
+    }
+
+    const rows = (data ?? []) as FeedRow[];
+    res.status(200).json({
+      items: rows.map((r) => ({
+        ...mapFeedItem(r),
+        // Pending items are invisible to everyone else until approved;
+        // show their owner that they are waiting.
+        pending: (r as { is_approved?: boolean }).is_approved === false,
+      })),
+    });
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // POST /public/event-media/links/:code/mine/delete
+  // ────────────────────────────────────────────────────────────────────
+  async function deleteMine(req: Request, res: Response): Promise<void> {
+    const ctx = await resolveLink(req, res, 'mine', GUEST_RATE_LIMITS.completePerIp);
+    if (!ctx) return;
+    const { link } = ctx;
+
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const clientId = typeof body['client_id'] === 'string' && UUID_RE.test(body['client_id'])
+      ? body['client_id']
+      : null;
+    const mediaId = typeof body['media_id'] === 'string' && UUID_RE.test(body['media_id'])
+      ? body['media_id']
+      : null;
+    if (!clientId || !mediaId) {
+      sendError(res, 400, 'invalid_request', 'client_id and media_id must be UUIDs');
+      return;
+    }
+    if (!(await checkRate(res, guestRateKey('delete', clientId), GUEST_RATE_LIMITS.completePerClient))) return;
+
+    const { data: row, error } = await supabase
+      .from('host_media')
+      .select('id, storage_path, variants, metadata, host_id, host_kind')
+      .eq('id', mediaId)
+      .maybeSingle();
+    if (error) {
+      sendError(res, 500, 'fetch_failed', 'could not look up that upload');
+      return;
+    }
+
+    const meta = (row?.metadata ?? {}) as Record<string, unknown>;
+    // Every condition must hold: the row exists, belongs to THIS
+    // event, was uploaded by a guest (never an admin's media), and
+    // carries this exact client_id. Any mismatch answers the same
+    // 404 so this cannot be used to probe for other people's media.
+    const owned = row
+      && row.host_kind === 'event'
+      && row.host_id === link.event_id
+      && meta['source'] === 'guest'
+      && meta['client_id'] === clientId;
+    if (!owned) {
+      sendError(res, 404, 'not_found', 'that upload is not yours to remove');
+      return;
+    }
+
+    const { error: delErr } = await supabase.from('host_media').delete().eq('id', mediaId);
+    if (delErr) {
+      logger.error('guest delete failed', { error: delErr.message });
+      sendError(res, 500, 'delete_failed', 'could not remove that upload');
+      return;
+    }
+
+    // Best-effort storage cleanup: the original plus any variants the
+    // edge function actually wrote (render-URL fallbacks are not
+    // stored objects, so only same-prefix paths are removed).
+    const paths = [row.storage_path as string];
+    const variants = (row.variants ?? {}) as Record<string, unknown>;
+    for (const v of Object.values(variants)) {
+      if (typeof v === 'string' && v && !/^https?:\/\//i.test(v)) paths.push(v);
+    }
+    await removeObject(paths);
+
+    res.status(200).json({ deleted: mediaId });
+  }
+
   // Crash guard: these are the platform's first UNAUTHENTICATED express
   // handlers in module space — an uncaught rejection here would become
   // an unhandledRejection and take the whole API process down (Sentry
@@ -649,6 +766,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     listMedia: guarded(listMedia),
     mintUploads: guarded(mintUploads),
     completeUploads: guarded(completeUploads),
+    listMine: guarded(listMine),
+    deleteMine: guarded(deleteMine),
   };
 }
 
@@ -657,4 +776,8 @@ export function mountGuestRoutes(router: Router, routes: ReturnType<typeof creat
   router.get('/public/event-media/links/:code/media', routes.listMedia);
   router.post('/public/event-media/links/:code/uploads', routes.mintUploads);
   router.post('/public/event-media/links/:code/uploads/complete', routes.completeUploads);
+  // POST, not GET, for both: client_id is the ownership credential and
+  // a query string ends up in access logs and browser history.
+  router.post('/public/event-media/links/:code/mine', routes.listMine);
+  router.post('/public/event-media/links/:code/mine/delete', routes.deleteMine);
 }
