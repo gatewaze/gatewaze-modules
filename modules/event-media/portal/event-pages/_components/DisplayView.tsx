@@ -800,7 +800,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             <div className="absolute inset-0">
               <CinematicPhoto
                 src={displaySrc(current)}
-                depthSrc={current.variants?.depth ?? null}
+                plateSrc={current.variants?.plate ?? null}
+                cutoutSrc={current.variants?.cutout ?? null}
                 depthStrength={settings.depthStrength ?? 1}
                 durationMs={Math.max(settings.intervalMs, 2000)}
                 className="absolute inset-0 w-full h-full"
@@ -967,7 +968,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             {settings.effect === 'cinematic' && (
               <div className="space-y-1.5 -mt-1">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-xs uppercase tracking-wide text-white/50">3D depth</span>
+                  <span className="text-xs uppercase tracking-wide text-white/50">3D separation</span>
                   <span className="text-sm tabular-nums text-white/80">
                     {settings.depthStrength === 0 ? 'off' : `${Math.round((settings.depthStrength ?? 1) * 100)}%`}
                   </span>
@@ -982,8 +983,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                   className="w-full accent-white/80"
                 />
                 <p className="text-xs text-white/40">
-                  Parallax, defocus and haze from each photo&apos;s depth map. Photos without one
-                  still get the camera move.
+                  How far the people separate from the background. Photos whose layers are still
+                  generating get a plain camera move.
                 </p>
               </div>
             )}

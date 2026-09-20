@@ -32,7 +32,7 @@ import {
   validateMintFile,
 } from '../lib/guest-limits.js';
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
-import { runDepth, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -255,48 +255,72 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     created_at: string;
   }
 
+  /** Write one generated asset next to the photo and record the path. */
+  async function storeVariant(
+    mediaId: string,
+    storagePath: string,
+    name: string,
+    bytes: Uint8Array,
+    contentType: string,
+    ext: string,
+  ): Promise<boolean> {
+    const dir = storagePath.slice(0, storagePath.lastIndexOf('/'));
+    if (!dir) return false;
+    const path = `${dir}/variants/${name}.${ext}`;
+    const { error: upErr } = await supabase.storage
+      .from(storageBucket)
+      .upload(path, bytes, { contentType, upsert: true });
+    if (upErr) {
+      logger.warn('layer upload failed', { mediaId, name, error: upErr.message });
+      return false;
+    }
+    // Merge rather than replace: the image-variant edge function writes
+    // thumb/medium into the same column and may land either side of this.
+    const { data: row } = await supabase
+      .from('host_media')
+      .select('variants')
+      .eq('id', mediaId)
+      .maybeSingle();
+    const variants = { ...((row?.variants ?? {}) as Record<string, unknown>), [name]: path };
+    await supabase.from('host_media').update({ variants }).eq('id', mediaId);
+    return true;
+  }
+
   /**
-   * Compute and cache a depth map for one photo.
+   * Build the projector's 3D layers for one photo.
    *
-   * The projector's 3D effect samples this; without it a photo simply
-   * gets a flat camera move. Depth belongs to the photo, so it is
-   * generated once here rather than in every browser that displays it
-   * — the previous client-side approach froze the display for seconds
-   * per photo.
+   * Three assets, each generated once and cached, because they are
+   * properties of the PHOTO rather than of whoever is viewing it:
+   *
+   *   cutout  the people, soft alpha        — the near layer
+   *   plate   the scene with nobody in it   — the far layer
+   *   depth   monocular depth map           — relief within a layer
+   *
+   * Moving two complete layers is what makes the parallax honest. The
+   * previous approach displaced one flat image by its depth map, which
+   * smears at every edge because there is nothing behind the subject to
+   * reveal — the torn cutouts the effect was rightly criticised for.
    *
    * Fire-and-forget and defensively total: this runs detached from the
    * request, so anything thrown here would surface as an
    * unhandledRejection and take the API process down.
    */
-  async function generateDepth(mediaId: string, storagePath: string): Promise<void> {
+  async function generateLayers(mediaId: string, storagePath: string): Promise<void> {
     try {
-      const result = await runDepth(toPublicUrl(storagePath));
-      if (!result.ok) {
-        logger.warn('depth generation failed', { mediaId, error: result.error, detail: result.detail });
-        return;
+      const src = toPublicUrl(storagePath);
+      const [depth, cutout, plate] = await Promise.all([
+        runDepth(src),
+        runCutout(src),
+        runPlate(src),
+      ]);
+      if (depth.ok) await storeVariant(mediaId, storagePath, 'depth', depth.image, 'image/png', 'png');
+      if (cutout.ok) await storeVariant(mediaId, storagePath, 'cutout', cutout.image, 'image/png', 'png');
+      if (plate.ok) await storeVariant(mediaId, storagePath, 'plate', plate.image, 'image/jpeg', 'jpg');
+      for (const [name, r] of [['depth', depth], ['cutout', cutout], ['plate', plate]] as const) {
+        if (!r.ok) logger.warn('layer generation failed', { mediaId, name, error: r.error, detail: r.detail });
       }
-      const dir = storagePath.slice(0, storagePath.lastIndexOf('/'));
-      if (!dir) return;
-      const depthPath = `${dir}/variants/depth.png`;
-      const { error: upErr } = await supabase.storage
-        .from(storageBucket)
-        .upload(depthPath, result.image, { contentType: 'image/png', upsert: true });
-      if (upErr) {
-        logger.warn('depth upload failed', { mediaId, error: upErr.message });
-        return;
-      }
-      // Merge rather than replace: the image-variant edge function
-      // writes thumb/medium into the same column and may land either
-      // side of this.
-      const { data: row } = await supabase
-        .from('host_media')
-        .select('variants')
-        .eq('id', mediaId)
-        .maybeSingle();
-      const variants = { ...((row?.variants ?? {}) as Record<string, unknown>), depth: depthPath };
-      await supabase.from('host_media').update({ variants }).eq('id', mediaId);
     } catch (err) {
-      logger.warn('depth generation crashed', {
+      logger.warn('layer generation crashed', {
         mediaId,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -661,8 +685,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       items.push({ media_id: p.media_id, status: 'created', item: mapFeedItem(inserted as FeedRow) });
 
       if (p.mime_type.startsWith('image/')) {
-        // Depth for the projector's 3D effect, alongside the thumbnails.
-        void generateDepth(p.media_id, p.storage_path);
+        // The projector's 3D layers, alongside the thumbnails.
+        void generateLayers(p.media_id, p.storage_path);
 
         // Fire-and-forget variant generation. invoke() resolves
         // { data, error } on a non-2xx rather than rejecting, so the
