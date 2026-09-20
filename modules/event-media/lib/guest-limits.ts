@@ -122,6 +122,11 @@ export const GUEST_RATE_LIMITS = {
   // NOTE this caps COMPLETE CALLS; each call carries ≤20 tickets, so the
   // true file ceiling is 20× this (240 calls/hr ≈ ≤4,800 files/hr).
   completePerLinkHourly: { max: 240, windowMs: 3_600_000 },
+  // Face filters call a paid GPU endpoint, so they are capped far
+  // harder than anything else: a handful of tries per guest, and a
+  // per-link ceiling so a leaked QR cannot run up a bill.
+  faceFilterPerClient: { max: 6, windowMs: 600_000 },
+  faceFilterPerLinkHourly: { max: 120, windowMs: 3_600_000 },
 } as const;
 
 export function guestRateKey(op: string, discriminator: string): string {
