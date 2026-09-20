@@ -895,7 +895,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               style={{ animation: slideAnimation(settings.effect, current.id, settings.intervalMs) }}
             />
           ) : null}
-          {current?.guest_name && !showQrSlide && (
+          {/* Wedflix owns the whole frame: a browse screen does not
+              credit whoever filmed it. The credit stays on every other
+              effect. */}
+          {current?.guest_name && !showQrSlide && !wedflixActive && (
             <div className="absolute bottom-6 left-6 flex items-center gap-2 text-white/70 text-xl drop-shadow">
               {/* house line-style (outline) camera icon — no emoji */}
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden="true">
