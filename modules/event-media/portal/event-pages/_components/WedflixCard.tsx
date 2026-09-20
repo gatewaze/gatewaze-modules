@@ -118,7 +118,10 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
         style={{
           background:
             'linear-gradient(to right, rgba(0,0,0,.86) 0%, rgba(0,0,0,.55) 30%, rgba(0,0,0,0) 60%),' +
-            'linear-gradient(to top, rgba(0,0,0,.78) 0%, rgba(0,0,0,0) 36%)',
+            'linear-gradient(to top, rgba(0,0,0,.78) 0%, rgba(0,0,0,0) 36%),' +
+            // Keeps the channel bug legible over a bright sky, the way a
+            // streaming nav bar's scrim does.
+            'linear-gradient(to bottom, rgba(0,0,0,.45) 0%, rgba(0,0,0,0) 16%)',
         }}
       />
 
@@ -190,13 +193,15 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
         )}
       </div>
 
+      {/* Channel bug, top right. It sat bottom-right until the display's
+          permanent upload QR card was put there and buried it. */}
       <div
         style={{
-          ...enter(0), position: 'absolute', right: '4.5%', bottom: '6.5%',
+          ...enter(0), position: 'absolute', right: '4.5%', top: '6%',
           color: '#e2231a', fontWeight: 800, textTransform: 'uppercase',
           letterSpacing: '.005em', fontSize: 'clamp(20px, 2.3vw, 46px)',
           transform: `${shown ? 'translateY(0)' : 'translateY(14px)'} scaleY(1.3) scaleX(.94)`,
-          transformOrigin: 'right bottom',
+          transformOrigin: 'right top',
           textShadow: '0 .05em .09em rgba(0,0,0,.6)',
         }}
       >
