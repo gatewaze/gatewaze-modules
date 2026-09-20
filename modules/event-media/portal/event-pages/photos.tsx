@@ -1382,34 +1382,33 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
               </button>
             )}
 
-            {/* Wraps rather than squeezing: three labels do not fit one
-                row at 390px, and a clipped "Save to my photos" is worse
-                than a second line. */}
-            <div className="flex flex-wrap gap-2">
+            {/* The two ways to keep the picture share a row; backing out
+                gets its own. Three across does not fit 390px: every
+                label wraps to two lines and the row turns to mush. */}
+            <div className="flex gap-2">
               <button
                 onClick={acceptShot}
                 disabled={shot.busy !== null}
                 className="flex-1 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50"
-                style={{ backgroundColor: primaryColor, minWidth: '9rem' }}
+                style={{ backgroundColor: primaryColor }}
               >
                 {shot.preview ? 'Upload this one' : 'Upload photo'}
               </button>
               <button
                 onClick={saveShot}
                 disabled={shot.busy !== null}
-                className="flex-1 rounded-lg px-4 py-2.5 text-white/80 bg-white/10 disabled:opacity-50"
-                style={{ minWidth: '9rem' }}
+                className="flex-1 rounded-lg px-4 py-2.5 text-white/80 bg-white/10 ring-1 ring-white/20 disabled:opacity-50"
               >
                 Save to my photos
               </button>
-              <button
-                onClick={() => setShot(null)}
-                disabled={shot.busy !== null}
-                className="rounded-lg px-4 py-2.5 text-white/80 bg-white/10 disabled:opacity-50"
-              >
-                Cancel
-              </button>
             </div>
+            <button
+              onClick={() => setShot(null)}
+              disabled={shot.busy !== null}
+              className="w-full rounded-lg px-4 py-2.5 text-white/60 bg-white/5 ring-1 ring-white/10 disabled:opacity-50"
+            >
+              Cancel
+            </button>
           </div>
           <style>{BOOTH_KEYFRAMES}</style>
         </div>
