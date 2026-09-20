@@ -273,6 +273,18 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // names it in a dependency array — a dependency array is evaluated
   // during render, so a later const would throw before anything paints.
   const pool = poolFor(photos, settings.stream)
+
+  // Must sit ABOVE the `if (!mounted) return null` guard further down:
+  // a hook after an early return runs on some renders and not others,
+  // which is React error #310 and takes the whole display out.
+  useEffect(() => {
+    streamRef.current = settings.stream
+    // Switching stream re-pools from everything already loaded.
+    setPhotos((all) => {
+      photosRef.current = poolFor(all, settings.stream)
+      return all
+    })
+  }, [settings.stream])
   const photosRef = useRef<DisplayItem[]>([])
   const freshQueueRef = useRef<DisplayItem[]>([])
   const newestRef = useRef<string | null>(null)
@@ -799,15 +811,6 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
   // Both modes drive the layered renderer; wedflix adds the overlay.
-  useEffect(() => {
-    streamRef.current = settings.stream
-    // Switching stream re-pools from everything already loaded.
-    setPhotos((all) => {
-      photosRef.current = poolFor(all, settings.stream)
-      return all
-    })
-  }, [settings.stream])
-
   const wedflixActive = settings.effect === 'wedflix'
   const cinematicActive = settings.effect === 'cinematic' || wedflixActive
   const cardCopy = (current?.card ?? null) as CardCopy | null
