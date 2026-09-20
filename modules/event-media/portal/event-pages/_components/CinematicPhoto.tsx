@@ -50,6 +50,38 @@ interface Props {
 
 const FADE_MS = 900
 
+/**
+ * Camera moves, in the Ken Burns sense: a slow zoom combined with a
+ * pan. Pan is expressed as a FRACTION OF THE SLACK the zoom creates
+ * (±1 = right to the edge), so a move can never sample past the edge
+ * of the photo whatever the zoom is.
+ *
+ * The amounts are deliberately much larger than the original effect's:
+ * that pushed in 6% over a whole slide and displaced by under 3%, which
+ * is invisible across a room. These run 8-26%.
+ */
+interface Move { z0: number; z1: number; x0: number; y0: number; x1: number; y1: number }
+
+const MOVES: Move[] = [
+  { z0: 1.08, z1: 1.26, x0: 0, y0: 0, x1: 0, y1: 0 },              // push in
+  { z0: 1.26, z1: 1.08, x0: 0, y0: 0, x1: 0, y1: 0 },              // pull back
+  { z0: 1.16, z1: 1.22, x0: -0.85, y0: 0, x1: 0.85, y1: 0 },       // pan right
+  { z0: 1.22, z1: 1.16, x0: 0.85, y0: 0, x1: -0.85, y1: 0 },       // pan left
+  { z0: 1.10, z1: 1.24, x0: -0.7, y0: 0.7, x1: 0.5, y1: -0.5 },    // dive in, diagonal
+  { z0: 1.24, z1: 1.10, x0: 0.6, y0: -0.6, x1: -0.4, y1: 0.4 },    // rise out, diagonal
+  { z0: 1.12, z1: 1.28, x0: 0.5, y0: 0.6, x1: -0.2, y1: -0.3 },    // push in from low
+  { z0: 1.20, z1: 1.14, x0: 0, y0: -0.8, x1: 0, y1: 0.8 },         // tilt down
+]
+
+/** Same photo always gets the same move, different photos differ. */
+function moveFor(src: string): Move {
+  let h = 0
+  for (let i = 0; i < src.length; i++) h = (h * 31 + src.charCodeAt(i)) | 0
+  return MOVES[Math.abs(h) % MOVES.length]!
+}
+
+const lerp = (a: number, b: number, k: number) => a + (b - a) * k
+
 const VERT = `
 attribute vec2 aPos;
 varying vec2 vUv;
@@ -123,6 +155,8 @@ interface Layer {
   popSafe: boolean
   /** Clock origin for this layer's own pan/zoom/pop cycle. */
   startedAt: number
+  /** The camera move this photo was dealt. */
+  move: Move
   src: string
 }
 
@@ -284,16 +318,21 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
       gl.uniform2f(u.contain, cx, cy)
 
       const t = (now - layer.startedAt) / Math.max(durationRef.current, 2000)
-      // Lissajous drift — never repeats exactly, never snaps.
-      const drift = Math.min(1, t * 4) // ease in over the first quarter
+      // Linear, like a real camera move — easing makes the middle rush.
+      // Clamped so a slide held open does not drift forever.
+      const k = Math.max(0, Math.min(1, t))
+      const m = layer.move
+      const zoom = lerp(m.z0, m.z1, k)
+      // How far the centre can move before the window leaves the photo.
+      const slack = Math.max(0, (1 - 1 / zoom) / 2)
+      gl.uniform1f(u.zoom, zoom)
       gl.uniform2f(
-        u.cam,
-        Math.sin(t * Math.PI * 1.1) * drift,
-        Math.cos(t * Math.PI * 0.7) * 0.6 * drift,
+        u.focus,
+        0.5 + lerp(m.x0, m.x1, k) * slack,
+        0.5 + lerp(m.y0, m.y1, k) * slack,
       )
-      // Slow push-in across the whole slide.
-      gl.uniform1f(u.zoom, 1.0 + Math.min(t, 1) * 0.06)
-      gl.uniform2f(u.focus, layer.focus.x, layer.focus.y)
+      // Parallax rides the move; zero without a depth map.
+      gl.uniform2f(u.cam, Math.sin(k * Math.PI), Math.cos(k * Math.PI) * 0.6)
       gl.uniform1f(u.parallax, layer.depth ? 0.055 : 0)
       gl.uniform1f(u.bgFloor, 0.28)
       gl.uniform1f(u.hasDepth, layer.depth ? 1 : 0)
@@ -416,6 +455,7 @@ export default function CinematicPhoto({ src, analysis, durationMs, enablePop = 
         focus: { x: 0.5, y: 0.42 },
         popSafe: false,
         startedAt: performance.now(),
+        move: moveFor(src),
         src,
       }
 

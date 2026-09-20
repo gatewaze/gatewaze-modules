@@ -29,14 +29,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import CinematicPhoto from './CinematicPhoto'
 import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
-import {
-  analysePhoto,
-  analysisFor,
-  ensureModels,
-  lastAnalysisMs,
-  setPreferWebGPU,
-  type PhotoAnalysis,
-} from './_lib/ai-pipeline'
 
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
@@ -78,8 +70,10 @@ interface DisplaySettings {
   /** Fill 16:9 letterbox bars with a blurred copy of the photo. */
   fillBars: boolean
   /** Background-melt half of the cinematic effect. */
+  /** @deprecated cinematic is GPU-only; kept so stored settings parse. */
   subjectPop: boolean
   /** Opt-in GPU backend for the models (see ai-pipeline note). */
+  /** @deprecated drove the ML backend, which cinematic no longer uses. */
   webgpu: boolean
   /** Rotation order through the pool. */
   order: 'newest' | 'oldest' | 'shuffle'
@@ -245,11 +239,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const [wallCells, setWallCells] = useState<WallCell[]>([])
   const wallPointerRef = useRef(0)
 
-  // Ambient colour spill + on-device analysis for the current photo.
+  // Ambient colour spill for the current photo.
   const [palette, setPalette] = useState<PhotoPalette | null>(null)
-  const [analysis, setAnalysis] = useState<PhotoAnalysis | null>(null)
-  const [aiState, setAiState] = useState<string>('idle')
-  const [aiProgress, setAiProgress] = useState<number>(0)
 
   const [menuVisible, setMenuVisible] = useState(true)
   const menuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -530,75 +521,38 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     return () => { cancelled = true }
   }, [current, settings.ambient])
 
-  // ── On-device analysis (cinematic mode) ───────────────────────────
+  // ── Display-sized sources (cinematic mode) ────────────────────────
 
+  /**
+   * Ask the image service for the size the stage will actually show,
+   * instead of the camera original. A 4K stage needs ~3840x2160; a
+   * phone original is several megabytes of detail that is thrown away
+   * on upload to the GPU. Measured on a 1.2 MB original: 422 KB at
+   * 2160px, and phone photos on the day will be far larger still.
+   *
+   * This is the same Supabase render endpoint already used to fill in
+   * missing thumbnails, so it needs no new infrastructure.
+   */
+  const displaySrc = useCallback((item: DisplayItem): string => {
+    const url = item.url
+    if (!url.includes('/object/public/')) return url
+    const dpr = Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 2)
+    const w = Math.min(3840, Math.max(1280, Math.round((window.innerWidth || 1920) * dpr)))
+    const h = Math.round((w * 9) / 16)
+    return `${url.replace('/object/public/', '/render/image/public/')}?width=${w}&height=${h}&resize=contain&quality=82`
+  }, [])
+
+  // Fetch the NEXT slide's image during the current one, so the
+  // cross-fade always has it decoded and ready.
   useEffect(() => {
-    setPreferWebGPU(settings.webgpu)
-  }, [settings.webgpu])
-
-  // Warm the models up as soon as cinematic is selected, so the first
-  // slide of the evening is not the one that waits for a 50 MB
-  // download over venue wifi.
-  useEffect(() => {
-    if (settings.effect !== 'cinematic') return
-    let cancelled = false
-    setAiState('loading')
-    void ensureModels((pct) => { if (!cancelled) setAiProgress(pct) }).then((ok) => {
-      if (!cancelled) setAiState(ok ? 'ready' : 'unavailable')
-    })
-    return () => { cancelled = true }
-  }, [settings.effect, settings.webgpu])
-
-  // Analyse the CURRENT photo (usually already cached from look-ahead)
-  // and queue the NEXT one, so by the time it appears its depth map
-  // and matte are ready.
-  useEffect(() => {
-    if (settings.effect !== 'cinematic' || !current) { setAnalysis(null); return }
-    let cancelled = false
-
-    const srcFor = (p: DisplayItem) => p.variants?.medium || p.url
-
-    const existing = analysisFor(current.id)
-    setAnalysis(existing)
-    if (!existing) {
-      analysePhoto(current.id, srcFor(current), (a) => {
-        if (!cancelled) setAnalysis(a)
-      })
-    }
-
-    // Look ahead one slide.
+    if (settings.effect !== 'cinematic' || !current) return
     const list = photosRef.current
     const upcoming = freshQueueRef.current[0] ?? list[(indexRef.current + 1) % Math.max(list.length, 1)]
-    if (upcoming && upcoming.id !== current.id) {
-      analysePhoto(upcoming.id, srcFor(upcoming))
-      // Warm the FULL-SIZE original too. The cinematic renderer draws
-      // the original (the medium variant is 800px, too soft for a
-      // 1920-wide projector), and originals measured 2.2 s average on
-      // venue wifi against an 8 s slide. Fetching it during the
-      // previous slide means the cross-fade has it ready. (This effect
-      // has already returned unless the mode is cinematic.)
-      const warm = new window.Image()
-      warm.crossOrigin = 'anonymous'
-      warm.src = upcoming.url
-    }
-
-    return () => { cancelled = true }
-  }, [current, settings.effect])
-
-  // Keep the backlog warm. Analysis costs ~10 s per photo (measured
-  // 2026-09-20, WASM), which is slower than an 8 s slide — so waiting
-  // until a photo is next would mean new uploads never get the effect
-  // during a burst. Instead every photo in the pool is queued in the
-  // background; by the time one comes round it is already cached, and
-  // anything not yet done just shows with a flat pan.
-  useEffect(() => {
-    if (settings.effect !== 'cinematic' || aiState !== 'ready') return
-    const iv = setInterval(() => {
-      const pending = photosRef.current.filter((p) => !analysisFor(p.id)).slice(0, 3)
-      for (const p of pending) analysePhoto(p.id, p.variants?.medium || p.url)
-    }, 5000)
-    return () => clearInterval(iv)
-  }, [settings.effect, aiState, photos.length])
+    if (!upcoming || upcoming.id === current.id) return
+    const warm = new window.Image()
+    warm.crossOrigin = 'anonymous'
+    warm.src = displaySrc(upcoming)
+  }, [current, settings.effect, displaySrc])
 
   // ── QR overlay ────────────────────────────────────────────────────
 
@@ -786,7 +740,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const showYoutube = settings.liveSource === 'youtube' && settings.liveOverride === 'live' && settings.youtubeId
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
-  const cinematicActive = settings.effect === 'cinematic' && aiState !== 'unavailable'
+  // Pure GPU now: no model download, no inference, nothing to fail.
+  const cinematicActive = settings.effect === 'cinematic'
 
   return createPortal(
     <div
@@ -841,10 +796,9 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             // blurred fill until the next original had downloaded.
             <div className="absolute inset-0">
               <CinematicPhoto
-                src={current.url}
-                analysis={analysis}
+                src={displaySrc(current)}
+                analysis={null}
                 durationMs={Math.max(settings.intervalMs, 2000)}
-                enablePop={settings.subjectPop}
                 className="absolute inset-0 w-full h-full"
               />
             </div>
@@ -1008,9 +962,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
             {settings.effect === 'cinematic' && (
               <p className="text-xs text-white/50 -mt-2">
-                {aiState === 'loading' && `Loading models… ${aiProgress}%`}
-                {aiState === 'ready' && `On-device AI ready${lastAnalysisMs() ? ` · ${(lastAnalysisMs() / 1000).toFixed(1)}s per photo` : ''}`}
-                {aiState === 'unavailable' && 'AI unavailable — showing Ken Burns instead'}
+                Slow camera moves, cross-dissolves, rendered on the GPU.
               </p>
             )}
 
@@ -1032,7 +984,6 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             <Row label="Look">
               <Chip on={settings.ambient} onClick={() => updateSettings({ ambient: !settings.ambient })}>Ambient colour</Chip>
               <Chip on={settings.fillBars} onClick={() => updateSettings({ fillBars: !settings.fillBars })}>Blurred fill</Chip>
-              <Chip on={settings.subjectPop} onClick={() => updateSettings({ subjectPop: !settings.subjectPop })}>Subject pop</Chip>
             </Row>
 
             <Row label="QR code">
@@ -1106,14 +1057,6 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               />
             )}
 
-            <Row label="Advanced">
-              <Chip
-                on={settings.webgpu}
-                onClick={() => updateSettings({ webgpu: !settings.webgpu })}
-              >
-                WebGPU
-              </Chip>
-              <span className="text-xs text-white/40 self-center">rehearse before using</span>
             </Row>
 
           </div>
