@@ -139,3 +139,29 @@ describe('boothStatus', () => {
     expect(boothStatus()).toMatchObject({ configured: true, styles: false, swaps: true });
   });
 });
+
+describe('hidden photos', () => {
+  // The feed filter is a plain predicate; pin its semantics so a photo
+  // with no metadata is never mistaken for a hidden one.
+  const visible = (metadata: unknown) =>
+    ((metadata ?? {}) as Record<string, unknown>)['hidden'] !== true;
+
+  it('keeps photos with no metadata at all', () => {
+    expect(visible(null)).toBe(true);
+    expect(visible(undefined)).toBe(true);
+    expect(visible({})).toBe(true);
+  });
+
+  it('keeps photos whose metadata says nothing about hiding', () => {
+    expect(visible({ guest_name: 'Dan', source: 'guest' })).toBe(true);
+  });
+
+  it('drops only an explicit hidden flag', () => {
+    expect(visible({ hidden: true })).toBe(false);
+    // Anything short of boolean true stays visible — a stray string
+    // must not silently remove a guest's photo.
+    expect(visible({ hidden: false })).toBe(true);
+    expect(visible({ hidden: 'true' })).toBe(true);
+    expect(visible({ hidden: 1 })).toBe(true);
+  });
+});

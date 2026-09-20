@@ -404,7 +404,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       .eq('is_approved', true)
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
-      .limit(limit + 1);
+      // Over-fetch: hidden rows are filtered below and would otherwise
+      // eat into the page size.
+      .limit(limit * 2 + 1);
 
     if (filter === 'photo') query = query.like('mime_type', 'image/%');
     else if (filter === 'video') query = query.like('mime_type', 'video/%');
@@ -429,7 +431,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       return;
     }
 
-    const rows = (data ?? []) as FeedRow[];
+    // Photos an operator has hidden — too soft or too dark to put on a
+    // projector — stay out of the feed. Hiding rather than deleting, so
+    // a judgement call about quality is always reversible.
+    const rows = ((data ?? []) as FeedRow[]).filter(
+      (r) => ((r.metadata ?? {}) as Record<string, unknown>)['hidden'] !== true,
+    );
     const page = rows.slice(0, limit);
     const hasMore = rows.length > limit && !after;
     const last = page[page.length - 1];
