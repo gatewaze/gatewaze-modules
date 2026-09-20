@@ -571,6 +571,15 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     const upcoming = freshQueueRef.current[0] ?? list[(indexRef.current + 1) % Math.max(list.length, 1)]
     if (upcoming && upcoming.id !== current.id) {
       analysePhoto(upcoming.id, srcFor(upcoming))
+      // Warm the FULL-SIZE original too. The cinematic renderer draws
+      // the original (the medium variant is 800px, too soft for a
+      // 1920-wide projector), and originals measured 2.2 s average on
+      // venue wifi against an 8 s slide. Fetching it during the
+      // previous slide means the cross-fade has it ready. (This effect
+      // has already returned unless the mode is cinematic.)
+      const warm = new window.Image()
+      warm.crossOrigin = 'anonymous'
+      warm.src = upcoming.url
     }
 
     return () => { cancelled = true }
@@ -825,7 +834,12 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             <img src={previous.url} alt="" className="absolute inset-0 w-full h-full object-contain opacity-0 transition-opacity duration-700" />
           )}
           {current && cinematicActive ? (
-            <div key={`cine-${current.id}`} className="absolute inset-0" style={{ animation: 'emfade 900ms ease' }}>
+            // Deliberately NOT keyed by photo: the renderer keeps one
+            // canvas and one WebGL context for the whole display and
+            // cross-fades between photos itself. Keying it here threw
+            // the canvas away on every slide and left the screen on the
+            // blurred fill until the next original had downloaded.
+            <div className="absolute inset-0">
               <CinematicPhoto
                 src={current.url}
                 analysis={analysis}
