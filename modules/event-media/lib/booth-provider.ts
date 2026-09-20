@@ -46,6 +46,7 @@ const DEFAULT_STYLE_MODEL = 'fal-ai/nano-banana/edit';
 const DEFAULT_SWAP_MODEL = 'fal-ai/face-swap';
 const DEFAULT_DEPTH_MODEL = 'fal-ai/image-preprocessors/depth-anything/v2';
 const DEFAULT_CUTOUT_MODEL = 'fal-ai/birefnet/v2';
+const DEFAULT_VISION_MODEL = 'fal-ai/any-llm/vision';
 
 /**
  * fal model slugs reach the request URL, so they are constrained to the
@@ -230,6 +231,115 @@ async function runFal(modelSlug: string, input: Record<string, unknown>): Promis
 export async function runDepth(imageUrl: string): Promise<BoothResult> {
   if (!falEnabled()) return { ok: false, error: 'not_configured' };
   return runFal(model('BOOTH_DEPTH_MODEL', DEFAULT_DEPTH_MODEL), { image_url: imageUrl });
+}
+
+export interface CardCopy {
+  title: string;
+  words: string[];
+  kind: string;
+  genre: string;
+  eyebrow: string;
+}
+
+const CARD_GENRES = [
+  'horror', 'comedy', 'thriller', 'eighties', 'doc', 'romance', 'scifi', 'crime', 'epic',
+];
+
+/**
+ * Browse-screen copy for one photo: a spoof programme invented from
+ * what is actually IN the picture.
+ *
+ * The register is the whole point and took several attempts to land.
+ * Puns and wedding-greeting-card phrasing read as cheesy; what works is
+ * taking one mundane thing in the photograph completely seriously, so
+ * the title sounds like a real programme somebody might scroll past.
+ */
+export async function runCardCopy(imageUrl: string): Promise<
+  { ok: true; copy: CardCopy } | { ok: false; error: string }
+> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  const key = falKey()!;
+  const headers = { Authorization: `Key ${key}`, 'Content-Type': 'application/json' };
+  const prompt = [
+    'You are writing browse-screen copy for a spoof streaming service at a wedding.',
+    'Invent a programme based on WHAT YOU ACTUALLY SEE in the photograph.',
+    'Return ONLY minified JSON:',
+    '{"title":"","words":["","",""],"kind":"Series|Films","genre":"' + CARD_GENRES.join('|') + '","eyebrow":""}',
+    'title: sounds like a real TV series or film. Dry and comedic, NEVER a pun,',
+    '  never wordplay, never a greeting-card phrase. Funny because it takes',
+    '  something mundane in the photo completely seriously. Two to four words.',
+    '  Good: "The Seating Plan". "Table Nine". "Nobody Left Early".',
+    '  Bad: "Love Is In The Air". "Top Vows". "Happily Ever After".',
+    'words: exactly three streaming descriptors, Title Case, one or two words each.',
+    '  Vary them; do not open every one with "Candid". They should quietly',
+    '  comment on the photo rather than describe a wedding.',
+    'kind: "Series" or "Films".',
+    'genre: the visual style fitting the tone.',
+    'eyebrow: 1-3 words, Title Case, e.g. "Season One", "Limited Series",',
+    '  "New Episodes", "A Wedflix Original".',
+    'Never mention weddings, brides, grooms, vows or marriage in the title.',
+  ].join('\n');
+
+  try {
+    const submit = await withTimeout(
+      fetch(`https://queue.fal.run/${model('BOOTH_VISION_MODEL', DEFAULT_VISION_MODEL)}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model: 'google/gemini-flash-1.5', prompt, image_url: imageUrl }),
+      }),
+      SUBMIT_TIMEOUT_MS,
+    );
+    if (!submit.ok) return { ok: false, error: `submit ${submit.status}` };
+    const queued = await submit.json() as FalQueued;
+    if (!queued.status_url?.startsWith('https://queue.fal.run/') ||
+        !queued.response_url?.startsWith('https://queue.fal.run/')) {
+      return { ok: false, error: 'unexpected queue host' };
+    }
+
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      const poll = await withTimeout(fetch(queued.status_url, { headers }), SUBMIT_TIMEOUT_MS);
+      if (!poll.ok) continue;
+      const state = await poll.json() as { status?: string };
+      if (state.status === 'COMPLETED') break;
+      if (state.status !== 'IN_QUEUE' && state.status !== 'IN_PROGRESS') {
+        return { ok: false, error: String(state.status ?? 'unknown') };
+      }
+    }
+
+    const resp = await withTimeout(fetch(queued.response_url, { headers }), SUBMIT_TIMEOUT_MS);
+    if (!resp.ok) return { ok: false, error: `result ${resp.status}` };
+    const body = await resp.json() as { output?: unknown; text?: unknown };
+    const raw = typeof body.output === 'string' ? body.output
+      : typeof body.text === 'string' ? body.text : '';
+    const match = /\{[\s\S]*\}/.exec(raw);
+    if (!match) return { ok: false, error: 'no json' };
+    const parsed = JSON.parse(match[0]) as Partial<CardCopy>;
+
+    // The model is writing display copy, so everything is clamped and
+    // allowlisted before it can reach the projector.
+    const clean = (v: unknown, max: number) =>
+      typeof v === 'string' ? v.replace(/[\u0000-\u001f]/g, '').trim().slice(0, max) : '';
+    const title = clean(parsed.title, 48);
+    const words = Array.isArray(parsed.words)
+      ? parsed.words.map((w) => clean(w, 24)).filter(Boolean).slice(0, 3)
+      : [];
+    if (!title || words.length !== 3) return { ok: false, error: 'incomplete' };
+
+    return {
+      ok: true,
+      copy: {
+        title,
+        words,
+        kind: parsed.kind === 'Films' ? 'Films' : 'Series',
+        genre: CARD_GENRES.includes(String(parsed.genre)) ? String(parsed.genre) : 'doc',
+        eyebrow: clean(parsed.eyebrow, 28),
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message.slice(0, 120) : 'failed' };
+  }
 }
 
 /**

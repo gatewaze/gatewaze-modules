@@ -28,6 +28,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import CinematicPhoto from './CinematicPhoto'
+import WedflixCard, { type CardCopy } from './WedflixCard'
 import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
 
 // Same-origin — proxied to the api service by the portal's
@@ -49,10 +50,12 @@ interface DisplayItem {
   url: string
   variants: Record<string, string>
   guest_name: string | null
+  /** Browse-card copy, generated per photo. Absent until it lands. */
+  card?: CardCopy | null
   created_at: string
 }
 
-type SlideEffect = 'cinematic' | 'kenburns' | 'grade' | 'fade' | 'slide' | 'zoom' | 'blur'
+type SlideEffect = 'wedflix' | 'cinematic' | 'kenburns' | 'grade' | 'fade' | 'slide' | 'zoom' | 'blur'
 
 interface DisplaySettings {
   mode: 'slideshow' | 'wall'
@@ -126,6 +129,13 @@ function kbVariantFor(id: string): string {
   let h = 0
   for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i)) % 4
   return KB_VARIANTS[h]!
+}
+
+/** Roughly one card in three shows a chart position. */
+function rankFor(id: string): boolean {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
+  return Math.abs(h) % 3 === 0
 }
 
 function slideAnimation(effect: SlideEffect, photoId: string, intervalMs: number): string {
@@ -743,8 +753,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const showYoutube = settings.liveSource === 'youtube' && settings.liveOverride === 'live' && settings.youtubeId
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
-  // Pure GPU now: no model download, no inference, nothing to fail.
-  const cinematicActive = settings.effect === 'cinematic'
+  // Both modes drive the layered renderer; wedflix adds the overlay.
+  const wedflixActive = settings.effect === 'wedflix'
+  const cinematicActive = settings.effect === 'cinematic' || wedflixActive
+  const cardCopy = (current?.card ?? null) as CardCopy | null
 
   return createPortal(
     <div
@@ -806,6 +818,15 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 durationMs={Math.max(settings.intervalMs, 2000)}
                 className="absolute inset-0 w-full h-full"
               />
+              {wedflixActive && cardCopy && (
+                <WedflixCard
+                  copy={cardCopy}
+                  slideKey={current.id}
+                  // A chart position on every card would stop being a
+                  // joke by the third one.
+                  showRank={rankFor(current.id)}
+                />
+              )}
             </div>
           ) : current ? (
             // eslint-disable-next-line @next/next/no-img-element -- projector shows originals full-screen
@@ -951,6 +972,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
             <Row label="Effect">
               {([
+                ['wedflix', 'Wedflix'],
                 ['cinematic', 'Cinematic'],
                 ['kenburns', 'Ken Burns'],
                 ['grade', 'B&W bloom'],

@@ -32,7 +32,7 @@ import {
   validateMintFile,
 } from '../lib/guest-limits.js';
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
-import { runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -313,6 +313,23 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         runCutout(src),
         runPlate(src),
       ]);
+      // Browse-card copy lives in metadata rather than storage — it is
+      // a few short strings, not a file.
+      void (async () => {
+        const copy = await runCardCopy(src);
+        if (!copy.ok) {
+          logger.warn('card copy failed', { mediaId, error: copy.error });
+          return;
+        }
+        const { data: row } = await supabase
+          .from('host_media')
+          .select('metadata')
+          .eq('id', mediaId)
+          .maybeSingle();
+        const metadata = { ...((row?.metadata ?? {}) as Record<string, unknown>), card: copy.copy };
+        await supabase.from('host_media').update({ metadata }).eq('id', mediaId);
+      })();
+
       if (depth.ok) await storeVariant(mediaId, storagePath, 'depth', depth.image, 'image/png', 'png');
       if (cutout.ok) await storeVariant(mediaId, storagePath, 'cutout', cutout.image, 'image/png', 'png');
       if (plate.ok) await storeVariant(mediaId, storagePath, 'plate', plate.image, 'image/jpeg', 'jpg');
@@ -358,6 +375,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       height: r.height,
       variants,
       guest_name: meta['source'] === 'guest' && typeof meta['guest_name'] === 'string' ? meta['guest_name'] : null,
+      card: meta['card'] && typeof meta['card'] === 'object' ? meta['card'] : null,
       created_at: r.created_at,
     };
   }
