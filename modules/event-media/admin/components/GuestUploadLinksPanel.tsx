@@ -8,7 +8,7 @@
  * Per spec-event-media-guest-uploads §8.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { QRCodeService } from '@/utils/qrCodeService';
 import { toast } from 'sonner';
@@ -32,6 +32,14 @@ interface UploadLink {
   created_at: string;
 }
 
+interface FaceFilter {
+  id: string;
+  label: string;
+  source_path: string;
+  is_active: boolean;
+  sort_order: number;
+}
+
 interface PendingMedia {
   id: string;
   storage_path: string;
@@ -41,6 +49,9 @@ interface PendingMedia {
 }
 
 const apiUrl = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
+const supabasePublicUrl = (
+  (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_SUPABASE_URL ?? ''
+).replace(/\/+$/, '');
 const portalUrl =
   (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_PORTAL_URL ??
   (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_APP_URL ??
@@ -60,6 +71,9 @@ const DEFAULT_FORM = {
   allow_video: true,
   auto_approve: true,
   show_gallery: true,
+  // Off by default: a guest's face being altered is never the
+  // out-of-the-box behaviour.
+  allow_face_filter: false,
 };
 
 export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
@@ -112,6 +126,78 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     [baseUrl, customDomainUrl, eventIdentifier],
   );
 
+  // ── Face filters ──────────────────────────────────────────────────
+
+  const [filters, setFilters] = useState<FaceFilter[]>([]);
+  const [provider, setProvider] = useState<{
+    configured: boolean;
+    reason?: string;
+    styles?: boolean;
+    swaps?: boolean;
+  } | null>(null);
+  const [filterLabel, setFilterLabel] = useState('');
+  const [uploadingFace, setUploadingFace] = useState(false);
+  const faceInputRef = useRef<HTMLInputElement | null>(null);
+
+  const loadFilters = useCallback(async () => {
+    try {
+      const res = await authedFetch(`/api/admin/events/${eventId}/face-filters`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setFilters(data.items ?? []);
+      setProvider(data.provider ?? null);
+    } catch {
+      // panel still usable without it
+    }
+  }, [eventId]);
+
+  const addFace = useCallback(async (file: File) => {
+    const label = filterLabel.trim();
+    if (!label) { toast.error('Give the face a name first'); return; }
+    setUploadingFace(true);
+    try {
+      // Reference faces live outside the media rows: they are inputs
+      // to the swap, not gallery content.
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const path = `event/${eventId}/__faces/${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('media').upload(path, file, {
+        contentType: file.type || 'image/jpeg',
+        upsert: false,
+      });
+      if (upErr) { toast.error(`Upload failed: ${upErr.message}`); return; }
+
+      const res = await authedFetch(`/api/admin/events/${eventId}/face-filters`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, source_path: path }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.message ?? 'Could not save that face');
+        return;
+      }
+      toast.success(`Added ${label}`);
+      setFilterLabel('');
+      await loadFilters();
+    } finally {
+      setUploadingFace(false);
+    }
+  }, [eventId, filterLabel, loadFilters]);
+
+  const toggleFilter = useCallback(async (f: FaceFilter) => {
+    const res = await authedFetch(`/api/admin/events/${eventId}/face-filters/${f.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: !f.is_active }),
+    });
+    if (res.ok) await loadFilters(); else toast.error('Could not update that face');
+  }, [eventId, loadFilters]);
+
+  const removeFilter = useCallback(async (f: FaceFilter) => {
+    const res = await authedFetch(`/api/admin/events/${eventId}/face-filters/${f.id}`, { method: 'DELETE' });
+    if (res.ok) { toast.success('Removed'); await loadFilters(); } else toast.error('Could not remove that face');
+  }, [eventId, loadFilters]);
+
   const loadLinks = useCallback(async () => {
     try {
       const res = await authedFetch(`/api/admin/events/${eventId}/media-upload-links`);
@@ -148,6 +234,7 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   useEffect(() => {
     if (!expanded || loaded) return;
     void loadLinks();
+    void loadFilters();
   }, [expanded, loaded, loadLinks]);
 
   const createLink = async () => {
@@ -308,6 +395,7 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                   ['allow_video', 'Allow video'],
                   ['auto_approve', 'Auto-approve'],
                   ['show_gallery', 'Show gallery'],
+                  ['allow_face_filter', 'Face filter'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="flex items-center gap-1.5">
                     <input
@@ -334,6 +422,77 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
             <button className="text-sm underline" onClick={() => setShowCreate(true)}>+ New upload link</button>
           )}
 
+          {/* Photo booth. Style effects need only the provider; face
+              swaps also need the reference faces uploaded below. Both
+              are offered to guests only when the link opts in. */}
+          <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
+            <p className="text-sm font-medium mb-1">Photo booth</p>
+            {provider && !provider.configured ? (
+              <p className="text-xs text-gray-500 mb-2">
+                Not available — {provider.reason}. Set BOOTH_PROVIDER=fal and FAL_API_KEY to
+                enable, then tick &quot;Face filter&quot; on a link.
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500 mb-2">
+                {provider?.styles
+                  ? 'Guests taking a photo can pick a style effect. '
+                  : 'Style effects are off. '}
+                {provider?.swaps
+                  ? 'Add a reference face below to also let them wear it — upload a clear, front-facing photo of each person.'
+                  : 'Face swaps are off.'}
+              </p>
+            )}
+
+            {filters.length > 0 && (
+              <div className="flex flex-wrap gap-3 mb-2">
+                {filters.map((f) => (
+                  <div key={f.id} className="flex flex-col items-center gap-1 w-20">
+                    <img
+                      src={`${supabasePublicUrl}/storage/v1/object/public/media/${f.source_path}`}
+                      alt=""
+                      className={`w-16 h-16 rounded-full object-cover ring-2 ${f.is_active ? 'ring-green-500' : 'ring-gray-300 opacity-50'}`}
+                    />
+                    <span className="text-xs truncate w-full text-center">{f.label}</span>
+                    <div className="flex gap-1.5 text-[11px]">
+                      <button className="underline" onClick={() => toggleFilter(f)}>
+                        {f.is_active ? 'Off' : 'On'}
+                      </button>
+                      <button className="underline text-red-600" onClick={() => removeFilter(f)}>Remove</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={filterLabel}
+                onChange={(e) => setFilterLabel(e.target.value)}
+                placeholder="Name, e.g. Dan"
+                maxLength={40}
+                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm w-36"
+              />
+              <button
+                className="text-sm underline disabled:opacity-50"
+                disabled={uploadingFace || !filterLabel.trim()}
+                onClick={() => faceInputRef.current?.click()}
+              >
+                {uploadingFace ? 'Uploading…' : '+ Add reference photo'}
+              </button>
+              <input
+                ref={faceInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void addFace(f);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+          </div>
           {pending.length > 0 && (
             <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
               <p className="text-sm font-medium mb-2">Pending approval</p>

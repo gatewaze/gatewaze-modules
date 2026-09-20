@@ -122,6 +122,23 @@ export const GUEST_RATE_LIMITS = {
   // NOTE this caps COMPLETE CALLS; each call carries ≤20 tickets, so the
   // true file ceiling is 20× this (240 calls/hr ≈ ≤4,800 files/hr).
   completePerLinkHourly: { max: 240, windowMs: 3_600_000 },
+  // Booth effects call a paid GPU endpoint, so they are capped far
+  // harder than anything else. The per-guest allowance has to cover
+  // actually trying the booth — there are eight or so effects and the
+  // whole point is to flick through them — so it is set above the size
+  // of the catalogue rather than at "a couple of goes". The per-link
+  // hourly ceiling is what stops a leaked QR running up a bill.
+  faceFilterPerClient: { max: 25, windowMs: 600_000 },
+  faceFilterPerLinkHourly: { max: 400, windowMs: 3_600_000 },
+  // client_id is client-chosen, so the per-client cap above does not
+  // bind an attacker who sends a fresh uuid each time; and the per-IP
+  // bucket cannot be tightened to compensate, because a wedding venue
+  // is one NAT and every guest shares it. Without this, one caller
+  // could drain the whole hourly budget in about three minutes and
+  // leave the real guests 429'd for the rest of the hour. A per-link
+  // burst cap spreads the damage over the full hour instead: 30/min is
+  // far more than a room full of guests will ever ask for together.
+  faceFilterPerLinkBurst: { max: 30, windowMs: 60_000 },
 } as const;
 
 export function guestRateKey(op: string, discriminator: string): string {
