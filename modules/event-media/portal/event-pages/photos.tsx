@@ -155,9 +155,22 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     error: string | null
   } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  // Top-level section. The booth needs its own tab because it was
+  // otherwise invisible: nothing on the upload card hinted it existed,
+  // and it only appeared AFTER a guest had already taken a photo with
+  // one particular button.
+  const [section, setSection] = useState<'upload' | 'booth'>('upload')
+  // A look chosen before the camera opens, applied as soon as the photo
+  // comes back — so the guest picks the result they want, rather than
+  // discovering the options afterwards.
+  const [pendingLook, setPendingLook] = useState<
+    { key: string; payload: { filter_id: string } | { effect: string } } | null
+  >(null)
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
+  // Separate input from the main camera: this one faces the guest.
+  const selfieInputRef = useRef<HTMLInputElement | null>(null)
 
   // Mobile detection for the upload takeover. Tracked via matchMedia so
   // the takeover can render through a PORTAL to document.body —
@@ -595,6 +608,34 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     setShot(null)
   }, [shot, enqueueFiles])
 
+  // ── Photo booth ───────────────────────────────────────────────────
+
+  /** Open the front camera, remembering the look to apply afterwards. */
+  const openBooth = useCallback((look: typeof pendingLook) => {
+    setPendingLook(look)
+    selfieInputRef.current?.click()
+  }, [])
+
+  const onSelfieShot = useCallback(async (files: FileList | null) => {
+    const file = files?.[0]
+    if (!file) { setPendingLook(null); return }
+    const dataUrl = await toDataUrl(file)
+    // If the photo cannot be read (an unusual format, say), fall back to
+    // a plain upload rather than dropping the guest's picture.
+    if (!dataUrl) { setPendingLook(null); enqueueFiles(files, true); return }
+    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
+  }, [toDataUrl, enqueueFiles])
+
+  // Apply the chosen look once the shot is in state. Done here rather
+  // than inside onSelfieShot because applyEffect reads `shot`, which is
+  // still null at the moment setShot is called.
+  useEffect(() => {
+    if (!shot || !pendingLook || shot.busy || shot.preview) return
+    const look = pendingLook
+    setPendingLook(null)
+    void applyEffect(look.key, look.payload)
+  }, [shot, pendingLook, applyEffect])
+
   // Safety net: retry stranded completion tickets (a failed flush keeps
   // them pending; complete is idempotent so re-sending is safe), and
   // re-kick the pump if waiting items ever exist without one running.
@@ -664,6 +705,14 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const activeCount = queue.filter((q) => q.status === 'waiting' || q.status === 'uploading' || q.status === 'processing').length
   const failedItems = queue.filter((q) => q.status === 'failed')
 
+  const boothFaces = link?.face_filters ?? []
+  const boothStyles = link?.booth_effects ?? []
+  // The booth turns itself on only when the deployment has a provider
+  // and this link opts in; with neither, the tab never appears and the
+  // page behaves exactly as it did before.
+  const boothOpen = canUpload && !needsName && (boothFaces.length > 0 || boothStyles.length > 0)
+  const activeSection = boothOpen ? section : 'upload'
+
   // On phones, a guest with an upload code gets a full-viewport
   // takeover — the event hero eats half the screen otherwise and this
   // page is about uploading, not browsing the event. Rendered through a
@@ -680,8 +729,32 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
           <p className={`text-xs ${subText}`}>Share your photos from the day</p>
         </div>
       )}
+      {/* Section tabs — the booth's shopfront. Without this the feature
+          is invisible until after a photo has already been taken. */}
+      {boothOpen && (
+        <div className="flex gap-2 mb-4">
+          {([
+            ['upload', 'Add photos'],
+            ['booth', 'Photo booth'],
+          ] as const).map(([val, label]) => (
+            <button
+              key={val}
+              onClick={() => setSection(val)}
+              className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${
+                activeSection === val
+                  ? 'text-white'
+                  : darkMode ? 'bg-white/10 text-white/80' : 'bg-black/5 text-gray-700'
+              }`}
+              style={activeSection === val ? { backgroundColor: primaryColor } : undefined}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Upload bar */}
-      {canUpload && (
+      {canUpload && activeSection === 'upload' && (
         <div className={`${cardBg} rounded-2xl shadow p-5 mb-6`}>
           {needsName ? (
             <div>
@@ -801,6 +874,73 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         </div>
       )}
 
+      {/* Photo booth — pick the look first, then the camera opens. */}
+      {activeSection === 'booth' && (
+        <div className={`${cardBg} rounded-2xl shadow p-5 mb-6`}>
+          <h2 className={`text-lg font-semibold mb-1 ${text}`}>Photo booth</h2>
+          <p className={`text-sm mb-4 ${subText}`}>
+            Pick a look and take a selfie. You&apos;ll see the result before anything is shared,
+            and you can always keep your original.
+          </p>
+
+          {boothFaces.length > 0 && (
+            <div className="flex flex-wrap gap-4 mb-5">
+              {boothFaces.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => openBooth({ key: `filter:${f.id}`, payload: { filter_id: f.id } })}
+                  className="flex flex-col items-center gap-1.5 w-20"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- reference face */}
+                  <img
+                    src={f.preview}
+                    alt=""
+                    className="w-16 h-16 rounded-full object-cover border-2"
+                    style={{ borderColor: primaryColor }}
+                  />
+                  <span className={`text-xs font-medium ${text}`}>Be {f.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {boothStyles.length > 0 && (
+            <div className="grid grid-cols-2 gap-2">
+              {boothStyles.map((e) => (
+                <button
+                  key={e.id}
+                  onClick={() => openBooth({ key: e.id, payload: { effect: e.id } })}
+                  className={`rounded-xl px-3 py-2.5 text-left ring-1 ${
+                    darkMode ? 'bg-white/10 ring-white/20' : 'bg-black/5 ring-black/10'
+                  }`}
+                >
+                  <span className={`block text-sm font-medium leading-tight ${text}`}>{e.label}</span>
+                  <span className={`block text-[11px] leading-tight mt-0.5 ${subText}`}>{e.blurb}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <button
+            onClick={() => openBooth(null)}
+            className={`mt-4 text-sm underline ${subText}`}
+          >
+            Or just take a selfie and choose after
+          </button>
+
+          {/* Lives here, not in the upload card, so it is mounted
+              whenever a look can be tapped. */}
+          <input
+            ref={selfieInputRef}
+            type="file"
+            accept="image/*"
+            capture="user"
+            className="hidden"
+            onChange={(e) => { onSelfieShot(e.target.files); e.target.value = '' }}
+          />
+        </div>
+      )}
+
       {!canUpload && (
         <div className={`${cardBg} rounded-2xl shadow p-5 mb-6`}>
           <p className={`text-sm ${subText}`}>
@@ -810,7 +950,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       )}
 
       {/* Gallery */}
-      {link?.settings.show_gallery && (
+      {link?.settings.show_gallery && activeSection === 'upload' && (
         <div>
           <div className="flex items-center gap-2 mb-3">
             <h2 className={`text-lg font-semibold ${text}`}>
