@@ -35,6 +35,7 @@ import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js
 import { runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { resolveViews, tagView, type View } from '../lib/view-albums.js';
+import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -190,6 +191,32 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     return { link: link as UploadLinkRow, event: event as EventRow };
   }
 
+  // Booth themes (lib/booth-theme.ts), cached per event -- misses too, so
+  // an event without one costs one storage read per window rather than
+  // one per guest page load.
+  const THEME_TTL_MS = 5 * 60_000;
+  const THEME_MAX_BYTES = 64 * 1024;
+  const themeCache = new Map<string, { at: number; raw: unknown }>();
+
+  async function boothThemeFor(eventId: string, offered: string[]): Promise<BoothTheme | null> {
+    if (offered.length === 0) return null;
+    const dir = `event/${eventId}/booth-theme`;
+    let hit = themeCache.get(eventId);
+    if (!hit || Date.now() - hit.at > THEME_TTL_MS) {
+      let raw: unknown = null;
+      try {
+        const { data, error } = await supabase.storage.from(storageBucket).download(`${dir}/theme.json`);
+        if (!error && data && data.size <= THEME_MAX_BYTES) raw = JSON.parse(await data.text());
+      } catch (err) {
+        logger.warn('booth theme unreadable', { eventId, error: err instanceof Error ? err.message : String(err) });
+      }
+      hit = { at: Date.now(), raw };
+      themeCache.set(eventId, hit);
+    }
+    if (hit.raw === null) return null;
+    return parseBoothTheme(hit.raw, new Set(offered), (file) => toBrowserUrl(`${dir}/${file}`));
+  }
+
   // ────────────────────────────────────────────────────────────────────
   // GET /public/event-media/links/:code
   // ────────────────────────────────────────────────────────────────────
@@ -216,6 +243,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       }));
     }
 
+    const boothEffects = link.allow_face_filter && styleConfigured() ? publicEffects() : [];
+    const boothTheme = await boothThemeFor(link.event_id, boothEffects.map((e) => e.id));
+
     res.status(200).json({
       event: {
         // uuid included for the display page's realtime INSERT filter
@@ -239,7 +269,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       face_filters: faceFilters,
       // Style effects need no per-event setup, so they turn on with the
       // provider — unlike swaps, which need reference faces uploaded.
-      booth_effects: link.allow_face_filter && styleConfigured() ? publicEffects() : [],
+      booth_effects: boothEffects,
+      // The illustrated booth, when this event has one; null otherwise.
+      booth_theme: boothTheme,
       logo_url: link.logo_url && /^https?:\/\//.test(link.logo_url)
         ? link.logo_url
         : link.logo_url

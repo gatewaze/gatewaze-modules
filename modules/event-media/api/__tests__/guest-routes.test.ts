@@ -113,6 +113,12 @@ function makeSupabase(config) {
         ),
         createSignedUrl: () => Promise.resolve({ data: { signedUrl: 'https://signed.example/head' }, error: null }),
         remove: (paths) => { state.removed.push(...paths); return Promise.resolve({ data: null, error: null }); },
+        download: (path) => {
+          (state.downloads ??= []).push(path);
+          if (!config.themeJson) return Promise.resolve({ data: null, error: { message: 'not found' } });
+          const text = JSON.stringify(config.themeJson);
+          return Promise.resolve({ data: { size: text.length, text: () => Promise.resolve(text) }, error: null });
+        },
       }),
     },
   };
@@ -252,6 +258,65 @@ describe('link resolution', () => {
     expect(res.body.event.id).toBe(EVENT_ID);
     expect(res.body.settings.require_name).toBe(true);
     expect(res.headers['Cache-Control']).toBe('no-store');
+  });
+});
+
+describe('getLink: booth theme', () => {
+  const ROOM = {
+    image: 'inside.webp', width: 941, height: 1672,
+    window: { x: 0.16, y: 0.18, w: 0.67, h: 0.53 },
+    coin: { x: 0.3, y: 0.76, w: 0.1, h: 0.11 },
+    panel: { x: 0.14, y: 0.73, w: 0.72, h: 0.18 },
+  };
+  const THEME = {
+    version: 1, default_interior: 'main', interiors: { main: ROOM },
+    outside: { image: 'outside.webp', width: 941, height: 1672, tiles: [{ effect: 'decade-1990s', x: 0.3, y: 0.6, w: 0.3, h: 0.2 }] },
+  };
+  const BOOTH_LINK = { ...ACTIVE_LINK, allow_face_filter: true };
+
+  beforeEach(() => {
+    process.env.BOOTH_PROVIDER = 'fal';
+    process.env.FAL_API_KEY = 'test-placeholder';
+  });
+  afterEach(() => {
+    delete process.env.BOOTH_PROVIDER;
+    delete process.env.FAL_API_KEY;
+  });
+
+  const get = async (config) => {
+    const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW, ...config });
+    const routes = createGuestRoutes(deps);
+    const res = mockRes();
+    await routes.getLink(req(), res);
+    return { res, supabase, routes };
+  };
+
+  it('serves the event theme with its images resolved inside the event folder', async () => {
+    const { res, supabase } = await get({ themeJson: THEME });
+    expect(supabase.state.downloads).toEqual([`event/${EVENT_ID}/booth-theme/theme.json`]);
+    expect(res.body.booth_theme.outside.image).toContain(`/event/${EVENT_ID}/booth-theme/outside.webp`);
+    expect(res.body.booth_theme.outside.tiles[0].effect).toBe('decade-1990s');
+  });
+
+  it('serves no theme when the event has none', async () => {
+    const { res } = await get({});
+    expect(res.statusCode).toBe(200);
+    expect(res.body.booth_theme).toBeNull();
+  });
+
+  // Without the booth there are no looks, and a theme with no looks is
+  // a board of buttons that do nothing.
+  it('serves no theme when the link does not offer the booth', async () => {
+    const { res, supabase } = await get({ themeJson: THEME, link: ACTIVE_LINK });
+    expect(res.body.booth_theme).toBeNull();
+    expect(supabase.state.downloads).toBeUndefined();
+  });
+
+  it('reads the theme once and then serves it from cache', async () => {
+    const { routes, supabase } = await get({ themeJson: THEME });
+    await routes.getLink(req(), mockRes());
+    await routes.getLink(req(), mockRes());
+    expect(supabase.state.downloads).toHaveLength(1);
   });
 });
 

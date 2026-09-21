@@ -1,0 +1,589 @@
+'use client'
+
+// @ts-nocheck — portal deps are resolved at build time via webpack alias
+
+/**
+ * The illustrated photo booth: a full-screen place rather than a form.
+ *
+ * Outside, the guest sees the front of a booth with a board of looks
+ * (one tile per decade). Tapping a tile walks them INSIDE: the booth
+ * interior fills the screen, their front camera runs live in the booth's
+ * window, and the coin slot is the shutter -- tap it, a coin drops, 3 2 1,
+ * flash. The picture then develops in the same window, and the machine
+ * panel under it becomes the controls.
+ *
+ * Everything drawn on a scene -- tiles, window, coin slot, panel -- is a
+ * fraction of that painting, from the event's booth theme (served by the
+ * link endpoint; see lib/booth-theme.ts). _lib/booth-stage.ts decides
+ * where the painting sits on a given screen.
+ *
+ * This component owns only the scenes and the camera. The shot itself,
+ * the model call, uploading and saving all stay with the page, exactly as
+ * they are for the plain booth, and are reached through the callbacks.
+ */
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { coverCrop, pctStyle, stageRect } from './_lib/booth-stage'
+
+interface Rect { x: number; y: number; w: number; h: number }
+interface Scene { image: string; width: number; height: number; focus_x: number }
+interface Interior extends Scene { window: Rect; coin: Rect; panel: Rect }
+export interface BoothThemeView {
+  outside: Scene & { tiles: Array<Rect & { effect: string; interior?: string }> }
+  interiors: Record<string, Interior>
+  default_interior: string
+}
+
+export interface BoothLook {
+  key: string
+  payload: { filter_id: string } | { effect: string }
+  label: string
+}
+
+interface Shot {
+  original: string
+  preview: string | null
+  filterLabel: string | null
+  busy: string | null
+  error: string | null
+}
+
+interface Props {
+  theme: BoothThemeView
+  effects: Array<{ id: string; label: string; blurb: string }>
+  faces: Array<{ id: string; label: string; preview: string }>
+  shot: Shot | null
+  /** 0..100 while a look is being made. */
+  progress: number
+  /** Rotating status line while generating. */
+  statusText: string
+  /** True while generating, and for a beat after, so the bar can finish. */
+  generating: boolean
+  primaryColor: string
+  onCaptured: (dataUrl: string, look: BoothLook | null) => void
+  /** No live camera (blocked, or an old browser): use the camera app. */
+  onFallbackCamera: (look: BoothLook | null) => void
+  onRestyle: (look: BoothLook) => void
+  onAccept: () => void
+  onSave: () => void
+  onDiscard: () => void
+  onOriginal: () => void
+  onClose: () => void
+}
+
+type Phase = 'outside' | 'to-inside' | 'inside' | 'to-outside'
+type CamState = 'off' | 'starting' | 'live' | 'blocked'
+
+/** Walking through the curtain. */
+const ENTER_MS = 650
+const ARRIVE_MS = 550
+const COUNT_FROM = 3
+const COUNT_STEP_MS = 800
+const COIN_MS = 480 // matches bx-drop
+
+// The booth styles itself. It is not built from the portal's Tailwind
+// utilities: module code reaches production by snapshot and restart, and
+// a class that nothing else in the portal uses may simply not exist
+// there -- a missing button reset alone paints white boxes over the
+// artwork (seen in the harness). Scoped under .bx-root; the reset uses
+// :where() so it never outranks the bx- rules that follow it.
+const STYLES = `
+.bx-root{position:fixed;top:0;left:0;width:100vw;height:100vh;height:100dvh;z-index:70;background:#000;overflow:hidden;user-select:none;-webkit-user-select:none;
+  touch-action:manipulation;-webkit-tap-highlight-color:transparent;color:#fff;
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.bx-root :where(*,*::before,*::after){box-sizing:border-box}
+.bx-root :where(button){appearance:none;-webkit-appearance:none;background:transparent;border:0;margin:0;padding:0;
+  font:inherit;color:inherit;cursor:pointer;line-height:1.2;text-align:center}
+.bx-root :where(button:disabled){cursor:default;opacity:.45}
+.bx-root :where(p){margin:0}
+.bx-fill{position:absolute;inset:0}
+.bx-abs{position:absolute}
+.bx-art{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;max-width:none}
+.bx-center{display:flex;align-items:center;justify-content:center}
+.bx-glass{background:rgba(12,12,16,.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.14)}
+.bx-pill{display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 14px;border-radius:999px;
+  font-size:14px;font-weight:600;white-space:nowrap}
+.bx-tile{position:absolute;border-radius:8px;transition:transform 160ms ease,box-shadow 160ms ease}
+.bx-window{position:absolute;overflow:hidden;border-radius:10px;background:#000}
+.bx-media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;max-width:none}
+.bx-note{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;padding:16px;text-align:center;font-size:14px;line-height:1.35;color:rgba(255,255,255,.82)}
+.bx-count{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:900;
+  font-size:min(34vw,180px);text-shadow:0 4px 30px rgba(0,0,0,.6);animation:bx-count 800ms ease-out both}
+.bx-flash{position:absolute;inset:0;background:#fff;pointer-events:none;animation:bx-flash 700ms ease-out both}
+.bx-dev{position:absolute;left:0;right:0;bottom:0;padding:16px}
+.bx-status{font-size:14px;font-weight:600;text-align:center;margin-bottom:8px;text-shadow:0 1px 8px rgba(0,0,0,.8);
+  animation:bx-rise 420ms ease-out both}
+.bx-bar{position:relative;height:6px;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.2)}
+.bx-bar-fill{position:absolute;top:0;bottom:0;left:0;border-radius:999px;transition:width 240ms linear}
+.bx-sheen{position:absolute;top:0;bottom:0;width:25%;
+  background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.6),rgba(255,255,255,0));
+  animation:bx-sheen 1.6s ease-in-out infinite}
+.bx-coin{position:absolute;border-radius:8px}
+.bx-coin-live{animation:bx-glow 1.8s ease-in-out infinite}
+.bx-coin-drop{position:absolute;left:50%;top:50%;width:70%;aspect-ratio:1;border-radius:50%;display:flex;
+  align-items:center;justify-content:center;font-weight:900;font-size:11px;color:#6b4d06;
+  background:radial-gradient(circle at 35% 30%,#fff6c8,#e8b938 55%,#9c7414);box-shadow:0 2px 6px rgba(0,0,0,.5);
+  animation:bx-drop 480ms ease-in both}
+.bx-panel{position:absolute;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.bx-hint{position:absolute;left:50%;top:-10px;transform:translate(-50%,-100%);padding:6px 12px;border-radius:999px;
+  font-size:12px;font-weight:600;white-space:nowrap;pointer-events:none;animation:bx-rise-x 500ms ease-out both}
+.bx-controls{pointer-events:auto;width:100%;height:100%;border-radius:14px;padding:10px;display:flex;
+  flex-direction:column;justify-content:center;gap:8px;animation:bx-rise 380ms ease-out both}
+.bx-primary{width:100%;height:44px;border-radius:10px;font-size:14px;font-weight:700;color:#fff}
+.bx-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.bx-btn{height:40px;border-radius:10px;font-size:12px;font-weight:600;background:rgba(255,255,255,.1);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.2)}
+.bx-link{font-size:11px;color:rgba(255,255,255,.6);text-decoration:underline}
+.bx-error{font-size:12px;color:#fcd34d;text-align:center;line-height:1.25}
+.bx-top{position:absolute;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:0 12px}
+.bx-toast{position:absolute;left:50%;transform:translateX(-50%);padding:8px 16px;border-radius:999px;font-size:14px;
+  font-weight:600;white-space:nowrap;animation:bx-rise-x 300ms ease-out both}
+.bx-more{position:absolute;left:50%;transform:translateX(-50%);height:44px;padding:0 22px;border-radius:999px;
+  font-size:14px;font-weight:700}
+.bx-sheet-wrap{position:absolute;inset:0;z-index:10}
+.bx-scrim{position:absolute;inset:0;background:rgba(0,0,0,.5)}
+.bx-sheet{position:absolute;left:0;right:0;bottom:0;width:100%;max-width:32rem;margin:0 auto;border-radius:24px 24px 0 0;padding:20px;
+  display:flex;flex-direction:column;gap:16px;animation:bx-rise 280ms ease-out both}
+.bx-grip{margin:0 auto;height:4px;width:40px;border-radius:999px;background:rgba(255,255,255,.3)}
+.bx-faces{display:flex;gap:16px;overflow-x:auto;padding-bottom:4px}
+.bx-face{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;font-weight:600}
+.bx-face img{width:64px;height:64px;border-radius:50%;object-fit:cover;box-shadow:0 0 0 2px rgba(255,255,255,.6)}
+.bx-looks{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.bx-look{border-radius:12px;padding:10px 12px;text-align:left;background:rgba(255,255,255,.1);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.15)}
+.bx-look b{display:block;font-size:14px;font-weight:600;line-height:1.2}
+.bx-look span{display:block;font-size:11px;line-height:1.25;margin-top:2px;color:rgba(255,255,255,.55)}
+@keyframes bx-drop{0%{transform:translate(-50%,-160%) scale(1.1);opacity:0}25%{opacity:1}
+  80%{transform:translate(-50%,10%) scale(.55);opacity:1}100%{transform:translate(-50%,30%) scale(.4);opacity:0}}
+@keyframes bx-glow{0%,100%{box-shadow:0 0 0 0 rgba(255,214,102,0),0 0 18px 4px rgba(255,214,102,.35)}
+  50%{box-shadow:0 0 0 6px rgba(255,214,102,.25),0 0 28px 10px rgba(255,214,102,.55)}}
+@keyframes bx-count{0%{transform:scale(1.6);opacity:0}20%{transform:scale(1);opacity:1}85%{opacity:1}100%{transform:scale(.9);opacity:0}}
+@keyframes bx-flash{0%{opacity:.95}100%{opacity:0}}
+@keyframes bx-sheen{from{transform:translateX(-100%)}to{transform:translateX(400%)}}
+@keyframes bx-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes bx-rise-x{from{opacity:0;margin-top:8px}to{opacity:1;margin-top:0}}
+@media (prefers-reduced-motion:reduce){.bx-root *{animation:none!important;transition:none!important}}
+`
+
+export default function BoothExperience(props: Props) {
+  const {
+    theme, effects, faces, shot, progress, statusText, generating, primaryColor,
+    onCaptured, onFallbackCamera, onRestyle, onAccept, onSave, onDiscard, onOriginal, onClose,
+  } = props
+
+  const [vp, setVp] = useState({ w: 390, h: 844 })
+  const [phase, setPhase] = useState<Phase>('outside')
+  const [interiorKey, setInteriorKey] = useState<string>(theme.default_interior)
+  const [look, setLook] = useState<BoothLook | null>(null)
+  const [pressed, setPressed] = useState<number | null>(null)
+  const [cam, setCam] = useState<CamState>('off')
+  const [count, setCount] = useState<number | null>(null)
+  const [coinDrop, setCoinDrop] = useState(false)
+  const [flash, setFlash] = useState(0)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const timers = useRef<Array<ReturnType<typeof setTimeout>>>([])
+  const later = useCallback((fn: () => void, ms: number) => {
+    timers.current.push(setTimeout(fn, ms))
+  }, [])
+  useEffect(() => () => timers.current.forEach(clearTimeout), [])
+
+  const interior = theme.interiors[interiorKey] ?? theme.interiors[theme.default_interior]
+  const inside = phase === 'inside' || phase === 'to-outside'
+  const busy = Boolean(shot?.busy)
+  // The camera runs only while there is nothing in the window to look at.
+  const cameraWanted = inside && !shot
+
+  // Fill the screen, whatever the screen does. Measured from the booth's
+  // own full-screen box, not window.innerWidth: before a phone settles
+  // its viewport, innerWidth can report the unscaled 980px layout width,
+  // which drew the board at twice the size of the screen (harness,
+  // 2026-09-21). The box is, by construction, exactly what is filled.
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    // The VISIBLE area where the browser reports it: anything on the page
+    // underneath that is wider than the phone grows the layout viewport,
+    // and a fixed box with it, past the edges of the screen.
+    const vv = window.visualViewport
+    const apply = () => {
+      const r = el.getBoundingClientRect()
+      const w = vv ? Math.min(vv.width, r.width) : r.width
+      const h = vv ? Math.min(vv.height, r.height) : r.height
+      if (w > 0 && h > 0) setVp({ w, h })
+    }
+    apply()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(apply) : null
+    ro?.observe(el)
+    window.addEventListener('resize', apply)
+    vv?.addEventListener('resize', apply)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', apply)
+      vv?.removeEventListener('resize', apply)
+    }
+  }, [])
+
+  // A full-screen place should not scroll the page underneath it.
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [])
+
+  // Warm every interior while the guest reads the board, so walking in
+  // never shows an empty booth loading.
+  useEffect(() => {
+    for (const i of Object.values(theme.interiors)) {
+      const img = new window.Image()
+      img.src = i.image
+    }
+  }, [theme])
+
+  // The live camera. Started only when wanted and always stopped on the
+  // way out, so the phone's camera light goes off as soon as the picture
+  // is taken or the guest leaves.
+  useEffect(() => {
+    if (!cameraWanted) { setCam('off'); return }
+    if (!navigator.mediaDevices?.getUserMedia) { setCam('blocked'); return }
+    let cancelled = false
+    let stream: MediaStream | null = null
+    setCam('starting')
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false })
+      .then((s) => {
+        if (cancelled) { s.getTracks().forEach((t) => t.stop()); return }
+        stream = s
+        const v = videoRef.current
+        if (v) {
+          v.srcObject = s
+          v.play().catch(() => { /* autoplay refusals resolve on the next tap */ })
+        }
+        setCam('live')
+      })
+      .catch(() => { if (!cancelled) setCam('blocked') })
+    return () => {
+      cancelled = true
+      stream?.getTracks().forEach((t) => t.stop())
+      if (videoRef.current) videoRef.current.srcObject = null
+    }
+  }, [cameraWanted])
+
+  const flashNotice = useCallback((text: string) => {
+    setNotice(text)
+    later(() => setNotice(null), 2600)
+  }, [later])
+
+  /** Walk in, optionally restyling a picture already taken. */
+  const enter = useCallback((key: string, chosen: BoothLook | null, tileIndex: number | null) => {
+    if (phase !== 'outside') return
+    setPressed(tileIndex)
+    setMoreOpen(false)
+    setLook(chosen)
+    later(() => {
+      setPhase('to-inside')
+      later(() => {
+        setInteriorKey(theme.interiors[key] ? key : theme.default_interior)
+        setPhase('inside')
+        setPressed(null)
+        // Back outside to choose another decade for the same picture.
+        if (shot && chosen) onRestyle(chosen)
+      }, ENTER_MS)
+    }, 160)
+  }, [phase, later, theme, shot, onRestyle])
+
+  const leave = useCallback(() => {
+    if (busy || count !== null) return
+    setPhase('to-outside')
+    later(() => setPhase('outside'), ARRIVE_MS)
+  }, [busy, count, later])
+
+  const capture = useCallback(() => {
+    const v = videoRef.current
+    if (!v || !v.videoWidth) { onFallbackCamera(look); return }
+    const aspect = (interior.window.w * interior.width) / (interior.window.h * interior.height)
+    const crop = coverCrop(v.videoWidth, v.videoHeight, aspect)
+    const scale = Math.min(1, 1600 / Math.max(crop.sw, crop.sh))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(crop.sw * scale)
+    canvas.height = Math.round(crop.sh * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { onFallbackCamera(look); return }
+    // Mirrored, like the preview: the picture should be the one they saw.
+    ctx.translate(canvas.width, 0)
+    ctx.scale(-1, 1)
+    ctx.drawImage(v, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height)
+    onCaptured(canvas.toDataURL('image/jpeg', 0.9), look)
+  }, [interior, look, onCaptured, onFallbackCamera])
+
+  /** The coin slot. */
+  const insertCoin = useCallback(() => {
+    if (count !== null || shot) return
+    if (cam === 'blocked') { onFallbackCamera(look); return }
+    if (cam !== 'live') return
+    // iOS can hold a stream paused until a gesture; this is one.
+    videoRef.current?.play().catch(() => {})
+    setCoinDrop(true)
+    later(() => {
+      setCoinDrop(false)
+      setCount(COUNT_FROM)
+      for (let i = 1; i < COUNT_FROM; i++) later(() => setCount(COUNT_FROM - i), i * COUNT_STEP_MS)
+      later(() => {
+        setCount(null)
+        setFlash((f) => f + 1)
+        capture()
+      }, COUNT_FROM * COUNT_STEP_MS)
+    }, COIN_MS)
+  }, [count, shot, cam, look, later, capture, onFallbackCamera])
+
+  const accept = useCallback(() => {
+    onAccept()
+    flashNotice('Sent to the big screen')
+  }, [onAccept, flashNotice])
+
+  // ── Layout ─────────────────────────────────────────────────────────
+
+  const outsideBox = stageRect(vp.w, vp.h, theme.outside.width, theme.outside.height, theme.outside.focus_x)
+  const insideBox = stageRect(vp.w, vp.h, interior.width, interior.height, interior.focus_x)
+
+  // Through the curtain: the board swells and darkens, then the interior
+  // settles in from slightly too close.
+  const outsideStyle = {
+    transition: `transform ${ENTER_MS}ms cubic-bezier(.5,0,.75,0), opacity ${ENTER_MS}ms ease-in, filter ${ENTER_MS}ms ease-in`,
+    transformOrigin: '12% 55%',
+    transform: phase === 'to-inside' ? 'scale(2.4)' : 'scale(1)',
+    opacity: phase === 'to-inside' || inside ? 0 : 1,
+    filter: phase === 'to-inside' ? 'blur(6px) brightness(.4)' : 'none',
+    pointerEvents: phase === 'outside' ? 'auto' : 'none',
+  } as const
+  const insideStyle = {
+    transition: `transform ${ARRIVE_MS}ms cubic-bezier(.2,.7,.3,1), opacity ${ARRIVE_MS}ms ease-out`,
+    transform: phase === 'inside' ? 'scale(1)' : 'scale(1.08)',
+    opacity: phase === 'inside' ? 1 : 0,
+    pointerEvents: phase === 'inside' ? 'auto' : 'none',
+  } as const
+
+  const tileLooks = new Set(theme.outside.tiles.map((t) => t.effect))
+  const extraEffects = effects.filter((e) => !tileLooks.has(e.id))
+  const hasMore = faces.length > 0 || extraEffects.length > 0
+  const labelFor = (id: string) => effects.find((e) => e.id === id)?.label ?? id
+  const result = shot ? shot.preview ?? shot.original : null
+  const showControls = Boolean(shot) && !busy && !generating
+  const topInset = 'calc(env(safe-area-inset-top, 0px) + 10px)'
+
+  return (
+    <div ref={rootRef} className="bx-root" data-event-media-overlay="" role="dialog" aria-modal="true" aria-label="Photo booth">
+      <style>{STYLES}</style>
+
+      {/* ── Outside ──────────────────────────────────────────────── */}
+      <div className="bx-fill" style={outsideStyle} aria-hidden={inside}>
+        <div className="bx-abs" style={outsideBox}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- themed artwork */}
+          <img src={theme.outside.image} alt="" draggable={false} className="bx-art" />
+          {theme.outside.tiles.map((t, i) => (
+            <button
+              key={`${t.effect}-${i}`}
+              type="button"
+              aria-label={`${labelFor(t.effect)} photo booth`}
+              onClick={() => enter(t.interior ?? theme.default_interior, {
+                key: t.effect, payload: { effect: t.effect }, label: labelFor(t.effect),
+              }, i)}
+              className="bx-tile"
+              style={{
+                ...pctStyle(t),
+                transform: pressed === i ? 'scale(.94)' : 'scale(1)',
+                boxShadow: pressed === i ? '0 0 0 3px rgba(255,255,255,.9), 0 0 30px 8px rgba(255,80,200,.6)' : 'none',
+              }}
+            />
+          ))}
+        </div>
+
+        {hasMore && phase === 'outside' && (
+          <button
+            type="button"
+            onClick={() => setMoreOpen(true)}
+            className="bx-more bx-glass"
+            style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 18px)' }}
+          >
+            More looks
+          </button>
+        )}
+      </div>
+
+      {/* ── Inside ───────────────────────────────────────────────── */}
+      <div className="bx-fill" style={insideStyle} aria-hidden={!inside}>
+        <div className="bx-abs" style={insideBox}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- themed artwork */}
+          <img src={interior.image} alt="" draggable={false} className="bx-art" />
+
+          {/* The window: live camera, then the picture developing in it. */}
+          <div className="bx-window" style={pctStyle(interior.window)}>
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              autoPlay
+              className="bx-media"
+              style={{ transform: 'scaleX(-1)', opacity: cam === 'live' && !result ? 1 : 0, transition: 'opacity 300ms' }}
+            />
+
+            {result && (
+              // eslint-disable-next-line @next/next/no-img-element -- local data URL
+              <img
+                src={result}
+                alt={shot?.filterLabel ? `Your ${shot.filterLabel} photo` : 'Your photo'}
+                className="bx-media"
+                style={{ filter: busy ? 'grayscale(.6) brightness(.55) blur(2px)' : 'none', transition: 'filter 500ms' }}
+              />
+            )}
+
+            {!result && cam === 'starting' && <div className="bx-note">Warming up the camera…</div>}
+            {!result && cam === 'blocked' && (
+              <div className="bx-note">
+                <p>The booth can&apos;t see you. Allow the camera for this site, or use your camera app instead.</p>
+                <button
+                  type="button"
+                  onClick={() => onFallbackCamera(look)}
+                  className="bx-pill"
+                  style={{ backgroundColor: primaryColor }}
+                >
+                  Open camera
+                </button>
+              </div>
+            )}
+
+            {count !== null && <div key={count} className="bx-count">{count}</div>}
+            {flash > 0 && <div key={flash} className="bx-flash" />}
+
+            {(busy || generating) && (
+              <div className="bx-dev" aria-live="polite">
+                <p key={statusText} className="bx-status">{statusText}</p>
+                <div className="bx-bar" role="progressbar" aria-label="Making your picture">
+                  <div className="bx-bar-fill" style={{ width: `${progress}%`, backgroundColor: primaryColor }} />
+                  {busy && <div className="bx-sheen" />}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* The coin slot is the shutter. */}
+          {!shot && (
+            <button
+              type="button"
+              aria-label="Insert a coin to take the photo"
+              onClick={insertCoin}
+              disabled={count !== null || cam === 'starting' || cam === 'off'}
+              className={`bx-coin${cam === 'live' && count === null ? ' bx-coin-live' : ''}`}
+              style={{ ...pctStyle(interior.coin), opacity: 1 }}
+            >
+              {coinDrop && <span className="bx-coin-drop">£1</span>}
+            </button>
+          )}
+
+          {/* The machine panel: the hint before, the controls after. It
+              covers the coin slot, so it only catches taps when it has
+              controls to offer. */}
+          <div className="bx-panel" style={pctStyle(interior.panel)}>
+            {!shot && cam === 'live' && count === null && !coinDrop && (
+              <span className="bx-hint bx-glass">Tap the coin slot to take your photo</span>
+            )}
+            {showControls && (
+              <div className="bx-controls bx-glass">
+                {shot?.error && <p className="bx-error">{shot.error}</p>}
+                <button type="button" onClick={accept} className="bx-primary" style={{ backgroundColor: primaryColor }}>
+                  Put it on the big screen
+                </button>
+                <div className="bx-row">
+                  <button type="button" onClick={onSave} className="bx-btn">Save</button>
+                  <button type="button" onClick={onDiscard} className="bx-btn">Retake</button>
+                  <button type="button" onClick={leave} className="bx-btn">New look</button>
+                </div>
+                {shot?.preview && (
+                  <button type="button" onClick={onOriginal} className="bx-link">Use my original instead</button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Chrome ───────────────────────────────────────────────── */}
+      <div className="bx-top" style={{ top: topInset }}>
+        {inside ? (
+          <button type="button" onClick={leave} disabled={busy || count !== null} className="bx-pill bx-glass">
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+            Step outside
+          </button>
+        ) : (
+          <button type="button" onClick={onClose} disabled={busy} className="bx-pill bx-glass" aria-label="Leave the photo booth">
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            Close
+          </button>
+        )}
+        {inside && look && <span className="bx-pill bx-glass">{look.label}</span>}
+      </div>
+
+      {notice && (
+        <div className="bx-toast bx-glass" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 62px)' }} role="status">
+          {notice}
+        </div>
+      )}
+
+      {/* ── More looks: the faces, and any look not on the board ──── */}
+      {moreOpen && (
+        <div className="bx-sheet-wrap" onClick={() => setMoreOpen(false)}>
+          <div className="bx-scrim" />
+          <div
+            className="bx-sheet bx-glass"
+            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bx-grip" />
+            {faces.length > 0 && (
+              <div className="bx-faces">
+                {faces.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => enter(theme.default_interior, {
+                      key: `filter:${f.id}`, payload: { filter_id: f.id }, label: `Be ${f.label}`,
+                    }, null)}
+                    className="bx-face"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- reference face */}
+                    <img src={f.preview} alt="" />
+                    Be {f.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {extraEffects.length > 0 && (
+              <div className="bx-looks">
+                {extraEffects.map((e) => (
+                  <button
+                    key={e.id}
+                    type="button"
+                    onClick={() => enter(theme.default_interior, { key: e.id, payload: { effect: e.id }, label: e.label }, null)}
+                    className="bx-look"
+                  >
+                    <b>{e.label}</b>
+                    <span>{e.blurb}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

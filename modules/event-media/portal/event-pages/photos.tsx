@@ -23,6 +23,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
+import BoothExperience, { type BoothLook, type BoothThemeView } from './_components/BoothExperience'
 
 // Same-origin ALWAYS: the portal proxies /api/public/* to the api
 // service (next.config rewrites). NEXT_PUBLIC_API_URL is unreliable in
@@ -55,7 +56,7 @@ const BOOTH_SAVE_TYPES: Record<string, string> = {
 const BOOTH_STATUS = [
   'Setting the scene…',
   'Finding your best side…',
-  'Adding the 80s…',
+  'Developing…',
   'Almost there…',
 ]
 
@@ -96,6 +97,8 @@ interface LinkInfo {
   logo_url: string | null
   face_filters?: Array<{ id: string; label: string; preview: string }>
   booth_effects?: Array<{ id: string; label: string; blurb: string; kind: 'swap' | 'style' }>
+  /** The illustrated booth, when the event has one (lib/booth-theme.ts). */
+  booth_theme?: BoothThemeView | null
 }
 
 interface GalleryItem {
@@ -278,6 +281,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     for (const el of Array.from(document.body.children)) {
       if (!(el instanceof HTMLElement)) continue
       if (el === node || el.contains(node)) continue
+      // Our own other full-screen layers (the illustrated booth) are
+      // body children too, and hiding them hid the booth on every phone
+      // (harness, 2026-09-21).
+      if (el.dataset.eventMediaOverlay !== undefined) continue
       const cs = getComputedStyle(el)
       const decorative = cs.position === 'fixed' && cs.pointerEvents === 'none'
       if (decorative) continue
@@ -803,6 +810,22 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
   }, [toDataUrl, enqueueFiles])
 
+  // The illustrated booth hands back a picture it took itself, from the
+  // live camera in its window, and goes through the same look-then-apply
+  // path as the camera app does.
+  const onBoothCaptured = useCallback((dataUrl: string, look: BoothLook | null) => {
+    setPendingLook(look ? { key: look.key, payload: look.payload } : null)
+    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
+  }, [])
+
+  const onBoothFallback = useCallback((look: BoothLook | null) => {
+    openBooth(look ? { key: look.key, payload: look.payload } : null)
+  }, [openBooth])
+
+  const onBoothRestyle = useCallback((look: BoothLook) => {
+    void applyEffect(look.key, look.payload)
+  }, [applyEffect])
+
   // Apply the chosen look once the shot is in state. Done here rather
   // than inside onSelfieShot because applyEffect reads `shot`, which is
   // still null at the moment setShot is called.
@@ -889,6 +912,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   // page behaves exactly as it did before.
   const boothOpen = canUpload && !needsName && (boothFaces.length > 0 || boothStyles.length > 0)
   const activeSection = boothOpen ? section : 'upload'
+  // With a theme, the booth is a place you walk into rather than a card:
+  // full screen, over everything, on phones and desktops alike.
+  const boothTheme = link?.booth_theme ?? null
+  const immersiveBooth = activeSection === 'booth' && Boolean(boothTheme) && mounted
 
   // On phones, a guest with an upload code gets a full-viewport
   // takeover — the event hero eats half the screen otherwise and this
@@ -1051,8 +1078,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         </div>
       )}
 
-      {/* Photo booth — pick the look first, then the camera opens. */}
-      {activeSection === 'booth' && (
+      {/* Photo booth — pick the look first, then the camera opens. With
+          a theme the illustrated booth replaces this card entirely, so
+          nothing under it can widen the page (below). */}
+      {activeSection === 'booth' && !immersiveBooth && (
         <div className={`${cardBg} rounded-2xl shadow p-5 mb-6`}>
           <h2 className={`text-lg font-semibold mb-1 ${text}`}>Photo booth</h2>
           <p className={`text-sm mb-4 ${subText}`}>
@@ -1105,17 +1134,22 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
             Or just take a selfie and choose after
           </button>
 
-          {/* Lives here, not in the upload card, so it is mounted
-              whenever a look can be tapped. */}
-          <input
-            ref={selfieInputRef}
-            type="file"
-            accept="image/*"
-            capture="user"
-            className="hidden"
-            onChange={(e) => { onSelfieShot(e.target.files); e.target.value = '' }}
-          />
         </div>
+      )}
+
+      {/* The front-camera input, mounted whenever the booth is open --
+          the plain card's looks and the illustrated booth's "use your
+          camera app" fallback both open it. Inline display:none rather
+          than a utility class, so it cannot depend on the portal's CSS. */}
+      {activeSection === 'booth' && (
+        <input
+          ref={selfieInputRef}
+          type="file"
+          accept="image/*"
+          capture="user"
+          style={{ display: 'none' }}
+          onChange={(e) => { onSelfieShot(e.target.files); e.target.value = '' }}
+        />
       )}
 
       {!canUpload && (
@@ -1277,7 +1311,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       {/* Camera shot + filter step. Nothing here has been uploaded:
           the guest chooses the original or a filtered version, and
           can always back out entirely. */}
-      {shot && (
+      {shot && !immersiveBooth && (
         <div className="fixed inset-0 z-[60] bg-black/95 flex flex-col">
           <div className="flex-1 min-h-0 flex items-center justify-center p-3">
             {/* eslint-disable-next-line @next/next/no-img-element -- local data URL preview */}
@@ -1448,8 +1482,30 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     </div>
   )
 
+  const booth = immersiveBooth ? createPortal(
+    <BoothExperience
+      theme={boothTheme!}
+      effects={boothStyles}
+      faces={boothFaces}
+      shot={shot}
+      progress={boothProgress}
+      statusText={shot?.busy ? BOOTH_STATUS[boothStatus] : 'Here you go…'}
+      generating={Boolean(shot?.busy) || boothFinishing}
+      primaryColor={primaryColor}
+      onCaptured={onBoothCaptured}
+      onFallbackCamera={onBoothFallback}
+      onRestyle={onBoothRestyle}
+      onAccept={acceptShot}
+      onSave={saveShot}
+      onDiscard={() => { setPendingLook(null); setShot(null) }}
+      onOriginal={() => setShot((s) => (s ? { ...s, preview: null, filterLabel: null } : s))}
+      onClose={() => { setPendingLook(null); setShot(null); setSection('upload') }}
+    />,
+    document.body,
+  ) : null
+
   if (mobileTakeover) {
-    return createPortal(
+    return <>{createPortal(
       // No background of its own: the page content underneath is
       // hidden by the effect above, leaving only the brand's animated
       // gradient layer visible behind the upload UI. Painting a solid
@@ -1460,8 +1516,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         {pageContent}
       </div>,
       document.body,
-    )
+    )}{booth}</>
   }
 
-  return pageContent
+  return <>{pageContent}{booth}</>
 }
