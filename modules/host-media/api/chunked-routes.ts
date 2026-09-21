@@ -139,7 +139,11 @@ export function createChunkedRoutes(deps: ChunkedRoutesDeps) {
   return { init, commit };
 }
 
-export function mountChunkedRoutes(router: Router, routes: ReturnType<typeof createChunkedRoutes>): void {
-  router.post('/:hostKind/:hostId/media/chunked-init', routes.init);
-  router.post('/:hostKind/:hostId/media/chunked-commit/:uploadId', routes.commit);
+export function mountChunkedRoutes(
+  router: Router,
+  routes: ReturnType<typeof createChunkedRoutes>,
+  authorize: import('express').RequestHandler,
+): void {
+  router.post('/:hostKind/:hostId/media/chunked-init', authorize, routes.init);
+  router.post('/:hostKind/:hostId/media/chunked-commit/:uploadId', authorize, routes.commit);
 }
