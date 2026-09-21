@@ -34,6 +34,7 @@ import {
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
 import { runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
+import { resolveViews, tagView, type View } from '../lib/view-albums.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -374,7 +375,39 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     return browserObjectUrl(cdn, publicSupabaseUrl, storageBucket, storagePath);
   }
 
-  function mapFeedItem(r: FeedRow) {
+  /**
+   * The projector view of each photo on a page, from its view-album
+   * membership (lib/view-albums.ts). Never fails the feed: on any error
+   * the photos fall back to their tags, which is where they were shown
+   * before the albums existed.
+   */
+  async function viewsFor(eventId: string, rows: FeedRow[]): Promise<Map<string, View>> {
+    const tags = new Map(rows.map((r) => [r.id, tagView(r.metadata)] as [string, View]));
+    if (rows.length === 0) return tags;
+    try {
+      const { data: albums, error: aErr } = await supabase
+        .from('event_media_view_albums')
+        .select('album_id, view')
+        .eq('event_id', eventId);
+      if (aErr) throw new Error(aErr.message);
+      if (!albums || albums.length === 0) return tags;
+      // Ids come from the rows just read, never from the request.
+      const { data: items, error: iErr } = await supabase
+        .from('host_media_album_items')
+        .select('album_id, media_id')
+        .in('album_id', albums.map((a: { album_id: string }) => a.album_id))
+        .in('media_id', rows.map((r) => r.id));
+      if (iErr) throw new Error(iErr.message);
+      return resolveViews(albums, items ?? [], tags);
+    } catch (err) {
+      logger.warn('view albums unavailable; using tags', {
+        eventId, error: err instanceof Error ? err.message : String(err),
+      });
+      return tags;
+    }
+  }
+
+  function mapFeedItem(r: FeedRow, view?: View) {
     const meta = (r.metadata ?? {}) as Record<string, unknown>;
     const variants: Record<string, string> = {};
     if (r.variants && typeof r.variants === 'object') {
@@ -401,9 +434,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       variants,
       guest_name: meta['source'] === 'guest' && typeof meta['guest_name'] === 'string' ? meta['guest_name'] : null,
       card: meta['card'] && typeof meta['card'] === 'object' ? meta['card'] : null,
-      // 'booth' | 'day' | 'seed'. Older rows predate this and read as
-      // 'seed', which is what they are.
-      album: typeof meta['album'] === 'string' ? meta['album'] : 'seed',
+      // 'booth' | 'day' | 'seed': the view album it is in, else its tag.
+      // Older rows predate the tag and read as 'seed', which they are.
+      album: view ?? tagView(meta),
       created_at: r.created_at,
     };
   }
@@ -486,8 +519,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const page = rows.slice(0, limit);
     const hasMore = rows.length > limit && !after;
     const last = page[page.length - 1];
+    const views = await viewsFor(link.event_id, page);
     res.status(200).json({
-      items: page.map(mapFeedItem),
+      items: page.map((r) => mapFeedItem(r, views.get(r.id))),
       next_cursor: hasMore && last ? encodeCursor(last.created_at, last.id) : null,
     });
   }
