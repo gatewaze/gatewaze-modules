@@ -56,12 +56,17 @@ interface Props {
   depthStrength?: number
   /** 'pan' tracks across at a fixed size; 'panzoom' adds a push-in. */
   camera?: 'pan' | 'panzoom'
+  /** Soften the incoming photo through the dissolve. */
+  blurTransition?: boolean
   /** Slide duration; the camera move is timed against it. */
   durationMs: number
   className?: string
 }
 
 const FADE_MS = 900
+
+/** How soft the incoming photo starts when the blur transition is on. */
+const BLUR_MAX_PX = 16
 
 /**
  * How much larger the background is drawn than the photograph's window.
@@ -174,6 +179,74 @@ function aimFromCutout(img: HTMLImageElement): { x: number; y: number } {
   }
 }
 
+/**
+ * Did the inpainting actually remove the people?
+ *
+ * Sometimes it does not. A tight selfie leaves the model almost no
+ * background to reconstruct, so it returns the photograph more or less
+ * unchanged — and the renderer then slides a cutout of the people over
+ * a background that still contains them, which reads as a smeared
+ * double exposure.
+ *
+ * Comparing the plate with the original INSIDE the subject's own mask
+ * catches it: if those pixels barely changed, nobody was removed.
+ * Returns the mean absolute difference, 0..255.
+ */
+function plateChange(
+  photo: HTMLImageElement,
+  plate: HTMLImageElement,
+  cutout: HTMLImageElement,
+): number {
+  try {
+    const w = 128
+    const h = Math.max(1, Math.round((photo.naturalHeight / photo.naturalWidth) * w))
+    const read = (img: HTMLImageElement) => {
+      const c = document.createElement('canvas')
+      c.width = w
+      c.height = h
+      const g = c.getContext('2d', { willReadFrequently: true })
+      if (!g) return null
+      g.drawImage(img, 0, 0, w, h)
+      return g.getImageData(0, 0, w, h).data
+    }
+    const a = read(photo)
+    const b = read(plate)
+    const m = read(cutout)
+    if (!a || !b || !m) return 255
+
+    let sum = 0
+    let n = 0
+    for (let i = 0; i < w * h; i++) {
+      if (m[i * 4 + 3]! < 160) continue
+      const la = 0.299 * a[i * 4]! + 0.587 * a[i * 4 + 1]! + 0.114 * a[i * 4 + 2]!
+      const lb = 0.299 * b[i * 4]! + 0.587 * b[i * 4 + 1]! + 0.114 * b[i * 4 + 2]!
+      sum += Math.abs(la - lb)
+      n++
+    }
+    // Too small a mask to judge; let the layers through rather than
+    // flattening a photo on no evidence.
+    if (n < 64) return 255
+    return sum / n
+  } catch {
+    return 255
+  }
+}
+
+/**
+ * Below this the plate still contains the people.
+ *
+ * Measured against the live album of 140 layered photos, then checked
+ * by eye at the boundary: plates scoring 4.5, 14.9, 23.4 and 31.5 still
+ * had their subjects entirely intact, while 36.4 and 44.8 were properly
+ * reconstructed. 35 sits in that gap and flattens 12 photos, every one
+ * of them a selfie — which is exactly where the failure was reported.
+ *
+ * Erring high is deliberate. A photo wrongly flattened merely loses its
+ * parallax and still looks like a photograph; a plate wrongly trusted
+ * slides the people over themselves and looks broken.
+ */
+const PLATE_MIN_CHANGE = 35
+
 interface Layer {
   photo: HTMLImageElement
   plate: HTMLImageElement | null
@@ -185,19 +258,24 @@ interface Layer {
 }
 
 export default function CinematicPhoto({
-  src, plateSrc, cutoutSrc, depthStrength = 1, camera = 'pan', durationMs, className,
+  src, plateSrc, cutoutSrc, depthStrength = 1, camera = 'pan',
+  blurTransition = true, durationMs, className,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const rafRef = useRef<number | null>(null)
   const curRef = useRef<Layer | null>(null)
   const prevRef = useRef<Layer | null>(null)
   const fadeFromRef = useRef(0)
+  /** Scratch canvas the incoming photo is composited on before it fades. */
+  const offRef = useRef<HTMLCanvasElement | null>(null)
 
   // Read by the render loop without restarting it.
   const durationRef = useRef(durationMs)
   const strengthRef = useRef(depthStrength)
   const cameraRef = useRef(camera)
+  const blurRef = useRef(blurTransition)
   cameraRef.current = camera
+  blurRef.current = blurTransition
   durationRef.current = durationMs
   strengthRef.current = depthStrength
 
@@ -272,6 +350,7 @@ export default function CinematicPhoto({
      * whatever the zoom, then offset it.
      */
     const drawImage = (
+      g: CanvasRenderingContext2D,
       img: HTMLImageElement, aim: { x: number; y: number }, zoom: number,
       panX: number, panY: number, nudgeX: number, nudgeY: number,
       w: number, h: number, alpha: number,
@@ -281,12 +360,15 @@ export default function CinematicPhoto({
       const ih = img.naturalHeight * scale
       const x = place(iw, w, w / 2 - aim.x * iw, panX, nudgeX)
       const y = place(ih, h, h / 2 - aim.y * ih, panY, nudgeY)
-      ctx.globalAlpha = alpha
-      ctx.drawImage(img, x, y, iw, ih)
-      ctx.globalAlpha = 1
+      g.globalAlpha = alpha
+      g.drawImage(img, x, y, iw, ih)
+      g.globalAlpha = 1
     }
 
-    const drawLayer = (layer: Layer, now: number, w: number, h: number, alpha: number) => {
+    const drawLayer = (
+      g: CanvasRenderingContext2D,
+      layer: Layer, now: number, w: number, h: number, alpha: number,
+    ) => {
       const t = (now - layer.startedAt) / Math.max(durationRef.current, 2000)
       // Linear, like a real camera move; easing makes the middle rush.
       const k = Math.max(0, Math.min(1, t))
@@ -302,7 +384,7 @@ export default function CinematicPhoto({
       // No layers to separate, so there is nothing to hold still: the
       // whole photograph drifts, which is the Ken Burns behaviour.
       if (!layered) {
-        drawImage(layer.photo, layer.aim, zoom, panX, panY, 0, 0, w, h, alpha)
+        drawImage(g, layer.photo, layer.aim, zoom, panX, panY, 0, 0, w, h, alpha)
         return
       }
 
@@ -326,10 +408,10 @@ export default function CinematicPhoto({
       const wx = place(iw, w, w / 2 - layer.aim.x * iw, 0, 0)
       const wy = place(ih, h, h / 2 - layer.aim.y * ih, 0, 0)
 
-      ctx.save()
-      ctx.beginPath()
-      ctx.rect(wx, wy, iw, ih)
-      ctx.clip()
+      g.save()
+      g.beginPath()
+      g.rect(wx, wy, iw, ih)
+      g.clip()
 
       // Spare is what the background has to travel within. Depth
       // strength scales how much of it a slide actually uses, so 0 is a
@@ -340,8 +422,8 @@ export default function CinematicPhoto({
       const travel = Math.min(1, strength) * 0.97
       const spareX = (iw * (PLATE_OVERSCAN - 1)) / 2
       const spareY = (ih * (PLATE_OVERSCAN - 1)) / 2
-      ctx.globalAlpha = alpha
-      ctx.drawImage(
+      g.globalAlpha = alpha
+      g.drawImage(
         layer.plate!,
         wx - spareX + panX * travel * spareX,
         wy - spareY + panY * travel * spareY,
@@ -349,9 +431,9 @@ export default function CinematicPhoto({
         ih * PLATE_OVERSCAN,
       )
       // The people, exactly where the window puts them, every frame.
-      ctx.drawImage(layer.cutout!, wx, wy, iw, ih)
-      ctx.globalAlpha = 1
-      ctx.restore()
+      g.drawImage(layer.cutout!, wx, wy, iw, ih)
+      g.globalAlpha = 1
+      g.restore()
     }
 
     const frame = (now: number) => {
@@ -382,11 +464,45 @@ export default function CinematicPhoto({
 
       const prev = prevRef.current
       const f = prev ? Math.min(1, (now - fadeFromRef.current) / FADE_MS) : 1
-      // The outgoing photo is drawn at full strength and the incoming
-      // one dissolves over it, so nothing shows through mid-transition.
-      if (prev && f < 1) drawLayer(prev, now, w, h, 1)
-      drawLayer(cur, now, w, h, f)
-      if (prev && f >= 1) prevRef.current = null
+
+      if (!prev || f >= 1) {
+        drawLayer(ctx, cur, now, w, h, 1)
+        if (prev && f >= 1) prevRef.current = null
+        return
+      }
+
+      /*
+       * The outgoing photo at full strength, then the incoming one
+       * dissolved over it AS A SINGLE IMAGE.
+       *
+       * Drawing the incoming plate and cutout straight onto the stage
+       * at a part alpha made them translucent against each other as
+       * well as against the outgoing photo, so the people ghosted over
+       * their own background for the whole transition. It showed worst
+       * on selfies, where the cutout covers most of the frame. Building
+       * the incoming photo offscreen first and compositing it once
+       * fixes that: two layers go in, one opaque image comes out.
+       */
+      drawLayer(ctx, prev, now, w, h, 1)
+
+      const off = offRef.current ?? (offRef.current = document.createElement('canvas'))
+      if (off.width !== w || off.height !== h) {
+        off.width = w
+        off.height = h
+      }
+      const offCtx = off.getContext('2d')
+      if (!offCtx) return
+      offCtx.clearRect(0, 0, w, h)
+      drawLayer(offCtx, cur, now, w, h, 1)
+
+      ctx.save()
+      ctx.globalAlpha = f
+      // Arrives soft and resolves, which hides the moment the pixels
+      // swap. `filter` is ignored where unsupported, leaving a plain
+      // dissolve rather than a broken one.
+      if (blurRef.current) ctx.filter = `blur(${((1 - f) * BLUR_MAX_PX).toFixed(2)}px)`
+      ctx.drawImage(off, 0, 0)
+      ctx.restore()
     }
     rafRef.current = requestAnimationFrame(frame)
 
@@ -412,11 +528,16 @@ export default function CinematicPhoto({
       ])
       if (cancelled || !photo) return
 
+      // A plate that still has the people in it is worse than no plate:
+      // drop to a plain camera move instead of sliding them over
+      // themselves.
+      const usable = plate && cutout && plateChange(photo, plate, cutout) >= PLATE_MIN_CHANGE
+
       curRef.current && (prevRef.current = curRef.current)
       curRef.current = {
         photo,
-        plate,
-        cutout,
+        plate: usable ? plate : null,
+        cutout: usable ? cutout : null,
         aim: cutout ? aimFromCutout(cutout) : { x: 0.5, y: 0.42 },
         startedAt: performance.now(),
         move: moveWith(moveFor(src), cameraRef.current),

@@ -25,16 +25,20 @@ export interface StreamSettings {
   camera: 'pan' | 'panzoom'
   /** Wall columns. 0 picks a best-fit grid from the photo count. */
   columns: number
+  /** Soften the incoming photo through a cinematic dissolve. */
+  blurTransition: boolean
 }
 
 export const DEFAULT_DAY: StreamSettings = {
-  mode: 'slideshow', effect: 'wedflix', intervalMs: 8000, camera: 'pan', columns: 0,
+  mode: 'slideshow', effect: 'wedflix', intervalMs: 8000, camera: 'pan',
+  columns: 0, blurTransition: true,
 }
 
 // The posters are finished artwork with their own titles, so they get a
 // quiet fade and three across the screen rather than a browse card.
 export const DEFAULT_BOOTH: StreamSettings = {
-  mode: 'wall', effect: 'fade', intervalMs: 9000, camera: 'pan', columns: 3,
+  mode: 'wall', effect: 'fade', intervalMs: 9000, camera: 'pan',
+  columns: 3, blurTransition: true,
 }
 
 /** The fields an older build wrote for the whole screen at once. */
@@ -73,6 +77,7 @@ export function migrateStreams(stored: Record<string, unknown> | null | undefine
     intervalMs: legacy.intervalMs ?? DEFAULT_DAY.intervalMs,
     camera: legacy.camera ?? DEFAULT_DAY.camera,
     columns: 0,
+    blurTransition: DEFAULT_DAY.blurTransition,
   }
   return {
     day: 'day' in s ? merge(s['day'], DEFAULT_DAY) : foldedDay,
