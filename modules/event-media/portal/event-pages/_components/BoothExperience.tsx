@@ -63,7 +63,6 @@ interface Props {
   onCaptured: (dataUrl: string, look: BoothLook | null) => void
   /** No live camera (blocked, or an old browser): use the camera app. */
   onFallbackCamera: (look: BoothLook | null) => void
-  onRestyle: (look: BoothLook) => void
   onAccept: () => void
   onSave: () => void
   onDiscard: () => void
@@ -175,7 +174,7 @@ const STYLES = `
 export default function BoothExperience(props: Props) {
   const {
     theme, effects, faces, shot, progress, statusText, generating, primaryColor,
-    onCaptured, onFallbackCamera, onRestyle, onAccept, onSave, onDiscard, onOriginal, onClose,
+    onCaptured, onFallbackCamera, onAccept, onSave, onDiscard, onOriginal, onClose,
   } = props
 
   const [vp, setVp] = useState({ w: 390, h: 844 })
@@ -294,7 +293,7 @@ export default function BoothExperience(props: Props) {
     later(() => setNotice(null), 2600)
   }, [later])
 
-  /** Walk in, optionally restyling a picture already taken. */
+  /** Walk in. Every visit starts with the live camera and no picture. */
   const enter = useCallback((key: string, chosen: BoothLook | null, tileIndex: number | null) => {
     if (phase !== 'outside') return
     setPressed(tileIndex)
@@ -306,17 +305,23 @@ export default function BoothExperience(props: Props) {
         setInteriorKey(theme.interiors[key] ? key : theme.default_interior)
         setPhase('inside')
         setPressed(null)
-        // Back outside to choose another decade for the same picture.
-        if (shot && chosen) onRestyle(chosen)
       }, ENTER_MS)
     }, 160)
-  }, [phase, later, theme, shot, onRestyle])
+  }, [phase, later, theme])
 
+  /**
+   * Step outside. The picture goes with it: walking back in, to the same
+   * decade or another, is a fresh sitting with the live camera, not the
+   * last photo restyled (asked for 2026-09-21 -- a guest choosing a new
+   * era expects to be photographed again). Anything they wanted to keep
+   * they will already have saved or put on the big screen.
+   */
   const leave = useCallback(() => {
     if (busy || count !== null) return
     setPhase('to-outside')
+    onDiscard()
     later(() => setPhase('outside'), ARRIVE_MS)
-  }, [busy, count, later])
+  }, [busy, count, later, onDiscard])
 
   const capture = useCallback(() => {
     const v = videoRef.current
@@ -525,7 +530,7 @@ export default function BoothExperience(props: Props) {
                 <div className="bx-row">
                   <button type="button" onClick={onSave} className="bx-btn">Save</button>
                   <button type="button" onClick={onDiscard} className="bx-btn">Retake</button>
-                  <button type="button" onClick={leave} className="bx-btn">New look</button>
+                  <button type="button" onClick={leave} className="bx-btn">New era</button>
                 </div>
                 {shot?.preview && (
                   <button type="button" onClick={onOriginal} className="bx-link">Use my original instead</button>
