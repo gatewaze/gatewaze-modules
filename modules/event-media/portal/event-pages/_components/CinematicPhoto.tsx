@@ -597,7 +597,15 @@ export default function CinematicPhoto({
       ctx.clearRect(0, 0, w, h)
 
       const prev = prevRef.current
-      const f = prev ? Math.min(1, (now - fadeFromRef.current) / FADE_MS) : 1
+      // Clamped at BOTH ends. The start of the fade is stamped with
+      // performance.now() when the new photo finishes loading, but `now`
+      // is the frame's own timestamp, which can fall a few milliseconds
+      // EARLIER than a load that completed inside the same frame. That
+      // made f slightly negative on the first frame, and a canvas IGNORES
+      // an out-of-range globalAlpha rather than clamping it -- it kept
+      // the previous value of 1 and drew the incoming photo solid for one
+      // frame. That single frame was the flash at every slide change.
+      const f = prev ? Math.max(0, Math.min(1, (now - fadeFromRef.current) / FADE_MS)) : 1
 
       if (!prev || f >= 1) {
         drawLayer(ctx, cur, now, w, h, 1)
