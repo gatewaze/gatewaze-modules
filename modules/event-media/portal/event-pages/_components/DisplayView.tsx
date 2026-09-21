@@ -30,6 +30,13 @@ import { createPortal } from 'react-dom'
 import CinematicPhoto from './CinematicPhoto'
 import WedflixCard, { type CardCopy } from './WedflixCard'
 import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
+import {
+  DEFAULT_BOOTH,
+  DEFAULT_DAY,
+  migrateStreams,
+  normaliseStream,
+  type StreamSettings,
+} from './_lib/display-settings'
 
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
@@ -58,22 +65,6 @@ interface DisplayItem {
 }
 
 type SlideEffect = 'wedflix' | 'cinematic' | 'kenburns' | 'grade' | 'fade' | 'slide' | 'zoom' | 'blur'
-
-/**
- * Everything that belongs to one stream rather than to the screen.
- *
- * The day's photographs and the booth's posters want different
- * treatment — Wedflix over a landscape snapshot, a quiet fade over a
- * wall of portrait posters — so each stream carries its own.
- */
-interface StreamSettings {
-  mode: 'slideshow' | 'wall'
-  effect: SlideEffect
-  intervalMs: number
-  camera: 'pan' | 'panzoom'
-  /** Wall columns. 0 picks a best-fit grid from the photo count. */
-  columns: number
-}
 
 interface DisplaySettings {
   /** @deprecated per-stream now; kept so stored settings still migrate. */
@@ -138,41 +129,14 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   fillBars: true,
   stream: 'day',
   mixSeconds: 90,
-  // The day gets the browse cards; the posters are their own artwork
-  // already, so they get a quiet fade and three across the screen.
-  day: { mode: 'slideshow', effect: 'wedflix', intervalMs: 8000, camera: 'pan', columns: 0 },
-  booth: { mode: 'wall', effect: 'fade', intervalMs: 9000, camera: 'pan', columns: 3 },
+  day: DEFAULT_DAY,
+  booth: DEFAULT_BOOTH,
   depthStrength: 1,
   camera: 'pan',
   subjectPop: true,
   webgpu: false,
   order: 'newest',
   instantNew: true,
-}
-
-/**
- * Settings saved before the per-stream split carry a single flat
- * effect/mode/interval for the whole screen. Fold those onto the day,
- * which is what they were describing, rather than dropping someone's
- * projector setup on upgrade.
- */
-function migrate(s: DisplaySettings): DisplaySettings {
-  const raw = s as unknown as Record<string, unknown>
-  const legacy = (): StreamSettings => ({
-    mode: s.mode ?? 'slideshow',
-    effect: s.effect ?? 'kenburns',
-    intervalMs: s.intervalMs ?? 8000,
-    camera: s.camera ?? 'pan',
-    columns: 0,
-  })
-  const fix = (v: unknown, fallback: StreamSettings): StreamSettings =>
-    (v && typeof v === 'object') ? { ...fallback, ...(v as Partial<StreamSettings>) } : fallback
-  return {
-    ...s,
-    stream: s.stream === 'booth' || s.stream === 'mix' ? s.stream : 'day',
-    day: fix(raw['day'], raw['day'] ? DEFAULT_SETTINGS.day : legacy()),
-    booth: fix(raw['booth'], DEFAULT_SETTINGS.booth),
-  }
 }
 
 /**
@@ -454,7 +418,17 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(settingsKey)
-      if (raw) setSettings(migrate({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }))
+      if (!raw) return
+      // The stored object, NOT the stored object merged over the
+      // defaults: migrateStreams has to be able to see what was
+      // actually saved (see display-settings.ts).
+      const stored = JSON.parse(raw) as Record<string, unknown>
+      setSettings({
+        ...DEFAULT_SETTINGS,
+        ...stored,
+        stream: normaliseStream(stored['stream']),
+        ...migrateStreams(stored),
+      })
     } catch { /* defaults are fine */ }
   }, [settingsKey])
 
