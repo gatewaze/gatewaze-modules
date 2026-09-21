@@ -37,6 +37,7 @@ import {
   normaliseStream,
   type StreamSettings,
 } from './_lib/display-settings'
+import { isReady } from './_lib/photo-ready'
 
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
@@ -185,10 +186,15 @@ const POOL_TARGET = 20
  *             POOL_TARGET while there are not yet enough real ones
  */
 function poolFor(all: DisplayItem[], mode: 'booth' | 'day'): DisplayItem[] {
-  const booth = all.filter((p) => p.album === 'booth')
+  // A photo joins the projector only once its layers and browse copy
+  // exist. Shown earlier it pans across with no depth and no title and
+  // then silently acquires both, which reads as a fault. The guest's
+  // own gallery is not gated — only this.
+  const shown = all.filter((p) => isReady(p))
+  const booth = shown.filter((p) => p.album === 'booth')
   if (mode === 'booth') return booth
-  const day = all.filter((p) => p.album === 'day')
-  const seed = all.filter((p) => p.album !== 'booth' && p.album !== 'day')
+  const day = shown.filter((p) => p.album === 'day')
+  const seed = shown.filter((p) => p.album !== 'booth' && p.album !== 'day')
   const padding = Math.max(0, POOL_TARGET - day.length)
   // Day photos first so the newest real ones lead.
   return [...day, ...seed.slice(0, padding)]
@@ -563,8 +569,31 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
   // ── Slideshow advance ─────────────────────────────────────────────
 
+  /**
+   * The next fresh arrival that is actually finished.
+   *
+   * Arrivals are queued the moment their bytes land, which is before
+   * their layers and browse copy exist. The queued object is a snapshot
+   * from that moment, so readiness is judged against the CURRENT pool
+   * instead: photosRef holds the ready-filtered list, so presence there
+   * is the answer. Anything not ready stays queued for a later cut
+   * rather than being dropped.
+   */
+  const takeReadyFresh = useCallback((): DisplayItem | null => {
+    const q = freshQueueRef.current
+    const pool = photosRef.current
+    for (let i = 0; i < q.length; i++) {
+      const live = pool.find((p) => p.id === q[i]!.id)
+      if (live) {
+        q.splice(i, 1)
+        return live
+      }
+    }
+    return null
+  }, [])
+
   const advance = useCallback(() => {
-    const fresh = freshQueueRef.current.shift()
+    const fresh = takeReadyFresh()
     advanceCountRef.current += 1
 
     // Interleaved QR card every Nth advance.
@@ -595,7 +624,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       }
       return list[indexRef.current]
     })
-  }, [settings.qrMode, settings.qrEveryN, settings.order])
+  }, [settings.qrMode, settings.qrEveryN, settings.order, takeReadyFresh])
 
   useEffect(() => {
     if (view.mode !== 'slideshow') return
@@ -638,8 +667,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     const pickNext = (displayed: Set<string>): DisplayItem | null => {
       const list = orderedPool(photosRef.current, settings.order)
       if (list.length === 0) return null
-      // Fresh uploads jump straight onto the wall.
-      const fresh = freshQueueRef.current.shift()
+      // Fresh uploads jump straight onto the wall, once finished.
+      const fresh = takeReadyFresh()
       if (fresh) return fresh
       if (settings.order === 'shuffle') {
         for (let i = 0; i < 12; i++) {
@@ -678,7 +707,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         // A new upload claims the next cell straight away rather than
         // waiting for that cell's own clock, so the wall reacts as
         // fast as the slideshow does.
-        const wantsInstant = settings.instantNew && freshQueueRef.current.length > 0
+        const wantsInstant = settings.instantNew
+          && freshQueueRef.current.some((f) => photosRef.current.some((p) => p.id === f.id))
         const dueIdx = wantsInstant
           ? prev.reduce((oldest, c, i) => (c.nextAt < prev[oldest]!.nextAt ? i : oldest), 0)
           : prev.findIndex((c) => c.nextAt <= now)
@@ -700,7 +730,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     tick()
     const iv = setInterval(tick, 500)
     return () => clearInterval(iv)
-  }, [view.mode, view.intervalMs, settings.order, settings.instantNew])
+  }, [view.mode, view.intervalMs, settings.order, settings.instantNew, takeReadyFresh])
 
   // ── Ambient colour spill ──────────────────────────────────────────
 
@@ -740,7 +770,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   useEffect(() => {
     if (view.effect !== 'cinematic' || !current) return
     const list = photosRef.current
-    const upcoming = freshQueueRef.current[0] ?? list[(indexRef.current + 1) % Math.max(list.length, 1)]
+    const upcoming = freshQueueRef.current.find((f) => list.some((p) => p.id === f.id))
+      ?? list[(indexRef.current + 1) % Math.max(list.length, 1)]
     if (!upcoming || upcoming.id === current.id) return
     // Warm the LAYERS too. Warming only the photo left the renderer
     // waiting on a plate and cutout fetch at the moment of the cut,
