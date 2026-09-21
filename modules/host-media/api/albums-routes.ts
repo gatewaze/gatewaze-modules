@@ -57,7 +57,11 @@ function validateAlbumFields(
   fields: Record<string, unknown>,
 ): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
   const value: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(fields)) {
+  // Iterate the fixed allowlist, never the caller's keys, so every
+  // written property name is a literal from ALBUM_WRITE_FIELDS.
+  for (const key of ALBUM_WRITE_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
+    const raw = fields[key];
     switch (key) {
       case 'name':
         if (typeof raw !== 'string' || raw.trim().length === 0) return { ok: false, error: 'name must be a non-empty string' };
@@ -79,9 +83,10 @@ function validateAlbumFields(
         if (typeof raw !== 'boolean') return { ok: false, error: 'is_default must be a boolean' };
         value[key] = raw;
         break;
-      default:
-        return { ok: false, error: `unknown field ${key}` };
     }
+  }
+  for (const key of Object.keys(fields)) {
+    if (!(ALBUM_WRITE_FIELDS as readonly string[]).includes(key)) return { ok: false, error: `unknown field ${key}` };
   }
   return { ok: true, value };
 }

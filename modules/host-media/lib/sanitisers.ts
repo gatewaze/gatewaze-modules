@@ -1,3 +1,5 @@
+import { MEDIA_PATCH_FIELDS } from '../types/index.js';
+
 /**
  * Search-string sanitiser for PostgREST .or() filter strings.
  * Strips PostgREST filter metacharacters AND escapes ILIKE wildcards
@@ -84,7 +86,11 @@ export function validateMediaPatch(
   fields: Record<string, unknown>,
 ): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
   const value: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(fields)) {
+  // Iterate the fixed field list, never the caller's keys, so every
+  // written property name is a literal from this list.
+  for (const key of MEDIA_PATCH_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
+    const raw = fields[key];
     switch (key) {
       case 'caption':
       case 'alt_text':
@@ -107,9 +113,10 @@ export function validateMediaPatch(
         }
         value[key] = raw;
         break;
-      default:
-        return { ok: false, error: `unknown field ${key}` };
     }
+  }
+  for (const key of Object.keys(fields)) {
+    if (!(MEDIA_PATCH_FIELDS as readonly string[]).includes(key)) return { ok: false, error: `unknown field ${key}` };
   }
   return { ok: true, value };
 }
