@@ -308,13 +308,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   async function generateLayers(mediaId: string, storagePath: string): Promise<void> {
     try {
       const src = toPublicUrl(storagePath);
-      const [depth, cutout, plate] = await Promise.all([
-        runDepth(src),
-        runCutout(src),
-        runPlate(src),
-      ]);
-      // Browse-card copy lives in metadata rather than storage — it is
-      // a few short strings, not a file.
+
+      // Browse-card copy lives in metadata rather than storage — it is a
+      // few short strings, not a file. Started BEFORE the layers and
+      // never awaited alongside them: it is the only one of these the
+      // guest actually reads, and it used to be skipped entirely
+      // whenever a layer threw.
       void (async () => {
         const copy = await runCardCopy(src);
         if (!copy.ok) {
@@ -329,6 +328,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         const metadata = { ...((row?.metadata ?? {}) as Record<string, unknown>), card: copy.copy };
         await supabase.from('host_media').update({ metadata }).eq('id', mediaId);
       })();
+
+      const [depth, cutout, plate] = await Promise.all([
+        runDepth(src),
+        runCutout(src),
+        runPlate(src),
+      ]);
 
       if (depth.ok) await storeVariant(mediaId, storagePath, 'depth', depth.image, 'image/png', 'png');
       if (cutout.ok) await storeVariant(mediaId, storagePath, 'cutout', cutout.image, 'image/png', 'png');

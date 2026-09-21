@@ -241,8 +241,12 @@ export interface CardCopy {
   eyebrow: string;
 }
 
+// Each genre is a title treatment on the browse card, so a wide list is
+// not padding — it is what stops every photo arriving in the same
+// logotype. The model was picking 'comedy' for most of the album.
 const CARD_GENRES = [
-  'horror', 'comedy', 'thriller', 'eighties', 'doc', 'romance', 'scifi', 'crime', 'epic',
+  'horror', 'comedy', 'thriller', 'eighties', 'doc', 'romance', 'scifi',
+  'crime', 'epic', 'noir', 'musical', 'reality', 'western', 'heist',
 ];
 
 /**
@@ -250,11 +254,26 @@ const CARD_GENRES = [
  * what is actually IN the picture.
  *
  * The register is the whole point and took several attempts to land.
- * Puns and wedding-greeting-card phrasing read as cheesy; what works is
- * taking one mundane thing in the photograph completely seriously, so
- * the title sounds like a real programme somebody might scroll past.
+ * Wedding-greeting-card phrasing ("Love Is In The Air") reads as cheesy
+ * and was rejected repeatedly. Banning wordplay outright fixed that but
+ * overcorrected: the titles became flat description ("The Lunch
+ * Gathering"). What works is a real programme name that happens to carry
+ * a second meaning — "Deep End" for a poolside photo — where the joke is
+ * in the double meaning rather than in announcing itself.
  */
 export async function runCardCopy(imageUrl: string): Promise<
+  { ok: true; copy: CardCopy } | { ok: false; error: string }
+> {
+  // The model occasionally emits JSON it cannot itself parse (an
+  // unescaped quote inside a descriptor is the usual culprit), and a
+  // photo that misses here has no title for the rest of the night. One
+  // retry costs a fraction of a penny and clears it.
+  const first = await cardCopyOnce(imageUrl);
+  if (first.ok || first.error === 'not_configured') return first;
+  return cardCopyOnce(imageUrl);
+}
+
+async function cardCopyOnce(imageUrl: string): Promise<
   { ok: true; copy: CardCopy } | { ok: false; error: string }
 > {
   if (!falEnabled()) return { ok: false, error: 'not_configured' };
@@ -265,16 +284,25 @@ export async function runCardCopy(imageUrl: string): Promise<
     'Invent a programme based on WHAT YOU ACTUALLY SEE in the photograph.',
     'Return ONLY minified JSON:',
     '{"title":"","words":["","",""],"kind":"Series|Films","genre":"' + CARD_GENRES.join('|') + '","eyebrow":""}',
-    'title: sounds like a real TV series or film. Dry and comedic, NEVER a pun,',
-    '  never wordplay, never a greeting-card phrase. Funny because it takes',
-    '  something mundane in the photo completely seriously. Two to four words.',
-    '  Good: "The Seating Plan". "Table Nine". "Nobody Left Early".',
-    '  Bad: "Love Is In The Air". "Top Vows". "Happily Ever After".',
+    'title: one to three words that could be a real TV series or film on a',
+    '  streaming service. Aim for a phrase that describes the photo literally',
+    '  AND carries a second, funnier meaning — the wit comes from the double',
+    '  meaning landing quietly, never from announcing itself.',
+    '  Good: "Deep End" (people in a pool). "Floor Filler" (dancing).',
+    '  "Table Manners" (dinner). "Last Orders" (the bar). "Plus One".',
+    '  "Open Bar". "Heavy Pour". "The Long Game" (a very long speech).',
+    '  Bad, because they are greeting-card phrases: "Love Is In The Air",',
+    '  "Top Vows", "Happily Ever After", "Tying The Knot".',
+    '  Bad, because they are flat description with no second meaning:',
+    '  "The Lunch Gathering", "The Couple Photo", "The Extended Table".',
+    '  Never explain the joke. Never use an exclamation mark.',
     'words: exactly three streaming descriptors, Title Case, one or two words each.',
     '  Vary them; do not open every one with "Candid". They should quietly',
     '  comment on the photo rather than describe a wedding.',
     'kind: "Series" or "Films".',
-    'genre: the visual style fitting the tone.',
+    'genre: pick the one whose title-card styling suits the photo. Spread your',
+    '  choices across the list rather than defaulting to comedy — judge by the',
+    '  light, colour and mood of the picture, not only by the joke.',
     'eyebrow: 1-3 words, Title Case, e.g. "Season One", "Limited Series",',
     '  "New Episodes", "A Wedflix Original".',
     'Never mention weddings, brides, grooms, vows or marriage in the title.',
