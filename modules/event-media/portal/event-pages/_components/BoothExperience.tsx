@@ -126,9 +126,14 @@ const STYLES = `
   align-items:center;justify-content:center;font-weight:900;font-size:11px;color:#6b4d06;
   background:radial-gradient(circle at 35% 30%,#fff6c8,#e8b938 55%,#9c7414);box-shadow:0 2px 6px rgba(0,0,0,.5);
   animation:bx-drop 480ms ease-in both}
+.bx-shutter{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);width:72px;height:72px;
+  border-radius:50%;border:4px solid #fff;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 2px 14px rgba(0,0,0,.45);transition:transform 120ms ease}
+.bx-shutter::after{content:"";width:54px;height:54px;border-radius:50%;background:#fff;transition:transform 120ms ease}
+.bx-shutter:active::after{transform:scale(.86)}
+.bx-root :where(button){outline:none}
+.bx-root button:focus-visible{outline:3px solid rgba(255,255,255,.85);outline-offset:3px}
 .bx-panel{position:absolute;display:flex;align-items:center;justify-content:center;pointer-events:none}
-.bx-hint{position:absolute;left:50%;top:-10px;transform:translate(-50%,-100%);padding:6px 12px;border-radius:999px;
-  font-size:12px;font-weight:600;white-space:nowrap;pointer-events:none;animation:bx-rise-x 500ms ease-out both}
 .bx-controls{pointer-events:auto;width:100%;height:100%;border-radius:14px;padding:10px;display:flex;
   flex-direction:column;justify-content:center;gap:8px;animation:bx-rise 380ms ease-out both}
 .bx-primary{width:100%;height:44px;border-radius:10px;font-size:14px;font-weight:700;color:#fff}
@@ -274,6 +279,16 @@ export default function BoothExperience(props: Props) {
     }
   }, [cameraWanted])
 
+  // A camera that never starts (a permission prompt dismissed without an
+  // answer, a browser that stalls) must not leave the guest with a dead
+  // shutter: after a while, offer the camera app instead. A late answer
+  // still wins -- the stream promise above sets 'live' whenever it lands.
+  useEffect(() => {
+    if (cam !== 'starting') return
+    const t = setTimeout(() => setCam((c) => (c === 'starting' ? 'blocked' : c)), 8000)
+    return () => clearTimeout(t)
+  }, [cam])
+
   const flashNotice = useCallback((text: string) => {
     setNotice(text)
     later(() => setNotice(null), 2600)
@@ -321,7 +336,7 @@ export default function BoothExperience(props: Props) {
     onCaptured(canvas.toDataURL('image/jpeg', 0.9), look)
   }, [interior, look, onCaptured, onFallbackCamera])
 
-  /** The coin slot. */
+  /** The shutter, and the coin slot, which does the same thing. */
   const insertCoin = useCallback(() => {
     if (count !== null || shot) return
     if (cam === 'blocked') { onFallbackCamera(look); return }
@@ -457,8 +472,20 @@ export default function BoothExperience(props: Props) {
               </div>
             )}
 
-            {count !== null && <div key={count} className="bx-count">{count}</div>}
-            {flash > 0 && <div key={flash} className="bx-flash" />}
+            {/* The shutter, where a phone's camera puts it. The coin slot
+                does the same, for anyone who reads the instructions. */}
+            {!result && count === null && !coinDrop && cam !== 'blocked' && (
+              <button
+                type="button"
+                aria-label="Take the photo"
+                onClick={insertCoin}
+                disabled={cam !== 'live'}
+                className="bx-shutter"
+              />
+            )}
+
+            {count !== null && <div key={`count-${count}`} className="bx-count">{count}</div>}
+            {flash > 0 && <div key={`flash-${flash}`} className="bx-flash" />}
 
             {(busy || generating) && (
               <div className="bx-dev" aria-live="polite">
@@ -485,13 +512,10 @@ export default function BoothExperience(props: Props) {
             </button>
           )}
 
-          {/* The machine panel: the hint before, the controls after. It
+          {/* The machine panel: the controls once there is a picture. It
               covers the coin slot, so it only catches taps when it has
               controls to offer. */}
           <div className="bx-panel" style={pctStyle(interior.panel)}>
-            {!shot && cam === 'live' && count === null && !coinDrop && (
-              <span className="bx-hint bx-glass">Tap the coin slot to take your photo</span>
-            )}
             {showControls && (
               <div className="bx-controls bx-glass">
                 {shot?.error && <p className="bx-error">{shot.error}</p>}
