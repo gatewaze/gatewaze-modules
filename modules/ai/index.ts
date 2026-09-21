@@ -92,6 +92,12 @@ const aiModule: GatewazeModule = {
     'migrations/043_ai_credential_crypto_helpers.sql',
     'migrations/044_ai_usage_events_drop_use_case_fk.sql',
     'migrations/045_ai_credential_identity.sql',
+    // 046/047 shipped as files but were never added here, so the reconcile
+    // never ran them — ai_usage_events lacked media_seconds and the usage-
+    // logging insert failed once the voice/cost code went live (e.g. the
+    // segments copilot). Register them so every environment gets the columns.
+    'migrations/046_ai_voice_transcription.sql',
+    'migrations/047_voice_p2.sql',
   ],
 
   // Cron schedule — fan-out worker scans for due agent sources every
