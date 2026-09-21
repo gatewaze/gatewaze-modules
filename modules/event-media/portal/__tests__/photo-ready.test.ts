@@ -16,6 +16,8 @@ import {
   isProcessed,
   isReady,
   partitionReady,
+  pollAfter,
+  feedChanged,
   PROCESSING_GRACE_MS,
 } from '../event-pages/_components/_lib/photo-ready.js';
 
@@ -105,5 +107,46 @@ describe('hasBrowseCard', () => {
   it('rejects a seed selfie even though it has copy', () => {
     expect(hasBrowseCard({ album: 'seed', card })).toBe(false);
     expect(hasBrowseCard({ card })).toBe(false);
+  });
+});
+
+describe('pollAfter', () => {
+  const NOW = Date.parse('2026-09-25T15:00:00Z');
+  const ago = (ms) => new Date(NOW - ms).toISOString();
+  const done = { variants: { plate: 'p', cutout: 'c' }, card: { title: 'x' } };
+
+  it('asks from the newest photo when everything is finished', () => {
+    expect(pollAfter([{ ...done, created_at: ago(5000) }], ago(1000), NOW)).toBe(ago(1000));
+  });
+
+  // The live fault: a booth poster seen half-made was never fetched again.
+  it('reaches back to the oldest photo still processing', () => {
+    const items = [
+      { ...done, created_at: ago(1000) },
+      { variants: {}, card: null, created_at: ago(60_000) },
+      { variants: { plate: 'p' }, card: null, created_at: ago(30_000) },
+    ];
+    expect(pollAfter(items, ago(1000), NOW)).toBe(ago(60_000));
+  });
+
+  it('stops waiting on a photo past the grace window', () => {
+    const items = [{ variants: {}, card: null, created_at: ago(PROCESSING_GRACE_MS + 1000) }];
+    expect(pollAfter(items, ago(1000), NOW)).toBe(ago(1000));
+  });
+
+  it('copes with nothing held yet', () => {
+    expect(pollAfter([], null, NOW)).toBeNull();
+  });
+});
+
+describe('feedChanged', () => {
+  const base = { variants: { thumb: 't' }, card: null, album: 'booth' };
+  it('notices new layers, a new card and a new album', () => {
+    expect(feedChanged(base, { ...base, variants: { thumb: 't', plate: 'p' } })).toBe(true);
+    expect(feedChanged(base, { ...base, card: { title: 'x' } })).toBe(true);
+    expect(feedChanged(base, { ...base, album: 'day' })).toBe(true);
+  });
+  it('is quiet when nothing moved', () => {
+    expect(feedChanged(base, { ...base, variants: { thumb: 't' } })).toBe(false);
   });
 });

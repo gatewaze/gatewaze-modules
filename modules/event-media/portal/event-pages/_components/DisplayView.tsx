@@ -33,13 +33,19 @@ import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
 import {
   DEFAULT_BOOTH,
   DEFAULT_PRELOAD,
+  DEFAULT_READY,
   DEFAULT_DAY,
+  DEFAULT_ROTATION,
+  VIEW_LABEL,
+  VIEW_ORDER,
   migrateStreams,
+  nextInRotation,
+  normaliseRotation,
   normaliseStream,
   type StreamSettings,
   type ViewName,
 } from './_lib/display-settings'
-import { hasBrowseCard, isReady } from './_lib/photo-ready'
+import { feedChanged, hasBrowseCard, isReady, pollAfter } from './_lib/photo-ready'
 import { sizedDisplayUrl } from './_lib/display-url'
 
 // Same-origin — proxied to the api service by the portal's
@@ -69,7 +75,7 @@ interface DisplayItem {
   guest_name: string | null
   /** Browse-card copy, generated per photo. Absent until it lands. */
   card?: CardCopy | null
-  /** 'booth' | 'day' | 'seed'. Older rows read as 'seed'. */
+  /** 'booth' | 'day' | 'ready' | 'seed'. Older rows read as 'seed'. */
   album?: string
   created_at: string
 }
@@ -96,14 +102,17 @@ interface DisplaySettings {
   fillBars: boolean
   /** Background-melt half of the cinematic effect. */
   /**
-   * Which stream the screen is on. 'mix' alternates between the two so
-   * one projector can carry both.
+   * Which stream the screen is on. 'mix' rotates through `rotation`, so
+   * one projector can carry several albums in turn.
    */
   stream: ViewName | 'mix'
   /** How long 'mix' dwells on each stream. */
   mixSeconds: number
+  /** The views 'mix' rotates through, in panel order. */
+  rotation: ViewName[]
   /** Per-stream treatment. */
   preload: StreamSettings
+  ready: StreamSettings
   day: StreamSettings
   booth: StreamSettings
   /** How pronounced the 3D relief is. 0 is a flat camera move. */
@@ -141,7 +150,9 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   // Preload is the only view with photos before the day's uploads exist.
   stream: 'preload',
   mixSeconds: 90,
+  rotation: [...DEFAULT_ROTATION],
   preload: DEFAULT_PRELOAD,
+  ready: DEFAULT_READY,
   day: DEFAULT_DAY,
   booth: DEFAULT_BOOTH,
   depthStrength: 1,
@@ -184,6 +195,7 @@ function rankFor(id: string): boolean {
  * Split the incoming media into the view being shown.
  *
  *   preload  the selfies, all of them
+ *   ready    Getting ready: guests' photos from before they arrive
  *   day      the day's uploads
  *   booth    the booth's posters
  *
@@ -204,9 +216,9 @@ function poolFor(all: DisplayItem[], mode: ViewName, wedflixOnly = false): Displ
   // own gallery is not gated -- only this.
   const shown = all.filter((p) => isReady(p))
   if (mode === 'preload') {
-    // Anything not explicitly the day's or the booth's. Older rows carry
-    // no album at all, and those are the selfies.
-    return shown.filter((p) => p.album !== 'day' && p.album !== 'booth')
+    // Anything not explicitly another view's. Older rows carry no album
+    // at all, and those are the selfies.
+    return shown.filter((p) => p.album !== 'day' && p.album !== 'booth' && p.album !== 'ready')
   }
   const inView = shown.filter((p) => p.album === mode)
   return wedflixOnly ? inView.filter((p) => hasBrowseCard(p)) : inView
@@ -356,8 +368,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const wedflixRef = useRef(false)
 
   /**
-   * Which stream is on screen now. In 'mix' this alternates on its own
-   * clock, so one projector carries the day and the booth in turn.
+   * Which stream is on screen now. In 'mix' this rotates on its own
+   * clock through the chosen views, so one projector carries them all.
    *
    * Every hook below names `activeStream` or `view`, and a dependency
    * array is evaluated during render, so both are declared here above
@@ -365,17 +377,35 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
    * early return runs on some renders and not others, which is React
    * error #310 and takes the whole display out.
    */
-  const [mixPhase, setMixPhase] = useState<'day' | 'booth'>('day')
-  const activeStream: ViewName = settings.stream === 'mix' ? mixPhase : settings.stream
+  const rotation: ViewName[] = settings.rotation ?? [...DEFAULT_ROTATION]
+  const [mixPhase, setMixPhase] = useState<ViewName>(rotation[0] ?? 'day')
+  const activeStream: ViewName = settings.stream === 'mix'
+    ? (rotation.includes(mixPhase) ? mixPhase : rotation[0] ?? 'day')
+    : settings.stream
   const view: StreamSettings = settings[activeStream] ?? DEFAULT_SETTINGS[activeStream]
   const wedflixOnly = view.effect === 'wedflix'
 
+  // Read by the rotation clock, so it can skip an album with nothing to
+  // show without restarting every time a photo lands or a setting moves.
+  const allPhotosRef = useRef<DisplayItem[]>([])
+  const settingsRef = useRef<DisplaySettings>(settings)
+  useEffect(() => { allPhotosRef.current = photos }, [photos])
+  useEffect(() => { settingsRef.current = settings }, [settings])
+
+  const rotationKey = rotation.join(',')
   useEffect(() => {
     if (settings.stream !== 'mix') return
     const every = Math.max(15, settings.mixSeconds ?? 90) * 1000
-    const t = setInterval(() => setMixPhase((p) => (p === 'day' ? 'booth' : 'day')), every)
+    const t = setInterval(() => {
+      const st = settingsRef.current
+      const order = st.rotation ?? [...DEFAULT_ROTATION]
+      setMixPhase((p) => nextInRotation(order, p, (v) => {
+        const vs = st[v] ?? DEFAULT_SETTINGS[v]
+        return poolFor(allPhotosRef.current, v, vs.effect === 'wedflix').length > 0
+      }))
+    }, every)
     return () => clearInterval(t)
-  }, [settings.stream, settings.mixSeconds])
+  }, [settings.stream, settings.mixSeconds, rotationKey])
 
   // What the projector is actually showing, so counts and layout agree
   // with what advance() walks.
@@ -453,6 +483,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         ...DEFAULT_SETTINGS,
         ...stored,
         stream: normaliseStream(stored['stream']),
+        rotation: normaliseRotation(stored['rotation']),
         ...migrateStreams(stored),
       })
     } catch { /* defaults are fine */ }
@@ -512,15 +543,30 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     setPhotos((prev) => {
       const seen = new Set(prev.map((p) => p.id))
       const add = clean.filter((i) => !seen.has(i.id))
-      if (add.length === 0) return prev
-      if (fresh) {
+      // A photo already held can come back finished -- layers, browse
+      // card, or moved to another album. Take the newer copy; ignoring it
+      // is what left new booth posters off the screen until a refresh.
+      const byId = new Map(clean.map((i) => [i.id, i]))
+      let changed = false
+      const held = prev.map((p) => {
+        const next = byId.get(p.id)
+        if (!next || !feedChanged(p, next)) return p
+        changed = true
+        return { ...p, ...next }
+      })
+      if (add.length === 0 && !changed) return prev
+      // A queued arrival that has just finished gets its instant cut now.
+      if (changed && freshQueueRef.current.some((f) => byId.has(f.id))) {
+        setFreshArrivals((n) => n + 1)
+      }
+      if (fresh && add.length > 0) {
         freshQueueRef.current.push(...add)
         // Signal the instant-cut effect (setState during another
         // component's updater is fine here — different state atom,
         // and React batches it into the same commit).
         setFreshArrivals((n) => n + 1)
       }
-      const merged = [...add, ...prev].slice(0, MAX_PHOTOS)
+      const merged = [...add, ...held].slice(0, MAX_PHOTOS)
       // The projector draws from the pooled stream, not everything that
       // has ever been uploaded.
       photosRef.current = poolFor(merged, streamRef.current, wedflixRef.current)
@@ -536,7 +582,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     const load = async (incremental: boolean) => {
       try {
         const qs = new URLSearchParams({ filter: 'photo', limit: '200' })
-        if (incremental && newestRef.current) qs.set('after', newestRef.current)
+        // From the oldest photo still processing, not just the newest, so
+        // a photo seen half-made is fetched again once it is finished.
+        const since = incremental ? pollAfter(allPhotosRef.current, newestRef.current) : null
+        if (since) qs.set('after', since)
         const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/media?${qs}`)
         if (!res.ok || cancelled) return
         const data = await res.json()
@@ -1330,11 +1379,9 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
             <Row label="Showing">
               {([
-                ['preload', 'Preload'],
-                ['day', 'The day'],
-                ['booth', 'Photo booth'],
-                ['mix', 'Day and booth, in turn'],
-              ] as const).map(([val, label]) => (
+                ...VIEW_ORDER.map((v) => [v, VIEW_LABEL[v]] as const),
+                ['mix', 'In turn'] as const,
+              ]).map(([val, label]) => (
                 <Chip
                   key={val}
                   on={settings.stream === val}
@@ -1351,6 +1398,29 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             </Row>
 
             {settings.stream === 'mix' && (
+              <Row label="Rotate through">
+                {VIEW_ORDER.map((v) => {
+                  const on = rotation.includes(v)
+                  return (
+                    <Chip
+                      key={v}
+                      on={on}
+                      onClick={() => {
+                        // Always at least one: an empty rotation would
+                        // quietly fall back to the day and the booth.
+                        if (on && rotation.length === 1) return
+                        const next = on ? rotation.filter((x) => x !== v) : [...rotation, v]
+                        updateSettings({ rotation: normaliseRotation(next) })
+                      }}
+                    >
+                      {VIEW_LABEL[v]}
+                    </Chip>
+                  )
+                })}
+              </Row>
+            )}
+
+            {settings.stream === 'mix' && (
               <div className="space-y-1.5">
                 <div className="flex items-baseline justify-between">
                   <span className="text-xs uppercase tracking-wide text-white/50">Swap every</span>
@@ -1363,7 +1433,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                   className="w-full accent-white/80"
                 />
                 <p className="text-xs text-white/40">
-                  Showing {activeStream === 'booth' ? 'the photo booth' : 'the day'} now.
+                  Showing {VIEW_LABEL[activeStream]} now, each with its own settings below.
+                  Albums with nothing to show yet are skipped.
                 </p>
               </div>
             )}
@@ -1374,13 +1445,9 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 the day is showing. */}
             <div className="pt-1 border-t border-white/10" />
             <Row label="Settings for">
-              {([
-                ['preload', 'Preload'],
-                ['day', 'The day'],
-                ['booth', 'Photo booth'],
-              ] as const).map(([val, label]) => (
+              {VIEW_ORDER.map((val) => (
                 <Chip key={val} on={editing === val} onClick={() => setEditing(val)}>
-                  {label}
+                  {VIEW_LABEL[val]}
                 </Chip>
               ))}
             </Row>

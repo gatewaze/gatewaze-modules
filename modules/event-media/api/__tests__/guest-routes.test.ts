@@ -648,6 +648,24 @@ describe('completeUploads', () => {
     expect(supabase.state.rpcCalls[0]).toEqual({ name: 'events_media_upload_links_increment', args: { p_link_id: LINK_ID, p_n: 1 } });
   });
 
+  // Guests upload the same way all day; the event's start decides.
+  it('files uploads before the event starts under Getting ready', async () => {
+    const albumFor = async (eventStart, overrides = {}) => {
+      const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: { ...EVENT_ROW, event_start: eventStart }, existingMedia: null });
+      stubHeadResponse(headOk());
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor(overrides)] } }), mockRes());
+      return supabase.state.inserted[0].metadata.album;
+    };
+    const inAnHour = new Date(Date.now() + 3_600_000).toISOString();
+    const anHourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    expect(await albumFor(inAnHour)).toBe('ready');
+    expect(await albumFor(anHourAgo)).toBe('day');
+    // No start time, no before.
+    expect(await albumFor(null)).toBe('day');
+    // The booth's posters go to the booth, before the start or not.
+    expect(await albumFor(inAnHour, { booth: true })).toBe('booth');
+  });
+
   it('stamps is_approved=false when the link does not auto-approve', async () => {
     const { deps, supabase } = makeDeps({ link: { ...ACTIVE_LINK, auto_approve: false }, event: EVENT_ROW });
     stubHeadResponse(headOk());

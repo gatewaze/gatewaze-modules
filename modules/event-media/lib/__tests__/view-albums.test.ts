@@ -1,12 +1,13 @@
 // @ts-nocheck — vitest harness.
 
 import { describe, it, expect } from 'vitest';
-import { resolveViews, tagView } from '../view-albums.js';
+import { albumForUpload, resolveViews, tagView } from '../view-albums.js';
 
 const ALBUMS = [
   { album_id: 'A-seed', view: 'seed' },
   { album_id: 'A-day', view: 'day' },
   { album_id: 'A-booth', view: 'booth' },
+  { album_id: 'A-ready', view: 'ready' },
 ];
 
 const resolve = (items, tags) => resolveViews(ALBUMS, items, new Map(Object.entries(tags)));
@@ -53,6 +54,19 @@ describe('resolveViews', () => {
     expect(r.get('p2')).toBe('day');
   });
 
+  it('knows Getting ready, and ranks it above Preload only', () => {
+    const r = resolve(
+      [
+        { album_id: 'A-ready', media_id: 'p1' },
+        { album_id: 'A-ready', media_id: 'p2' }, { album_id: 'A-day', media_id: 'p2' },
+      ],
+      { p1: 'seed', p2: 'seed' },
+    );
+    expect(r.get('p1')).toBe('ready');
+    expect(r.get('p2')).toBe('day');
+    expect(tagView({ album: 'ready' })).toBe('ready');
+  });
+
   it('ignores ordinary albums', () => {
     const r = resolve([{ album_id: 'Holiday', media_id: 'p1' }], { p1: 'day' });
     expect(r.get('p1')).toBe('day');
@@ -74,5 +88,23 @@ describe('tagView', () => {
     expect(tagView(null)).toBe('seed');
     expect(tagView({ album: 'mix' })).toBe('seed');
     expect(tagView({ album: 'day' })).toBe('day');
+  });
+});
+
+describe('albumForUpload', () => {
+  const START = '2026-09-25T13:30:00Z';
+  const at = (iso) => Date.parse(iso);
+  it('is Getting ready before the start and The day from it', () => {
+    expect(albumForUpload({ booth: false, eventStart: START, now: at('2026-09-25T09:00:00Z') })).toBe('ready');
+    expect(albumForUpload({ booth: false, eventStart: START, now: at(START) })).toBe('day');
+    expect(albumForUpload({ booth: false, eventStart: START, now: at('2026-09-25T20:00:00Z') })).toBe('day');
+  });
+  it('puts the booth in the booth whatever the time', () => {
+    expect(albumForUpload({ booth: true, eventStart: START, now: at('2026-09-25T09:00:00Z') })).toBe('booth');
+  });
+  it('treats a missing or garbled start as no before', () => {
+    for (const s of [null, undefined, '', 'soon']) {
+      expect(albumForUpload({ booth: false, eventStart: s, now: 0 })).toBe('day');
+    }
   });
 });
