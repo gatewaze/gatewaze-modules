@@ -133,6 +133,33 @@ const GENRE_SCALE: Record<string, number> = {
   western: 0.9, heist: 1.15,
 }
 
+/**
+ * The Wedflix wordmark, drawn rather than set.
+ *
+ * It was faked in CSS before — a bold sans squeezed with
+ * `scaleY(1.3) scaleX(.94)` — which only ever approximated the real
+ * letterforms. This is the actual artwork, inlined rather than fetched
+ * so it cannot fail to load at the venue and needs no asset hosting.
+ *
+ * Sized by height; the width follows the 1694:472 aspect.
+ */
+function Wordmark({ height }: { height: string }) {
+  return (
+    <svg
+      viewBox="239 125 1694 472"
+      role="img"
+      aria-label="Wedflix"
+      style={{ height, width: 'auto', display: 'block' }}
+    >
+      <path
+        fill="#e8121c"
+        fillRule="evenodd"
+        d="M1689,126 1763,348 1684,553 1766,566 1804,450 1843,577 1930,596 1846,351 1932,127 1847,127 1808,246 1772,127Z M1567,126 1567,541 1645,550 1645,126Z M1350,126 1350,521 1525,537 1525,466 1428,457 1428,126Z M1303,126 1129,126 1129,514 1209,517 1209,359 1284,358 1284,287 1209,286 1209,197 1303,196Z M879,125 877,514 997,516 1019,514 1040,508 1061,495 1073,481 1081,465 1087,442 1088,218 1081,176 1071,158 1060,146 1049,138 1027,129 1003,125Z M958,196 993,197 1005,206 1009,218 1009,426 1005,437 991,446 957,445Z M649,125 649,533 832,519 833,452 727,456 727,358 803,356 803,287 727,286 727,196 832,195 833,126Z M239,125 303,593 387,572 423,347 457,563 545,546 611,125 534,125 500,383 464,125 383,125 347,381 315,125Z"
+      />
+    </svg>
+  )
+}
+
 /** One stylesheet for every logotype, injected once per page. */
 function useLogotypeFonts(): void {
   useEffect(() => {
@@ -203,15 +230,11 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
       <div className="absolute" style={{ left: '5%', bottom: '13%', maxWidth: '48%' }}>
         <div
           style={{
-            ...enter(0),
-            color: '#e2231a', fontWeight: 800, textTransform: 'uppercase',
-            letterSpacing: '.005em', fontSize: 'clamp(15px, 1.6vw, 30px)',
-            transform: `${shown ? 'translateY(0)' : 'translateY(14px)'} scaleY(1.3) scaleX(.94)`,
-            transformOrigin: 'left bottom', marginBottom: '1.1em',
-            textShadow: '0 .05em .09em rgba(0,0,0,.6)',
+            ...enter(0), marginBottom: '1.1em',
+            filter: 'drop-shadow(0 .05em .09em rgba(0,0,0,.6))',
           }}
         >
-          Wedflix
+          <Wordmark height="clamp(17px, 1.85vw, 34px)" />
         </div>
 
         {copy.eyebrow && (
@@ -273,14 +296,10 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
       <div
         style={{
           ...enter(0), position: 'absolute', right: '4.5%', bottom: '6.5%',
-          color: '#e2231a', fontWeight: 800, textTransform: 'uppercase',
-          letterSpacing: '.005em', fontSize: 'clamp(20px, 2.3vw, 46px)',
-          transform: `${shown ? 'translateY(0)' : 'translateY(14px)'} scaleY(1.3) scaleX(.94)`,
-          transformOrigin: 'right bottom',
-          textShadow: '0 .05em .09em rgba(0,0,0,.6)',
+          filter: 'drop-shadow(0 .05em .09em rgba(0,0,0,.6))',
         }}
       >
-        Wedflix
+        <Wordmark height="clamp(23px, 2.6vw, 52px)" />
       </div>
     </div>
   )
