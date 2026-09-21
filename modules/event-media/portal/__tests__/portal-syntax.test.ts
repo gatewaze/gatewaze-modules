@@ -107,3 +107,55 @@ describe('hooks run before any early return', () => {
     });
   }
 });
+
+/**
+ * A hook's dependency array is evaluated DURING RENDER, at the line the
+ * hook is written on. Naming a `const` declared further down the
+ * component throws a ReferenceError (the temporal dead zone) before
+ * anything paints, and in a portal page that takes the whole display
+ * out.
+ *
+ * Typecheck cannot see it, the parse gate cannot see it, and the
+ * hook-order gate above cannot see it — the code is valid and the hooks
+ * are in a fixed order. It has reached production in this repo before,
+ * and on 2026-09-21 an innocent-looking fix to a preload effect would
+ * have done it again by naming displaySrc from 110 lines above its
+ * declaration.
+ */
+describe('hook dependencies are declared before the hook', () => {
+  const DEPS = /\}\s*,\s*\[([^\]]*)\]\s*\)/;
+  const DECL = /^\s*const\s+(?:\[([^\]]+)\]|\{([^}]+)\}|([A-Za-z_$][\w$]*))\s*=/;
+
+  for (const file of files.filter((f) => f.endsWith('.tsx'))) {
+    const rel = file.slice(PORTAL.length + 1);
+    it(`names nothing from below itself in ${rel}`, () => {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      // First line each name is declared on. Taking the FIRST keeps this
+      // conservative: a name declared anywhere above passes.
+      const firstDecl = new Map<string, number>();
+      lines.forEach((line, i) => {
+        const m = DECL.exec(line);
+        if (!m) return;
+        const names = (m[1] ?? m[2] ?? m[3] ?? '')
+          .split(',')
+          .map((n) => n.split(':').pop()!.split('=')[0]!.trim())
+          .filter((n) => /^[A-Za-z_$][\w$]*$/.test(n));
+        for (const n of names) if (!firstDecl.has(n)) firstDecl.set(n, i);
+      });
+
+      const offenders: string[] = [];
+      lines.forEach((line, i) => {
+        const m = DEPS.exec(line);
+        if (!m) return;
+        for (const raw of m[1]!.split(',')) {
+          const name = raw.trim().split(/[.?[\s]/)[0]!;
+          const at = firstDecl.get(name);
+          if (at !== undefined && at > i) {
+            offenders.push(`${rel}:${i + 1} depends on "${name}", declared at line ${at + 1}`);
+          }
+        }
+      });
+      expect(offenders).toEqual([]);
+    });
+  }
+});

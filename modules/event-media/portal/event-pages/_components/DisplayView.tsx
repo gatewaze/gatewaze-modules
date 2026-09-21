@@ -648,17 +648,6 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     setSlideTick((t) => t + 1)
   }, [freshArrivals, settings.instantNew, view.mode, advance])
 
-  // Preload the next slide.
-  useEffect(() => {
-    const list = photosRef.current
-    if (list.length < 2) return
-    const next = freshQueueRef.current[0] ?? list[(indexRef.current + 1) % list.length]
-    if (next) {
-      const img = new window.Image()
-      img.src = next.url
-    }
-  }, [current])
-
   // ── Wall mode: staggered per-cell slides ──────────────────────────
 
   useEffect(() => {
@@ -791,6 +780,33 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       const warm = new window.Image()
       warm.crossOrigin = 'anonymous'
       warm.src = href
+    }
+  }, [current, view.effect, displaySrc])
+
+  /*
+   * Preload the next slide for the CSS effects.
+   *
+   * This used to fetch next.url — the untouched full-size original,
+   * which nothing on screen ever displays, so it warmed the wrong file
+   * and paid for a full download every slide. It now fetches the URL the
+   * slide will actually use.
+   *
+   * It lives down here, below displaySrc, on purpose. A dependency array
+   * is evaluated during render, so naming displaySrc from above its
+   * declaration throws before anything paints and takes the display out.
+   *
+   * The cinematic effects are skipped: the warmer above already fetches
+   * that photo along with its depth layers.
+   */
+  useEffect(() => {
+    if (view.effect === 'cinematic' || view.effect === 'wedflix') return
+    const list = photosRef.current
+    if (list.length < 2) return
+    const next = freshQueueRef.current.find((f) => list.some((p) => p.id === f.id))
+      ?? list[(indexRef.current + 1) % list.length]
+    if (next) {
+      const img = new window.Image()
+      img.src = displaySrc(next)
     }
   }, [current, view.effect, displaySrc])
 
