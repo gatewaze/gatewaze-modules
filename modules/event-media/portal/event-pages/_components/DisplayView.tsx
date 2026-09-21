@@ -45,7 +45,13 @@ import { sizedDisplayUrl } from './_lib/display-url'
 const API_BASE = ''
 const POLL_MS = 10_000
 const MAX_PHOTOS = 500
-const MENU_HIDE_MS = 4_000
+/**
+ * An open settings panel closes itself after this long untouched, so it
+ * can never be forgotten over the projection for the rest of the night.
+ */
+const MENU_IDLE_MS = 60_000
+/** How long the "press Esc" hint shows when the display first loads. */
+const HINT_MS = 5_000
 const LIVE_STATUS_POLL_MS = 2_000
 // Cadence once the stream host looks absent (see the poll loop).
 const LIVE_STATUS_SLOW_MS = 20_000
@@ -408,7 +414,9 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // Ambient colour spill for the current photo.
   const [palette, setPalette] = useState<PhotoPalette | null>(null)
 
-  const [menuVisible, setMenuVisible] = useState(true)
+  // Starts hidden: it opens from the keyboard now, not the mouse.
+  const [menuVisible, setMenuVisible] = useState(false)
+  const [showHint, setShowHint] = useState(true)
   const menuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
 
@@ -961,20 +969,85 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
   // ── Menu auto-hide + fullscreen ───────────────────────────────────
 
-  const pokeMenu = useCallback(() => {
-    setMenuVisible(true)
-    if (menuTimerRef.current) clearTimeout(menuTimerRef.current)
-    menuTimerRef.current = setTimeout(() => setMenuVisible(false), MENU_HIDE_MS)
+  /*
+   * The panel opens from the keyboard, not the mouse.
+   *
+   * It used to appear on any mouse movement, so on the projector laptop
+   * someone brushing the trackpad put the settings over the photos in
+   * front of the whole room. Escape now toggles it, and M does too.
+   *
+   * Why M as well: Escape is also the key that leaves fullscreen, and a
+   * projector runs fullscreen. The lock below keeps a short Escape press
+   * for the page where the browser supports it; where it does not, M
+   * opens the panel without ever touching fullscreen.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+      // Escape always works, including to close the panel from a field.
+      // M must not fire while someone is typing a URL or a YouTube id.
+      const toggle = e.key === 'Escape' || (!typing && (e.key === 'm' || e.key === 'M'))
+      if (!toggle) return
+      e.preventDefault()
+      setShowHint(false)
+      setMenuVisible((v) => !v)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  /*
+   * Keep a short Escape press for the page while fullscreen.
+   *
+   * Without this the browser takes Escape to leave fullscreen, and the
+   * projector drops out of it the moment anyone opens the settings. The
+   * Keyboard Lock API exists for exactly this: a short press reaches the
+   * page, and press-and-hold still leaves fullscreen, so nobody is ever
+   * trapped. Chromium only; elsewhere this does nothing and M is the key.
+   */
   useEffect(() => {
-    pokeMenu()
-    window.addEventListener('mousemove', pokeMenu)
+    const kb = (navigator as unknown as {
+      keyboard?: { lock?: (keys: string[]) => Promise<void>; unlock?: () => void }
+    }).keyboard
+    if (!kb?.lock) return
+    const sync = () => {
+      if (document.fullscreenElement) void kb.lock!(['Escape']).catch(() => { /* not granted */ })
+      else kb.unlock?.()
+    }
+    document.addEventListener('fullscreenchange', sync)
+    sync()
     return () => {
-      window.removeEventListener('mousemove', pokeMenu)
+      document.removeEventListener('fullscreenchange', sync)
+      kb.unlock?.()
+    }
+  }, [])
+
+  // While open, using the panel keeps it open; left alone, it closes.
+  useEffect(() => {
+    if (!menuVisible) return
+    const arm = () => {
+      if (menuTimerRef.current) clearTimeout(menuTimerRef.current)
+      menuTimerRef.current = setTimeout(() => setMenuVisible(false), MENU_IDLE_MS)
+    }
+    arm()
+    window.addEventListener('pointermove', arm)
+    window.addEventListener('pointerdown', arm)
+    window.addEventListener('keydown', arm)
+    return () => {
+      window.removeEventListener('pointermove', arm)
+      window.removeEventListener('pointerdown', arm)
+      window.removeEventListener('keydown', arm)
       if (menuTimerRef.current) clearTimeout(menuTimerRef.current)
     }
-  }, [pokeMenu])
+  }, [menuVisible])
+
+  // A brief pointer to the key when the display first loads, since
+  // nothing on screen otherwise says the panel exists.
+  useEffect(() => {
+    const t = setTimeout(() => setShowHint(false), HINT_MS)
+    return () => clearTimeout(t)
+  }, [])
 
   // Portal to document.body: fixed positioning inside the event shell
   // gets re-anchored/dimmed by transform/opacity ancestors (same issue
@@ -1212,6 +1285,25 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
           <p className="text-[11px] text-gray-700 font-medium">Scan to add photos</p>
         </div>
       )}
+
+      {/* Where the settings live, shown briefly on load. Bottom centre is
+          the one corner of the screen nothing else uses: the QR has the
+          top right, the Wedflix wordmark the bottom right, the uploader
+          credit the bottom left. */}
+      <div
+        aria-hidden={!showHint}
+        className="absolute left-1/2 -translate-x-1/2 transition-opacity duration-700 pointer-events-none"
+        style={{
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 22px)',
+          opacity: showHint && !menuVisible ? 1 : 0,
+          background: 'rgba(0,0,0,.55)', color: 'rgba(255,255,255,.85)',
+          padding: '.5em .9em', borderRadius: 999, fontSize: 13,
+          backdropFilter: 'blur(6px)',
+        }}
+      >
+        Press <kbd style={{ fontFamily: 'inherit', fontWeight: 600 }}>Esc</kbd> or{' '}
+        <kbd style={{ fontFamily: 'inherit', fontWeight: 600 }}>M</kbd> for settings
+      </div>
 
       {/* Settings panel. Sized for a laptop trackpad AND a phone held
           at arm's length next to a projector: one labelled row per
