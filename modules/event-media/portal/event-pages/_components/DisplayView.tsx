@@ -59,9 +59,28 @@ interface DisplayItem {
 
 type SlideEffect = 'wedflix' | 'cinematic' | 'kenburns' | 'grade' | 'fade' | 'slide' | 'zoom' | 'blur'
 
-interface DisplaySettings {
+/**
+ * Everything that belongs to one stream rather than to the screen.
+ *
+ * The day's photographs and the booth's posters want different
+ * treatment — Wedflix over a landscape snapshot, a quiet fade over a
+ * wall of portrait posters — so each stream carries its own.
+ */
+interface StreamSettings {
   mode: 'slideshow' | 'wall'
+  effect: SlideEffect
   intervalMs: number
+  camera: 'pan' | 'panzoom'
+  /** Wall columns. 0 picks a best-fit grid from the photo count. */
+  columns: number
+}
+
+interface DisplaySettings {
+  /** @deprecated per-stream now; kept so stored settings still migrate. */
+  mode: 'slideshow' | 'wall'
+  /** @deprecated per-stream now. */
+  intervalMs: number
+  /** @deprecated per-stream now. */
   effect: SlideEffect
   qrMode: 'corner' | 'interleave' | 'hidden'
   qrEveryN: number
@@ -75,11 +94,19 @@ interface DisplaySettings {
   /** Fill 16:9 letterbox bars with a blurred copy of the photo. */
   fillBars: boolean
   /** Background-melt half of the cinematic effect. */
-  /** Which stream to show: the day's photos, or the booth's posters. */
-  stream: 'day' | 'booth'
+  /**
+   * Which stream the screen is on. 'mix' alternates between the two so
+   * one projector can carry both.
+   */
+  stream: 'day' | 'booth' | 'mix'
+  /** How long 'mix' dwells on each stream. */
+  mixSeconds: number
+  /** Per-stream treatment. */
+  day: StreamSettings
+  booth: StreamSettings
   /** How pronounced the 3D relief is. 0 is a flat camera move. */
   depthStrength: number
-  /** Cinematic camera: track across, or track and push in. */
+  /** @deprecated per-stream now. */
   camera: 'pan' | 'panzoom'
   /** @deprecated cinematic is GPU-only; kept so stored settings parse. */
   subjectPop: boolean
@@ -110,12 +137,42 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   ambient: true,
   fillBars: true,
   stream: 'day',
+  mixSeconds: 90,
+  // The day gets the browse cards; the posters are their own artwork
+  // already, so they get a quiet fade and three across the screen.
+  day: { mode: 'slideshow', effect: 'wedflix', intervalMs: 8000, camera: 'pan', columns: 0 },
+  booth: { mode: 'wall', effect: 'fade', intervalMs: 9000, camera: 'pan', columns: 3 },
   depthStrength: 1,
   camera: 'pan',
   subjectPop: true,
   webgpu: false,
   order: 'newest',
   instantNew: true,
+}
+
+/**
+ * Settings saved before the per-stream split carry a single flat
+ * effect/mode/interval for the whole screen. Fold those onto the day,
+ * which is what they were describing, rather than dropping someone's
+ * projector setup on upgrade.
+ */
+function migrate(s: DisplaySettings): DisplaySettings {
+  const raw = s as unknown as Record<string, unknown>
+  const legacy = (): StreamSettings => ({
+    mode: s.mode ?? 'slideshow',
+    effect: s.effect ?? 'kenburns',
+    intervalMs: s.intervalMs ?? 8000,
+    camera: s.camera ?? 'pan',
+    columns: 0,
+  })
+  const fix = (v: unknown, fallback: StreamSettings): StreamSettings =>
+    (v && typeof v === 'object') ? { ...fallback, ...(v as Partial<StreamSettings>) } : fallback
+  return {
+    ...s,
+    stream: s.stream === 'booth' || s.stream === 'mix' ? s.stream : 'day',
+    day: fix(raw['day'], raw['day'] ? DEFAULT_SETTINGS.day : legacy()),
+    booth: fix(raw['booth'], DEFAULT_SETTINGS.booth),
+  }
 }
 
 /**
@@ -227,7 +284,14 @@ const WALL_LAYOUTS: Array<{ cells: number; cols: number; rows: number }> = [
   { cells: 2, cols: 2, rows: 1 },
   { cells: 1, cols: 1, rows: 1 },
 ]
-function wallLayoutFor(count: number) {
+/**
+ * `columns` forces a single row of that width, which is what portrait
+ * booth posters want: three 3:4 posters side by side very nearly fill a
+ * 16:9 stage, where a best-fit grid would stack them into letterboxes.
+ * 0 keeps the automatic grid.
+ */
+function wallLayoutFor(count: number, columns = 0) {
+  if (columns > 0) return { cells: Math.min(columns, Math.max(count, 1)), cols: columns, rows: 1 }
   return WALL_LAYOUTS.find((l) => l.cells <= count) ?? WALL_LAYOUTS[WALL_LAYOUTS.length - 1]!
 }
 
@@ -306,23 +370,50 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // settings, which would re-create it on every unrelated change.
   const streamRef = useRef<'day' | 'booth'>('day')
 
-  // What the projector is actually showing, so counts and layout agree
-  // with what advance() walks. Declared here, above every hook that
-  // names it in a dependency array — a dependency array is evaluated
-  // during render, so a later const would throw before anything paints.
-  const pool = poolFor(photos, settings.stream)
+  /**
+   * Which stream is on screen now. In 'mix' this alternates on its own
+   * clock, so one projector carries the day and the booth in turn.
+   *
+   * Every hook below names `activeStream` or `view`, and a dependency
+   * array is evaluated during render, so both are declared here above
+   * the `if (!mounted) return null` guard further down. A hook after an
+   * early return runs on some renders and not others, which is React
+   * error #310 and takes the whole display out.
+   */
+  const [mixPhase, setMixPhase] = useState<'day' | 'booth'>('day')
+  const activeStream: 'day' | 'booth' = settings.stream === 'mix' ? mixPhase : settings.stream
+  const view: StreamSettings =
+    (activeStream === 'booth' ? settings.booth : settings.day) ?? DEFAULT_SETTINGS[activeStream]
 
-  // Must sit ABOVE the `if (!mounted) return null` guard further down:
-  // a hook after an early return runs on some renders and not others,
-  // which is React error #310 and takes the whole display out.
   useEffect(() => {
-    streamRef.current = settings.stream
-    // Switching stream re-pools from everything already loaded.
+    if (settings.stream !== 'mix') return
+    const every = Math.max(15, settings.mixSeconds ?? 90) * 1000
+    const t = setInterval(() => setMixPhase((p) => (p === 'day' ? 'booth' : 'day')), every)
+    return () => clearInterval(t)
+  }, [settings.stream, settings.mixSeconds])
+
+  // What the projector is actually showing, so counts and layout agree
+  // with what advance() walks.
+  const pool = poolFor(photos, activeStream)
+
+  useEffect(() => {
+    streamRef.current = activeStream
+    // Switching stream re-pools from everything already loaded, and
+    // cuts straight to the new stream. Without the cut, a swap in 'mix'
+    // would leave the previous stream on screen for up to a full slide
+    // — long enough to look broken on a 90 second rotation.
     setPhotos((all) => {
-      photosRef.current = poolFor(all, settings.stream)
+      const next = poolFor(all, activeStream)
+      photosRef.current = next
+      indexRef.current = 0
+      if (next.length) setCurrent(orderedPool(next, settings.order)[0] ?? null)
       return all
     })
-  }, [settings.stream])
+    setSlideTick((t) => t + 1)
+    // `order` is read, not watched: a change of order should not force
+    // a cut, it only decides which photo this one lands on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStream])
   const photosRef = useRef<DisplayItem[]>([])
   const freshQueueRef = useRef<DisplayItem[]>([])
   const newestRef = useRef<string | null>(null)
@@ -363,9 +454,18 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(settingsKey)
-      if (raw) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) })
+      if (raw) setSettings(migrate({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }))
     } catch { /* defaults are fine */ }
   }, [settingsKey])
+
+  /**
+   * Which stream the panel is editing. In 'mix' that cannot be inferred
+   * from what is on screen, because what is on screen keeps changing.
+   * Not persisted: it is a view of the panel, not a setting.
+   */
+  const [editing, setEditing] = useState<'day' | 'booth'>('day')
+  const editTarget: 'day' | 'booth' = settings.stream === 'mix' ? editing : settings.stream
+  const edited: StreamSettings = settings[editTarget] ?? DEFAULT_SETTINGS[editTarget]
 
   const updateSettings = useCallback((patch: Partial<DisplaySettings>) => {
     setSettings((prev) => {
@@ -374,6 +474,17 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       return next
     })
   }, [settingsKey])
+
+  /** Patch the stream the panel is currently editing. */
+  const updateStream = useCallback((patch: Partial<StreamSettings>) => {
+    setSettings((prev) => {
+      const target = prev.stream === 'mix' ? editing : prev.stream
+      const key: 'day' | 'booth' = target === 'booth' ? 'booth' : 'day'
+      const next = { ...prev, [key]: { ...(prev[key] ?? DEFAULT_SETTINGS[key]), ...patch } }
+      try { localStorage.setItem(settingsKey, JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
+  }, [settingsKey, editing])
 
   // ── Link + photo feed ─────────────────────────────────────────────
 
@@ -513,13 +624,13 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   }, [settings.qrMode, settings.qrEveryN, settings.order])
 
   useEffect(() => {
-    if (settings.mode !== 'slideshow') return
+    if (view.mode !== 'slideshow') return
     if (!current && photosRef.current.length > 0) setCurrent(photosRef.current[0])
-    const interval = setInterval(advance, Math.max(settings.intervalMs, 2000))
+    const interval = setInterval(advance, Math.max(view.intervalMs, 2000))
     return () => clearInterval(interval)
     // slideTick restarts the timer after an interrupt so a photo cut to
     // early still gets its full time on screen.
-  }, [settings.mode, settings.intervalMs, advance, current, pool.length, slideTick])
+  }, [view.mode, view.intervalMs, advance, current, pool.length, slideTick])
 
   // Cut to new arrivals immediately. The poll finds them within ~10 s;
   // without this they would then wait out the rest of the current
@@ -527,11 +638,11 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // per burst — the rest of the batch drains through the normal
   // fresh-queue priority rather than strobing past.
   useEffect(() => {
-    if (!settings.instantNew || settings.mode !== 'slideshow') return
+    if (!settings.instantNew || view.mode !== 'slideshow') return
     if (freshArrivals === 0) return
     advance()
     setSlideTick((t) => t + 1)
-  }, [freshArrivals, settings.instantNew, settings.mode, advance])
+  }, [freshArrivals, settings.instantNew, view.mode, advance])
 
   // Preload the next slide.
   useEffect(() => {
@@ -547,8 +658,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // ── Wall mode: staggered per-cell slides ──────────────────────────
 
   useEffect(() => {
-    if (settings.mode !== 'wall') return
-    const interval = Math.max(settings.intervalMs, 2000)
+    if (view.mode !== 'wall') return
+    const interval = Math.max(view.intervalMs, 2000)
 
     const pickNext = (displayed: Set<string>): DisplayItem | null => {
       const list = orderedPool(photosRef.current, settings.order)
@@ -575,7 +686,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       setWallCells((prev) => {
         const count = photosRef.current.length
         if (count === 0) return prev.length ? [] : prev
-        const layout = wallLayoutFor(count)
+        const layout = wallLayoutFor(count, view.columns)
         if (prev.length !== layout.cells) {
           // (Re)build the grid with staggered clocks so the first
           // round of changes is already spread across the interval.
@@ -615,7 +726,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     tick()
     const iv = setInterval(tick, 500)
     return () => clearInterval(iv)
-  }, [settings.mode, settings.intervalMs, settings.order, settings.instantNew])
+  }, [view.mode, view.intervalMs, settings.order, settings.instantNew])
 
   // ── Ambient colour spill ──────────────────────────────────────────
 
@@ -653,14 +764,14 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // Fetch the NEXT slide's image during the current one, so the
   // cross-fade always has it decoded and ready.
   useEffect(() => {
-    if (settings.effect !== 'cinematic' || !current) return
+    if (view.effect !== 'cinematic' || !current) return
     const list = photosRef.current
     const upcoming = freshQueueRef.current[0] ?? list[(indexRef.current + 1) % Math.max(list.length, 1)]
     if (!upcoming || upcoming.id === current.id) return
     const warm = new window.Image()
     warm.crossOrigin = 'anonymous'
     warm.src = displaySrc(upcoming)
-  }, [current, settings.effect, displaySrc])
+  }, [current, view.effect, displaySrc])
 
   // ── QR overlay ────────────────────────────────────────────────────
 
@@ -849,8 +960,15 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const qrCorner = settings.qrMode !== 'hidden' && qrDataUrl && !(showQrSlide && !showLive)
 
   // Both modes drive the layered renderer; wedflix adds the overlay.
-  const wedflixActive = settings.effect === 'wedflix'
-  const cinematicActive = settings.effect === 'cinematic' || wedflixActive
+  /**
+   * A forced-column wall is showing posters, which are artwork: crop
+   * them to fill and the title comes off. The automatic grid is showing
+   * snapshots, where filling the cell looks better than letterboxing.
+   */
+  const wallFit = (view.columns ?? 0) > 0 ? 'object-contain' : 'object-cover'
+
+  const wedflixActive = view.effect === 'wedflix'
+  const cinematicActive = view.effect === 'cinematic' || wedflixActive
   const cardCopy = (current?.card ?? null) as CardCopy | null
 
   // The browse card is for the day's own photographs. The seed selfies
@@ -886,7 +1004,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         }}
       >
       {/* Photo layer — never unmounts */}
-      {settings.mode === 'slideshow' ? (
+      {view.mode === 'slideshow' ? (
         <div className="absolute inset-0">
           {/* Blurred cover fill — replaces dead black letterbox bars,
               and in cinematic mode it is what the melted-away
@@ -918,8 +1036,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 plateSrc={current.variants?.plate ?? null}
                 cutoutSrc={current.variants?.cutout ?? null}
                 depthStrength={settings.depthStrength ?? 1}
-                camera={settings.camera ?? 'pan'}
-                durationMs={Math.max(settings.intervalMs, 2000)}
+                camera={view.camera}
+                durationMs={Math.max(view.intervalMs, 2000)}
                 className="absolute inset-0 w-full h-full"
               />
               {wedflixCard && cardCopy && (
@@ -939,7 +1057,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               src={current.url}
               alt={current.guest_name ? `Photo by ${current.guest_name}` : ''}
               className="absolute inset-0 w-full h-full object-contain"
-              style={{ animation: slideAnimation(settings.effect, current.id, settings.intervalMs) }}
+              style={{ animation: slideAnimation(view.effect, current.id, view.intervalMs) }}
             />
           ) : null}
           {/* A browse card owns the whole frame and does not credit
@@ -970,8 +1088,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         <div
           className="absolute inset-0 grid gap-1 p-1"
           style={{
-            gridTemplateColumns: `repeat(${wallLayoutFor(Math.max(pool.length, 1)).cols}, 1fr)`,
-            gridTemplateRows: `repeat(${wallLayoutFor(Math.max(pool.length, 1)).rows}, 1fr)`,
+            gridTemplateColumns: `repeat(${wallLayoutFor(Math.max(pool.length, 1), view.columns).cols}, 1fr)`,
+            gridTemplateRows: `repeat(${wallLayoutFor(Math.max(pool.length, 1), view.columns).rows}, 1fr)`,
           }}
         >
           {wallCells.map((cell, i) => (
@@ -981,7 +1099,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 <img
                   src={cell.previous.variants?.medium || cell.previous.url}
                   alt=""
-                  className="absolute inset-0 w-full h-full object-cover"
+                  className={`absolute inset-0 w-full h-full ${wallFit}`}
                 />
               )}
               {cell.current && (
@@ -990,8 +1108,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                   key={cell.current.id}
                   src={cell.current.variants?.medium || cell.current.url}
                   alt={cell.current.guest_name ? `Photo by ${cell.current.guest_name}` : ''}
-                  className="absolute inset-0 w-full h-full object-cover"
-                  style={{ animation: slideAnimation(settings.effect, cell.current.id, settings.intervalMs) }}
+                  className={`absolute inset-0 w-full h-full ${wallFit}`}
+                  style={{ animation: slideAnimation(view.effect, cell.current.id, view.intervalMs) }}
                 />
               )}
             </div>
@@ -1009,7 +1127,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       )}
 
       {/* Interleaved full-screen QR card */}
-      {showQrSlide && !showLive && qrDataUrl && settings.mode === 'slideshow' && (
+      {showQrSlide && !showLive && qrDataUrl && view.mode === 'slideshow' && (
         <div className="absolute inset-0 bg-black/95 flex flex-col items-center justify-center gap-6 transition-opacity duration-700">
           {linkInfo?.logoUrl && (
             // eslint-disable-next-line @next/next/no-img-element -- event logo
@@ -1065,9 +1183,60 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         <div data-menu className="ml-auto bg-black/80 backdrop-blur-md rounded-2xl shadow-2xl ring-1 ring-white/10 text-white w-full sm:w-[24rem] max-h-[86vh] overflow-y-auto">
           <div className="p-4 space-y-4">
 
+            <Row label="Showing">
+              {([
+                ['day', 'The day'],
+                ['booth', 'Photo booth'],
+                ['mix', 'Both, in turn'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={settings.stream === val} onClick={() => updateSettings({ stream: val })}>
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
+            {settings.stream === 'mix' && (
+              <div className="space-y-1.5">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-xs uppercase tracking-wide text-white/50">Swap every</span>
+                  <span className="text-sm tabular-nums text-white/80">{settings.mixSeconds ?? 90}s</span>
+                </div>
+                <input
+                  type="range" min={15} max={300} step={15}
+                  value={settings.mixSeconds ?? 90}
+                  onChange={(e) => updateSettings({ mixSeconds: Number(e.target.value) })}
+                  className="w-full accent-white/80"
+                />
+                <p className="text-xs text-white/40">
+                  Showing {activeStream === 'booth' ? 'the photo booth' : 'the day'} now.
+                </p>
+              </div>
+            )}
+
+            {/* Everything below belongs to ONE stream. In 'mix' the
+                screen keeps changing, so the panel cannot infer which
+                one you mean — say so explicitly. */}
+            <div className="pt-1 border-t border-white/10" />
+            {settings.stream === 'mix' ? (
+              <Row label="Settings for">
+                {([
+                  ['day', 'The day'],
+                  ['booth', 'Photo booth'],
+                ] as const).map(([val, label]) => (
+                  <Chip key={val} on={editing === val} onClick={() => setEditing(val)}>
+                    {label}
+                  </Chip>
+                ))}
+              </Row>
+            ) : (
+              <span className="block text-xs uppercase tracking-wide text-white/35">
+                Settings for {settings.stream === 'booth' ? 'the photo booth' : 'the day'}
+              </span>
+            )}
+
             <Row label="Display">
               {(['slideshow', 'wall'] as const).map((m) => (
-                <Chip key={m} on={settings.mode === m} onClick={() => updateSettings({ mode: m })}>
+                <Chip key={m} on={edited.mode === m} onClick={() => updateStream({ mode: m })}>
                   {m === 'slideshow' ? 'Slideshow' : 'Wall'}
                 </Chip>
               ))}
@@ -1094,13 +1263,13 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 ['zoom', 'Zoom'],
                 ['blur', 'Blur'],
               ] as const).map(([val, label]) => (
-                <Chip key={val} on={settings.effect === val} onClick={() => updateSettings({ effect: val })}>
+                <Chip key={val} on={edited.effect === val} onClick={() => updateStream({ effect: val })}>
                   {label}
                 </Chip>
               ))}
             </Row>
 
-            {settings.effect === 'cinematic' && (
+            {edited.effect === 'cinematic' && (
               <div className="space-y-1.5 -mt-1">
                 <div className="flex items-baseline justify-between">
                   <span className="text-xs uppercase tracking-wide text-white/50">3D separation</span>
@@ -1139,16 +1308,6 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               </Chip>
             </Row>
 
-            <Row label="Showing">
-              {([
-                ['day', "The day"],
-                ['booth', 'Photo booth'],
-              ] as const).map(([val, label]) => (
-                <Chip key={val} on={settings.stream === val} onClick={() => updateSettings({ stream: val })}>
-                  {label}
-                </Chip>
-              ))}
-            </Row>
 
             <Row label="Camera">
               {([
@@ -1157,7 +1316,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               ] as const).map(([val, label]) => (
                 <Chip
                   key={val}
-                  on={(settings.camera ?? 'pan') === val}
+                  on={edited.camera === val}
                   onClick={() => updateSettings({ camera: val })}
                 >
                   {label}
@@ -1185,17 +1344,27 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             <div className="space-y-1.5">
               <div className="flex items-baseline justify-between">
                 <span className="text-xs uppercase tracking-wide text-white/50">Time per photo</span>
-                <span className="text-sm tabular-nums text-white/80">{settings.intervalMs / 1000}s</span>
+                <span className="text-sm tabular-nums text-white/80">{edited.intervalMs / 1000}s</span>
               </div>
               <input
                 type="range"
                 min={4}
                 max={30}
-                value={settings.intervalMs / 1000}
-                onChange={(e) => updateSettings({ intervalMs: Number(e.target.value) * 1000 })}
+                value={edited.intervalMs / 1000}
+                onChange={(e) => updateStream({ intervalMs: Number(e.target.value) * 1000 })}
                 className="w-full accent-white/80"
               />
             </div>
+
+            {edited.mode === 'wall' && (
+              <Row label="Across">
+                {([[0, 'Best fit'], [2, 'Two'], [3, 'Three'], [4, 'Four']] as const).map(([n, label]) => (
+                  <Chip key={n} on={(edited.columns ?? 0) === n} onClick={() => updateStream({ columns: n })}>
+                    {label}
+                  </Chip>
+                ))}
+              </Row>
+            )}
 
             <hr className="border-white/10" />
 
