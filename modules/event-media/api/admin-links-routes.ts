@@ -57,11 +57,10 @@ export const LINK_WRITE_FIELDS = [
   'max_video_bytes',
   'logo_url',
   'allow_face_filter',
-  'album',
 ] as const;
 
 const LINK_SELECT =
-  'id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, album, uploads_count, created_by, created_at, updated_at';
+  'id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, uploads_count, created_by, created_at, updated_at';
 
 const FILTER_SELECT = 'id, event_id, label, source_path, is_active, sort_order, created_at';
 
@@ -93,11 +92,6 @@ function pickLinkFields(body: unknown): Record<string, unknown> {
       case 'expires_at':
         if (value === null) out[key] = null;
         else if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) out[key] = new Date(value).toISOString();
-        break;
-      case 'album':
-        // Where the link's uploads land. The booth has its own route in;
-        // Preload is the operator's own seeding, never a guest link.
-        if (value === 'day' || value === 'ready') out[key] = value;
         break;
       case 'max_photo_bytes':
       case 'max_video_bytes': {

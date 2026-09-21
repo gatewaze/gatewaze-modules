@@ -29,12 +29,8 @@ interface UploadLink {
   show_gallery: boolean;
   uploads_count: number;
   logo_url: string | null;
-  /** Where this link's uploads land: the day, or Getting ready. */
-  album?: 'day' | 'ready';
   created_at: string;
 }
-
-const ALBUM_LABEL: Record<'day' | 'ready', string> = { day: 'The day', ready: 'Getting ready' };
 
 interface FaceFilter {
   id: string;
@@ -78,7 +74,6 @@ const DEFAULT_FORM = {
   // Off by default: a guest's face being altered is never the
   // out-of-the-box behaviour.
   allow_face_filter: false,
-  album: 'day' as 'day' | 'ready',
 };
 
 export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
@@ -279,20 +274,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     }
   };
 
-  const setAlbum = async (link: UploadLink, album: 'day' | 'ready') => {
-    const res = await authedFetch(`/api/admin/events/${eventId}/media-upload-links/${link.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album }),
-    });
-    if (res.ok) {
-      toast.success(`New uploads go to ${ALBUM_LABEL[album]}`);
-      await loadLinks();
-    } else {
-      toast.error('Failed to update link');
-    }
-  };
-
   const copyUrl = async (link: UploadLink) => {
     try {
       await navigator.clipboard.writeText(linkUrl(link));
@@ -373,18 +354,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                 {link.is_active ? 'active' : 'inactive'}
               </span>
               <span className="text-xs text-gray-500">{link.uploads_count} uploads</span>
-              {/* Where this link's photos land. A Getting ready link is
-                  the one sent out before the day; the venue QR stays on
-                  The day. */}
-              <select
-                aria-label="Uploads go to"
-                value={link.album ?? 'day'}
-                onChange={(e) => setAlbum(link, e.target.value as 'day' | 'ready')}
-                className="text-xs rounded border border-gray-300 dark:border-gray-600 bg-transparent px-1.5 py-0.5"
-              >
-                <option value="day">→ The day</option>
-                <option value="ready">→ Getting ready</option>
-              </select>
               <span className="flex-1" />
               <button className="text-xs underline" onClick={() => copyUrl(link)}>Copy URL</button>
               <button
@@ -420,17 +389,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                 maxLength={120}
                 className="w-full rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1.5 text-sm"
               />
-              <label className="flex items-center gap-2 text-sm">
-                Uploads go to
-                <select
-                  value={form.album}
-                  onChange={(e) => setForm({ ...form, album: e.target.value as 'day' | 'ready' })}
-                  className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
-                >
-                  <option value="day">The day (the QR at the venue)</option>
-                  <option value="ready">Getting ready (sent before the day)</option>
-                </select>
-              </label>
               <div className="flex flex-wrap gap-4 text-sm">
                 {([
                   ['require_name', 'Ask for name'],

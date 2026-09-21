@@ -34,7 +34,7 @@ import {
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
 import { runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
-import { resolveViews, tagView, type View } from '../lib/view-albums.js';
+import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
 import {
   TICKET_TTL_SECONDS,
@@ -87,8 +87,6 @@ interface UploadLinkRow {
   max_video_bytes: number;
   logo_url: string | null;
   allow_face_filter: boolean;
-  /** Where uploads through this link land: 'day' or 'ready'. */
-  album?: string;
 }
 
 interface EventRow {
@@ -96,6 +94,8 @@ interface EventRow {
   event_id: string | null;
   event_slug: string | null;
   event_title: string | null;
+  /** When the event starts; uploads before it are Getting ready. */
+  event_start?: string | null;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -163,7 +163,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: link, error } = await supabase
       .from('events_media_upload_links')
-      .select('id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, album')
+      .select('id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter')
       .eq('short_code', code)
       .maybeSingle();
     if (error) {
@@ -181,7 +181,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: event, error: evErr } = await supabase
       .from('events')
-      .select('id, event_id, event_slug, event_title')
+      .select('id, event_id, event_slug, event_title, event_start')
       .eq('id', link.event_id)
       .maybeSingle();
     if (evErr || !event) {
@@ -655,7 +655,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     p: UploadTicketPayload,
     actualBytes: number,
     autoApprove: boolean,
-    linkAlbum: unknown,
+    eventStart: string | null,
   ): Record<string, unknown> {
     return {
       id: p.media_id,
@@ -674,11 +674,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         guest_name: p.guest_name || null,
         client_id: p.client_id,
         captured: p.captured,
-        // Which stream this belongs to. The booth's posters are shown on
-        // their own whichever link made them; everything else lands where
-        // the link sends it -- the day, or Getting ready for a link sent
-        // out before it. Anything unexpected is the day.
-        album: p.booth ? 'booth' : linkAlbum === 'ready' ? 'ready' : 'day',
+        // Which stream this belongs to: the booth's posters on their own,
+        // and a guest's photo under Getting ready until the event starts,
+        // The day after. The guest never chooses.
+        album: albumForUpload({ booth: Boolean(p.booth), eventStart, now: Date.now() }),
       },
     };
   }
@@ -717,7 +716,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
     const ctx = await resolveLink(req, res, 'complete', GUEST_RATE_LIMITS.completePerIp);
     if (!ctx) return;
-    const { link } = ctx;
+    const { link, event } = ctx;
 
     // Hard per-link circuit breaker (client_id is spoofable; this is the
     // real backstop against a leaked QR). Windowed key, NOT the
@@ -789,7 +788,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         continue;
       }
 
-      const row = buildInsertRow(p, head.bytes || 0, link.auto_approve, link.album);
+      const row = buildInsertRow(p, head.bytes || 0, link.auto_approve, event.event_start ?? null);
       (row['metadata'] as Record<string, unknown>)['upload_link_id'] = link.id;
 
       const { data: inserted, error: insErr } = await supabase

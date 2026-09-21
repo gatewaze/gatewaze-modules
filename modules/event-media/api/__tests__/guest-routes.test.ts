@@ -648,21 +648,22 @@ describe('completeUploads', () => {
     expect(supabase.state.rpcCalls[0]).toEqual({ name: 'events_media_upload_links_increment', args: { p_link_id: LINK_ID, p_n: 1 } });
   });
 
-  // A link sent out before the day files its uploads under Getting ready.
-  it('files uploads where the link sends them', async () => {
-    const albumFor = async (link, overrides = {}) => {
-      const { deps, supabase } = makeDeps({ link, event: EVENT_ROW, existingMedia: null });
+  // Guests upload the same way all day; the event's start decides.
+  it('files uploads before the event starts under Getting ready', async () => {
+    const albumFor = async (eventStart, overrides = {}) => {
+      const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: { ...EVENT_ROW, event_start: eventStart }, existingMedia: null });
       stubHeadResponse(headOk());
       await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor(overrides)] } }), mockRes());
       return supabase.state.inserted[0].metadata.album;
     };
-    expect(await albumFor({ ...ACTIVE_LINK, album: 'ready' })).toBe('ready');
-    expect(await albumFor({ ...ACTIVE_LINK, album: 'day' })).toBe('day');
-    // Older rows predate the column, and nothing unexpected gets through.
-    expect(await albumFor(ACTIVE_LINK)).toBe('day');
-    expect(await albumFor({ ...ACTIVE_LINK, album: 'booth' })).toBe('day');
-    // The booth's posters go to the booth whichever link made them.
-    expect(await albumFor({ ...ACTIVE_LINK, album: 'ready' }, { booth: true })).toBe('booth');
+    const inAnHour = new Date(Date.now() + 3_600_000).toISOString();
+    const anHourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    expect(await albumFor(inAnHour)).toBe('ready');
+    expect(await albumFor(anHourAgo)).toBe('day');
+    // No start time, no before.
+    expect(await albumFor(null)).toBe('day');
+    // The booth's posters go to the booth, before the start or not.
+    expect(await albumFor(inAnHour, { booth: true })).toBe('booth');
   });
 
   it('stamps is_approved=false when the link does not auto-approve', async () => {

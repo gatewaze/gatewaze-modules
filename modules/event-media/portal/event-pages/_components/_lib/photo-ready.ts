@@ -78,3 +78,44 @@ export function hasBrowseCard(p: CardCandidate): boolean {
   const title = p.card?.title
   return typeof title === 'string' && title.trim().length > 0
 }
+
+/**
+ * Where the next incremental poll should start.
+ *
+ * The feed returns rows at or after a timestamp, and the display used to
+ * ask only for rows newer than its newest -- so a photo first seen while
+ * still processing was never fetched again, and sat "not ready" on the
+ * projector until someone refreshed the page (booth screen, 2026-09-21).
+ * Reaching back to the oldest photo still processing re-delivers it with
+ * its finished layers. Photos past the grace window are shown anyway, so
+ * they stop holding the window open.
+ */
+export function pollAfter<T extends ReadyCandidate>(
+  items: T[],
+  newest: string | null,
+  now: number = Date.now(),
+): string | null {
+  let earliest = newest
+  for (const p of items) {
+    if (isProcessed(p) || !p.created_at) continue
+    const t = Date.parse(p.created_at)
+    if (!Number.isFinite(t) || now - t > PROCESSING_GRACE_MS) continue
+    if (earliest === null || p.created_at < earliest) earliest = p.created_at
+  }
+  return earliest
+}
+
+export interface FeedFields extends ReadyCandidate {
+  album?: string | null
+}
+
+/** Has the feed's copy of a photo moved on from the one on screen? */
+export function feedChanged(held: FeedFields, incoming: FeedFields): boolean {
+  const a = held.variants ?? {}
+  const b = incoming.variants ?? {}
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const k of keys) if (a[k] !== b[k]) return true
+  if (Boolean(held.card) !== Boolean(incoming.card)) return true
+  if (held.card && incoming.card && JSON.stringify(held.card) !== JSON.stringify(incoming.card)) return true
+  return (held.album ?? null) !== (incoming.album ?? null)
+}

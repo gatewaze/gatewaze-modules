@@ -1,22 +1,14 @@
 -- A fourth projector view: Getting ready.
 --
 -- Photos guests take before they arrive -- dressing, travelling, the
--- morning of. They reach it through an upload link whose destination is
--- 'ready' (sent ahead of the day), where the venue's QR stays 'day'. The
--- booth's posters still go to the booth whichever link made them.
+-- morning of. Guests upload exactly as they do on the day; anything that
+-- lands before the event starts is filed here instead of under The day
+-- (lib/view-albums.ts, albumForUpload). The booth's posters still go to
+-- the booth.
 --
---   events_media_upload_links.album   where a link's uploads land
---   event_media_view_albums            now accepts 'ready'
---   event_media_view_album()           names and orders the new album
---   the insert trigger                 joins 'ready' uploads to it
-
-ALTER TABLE public.events_media_upload_links
-  ADD COLUMN IF NOT EXISTS album text NOT NULL DEFAULT 'day';
-
-ALTER TABLE public.events_media_upload_links
-  DROP CONSTRAINT IF EXISTS events_media_upload_links_album_check;
-ALTER TABLE public.events_media_upload_links
-  ADD CONSTRAINT events_media_upload_links_album_check CHECK (album IN ('day', 'ready'));
+--   event_media_view_albums     now accepts 'ready'
+--   event_media_view_album()    names and orders the new album
+--   the insert trigger          joins 'ready' uploads to it
 
 ALTER TABLE public.event_media_view_albums
   DROP CONSTRAINT IF EXISTS event_media_view_albums_view_check;
@@ -52,7 +44,7 @@ BEGIN
     END,
     CASE p_view
       WHEN 'seed'  THEN 'Shown on the projector''s Preload view.'
-      WHEN 'ready' THEN 'Shown on the projector''s Getting ready view. Uploads through a Getting ready link land here.'
+      WHEN 'ready' THEN 'Shown on the projector''s Getting ready view. Guest uploads from before the event starts land here.'
       WHEN 'day'   THEN 'Shown on the projector''s The day view. Guest uploads land here.'
       ELSE              'Shown on the projector''s Photo booth view. Booth posters land here.'
     END,

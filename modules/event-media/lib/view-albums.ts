@@ -23,6 +23,20 @@ export const VIEWS: readonly View[] = ['seed', 'ready', 'day', 'booth']
 
 const RANK: Record<View, number> = { booth: 0, day: 1, ready: 2, seed: 3 }
 
+/**
+ * Where a new upload lands.
+ *
+ * Guests upload the same way all day and never choose. The booth's
+ * posters go to the booth; everything else is Getting ready until the
+ * event starts and The day from then on. An event with no usable start
+ * time has no before, so everything is The day.
+ */
+export function albumForUpload(opts: { booth: boolean; eventStart: string | null | undefined; now: number }): View {
+  if (opts.booth) return 'booth'
+  const start = opts.eventStart ? Date.parse(opts.eventStart) : NaN
+  return Number.isFinite(start) && opts.now < start ? 'ready' : 'day'
+}
+
 export function isView(v: unknown): v is View {
   return typeof v === 'string' && (VIEWS as readonly string[]).includes(v)
 }

@@ -45,7 +45,7 @@ import {
   type StreamSettings,
   type ViewName,
 } from './_lib/display-settings'
-import { hasBrowseCard, isReady } from './_lib/photo-ready'
+import { feedChanged, hasBrowseCard, isReady, pollAfter } from './_lib/photo-ready'
 import { sizedDisplayUrl } from './_lib/display-url'
 
 // Same-origin — proxied to the api service by the portal's
@@ -543,15 +543,30 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     setPhotos((prev) => {
       const seen = new Set(prev.map((p) => p.id))
       const add = clean.filter((i) => !seen.has(i.id))
-      if (add.length === 0) return prev
-      if (fresh) {
+      // A photo already held can come back finished -- layers, browse
+      // card, or moved to another album. Take the newer copy; ignoring it
+      // is what left new booth posters off the screen until a refresh.
+      const byId = new Map(clean.map((i) => [i.id, i]))
+      let changed = false
+      const held = prev.map((p) => {
+        const next = byId.get(p.id)
+        if (!next || !feedChanged(p, next)) return p
+        changed = true
+        return { ...p, ...next }
+      })
+      if (add.length === 0 && !changed) return prev
+      // A queued arrival that has just finished gets its instant cut now.
+      if (changed && freshQueueRef.current.some((f) => byId.has(f.id))) {
+        setFreshArrivals((n) => n + 1)
+      }
+      if (fresh && add.length > 0) {
         freshQueueRef.current.push(...add)
         // Signal the instant-cut effect (setState during another
         // component's updater is fine here — different state atom,
         // and React batches it into the same commit).
         setFreshArrivals((n) => n + 1)
       }
-      const merged = [...add, ...prev].slice(0, MAX_PHOTOS)
+      const merged = [...add, ...held].slice(0, MAX_PHOTOS)
       // The projector draws from the pooled stream, not everything that
       // has ever been uploaded.
       photosRef.current = poolFor(merged, streamRef.current, wedflixRef.current)
@@ -567,7 +582,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     const load = async (incremental: boolean) => {
       try {
         const qs = new URLSearchParams({ filter: 'photo', limit: '200' })
-        if (incremental && newestRef.current) qs.set('after', newestRef.current)
+        // From the oldest photo still processing, not just the newest, so
+        // a photo seen half-made is fetched again once it is finished.
+        const since = incremental ? pollAfter(allPhotosRef.current, newestRef.current) : null
+        if (since) qs.set('after', since)
         const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/media?${qs}`)
         if (!res.ok || cancelled) return
         const data = await res.json()
