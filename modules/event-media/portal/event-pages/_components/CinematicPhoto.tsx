@@ -597,7 +597,15 @@ export default function CinematicPhoto({
       ctx.clearRect(0, 0, w, h)
 
       const prev = prevRef.current
-      const f = prev ? Math.min(1, (now - fadeFromRef.current) / FADE_MS) : 1
+      // Clamped at BOTH ends. The start of the fade is stamped with
+      // performance.now() when the new photo finishes loading, but `now`
+      // is the frame's own timestamp, which can fall a few milliseconds
+      // EARLIER than a load that completed inside the same frame. That
+      // made f slightly negative on the first frame, and a canvas IGNORES
+      // an out-of-range globalAlpha rather than clamping it -- it kept
+      // the previous value of 1 and drew the incoming photo solid for one
+      // frame. That single frame was the flash at every slide change.
+      const f = prev ? Math.max(0, Math.min(1, (now - fadeFromRef.current) / FADE_MS)) : 1
 
       if (!prev || f >= 1) {
         drawLayer(ctx, cur, now, w, h, 1)
@@ -667,12 +675,20 @@ export default function CinematicPhoto({
       // and the photo is shown still — a still photograph looks like a
       // photograph, where a bad separation looks broken.
       //   - the plate must actually have had the people removed
-      //   - the cutout must agree with the depth map, when there is one
+      //   - the cutout must agree with the depth map
+      //
+      // A missing depth map is a failure, not a pass. This used to skip
+      // the agreement check when there was no depth map, which is how a
+      // pub photo with pints on the table kept its parallax and sliced
+      // the glasses in half: its depth map was never generated, so the
+      // one check that would have caught it never ran. If the layers
+      // cannot be verified, they are not used.
       const agree = depth && cutout ? layerAgreement(depth, cutout) : null
       const usable = Boolean(
-        plate && cutout
+        plate && cutout && agree
         && plateChange(photo, plate, cutout) >= PLATE_MIN_CHANGE
-        && (!agree || (agree.nearOutside <= MAX_NEAR_OUTSIDE && agree.farInside <= MAX_FAR_INSIDE)),
+        && agree.nearOutside <= MAX_NEAR_OUTSIDE
+        && agree.farInside <= MAX_FAR_INSIDE,
       )
 
       curRef.current && (prevRef.current = curRef.current)

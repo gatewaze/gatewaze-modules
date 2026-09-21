@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import {
   migrateStreams,
   normaliseStream,
+  DEFAULT_PRELOAD,
   DEFAULT_DAY,
   DEFAULT_BOOTH,
 } from '../event-pages/_components/_lib/display-settings.js';
@@ -64,15 +65,32 @@ describe('migrateStreams', () => {
 });
 
 describe('normaliseStream', () => {
-  it('accepts the three real streams', () => {
-    expect(normaliseStream('day')).toBe('day');
-    expect(normaliseStream('booth')).toBe('booth');
-    expect(normaliseStream('mix')).toBe('mix');
+  it('accepts the three views and the rotation', () => {
+    for (const v of ['preload', 'day', 'booth', 'mix']) expect(normaliseStream(v)).toBe(v);
   });
 
-  it('falls back to the day for anything else', () => {
+  // Preload is the only view certain to have photos before the day, so
+  // a fresh or garbled setting must not open on an empty screen.
+  it('opens on Preload for anything else', () => {
     for (const v of [undefined, null, '', 'wall', 42, {}]) {
-      expect(normaliseStream(v)).toBe('day');
+      expect(normaliseStream(v)).toBe('preload');
     }
+  });
+});
+
+describe('Preload settings', () => {
+  it('get their own defaults on a save that predates them', () => {
+    const { preload, day } = migrateStreams({ day: { effect: 'wedflix' } });
+    expect(preload).toEqual(DEFAULT_PRELOAD);
+    expect(day.effect).toBe('wedflix');
+  });
+
+  it('keep what was saved for them', () => {
+    expect(migrateStreams({ preload: { effect: 'kenburns' } }).preload.effect).toBe('kenburns');
+  });
+
+  // Selfies are never billed as programmes, so their default is not Wedflix.
+  it('default to a treatment that is not Wedflix', () => {
+    expect(DEFAULT_PRELOAD.effect).not.toBe('wedflix');
   });
 });
