@@ -1041,10 +1041,6 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               style={{ filter: 'blur(48px) saturate(1.25) brightness(0.55)', transform: 'scale(1.15)' }}
             />
           )}
-          {previous && previous.id !== current?.id && (
-            // eslint-disable-next-line @next/next/no-img-element -- projector shows originals full-screen
-            <img src={previous.url} alt="" className="absolute inset-0 w-full h-full object-contain opacity-0 transition-opacity duration-700" />
-          )}
           {current && cinematicActive ? (
             // Deliberately NOT keyed by photo: the renderer keeps one
             // canvas and one WebGL context for the whole display and
@@ -1078,7 +1074,11 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             // eslint-disable-next-line @next/next/no-img-element -- projector shows originals full-screen
             <img
               key={current.id}
-              src={current.url}
+              // Sized for the screen, upscaled where available, and
+              // resized by the CDN when one is configured — the same URL
+              // the cinematic renderer uses. current.url is the untouched
+              // original at full size.
+              src={displaySrc(current)}
               alt={current.guest_name ? `Photo by ${current.guest_name}` : ''}
               className="absolute inset-0 w-full h-full object-contain"
               style={{ animation: slideAnimation(view.effect, current.id, view.intervalMs) }}
