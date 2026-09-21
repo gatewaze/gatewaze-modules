@@ -18,6 +18,7 @@ import {
   formatDuration,
 } from '../utils/mediaOrganizerService';
 import type { TileChips } from './MediaGrid';
+import { PhotoArtifacts } from './PhotoArtifacts';
 
 interface MediaViewerModalProps {
   items: HostMediaItem[];
@@ -131,6 +132,7 @@ export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onP
         </div>
       }
     >
+      <>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
         <div className="flex items-center justify-center overflow-hidden rounded-lg bg-[var(--gray-a3)]">
           {kind === 'photo' && imgSrc ? (
@@ -211,6 +213,8 @@ export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onP
           </dl>
         </div>
       </div>
+      {kind === 'photo' && <PhotoArtifacts item={item} />}
+      </>
     </Modal>
   );
 }
