@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
-import { CheckCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { toast } from 'sonner';
+import { CheckCircleIcon, ExclamationTriangleIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
+import { Button } from '@/components/ui';
+import { supabase } from '@/lib/supabase';
 import type { HostMediaItem } from '../utils/mediaOrganizerService';
 import {
   MAX_FAR_INSIDE,
@@ -10,6 +13,7 @@ import {
   plateChangeScore,
   type DepthVerdict,
 } from '../../lib/depth-quality.js';
+import { CARD_GENRES, CARD_KINDS, CARD_LIMITS } from '../../lib/card-copy.js';
 
 /**
  * Everything that sits behind one photo: the layers the projector builds
@@ -32,6 +36,18 @@ interface Card {
   genre?: string;
   kind?: string;
   eyebrow?: string;
+}
+
+const apiUrl = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
+
+/** The admin's own session goes with the request, so RLS decides. */
+async function authedFetch(path: string, init?: RequestInit): Promise<Response> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const headers = new Headers(init?.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  headers.set('Content-Type', 'application/json');
+  return fetch(`${apiUrl}${path}`, { ...init, headers });
 }
 
 /**
@@ -126,7 +142,11 @@ function Measure({ label, value, limit, better }: {
   );
 }
 
-export function PhotoArtifacts({ item }: { item: HostMediaItem }) {
+export function PhotoArtifacts({ item, onItemChange }: {
+  item: HostMediaItem;
+  /** Called with the updated photo after an edit, so the organiser's list reflects it. */
+  onItemChange?: (item: HostMediaItem) => void;
+}) {
   const v = item.variants ?? {};
   const meta = (item.metadata ?? {}) as Record<string, unknown>;
   const card = (meta.card && typeof meta.card === 'object' ? meta.card : null) as Card | null;
@@ -139,7 +159,11 @@ export function PhotoArtifacts({ item }: { item: HostMediaItem }) {
     setScored(null);
     void score(item).then((s) => { if (live) setScored(s); });
     return () => { live = false; };
-  }, [item]);
+    // Keyed on the photo, not the object: saving a card produces a new
+    // object for the same photo, and re-downloading every layer to
+    // re-score an unchanged photo would be pure waste.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.id]);
 
   const layers: Array<{ key: string; label: string; url: string | null; note: string; checker?: boolean }> = [
     { key: 'original', label: 'Original', url: item.cdn_url, note: item.width && item.height ? `${item.width} × ${item.height}` : 'as uploaded' },
@@ -224,28 +248,168 @@ export function PhotoArtifacts({ item }: { item: HostMediaItem }) {
         ))}
       </div>
 
-      <div className="rounded-lg border border-[var(--gray-a5)] p-3">
-        <div className="mb-1 text-xs text-[var(--gray-a10)]">Wedflix card</div>
-        {card?.title ? (
-          <div className="space-y-1">
-            {card.eyebrow && <div className="text-xs uppercase tracking-widest text-[var(--gray-a10)]">{card.eyebrow}</div>}
-            <div className="text-lg font-semibold">{card.title}</div>
-            {Array.isArray(card.words) && card.words.length > 0 && <div>{card.words.join(' · ')}</div>}
-            <div className="text-xs text-[var(--gray-a10)]">
-              {[card.genre && `${card.genre} styling`, card.kind].filter(Boolean).join(' · ')}
-            </div>
-            {album === 'seed' && (
-              <div className="text-xs text-[var(--gray-a10)]">
-                Preload photos are never billed as programmes, so this card is not shown.
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="text-[var(--gray-a10)]">
-            No card yet. Photos without one are left out of Wedflix.
-          </div>
-        )}
-      </div>
+      <CardEditor item={item} card={card} album={album} onItemChange={onItemChange} />
     </section>
+  );
+}
+
+/**
+ * The Wedflix card, viewed or edited in place.
+ *
+ * The form holds to the same limits the server enforces (lib/card-copy.ts),
+ * so a card that passes here is not refused on save. Those limits are
+ * layout: past them the title and words wrap into the photograph.
+ */
+function CardEditor({ item, card, album, onItemChange }: {
+  item: HostMediaItem;
+  card: Card | null;
+  album: string;
+  onItemChange?: (item: HostMediaItem) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const blank = { title: '', words: ['', '', ''], genre: 'doc', kind: 'Series', eyebrow: 'A Wedflix Original' };
+  const [draft, setDraft] = useState(blank);
+
+  // A different photo in the viewer discards any unsaved edit.
+  useEffect(() => { setEditing(false); setError(null); }, [item.id]);
+
+  const open = () => {
+    setDraft({
+      title: card?.title ?? '',
+      words: [0, 1, 2].map((i) => card?.words?.[i] ?? ''),
+      genre: card?.genre && (CARD_GENRES as readonly string[]).includes(card.genre) ? card.genre : 'doc',
+      kind: card?.kind === 'Films' ? 'Films' : 'Series',
+      eyebrow: card?.eyebrow ?? '',
+    });
+    setError(null);
+    setEditing(true);
+  };
+
+  const tooLong = draft.title.length > CARD_LIMITS.title
+    || draft.words.some((w) => w.length > CARD_LIMITS.word)
+    || draft.eyebrow.length > CARD_LIMITS.eyebrow;
+  const incomplete = !draft.title.trim() || draft.words.some((w) => !w.trim());
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/admin/events/${item.host_id}/media/${item.id}/card`, {
+        method: 'PUT',
+        body: JSON.stringify({ card: draft }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body?.message ?? `Could not save (${res.status})`);
+        return;
+      }
+      onItemChange?.({ ...item, metadata: { ...(item.metadata ?? {}), card: body.card } });
+      setEditing(false);
+      toast.success('Wedflix card saved — the projector picks it up within a few seconds');
+    } catch {
+      setError('Could not reach the server');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const counter = (n: number, max: number) => (
+    <span className={`text-xs ${n > max ? 'font-medium text-[var(--red-11)]' : 'text-[var(--gray-a9)]'}`}>{n}/{max}</span>
+  );
+  const field = 'w-full rounded-md border border-[var(--gray-a6)] bg-transparent px-2 py-1.5';
+
+  if (editing) {
+    return (
+      <div className="space-y-3 rounded-lg border border-[var(--gray-a5)] p-3">
+        <div className="text-xs text-[var(--gray-a10)]">Edit Wedflix card</div>
+
+        <label className="block space-y-1">
+          <span className="flex justify-between text-xs text-[var(--gray-a10)]">Eyebrow (optional) {counter(draft.eyebrow.length, CARD_LIMITS.eyebrow)}</span>
+          <input className={field} value={draft.eyebrow} onChange={(e) => setDraft({ ...draft, eyebrow: e.target.value })} />
+        </label>
+
+        <label className="block space-y-1">
+          <span className="flex justify-between text-xs text-[var(--gray-a10)]">Title {counter(draft.title.length, CARD_LIMITS.title)}</span>
+          <input className={`${field} text-base font-semibold`} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+        </label>
+
+        <div className="space-y-1">
+          <span className="text-xs text-[var(--gray-a10)]">Three words</span>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {draft.words.map((w, i) => (
+              <label key={i} className="block space-y-0.5">
+                <input
+                  className={field}
+                  value={w}
+                  onChange={(e) => {
+                    const words = [...draft.words];
+                    words[i] = e.target.value;
+                    setDraft({ ...draft, words });
+                  }}
+                />
+                <span className="flex justify-end">{counter(w.length, CARD_LIMITS.word)}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="block space-y-1">
+            <span className="text-xs text-[var(--gray-a10)]">Title styling</span>
+            <select className={field} value={draft.genre} onChange={(e) => setDraft({ ...draft, genre: e.target.value })}>
+              {CARD_GENRES.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs text-[var(--gray-a10)]">Kind</span>
+            <select className={field} value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
+              {CARD_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+          </label>
+        </div>
+
+        {error && <div className="text-sm text-[var(--red-11)]">{error}</div>}
+
+        <div className="flex gap-2">
+          <Button size="sm" onClick={save} disabled={saving || tooLong || incomplete}>
+            {saving ? 'Saving…' : 'Save card'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
+          {incomplete && <span className="self-center text-xs text-[var(--gray-a10)]">A title and all three words are needed.</span>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-[var(--gray-a5)] p-3">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-xs text-[var(--gray-a10)]">Wedflix card</span>
+        <Button size="sm" variant="outline" onClick={open}>
+          <PencilSquareIcon className="h-4 w-4" /> {card?.title ? 'Edit' : 'Write one'}
+        </Button>
+      </div>
+      {card?.title ? (
+        <div className="space-y-1">
+          {card.eyebrow && <div className="text-xs uppercase tracking-widest text-[var(--gray-a10)]">{card.eyebrow}</div>}
+          <div className="text-lg font-semibold">{card.title}</div>
+          {Array.isArray(card.words) && card.words.length > 0 && <div>{card.words.join(' · ')}</div>}
+          <div className="text-xs text-[var(--gray-a10)]">
+            {[card.genre && `${card.genre} styling`, card.kind].filter(Boolean).join(' · ')}
+          </div>
+          {album === 'seed' && (
+            <div className="text-xs text-[var(--gray-a10)]">
+              Preload photos are never billed as programmes, so this card is not shown.
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="text-[var(--gray-a10)]">
+          No card yet. Photos without one are left out of Wedflix.
+        </div>
+      )}
+    </div>
   );
 }
