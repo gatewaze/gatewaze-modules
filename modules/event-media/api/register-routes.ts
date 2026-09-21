@@ -140,6 +140,15 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     );
   }
 
+  // Browser-facing image host, also resolved once. A malformed value
+  // fails closed to Supabase rather than pointing every photo at a host
+  // that does not exist.
+  const { cdnConfigFromEnv } = await import('../lib/cdn.js');
+  const cdn = cdnConfigFromEnv(process.env);
+  if (process.env.BUNNY_CDN_ENABLED === 'true' && !cdn.zone) {
+    logger.warn('BUNNY_CDN_ENABLED is set but BUNNY_PULLZONE_URL is not a bare https origin — serving from Supabase');
+  }
+
   // Public guest endpoints — /api/public/event-media/*.
   const publicRouter = Router();
   const guestRoutes = createGuestRoutes({
@@ -150,6 +159,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     rateLimit: rateLimiter.check.bind(rateLimiter),
     logger,
     ticketSecret,
+    cdn,
   });
   mountGuestRoutes(publicRouter, guestRoutes);
   app.use('/api', publicRouter);

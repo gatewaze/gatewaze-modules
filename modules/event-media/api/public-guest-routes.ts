@@ -33,6 +33,7 @@ import {
 } from '../lib/guest-limits.js';
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
 import { runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -62,6 +63,11 @@ export interface GuestRoutesDeps {
    *  process.exit via the Sentry hook; evidence review 2026-09-19, F3).
    *  null → mint/complete answer 503 not_configured. */
   ticketSecret: string | null;
+  /**
+   * Browser-facing image host. Resolved once at mount; absent or off
+   * means browsers fetch straight from Supabase, exactly as before.
+   */
+  cdn?: CdnConfig;
 }
 
 interface UploadLinkRow {
@@ -105,6 +111,7 @@ function clientIp(req: Request): string {
 
 export function createGuestRoutes(deps: GuestRoutesDeps) {
   const { supabase, storageBucket, publicSupabaseUrl, internalSupabaseUrl, rateLimit, logger } = deps;
+  const cdn: CdnConfig = deps.cdn ?? { zone: null };
 
   function toPublicUrl(storagePath: string): string {
     return `${publicSupabaseUrl}/storage/v1/object/public/${storageBucket}/${storagePath}`;
@@ -349,9 +356,22 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
   }
 
-  /** Supabase image-transformation URL (imgproxy render endpoint). */
+  /**
+   * A resized copy for a browser. Through Bunny when configured, so
+   * Supabase's per-transformation render endpoint is never hit; otherwise
+   * the render endpoint, as before.
+   */
   function toRenderUrl(storagePath: string, width: number): string {
-    return `${publicSupabaseUrl}/storage/v1/render/image/public/${storageBucket}/${storagePath}?width=${width}&resize=contain&quality=80`;
+    return browserSizedUrl(cdn, publicSupabaseUrl, storageBucket, storagePath, width);
+  }
+
+  /**
+   * An original for a browser. Deliberately separate from toPublicUrl,
+   * which also builds the source URLs handed to the image models —
+   * including short-lived scratch files there is no point caching.
+   */
+  function toBrowserUrl(storagePath: string): string {
+    return browserObjectUrl(cdn, publicSupabaseUrl, storageBucket, storagePath);
   }
 
   function mapFeedItem(r: FeedRow) {
@@ -359,7 +379,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const variants: Record<string, string> = {};
     if (r.variants && typeof r.variants === 'object') {
       for (const [k, v] of Object.entries(r.variants)) {
-        if (typeof v === 'string' && v) variants[k] = toPublicUrl(v);
+        if (typeof v === 'string' && v) variants[k] = toBrowserUrl(v);
       }
     }
     // Fill missing variants with on-the-fly render URLs: the magick-wasm
@@ -374,7 +394,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     return {
       id: r.id,
       kind: r.mime_type.startsWith('video/') ? 'video' : 'photo',
-      url: toPublicUrl(r.storage_path),
+      url: toBrowserUrl(r.storage_path),
       mime_type: r.mime_type,
       width: r.width,
       height: r.height,

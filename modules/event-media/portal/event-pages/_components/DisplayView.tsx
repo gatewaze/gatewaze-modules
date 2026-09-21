@@ -38,6 +38,7 @@ import {
   type StreamSettings,
 } from './_lib/display-settings'
 import { isReady } from './_lib/photo-ready'
+import { sizedDisplayUrl } from './_lib/display-url'
 
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
@@ -757,12 +758,15 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
    * missing thumbnails, so it needs no new infrastructure.
    */
   const displaySrc = useCallback((item: DisplayItem): string => {
-    const url = item.url
-    if (!url.includes('/object/public/')) return url
     const dpr = Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 2)
     const w = Math.min(3840, Math.max(1280, Math.round((window.innerWidth || 1920) * dpr)))
     const h = Math.round((w * 9) / 16)
-    return `${url.replace('/object/public/', '/render/image/public/')}?width=${w}&height=${h}&resize=contain&quality=82`
+    // Supabase and a CDN resize differently; see display-url.ts for why
+    // getting this wrong costs money without looking wrong.
+    // Prefer the upscaled copy where one exists. Upscaling only helps if
+    // the projector actually fetches it; reading item.url here would
+    // keep showing the small original the upscale was paid to replace.
+    return sizedDisplayUrl(item.variants?.hires || item.url, w, h)
   }, [])
 
   // Fetch the NEXT slide's image during the current one, so the
