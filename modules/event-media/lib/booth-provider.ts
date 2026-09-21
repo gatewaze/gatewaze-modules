@@ -30,6 +30,7 @@
  */
 
 import { faceSwapConfigured, faceSwapStatus, runFaceSwap } from './face-swap.js';
+import { CARD_GENRES as SHARED_CARD_GENRES } from './card-copy.js';
 
 export type BoothResult =
   | { ok: true; image: Uint8Array; contentType: string }
@@ -241,13 +242,11 @@ export interface CardCopy {
   eyebrow: string;
 }
 
-// Each genre is a title treatment on the browse card, so a wide list is
-// not padding — it is what stops every photo arriving in the same
-// logotype. The model was picking 'comedy' for most of the album.
-const CARD_GENRES = [
-  'horror', 'comedy', 'thriller', 'eighties', 'doc', 'romance', 'scifi',
-  'crime', 'epic', 'noir', 'musical', 'reality', 'western', 'heist',
-];
+// The genre list lives with the card's other rules in card-copy.ts, so
+// the generator and a person editing a card in the admin are held to the
+// same set. The model was picking 'comedy' for most of the album, which
+// is why the list is wide.
+const CARD_GENRES: readonly string[] = SHARED_CARD_GENRES;
 
 /**
  * Browse-screen copy for one photo: a spoof programme invented from

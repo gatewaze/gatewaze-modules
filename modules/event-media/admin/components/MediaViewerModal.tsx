@@ -28,9 +28,11 @@ interface MediaViewerModalProps {
   onClose: () => void;
   onPatch: (item: HostMediaItem, fields: Record<string, unknown>) => Promise<boolean>;
   onDelete: (item: HostMediaItem) => void;
+  /** An edit made inside the viewer (the Wedflix card), for the organiser's list. */
+  onItemChange?: (item: HostMediaItem) => void;
 }
 
-export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onPatch, onDelete }: MediaViewerModalProps) {
+export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onPatch, onDelete, onItemChange }: MediaViewerModalProps) {
   const item = items[index];
   const [caption, setCaption] = useState('');
   const [altText, setAltText] = useState('');
@@ -213,7 +215,7 @@ export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onP
           </dl>
         </div>
       </div>
-      {kind === 'photo' && <PhotoArtifacts item={item} />}
+      {kind === 'photo' && <PhotoArtifacts item={item} onItemChange={onItemChange} />}
       </>
     </Modal>
   );

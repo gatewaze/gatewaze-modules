@@ -195,6 +195,22 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     logger,
   });
   mountAdminLinksRoutes(adminRouter, adminRoutes);
+
+  // Card edits share the same router: same rate limit, same requireJwt,
+  // same per-user client so RLS decides who may edit which photo.
+  const { createAdminMediaRoutes, mountAdminMediaRoutes } = await import('./admin-media-routes.js');
+  mountAdminMediaRoutes(adminRouter, createAdminMediaRoutes({
+    userClient: (req) => {
+      if (!supabaseAnonKey) return null;
+      const token = extractBearer(req);
+      if (!token) return null;
+      return createClient(supabaseUrl, supabaseAnonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      });
+    },
+    logger,
+  }));
   app.use('/api/admin', adminRouter);
 
   void context;

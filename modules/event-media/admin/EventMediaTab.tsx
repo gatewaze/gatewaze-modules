@@ -729,6 +729,7 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
           onClose={() => setViewerId(null)}
           onPatch={patchOne}
           onDelete={(item) => setDeleteTarget({ kind: 'single', item })}
+          onItemChange={(row) => setMedia((prev) => prev.map((m) => (m.id === row.id ? row : m)))}
         />
       )}
 
