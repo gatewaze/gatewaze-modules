@@ -52,12 +52,20 @@ interface Props {
   plateSrc?: string | null
   /** The people, alpha cut out. Absent → single-layer move. */
   cutoutSrc?: string | null
+  /**
+   * Depth map, brighter nearer. Not drawn: it is the independent
+   * witness the cutout is checked against before any parallax is
+   * trusted.
+   */
+  depthSrc?: string | null
   /** 0 flattens to a plain camera move; 1 is the tuned default. */
   depthStrength?: number
   /** 'pan' tracks across at a fixed size; 'panzoom' adds a push-in. */
   camera?: 'pan' | 'panzoom'
   /** Soften the incoming photo through the dissolve. */
   blurTransition?: boolean
+  /** Paint a blurred, darkened copy of the photo across the whole stage. */
+  fill?: boolean
   /** Slide duration; the camera move is timed against it. */
   durationMs: number
   className?: string
@@ -247,8 +255,98 @@ function plateChange(
  */
 const PLATE_MIN_CHANGE = 35
 
+/**
+ * Does the cutout agree with the depth map?
+ *
+ * The renderer treats everything inside the cutout as near and
+ * everything outside it as far. Where that contradicts the depth map
+ * the pan goes wrong in one of two ways, both seen on the projector:
+ *
+ *   nearOutside  near pixels left OUT of the cutout. A drink held up to
+ *                the camera, or the floor under someone's feet, becomes
+ *                background and slides behind the people — the glass is
+ *                sliced in half, the feet skate.
+ *   farInside    far pixels taken IN to the cutout. People at the back
+ *                of a room are drawn as foreground, so they slide across
+ *                the table that is actually in front of them.
+ *
+ * Both are fractions of the frame, 0..1.
+ */
+function layerAgreement(
+  depth: HTMLImageElement,
+  cutout: HTMLImageElement,
+): { nearOutside: number; farInside: number } {
+  const clean = { nearOutside: 0, farInside: 0 }
+  try {
+    const W = 128
+    const H = Math.max(1, Math.round((cutout.naturalHeight / cutout.naturalWidth) * W))
+    const read = (img: HTMLImageElement) => {
+      const c = document.createElement('canvas')
+      c.width = W
+      c.height = H
+      const g = c.getContext('2d', { willReadFrequently: true })
+      if (!g) return null
+      g.drawImage(img, 0, 0, W, H)
+      return g.getImageData(0, 0, W, H).data
+    }
+    const d = read(depth)
+    const m = read(cutout)
+    if (!d || !m) return clean
+
+    const inside: number[] = []
+    const outside: number[] = []
+    for (let i = 0; i < W * H; i++) (m[i * 4 + 3]! > 160 ? inside : outside).push(d[i * 4]!)
+    // Too little of either to judge: say nothing rather than guess.
+    if (inside.length < 64 || outside.length < 64) return clean
+
+    inside.sort((a, b) => a - b)
+    // The subject's own depth is the middle of what the cutout claims.
+    const subj = inside[Math.floor(inside.length / 2)]!
+    return {
+      farInside: inside.filter((v) => v < subj - AGREE_MARGIN * 1.6).length / inside.length,
+      nearOutside: outside.filter((v) => v >= subj - AGREE_MARGIN * 0.3).length / (W * H),
+    }
+  } catch {
+    return clean
+  }
+}
+
+/** Depth-map units (0..255) that count as a different plane. */
+const AGREE_MARGIN = 38
+
+/**
+ * Thresholds, measured on the live album of 137 layered photos. Both
+ * distributions sit near zero with a clear tail; these cut the tail.
+ * Checked by eye at the extremes: the worst nearOutside is a car selfie
+ * with coffee cups held to the lens, the worst farInside a photo with a
+ * person seated behind a table. Those are the two failures reported.
+ */
+const MAX_NEAR_OUTSIDE = 0.05
+const MAX_FAR_INSIDE = 0.08
+
+/**
+ * A tiny copy of the photo. Stretched across the stage with smoothing it
+ * becomes a soft blur for almost nothing, where a real blur filter over
+ * a full-screen canvas every frame is expensive enough to drop frames.
+ */
+function makeBackdrop(img: HTMLImageElement): HTMLCanvasElement | null {
+  try {
+    const c = document.createElement('canvas')
+    c.width = 64
+    c.height = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * 64))
+    const g = c.getContext('2d')
+    if (!g) return null
+    g.drawImage(img, 0, 0, c.width, c.height)
+    return c
+  } catch {
+    return null
+  }
+}
+
 interface Layer {
   photo: HTMLImageElement
+  /** A thumbnail-sized copy, stretched to make the blurred backdrop. */
+  backdrop: HTMLCanvasElement | null
   plate: HTMLImageElement | null
   cutout: HTMLImageElement | null
   aim: { x: number; y: number }
@@ -258,8 +356,8 @@ interface Layer {
 }
 
 export default function CinematicPhoto({
-  src, plateSrc, cutoutSrc, depthStrength = 1, camera = 'pan',
-  blurTransition = true, durationMs, className,
+  src, plateSrc, cutoutSrc, depthSrc, depthStrength = 1, camera = 'pan',
+  blurTransition = true, fill = true, durationMs, className,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const rafRef = useRef<number | null>(null)
@@ -274,8 +372,10 @@ export default function CinematicPhoto({
   const strengthRef = useRef(depthStrength)
   const cameraRef = useRef(camera)
   const blurRef = useRef(blurTransition)
+  const fillRef = useRef(fill)
   cameraRef.current = camera
   blurRef.current = blurTransition
+  fillRef.current = fill
   durationRef.current = durationMs
   strengthRef.current = depthStrength
 
@@ -381,10 +481,44 @@ export default function CinematicPhoto({
       const strength = Math.max(0, Math.min(2, strengthRef.current))
       const layered = Boolean(layer.plate && layer.cutout) && strength > 0.001
 
-      // No layers to separate, so there is nothing to hold still: the
-      // whole photograph drifts, which is the Ken Burns behaviour.
+      /*
+       * The blurred backdrop, painted HERE rather than as a separate
+       * image behind the canvas.
+       *
+       * It used to be its own DOM element keyed on the current photo, so
+       * it swapped the instant a slide changed — while this canvas was
+       * still fetching the new photo's layers. For that gap the NEW
+       * backdrop sat behind the OLD photo, which is the "previous one is
+       * still showing" and the flicker. Painted as part of the layer it
+       * is captured by the offscreen composite and dissolves on the same
+       * clock as the photo in front of it.
+       */
+      if (fillRef.current && layer.backdrop) {
+        const b = layer.backdrop
+        const cover = Math.max(w / b.width, h / b.height) * 1.15
+        const bw = b.width * cover
+        const bh = b.height * cover
+        g.save()
+        g.imageSmoothingEnabled = true
+        g.imageSmoothingQuality = 'high'
+        g.globalAlpha = alpha
+        g.drawImage(b, (w - bw) / 2, (h - bh) / 2, bw, bh)
+        g.fillStyle = 'rgba(0,0,0,.45)'
+        g.fillRect(0, 0, w, h)
+        g.restore()
+      }
+
+      /*
+       * No working depth — no layers, a plate that failed a check, or
+       * separation turned down to nothing — means no movement at all.
+       *
+       * This used to fall back to drifting the whole photograph, which
+       * is exactly what the effect is not: the pan exists only to show
+       * the background sliding past the people, and without that it is
+       * just a picture sliding across the screen for no reason.
+       */
       if (!layered) {
-        drawImage(g, layer.photo, layer.aim, zoom, panX, panY, 0, 0, w, h, alpha)
+        drawImage(g, layer.photo, layer.aim, 1, 0, 0, 0, 0, w, h, alpha)
         return
       }
 
@@ -521,21 +655,30 @@ export default function CinematicPhoto({
       // The layers are optional. A photo whose plate or cutout has not
       // been generated yet still gets its camera move, so a fresh
       // upload is never held off the screen waiting for them.
-      const [photo, plate, cutout] = await Promise.all([
+      const [photo, plate, cutout, depth] = await Promise.all([
         loadImage(src),
         plateSrc ? loadImage(plateSrc) : Promise.resolve(null),
         cutoutSrc ? loadImage(cutoutSrc) : Promise.resolve(null),
+        depthSrc ? loadImage(depthSrc) : Promise.resolve(null),
       ])
       if (cancelled || !photo) return
 
-      // A plate that still has the people in it is worse than no plate:
-      // drop to a plain camera move instead of sliding them over
-      // themselves.
-      const usable = plate && cutout && plateChange(photo, plate, cutout) >= PLATE_MIN_CHANGE
+      // Parallax is only trusted when every check passes. Any failure
+      // and the photo is shown still — a still photograph looks like a
+      // photograph, where a bad separation looks broken.
+      //   - the plate must actually have had the people removed
+      //   - the cutout must agree with the depth map, when there is one
+      const agree = depth && cutout ? layerAgreement(depth, cutout) : null
+      const usable = Boolean(
+        plate && cutout
+        && plateChange(photo, plate, cutout) >= PLATE_MIN_CHANGE
+        && (!agree || (agree.nearOutside <= MAX_NEAR_OUTSIDE && agree.farInside <= MAX_FAR_INSIDE)),
+      )
 
       curRef.current && (prevRef.current = curRef.current)
       curRef.current = {
         photo,
+        backdrop: makeBackdrop(photo),
         plate: usable ? plate : null,
         cutout: usable ? cutout : null,
         aim: cutout ? aimFromCutout(cutout) : { x: 0.5, y: 0.42 },
@@ -546,7 +689,7 @@ export default function CinematicPhoto({
       fadeFromRef.current = performance.now()
     })()
     return () => { cancelled = true }
-  }, [src, plateSrc, cutoutSrc])
+  }, [src, plateSrc, cutoutSrc, depthSrc])
 
   return <canvas ref={canvasRef} className={className} />
 }
