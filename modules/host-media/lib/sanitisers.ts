@@ -54,3 +54,62 @@ export function paramAsString(value: unknown): string | null {
   if (typeof value !== 'string' || value.length === 0) return null;
   return value;
 }
+
+/**
+ * parseUuidList — validates a caller-supplied id array for the bulk
+ * endpoints. Returns the de-duplicated list, or null when the value is
+ * not an array, is empty, exceeds `max`, or holds a non-UUID.
+ */
+export function parseUuidList(value: unknown, max = 500): string[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > max) return null;
+  const out = new Set<string>();
+  for (const v of value) {
+    const id = paramAsUuid(v);
+    if (!id) return null;
+    out.add(id.toLowerCase());
+  }
+  return Array.from(out);
+}
+
+const ACCESS_LEVELS = new Set(['public', 'authenticated', 'signed']);
+const MAX_TEXT = 2000;
+
+/**
+ * validateMediaPatch — type-checks the allowlisted PATCH fields that
+ * pickFields() let through. pickFields only filters keys; without this a
+ * caller could write `is_approved: "yes"` or a 1 MB caption. Returns the
+ * cleaned object, or an error string naming the bad field.
+ */
+export function validateMediaPatch(
+  fields: Record<string, unknown>,
+): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+  const value: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(fields)) {
+    switch (key) {
+      case 'caption':
+      case 'alt_text':
+        if (raw !== null && typeof raw !== 'string') return { ok: false, error: `${key} must be a string or null` };
+        value[key] = typeof raw === 'string' ? raw.slice(0, MAX_TEXT) : null;
+        break;
+      case 'sponsor_id':
+      case 'album_id':
+        if (raw !== null && !paramAsUuid(raw)) return { ok: false, error: `${key} must be a UUID or null` };
+        value[key] = raw;
+        break;
+      case 'is_featured':
+      case 'is_approved':
+        if (typeof raw !== 'boolean') return { ok: false, error: `${key} must be a boolean` };
+        value[key] = raw;
+        break;
+      case 'access_level':
+        if (typeof raw !== 'string' || !ACCESS_LEVELS.has(raw)) {
+          return { ok: false, error: 'access_level must be public, authenticated or signed' };
+        }
+        value[key] = raw;
+        break;
+      default:
+        return { ok: false, error: `unknown field ${key}` };
+    }
+  }
+  return { ok: true, value };
+}

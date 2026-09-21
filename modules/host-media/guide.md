@@ -39,11 +39,14 @@ A single dispatch function `can_admin_host_media(host_kind, host_id)` branches o
 
 ### API routes
 
-All routes mount under `/api/admin/:hostKind/:hostId/...` and require a JWT (`requireJwt()` applied to the router):
+All routes mount under `/api/admin/:hostKind/:hostId/...`. `requireJwt()` on the router proves the caller has a valid session; then every route runs `createHostAuthorizer()` (`lib/authorize-host.ts`), which calls `can_admin_host_media()` as the caller and returns 403 unless it is true. The handlers use a service-role client (Storage needs it), so this per-route check is what stops one host's admin, or any signed-in portal user, from touching another host's media.
 
 - `GET|POST /media`, `GET|PATCH|DELETE /media/:id`, `GET /media/:id/contents`, `POST /media/:id/signed-url`
-- `GET|POST /albums`, `PATCH|DELETE /albums/:id`, `POST /albums/:id/items`, `DELETE /albums/:id/items/:mediaId`
+- `PATCH /media` (bulk edit: `{ media_ids, fields }`), `POST /media/bulk-delete` (`{ media_ids }`; referenced rows are kept and reported), `PUT /media/order` (`{ media_ids }` in the desired custom order)
+- `GET|POST /albums`, `PATCH|DELETE /albums/:id`, `GET /album-items`, `POST /albums/:id/items` (`{ media_id }` or `{ media_ids }`), `PUT /albums/:id/order`, `DELETE /albums/:id/items/:mediaId`
 - `POST /media/chunked-init`, `POST /media/chunked-commit/:uploadId`
+
+List responses page with `limit` (max 500) and `offset`; `next_cursor` is the next offset while a full page came back. Each item carries `cdn_url` plus `thumb_url` / `medium_url` previews (the stored variant, or a Supabase image-render URL for images without one). Every id in a request body is scoped to the host in the URL: media ids from another host are ignored, and an `album_id` or cover image from another host is rejected. `sponsor_id` has no owner check here (host-media cannot see each consumer's sponsor table); event sponsor tagging uses event-media's RLS-guarded `events_media_sponsor_tags` instead.
 
 The default media adapter writes to Supabase Storage. Uploads pass through a multer multipart parser scoped to the upload route only.
 
