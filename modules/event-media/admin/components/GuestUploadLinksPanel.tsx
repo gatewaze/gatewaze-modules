@@ -1,6 +1,6 @@
 /**
  * Guest upload links panel — rendered by EventMediaTab above the
- * shared <HostMediaTab>. Create/manage the hidden QR upload links,
+ * media organizer. Create/manage the hidden QR upload links,
  * export QR PNGs (custom-domain aware, QrCodeExport precedent), and
  * review pending (unapproved) guest uploads for auto_approve=false
  * links.

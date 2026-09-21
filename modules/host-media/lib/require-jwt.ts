@@ -9,13 +9,17 @@
  *
  * Behaviour: same contract as the platform's requireJwt — sets
  * `req.userId`, returns 401 on missing/invalid tokens. We DO NOT
- * resolve active-account; the per-kind RLS check downstream
- * (`can_admin_<kind>`) verifies membership.
+ * resolve active-account. This only proves a valid session: the route
+ * handlers use a service-role client, so per-host authorization is done
+ * by createHostAuthorizer() (lib/authorize-host.ts) on every route.
  */
 
 import jwt from 'jsonwebtoken';
 import { createClient } from '@supabase/supabase-js';
 import type { Request, Response, NextFunction } from 'express';
+import { extractToken } from './extract-token.js';
+
+export { extractToken };
 
 // Client used only to verify non-HS256 (cloud ES256) tokens via Supabase Auth — this module gates
 // /api/admin/* itself (the platform does not), so it must verify signatures, not trust the payload.
@@ -48,31 +52,6 @@ function getJwtSecret(): string {
     throw new Error('JWT_SECRET (or SUPABASE_JWT_SECRET) not set; host-media requireJwt cannot verify tokens');
   }
   return secret;
-}
-
-function extractToken(req: Request): string | null {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.slice(7).trim();
-  }
-  const cookieHeader = req.headers.cookie;
-  if (cookieHeader) {
-    // Split into individual cookies and match the name with string ops — NOT a backtracking regex
-    // over the whole Cookie header (which CodeQL flags as polynomial ReDoS on untrusted input).
-    for (const part of cookieHeader.split(';')) {
-      const eq = part.indexOf('=');
-      if (eq < 0) continue;
-      const name = part.slice(0, eq).trim();
-      if (!name.startsWith('sb-') || !name.endsWith('-auth-token')) continue;
-      try {
-        const parsed = JSON.parse(decodeURIComponent(part.slice(eq + 1).trim())) as { access_token?: string };
-        if (parsed.access_token) return parsed.access_token;
-      } catch {
-        // malformed cookie → keep scanning
-      }
-    }
-  }
-  return null;
 }
 
 export function requireJwt() {

@@ -36,9 +36,22 @@ export interface HostMediaItem {
   sponsor_id: string | null;
   is_featured: boolean;
   is_approved: boolean;
+  /** Host-wide custom order position; null = never placed. */
+  display_order: number | null;
   created_at: string;
   updated_at: string;
   cdn_url: string;
+  /** Grid-sized preview (350px) — the thumb variant, or an on-the-fly render URL for images. Null for non-images without a variant. */
+  thumb_url: string | null;
+  /** Viewer-sized preview (800px), same fallback rules as thumb_url. */
+  medium_url: string | null;
+}
+
+export interface HostMediaAlbumItem {
+  id: string;
+  album_id: string;
+  media_id: string;
+  sort_order: number;
 }
 
 export interface HostMediaAlbum {
@@ -79,6 +92,7 @@ export const MEDIA_PATCH_FIELDS = [
   'sponsor_id',
   'album_id',
   'is_featured',
+  'is_approved',
   'access_level',
 ] as const;
 

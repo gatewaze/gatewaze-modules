@@ -4,7 +4,16 @@ Photo and video galleries, media uploads, and album management for events. This 
 
 ## How It Works
 
-Event Media adds a **Media** tab to the event detail view in the admin panel. From there, organizers can upload photos and videos, create albums, and manage all media assets associated with an event. The module includes server-side edge functions for chunked uploads, image processing, YouTube integration (upload and retrieval), and bulk ZIP processing. Media is stored via Supabase storage and metadata is tracked in dedicated database tables.
+Event Media adds a **Media** tab to the event detail view in the admin panel. The tab is a full media organizer over the event's `host_media` rows:
+
+- Stats (photos, videos, albums, total size, pending approval), search, and filters by type, status (pending, approved, guest uploads), album and sponsor (`?sponsorId=` in the URL).
+- Sorting by date or name, or a custom order you set by dragging, either event-wide or per album. Dragging inside a filtered view keeps hidden items in their places.
+- Click to select (Shift-click for a range, Cmd/Ctrl-A for all), then add to albums, remove from the current album, tag sponsors, approve guest uploads, or delete in bulk.
+- Album management (create, rename, describe, reorder, delete) and a viewer with previous/next, caption and alt text editing, approve, feature, copy link and download.
+- Uploads of photos, videos or a ZIP. ZIPs are unpacked in the browser and top-level folders can become albums.
+- Live updates as guests upload through a QR link.
+
+Sponsor tags live in `events_media_sponsor_tags` (many sponsors per item), readable and writable only by admins of the event. The module includes server-side edge functions for chunked uploads, image processing, YouTube integration (upload and retrieval), and bulk ZIP processing. Media is stored via Supabase storage and metadata is tracked in dedicated database tables.
 
 ## Configuration
 
@@ -17,6 +26,7 @@ This module has no configurable settings.
 | `event-media` | Core media gallery functionality |
 | `event-media.upload` | Upload photos and videos to events |
 | `event-media.albums` | Organize media into named albums |
+| `event-media.sponsor-tags` | Tag sponsors that appear in photos and filter by sponsor |
 
 ### Edge Functions
 

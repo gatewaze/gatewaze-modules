@@ -7,8 +7,11 @@
  *
  * Auth: this router mounts at /api/admin, which the platform does NOT
  * gate (the platform's modulesRouter only gates /api/modules/*). So the
- * local `adminRouter.use(requireJwt())` below is the SOLE auth gate for
- * these routes — do not remove it. It sets req.userId for the handlers.
+ * local `adminRouter.use(requireJwt())` below is the SOLE authentication
+ * gate for these routes — do not remove it. It sets req.userId for the
+ * handlers. Authorization is per route: `authorizeHost` checks
+ * can_admin_host_media() as the caller before any handler runs, because
+ * the handlers use a service-role client that bypasses RLS.
  *
  * Per spec-host-media-module §4.1 (multer mount) + §11.
  */
@@ -22,6 +25,7 @@ import { createMediaRoutes, mountMediaRoutes, type MediaUploadInput, type MediaA
 import { createAlbumsRoutes, mountAlbumsRoutes } from './albums-routes.js';
 import { createChunkedRoutes, mountChunkedRoutes } from './chunked-routes.js';
 import { requireJwt } from '../lib/require-jwt.js';
+import { createHostAuthorizer } from '../lib/authorize-host.js';
 import { sanitiseFilename } from '../lib/storage-paths.js';
 
 // Canonical bucket per spec-relative-storage-paths.md: a single `media`
@@ -72,6 +76,7 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
 
   const supabaseUrl = process.env.SUPABASE_URL ?? '';
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
   const supabase = createClient(supabaseUrl, supabaseServiceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
@@ -114,6 +119,9 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     getPublicUrl(storagePath) {
       return buildPublicUrl(storagePath);
     },
+    getRenderUrl(storagePath, width) {
+      return `${publicSupabaseUrl}/storage/v1/render/image/public/${STORAGE_BUCKET}/${storagePath}?width=${width}&resize=contain&quality=80`;
+    },
     async createSignedUrl(storagePath, ttlSeconds) {
       const { data, error } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(storagePath, ttlSeconds);
       if (error || !data?.signedUrl) throw new Error(`signed-url failed: ${error?.message ?? 'unknown'}`);
@@ -149,6 +157,7 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
   // doesn't gate /api/admin/* itself, and we cannot rely on the
   // /api/modules overlap pattern since we mount under /api/admin.
   adminRouter.use(requireJwt());
+  const authorizeHost = createHostAuthorizer({ supabaseUrl, anonKey: supabaseAnonKey, logger });
 
   const mediaRoutes = createMediaRoutes({
     supabase,
@@ -157,13 +166,13 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     rateLimit: rateLimiter.check.bind(rateLimiter),
     logger,
   });
-  mountMediaRoutes(adminRouter, mediaRoutes, mediaUpload);
+  mountMediaRoutes(adminRouter, mediaRoutes, mediaUpload, authorizeHost);
 
   const albumsRoutes = createAlbumsRoutes({ supabase, logger });
-  mountAlbumsRoutes(adminRouter, albumsRoutes);
+  mountAlbumsRoutes(adminRouter, albumsRoutes, authorizeHost);
 
   const chunkedRoutes = createChunkedRoutes({ supabase, storageBucket: STORAGE_BUCKET, logger });
-  mountChunkedRoutes(adminRouter, chunkedRoutes);
+  mountChunkedRoutes(adminRouter, chunkedRoutes, authorizeHost);
 
   // Mount at /api/admin, which the platform does not gate — the local
   // requireJwt() above is the sole auth gate for these routes.

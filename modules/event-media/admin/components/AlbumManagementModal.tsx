@@ -1,276 +1,173 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import {
-  XMarkIcon,
-  PlusIcon,
-  PencilIcon,
-  TrashIcon,
-  FolderIcon,
-} from '@heroicons/react/24/outline';
+import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import { Button, Modal, Input, ConfirmModal } from '@/components/ui';
-import {
-  EventMediaAlbum,
-  createEventAlbum,
-  updateEventAlbum,
-  deleteEventAlbum,
-} from '../utils/eventMediaService';
+import { createAlbum, updateAlbum, deleteAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
+import { HOST_KIND, type HostMediaAlbum } from '../utils/mediaOrganizerService';
 
 interface AlbumManagementModalProps {
   eventId: string;
-  albums: EventMediaAlbum[];
+  albums: HostMediaAlbum[];
+  albumCounts: Map<string, number>;
   onClose: () => void;
-  onSuccess: () => void;
+  onChanged: () => void;
+  onDeleted: (albumId: string) => void;
 }
 
-interface AlbumFormData {
-  name: string;
-  description: string;
-}
-
-export function AlbumManagementModal({
-  eventId,
-  albums,
-  onClose,
-  onSuccess,
-}: AlbumManagementModalProps) {
-  const [showForm, setShowForm] = useState(false);
-  const [editingAlbum, setEditingAlbum] = useState<EventMediaAlbum | null>(null);
-  const [formData, setFormData] = useState<AlbumFormData>({
-    name: '',
-    description: '',
-  });
+export function AlbumManagementModal({ eventId, albums, albumCounts, onClose, onChanged, onDeleted }: AlbumManagementModalProps) {
+  const [editing, setEditing] = useState<HostMediaAlbum | 'new' | null>(null);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<HostMediaAlbum | null>(null);
 
-  const handleAddAlbum = () => {
-    setEditingAlbum(null);
-    setFormData({ name: '', description: '' });
-    setShowForm(true);
+  const openForm = (album: HostMediaAlbum | 'new') => {
+    setEditing(album);
+    setName(album === 'new' ? '' : album.name);
+    setDescription(album === 'new' ? '' : album.description ?? '');
   };
 
-  const handleEditAlbum = (album: EventMediaAlbum) => {
-    setEditingAlbum(album);
-    setFormData({
-      name: album.name,
-      description: album.description || '',
-    });
-    setShowForm(true);
-  };
-
-  const handleSaveAlbum = async () => {
-    if (!formData.name.trim()) {
-      toast.error('Album name is required');
-      return;
-    }
-
+  const save = async () => {
+    if (!name.trim()) { toast.error('Album name is required'); return; }
     setSaving(true);
     try {
-      if (editingAlbum) {
-        // Update existing album
-        const { data, error } = await updateEventAlbum(editingAlbum.id, {
-          name: formData.name.trim(),
-          description: formData.description.trim() || undefined,
-        });
-
-        if (error) {
-          throw new Error(error.message);
-        }
-
-        toast.success('Album updated successfully');
-      } else {
-        // Create new album
-        const { data, error } = await createEventAlbum(
-          eventId,
-          formData.name.trim(),
-          formData.description.trim() || undefined
-        );
-
-        if (error) {
-          throw new Error(error.message);
-        }
-
-        toast.success('Album created successfully');
-      }
-
-      setShowForm(false);
-      setFormData({ name: '', description: '' });
-      setEditingAlbum(null);
-      onSuccess();
-    } catch (error) {
-      console.error('Error saving album:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to save album');
+      const body = { name: name.trim(), description: description.trim() || null };
+      const resp = editing === 'new'
+        ? await createAlbum(HOST_KIND, eventId, { name: body.name, description: body.description ?? undefined })
+        : await updateAlbum(HOST_KIND, eventId, (editing as HostMediaAlbum).id, body);
+      if (!resp.ok) throw new Error(await errorMessage(resp, 'Failed to save album'));
+      toast.success(editing === 'new' ? 'Album created' : 'Album updated');
+      setEditing(null);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save album');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDeleteAlbumClick = (albumId: string, albumName: string) => {
-    setDeleteConfirm({ id: albumId, name: albumName });
-  };
-
-  const confirmDeleteAlbum = async () => {
-    if (!deleteConfirm) return;
-
+  // Albums are listed by sort_order; moving one rewrites every album's
+  // position so the order stays dense.
+  const move = async (index: number, delta: -1 | 1) => {
+    const target = index + delta;
+    if (target < 0 || target >= albums.length) return;
+    const next = [...albums];
+    [next[index], next[target]] = [next[target]!, next[index]!];
     try {
-      const result = await deleteEventAlbum(deleteConfirm.id);
-      if (result.success) {
-        toast.success('Album deleted successfully');
-        onSuccess();
-      } else {
-        toast.error(result.error || 'Failed to delete album');
-      }
-    } catch (error) {
-      console.error('Error deleting album:', error);
-      toast.error('Failed to delete album');
-    } finally {
-      setDeleteConfirm(null);
+      const results = await Promise.all(
+        next.map((a, i) => (a.sort_order === (i + 1) * 10 ? null : updateAlbum(HOST_KIND, eventId, a.id, { sort_order: (i + 1) * 10 }))),
+      );
+      if (results.some((r) => r && !r.ok)) throw new Error('Failed to reorder albums');
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to reorder albums');
     }
   };
 
-  const handleCancelForm = () => {
-    setShowForm(false);
-    setFormData({ name: '', description: '' });
-    setEditingAlbum(null);
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    const album = confirmDelete;
+    setConfirmDelete(null);
+    try {
+      const resp = await deleteAlbum(HOST_KIND, eventId, album.id);
+      if (resp.status !== 204) throw new Error(await errorMessage(resp, 'Failed to delete album'));
+      toast.success('Album deleted');
+      onDeleted(album.id);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete album');
+    }
   };
 
   return (
-    <Modal isOpen={true} onClose={onClose} size="md">
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-            Manage Albums
-          </h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-500 dark:hover:text-gray-300"
-          >
-            <XMarkIcon className="h-6 w-6" />
-          </button>
-        </div>
-
-        {/* Album Form */}
-        {showForm && (
-          <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-surface-3">
-            <h3 className="text-sm font-medium text-gray-900 dark:text-white">
-              {editingAlbum ? 'Edit Album' : 'New Album'}
-            </h3>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Manage albums"
+      size="md"
+      footer={<div className="flex justify-end"><Button variant="outline" onClick={onClose}>Close</Button></div>}
+    >
+      <div className="space-y-4">
+        {editing ? (
+          <div className="space-y-3 rounded-lg border border-[var(--gray-a5)] bg-[var(--gray-a2)] p-4">
+            <h3 className="text-sm font-medium">{editing === 'new' ? 'New album' : 'Edit album'}</h3>
             <div>
-              <label className="mb-2 block text-sm font-medium text-gray-900 dark:text-white">
-                Album Name <span className="text-red-500">*</span>
-              </label>
+              <label className="mb-1 block text-sm font-medium">Name <span className="text-[var(--red-11)]">*</span></label>
               <Input
-                value={formData.name}
-                onChange={e => setFormData({ ...formData, name: e.target.value })}
-                placeholder="Enter album name"
+                value={name}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setName(e.target.value)}
+                placeholder="Album name"
+                maxLength={200}
                 disabled={saving}
+                autoFocus
               />
             </div>
             <div>
-              <label className="mb-2 block text-sm font-medium text-gray-900 dark:text-white">
-                Description (optional)
-              </label>
+              <label className="mb-1 block text-sm font-medium">Description (optional)</label>
               <textarea
-                value={formData.description}
-                onChange={e => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Enter album description"
-                disabled={saving}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
                 rows={3}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-surface-2 dark:text-white dark:placeholder-gray-500"
+                maxLength={2000}
+                disabled={saving}
+                className="w-full rounded-md border border-[var(--gray-a6)] bg-transparent px-3 py-2 text-sm"
               />
             </div>
             <div className="flex justify-end gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleCancelForm}
-                disabled={saving}
-              >
-                Cancel
-              </Button>
-              <Button size="sm" onClick={handleSaveAlbum} disabled={saving}>
-                {saving ? 'Saving...' : editingAlbum ? 'Update' : 'Create'}
-              </Button>
+              <Button variant="outline" size="sm" onClick={() => setEditing(null)} disabled={saving}>Cancel</Button>
+              <Button size="sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : editing === 'new' ? 'Create' : 'Update'}</Button>
             </div>
           </div>
-        )}
-
-        {/* Add Album Button */}
-        {!showForm && (
-          <Button onClick={handleAddAlbum} className="w-full">
-            <PlusIcon className="mr-2 h-4 w-4" />
-            Add New Album
+        ) : (
+          <Button onClick={() => openForm('new')} className="w-full">
+            <PlusIcon className="h-4 w-4" /> Add new album
           </Button>
         )}
 
-        {/* Albums List */}
-        <div className="space-y-2">
-          {albums.length === 0 ? (
-            <div className="py-12 text-center">
-              <FolderIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <p className="mt-4 text-sm text-gray-600 dark:text-gray-400">
-                No albums yet. Create your first album to organize media.
-              </p>
-            </div>
-          ) : (
-            albums.map(album => (
-              <div
-                key={album.id}
-                className="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-surface-2"
-              >
+        {albums.length === 0 ? (
+          <div className="py-10 text-center">
+            <FolderIcon className="mx-auto h-12 w-12 text-[var(--gray-a8)]" />
+            <p className="mt-3 text-sm text-[var(--gray-a10)]">No albums yet. Create one to organize this event's media.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {albums.map((album, i) => (
+              <div key={album.id} className="flex items-center justify-between gap-2 rounded-lg border border-[var(--gray-a5)] p-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <FolderIcon className="h-5 w-5 flex-shrink-0 text-primary-600 dark:text-primary-400" />
-                    <h3 className="font-medium text-gray-900 dark:text-white">
-                      {album.name}
-                    </h3>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      ({album.media_count || 0} items)
-                    </span>
+                    <FolderIcon className="h-5 w-5 shrink-0 text-[var(--accent-11)]" />
+                    <span className="truncate font-medium">{album.name}</span>
+                    <span className="shrink-0 text-xs text-[var(--gray-a9)]">({albumCounts.get(album.id) ?? 0} items)</span>
                   </div>
-                  {album.description && (
-                    <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                      {album.description}
-                    </p>
-                  )}
+                  {album.description && <p className="mt-1 text-sm text-[var(--gray-a10)]">{album.description}</p>}
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleEditAlbum(album)}
-                    className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-surface-3 dark:hover:text-gray-300"
-                    title="Edit album"
-                  >
-                    <PencilIcon className="h-5 w-5" />
+                <div className="flex shrink-0 gap-1">
+                  <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--gray-a3)] disabled:opacity-30">
+                    <ChevronUpIcon className="h-4 w-4" />
                   </button>
-                  <button
-                    onClick={() => handleDeleteAlbumClick(album.id, album.name)}
-                    className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-                    title="Delete album"
-                  >
-                    <TrashIcon className="h-5 w-5" />
+                  <button type="button" title="Move down" disabled={i === albums.length - 1} onClick={() => move(i, 1)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--gray-a3)] disabled:opacity-30">
+                    <ChevronDownIcon className="h-4 w-4" />
+                  </button>
+                  <button type="button" title="Edit album" onClick={() => openForm(album)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--gray-a3)]">
+                    <PencilIcon className="h-4 w-4" />
+                  </button>
+                  <button type="button" title="Delete album" onClick={() => setConfirmDelete(album)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--red-a3)] hover:text-[var(--red-11)]">
+                    <TrashIcon className="h-4 w-4" />
                   </button>
                 </div>
               </div>
-            ))
-          )}
-        </div>
-
-        {/* Close Button */}
-        <div className="flex justify-end">
-          <Button variant="secondary" onClick={onClose}>
-            Close
-          </Button>
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Delete Confirmation Modal */}
-      {deleteConfirm && (
+      {confirmDelete && (
         <ConfirmModal
-          isOpen={true}
-          onClose={() => setDeleteConfirm(null)}
-          onConfirm={confirmDeleteAlbum}
-          title="Delete Album?"
-          message={`Are you sure you want to delete the album "${deleteConfirm.name}"? Media files will not be deleted.`}
+          isOpen
+          onClose={() => setConfirmDelete(null)}
+          onConfirm={doDelete}
+          title="Delete album?"
+          message={`Delete the album "${confirmDelete.name}"? The media in it will not be deleted.`}
           confirmText="Delete"
           confirmColor="red"
         />

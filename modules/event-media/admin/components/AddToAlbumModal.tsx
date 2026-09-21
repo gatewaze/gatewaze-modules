@@ -1,137 +1,97 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { Button, Modal } from '@/components/ui';
-import { EventMediaAlbum, addMediaToAlbums } from '../utils/eventMediaService';
+import { Button, Modal, Input } from '@/components/ui';
+import { addManyToAlbum, createAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
+import { HOST_KIND, type HostMediaAlbum } from '../utils/mediaOrganizerService';
 
 interface AddToAlbumModalProps {
-  isOpen: boolean;
+  eventId: string;
+  albums: HostMediaAlbum[];
+  albumCounts: Map<string, number>;
+  selectedMediaIds: string[];
   onClose: () => void;
   onSuccess: () => void;
-  albums: EventMediaAlbum[];
-  selectedMediaIds: string[];
 }
 
-export function AddToAlbumModal({
-  isOpen,
-  onClose,
-  onSuccess,
-  albums,
-  selectedMediaIds,
-}: AddToAlbumModalProps) {
-  const [selectedAlbums, setSelectedAlbums] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+export function AddToAlbumModal({ eventId, albums, albumCounts, selectedMediaIds, onClose, onSuccess }: AddToAlbumModalProps) {
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [newAlbumName, setNewAlbumName] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  // Sort albums alphabetically by name
-  const sortedAlbums = [...albums].sort((a, b) =>
-    a.name.localeCompare(b.name)
-  );
+  const sorted = [...albums].sort((a, b) => a.name.localeCompare(b.name));
+  const canSubmit = chosen.length > 0 || newAlbumName.trim().length > 0;
 
-  const handleToggleAlbum = (albumId: string) => {
-    setSelectedAlbums(prev =>
-      prev.includes(albumId)
-        ? prev.filter(id => id !== albumId)
-        : [...prev, albumId]
-    );
-  };
+  const toggle = (id: string) =>
+    setChosen((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
-  const handleSubmit = async () => {
-    if (selectedAlbums.length === 0) {
-      toast.error('Please select at least one album');
-      return;
-    }
-
+  const submit = async () => {
+    if (!canSubmit) return;
+    setSaving(true);
     try {
-      setLoading(true);
-
-      // Add each media item to the selected albums
-      for (const mediaId of selectedMediaIds) {
-        const result = await addMediaToAlbums(mediaId, selectedAlbums);
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to add media to albums');
-        }
+      const targets = [...chosen];
+      if (newAlbumName.trim()) {
+        const resp = await createAlbum(HOST_KIND, eventId, { name: newAlbumName.trim() });
+        if (!resp.ok) throw new Error(await errorMessage(resp, 'Could not create album'));
+        const album = (await resp.json()) as HostMediaAlbum;
+        targets.push(album.id);
       }
-
-      toast.success(
-        `Added ${selectedMediaIds.length} item(s) to ${selectedAlbums.length} album(s)`
-      );
+      for (const albumId of targets) {
+        const resp = await addManyToAlbum(HOST_KIND, eventId, albumId, selectedMediaIds);
+        if (!resp.ok) throw new Error(await errorMessage(resp, 'Could not add to album'));
+      }
+      toast.success(`Added ${selectedMediaIds.length} item(s) to ${targets.length} album(s)`);
       onSuccess();
-      handleClose();
-    } catch (error) {
-      console.error('Error adding to albums:', error);
-      toast.error('Failed to add media to albums');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add media to albums');
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
-  };
-
-  const handleClose = () => {
-    setSelectedAlbums([]);
-    onClose();
   };
 
   return (
     <Modal
-      isOpen={isOpen}
-      onClose={handleClose}
-      title="Add to Albums"
+      isOpen
+      onClose={onClose}
+      title="Add to albums"
       size="md"
       footer={
-        <div className="flex justify-end gap-3 p-4">
-          <Button variant="outline" onClick={handleClose} disabled={loading}>
-            Cancel
-          </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={loading || selectedAlbums.length === 0 || albums.length === 0}
-          >
-            {loading ? 'Adding...' : 'Add to Albums'}
-          </Button>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !canSubmit}>{saving ? 'Adding…' : 'Add to albums'}</Button>
         </div>
       }
     >
       <div className="space-y-4">
-        <p className="text-sm text-gray-600 dark:text-gray-400">
-          Select albums to add {selectedMediaIds.length} selected item(s) to:
+        <p className="text-sm text-[var(--gray-a11)]">
+          Choose albums for the {selectedMediaIds.length} selected item(s):
         </p>
-
-        {sortedAlbums.length === 0 ? (
-          <div className="py-8 text-center">
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              No albums available. Create an album first.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {sortedAlbums.map(album => (
+        {sorted.length > 0 && (
+          <div className="max-h-80 space-y-2 overflow-y-auto">
+            {sorted.map((album) => (
               <label
                 key={album.id}
-                className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-surface-2"
+                className="flex cursor-pointer items-center gap-3 rounded-lg border border-[var(--gray-a5)] p-3 hover:bg-[var(--gray-a2)]"
               >
-                <input
-                  type="checkbox"
-                  checked={selectedAlbums.includes(album.id)}
-                  onChange={() => handleToggleAlbum(album.id)}
-                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
+                <input type="checkbox" checked={chosen.includes(album.id)} onChange={() => toggle(album.id)} className="h-4 w-4" />
                 <div className="flex-1">
-                  <div className="font-medium text-gray-900 dark:text-white">
-                    {album.name}
-                  </div>
-                  {album.description && (
-                    <div className="text-sm text-gray-500 dark:text-gray-400">
-                      {album.description}
-                    </div>
-                  )}
-                  {album.media_count !== undefined && (
-                    <div className="text-xs text-gray-400 dark:text-gray-500">
-                      {album.media_count} items
-                    </div>
-                  )}
+                  <div className="font-medium">{album.name}</div>
+                  {album.description && <div className="text-sm text-[var(--gray-a10)]">{album.description}</div>}
+                  <div className="text-xs text-[var(--gray-a9)]">{albumCounts.get(album.id) ?? 0} items</div>
                 </div>
               </label>
             ))}
           </div>
         )}
+        <div>
+          <label className="mb-1 block text-sm font-medium">{sorted.length > 0 ? 'Or create a new album' : 'New album'}</label>
+          <Input
+            value={newAlbumName}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewAlbumName(e.target.value)}
+            placeholder="Album name"
+            maxLength={200}
+            disabled={saving}
+          />
+        </div>
       </div>
     </Modal>
   );
