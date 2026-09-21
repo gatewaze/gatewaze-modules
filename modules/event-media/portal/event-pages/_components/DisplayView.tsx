@@ -742,9 +742,20 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     const list = photosRef.current
     const upcoming = freshQueueRef.current[0] ?? list[(indexRef.current + 1) % Math.max(list.length, 1)]
     if (!upcoming || upcoming.id === current.id) return
-    const warm = new window.Image()
-    warm.crossOrigin = 'anonymous'
-    warm.src = displaySrc(upcoming)
+    // Warm the LAYERS too. Warming only the photo left the renderer
+    // waiting on a plate and cutout fetch at the moment of the cut,
+    // which is why the outgoing photo sat on screen after the new one
+    // had been chosen.
+    for (const href of [
+      displaySrc(upcoming),
+      upcoming.variants?.plate,
+      upcoming.variants?.cutout,
+    ]) {
+      if (!href) continue
+      const warm = new window.Image()
+      warm.crossOrigin = 'anonymous'
+      warm.src = href
+    }
   }, [current, view.effect, displaySrc])
 
   // ── QR overlay ────────────────────────────────────────────────────
@@ -1011,6 +1022,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 cutoutSrc={current.variants?.cutout ?? null}
                 depthStrength={settings.depthStrength ?? 1}
                 camera={view.camera}
+                blurTransition={view.blurTransition ?? true}
                 durationMs={Math.max(view.intervalMs, 2000)}
                 className="absolute inset-0 w-full h-full"
               />
@@ -1242,6 +1254,17 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 </Chip>
               ))}
             </Row>
+
+            {(edited.effect === 'cinematic' || edited.effect === 'wedflix') && (
+              <Row label="Transition">
+                <Toggle
+                  on={edited.blurTransition ?? true}
+                  onClick={() => updateStream({ blurTransition: !(edited.blurTransition ?? true) })}
+                >
+                  Blur dissolve
+                </Toggle>
+              </Row>
+            )}
 
             {edited.effect === 'cinematic' && (
               <div className="space-y-1.5 -mt-1">
