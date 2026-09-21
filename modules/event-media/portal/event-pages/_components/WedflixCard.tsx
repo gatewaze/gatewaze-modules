@@ -17,7 +17,8 @@
  * generator from the tone of the title it wrote.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { wedflixSchedule, type Beat } from './_lib/wedflix-timing'
 
 export interface CardCopy {
   title: string
@@ -31,6 +32,8 @@ interface Props {
   copy: CardCopy
   /** Changes when the slide does, so the text can re-animate. */
   slideKey: string
+  /** How long the slide is on screen; the text sequence fits inside it. */
+  durationMs: number
   /** Roughly one card in three carries a chart position. */
   showRank?: boolean
 }
@@ -193,70 +196,79 @@ function titleSize(title: string, scale: number): string {
   return `clamp(${r(min)}px, ${r(vw)}vw, ${r(max)}px)`
 }
 
-export default function WedflixCard({ copy, slideKey, showRank = false }: Props) {
+export default function WedflixCard({ copy, slideKey, durationMs, showRank = false }: Props) {
   useLogotypeFonts()
-  // Re-run the entrance animation on every slide without remounting the
-  // renderer underneath.
-  const [shown, setShown] = useState(false)
-  const timers = useRef<Array<ReturnType<typeof setTimeout>>>([])
+
+  // The photograph arrives first, moving; the text then follows one beat
+  // at a time and leaves in reverse, faster, clearing the frame as the
+  // slide ends. The timings live in _lib so they can be tested.
+  const schedule = useMemo(() => wedflixSchedule(durationMs, showRank), [durationMs, showRank])
+  const [on, setOn] = useState<Record<Beat, boolean>>(ALL_OFF)
   useEffect(() => {
-    setShown(false)
-    timers.current.forEach(clearTimeout)
-    timers.current = [setTimeout(() => setShown(true), 260)]
-    return () => timers.current.forEach(clearTimeout)
-  }, [slideKey])
+    // Keyed on the slide, not remounted, so the renderer underneath is
+    // left alone. A slide skipped early starts again from nothing.
+    setOn(ALL_OFF)
+    const timers: Array<ReturnType<typeof setTimeout>> = []
+    for (const beat of Object.keys(schedule.in) as Beat[]) {
+      timers.push(setTimeout(() => setOn((o) => ({ ...o, [beat]: true })), schedule.in[beat]))
+      timers.push(setTimeout(() => setOn((o) => ({ ...o, [beat]: false })), schedule.out[beat]))
+    }
+    return () => timers.forEach(clearTimeout)
+  }, [slideKey, schedule])
 
   const style = GENRE_STYLE[copy.genre] ?? GENRE_STYLE['doc']!
   const scale = GENRE_SCALE[copy.genre] ?? 1
-  const enter = (delay: number): React.CSSProperties => ({
-    opacity: shown ? 1 : 0,
-    transform: shown ? 'translateY(0)' : 'translateY(14px)',
-    transition: `opacity 700ms ease ${delay}ms, transform 700ms cubic-bezier(.2,.7,.3,1) ${delay}ms`,
-  })
+  // In rises gently into place; out sinks back the way it came, quicker.
+  const fade = (beat: Beat, lift = true): React.CSSProperties => {
+    const visible = on[beat]
+    const ms = visible ? schedule.inFadeMs : schedule.outFadeMs
+    return {
+      opacity: visible ? 1 : 0,
+      ...(lift ? { transform: visible ? 'translateY(0)' : 'translateY(12px)' } : {}),
+      transition: `opacity ${ms}ms ease, transform ${ms}ms cubic-bezier(.2,.7,.3,1)`,
+    }
+  }
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none">
-      {/* Legibility scrim: dark to the left and along the bottom, clear
-          over the middle so it never veils a face. */}
+      {/* Legibility scrim along the bottom edge only, behind the title
+          block and the wordmark, clear by the middle of the frame. It
+          comes and goes with the title so a bare photograph is bare. */}
       <div
         className="absolute inset-0"
         style={{
+          ...fade('title', false),
           background:
-            'linear-gradient(to right, rgba(0,0,0,.86) 0%, rgba(0,0,0,.55) 30%, rgba(0,0,0,0) 60%),' +
-            'linear-gradient(to top, rgba(0,0,0,.78) 0%, rgba(0,0,0,0) 36%)',
+            'linear-gradient(to top, rgba(0,0,0,.8) 0%, rgba(0,0,0,.55) 25%, rgba(0,0,0,.2) 44%, rgba(0,0,0,0) 58%)',
         }}
       />
 
       <div className="absolute" style={{ left: '5%', bottom: '13%', maxWidth: '48%' }}>
-        <div
-          style={{
-            ...enter(0), marginBottom: '1.1em',
-            filter: 'drop-shadow(0 .05em .09em rgba(0,0,0,.6))',
-          }}
-        >
-          <Wordmark height="clamp(17px, 1.85vw, 34px)" />
-        </div>
-
-        {copy.eyebrow && (
-          <div
-            style={{
-              ...enter(120),
-              color: 'rgba(255,255,255,.82)', textTransform: 'uppercase',
-              letterSpacing: '.4em', fontSize: 'clamp(11px, 1.15vw, 24px)',
-              marginBottom: '.5em',
-            }}
-          >
-            {copy.eyebrow}
+        <div style={fade('title')}>
+          <div style={{ marginBottom: '1.1em', filter: 'drop-shadow(0 .05em .09em rgba(0,0,0,.6))' }}>
+            <Wordmark height="clamp(17px, 1.85vw, 34px)" />
           </div>
-        )}
 
-        <div style={{ ...style, ...enter(220), fontSize: titleSize(copy.title, scale), lineHeight: 1.06 }}>
-          {copy.title}
+          {copy.eyebrow && (
+            <div
+              style={{
+                color: 'rgba(255,255,255,.82)', textTransform: 'uppercase',
+                letterSpacing: '.4em', fontSize: 'clamp(11px, 1.15vw, 24px)',
+                marginBottom: '.5em',
+              }}
+            >
+              {copy.eyebrow}
+            </div>
+          )}
+
+          <div style={{ ...style, fontSize: titleSize(copy.title, scale), lineHeight: 1.06 }}>
+            {copy.title}
+          </div>
         </div>
 
         <div
           style={{
-            ...enter(420),
+            ...fade('words'),
             marginTop: '.8em', color: 'rgba(255,255,255,.92)',
             fontSize: 'clamp(13px, 1.25vw, 25px)',
           }}
@@ -272,7 +284,7 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
         {showRank && (
           <div
             style={{
-              ...enter(600), marginTop: '.9em', display: 'flex',
+              ...fade('rank'), marginTop: '.9em', display: 'flex',
               alignItems: 'center', gap: '.6em',
               color: '#fff', fontSize: 'clamp(12px, 1.2vw, 24px)',
             }}
@@ -292,10 +304,10 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
       </div>
 
       {/* Wordmark, bottom right — where a streaming service signs off.
-          The upload QR moved to the top right to leave it this corner. */}
+          It arrives and leaves with the title. */}
       <div
         style={{
-          ...enter(0), position: 'absolute', right: '4.5%', bottom: '6.5%',
+          ...fade('title', false), position: 'absolute', right: '4.5%', bottom: '6.5%',
           filter: 'drop-shadow(0 .05em .09em rgba(0,0,0,.6))',
         }}
       >
@@ -304,6 +316,8 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
     </div>
   )
 }
+
+const ALL_OFF: Record<Beat, boolean> = { title: false, words: false, rank: false }
 
 /** Stable pseudo-random rank per photo, so it does not flicker. */
 function hashRank(key: string): number {
