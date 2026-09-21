@@ -261,6 +261,38 @@ const CARD_GENRES = [
  * a second meaning — "Deep End" for a poolside photo — where the joke is
  * in the double meaning rather than in announcing itself.
  */
+/**
+ * Read the card fields out of the model's reply.
+ *
+ * Strict JSON first. When that fails it is almost always one specific
+ * fault — a comma left out between two descriptors, so `words` arrives
+ * as `["Sun Kissed" "Poolside"]` — which sank about 3% of an album-wide
+ * run. The schema here is five known fields of plain text, so pulling
+ * them out directly is both safer than repairing arbitrary JSON and
+ * immune to that whole class of malformation.
+ *
+ * Everything returned is still clamped and allowlisted by the caller.
+ */
+export function parseCard(json: string): Partial<CardCopy> | null {
+  try {
+    return JSON.parse(json) as Partial<CardCopy>;
+  } catch {
+    const str = (field: string): string | undefined =>
+      new RegExp(`"${field}"\\s*:\\s*"([^"]*)"`).exec(json)?.[1];
+    const arr = /"words"\s*:\s*\[([^\]]*)\]/.exec(json)?.[1];
+    const words = arr ? [...arr.matchAll(/"([^"]*)"/g)].map((m) => m[1]!) : undefined;
+    const title = str('title');
+    if (!title || !words?.length) return null;
+    return {
+      title,
+      words,
+      kind: str('kind'),
+      genre: str('genre'),
+      eyebrow: str('eyebrow'),
+    } as Partial<CardCopy>;
+  }
+}
+
 export async function runCardCopy(imageUrl: string): Promise<
   { ok: true; copy: CardCopy } | { ok: false; error: string }
 > {
@@ -343,7 +375,8 @@ async function cardCopyOnce(imageUrl: string): Promise<
       : typeof body.text === 'string' ? body.text : '';
     const match = /\{[\s\S]*\}/.exec(raw);
     if (!match) return { ok: false, error: 'no json' };
-    const parsed = JSON.parse(match[0]) as Partial<CardCopy>;
+    const parsed = parseCard(match[0]);
+    if (!parsed) return { ok: false, error: 'bad json' };
 
     // The model is writing display copy, so everything is clamped and
     // allowlisted before it can reach the projector.
