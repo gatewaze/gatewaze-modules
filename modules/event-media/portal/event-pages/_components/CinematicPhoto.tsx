@@ -66,15 +66,20 @@ const SEPARATION = 0.055
  *  move can never wander off the edge of the photo. */
 interface Move { z0: number; z1: number; x0: number; y0: number; x1: number; y1: number }
 
+/**
+ * Zooms deliberately match the Ken Burns keyframes in DisplayView
+ * (1.02 to 1.12), which is the distance the camera is wanted at. They
+ * ran 1.06 to 1.24 on top of a cover-fit, which read as far too close.
+ */
 const MOVES: Move[] = [
-  { z0: 1.06, z1: 1.20, x0: 0, y0: 0, x1: 0, y1: 0 },
-  { z0: 1.20, z1: 1.06, x0: 0, y0: 0, x1: 0, y1: 0 },
-  { z0: 1.12, z1: 1.18, x0: -0.8, y0: 0, x1: 0.8, y1: 0 },
-  { z0: 1.18, z1: 1.12, x0: 0.8, y0: 0, x1: -0.8, y1: 0 },
-  { z0: 1.08, z1: 1.22, x0: -0.6, y0: 0.5, x1: 0.4, y1: -0.4 },
-  { z0: 1.22, z1: 1.08, x0: 0.5, y0: -0.5, x1: -0.3, y1: 0.3 },
-  { z0: 1.10, z1: 1.24, x0: 0.4, y0: 0.5, x1: -0.2, y1: -0.2 },
-  { z0: 1.16, z1: 1.10, x0: 0, y0: -0.6, x1: 0, y1: 0.6 },
+  { z0: 1.02, z1: 1.12, x0: 0, y0: 0, x1: 0, y1: 0 },
+  { z0: 1.12, z1: 1.02, x0: 0, y0: 0, x1: 0, y1: 0 },
+  { z0: 1.04, z1: 1.10, x0: -0.8, y0: 0, x1: 0.8, y1: 0 },
+  { z0: 1.10, z1: 1.04, x0: 0.8, y0: 0, x1: -0.8, y1: 0 },
+  { z0: 1.03, z1: 1.12, x0: -0.6, y0: 0.5, x1: 0.4, y1: -0.4 },
+  { z0: 1.12, z1: 1.03, x0: 0.5, y0: -0.5, x1: -0.3, y1: 0.3 },
+  { z0: 1.05, z1: 1.13, x0: 0.4, y0: 0.5, x1: -0.2, y1: -0.2 },
+  { z0: 1.09, z1: 1.03, x0: 0, y0: -0.6, x1: 0, y1: 0.6 },
 ]
 
 /** Same photo always gets the same move; different photos differ. */
@@ -175,21 +180,21 @@ export default function CinematicPhoto({
     /**
      * How much of the frame to fill.
      *
-     * Filling the stage looks best and gives the move its crop
-     * headroom, but a portrait phone photo cover-fitted into 16:9 loses
-     * most of its height — faces end up cropped to a forehead. So fill
-     * only while the crop stays reasonable, and fall back toward fitting
-     * when it would not. The blurred cover layer behind still fills the
-     * screen either way.
+     * This used to cover-fit the stage, which put the camera far closer
+     * to the subject than Ken Burns does and was the effect's most
+     * common complaint. The two are not reconcilable at full cover: a
+     * 4:3 photo cover-fitted into 16:9 is already cropped to 1.33x
+     * before any move is applied, where Ken Burns letterboxes and never
+     * exceeds 1.12x. Matching that framing means sitting near `contain`.
+     *
+     * OVERSCAN is the small amount past fitting that keeps the frame
+     * edges off-screen through the pan; the blurred backdrop fills the
+     * rest of the stage, so the screen is never empty.
      */
+    const OVERSCAN = 1.04
     const fitScale = (img: HTMLImageElement, w: number, h: number) => {
-      const cover = Math.max(w / img.naturalWidth, h / img.naturalHeight)
       const contain = Math.min(w / img.naturalWidth, h / img.naturalHeight)
-      // Fraction of the image thrown away by filling the stage.
-      const lost = 1 - (contain / cover) ** 2
-      if (lost <= 0.38) return cover
-      // Meet part way: bigger than a plain fit, without gutting the photo.
-      return contain * 1.14
+      return contain * OVERSCAN
     }
 
     /**
