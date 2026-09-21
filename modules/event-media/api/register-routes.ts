@@ -196,19 +196,30 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   });
   mountAdminLinksRoutes(adminRouter, adminRoutes);
 
-  // Card edits share the same router: same rate limit, same requireJwt,
-  // same per-user client so RLS decides who may edit which photo.
+  // Card edits share the same router: same rate limit, same requireJwt.
   const { createAdminMediaRoutes, mountAdminMediaRoutes } = await import('./admin-media-routes.js');
   mountAdminMediaRoutes(adminRouter, createAdminMediaRoutes({
-    userClient: (req) => {
-      if (!supabaseAnonKey) return null;
+    // The same question host-media's organiser asks, asked as the caller
+    // and failing closed. See admin-media-routes.ts for why the photo is
+    // not simply queried under the caller's own RLS.
+    canAdminEvent: async (req, eventId) => {
       const token = extractBearer(req);
-      if (!token) return null;
-      return createClient(supabaseUrl, supabaseAnonKey, {
+      if (!token || !supabaseAnonKey) return null;
+      const asCaller = createClient(supabaseUrl, supabaseAnonKey, {
         auth: { autoRefreshToken: false, persistSession: false },
         global: { headers: { Authorization: `Bearer ${token}` } },
       });
+      const { data, error } = await asCaller.rpc('can_admin_host_media', {
+        p_host_kind: 'event',
+        p_host_id: eventId,
+      });
+      if (error) {
+        logger.error('card edit: can_admin_host_media failed', { eventId, error: error.message });
+        return false;
+      }
+      return data === true;
     },
+    serviceClient: serviceSupabase,
     logger,
   }));
   app.use('/api/admin', adminRouter);

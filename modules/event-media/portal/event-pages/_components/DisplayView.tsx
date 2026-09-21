@@ -1165,6 +1165,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 <WedflixCard
                   copy={cardCopy}
                   slideKey={current.id}
+                  durationMs={Math.max(view.intervalMs, 2000)}
                   // A chart position on every card would stop being a
                   // joke by the third one.
                   showRank={rankFor(current.id)}

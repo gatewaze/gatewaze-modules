@@ -13,10 +13,21 @@
  * merges the card into `metadata` on the server.
  *
  * Mounted under /api/admin behind requireJwt and the admin router's rate
- * limit (register-routes.ts). Authorization is real RLS: the update runs
- * on a client built from the caller's own token, so host_media's admin
- * policy -- can_admin_host_media -> can_admin_event -- decides, exactly
- * as for every other admin write in this module.
+ * limit (register-routes.ts).
+ *
+ * Authorization asks the database, AS THE CALLER, whether they may
+ * administer this event -- can_admin_host_media('event', id), the same
+ * question and the same fail-closed handling as host-media's organiser
+ * routes (authorize-host.ts). Only once that answers `true` is the photo
+ * read and written, on the service client, scoped to this event and id.
+ *
+ * It does not simply run the query as the user and let RLS decide, which
+ * was the first version. On a deployment without the templates module,
+ * host_media's public-read policy calls templates.can_read_host() and the
+ * schema does not exist, so EVERY user-scoped SELECT on host_media fails
+ * -- the policy is evaluated even for an admin whom the admin policy
+ * would have allowed. That is a host-media bug; this route stays out of
+ * its way rather than depending on it being fixed first.
  */
 import type { Request, Response, Router } from 'express';
 import { validateCardInput } from '../lib/card-copy.js';
@@ -28,9 +39,14 @@ interface PlatformLogger {
 }
 
 export interface AdminMediaDeps {
-  /** Builds a Supabase client scoped to the calling user's JWT. */
+  /**
+   * Whether the caller may administer the event, asked as the caller.
+   * `null` means there is no usable session.
+   */
+  canAdminEvent: (req: Request, eventId: string) => Promise<boolean | null>;
+  /** Service-role client, used only after the caller is authorised. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userClient: (req: Request) => any | null;
+  serviceClient: any;
   logger: PlatformLogger;
 }
 
@@ -41,7 +57,7 @@ function sendError(res: Response, status: number, code: string, message: string)
 }
 
 export function createAdminMediaRoutes(deps: AdminMediaDeps) {
-  const { userClient, logger } = deps;
+  const { canAdminEvent, serviceClient: db, logger } = deps;
 
   async function putCard(req: Request, res: Response): Promise<void> {
     const eventId = req.params['eventId'];
@@ -62,15 +78,29 @@ export function createAdminMediaRoutes(deps: AdminMediaDeps) {
       return;
     }
 
-    const db = userClient(req);
-    if (!db) {
+    // Fails closed: no session, an error, a throw, or anything but `true`
+    // denies.
+    let allowed: boolean | null;
+    try {
+      allowed = await canAdminEvent(req, eventId);
+    } catch (err) {
+      logger.error('card edit: authorisation check threw', {
+        eventId, error: err instanceof Error ? err.message : String(err),
+      });
+      allowed = false;
+    }
+    if (allowed === null) {
       sendError(res, 401, 'unauthenticated', 'session required');
       return;
     }
+    if (!allowed) {
+      sendError(res, 403, 'forbidden', 'not authorised to edit media for this event');
+      return;
+    }
 
-    // Scoped to this event's photos. A row the caller may not administer
-    // is invisible under RLS, so it reads as not found rather than as a
-    // refusal -- which also avoids saying whether the id exists.
+    // Scoped to THIS event: an id belonging to another event reads as not
+    // found, so an admin of one event cannot reach another's photos by
+    // pairing their own event id with someone else's media id.
     const { data: row, error: readErr } = await db
       .from('host_media')
       .select('id, metadata')
@@ -102,10 +132,8 @@ export function createAdminMediaRoutes(deps: AdminMediaDeps) {
       .select('id, metadata')
       .maybeSingle();
     if (writeErr || !updated) {
-      // An update RLS refuses returns no row rather than an error.
-      logger.warn('card edit: write refused or failed', { mediaId, error: writeErr?.message });
-      sendError(res, writeErr ? 500 : 403, writeErr ? 'write_failed' : 'forbidden',
-        writeErr ? 'could not save the card' : 'not authorised to edit this photo');
+      logger.warn('card edit: write failed', { mediaId, error: writeErr?.message });
+      sendError(res, 500, 'write_failed', 'could not save the card');
       return;
     }
 
