@@ -140,6 +140,18 @@ describe('admin links routes', () => {
     expect(state.updated[0].uploads_count).toBeUndefined();
   });
 
+  it('patch accepts only the day or Getting ready as a destination', async () => {
+    const patch = async (album) => {
+      const { routes, state } = makeRoutes({ existing: { id: LINK_ID, uploads_count: 0 } });
+      await routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { album, label: 'x' } }), mockRes());
+      return state.updated[0].album;
+    };
+    expect(await patch('ready')).toBe('ready');
+    expect(await patch('day')).toBe('day');
+    // The booth and Preload are not places a guest link can send photos.
+    for (const bad of ['booth', 'seed', 'READY', 1, null]) expect(await patch(bad)).toBeUndefined();
+  });
+
   it('delete deactivates once uploads exist, deletes otherwise', async () => {
     const used = makeRoutes({ existing: { id: LINK_ID, uploads_count: 5 } });
     const res1 = mockRes();

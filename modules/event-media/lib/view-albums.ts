@@ -1,27 +1,27 @@
 /**
  * Which projector view a photo belongs to.
  *
- * Each event has three view albums (migration 006): Preload, The day and
- * Photo booth. Membership of those albums is what decides the view, so
- * an organiser moves a photo between views by moving it between albums
- * in the Media tab.
+ * Each event has four view albums (migrations 006, 007): Preload,
+ * Getting ready, The day and Photo booth. Membership of those albums is
+ * what decides the view, so an organiser moves a photo between views by
+ * moving it between albums in the Media tab.
  *
  * The photo's own tag, metadata.album, records where it first landed.
  * It is the fallback for a photo in no view album -- one removed from
- * all three, or one whose join failed -- so nothing drops off the
+ * all of them, or one whose join failed -- so nothing drops off the
  * projector because of an album edit.
  *
  * A photo in more than one view album was almost certainly ADDED to a
  * second one by an organiser who meant to move it, so a view other than
- * its tag wins. Between two such, the booth and then the day outrank
- * Preload, which is the stand-in stream.
+ * its tag wins. Between two such, the booth, then the day, then Getting
+ * ready outrank Preload, which is the stand-in stream.
  */
 
-export type View = 'seed' | 'day' | 'booth'
+export type View = 'seed' | 'ready' | 'day' | 'booth'
 
-export const VIEWS: readonly View[] = ['seed', 'day', 'booth']
+export const VIEWS: readonly View[] = ['seed', 'ready', 'day', 'booth']
 
-const RANK: Record<View, number> = { booth: 0, day: 1, seed: 2 }
+const RANK: Record<View, number> = { booth: 0, day: 1, ready: 2, seed: 3 }
 
 export function isView(v: unknown): v is View {
   return typeof v === 'string' && (VIEWS as readonly string[]).includes(v)

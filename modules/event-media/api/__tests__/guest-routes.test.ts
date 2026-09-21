@@ -648,6 +648,23 @@ describe('completeUploads', () => {
     expect(supabase.state.rpcCalls[0]).toEqual({ name: 'events_media_upload_links_increment', args: { p_link_id: LINK_ID, p_n: 1 } });
   });
 
+  // A link sent out before the day files its uploads under Getting ready.
+  it('files uploads where the link sends them', async () => {
+    const albumFor = async (link, overrides = {}) => {
+      const { deps, supabase } = makeDeps({ link, event: EVENT_ROW, existingMedia: null });
+      stubHeadResponse(headOk());
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor(overrides)] } }), mockRes());
+      return supabase.state.inserted[0].metadata.album;
+    };
+    expect(await albumFor({ ...ACTIVE_LINK, album: 'ready' })).toBe('ready');
+    expect(await albumFor({ ...ACTIVE_LINK, album: 'day' })).toBe('day');
+    // Older rows predate the column, and nothing unexpected gets through.
+    expect(await albumFor(ACTIVE_LINK)).toBe('day');
+    expect(await albumFor({ ...ACTIVE_LINK, album: 'booth' })).toBe('day');
+    // The booth's posters go to the booth whichever link made them.
+    expect(await albumFor({ ...ACTIVE_LINK, album: 'ready' }, { booth: true })).toBe('booth');
+  });
+
   it('stamps is_approved=false when the link does not auto-approve', async () => {
     const { deps, supabase } = makeDeps({ link: { ...ACTIVE_LINK, auto_approve: false }, event: EVENT_ROW });
     stubHeadResponse(headOk());

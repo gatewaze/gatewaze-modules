@@ -87,6 +87,8 @@ interface UploadLinkRow {
   max_video_bytes: number;
   logo_url: string | null;
   allow_face_filter: boolean;
+  /** Where uploads through this link land: 'day' or 'ready'. */
+  album?: string;
 }
 
 interface EventRow {
@@ -161,7 +163,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: link, error } = await supabase
       .from('events_media_upload_links')
-      .select('id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter')
+      .select('id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, album')
       .eq('short_code', code)
       .maybeSingle();
     if (error) {
@@ -649,7 +651,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
   // Explicit insert allowlist — nothing from the request body reaches the
   // row except through the verified ticket payload.
-  function buildInsertRow(p: UploadTicketPayload, actualBytes: number, autoApprove: boolean): Record<string, unknown> {
+  function buildInsertRow(
+    p: UploadTicketPayload,
+    actualBytes: number,
+    autoApprove: boolean,
+    linkAlbum: unknown,
+  ): Record<string, unknown> {
     return {
       id: p.media_id,
       host_kind: 'event',
@@ -667,9 +674,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         guest_name: p.guest_name || null,
         client_id: p.client_id,
         captured: p.captured,
-        // Which stream this belongs to. The booth's posters are shown
-        // on their own rather than mixed into the day's photos.
-        album: p.booth ? 'booth' : 'day',
+        // Which stream this belongs to. The booth's posters are shown on
+        // their own whichever link made them; everything else lands where
+        // the link sends it -- the day, or Getting ready for a link sent
+        // out before it. Anything unexpected is the day.
+        album: p.booth ? 'booth' : linkAlbum === 'ready' ? 'ready' : 'day',
       },
     };
   }
@@ -780,7 +789,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         continue;
       }
 
-      const row = buildInsertRow(p, head.bytes || 0, link.auto_approve);
+      const row = buildInsertRow(p, head.bytes || 0, link.auto_approve, link.album);
       (row['metadata'] as Record<string, unknown>)['upload_link_id'] = link.id;
 
       const { data: inserted, error: insErr } = await supabase

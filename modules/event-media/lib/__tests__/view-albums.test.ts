@@ -7,6 +7,7 @@ const ALBUMS = [
   { album_id: 'A-seed', view: 'seed' },
   { album_id: 'A-day', view: 'day' },
   { album_id: 'A-booth', view: 'booth' },
+  { album_id: 'A-ready', view: 'ready' },
 ];
 
 const resolve = (items, tags) => resolveViews(ALBUMS, items, new Map(Object.entries(tags)));
@@ -51,6 +52,19 @@ describe('resolveViews', () => {
     );
     expect(r.get('p1')).toBe('booth');
     expect(r.get('p2')).toBe('day');
+  });
+
+  it('knows Getting ready, and ranks it above Preload only', () => {
+    const r = resolve(
+      [
+        { album_id: 'A-ready', media_id: 'p1' },
+        { album_id: 'A-ready', media_id: 'p2' }, { album_id: 'A-day', media_id: 'p2' },
+      ],
+      { p1: 'seed', p2: 'seed' },
+    );
+    expect(r.get('p1')).toBe('ready');
+    expect(r.get('p2')).toBe('day');
+    expect(tagView({ album: 'ready' })).toBe('ready');
   });
 
   it('ignores ordinary albums', () => {
