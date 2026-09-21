@@ -1002,9 +1002,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       )}
       </div>{/* /16:9 stage */}
 
-      {/* Corner QR + logo card */}
+      {/* Corner QR + logo card. Top right so the bottom right belongs to
+          the Wedflix wordmark, where a streaming service puts it. */}
       {qrCorner && (
-        <div className="absolute bottom-6 right-6 bg-white/95 rounded-xl p-3 flex flex-col items-center gap-2 shadow-xl">
+        <div className="absolute top-6 right-6 bg-white/95 rounded-xl p-3 flex flex-col items-center gap-2 shadow-xl">
           {/* eslint-disable-next-line @next/next/no-img-element -- data-URL QR */}
           <img src={qrDataUrl} alt="Upload QR" className="w-32 h-32" />
           {linkInfo?.logoUrl && (

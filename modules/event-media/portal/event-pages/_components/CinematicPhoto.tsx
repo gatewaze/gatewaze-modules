@@ -67,19 +67,27 @@ const SEPARATION = 0.055
 interface Move { z0: number; z1: number; x0: number; y0: number; x1: number; y1: number }
 
 /**
- * Zooms deliberately match the Ken Burns keyframes in DisplayView
- * (1.02 to 1.12), which is the distance the camera is wanted at. They
- * ran 1.06 to 1.24 on top of a cover-fit, which read as far too close.
+ * Every move pushes IN, never out.
+ *
+ * Half of these used to pull back, which is why the camera sometimes
+ * appeared to leave the people rather than settle on them. Pushing in
+ * also earns the aim point its room: the further in the camera goes the
+ * more of the photo hangs outside the stage, and the more of the
+ * face-aim the clamp in `place` can afford to honour. So a slide starts
+ * showing the whole photograph and closes framed on the faces.
+ *
+ * Combined with OVERSCAN the total runs 1.06 to about 1.12, which is
+ * the Ken Burns range (1.02 to 1.12).
  */
 const MOVES: Move[] = [
-  { z0: 1.02, z1: 1.12, x0: 0, y0: 0, x1: 0, y1: 0 },
-  { z0: 1.12, z1: 1.02, x0: 0, y0: 0, x1: 0, y1: 0 },
-  { z0: 1.04, z1: 1.10, x0: -0.8, y0: 0, x1: 0.8, y1: 0 },
-  { z0: 1.10, z1: 1.04, x0: 0.8, y0: 0, x1: -0.8, y1: 0 },
-  { z0: 1.03, z1: 1.12, x0: -0.6, y0: 0.5, x1: 0.4, y1: -0.4 },
-  { z0: 1.12, z1: 1.03, x0: 0.5, y0: -0.5, x1: -0.3, y1: 0.3 },
-  { z0: 1.05, z1: 1.13, x0: 0.4, y0: 0.5, x1: -0.2, y1: -0.2 },
-  { z0: 1.09, z1: 1.03, x0: 0, y0: -0.6, x1: 0, y1: 0.6 },
+  { z0: 1.00, z1: 1.06, x0: 0, y0: 0, x1: 0, y1: 0 },
+  { z0: 1.00, z1: 1.05, x0: -0.5, y0: 0, x1: 0, y1: 0 },
+  { z0: 1.00, z1: 1.05, x0: 0.5, y0: 0, x1: 0, y1: 0 },
+  { z0: 1.01, z1: 1.06, x0: -0.4, y0: 0.35, x1: 0, y1: 0 },
+  { z0: 1.01, z1: 1.06, x0: 0.4, y0: 0.35, x1: 0, y1: 0 },
+  { z0: 1.00, z1: 1.055, x0: 0, y0: 0.4, x1: 0, y1: 0 },
+  { z0: 1.00, z1: 1.05, x0: 0.3, y0: -0.3, x1: 0, y1: 0 },
+  { z0: 1.01, z1: 1.06, x0: -0.3, y0: -0.3, x1: 0, y1: 0 },
 ]
 
 /** Same photo always gets the same move; different photos differ. */
@@ -189,12 +197,34 @@ export default function CinematicPhoto({
      *
      * OVERSCAN is the small amount past fitting that keeps the frame
      * edges off-screen through the pan; the blurred backdrop fills the
-     * rest of the stage, so the screen is never empty.
+     * rest of the stage, so the screen is never empty. It is also the
+     * headroom the face-aim needs: with nothing outside the stage there
+     * is nothing to aim with, and the camera cannot favour the people.
      */
-    const OVERSCAN = 1.04
+    const OVERSCAN = 1.06
     const fitScale = (img: HTMLImageElement, w: number, h: number) => {
       const contain = Math.min(w / img.naturalWidth, h / img.naturalHeight)
       return contain * OVERSCAN
+    }
+
+    /**
+     * Place one axis.
+     *
+     * `want` aims the camera; this decides how much of that aim is
+     * affordable. Where the image is bigger than the stage it may slide
+     * only as far as its own overflow, so an edge can never come into
+     * frame — without this, aiming at faces (which sit above centre)
+     * pushed the image down and left a border along the top. Where the
+     * image is smaller it is centred, so the letterbox is symmetric,
+     * which is what Ken Burns does.
+     */
+    const place = (size: number, stage: number, aim: number, pan: number) => {
+      const over = size - stage
+      // Letterboxed axis: centre it and let the move drift it, which is
+      // what the Ken Burns translate does. Aiming is meaningless here —
+      // there is nothing outside the frame to aim at.
+      if (over <= 0) return (stage - size) / 2 + pan
+      return Math.max(-over, Math.min(0, aim + pan))
     }
 
     /**
@@ -208,8 +238,8 @@ export default function CinematicPhoto({
       const scale = fitScale(img, w, h) * zoom
       const iw = img.naturalWidth * scale
       const ih = img.naturalHeight * scale
-      const x = w / 2 - aim.x * iw + dx
-      const y = h / 2 - aim.y * ih + dy
+      const x = place(iw, w, w / 2 - aim.x * iw + dx)
+      const y = place(ih, h, h / 2 - aim.y * ih + dy)
       ctx.globalAlpha = alpha
       ctx.drawImage(img, x, y, iw, ih)
       ctx.globalAlpha = 1
