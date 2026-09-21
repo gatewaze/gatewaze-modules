@@ -48,6 +48,8 @@ interface Props {
   cutoutSrc?: string | null
   /** 0 flattens to a plain camera move; 1 is the tuned default. */
   depthStrength?: number
+  /** 'pan' tracks across at a fixed size; 'panzoom' adds a push-in. */
+  camera?: 'pan' | 'panzoom'
   /** Slide duration; the camera move is timed against it. */
   durationMs: number
   className?: string
@@ -67,28 +69,34 @@ const SEPARATION = 0.055
 interface Move { z0: number; z1: number; x0: number; y0: number; x1: number; y1: number }
 
 /**
- * Every move pushes IN, never out.
+ * Pure pans: the zoom holds still and the camera tracks across.
  *
- * Half of these used to pull back, which is why the camera sometimes
- * appeared to leave the people rather than settle on them. Pushing in
- * also earns the aim point its room: the further in the camera goes the
- * more of the photo hangs outside the stage, and the more of the
- * face-aim the clamp in `place` can afford to honour. So a slide starts
- * showing the whole photograph and closes framed on the faces.
+ * The parallax is what makes this effect worth having, and a pan shows
+ * it where a zoom hides it — sliding sideways, the background visibly
+ * moves past the people, where growing merely scales them together.
+ * Every move ends at 0, so a slide settles with the aim point, and
+ * therefore the faces, as centred as the frame allows.
  *
- * Combined with OVERSCAN the total runs 1.06 to about 1.12, which is
- * the Ken Burns range (1.02 to 1.12).
+ * `zoom` remains per-move so the Pan + zoom setting can reintroduce it.
  */
 const MOVES: Move[] = [
-  { z0: 1.00, z1: 1.06, x0: 0, y0: 0, x1: 0, y1: 0 },
-  { z0: 1.00, z1: 1.05, x0: -0.5, y0: 0, x1: 0, y1: 0 },
-  { z0: 1.00, z1: 1.05, x0: 0.5, y0: 0, x1: 0, y1: 0 },
-  { z0: 1.01, z1: 1.06, x0: -0.4, y0: 0.35, x1: 0, y1: 0 },
-  { z0: 1.01, z1: 1.06, x0: 0.4, y0: 0.35, x1: 0, y1: 0 },
-  { z0: 1.00, z1: 1.055, x0: 0, y0: 0.4, x1: 0, y1: 0 },
-  { z0: 1.00, z1: 1.05, x0: 0.3, y0: -0.3, x1: 0, y1: 0 },
-  { z0: 1.01, z1: 1.06, x0: -0.3, y0: -0.3, x1: 0, y1: 0 },
+  { z0: 1, z1: 1, x0: -1, y0: 0, x1: 1, y1: 0 },
+  { z0: 1, z1: 1, x0: 1, y0: 0, x1: -1, y1: 0 },
+  { z0: 1, z1: 1, x0: -0.9, y0: -0.5, x1: 0.9, y1: 0.5 },
+  { z0: 1, z1: 1, x0: 0.9, y0: 0.5, x1: -0.9, y1: -0.5 },
+  { z0: 1, z1: 1, x0: -1, y0: 0.4, x1: 0.6, y1: -0.4 },
+  { z0: 1, z1: 1, x0: 1, y0: -0.4, x1: -0.6, y1: 0.4 },
+  { z0: 1, z1: 1, x0: 0, y0: -1, x1: 0, y1: 1 },
+  { z0: 1, z1: 1, x0: -0.6, y0: 0.8, x1: 0.8, y1: -0.6 },
 ]
+
+/** Pan + zoom adds a slow push-in on top, inside the Ken Burns range. */
+const ZOOM_IN = { z0: 1.0, z1: 1.06 }
+
+/** Apply the camera setting to a move. */
+function moveWith(m: Move, camera: 'pan' | 'panzoom'): Move {
+  return camera === 'panzoom' ? { ...m, ...ZOOM_IN } : m
+}
 
 /** Same photo always gets the same move; different photos differ. */
 function moveFor(src: string): Move {
@@ -163,7 +171,7 @@ interface Layer {
 }
 
 export default function CinematicPhoto({
-  src, plateSrc, cutoutSrc, depthStrength = 1, durationMs, className,
+  src, plateSrc, cutoutSrc, depthStrength = 1, camera = 'pan', durationMs, className,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const rafRef = useRef<number | null>(null)
@@ -174,6 +182,8 @@ export default function CinematicPhoto({
   // Read by the render loop without restarting it.
   const durationRef = useRef(durationMs)
   const strengthRef = useRef(depthStrength)
+  const cameraRef = useRef(camera)
+  cameraRef.current = camera
   durationRef.current = durationMs
   strengthRef.current = depthStrength
 
@@ -218,13 +228,29 @@ export default function CinematicPhoto({
      * image is smaller it is centred, so the letterbox is symmetric,
      * which is what Ken Burns does.
      */
-    const place = (size: number, stage: number, aim: number, pan: number) => {
+    /**
+     * Place one axis.
+     *
+     * `pan` arrives as -1..1 and is mapped to whatever room this axis
+     * actually has, rather than to the zoom. The camera no longer zooms,
+     * so deriving the travel from the zoom would mean no travel at all.
+     *
+     * Where the image overhangs the stage it may slide only as far as
+     * that overhang, so an edge can never come into frame — this is also
+     * what keeps the face-aim from opening a border along the top.
+     * Where the image is letterboxed it drifts around centre instead,
+     * within the bar, which is what the Ken Burns translate does.
+     */
+    const place = (
+      size: number, stage: number, aim: number, pan: number, nudge: number,
+    ) => {
       const over = size - stage
-      // Letterboxed axis: centre it and let the move drift it, which is
-      // what the Ken Burns translate does. Aiming is meaningless here —
-      // there is nothing outside the frame to aim at.
-      if (over <= 0) return (stage - size) / 2 + pan
-      return Math.max(-over, Math.min(0, aim + pan))
+      if (over <= 0) {
+        const centre = (stage - size) / 2
+        // 0.6 keeps a margin, so a drift never runs the photo off-stage.
+        return centre + pan * centre * 0.6 + nudge
+      }
+      return Math.max(-over, Math.min(0, aim + pan * (over / 2) + nudge))
     }
 
     /**
@@ -232,14 +258,15 @@ export default function CinematicPhoto({
      * whatever the zoom, then offset it.
      */
     const drawImage = (
-      img: HTMLImageElement, aim: { x: number; y: number },
-      zoom: number, dx: number, dy: number, w: number, h: number, alpha: number,
+      img: HTMLImageElement, aim: { x: number; y: number }, zoom: number,
+      panX: number, panY: number, nudgeX: number, nudgeY: number,
+      w: number, h: number, alpha: number,
     ) => {
       const scale = fitScale(img, w, h) * zoom
       const iw = img.naturalWidth * scale
       const ih = img.naturalHeight * scale
-      const x = place(iw, w, w / 2 - aim.x * iw + dx)
-      const y = place(ih, h, h / 2 - aim.y * ih + dy)
+      const x = place(iw, w, w / 2 - aim.x * iw, panX, nudgeX)
+      const y = place(ih, h, h / 2 - aim.y * ih, panY, nudgeY)
       ctx.globalAlpha = alpha
       ctx.drawImage(img, x, y, iw, ih)
       ctx.globalAlpha = 1
@@ -251,25 +278,28 @@ export default function CinematicPhoto({
       const k = Math.max(0, Math.min(1, t))
       const m = layer.move
       const zoom = lerp(m.z0, m.z1, k)
-      const slack = Math.max(0, (1 - 1 / zoom) / 2)
-      const panX = lerp(m.x0, m.x1, k) * slack * w
-      const panY = lerp(m.y0, m.y1, k) * slack * h
+      // Normalised travel, mapped to each axis's own room by `place`.
+      const panX = lerp(m.x0, m.x1, k)
+      const panY = lerp(m.y0, m.y1, k)
 
       const strength = Math.max(0, Math.min(2, strengthRef.current))
       const layered = Boolean(layer.plate && layer.cutout) && strength > 0.001
 
       if (!layered) {
-        drawImage(layer.photo, layer.aim, zoom, panX, panY, w, h, alpha)
+        drawImage(layer.photo, layer.aim, zoom, panX, panY, 0, 0, w, h, alpha)
         return
       }
 
-      // The near layer travels further than the far one. That
-      // difference, and nothing else, is the depth.
+      // The far layer travels against the near one. That difference, and
+      // nothing else, is the depth — and a pan shows it far better than
+      // a zoom did, because the background slides past the people
+      // instead of merely growing with them.
       const spread = SEPARATION * strength * w
-      const bg = -spread * (lerp(m.x0, m.x1, k))
-      const bgY = -spread * (lerp(m.y0, m.y1, k)) * (h / w)
-      drawImage(layer.plate!, layer.aim, zoom * 1.04, panX + bg, panY + bgY, w, h, alpha)
-      drawImage(layer.cutout!, layer.aim, zoom, panX, panY, w, h, alpha)
+      drawImage(
+        layer.plate!, layer.aim, zoom * 1.04, panX, panY,
+        -spread * panX, -spread * panY * (h / w), w, h, alpha,
+      )
+      drawImage(layer.cutout!, layer.aim, zoom, panX, panY, 0, 0, w, h, alpha)
     }
 
     const frame = (now: number) => {
@@ -337,7 +367,7 @@ export default function CinematicPhoto({
         cutout,
         aim: cutout ? aimFromCutout(cutout) : { x: 0.5, y: 0.42 },
         startedAt: performance.now(),
-        move: moveFor(src),
+        move: moveWith(moveFor(src), cameraRef.current),
         src,
       }
       fadeFromRef.current = performance.now()

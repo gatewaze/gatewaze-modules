@@ -79,6 +79,8 @@ interface DisplaySettings {
   stream: 'day' | 'booth'
   /** How pronounced the 3D relief is. 0 is a flat camera move. */
   depthStrength: number
+  /** Cinematic camera: track across, or track and push in. */
+  camera: 'pan' | 'panzoom'
   /** @deprecated cinematic is GPU-only; kept so stored settings parse. */
   subjectPop: boolean
   /** Opt-in GPU backend for the models (see ai-pipeline note). */
@@ -109,6 +111,7 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   fillBars: true,
   stream: 'day',
   depthStrength: 1,
+  camera: 'pan',
   subjectPop: true,
   webgpu: false,
   order: 'newest',
@@ -240,15 +243,48 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 /** Toggle/segment button. Sized for a finger as well as a trackpad. */
+/**
+ * A choice within a row. Selected is filled and ticked, unselected is a
+ * dim outline — the two used to differ only by how light their grey
+ * was, which is unreadable across a room at a projector.
+ */
 function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       onClick={onClick}
-      className={`rounded-lg px-3 py-1.5 text-sm leading-none transition-colors ${
-        on ? 'bg-white/90 text-gray-900 font-medium' : 'bg-white/10 text-white/90 hover:bg-white/20'
+      aria-pressed={on}
+      className={`rounded-lg px-3 py-1.5 text-sm leading-none border transition-colors ${
+        on
+          ? 'bg-white text-gray-900 font-semibold border-white'
+          : 'bg-transparent text-white/55 border-white/25 hover:bg-white/10 hover:text-white/90'
       }`}
     >
+      {on && <span aria-hidden="true" className="mr-1.5">\u2713</span>}
       {children}
+    </button>
+  )
+}
+
+/**
+ * An on/off setting. Unlike a Chip these are not a set of alternatives,
+ * so "which one is lit" tells you nothing — each states its own value.
+ */
+function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      role="switch"
+      aria-checked={on}
+      className={`rounded-lg px-3 py-1.5 text-sm leading-none border transition-colors inline-flex items-center gap-2 ${
+        on
+          ? 'bg-emerald-400 text-emerald-950 font-semibold border-emerald-300'
+          : 'bg-transparent text-white/55 border-white/25 hover:bg-white/10'
+      }`}
+    >
+      <span>{children}</span>
+      <span className={`text-[11px] uppercase tracking-wider ${on ? 'opacity-70' : 'opacity-60'}`}>
+        {on ? 'on' : 'off'}
+      </span>
     </button>
   )
 }
@@ -880,6 +916,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 plateSrc={current.variants?.plate ?? null}
                 cutoutSrc={current.variants?.cutout ?? null}
                 depthStrength={settings.depthStrength ?? 1}
+                camera={settings.camera ?? 'pan'}
                 durationMs={Math.max(settings.intervalMs, 2000)}
                 className="absolute inset-0 w-full h-full"
               />
@@ -1111,9 +1148,24 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               ))}
             </Row>
 
+            <Row label="Camera">
+              {([
+                ['pan', 'Pan'],
+                ['panzoom', 'Pan + zoom'],
+              ] as const).map(([val, label]) => (
+                <Chip
+                  key={val}
+                  on={(settings.camera ?? 'pan') === val}
+                  onClick={() => updateSettings({ camera: val })}
+                >
+                  {label}
+                </Chip>
+              ))}
+            </Row>
+
             <Row label="Look">
-              <Chip on={settings.ambient} onClick={() => updateSettings({ ambient: !settings.ambient })}>Ambient colour</Chip>
-              <Chip on={settings.fillBars} onClick={() => updateSettings({ fillBars: !settings.fillBars })}>Blurred fill</Chip>
+              <Toggle on={settings.ambient} onClick={() => updateSettings({ ambient: !settings.ambient })}>Ambient colour</Toggle>
+              <Toggle on={settings.fillBars} onClick={() => updateSettings({ fillBars: !settings.fillBars })}>Blurred fill</Toggle>
             </Row>
 
             <Row label="QR code">
