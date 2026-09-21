@@ -7,6 +7,7 @@ export type {
   AccessLevel,
   HostMediaItem,
   HostMediaAlbum,
+  HostMediaAlbumItem,
   HostMediaUploadResult,
   HostMediaListResponse,
   YoutubeUploadStatus,
