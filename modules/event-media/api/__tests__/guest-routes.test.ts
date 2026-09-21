@@ -60,6 +60,7 @@ function makeSupabase(config) {
       gt: () => b,
       gte: () => b,
       like: () => b,
+      in: (col, vals) => { (state.inCalls ??= []).push({ table, col, vals }); return b; },
       or: () => b,
       contains: () => b,
       order: () => b,
@@ -75,7 +76,11 @@ function makeSupabase(config) {
         if (table === 'host_media') return Promise.resolve({ data: config.existingMedia ?? null, error: null });
         return Promise.resolve({ data: null, error: null });
       },
-      then: (resolve) => resolve({ data: config.mediaRows ?? [], error: config.mediaListError ?? null }),
+      then: (resolve) => {
+        if (config.tables && table in config.tables) return resolve(config.tables[table]);
+        if (table !== 'host_media') return resolve({ data: [], error: null });
+        return resolve({ data: config.mediaRows ?? [], error: config.mediaListError ?? null });
+      },
       insert: (row) => {
         state.inserted.push(row);
         return {
@@ -319,6 +324,61 @@ describe('listMedia', () => {
     await routes.listMedia(req({ query: { cursor: '!!nonsense!!', after: 'DROP TABLE' } }), res);
     expect(res.statusCode).toBe(200);
     expect(res.body.items).toEqual([]);
+  });
+});
+
+describe('listMedia: projector views', () => {
+  const P1 = '11111111-2222-3333-4444-555555555555';
+  const P2 = '22222222-2222-3333-4444-555555555555';
+  const row = (id, album) => ({
+    id, storage_path: `event/${EVENT_ID}/x/${id}.jpg`, mime_type: 'image/jpeg', bytes: 1,
+    width: null, height: null, variants: null, metadata: album ? { album } : {},
+    created_at: '2026-09-19T18:00:00.000Z',
+  });
+  const list = async (config) => {
+    const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, ...config });
+    const res = mockRes();
+    await createGuestRoutes(deps).listMedia(req(), res);
+    return { res, supabase };
+  };
+
+  // An organiser moved P1 from Preload to The day in the Media tab.
+  it('reports the view album a photo is in, not its original tag', async () => {
+    const { res } = await list({
+      mediaRows: [row(P1, 'seed'), row(P2, 'day')],
+      tables: {
+        event_media_view_albums: { data: [{ album_id: 'a-seed', view: 'seed' }, { album_id: 'a-day', view: 'day' }], error: null },
+        host_media_album_items: { data: [{ album_id: 'a-day', media_id: P1 }, { album_id: 'a-day', media_id: P2 }], error: null },
+      },
+    });
+    expect(res.body.items.map((i) => i.album)).toEqual(['day', 'day']);
+  });
+
+  it('uses the tags when the event has no view albums', async () => {
+    const { res } = await list({ mediaRows: [row(P1, 'booth'), row(P2, null)] });
+    expect(res.body.items.map((i) => i.album)).toEqual(['booth', 'seed']);
+  });
+
+  // The projector must keep running through an album lookup failure.
+  it('falls back to the tags if the album lookup fails', async () => {
+    const { res } = await list({
+      mediaRows: [row(P1, 'booth')],
+      tables: { event_media_view_albums: { data: null, error: { message: 'boom' } } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items[0].album).toBe('booth');
+  });
+
+  it('looks up membership only for the photos on the page', async () => {
+    const { supabase } = await list({
+      mediaRows: [row(P1, 'seed')],
+      tables: {
+        event_media_view_albums: { data: [{ album_id: 'a-seed', view: 'seed' }], error: null },
+        host_media_album_items: { data: [], error: null },
+      },
+    });
+    const media = supabase.state.inCalls.find((c) => c.col === 'media_id');
+    expect(media.vals).toEqual([P1]);
   });
 });
 
