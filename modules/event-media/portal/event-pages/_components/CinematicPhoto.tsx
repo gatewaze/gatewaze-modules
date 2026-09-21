@@ -5,17 +5,23 @@
 /**
  * Cinematic photo renderer — layered 3D.
  *
- * Each photo is drawn as two complete layers that move at different
- * rates:
+ * Each photo is drawn as two complete layers:
  *
  *   plate   the scene with the people removed and the background
  *           reconstructed behind them — the far layer
  *   cutout  the people on their own with a soft alpha edge — the near
  *           layer
  *
- * That difference IS the depth. Because both layers are complete, the
- * background revealed as the camera drifts is real reconstructed
- * scene, so nothing smears and no edge tears.
+ * It is shot like a tracking move: the camera follows the people, so
+ * they hold still and the world slides behind them. That relative
+ * motion IS the depth. Because both layers are complete, the background
+ * revealed as the scene travels is real reconstructed scene, so nothing
+ * smears and no edge tears.
+ *
+ * The photograph's window on the stage is pinned for the whole slide
+ * and the background is drawn larger than it and clipped to it, so the
+ * background can travel without its own edges ever entering the frame
+ * and the letterbox bars never budge.
  *
  * This replaces a depth-map displacement approach that was rightly
  * criticised for exactly that: it shifted one flat image by its depth
@@ -58,11 +64,19 @@ interface Props {
 const FADE_MS = 900
 
 /**
- * Separation between the layers, as a fraction of the frame. The near
- * layer travels this much further than the far one over a whole slide.
- * Small numbers read as depth; large ones read as a mistake.
+ * How much larger the background is drawn than the photograph's window.
+ *
+ * This is the room the background has to travel in. It is spent
+ * entirely on movement: because the layer is clipped to the window, the
+ * extra is never visible as extra size, only as the distance the scene
+ * can slide before an edge would reach the frame. Half of it is
+ * available in each direction, so 1.12 buys a little over 5% of the
+ * photo's width each way.
+ *
+ * Larger would travel further but pushes the background out of scale
+ * with the people standing in front of it, and the seam starts to show.
  */
-const SEPARATION = 0.055
+const PLATE_OVERSCAN = 1.12
 
 /** Camera moves. Pan is a fraction of the slack the zoom creates, so a
  *  move can never wander off the edge of the photo. */
@@ -285,21 +299,59 @@ export default function CinematicPhoto({
       const strength = Math.max(0, Math.min(2, strengthRef.current))
       const layered = Boolean(layer.plate && layer.cutout) && strength > 0.001
 
+      // No layers to separate, so there is nothing to hold still: the
+      // whole photograph drifts, which is the Ken Burns behaviour.
       if (!layered) {
         drawImage(layer.photo, layer.aim, zoom, panX, panY, 0, 0, w, h, alpha)
         return
       }
 
-      // The far layer travels against the near one. That difference, and
-      // nothing else, is the depth — and a pan shows it far better than
-      // a zoom did, because the background slides past the people
-      // instead of merely growing with them.
-      const spread = SEPARATION * strength * w
-      drawImage(
-        layer.plate!, layer.aim, zoom * 1.04, panX, panY,
-        -spread * panX, -spread * panY * (h / w), w, h, alpha,
+      /*
+       * A tracking shot: the camera follows the people, so THEY stay
+       * put and the world slides behind them. Moving both and relying
+       * on the small difference between them, as this did before, spent
+       * most of the motion budget dragging the subject around the
+       * screen for no gain.
+       *
+       * The obvious objection is that panning the background drags its
+       * edges into frame. It does not, because the photograph's own
+       * window is pinned for the whole slide and the background is
+       * drawn larger than that window, then clipped to it. The
+       * background travels inside a frame that never moves, so no edge
+       * can appear and the letterbox bars stay rock steady.
+       */
+      const scale = fitScale(layer.cutout!, w, h) * zoom
+      const iw = layer.cutout!.naturalWidth * scale
+      const ih = layer.cutout!.naturalHeight * scale
+      const wx = place(iw, w, w / 2 - layer.aim.x * iw, 0, 0)
+      const wy = place(ih, h, h / 2 - layer.aim.y * ih, 0, 0)
+
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(wx, wy, iw, ih)
+      ctx.clip()
+
+      // Spare is what the background has to travel within. Depth
+      // strength scales how much of it a slide actually uses, so 0 is a
+      // still photograph and 1 the tuned default.
+      // 0.97 rather than 1: at full travel the background lands exactly
+      // on the window edge, and sub-pixel rounding there can flash a
+      // hairline seam. The margin costs nothing visible.
+      const travel = Math.min(1, strength) * 0.97
+      const spareX = (iw * (PLATE_OVERSCAN - 1)) / 2
+      const spareY = (ih * (PLATE_OVERSCAN - 1)) / 2
+      ctx.globalAlpha = alpha
+      ctx.drawImage(
+        layer.plate!,
+        wx - spareX + panX * travel * spareX,
+        wy - spareY + panY * travel * spareY,
+        iw * PLATE_OVERSCAN,
+        ih * PLATE_OVERSCAN,
       )
-      drawImage(layer.cutout!, layer.aim, zoom, panX, panY, 0, 0, w, h, alpha)
+      // The people, exactly where the window puts them, every frame.
+      ctx.drawImage(layer.cutout!, wx, wy, iw, ih)
+      ctx.globalAlpha = 1
+      ctx.restore()
     }
 
     const frame = (now: number) => {
