@@ -815,6 +815,14 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const cinematicActive = settings.effect === 'cinematic' || wedflixActive
   const cardCopy = (current?.card ?? null) as CardCopy | null
 
+  // The browse card is for the day's own photographs. The seed selfies
+  // are stand-ins shown until real ones arrive, and billing those as
+  // programmes gives the joke away before the wedding has started — so
+  // while the pool is still padded with them, they play as plain
+  // cinematic and only the uploads get a card. No switch to remember:
+  // Wedflix turns itself on as the photos come in.
+  const wedflixCard = wedflixActive && current?.album !== 'seed'
+
   return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black overflow-hidden flex items-center justify-center"
@@ -875,7 +883,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 durationMs={Math.max(settings.intervalMs, 2000)}
                 className="absolute inset-0 w-full h-full"
               />
-              {wedflixActive && cardCopy && (
+              {wedflixCard && cardCopy && (
                 <WedflixCard
                   copy={cardCopy}
                   slideKey={current.id}
@@ -895,10 +903,11 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               style={{ animation: slideAnimation(settings.effect, current.id, settings.intervalMs) }}
             />
           ) : null}
-          {/* Wedflix owns the whole frame: a browse screen does not
-              credit whoever filmed it. The credit stays on every other
-              effect. */}
-          {current?.guest_name && !showQrSlide && !wedflixActive && (
+          {/* A browse card owns the whole frame and does not credit
+              whoever filmed it. Keyed off the card actually being drawn,
+              not the mode, so a seed selfie playing as plain cinematic
+              keeps its credit. */}
+          {current?.guest_name && !showQrSlide && !wedflixCard && (
             <div className="absolute bottom-6 left-6 flex items-center gap-2 text-white/70 text-xl drop-shadow">
               {/* house line-style (outline) camera icon — no emoji */}
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden="true">
@@ -1032,7 +1041,11 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
             <Row label="Effect">
               {([
-                ['wedflix', 'Wedflix'],
+                // Named for what it does: seed selfies keep playing as
+                // cinematic under this setting, so an operator who
+                // picks it before any uploads exist is not left
+                // wondering why nothing changed.
+                ['wedflix', 'Wedflix (uploads)'],
                 ['cinematic', 'Cinematic'],
                 ['kenburns', 'Ken Burns'],
                 ['grade', 'B&W bloom'],
