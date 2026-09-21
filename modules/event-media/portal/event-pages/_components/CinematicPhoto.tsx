@@ -667,12 +667,20 @@ export default function CinematicPhoto({
       // and the photo is shown still — a still photograph looks like a
       // photograph, where a bad separation looks broken.
       //   - the plate must actually have had the people removed
-      //   - the cutout must agree with the depth map, when there is one
+      //   - the cutout must agree with the depth map
+      //
+      // A missing depth map is a failure, not a pass. This used to skip
+      // the agreement check when there was no depth map, which is how a
+      // pub photo with pints on the table kept its parallax and sliced
+      // the glasses in half: its depth map was never generated, so the
+      // one check that would have caught it never ran. If the layers
+      // cannot be verified, they are not used.
       const agree = depth && cutout ? layerAgreement(depth, cutout) : null
       const usable = Boolean(
-        plate && cutout
+        plate && cutout && agree
         && plateChange(photo, plate, cutout) >= PLATE_MIN_CHANGE
-        && (!agree || (agree.nearOutside <= MAX_NEAR_OUTSIDE && agree.farInside <= MAX_FAR_INSIDE)),
+        && agree.nearOutside <= MAX_NEAR_OUTSIDE
+        && agree.farInside <= MAX_FAR_INSIDE,
       )
 
       curRef.current && (prevRef.current = curRef.current)

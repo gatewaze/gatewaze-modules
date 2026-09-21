@@ -55,3 +55,26 @@ export function partitionReady<T extends ReadyCandidate>(
   for (const p of list) (isReady(p, now) ? ready : pending).push(p)
   return { ready, pending }
 }
+
+export interface CardCandidate {
+  album?: string | null
+  card?: { title?: unknown } | null
+}
+
+/**
+ * Will this photo actually be billed as a programme in Wedflix?
+ *
+ * Wedflix is only worth putting on screen as Wedflix: a slide with no
+ * browse card, in a mode whose whole point is the browse card, just
+ * looks like the effect failed. So in Wedflix the pool is the photos
+ * that get a card, and nothing else.
+ *
+ * Seed selfies are never billed, by design — they are stand-ins shown
+ * as plain cinematic until real photographs arrive — so they are not
+ * eligible even though they carry generated copy.
+ */
+export function hasBrowseCard(p: CardCandidate): boolean {
+  if (p.album === 'seed' || !p.album) return false
+  const title = p.card?.title
+  return typeof title === 'string' && title.trim().length > 0
+}

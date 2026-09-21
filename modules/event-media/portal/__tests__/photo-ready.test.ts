@@ -81,3 +81,29 @@ describe('partitionReady', () => {
     expect(ready.length + pending.length).toBe(list.length);
   });
 });
+
+import { hasBrowseCard } from '../event-pages/_components/_lib/photo-ready.js';
+
+describe('hasBrowseCard', () => {
+  const card = { title: 'Last Round', words: ['a', 'b', 'c'] };
+
+  it('accepts an upload of the day that has its card', () => {
+    expect(hasBrowseCard({ album: 'day', card })).toBe(true);
+    expect(hasBrowseCard({ album: 'booth', card })).toBe(true);
+  });
+
+  // An upload whose copy has not been generated would show as a bare
+  // photo in the middle of a Wedflix run.
+  it('rejects an upload with no card yet', () => {
+    expect(hasBrowseCard({ album: 'day', card: null })).toBe(false);
+    expect(hasBrowseCard({ album: 'day' })).toBe(false);
+    expect(hasBrowseCard({ album: 'day', card: { title: '   ' } })).toBe(false);
+    expect(hasBrowseCard({ album: 'day', card: { title: 42 } })).toBe(false);
+  });
+
+  // Seeds carry generated copy but are never billed as programmes.
+  it('rejects a seed selfie even though it has copy', () => {
+    expect(hasBrowseCard({ album: 'seed', card })).toBe(false);
+    expect(hasBrowseCard({ card })).toBe(false);
+  });
+});

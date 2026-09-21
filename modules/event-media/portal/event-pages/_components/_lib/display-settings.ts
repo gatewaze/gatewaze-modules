@@ -29,6 +29,23 @@ export interface StreamSettings {
   blurTransition: boolean
 }
 
+/**
+ * The three things the projector can show. Each is its own album and
+ * carries its own treatment.
+ *
+ *   preload  the selfies shown before the day's photographs exist
+ *   day      what guests upload on the day
+ *   booth    the photo booth's posters
+ */
+export type ViewName = 'preload' | 'day' | 'booth'
+
+// The selfies are stand-ins, never billed as programmes, so they get the
+// cinematic treatment rather than Wedflix.
+export const DEFAULT_PRELOAD: StreamSettings = {
+  mode: 'slideshow', effect: 'cinematic', intervalMs: 8000, camera: 'pan',
+  columns: 0, blurTransition: true,
+}
+
 export const DEFAULT_DAY: StreamSettings = {
   mode: 'slideshow', effect: 'wedflix', intervalMs: 8000, camera: 'pan',
   columns: 0, blurTransition: true,
@@ -64,6 +81,7 @@ function merge(stored: unknown, base: StreamSettings): StreamSettings {
  * person had one, and a legacy save loses its effect every time.
  */
 export function migrateStreams(stored: Record<string, unknown> | null | undefined): {
+  preload: StreamSettings
   day: StreamSettings
   booth: StreamSettings
 } {
@@ -80,12 +98,18 @@ export function migrateStreams(stored: Record<string, unknown> | null | undefine
     blurTransition: DEFAULT_DAY.blurTransition,
   }
   return {
+    preload: 'preload' in s ? merge(s['preload'], DEFAULT_PRELOAD) : DEFAULT_PRELOAD,
     day: 'day' in s ? merge(s['day'], DEFAULT_DAY) : foldedDay,
     booth: 'booth' in s ? merge(s['booth'], DEFAULT_BOOTH) : DEFAULT_BOOTH,
   }
 }
 
-/** Streams are the top-level choice; anything else reads as the day. */
-export function normaliseStream(v: unknown): 'day' | 'booth' | 'mix' {
-  return v === 'booth' || v === 'mix' ? v : 'day'
+/**
+ * Streams are the top-level choice. Anything unrecognised opens on
+ * Preload, which is the one view guaranteed to have photos before the
+ * day's uploads exist -- so a fresh or garbled setting never opens on an
+ * empty screen.
+ */
+export function normaliseStream(v: unknown): ViewName | 'mix' {
+  return v === 'day' || v === 'booth' || v === 'mix' || v === 'preload' ? v : 'preload'
 }

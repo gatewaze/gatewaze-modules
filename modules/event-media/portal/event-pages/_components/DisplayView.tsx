@@ -32,12 +32,14 @@ import WedflixCard, { type CardCopy } from './WedflixCard'
 import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
 import {
   DEFAULT_BOOTH,
+  DEFAULT_PRELOAD,
   DEFAULT_DAY,
   migrateStreams,
   normaliseStream,
   type StreamSettings,
+  type ViewName,
 } from './_lib/display-settings'
-import { isReady } from './_lib/photo-ready'
+import { hasBrowseCard, isReady } from './_lib/photo-ready'
 import { sizedDisplayUrl } from './_lib/display-url'
 
 // Same-origin — proxied to the api service by the portal's
@@ -97,10 +99,11 @@ interface DisplaySettings {
    * Which stream the screen is on. 'mix' alternates between the two so
    * one projector can carry both.
    */
-  stream: 'day' | 'booth' | 'mix'
+  stream: ViewName | 'mix'
   /** How long 'mix' dwells on each stream. */
   mixSeconds: number
   /** Per-stream treatment. */
+  preload: StreamSettings
   day: StreamSettings
   booth: StreamSettings
   /** How pronounced the 3D relief is. 0 is a flat camera move. */
@@ -135,8 +138,10 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   youtubeId: '',
   ambient: true,
   fillBars: true,
-  stream: 'day',
+  // Preload is the only view with photos before the day's uploads exist.
+  stream: 'preload',
   mixSeconds: 90,
+  preload: DEFAULT_PRELOAD,
   day: DEFAULT_DAY,
   booth: DEFAULT_BOOTH,
   depthStrength: 1,
@@ -176,35 +181,35 @@ function rankFor(id: string): boolean {
 }
 
 /**
- * How many seed photos to pad with.
+ * Split the incoming media into the view being shown.
  *
- * The seed selfies exist so the screen is not empty before anyone has
- * uploaded anything, and they should retreat as real photos of the day
- * arrive. One upload leaves nineteen selfies; ten leaves ten; at twenty
- * the seeds are gone entirely.
- */
-const POOL_TARGET = 20
-
-/**
- * Split the incoming media into the stream a mode wants.
+ *   preload  the selfies, all of them
+ *   day      the day's uploads
+ *   booth    the booth's posters
  *
- * booth mode  the booth's posters only
- * otherwise   the day's photos, padded with seed selfies up to
- *             POOL_TARGET while there are not yet enough real ones
+ * The day used to be padded with selfies up to twenty photos. That made
+ * the slideshow feel short -- the same eighteen or so selfies every
+ * rotation, with a hundred more never shown -- and mixed two things that
+ * are better chosen deliberately. Preload is now its own view.
+ *
+ * `wedflixOnly` narrows the day and the booth to photos that will be
+ * billed as a programme: a slide with no browse card, in a mode whose
+ * whole point is the browse card, just looks like the effect failed.
+ * It does not apply to Preload, whose selfies are never billed.
  */
-function poolFor(all: DisplayItem[], mode: 'booth' | 'day'): DisplayItem[] {
+function poolFor(all: DisplayItem[], mode: ViewName, wedflixOnly = false): DisplayItem[] {
   // A photo joins the projector only once its layers and browse copy
   // exist. Shown earlier it pans across with no depth and no title and
   // then silently acquires both, which reads as a fault. The guest's
-  // own gallery is not gated — only this.
+  // own gallery is not gated -- only this.
   const shown = all.filter((p) => isReady(p))
-  const booth = shown.filter((p) => p.album === 'booth')
-  if (mode === 'booth') return booth
-  const day = shown.filter((p) => p.album === 'day')
-  const seed = shown.filter((p) => p.album !== 'booth' && p.album !== 'day')
-  const padding = Math.max(0, POOL_TARGET - day.length)
-  // Day photos first so the newest real ones lead.
-  return [...day, ...seed.slice(0, padding)]
+  if (mode === 'preload') {
+    // Anything not explicitly the day's or the booth's. Older rows carry
+    // no album at all, and those are the selfies.
+    return shown.filter((p) => p.album !== 'day' && p.album !== 'booth')
+  }
+  const inView = shown.filter((p) => p.album === mode)
+  return wedflixOnly ? inView.filter((p) => hasBrowseCard(p)) : inView
 }
 
 function slideAnimation(effect: SlideEffect, photoId: string, intervalMs: number): string {
@@ -345,7 +350,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const [photos, setPhotos] = useState<DisplayItem[]>([])
   // Mirrored so the upload handler can pool without depending on
   // settings, which would re-create it on every unrelated change.
-  const streamRef = useRef<'day' | 'booth'>('day')
+  const streamRef = useRef<ViewName>('preload')
+  // Mirrored for the same reason: new arrivals must be pooled by the
+  // Wedflix rule too, or an uncarded upload would slip straight in.
+  const wedflixRef = useRef(false)
 
   /**
    * Which stream is on screen now. In 'mix' this alternates on its own
@@ -358,9 +366,9 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
    * error #310 and takes the whole display out.
    */
   const [mixPhase, setMixPhase] = useState<'day' | 'booth'>('day')
-  const activeStream: 'day' | 'booth' = settings.stream === 'mix' ? mixPhase : settings.stream
-  const view: StreamSettings =
-    (activeStream === 'booth' ? settings.booth : settings.day) ?? DEFAULT_SETTINGS[activeStream]
+  const activeStream: ViewName = settings.stream === 'mix' ? mixPhase : settings.stream
+  const view: StreamSettings = settings[activeStream] ?? DEFAULT_SETTINGS[activeStream]
+  const wedflixOnly = view.effect === 'wedflix'
 
   useEffect(() => {
     if (settings.stream !== 'mix') return
@@ -371,16 +379,17 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
   // What the projector is actually showing, so counts and layout agree
   // with what advance() walks.
-  const pool = poolFor(photos, activeStream)
+  const pool = poolFor(photos, activeStream, wedflixOnly)
 
   useEffect(() => {
     streamRef.current = activeStream
+    wedflixRef.current = wedflixOnly
     // Switching stream re-pools from everything already loaded, and
     // cuts straight to the new stream. Without the cut, a swap in 'mix'
     // would leave the previous stream on screen for up to a full slide
     // — long enough to look broken on a 90 second rotation.
     setPhotos((all) => {
-      const next = poolFor(all, activeStream)
+      const next = poolFor(all, activeStream, wedflixOnly)
       photosRef.current = next
       indexRef.current = 0
       if (next.length) setCurrent(orderedPool(next, settings.order)[0] ?? null)
@@ -388,9 +397,11 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     })
     setSlideTick((t) => t + 1)
     // `order` is read, not watched: a change of order should not force
-    // a cut, it only decides which photo this one lands on.
+    // a cut, it only decides which photo this one lands on. Turning
+    // Wedflix on or off changes which photos qualify, so it re-pools and
+    // cuts just as a change of view does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStream])
+  }, [activeStream, wedflixOnly])
   const photosRef = useRef<DisplayItem[]>([])
   const freshQueueRef = useRef<DisplayItem[]>([])
   const newestRef = useRef<string | null>(null)
@@ -452,8 +463,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
    * from what is on screen, because what is on screen keeps changing.
    * Not persisted: it is a view of the panel, not a setting.
    */
-  const [editing, setEditing] = useState<'day' | 'booth'>('day')
-  const editTarget: 'day' | 'booth' = settings.stream === 'mix' ? editing : settings.stream
+  const [editing, setEditing] = useState<ViewName>('preload')
+  const editTarget: ViewName = editing
   const edited: StreamSettings = settings[editTarget] ?? DEFAULT_SETTINGS[editTarget]
 
   const updateSettings = useCallback((patch: Partial<DisplaySettings>) => {
@@ -467,8 +478,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   /** Patch the stream the panel is currently editing. */
   const updateStream = useCallback((patch: Partial<StreamSettings>) => {
     setSettings((prev) => {
-      const target = prev.stream === 'mix' ? editing : prev.stream
-      const key: 'day' | 'booth' = target === 'booth' ? 'booth' : 'day'
+      const key: ViewName = editing
       const next = { ...prev, [key]: { ...(prev[key] ?? DEFAULT_SETTINGS[key]), ...patch } }
       try { localStorage.setItem(settingsKey, JSON.stringify(next)) } catch { /* ignore */ }
       return next
@@ -513,7 +523,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       const merged = [...add, ...prev].slice(0, MAX_PHOTOS)
       // The projector draws from the pooled stream, not everything that
       // has ever been uploaded.
-      photosRef.current = poolFor(merged, streamRef.current)
+      photosRef.current = poolFor(merged, streamRef.current, wedflixRef.current)
       const newest = merged[0]?.created_at
       if (newest && (!newestRef.current || newest > newestRef.current)) newestRef.current = newest
       return merged
@@ -1087,7 +1097,9 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // while the pool is still padded with them, they play as plain
   // cinematic and only the uploads get a card. No switch to remember:
   // Wedflix turns itself on as the photos come in.
-  const wedflixCard = wedflixActive && current?.album !== 'seed'
+  // The same rule the pool uses, so what is pooled for Wedflix and what
+  // is drawn as Wedflix cannot drift apart.
+  const wedflixCard = wedflixActive && !!current && hasBrowseCard(current)
 
   return createPortal(
     <div
@@ -1317,11 +1329,21 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
             <Row label="Showing">
               {([
+                ['preload', 'Preload'],
                 ['day', 'The day'],
                 ['booth', 'Photo booth'],
-                ['mix', 'Both, in turn'],
+                ['mix', 'Day and booth, in turn'],
               ] as const).map(([val, label]) => (
-                <Chip key={val} on={settings.stream === val} onClick={() => updateSettings({ stream: val })}>
+                <Chip
+                  key={val}
+                  on={settings.stream === val}
+                  onClick={() => {
+                    updateSettings({ stream: val })
+                    // Picking a view opens its settings below, which is
+                    // almost always what someone reaching for it wants.
+                    if (val !== 'mix') setEditing(val)
+                  }}
+                >
                   {label}
                 </Chip>
               ))}
@@ -1345,26 +1367,22 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               </div>
             )}
 
-            {/* Everything below belongs to ONE stream. In 'mix' the
-                screen keeps changing, so the panel cannot infer which
-                one you mean — say so explicitly. */}
+            {/* Everything below belongs to ONE view, chosen here rather
+                than inferred from the screen, so any view can be set up
+                at any time -- Preload ahead of the day, the booth while
+                the day is showing. */}
             <div className="pt-1 border-t border-white/10" />
-            {settings.stream === 'mix' ? (
-              <Row label="Settings for">
-                {([
-                  ['day', 'The day'],
-                  ['booth', 'Photo booth'],
-                ] as const).map(([val, label]) => (
-                  <Chip key={val} on={editing === val} onClick={() => setEditing(val)}>
-                    {label}
-                  </Chip>
-                ))}
-              </Row>
-            ) : (
-              <span className="block text-xs uppercase tracking-wide text-white/35">
-                Settings for {settings.stream === 'booth' ? 'the photo booth' : 'the day'}
-              </span>
-            )}
+            <Row label="Settings for">
+              {([
+                ['preload', 'Preload'],
+                ['day', 'The day'],
+                ['booth', 'Photo booth'],
+              ] as const).map(([val, label]) => (
+                <Chip key={val} on={editing === val} onClick={() => setEditing(val)}>
+                  {label}
+                </Chip>
+              ))}
+            </Row>
 
             <Row label="Display">
               {(['slideshow', 'wall'] as const).map((m) => (
@@ -1382,11 +1400,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
             <Row label="Effect">
               {([
-                // Named for what it does: seed selfies keep playing as
-                // cinematic under this setting, so an operator who
-                // picks it before any uploads exist is not left
-                // wondering why nothing changed.
-                ['wedflix', 'Wedflix (uploads)'],
+                // Not offered for Preload: selfies are never billed as
+                // programmes, so it would show nothing but stand-ins with
+                // their cards missing.
+                ...(editing === 'preload' ? [] : [['wedflix', 'Wedflix'] as const]),
                 ['cinematic', 'Cinematic'],
                 ['kenburns', 'Ken Burns'],
                 ['grade', 'B&W bloom'],
