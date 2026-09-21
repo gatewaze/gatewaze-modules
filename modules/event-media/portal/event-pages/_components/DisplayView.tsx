@@ -242,24 +242,27 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
-/** Toggle/segment button. Sized for a finger as well as a trackpad. */
 /**
  * A choice within a row. Selected is filled and ticked, unselected is a
  * dim outline — the two used to differ only by how light their grey
  * was, which is unreadable across a room at a projector.
+ *
+ * Colours are inline rather than Tailwind classes. `text-gray-900` never
+ * reached the module page's stylesheet, so a selected chip inherited the
+ * panel's white and rendered as a blank white box: the label was there
+ * and invisible. Sized for a finger as well as a trackpad.
  */
 function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       onClick={onClick}
       aria-pressed={on}
-      className={`rounded-lg px-3 py-1.5 text-sm leading-none border transition-colors ${
-        on
-          ? 'bg-white text-gray-900 font-semibold border-white'
-          : 'bg-transparent text-white/55 border-white/25 hover:bg-white/10 hover:text-white/90'
-      }`}
+      className="rounded-lg px-3 py-1.5 text-sm leading-none border transition-colors"
+      style={on
+        ? { background: '#fff', color: '#111827', fontWeight: 600, borderColor: '#fff' }
+        : { background: 'transparent', color: 'rgba(255,255,255,.55)', borderColor: 'rgba(255,255,255,.25)' }}
     >
-      {on && <span aria-hidden="true" className="mr-1.5">\u2713</span>}
+      {on && <span aria-hidden="true" style={{ marginRight: '.4em' }}>✓</span>}
       {children}
     </button>
   )
@@ -275,14 +278,13 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
       onClick={onClick}
       role="switch"
       aria-checked={on}
-      className={`rounded-lg px-3 py-1.5 text-sm leading-none border transition-colors inline-flex items-center gap-2 ${
-        on
-          ? 'bg-emerald-400 text-emerald-950 font-semibold border-emerald-300'
-          : 'bg-transparent text-white/55 border-white/25 hover:bg-white/10'
-      }`}
+      className="rounded-lg px-3 py-1.5 text-sm leading-none border transition-colors inline-flex items-center gap-2"
+      style={on
+        ? { background: '#34d399', color: '#052e16', fontWeight: 600, borderColor: '#6ee7b7' }
+        : { background: 'transparent', color: 'rgba(255,255,255,.55)', borderColor: 'rgba(255,255,255,.25)' }}
     >
       <span>{children}</span>
-      <span className={`text-[11px] uppercase tracking-wider ${on ? 'opacity-70' : 'opacity-60'}`}>
+      <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em', opacity: .75 }}>
         {on ? 'on' : 'off'}
       </span>
     </button>
