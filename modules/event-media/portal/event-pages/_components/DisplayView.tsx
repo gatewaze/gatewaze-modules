@@ -763,7 +763,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     const h = Math.round((w * 9) / 16)
     // Supabase and a CDN resize differently; see display-url.ts for why
     // getting this wrong costs money without looking wrong.
-    return sizedDisplayUrl(item.url, w, h)
+    // Prefer the upscaled copy where one exists. Upscaling only helps if
+    // the projector actually fetches it; reading item.url here would
+    // keep showing the small original the upscale was paid to replace.
+    return sizedDisplayUrl(item.variants?.hires || item.url, w, h)
   }, [])
 
   // Fetch the NEXT slide's image during the current one, so the
