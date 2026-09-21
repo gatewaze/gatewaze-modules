@@ -781,6 +781,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       displaySrc(upcoming),
       upcoming.variants?.plate,
       upcoming.variants?.cutout,
+      upcoming.variants?.depth,
     ]) {
       if (!href) continue
       const warm = new window.Image()
@@ -1025,7 +1026,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
           {/* Blurred cover fill — replaces dead black letterbox bars,
               and in cinematic mode it is what the melted-away
               background dissolves INTO. */}
-          {settings.fillBars && current && (
+          {settings.fillBars && current && !cinematicActive && (
             // eslint-disable-next-line @next/next/no-img-element -- decorative fill
             <img
               key={`fill-${current.id}`}
@@ -1051,6 +1052,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 src={displaySrc(current)}
                 plateSrc={current.variants?.plate ?? null}
                 cutoutSrc={current.variants?.cutout ?? null}
+                depthSrc={current.variants?.depth ?? null}
+                fill={settings.fillBars}
                 depthStrength={settings.depthStrength ?? 1}
                 camera={view.camera}
                 blurTransition={view.blurTransition ?? true}
