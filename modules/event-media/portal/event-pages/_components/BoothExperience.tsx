@@ -23,7 +23,15 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { coverCrop, pctStyle, stageRect } from './_lib/booth-stage'
+import { coverCrop, pctStyle, polaroidSize, stageRect } from './_lib/booth-stage'
+import {
+  addPicture,
+  loadHistory,
+  markPosted,
+  removePicture,
+  saveHistory,
+  type BoothPicture,
+} from './_lib/booth-history'
 
 interface Rect { x: number; y: number; w: number; h: number }
 interface Scene { image: string; width: number; height: number; focus_x: number }
@@ -68,6 +76,14 @@ interface Props {
   onDiscard: () => void
   onOriginal: () => void
   onClose: () => void
+  /** Where this event's pictures are kept on the device. */
+  historyKey: string
+  /** Upload a kept picture; told the upload's id once it has one. */
+  onPostImage: (dataUrl: string, styled: boolean, onMediaId: (mediaId: string) => void) => Promise<void>
+  /** Save or share a kept picture; false if it could not be. */
+  onSaveImage: (dataUrl: string) => boolean
+  /** Remove one of this device's uploads from the event. */
+  onRemoveUpload: (mediaId: string) => Promise<boolean>
 }
 
 type Phase = 'outside' | 'to-inside' | 'inside' | 'to-outside'
@@ -132,6 +148,39 @@ const STYLES = `
 .bx-shutter:active::after{transform:scale(.86)}
 .bx-root :where(button){outline:none}
 .bx-root button:focus-visible{outline:3px solid rgba(255,255,255,.85);outline-offset:3px}
+.bx-top-right{display:flex;gap:8px;align-items:center}
+.bx-car{position:absolute;inset:0;z-index:5;overflow:hidden}
+.bx-car-bg{position:absolute;inset:-40px;width:calc(100% + 80px);height:calc(100% + 80px);object-fit:cover;
+  filter:blur(18px) brightness(.62) saturate(1.1);max-width:none;pointer-events:none}
+.bx-car-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.25),rgba(0,0,0,.05) 40%,rgba(0,0,0,.55))}
+.bx-track{position:absolute;left:0;right:0;top:calc(env(safe-area-inset-top,0px) + 64px);bottom:calc(env(safe-area-inset-bottom,0px) + 206px);
+  display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.bx-track::-webkit-scrollbar{display:none}
+.bx-slide{flex:0 0 100%;scroll-snap-align:center;display:flex;align-items:center;justify-content:center}
+.bx-polaroid{margin:0;border-radius:3px;box-shadow:0 22px 50px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.35);
+  background:
+    radial-gradient(circle at 8% 12%,rgba(170,130,70,.16),transparent 22%),
+    radial-gradient(circle at 92% 88%,rgba(170,130,70,.18),transparent 25%),
+    radial-gradient(circle at 85% 6%,rgba(170,130,70,.10),transparent 18%),
+    linear-gradient(180deg,#f7f3ea,#eee7d6)}
+.bx-polaroid img{display:block;object-fit:cover;max-width:none;background:#111;box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)}
+.bx-polaroid figcaption{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#2b2b33}
+.bx-hand{font-family:"Bradley Hand","Segoe Print","Marker Felt","Comic Sans MS",cursive;font-size:clamp(18px,5.4vw,28px);transform:rotate(-2deg)}
+.bx-note-line{font-size:12px;color:#6b6258;text-align:center;padding:0 10px;line-height:1.3}
+.bx-posted{font-size:11px;font-weight:700;letter-spacing:.04em;color:#2f7d4f;text-transform:uppercase}
+.bx-arrow{position:absolute;top:calc(env(safe-area-inset-top,0px) + 64px + (100% - 64px - 206px) / 2);transform:translateY(-50%);
+  width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.bx-car-foot{position:absolute;left:0;right:0;bottom:0;padding:0 16px;display:flex;flex-direction:column;gap:10px;align-items:center}
+.bx-car-foot > .bx-primary,.bx-car-foot > .bx-row{width:100%;max-width:26rem}
+.bx-counter{font-size:14px;font-weight:600;color:rgba(255,255,255,.9)}
+.bx-dots{display:flex;gap:8px}
+.bx-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.35)}
+.bx-dot-on{background:#fff}
+.bx-row.bx-row-4{grid-template-columns:repeat(4,1fr)}
+.bx-btn-danger{color:#fecaca}
+.bx-danger{background:#b42318}
+.bx-confirm-title{font-size:17px;font-weight:700;text-align:center}
+.bx-confirm-body{font-size:14px;color:rgba(255,255,255,.75);text-align:center;line-height:1.4}
 .bx-panel{position:absolute;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .bx-controls{pointer-events:auto;width:100%;height:100%;border-radius:14px;padding:10px;display:flex;
   flex-direction:column;justify-content:center;gap:8px;animation:bx-rise 380ms ease-out both}
@@ -175,6 +224,7 @@ export default function BoothExperience(props: Props) {
   const {
     theme, effects, faces, shot, progress, statusText, generating, primaryColor,
     onCaptured, onFallbackCamera, onAccept, onSave, onDiscard, onOriginal, onClose,
+    historyKey, onPostImage, onSaveImage, onRemoveUpload,
   } = props
 
   const [vp, setVp] = useState({ w: 390, h: 844 })
@@ -188,9 +238,18 @@ export default function BoothExperience(props: Props) {
   const [flash, setFlash] = useState(0)
   const [moreOpen, setMoreOpen] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  // The Polaroids: every picture the booth has made on this phone.
+  const [pictures, setPictures] = useState<BoothPicture[]>([])
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [carousel, setCarousel] = useState(false)
+  const [slide, setSlide] = useState(0)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [postingId, setPostingId] = useState<string | null>(null)
 
   const rootRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const trackRef = useRef<HTMLDivElement | null>(null)
+  const recordedRef = useRef<string | null>(null)
   const timers = useRef<Array<ReturnType<typeof setTimeout>>>([])
   const later = useCallback((fn: () => void, ms: number) => {
     timers.current.push(setTimeout(fn, ms))
@@ -200,8 +259,9 @@ export default function BoothExperience(props: Props) {
   const interior = theme.interiors[interiorKey] ?? theme.interiors[theme.default_interior]
   const inside = phase === 'inside' || phase === 'to-outside'
   const busy = Boolean(shot?.busy)
-  // The camera runs only while there is nothing in the window to look at.
-  const cameraWanted = inside && !shot
+  // The camera runs only while there is nothing in the window to look at,
+  // and not behind the Polaroids.
+  const cameraWanted = inside && !shot && !carousel
 
   // Fill the screen, whatever the screen does. Measured from the booth's
   // own full-screen box, not window.innerWidth: before a phone settles
@@ -292,6 +352,111 @@ export default function BoothExperience(props: Props) {
     setNotice(text)
     later(() => setNotice(null), 2600)
   }, [later])
+
+  // Bring back this phone's pictures from earlier in the evening.
+  useEffect(() => {
+    let cancelled = false
+    void loadHistory(historyKey).then((kept) => {
+      if (cancelled) return
+      // Anything made before the load finished stays, newest first.
+      setPictures((now) => kept.reduce((list, p) => (list.some((x) => x.id === p.id) ? list : [...list, p]), now))
+      setHistoryLoaded(true)
+    })
+    return () => { cancelled = true }
+  }, [historyKey])
+
+  useEffect(() => {
+    if (historyLoaded) void saveHistory(historyKey, pictures)
+  }, [pictures, historyLoaded, historyKey])
+
+  // A finished picture goes onto a Polaroid, whatever the guest then does
+  // with it -- posted, saved or neither, it is kept. A look that failed
+  // keeps the guest's own photo instead, so they are never left with
+  // nothing.
+  useEffect(() => {
+    if (!shot || shot.busy || generating) return
+    if (!shot.preview && !shot.error) return
+    const signature = `${shot.preview ?? shot.original}|${shot.error ?? ''}`
+    if (recordedRef.current === signature) return
+    recordedRef.current = signature
+    const styled = Boolean(shot.preview)
+    setPictures((list) => addPicture(list, {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      image: shot.preview ?? shot.original,
+      label: styled ? shot.filterLabel ?? look?.label ?? null : null,
+      styled,
+      note: styled ? null : 'That look did not work this time, so here is your photo as it was.',
+      createdAt: Date.now(),
+      posted: false,
+      mediaId: null,
+    }))
+    setSlide(0)
+    setCarousel(true)
+    onDiscard()
+  }, [shot, generating, look, onDiscard])
+
+  // Open on the newest, without an animated scroll from wherever it was.
+  useEffect(() => {
+    if (!carousel) return
+    const el = trackRef.current
+    if (el) el.scrollTo({ left: slide * el.clientWidth, behavior: 'auto' })
+    // Only on opening; scrolling itself updates `slide`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carousel])
+
+  const goTo = useCallback((i: number) => {
+    const el = trackRef.current
+    if (!el) return
+    const n = Math.max(0, Math.min(i, pictures.length - 1))
+    el.scrollTo({ left: n * el.clientWidth, behavior: 'smooth' })
+  }, [pictures.length])
+
+  const onTrackScroll = useCallback(() => {
+    const el = trackRef.current
+    if (!el || el.clientWidth === 0) return
+    setSlide(Math.round(el.scrollLeft / el.clientWidth))
+  }, [])
+
+  const postPicture = useCallback(async (pic: BoothPicture) => {
+    if (pic.posted || postingId) return
+    setPostingId(pic.id)
+    try {
+      await onPostImage(pic.image, pic.styled, (mediaId) => {
+        setPictures((list) => markPosted(list, pic.id, mediaId))
+      })
+      setPictures((list) => markPosted(list, pic.id))
+      flashNotice('Sent to the big screen')
+    } catch {
+      flashNotice('That did not send. Try again in a moment.')
+    } finally {
+      setPostingId(null)
+    }
+  }, [postingId, onPostImage, flashNotice])
+
+  const savePicture = useCallback((pic: BoothPicture) => {
+    if (!onSaveImage(pic.image)) flashNotice('That one would not save. Try again.')
+  }, [onSaveImage, flashNotice])
+
+  /**
+   * Delete from the carousel and the phone, and -- if it was posted --
+   * from the event, which takes it off the big screen too.
+   */
+  const deletePicture = useCallback(async (pic: BoothPicture) => {
+    if (pic.mediaId) {
+      const ok = await onRemoveUpload(pic.mediaId)
+      if (!ok) {
+        setConfirmDelete(null)
+        flashNotice('Could not take it off the big screen. Try again.')
+        return
+      }
+    }
+    const remaining = pictures.length - 1
+    setPictures((list) => removePicture(list, pic.id))
+    setConfirmDelete(null)
+    setSlide((i) => Math.max(0, Math.min(i, remaining - 1)))
+    if (remaining <= 0) setCarousel(false)
+    flashNotice(pic.posted ? 'Deleted, and taken off the big screen' : 'Deleted')
+  }, [pictures.length, onRemoveUpload, flashNotice])
 
   /** Walk in. Every visit starts with the live camera and no picture. */
   const enter = useCallback((key: string, chosen: BoothLook | null, tileIndex: number | null) => {
@@ -542,7 +707,7 @@ export default function BoothExperience(props: Props) {
       </div>
 
       {/* ── Chrome ───────────────────────────────────────────────── */}
-      <div className="bx-top" style={{ top: topInset }}>
+      <div className="bx-top" style={{ top: topInset, visibility: carousel ? 'hidden' : 'visible' }}>
         {inside ? (
           <button type="button" onClick={leave} disabled={busy || count !== null} className="bx-pill bx-glass">
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
@@ -558,7 +723,17 @@ export default function BoothExperience(props: Props) {
             Close
           </button>
         )}
-        {inside && look && <span className="bx-pill bx-glass">{look.label}</span>}
+        <span className="bx-top-right">
+          {inside && look && <span className="bx-pill bx-glass">{look.label}</span>}
+          {pictures.length > 0 && !busy && count === null && (
+            <button type="button" onClick={() => { setSlide(0); setCarousel(true) }} className="bx-pill bx-glass" aria-label="My photos">
+              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A1.5 1.5 0 0021.75 19.5V4.5A1.5 1.5 0 0020.25 3H3.75A1.5 1.5 0 002.25 4.5v15A1.5 1.5 0 003.75 21z" />
+              </svg>
+              {pictures.length}
+            </button>
+          )}
+        </span>
       </div>
 
       {notice && (
@@ -566,6 +741,112 @@ export default function BoothExperience(props: Props) {
           {notice}
         </div>
       )}
+
+      {/* ── The Polaroids ────────────────────────────────────────── */}
+      {carousel && pictures.length > 0 && (() => {
+        const room = inside ? interior : null
+        const backdrop = room ? room.image : theme.outside.image
+        const aspect = room
+          ? (room.window.w * room.width) / (room.window.h * room.height)
+          : 0.72
+        const pol = polaroidSize(vp.w, vp.h, aspect, 300)
+        const current = pictures[Math.min(slide, pictures.length - 1)]!
+        const confirming = confirmDelete ? pictures.find((p) => p.id === confirmDelete) ?? null : null
+        return (
+          <div className="bx-car" role="region" aria-label="Your booth photos">
+            {/* eslint-disable-next-line @next/next/no-img-element -- themed artwork, blurred */}
+            <img src={backdrop} alt="" className="bx-car-bg" draggable={false} />
+            <div className="bx-car-shade" />
+
+            <div className="bx-top" style={{ top: topInset }}>
+              <button type="button" onClick={() => setCarousel(false)} className="bx-pill bx-glass">
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                </svg>
+                {inside ? 'Back to the booth' : 'Back'}
+              </button>
+            </div>
+
+            <div ref={trackRef} className="bx-track" onScroll={onTrackScroll}>
+              {pictures.map((p, i) => (
+                <div key={p.id} className="bx-slide" aria-hidden={i !== slide}>
+                  <figure
+                    className="bx-polaroid"
+                    style={{
+                      width: pol.frameW,
+                      padding: `${pol.side}px ${pol.side}px ${pol.bottom}px`,
+                      transform: `rotate(${((i % 3) - 1) * 1.1}deg)`,
+                    }}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- local data URL */}
+                    <img src={p.image} alt={p.label ? `Your ${p.label} photo` : 'Your photo'} style={{ width: pol.photoW, height: pol.photoH }} />
+                    <figcaption style={{ height: pol.bottom }}>
+                      {p.label && <span className="bx-hand">{p.label}</span>}
+                      {p.note && <span className="bx-note-line">{p.note}</span>}
+                      {p.posted && <span className="bx-posted">On the big screen</span>}
+                    </figcaption>
+                  </figure>
+                </div>
+              ))}
+            </div>
+
+            {slide > 0 && (
+              <button type="button" className="bx-arrow bx-glass" style={{ left: 12 }} onClick={() => goTo(slide - 1)} aria-label="Newer photo">
+                <svg width="22" height="22" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>
+              </button>
+            )}
+            {slide < pictures.length - 1 && (
+              <button type="button" className="bx-arrow bx-glass" style={{ right: 12 }} onClick={() => goTo(slide + 1)} aria-label="Older photo">
+                <svg width="22" height="22" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" /></svg>
+              </button>
+            )}
+
+            <div className="bx-car-foot" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}>
+              <p className="bx-counter">{Math.min(slide, pictures.length - 1) + 1} / {pictures.length}</p>
+              {pictures.length <= 12 && (
+                <div className="bx-dots">
+                  {pictures.map((p, i) => (
+                    <button key={p.id} type="button" className={`bx-dot${i === slide ? ' bx-dot-on' : ''}`} onClick={() => goTo(i)} aria-label={`Photo ${i + 1}`} />
+                  ))}
+                </div>
+              )}
+              <button
+                type="button"
+                className="bx-primary"
+                style={{ backgroundColor: current.posted ? 'rgba(255,255,255,.14)' : primaryColor }}
+                disabled={current.posted || postingId === current.id}
+                onClick={() => postPicture(current)}
+              >
+                {current.posted ? '✓ On the big screen' : postingId === current.id ? 'Sending…' : 'Put it on the big screen'}
+              </button>
+              <div className="bx-row bx-row-4">
+                <button type="button" className="bx-btn" onClick={() => savePicture(current)}>Save</button>
+                {inside
+                  ? <button type="button" className="bx-btn" onClick={() => setCarousel(false)}>Retake</button>
+                  : <span />}
+                <button type="button" className="bx-btn" onClick={() => { setCarousel(false); if (inside) leave() }}>New era</button>
+                <button type="button" className="bx-btn bx-btn-danger" onClick={() => setConfirmDelete(current.id)}>Delete</button>
+              </div>
+            </div>
+
+            {confirming && (
+              <div className="bx-sheet-wrap" onClick={() => setConfirmDelete(null)}>
+                <div className="bx-scrim" />
+                <div className="bx-sheet bx-glass" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)' }} onClick={(e) => e.stopPropagation()}>
+                  <p className="bx-confirm-title">Delete this photo?</p>
+                  <p className="bx-confirm-body">
+                    {confirming.posted
+                      ? 'It will be removed from your phone and taken off the big screen.'
+                      : 'It will be removed from your phone.'}
+                  </p>
+                  <button type="button" className="bx-primary bx-danger" onClick={() => deletePicture(confirming)}>Delete</button>
+                  <button type="button" className="bx-btn" onClick={() => setConfirmDelete(null)}>Keep it</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* ── More looks: the faces, and any look not on the board ──── */}
       {moreOpen && (

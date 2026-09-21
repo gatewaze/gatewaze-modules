@@ -150,3 +150,26 @@ describe('feedChanged', () => {
     expect(feedChanged(base, { ...base, variants: { thumb: 't' } })).toBe(false);
   });
 });
+
+import { pruneMissing } from '../event-pages/_components/_lib/photo-ready.js';
+
+describe('pruneMissing', () => {
+  const at = (id, t) => ({ id, created_at: `2026-09-25T${t}:00Z` });
+
+  // A guest deleted their booth photo: it must leave the big screen.
+  it('drops a photo the complete feed no longer lists', () => {
+    const held = [at('a', '20:00'), at('gone', '19:00'), at('b', '18:00')];
+    expect(pruneMissing(held, [at('a', '20:00'), at('b', '18:00')], true).map((p) => p.id)).toEqual(['a', 'b']);
+  });
+
+  it('keeps photos older than a partial page, which are only off the page', () => {
+    const held = [at('a', '20:00'), at('gone', '19:00'), at('old', '10:00')];
+    const kept = pruneMissing(held, [at('a', '20:00'), at('b', '18:00')], false).map((p) => p.id);
+    expect(kept).toEqual(['a', 'old']);
+  });
+
+  it('leaves everything alone when a partial page is empty', () => {
+    const held = [at('a', '20:00')];
+    expect(pruneMissing(held, [], false)).toEqual(held);
+  });
+});

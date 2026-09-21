@@ -122,6 +122,8 @@ interface QueueItem {
   file: File
   /** Booth output — goes in its own album, not the day's photos. */
   booth?: boolean
+  /** Told the upload's id once minted, so it can be removed later. */
+  onMediaId?: (mediaId: string) => void
   status: QueueStatus
   progress: number
   error?: string
@@ -410,6 +412,28 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     if (tab === 'mine') void loadMine()
   }, [tab, loadMine])
 
+  /**
+   * Remove one of this device's uploads from the event -- the big screen
+   * and the gallery included. The server only lets a device remove what
+   * it uploaded itself (same check as "Yours").
+   */
+  const removeUpload = useCallback(async (id: string): Promise<boolean> => {
+    if (!code || !guest) return false
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/mine/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: guest.client_id, media_id: id }),
+      })
+      if (!res.ok) return false
+      setMine((prev) => prev.filter((i) => i.id !== id))
+      setItems((prev) => prev.filter((i) => i.id !== id))
+      return true
+    } catch {
+      return false
+    }
+  }, [code, guest])
+
   const deleteMine = useCallback(async (id: string) => {
     if (!code || !guest) return
     setDeleting(id)
@@ -561,6 +585,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
             patchItem(q.key, { status: 'failed', error: minted?.message ?? 'could not start upload' })
             return
           }
+          const mediaId = (minted as { media_id?: unknown }).media_id
+          if (typeof mediaId === 'string') q.onMediaId?.(mediaId)
           jobs.push(() => putMinted(q, { upload_url: minted.upload_url!, ticket: minted.ticket! }))
         })
 
@@ -581,13 +607,19 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     }
   }, [code, guest, patchItem, putMinted, flushCompletes])
 
-  const enqueueFiles = useCallback((files: FileList | null, camera: boolean, booth = false) => {
+  const enqueueFiles = useCallback((
+    files: FileList | null,
+    camera: boolean,
+    booth = false,
+    onMediaId?: (mediaId: string) => void,
+  ) => {
     if (!files || files.length === 0) return
     const stamp = Date.now()
     const fresh: QueueItem[] = Array.from(files).map((file, i) => ({
       key: `${camera ? 'cam' : 'pick'}-${stamp}-${i}-${file.name}`,
       file,
       booth,
+      onMediaId,
       status: 'waiting',
       progress: 0,
     }))
@@ -708,18 +740,29 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   }, [boothFinishing])
 
   /** Upload whichever version the guest settled on. */
-  const acceptShot = useCallback(async () => {
-    if (!shot) return
-    const chosen = shot.preview ?? shot.original
-    const blob = await (await fetch(chosen)).blob()
-    const fromBooth = Boolean(shot.preview)
+  /**
+   * Upload a picture held as a data URL -- the current shot, or one the
+   * booth's carousel kept from earlier. Booth-made pictures go to the
+   * booth's album; an untouched photo goes wherever uploads go.
+   */
+  const postImage = useCallback(async (
+    dataUrl: string,
+    fromBooth: boolean,
+    onMediaId?: (mediaId: string) => void,
+  ) => {
+    const blob = await (await fetch(dataUrl)).blob()
     const name = fromBooth ? `filtered-${Date.now()}.jpg` : `photo-${Date.now()}.jpg`
     const file = new File([blob], name, { type: 'image/jpeg' })
     const dt = new DataTransfer()
     dt.items.add(file)
-    enqueueFiles(dt.files, true, fromBooth)
+    enqueueFiles(dt.files, true, fromBooth, onMediaId)
+  }, [enqueueFiles])
+
+  const acceptShot = useCallback(async () => {
+    if (!shot) return
+    await postImage(shot.preview ?? shot.original, Boolean(shot.preview))
     setShot(null)
-  }, [shot, enqueueFiles])
+  }, [shot, postImage])
 
   /**
    * Keep whichever version is on screen.
@@ -731,18 +774,16 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
    * toDataURL) and `preview` (the booth API) are data URLs, so there is
    * nothing to go to the network for anyway.
    */
-  const saveShot = useCallback(() => {
-    if (!shot) return
-    const source = shot.preview ?? shot.original
+  const saveImage = useCallback((source: string): boolean => {
     let file: File | null = null
     try {
       // Both sources are data: URLs by construction (canvas toDataURL,
       // and the booth API's base64 payload), but the booth response is
       // only `res.json()` with no shape check behind it, so prove it
       // rather than assume it.
-      if (!source.startsWith('data:')) return
+      if (!source.startsWith('data:')) return false
       const comma = source.indexOf(',')
-      if (comma < 0) return
+      if (comma < 0) return false
       const meta = source.slice(0, comma)
       // Allowlisted, not taken as given: the media type ends up on a File
       // handed to the OS share sheet, and the only thing that should ever
@@ -765,7 +806,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       file = new File([bytes], name, { type })
     } catch {
       setShot((s) => (s ? { ...s, error: 'could not save that one — you can still upload it' } : s))
-      return
+      return false
     }
     if (canShareFiles) {
       // A cancelled share sheet (AbortError) is the guest changing their
@@ -776,7 +817,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       } catch {
         // Nothing useful to say — the sheet simply did not open.
       }
-      return
+      return true
     }
     // Desktop and anything without file sharing: a plain download.
     const url = URL.createObjectURL(file)
@@ -790,7 +831,12 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     // Revoked on a delay: revoking straight away races the browser's own
     // read of the blob in some WebViews and saves a zero-byte file.
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [shot, canShareFiles, link, eventIdentifier])
+    return true
+  }, [canShareFiles, link, eventIdentifier])
+
+  const saveShot = useCallback(() => {
+    if (shot) saveImage(shot.preview ?? shot.original)
+  }, [shot, saveImage])
 
   // ── Photo booth ───────────────────────────────────────────────────
 
@@ -1495,6 +1541,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       onDiscard={() => { setPendingLook(null); setShot(null) }}
       onOriginal={() => setShot((s) => (s ? { ...s, preview: null, filterLabel: null } : s))}
       onClose={() => { setPendingLook(null); setShot(null); setSection('upload') }}
+      historyKey={`booth:${eventIdentifier}`}
+      onPostImage={postImage}
+      onSaveImage={saveImage}
+      onRemoveUpload={removeUpload}
     />,
     document.body,
   ) : null

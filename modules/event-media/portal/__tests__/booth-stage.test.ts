@@ -62,3 +62,29 @@ describe('pctStyle', () => {
     });
   });
 });
+
+import { polaroidSize } from '../event-pages/_components/_lib/booth-stage.js';
+
+describe('polaroidSize', () => {
+  it('fits a phone between the top bar and the buttons', () => {
+    const p = polaroidSize(390, 844, 0.71, 300);
+    expect(p.frameW).toBeLessThanOrEqual(390 * 0.86 + 0.01);
+    expect(p.frameH).toBeLessThanOrEqual(844 - 300 + 0.01);
+    expect(p.bottom).toBeGreaterThan(p.side * 3);
+  });
+
+  it('keeps the photo at the window aspect', () => {
+    const p = polaroidSize(390, 844, 0.71, 300);
+    expect(p.photoW / p.photoH).toBeCloseTo(0.71, 5);
+  });
+
+  it('does not grow without limit on a big screen', () => {
+    expect(polaroidSize(2560, 1440, 0.71, 300).photoW).toBe(520);
+  });
+
+  it('survives a nonsense aspect and a tiny screen', () => {
+    const p = polaroidSize(200, 200, NaN, 300);
+    expect(Number.isFinite(p.photoH)).toBe(true);
+    expect(p.photoW).toBeGreaterThanOrEqual(80);
+  });
+});
