@@ -822,10 +822,6 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     openBooth(look ? { key: look.key, payload: look.payload } : null)
   }, [openBooth])
 
-  const onBoothRestyle = useCallback((look: BoothLook) => {
-    void applyEffect(look.key, look.payload)
-  }, [applyEffect])
-
   // Apply the chosen look once the shot is in state. Done here rather
   // than inside onSelfieShot because applyEffect reads `shot`, which is
   // still null at the moment setShot is called.
@@ -1494,7 +1490,6 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       primaryColor={primaryColor}
       onCaptured={onBoothCaptured}
       onFallbackCamera={onBoothFallback}
-      onRestyle={onBoothRestyle}
       onAccept={acceptShot}
       onSave={saveShot}
       onDiscard={() => { setPendingLook(null); setShot(null) }}
