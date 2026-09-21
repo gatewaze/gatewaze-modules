@@ -45,13 +45,15 @@ import {
   type StreamSettings,
   type ViewName,
 } from './_lib/display-settings'
-import { feedChanged, hasBrowseCard, isReady, pollAfter } from './_lib/photo-ready'
+import { feedChanged, hasBrowseCard, isReady, pollAfter, pruneMissing } from './_lib/photo-ready'
 import { sizedDisplayUrl } from './_lib/display-url'
 
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
 const API_BASE = ''
 const POLL_MS = 10_000
+/** How often the whole feed is re-read to notice deletions. */
+const SWEEP_MS = 30_000
 const MAX_PHOTOS = 500
 /**
  * An open settings panel closes itself after this long untouched, so it
@@ -576,9 +578,40 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     })
   }, [])
 
+  /**
+   * Let go of photos the feed no longer lists (a guest deleted their
+   * booth picture, or an organiser hid one). A deleted photo that is on
+   * screen right now is cut away from at once.
+   */
+  const prune = useCallback((listed: DisplayItem[], complete: boolean) => {
+    setPhotos((prev) => {
+      const next = pruneMissing(prev, listed, complete)
+      if (next.length === prev.length) return prev
+      const keep = new Set(next.map((p) => p.id))
+      photosRef.current = poolFor(next, streamRef.current, wedflixRef.current)
+      freshQueueRef.current = freshQueueRef.current.filter((f) => keep.has(f.id))
+      setCurrent((c) => (c && !keep.has(c.id) ? photosRef.current[0] ?? null : c))
+      return next
+    })
+  }, [])
+
   useEffect(() => {
     if (!code) return
     let cancelled = false
+    // Every 30 s, the whole first page: picks up deletions and hides,
+    // which the incremental poll (new rows only) cannot see.
+    const sweep = async () => {
+      try {
+        const qs = new URLSearchParams({ filter: 'photo', limit: '200' })
+        const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/media?${qs}`)
+        if (!res.ok || cancelled) return
+        const data = await res.json()
+        const listed = ((data.items ?? []) as DisplayItem[]).filter((i) => i.kind === 'photo')
+        prune(listed, !data.next_cursor)
+        ingest(listed, false)
+      } catch { /* the next sweep tries again */ }
+    }
+    const sweeper = setInterval(sweep, SWEEP_MS)
     const load = async (incremental: boolean) => {
       try {
         const qs = new URLSearchParams({ filter: 'photo', limit: '200' })
@@ -594,8 +627,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     }
     load(false)
     const interval = setInterval(() => load(true), POLL_MS)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [code, ingest])
+    return () => { cancelled = true; clearInterval(interval); clearInterval(sweeper) }
+  }, [code, ingest, prune])
 
   // Realtime accelerator — best-effort; polling stays the source of truth.
   useEffect(() => {

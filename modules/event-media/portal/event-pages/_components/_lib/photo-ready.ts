@@ -119,3 +119,31 @@ export function feedChanged(held: FeedFields, incoming: FeedFields): boolean {
   if (held.card && incoming.card && JSON.stringify(held.card) !== JSON.stringify(incoming.card)) return true
   return (held.album ?? null) !== (incoming.album ?? null)
 }
+
+/**
+ * Drop photos the feed no longer lists -- deleted by the guest who took
+ * them, or hidden by an organiser -- so the big screen lets go of them
+ * without a refresh.
+ *
+ * Only inside the span the feed actually covered: it returns the newest
+ * page, so a photo older than that page's oldest row is simply off the
+ * page, not gone. When the page is the whole feed (`complete`), anything
+ * missing is gone.
+ */
+export function pruneMissing<T extends { id: string; created_at?: string | null }>(
+  held: T[],
+  listed: Array<{ id: string; created_at?: string | null }>,
+  complete: boolean,
+): T[] {
+  const ids = new Set(listed.map((p) => p.id))
+  let floor: string | null = null
+  if (!complete) {
+    for (const p of listed) if (p.created_at && (floor === null || p.created_at < floor)) floor = p.created_at
+    if (floor === null) return held
+  }
+  return held.filter((p) => {
+    if (ids.has(p.id)) return true
+    if (complete) return false
+    return !p.created_at || p.created_at < floor!
+  })
+}

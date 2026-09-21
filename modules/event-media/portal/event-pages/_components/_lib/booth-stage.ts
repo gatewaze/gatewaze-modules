@@ -57,3 +57,26 @@ export function pctStyle(r: { x: number; y: number; w: number; h: number }): {
   const p = (v: number) => `${(v * 100).toFixed(3)}%`
   return { left: p(r.x), top: p(r.y), width: p(r.w), height: p(r.h) }
 }
+
+/**
+ * A Polaroid that fits the screen: the photo at the booth window's
+ * aspect, a narrow border on three sides and the deep one at the bottom,
+ * as large as it can be between the top bar and the buttons under it.
+ */
+export function polaroidSize(
+  viewW: number,
+  viewH: number,
+  photoAspect: number,
+  reserveH: number,
+): { photoW: number; photoH: number; side: number; bottom: number; frameW: number; frameH: number } {
+  const a = photoAspect > 0 && Number.isFinite(photoAspect) ? photoAspect : 0.75
+  const SIDE = 0.065
+  const BOTTOM = 0.24
+  const byWidth = (viewW * 0.86) / (1 + 2 * SIDE)
+  const byHeight = Math.max(80, viewH - reserveH) / (1 / a + SIDE + BOTTOM)
+  const photoW = Math.max(80, Math.min(byWidth, byHeight, 520))
+  const side = photoW * SIDE
+  const bottom = photoW * BOTTOM
+  const photoH = photoW / a
+  return { photoW, photoH, side, bottom, frameW: photoW + 2 * side, frameH: photoH + side + bottom }
+}
