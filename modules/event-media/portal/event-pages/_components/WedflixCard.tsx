@@ -10,7 +10,7 @@
  * have the image model draw the titles, and that was tried — it
  * produces typos ("diplomaciy"), invents cast names, and cannot be
  * corrected. Rendering text as HTML gives pixel-crisp type, the real
- * guest's name, and nine per-show logotypes for free.
+ * guest's name, and a per-show logotype for free.
  *
  * Each programme gets its own title treatment, the way a real service
  * gives every show its own logo. The style is chosen by the copy
@@ -35,62 +35,139 @@ interface Props {
   showRank?: boolean
 }
 
-/** Per-show logotypes. Font stacks only — a webfont fetch that fails at
- *  a venue would leave the title unstyled or invisible. */
+/**
+ * Per-show logotypes, one display face each, so consecutive cards do not
+ * arrive looking like the same programme.
+ *
+ * These are Google Fonts. An earlier version used system stacks to avoid
+ * depending on a font fetch at the venue, but that reasoning does not
+ * hold: the display cannot show a single photograph without the network
+ * either, so a webfont is no more fragile than the picture under it.
+ * Every entry still ends in a real system fallback, so a blocked fetch
+ * degrades to a plain face rather than to invisible text.
+ */
+const FONTS: Array<[string, string]> = [
+  ['Creepster', ''], ['Bungee', ''], ['Oswald', ':wght@200;500'],
+  ['Monoton', ''], ['Playfair+Display', ':ital,wght@0,600;1,600'],
+  ['Parisienne', ''], ['Orbitron', ':wght@700'], ['Special+Elite', ''],
+  ['Cinzel', ':wght@900'], ['Abril+Fatface', ''], ['Lobster', ''],
+  ['Anton', ''], ['Rye', ''], ['Bebas+Neue', ''],
+]
+
 const GENRE_STYLE: Record<string, React.CSSProperties> = {
   horror: {
-    fontFamily: '"Times New Roman", Georgia, serif', fontWeight: 700,
-    color: '#d81f1f', letterSpacing: '.05em', textTransform: 'uppercase',
-    textShadow: '0 0 28px rgba(216,31,31,.55)',
+    fontFamily: '"Creepster", Impact, fantasy', color: '#d81f1f',
+    letterSpacing: '.04em', textShadow: '0 0 30px rgba(216,31,31,.6)',
   },
   comedy: {
-    fontFamily: '"Arial Rounded MT Bold", "Helvetica Neue", sans-serif', fontWeight: 800,
-    color: '#ffd21f', letterSpacing: '-.01em', textTransform: 'uppercase',
-    textShadow: '0 .07em 0 #c78b00',
+    fontFamily: '"Bungee", Impact, sans-serif', color: '#ffd21f',
+    letterSpacing: '-.01em', textShadow: '0 .06em 0 #c78b00',
   },
   thriller: {
-    fontFamily: '"Helvetica Neue", Helvetica, sans-serif', fontWeight: 300,
-    color: '#fff', letterSpacing: '.36em', textTransform: 'uppercase',
+    fontFamily: '"Oswald", "Helvetica Neue", sans-serif', fontWeight: 200,
+    color: '#fff', letterSpacing: '.38em', textTransform: 'uppercase',
   },
   eighties: {
-    fontFamily: '"Helvetica Neue", Helvetica, sans-serif', fontWeight: 900,
-    fontStyle: 'italic', textTransform: 'uppercase', letterSpacing: '-.01em',
+    // Monoton is already striped, so the chrome gradient reads as the
+    // airbrushed logos it is imitating.
+    fontFamily: '"Monoton", Impact, sans-serif', textTransform: 'uppercase',
     background: 'linear-gradient(180deg,#fff 0%,#ffe9a8 42%,#c9962e 52%,#fff6cf 100%)',
     WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent',
-    filter: 'drop-shadow(0 3px 2px rgba(0,0,0,.6))',
+    filter: 'drop-shadow(0 3px 2px rgba(0,0,0,.7))',
   },
   doc: {
-    fontFamily: 'Georgia, "Times New Roman", serif', fontWeight: 400,
-    color: '#f2f2f2', letterSpacing: '.26em', textTransform: 'uppercase',
+    fontFamily: '"Playfair Display", Georgia, serif', fontWeight: 600,
+    color: '#f2f2f2', letterSpacing: '.2em', textTransform: 'uppercase',
   },
   romance: {
-    fontFamily: '"Snell Roundhand", "Apple Chancery", cursive', color: '#ffd9e2',
+    fontFamily: '"Parisienne", "Snell Roundhand", cursive', color: '#ffd9e2',
   },
   scifi: {
-    fontFamily: 'Futura, "Century Gothic", "Helvetica Neue", sans-serif', fontWeight: 700,
-    color: '#8fe8ff', letterSpacing: '.26em', textTransform: 'uppercase',
-    textShadow: '0 0 22px rgba(80,200,255,.8)',
+    fontFamily: '"Orbitron", Futura, sans-serif', fontWeight: 700,
+    color: '#8fe8ff', letterSpacing: '.22em', textTransform: 'uppercase',
+    textShadow: '0 0 24px rgba(80,200,255,.85)',
   },
   crime: {
-    fontFamily: '"Courier New", monospace', fontWeight: 700, color: '#e8e8e8',
-    letterSpacing: '.12em', textTransform: 'uppercase',
+    fontFamily: '"Special Elite", "Courier New", monospace', color: '#e8e8e8',
+    letterSpacing: '.08em', textTransform: 'uppercase',
   },
   epic: {
-    fontFamily: 'Impact, Haettenschweiler, "Arial Narrow", sans-serif',
-    color: '#fff', letterSpacing: '.02em', textTransform: 'uppercase',
-    textShadow: '0 3px 18px rgba(0,0,0,.8)',
+    fontFamily: '"Cinzel", Georgia, serif', fontWeight: 900, color: '#fff',
+    letterSpacing: '.06em', textTransform: 'uppercase',
+    textShadow: '0 3px 20px rgba(0,0,0,.85)',
   },
+  noir: {
+    fontFamily: '"Abril Fatface", Georgia, serif', color: '#f5f0e6',
+    letterSpacing: '.01em', textShadow: '0 4px 20px rgba(0,0,0,.9)',
+  },
+  musical: {
+    fontFamily: '"Lobster", "Brush Script MT", cursive', color: '#ff7ab8',
+    textShadow: '0 0 26px rgba(255,122,184,.5)',
+  },
+  reality: {
+    fontFamily: '"Anton", Impact, sans-serif', color: '#fff',
+    letterSpacing: '.02em', textTransform: 'uppercase',
+    textShadow: '0 3px 16px rgba(0,0,0,.8)',
+  },
+  western: {
+    fontFamily: '"Rye", Georgia, serif', color: '#e7c98a',
+    letterSpacing: '.02em', textTransform: 'uppercase',
+    textShadow: '0 3px 14px rgba(0,0,0,.8)',
+  },
+  heist: {
+    fontFamily: '"Bebas Neue", Impact, sans-serif', color: '#fff',
+    letterSpacing: '.09em', textTransform: 'uppercase',
+    textShadow: '0 3px 16px rgba(0,0,0,.8)',
+  },
+}
+
+/**
+ * Display faces differ enormously in cap height, so a single font size
+ * makes Creepster tower over Oswald. These nudge each back to roughly
+ * the same optical weight on screen.
+ */
+const GENRE_SCALE: Record<string, number> = {
+  horror: 1.15, comedy: 0.88, thriller: 0.92, eighties: 0.82,
+  doc: 0.9, romance: 1.35, scifi: 0.82, crime: 0.95,
+  epic: 0.95, noir: 1.0, musical: 1.2, reality: 1.05,
+  western: 0.9, heist: 1.15,
+}
+
+/** One stylesheet for every logotype, injected once per page. */
+function useLogotypeFonts(): void {
+  useEffect(() => {
+    const ID = 'wedflix-logotypes'
+    if (document.getElementById(ID)) return
+    for (const host of ['https://fonts.googleapis.com', 'https://fonts.gstatic.com']) {
+      const pre = document.createElement('link')
+      pre.rel = 'preconnect'
+      pre.href = host
+      if (host.includes('gstatic')) pre.crossOrigin = 'anonymous'
+      document.head.appendChild(pre)
+    }
+    const link = document.createElement('link')
+    link.id = ID
+    link.rel = 'stylesheet'
+    // display=swap shows the fallback immediately rather than blank text
+    // while a face loads, which matters on a slideshow that never waits.
+    link.href = 'https://fonts.googleapis.com/css2?' +
+      FONTS.map(([f, w]) => `family=${f}${w}`).join('&') + '&display=swap'
+    document.head.appendChild(link)
+  }, [])
 }
 
 /** Longer titles step down so they never wrap past two lines. */
-function titleSize(title: string): string {
+function titleSize(title: string, scale: number): string {
   const n = title.length
-  if (n <= 14) return 'clamp(44px, 5.4vw, 104px)'
-  if (n <= 22) return 'clamp(36px, 4.4vw, 84px)'
-  return 'clamp(28px, 3.4vw, 66px)'
+  const [min, vw, max] = n <= 14 ? [44, 5.4, 104]
+    : n <= 22 ? [36, 4.4, 84]
+      : [28, 3.4, 66]
+  const r = (v: number) => Math.round(v * scale * 10) / 10
+  return `clamp(${r(min)}px, ${r(vw)}vw, ${r(max)}px)`
 }
 
 export default function WedflixCard({ copy, slideKey, showRank = false }: Props) {
+  useLogotypeFonts()
   // Re-run the entrance animation on every slide without remounting the
   // renderer underneath.
   const [shown, setShown] = useState(false)
@@ -103,6 +180,7 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
   }, [slideKey])
 
   const style = GENRE_STYLE[copy.genre] ?? GENRE_STYLE['doc']!
+  const scale = GENRE_SCALE[copy.genre] ?? 1
   const enter = (delay: number): React.CSSProperties => ({
     opacity: shown ? 1 : 0,
     transform: shown ? 'translateY(0)' : 'translateY(14px)',
@@ -152,7 +230,7 @@ export default function WedflixCard({ copy, slideKey, showRank = false }: Props)
           </div>
         )}
 
-        <div style={{ ...style, ...enter(220), fontSize: titleSize(copy.title), lineHeight: 1.02 }}>
+        <div style={{ ...style, ...enter(220), fontSize: titleSize(copy.title, scale), lineHeight: 1.06 }}>
           {copy.title}
         </div>
 
