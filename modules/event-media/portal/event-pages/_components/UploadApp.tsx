@@ -64,35 +64,40 @@ interface Props {
 }
 
 const STYLES = `
-.ua-root{position:fixed;inset:0;z-index:60;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+.ua-root{position:fixed;inset:0;z-index:60;overflow:hidden;
   color:#fff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  background:radial-gradient(120% 80% at 50% -10%,#2a2140 0%,#141019 55%,#0b0a0f 100%)}
+  background:transparent}
+.ua-root.ua-solid{background:radial-gradient(120% 80% at 50% -10%,#2a2140 0%,#141019 55%,#0b0a0f 100%)}
 .ua-root :where(*,*::before,*::after){box-sizing:border-box}
 .ua-root :where(button){appearance:none;-webkit-appearance:none;background:transparent;border:0;margin:0;padding:0;font:inherit;color:inherit;cursor:pointer}
 .ua-root :where(p,h1,h2){margin:0}
-.ua-wrap{max-width:34rem;margin:0 auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 32px)}
-.ua-head{position:sticky;top:0;z-index:5;margin:0 -16px;padding:calc(env(safe-area-inset-top,0px) + 10px) 16px 12px;
-  background:linear-gradient(180deg,rgba(20,16,25,.96),rgba(20,16,25,.86));backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-.ua-event{font-size:13px;color:rgba(255,255,255,.6);text-align:center;margin-bottom:10px;font-weight:600;letter-spacing:.02em}
+.ua-wrap{max-width:34rem;height:100%;margin:0 auto;display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top,0px) + 12px) 16px 0}
+.ua-head{flex:none}
+/* Only the photos scroll: the switch, the add panel and the tabs stay put. */
+.ua-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+  margin:0 -16px;padding:0 16px calc(env(safe-area-inset-bottom,0px) + 28px)}
 .ua-switch{display:grid;grid-template-columns:1fr 1fr;padding:4px;border-radius:14px;background:rgba(255,255,255,.08);
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
 .ua-seg{height:42px;border-radius:11px;font-size:15px;font-weight:700;color:rgba(255,255,255,.7);display:flex;align-items:center;justify-content:center;gap:8px}
 .ua-seg-on{color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.35)}
-.ua-card{margin-top:16px;border-radius:18px;padding:16px;background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+.ua-card{margin-top:16px;border-radius:18px;padding:16px;background:rgba(10,8,20,.5);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
 .ua-h1{font-size:22px;font-weight:800}
 .ua-sub{font-size:14px;color:rgba(255,255,255,.65);margin-top:4px;line-height:1.4}
-.ua-add{margin-top:16px;width:100%;border-radius:18px;padding:22px 16px;display:flex;flex-direction:column;align-items:center;gap:8px;
-  box-shadow:0 10px 30px rgba(0,0,0,.35);transition:transform 120ms ease}
-.ua-add:active{transform:scale(.98)}
-.ua-add b{font-size:19px;font-weight:800}
-.ua-add span{font-size:13px;opacity:.85}
+.ua-panel{margin-top:14px;border-radius:18px;padding:16px;background:rgba(10,8,20,.45);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
+.ua-panel h2{font-size:18px;font-weight:800}
+.ua-panel p{font-size:13px;color:rgba(255,255,255,.72);margin-top:3px;line-height:1.4}
+.ua-btn{margin-top:12px;height:48px;padding:0 22px;border-radius:999px;display:inline-flex;align-items:center;gap:8px;
+  font-size:16px;font-weight:800;color:#fff;box-shadow:0 6px 18px rgba(0,0,0,.35);transition:transform 120ms ease}
+.ua-btn:active{transform:scale(.97)}
 .ua-who{margin-top:10px;font-size:13px;color:rgba(255,255,255,.6);text-align:center}
 .ua-who button{text-decoration:underline;color:rgba(255,255,255,.8)}
 .ua-status{margin-top:14px;display:flex;align-items:center;gap:10px;font-size:14px;color:rgba(255,255,255,.8)}
 .ua-bar{flex:1;height:6px;border-radius:999px;background:rgba(255,255,255,.12);overflow:hidden}
 .ua-bar i{display:block;height:100%;border-radius:999px;transition:width 300ms linear}
 .ua-notice{margin-top:14px;border-radius:12px;padding:10px 12px;background:#fef3c7;color:#78350f;font-size:14px}
-.ua-tabs{margin-top:22px;display:flex;gap:18px;border-bottom:1px solid rgba(255,255,255,.1)}
+.ua-tabs{flex:none;margin-top:18px;display:flex;gap:18px;border-bottom:1px solid rgba(255,255,255,.1)}
 .ua-tab{padding:10px 2px;font-size:15px;font-weight:700;color:rgba(255,255,255,.5);border-bottom:2px solid transparent;margin-bottom:-1px}
 .ua-tab-on{color:#fff}
 .ua-grid{margin-top:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
@@ -155,11 +160,31 @@ export default function UploadApp(props: Props) {
   const [viewing, setViewing] = useState<{ list: 'mine' | 'everyone'; index: number } | null>(null)
   const touchX = useRef<number | null>(null)
 
-  // Nothing of the page underneath should scroll behind the app.
+  // The portal's own animated background shows through; the event page
+  // itself does not. That background is a fixed, pointer-events:none layer
+  // among the body's children, so everything else there is hidden (and
+  // restored on the way out). If no such layer exists, the app paints its
+  // own background instead.
+  const [backdrop, setBackdrop] = useState(false)
   useEffect(() => {
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = prev }
+    const touched: Array<[HTMLElement, string]> = []
+    let found = false
+    for (const el of Array.from(document.body.children)) {
+      if (!(el instanceof HTMLElement)) continue
+      if (el.dataset.eventMediaOverlay !== undefined || el.querySelector('[data-event-media-overlay]')) continue
+      const cs = getComputedStyle(el)
+      if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue
+      if (cs.position === 'fixed' && cs.pointerEvents === 'none') { found = true; continue }
+      touched.push([el, el.style.visibility])
+      el.style.visibility = 'hidden'
+    }
+    setBackdrop(found)
+    return () => {
+      document.body.style.overflow = prev
+      for (const [el, v] of touched) el.style.visibility = v
+    }
   }, [])
 
   const viewList = viewing
@@ -235,11 +260,10 @@ export default function UploadApp(props: Props) {
   }
 
   return (
-    <div className="ua-root" data-event-media-overlay="" role="main">
+    <div className={`ua-root${backdrop ? '' : ' ua-solid'}`} data-event-media-overlay="" role="main">
       <style>{STYLES}</style>
       <div className="ua-wrap">
         <div className="ua-head">
-          <p className="ua-event">{eventName}</p>
           {onOpenBooth && (
             <div className="ua-switch" role="tablist" aria-label="Choose">
               <button type="button" role="tab" aria-selected="true" className="ua-seg ua-seg-on" style={{ backgroundColor: primaryColor }}>
@@ -256,18 +280,21 @@ export default function UploadApp(props: Props) {
           <div className="ua-card">{nameStep}</div>
         ) : (
           <>
-            <button
-              type="button"
-              className="ua-add"
-              style={{ backgroundColor: primaryColor }}
-              onClick={() => inputRef.current?.click()}
-            >
-              <svg width="34" height="34" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A1.5 1.5 0 0021.75 19.5V4.5A1.5 1.5 0 0020.25 3H3.75A1.5 1.5 0 002.25 4.5v15A1.5 1.5 0 003.75 21zM12 8.25v6m3-3H9" />
-              </svg>
-              <b>Add your photos</b>
-              <span>Pick as many as you like — they upload straight away</span>
-            </button>
+            <div className="ua-panel">
+              <h2>Share your photos</h2>
+              <p>Pick as many as you like from your phone — they upload straight away.</p>
+              <button
+                type="button"
+                className="ua-btn"
+                style={{ backgroundColor: primaryColor }}
+                onClick={() => inputRef.current?.click()}
+              >
+                <svg width="20" height="20" fill="none" viewBox="0 0 24 24" strokeWidth={2.6} stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                Add photos
+              </button>
+            </div>
             <input
               ref={inputRef}
               type="file"
@@ -303,6 +330,7 @@ export default function UploadApp(props: Props) {
               )}
             </div>
 
+            <div className="ua-scroll">
             {tab === 'mine' && (
               tiles.length === 0
                 ? <p className="ua-empty">Photos you add appear here. Tap × on any you&apos;d rather not share.</p>
@@ -333,6 +361,7 @@ export default function UploadApp(props: Props) {
                 )}
               </>
             )}
+            </div>
           </>
         )}
       </div>

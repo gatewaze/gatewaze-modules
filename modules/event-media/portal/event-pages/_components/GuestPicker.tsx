@@ -67,19 +67,38 @@ export default function GuestPicker({ code, darkMode, onPick }: Props) {
         role="combobox"
         aria-expanded={matches.length > 0}
         maxLength={60}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-gray-900 text-base"
+        className={darkMode ? undefined : 'w-full rounded-lg border border-gray-300 px-3 py-2.5 text-gray-900 text-base'}
+        style={darkMode ? {
+          width: '100%', height: 50, borderRadius: 14, padding: '0 16px', fontSize: 17, color: '#fff',
+          background: 'rgba(255,255,255,.1)', border: '1px solid rgba(255,255,255,.28)', outline: 'none',
+        } : undefined}
       />
       {matches.length > 0 && (
-        <ul role="listbox" className={`mt-2 rounded-lg border ${border} overflow-hidden`}>
-          {matches.map((g) => (
+        <ul
+          role="listbox"
+          className={darkMode ? undefined : `mt-2 rounded-lg border ${border} overflow-hidden`}
+          style={darkMode ? {
+            listStyle: 'none', margin: '10px 0 0', padding: 0, borderRadius: 14, overflow: 'hidden',
+            background: 'rgba(10,8,20,.55)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.16)',
+          } : undefined}
+        >
+          {matches.map((g, i) => (
             <li key={g.id}>
               <button
                 type="button"
                 role="option"
                 onClick={() => onPick(g)}
-                className={`w-full text-left px-3 py-3 text-base ${rowText} ${darkMode ? 'hover:bg-white/10' : 'hover:bg-gray-50'} border-b last:border-b-0 ${border}`}
+                className={darkMode ? undefined : `w-full text-left px-4 py-4 text-lg ${rowText} hover:bg-gray-50 border-b last:border-b-0 ${border}`}
+                style={darkMode ? {
+                  // Big enough to hit with a thumb: 56px+ rows, 18px names.
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+                  minHeight: 58, padding: '16px 18px', fontSize: 18, fontWeight: 600, color: '#fff', textAlign: 'left',
+                  background: 'transparent', border: 0,
+                  borderTop: i === 0 ? 0 : '1px solid rgba(255,255,255,.1)', cursor: 'pointer',
+                } : undefined}
               >
                 {g.name}
+                {darkMode && <span aria-hidden="true" style={{ opacity: 0.5 }}>›</span>}
               </button>
             </li>
           ))}
