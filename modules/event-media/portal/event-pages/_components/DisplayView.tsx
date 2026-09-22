@@ -51,7 +51,10 @@ import { sizedDisplayUrl } from './_lib/display-url'
 // Same-origin — proxied to the api service by the portal's
 // /api/public/* rewrite (see photos.tsx note).
 const API_BASE = ''
-const POLL_MS = 10_000
+// A guest who has just pressed "Put it on the big screen" is watching.
+const POLL_MS = 5_000
+const VERSION_CHECK_MS = 2 * 60_000
+const RELOAD_DELAY_MS = 4 * 60_000
 /** How often the whole feed is re-read to notice deletions. */
 const SWEEP_MS = 30_000
 const MAX_PHOTOS = 500
@@ -211,12 +214,14 @@ function rankFor(id: string): boolean {
  * whole point is the browse card, just looks like the effect failed.
  * It does not apply to Preload, whose selfies are never billed.
  */
-function poolFor(all: DisplayItem[], mode: ViewName, wedflixOnly = false): DisplayItem[] {
-  // A photo joins the projector only once its layers and browse copy
-  // exist. Shown earlier it pans across with no depth and no title and
-  // then silently acquires both, which reads as a fault. The guest's
-  // own gallery is not gated -- only this.
-  const shown = all.filter((p) => isReady(p))
+function poolFor(all: DisplayItem[], mode: ViewName, wedflixOnly = false, needsLayers = true): DisplayItem[] {
+  // Under the cinematic effects a photo joins the projector only once its
+  // layers and browse copy exist: shown earlier it pans across with no
+  // depth and no title and then silently acquires both, which reads as a
+  // fault. The other effects use neither, and waiting for them only kept
+  // a just-posted booth picture off the wall for half a minute
+  // (2026-09-22). The guest's own gallery is never gated.
+  const shown = needsLayers ? all.filter((p) => isReady(p)) : all
   if (mode === 'preload') {
     // Anything not explicitly another view's. Older rows carry no album
     // at all, and those are the selfies.
@@ -247,6 +252,7 @@ function slideAnimation(effect: SlideEffect, photoId: string, intervalMs: number
 
 const EFFECT_KEYFRAMES = `
 @keyframes emfade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes emfadeout { from { opacity: 1 } to { opacity: 0 } }
 @keyframes emslide { from { opacity: 0; transform: translateX(5%) } to { opacity: 1; transform: none } }
 @keyframes emzoom { from { opacity: 0; transform: scale(1.12) } to { opacity: 1; transform: scale(1) } }
 @keyframes emblur { from { opacity: 0; filter: blur(14px) } to { opacity: 1; filter: none } }
@@ -368,6 +374,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // Mirrored for the same reason: new arrivals must be pooled by the
   // Wedflix rule too, or an uncarded upload would slip straight in.
   const wedflixRef = useRef(false)
+  const layersRef = useRef(true)
 
   /**
    * Which stream is on screen now. In 'mix' this rotates on its own
@@ -386,6 +393,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     : settings.stream
   const view: StreamSettings = settings[activeStream] ?? DEFAULT_SETTINGS[activeStream]
   const wedflixOnly = view.effect === 'wedflix'
+  const needsLayers = view.effect === 'wedflix' || view.effect === 'cinematic'
 
   // Read by the rotation clock, so it can skip an album with nothing to
   // show without restarting every time a photo lands or a setting moves.
@@ -403,7 +411,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       const order = st.rotation ?? [...DEFAULT_ROTATION]
       setMixPhase((p) => nextInRotation(order, p, (v) => {
         const vs = st[v] ?? DEFAULT_SETTINGS[v]
-        return poolFor(allPhotosRef.current, v, vs.effect === 'wedflix').length > 0
+        return poolFor(allPhotosRef.current, v, vs.effect === 'wedflix', vs.effect === 'wedflix' || vs.effect === 'cinematic').length > 0
       }))
     }, every)
     return () => clearInterval(t)
@@ -411,17 +419,18 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
   // What the projector is actually showing, so counts and layout agree
   // with what advance() walks.
-  const pool = poolFor(photos, activeStream, wedflixOnly)
+  const pool = poolFor(photos, activeStream, wedflixOnly, needsLayers)
 
   useEffect(() => {
     streamRef.current = activeStream
     wedflixRef.current = wedflixOnly
+    layersRef.current = needsLayers
     // Switching stream re-pools from everything already loaded, and
     // cuts straight to the new stream. Without the cut, a swap in 'mix'
     // would leave the previous stream on screen for up to a full slide
     // — long enough to look broken on a 90 second rotation.
     setPhotos((all) => {
-      const next = poolFor(all, activeStream, wedflixOnly)
+      const next = poolFor(all, activeStream, wedflixOnly, needsLayers)
       photosRef.current = next
       indexRef.current = 0
       if (next.length) setCurrent(orderedPool(next, settings.order)[0] ?? null)
@@ -433,7 +442,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     // Wedflix on or off changes which photos qualify, so it re-pools and
     // cuts just as a change of view does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStream, wedflixOnly])
+  }, [activeStream, wedflixOnly, needsLayers])
   const photosRef = useRef<DisplayItem[]>([])
   const freshQueueRef = useRef<DisplayItem[]>([])
   const newestRef = useRef<string | null>(null)
@@ -535,6 +544,31 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       .catch(() => { /* poll retries below */ })
   }, [code])
 
+  // A projector is opened once and left running for hours. When a new
+  // version is deployed it reloads itself -- after a pause, because the
+  // API reports the new version a minute or two before the portal is
+  // serving the new page. Found 2026-09-22: a projector still running the
+  // code from before a fix was mistaken for the fix not working.
+  useEffect(() => {
+    if (!code) return
+    let first: string | null = null
+    let reloadAt: ReturnType<typeof setTimeout> | null = null
+    const check = () => {
+      fetch(`${API_BASE}/api/public/event-media/links/${code}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          const v = typeof data?.version === 'string' ? data.version : null
+          if (!v) return
+          if (first === null) { first = v; return }
+          if (v !== first && !reloadAt) reloadAt = setTimeout(() => window.location.reload(), RELOAD_DELAY_MS)
+        })
+        .catch(() => { /* try again next time */ })
+    }
+    check()
+    const iv = setInterval(check, VERSION_CHECK_MS)
+    return () => { clearInterval(iv); if (reloadAt) clearTimeout(reloadAt) }
+  }, [code])
+
   const ingest = useCallback((incoming: DisplayItem[], fresh: boolean) => {
     // Defensive: never let a non-photo reach the projector even if the
     // API were to return one. Booth posters are a separate stream and
@@ -571,7 +605,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       const merged = [...add, ...held].slice(0, MAX_PHOTOS)
       // The projector draws from the pooled stream, not everything that
       // has ever been uploaded.
-      photosRef.current = poolFor(merged, streamRef.current, wedflixRef.current)
+      photosRef.current = poolFor(merged, streamRef.current, wedflixRef.current, layersRef.current)
       const newest = merged[0]?.created_at
       if (newest && (!newestRef.current || newest > newestRef.current)) newestRef.current = newest
       return merged
@@ -588,7 +622,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       const next = pruneMissing(prev, listed, complete)
       if (next.length === prev.length) return prev
       const keep = new Set(next.map((p) => p.id))
-      photosRef.current = poolFor(next, streamRef.current, wedflixRef.current)
+      photosRef.current = poolFor(next, streamRef.current, wedflixRef.current, layersRef.current)
       freshQueueRef.current = freshQueueRef.current.filter((f) => keep.has(f.id))
       setCurrent((c) => (c && !keep.has(c.id) ? photosRef.current[0] ?? null : c))
       return next
@@ -1304,10 +1338,15 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
             <div key={i} className="relative overflow-hidden bg-black">
               {cell.previous && cell.previous.id !== cell.current?.id && (
                 // eslint-disable-next-line @next/next/no-img-element -- wall cell (outgoing)
+                // Fades out as the new one fades in. It used to stay put
+                // underneath, so a smaller incoming photo left the old one
+                // showing round its edges (projector, 2026-09-22).
                 <img
+                  key={`out-${cell.previous.id}-${cell.current?.id ?? ''}`}
                   src={cell.previous.variants?.medium || cell.previous.url}
                   alt=""
                   className={`absolute inset-0 w-full h-full ${wallFit}`}
+                  style={{ animation: 'emfadeout 900ms ease forwards' }}
                 />
               )}
               {cell.current && (

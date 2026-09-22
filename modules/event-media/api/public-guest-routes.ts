@@ -37,6 +37,7 @@ import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
 import { erasFor, isEraSetting } from '../lib/booth-eras.js';
+import eventMediaModule from '../index.js';
 import { displayName, matchGuests, type GuestEntry } from '../lib/guest-identity.js';
 import {
   TICKET_TTL_SECONDS,
@@ -386,6 +387,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const booth = await boothFor(link.event_id, boothEffects);
 
     res.status(200).json({
+      // The projector reloads itself when this changes, so a screen left
+      // open all day picks up fixes without anyone touching it.
+      version: eventMediaModule.version,
       event: {
         // uuid included for the display page's realtime INSERT filter
         // (host_id=eq.<uuid>); not privileged — RLS gates the reads.
