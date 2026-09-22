@@ -70,11 +70,21 @@ function makeSupabase(config) {
     signedUploadErr: config.signedUploadErr ?? null,
   };
 
+  // Name claims, kept for real: member_id -> client_id.
+  state.claims = new Map(Object.entries(config.claims ?? {}));
   function builder(table) {
+    let claimMember = null;
     const b = {
       _table: table,
+      upsert: (row) => {
+        if (table === 'events_media_guest_claims') {
+          claimMember = row.member_id;
+          if (!state.claims.has(row.member_id)) state.claims.set(row.member_id, row.client_id);
+        }
+        return Promise.resolve({ error: null });
+      },
       select: () => b,
-      eq: () => b,
+      eq: (col, val) => { if (table === 'events_media_guest_claims' && col === 'member_id') claimMember = val; return b; },
       gt: () => b,
       gte: () => b,
       like: () => b,
@@ -98,9 +108,11 @@ function makeSupabase(config) {
         if (table === 'events') return Promise.resolve({ data: config.event ?? null, error: null });
         if (table === 'host_media') return Promise.resolve({ data: config.existingMedia ?? null, error: null });
         if (table === 'events_media_booth_settings') return Promise.resolve({ data: config.boothSetting ?? null, error: null });
+        if (table === 'events_media_guest_claims') return Promise.resolve({ data: state.claims.has(claimMember) ? { client_id: state.claims.get(claimMember) } : null, error: null });
         return Promise.resolve({ data: null, error: null });
       },
       then: (resolve) => {
+        if (table === 'events_media_guest_claims') return resolve({ data: [...state.claims].map(([member_id, client_id]) => ({ member_id, client_id })), error: null });
         if (config.tables && table in config.tables) return resolve(config.tables[table]);
         if (table !== 'host_media') return resolve({ data: [], error: null });
         return resolve({ data: config.mediaRows ?? [], error: config.mediaListError ?? null });
@@ -1099,5 +1111,76 @@ describe('taking a booth picture back off the big screen', () => {
       expect(res.statusCode).toBe(404);
       expect(supabase.state.updated ?? []).toHaveLength(0);
     }
+  });
+});
+
+
+describe('one phone per name', () => {
+  const DAN = 'aaaaaaaa-0000-4000-8000-00000000da01';
+  const DAVID = 'aaaaaaaa-0000-4000-8000-00000000da02';
+  const OTHER_PHONE = '11111111-1111-4111-8111-111111111111';
+  const INVITES = { data: [
+    { invite_party_members: { id: DAN, first_name: 'Dan', last_name: 'Baker' } },
+    { invite_party_members: { id: DAVID, first_name: 'David', last_name: 'Jones' } },
+  ], error: null };
+  const cfg = (over = {}) => ({
+    link: ACTIVE_LINK, event: EVENT_ROW,
+    tables: { invite_party_member_events: INVITES, events_media_guest_blocks: { data: [], error: null } },
+    ...over,
+  });
+  const run = async (fn, config, request) => {
+    const { deps, supabase } = makeDeps(config);
+    const res = mockRes();
+    await createGuestRoutes(deps)[fn](req(request), res);
+    return { res, supabase };
+  };
+
+  it('hides a name another phone has chosen, but not from that phone', async () => {
+    const theirs = await run('searchGuests', cfg({ claims: { [DAN]: OTHER_PHONE } }), { query: { q: 'da', client_id: CLIENT_ID } });
+    expect(theirs.res.body.guests.map((g) => g.name)).toEqual(['David Jones']);
+    const mine = await run('searchGuests', cfg({ claims: { [DAN]: CLIENT_ID } }), { query: { q: 'da', client_id: CLIENT_ID } });
+    expect(mine.res.body.guests.map((g) => g.name)).toEqual(['Dan Baker', 'David Jones']);
+  });
+
+  it('lets the first phone claim a name and refuses the second', async () => {
+    const first = await run('claimGuest', cfg(), { body: { client_id: CLIENT_ID, member_id: DAN } });
+    expect(first.res.statusCode).toBe(200);
+    expect(first.supabase.state.claims.get(DAN)).toBe(CLIENT_ID);
+    const second = await run('claimGuest', cfg({ claims: { [DAN]: CLIENT_ID } }), { body: { client_id: OTHER_PHONE, member_id: DAN } });
+    expect(second.res.statusCode).toBe(409);
+    expect(second.res.body.error).toBe('name_taken');
+  });
+
+  it('refuses uploads under a name another phone holds', async () => {
+    const { res } = await run('mintUploads', cfg({ claims: { [DAN]: OTHER_PHONE } }), {
+      body: { client_id: CLIENT_ID, member_id: DAN, files: [{ filename: 'a.jpg', mime_type: 'image/jpeg', bytes: 10 }] },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  // Switching names and back: the photos are the guest's, not the phone's.
+  it('lists the claimed guest\'s photos, from any phone that holds the name', async () => {
+    let filter = null;
+    const { deps, supabase } = makeDeps(cfg({ claims: { [DAN]: CLIENT_ID }, mediaRows: [] }));
+    const realFrom = supabase.from;
+    supabase.from = (t) => { const b = realFrom(t); if (t === 'host_media') { const c = b.contains; b.contains = (col, v) => { filter = v; return c(col, v); }; } return b; };
+    const res = mockRes();
+    await createGuestRoutes(deps).listMine(req({ body: { client_id: CLIENT_ID, member_id: DAN } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(filter).toEqual({ source: 'guest', member_id: DAN });
+  });
+
+  it('lets the phone holding a name remove that guest\'s photos, and nobody else', async () => {
+    const photo = { id: '44444444-2222-4333-8444-555555555555', host_kind: 'event', host_id: EVENT_ID, storage_path: 'x', variants: {},
+      metadata: { source: 'guest', client_id: '22222222-2222-4222-8222-222222222222', member_id: DAN } };
+    const holder = await run('deleteMine', cfg({ claims: { [DAN]: CLIENT_ID }, existingMedia: photo }), { body: { client_id: CLIENT_ID, media_id: photo.id } });
+    expect(holder.res.statusCode).toBe(200);
+    const other = await run('deleteMine', cfg({ claims: { [DAN]: OTHER_PHONE }, existingMedia: photo }), { body: { client_id: CLIENT_ID, media_id: photo.id } });
+    expect(other.res.statusCode).toBe(404);
+  });
+
+  it('releases a name only for the phone that holds it', async () => {
+    const { res } = await run('releaseGuest', cfg({ claims: { [DAN]: CLIENT_ID } }), { body: { client_id: CLIENT_ID, member_id: DAN } });
+    expect(res.statusCode).toBe(200);
   });
 });

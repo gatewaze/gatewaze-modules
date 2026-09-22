@@ -253,7 +253,44 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * on it who has not been blocked; without one, any typed name will do
    * (guest: null) and the caller falls back to that.
    */
-  async function identify(eventId: string, raw: unknown): Promise<
+  // ── Name claims (migration 011) ─────────────────────────────────
+  // One phone per name. Read fresh every time: a claim must bite at once.
+  async function claimsFor(eventId: string): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const { data, error } = await supabase
+      .from('events_media_guest_claims')
+      .select('member_id, client_id')
+      .eq('event_id', eventId)
+      .limit(5000);
+    if (!error) for (const r of (data ?? []) as Array<{ member_id: string; client_id: string }>) out.set(r.member_id, r.client_id);
+    return out;
+  }
+
+  /** Take a name for this phone: 'ok' if it now holds it, 'taken' if another does. */
+  async function claim(eventId: string, guest: GuestEntry, clientId: string): Promise<'ok' | 'taken' | 'error'> {
+    const { error } = await supabase
+      .from('events_media_guest_claims')
+      .upsert(
+        { event_id: eventId, member_id: guest.id, client_id: clientId, guest_name: guest.name },
+        { onConflict: 'event_id,member_id', ignoreDuplicates: true },
+      );
+    if (error) return 'error';
+    const { data } = await supabase
+      .from('events_media_guest_claims')
+      .select('client_id')
+      .eq('event_id', eventId)
+      .eq('member_id', guest.id)
+      .maybeSingle();
+    return data?.client_id === clientId ? 'ok' : 'taken';
+  }
+
+  /**
+   * Who is uploading. With a guest list, the member id must name someone
+   * on it, not blocked, and held by this phone (claimed now if nobody holds
+   * it yet); without one, any typed name will do (guest: null) and the
+   * caller falls back to that.
+   */
+  async function identify(eventId: string, raw: unknown, clientId: string | null): Promise<
     | { ok: true; guest: GuestEntry | null }
     | { ok: false; status: number; code: string; message: string }
   > {
@@ -261,11 +298,59 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (!list) return { ok: true, guest: null };
     const id = typeof raw === 'string' && UUID_RE.test(raw) ? raw : null;
     const guest = id ? list.find((g) => g.id === id) ?? null : null;
-    if (!guest) return { ok: false, status: 400, code: 'guest_required', message: 'please choose your name from the guest list' };
+    if (!guest || !clientId) return { ok: false, status: 400, code: 'guest_required', message: 'please choose your name from the guest list' };
     if ((await blockedFor(eventId)).has(guest.id)) {
       return { ok: false, status: 403, code: 'guest_blocked', message: 'uploads are paused for this guest' };
     }
+    const held = await claim(eventId, guest, clientId);
+    if (held === 'taken') {
+      return { ok: false, status: 409, code: 'name_taken', message: 'that name has been chosen on another phone' };
+    }
+    if (held === 'error') return { ok: false, status: 500, code: 'claim_failed', message: 'could not check your name' };
     return { ok: true, guest };
+  }
+
+  /**
+   * May this phone manage this photo? Its own uploads, or -- on an event
+   * with a guest list -- any photo of the guest whose name it holds.
+   */
+  async function mayManage(eventId: string, meta: Record<string, unknown>, clientId: string): Promise<boolean> {
+    if (meta['client_id'] === clientId) return true;
+    const member = typeof meta['member_id'] === 'string' ? meta['member_id'] : null;
+    if (!member) return false;
+    return (await claimsFor(eventId)).get(member) === clientId;
+  }
+
+  const clientIdOf = (v: unknown): string | null => (typeof v === 'string' && UUID_RE.test(v) ? v : null);
+
+  // POST /public/event-media/links/:code/guests/claim   { client_id, member_id }
+  async function claimGuest(req: Request, res: Response): Promise<void> {
+    const ctx = await resolveLink(req, res, 'guests', GUEST_RATE_LIMITS.guestSearchPerIp);
+    if (!ctx) return;
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const clientId = clientIdOf(body['client_id']);
+    if (!clientId) { sendError(res, 400, 'invalid_request', 'client_id must be a UUID'); return; }
+    const who = await identify(ctx.link.event_id, body['member_id'], clientId);
+    if (!who.ok) { sendError(res, who.status, who.code, who.message); return; }
+    res.status(200).json({ guest: who.guest });
+  }
+
+  // POST /public/event-media/links/:code/guests/release   { client_id, member_id }
+  async function releaseGuest(req: Request, res: Response): Promise<void> {
+    const ctx = await resolveLink(req, res, 'guests', GUEST_RATE_LIMITS.guestSearchPerIp);
+    if (!ctx) return;
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const clientId = clientIdOf(body['client_id']);
+    const memberId = clientIdOf(body['member_id']);
+    if (!clientId || !memberId) { sendError(res, 400, 'invalid_request', 'client_id and member_id must be UUIDs'); return; }
+    // Only the phone holding the name can let it go.
+    await supabase
+      .from('events_media_guest_claims')
+      .delete()
+      .eq('event_id', ctx.link.event_id)
+      .eq('member_id', memberId)
+      .eq('client_id', clientId);
+    res.status(200).json({ released: memberId });
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -281,7 +366,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       sendError(res, 404, 'no_guest_list', 'this event has no guest list');
       return;
     }
-    res.status(200).json({ guests: matchGuests(list, req.query['q']) });
+    // Names another phone holds are not offered.
+    const me = clientIdOf(req.query['client_id']);
+    const held = await claimsFor(ctx.link.event_id);
+    const free = list.filter((g) => { const by = held.get(g.id); return !by || by === me; });
+    res.status(200).json({ guests: matchGuests(free, req.query['q']) });
   }
 
   // Booth themes (lib/booth-theme.ts), cached per event -- misses too, so
@@ -762,7 +851,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
     if (!(await checkRate(res, guestRateKey('mint', clientId), GUEST_RATE_LIMITS.mintPerClient))) return;
 
-    const who = await identify(link.event_id, body['member_id']);
+    const who = await identify(link.event_id, body['member_id'], clientId);
     if (!who.ok) {
       sendError(res, who.status, who.code, who.message);
       return;
@@ -1046,6 +1135,16 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       return;
     }
 
+    // On an event with a guest list, "Your photos" are the photos of the
+    // guest whose name this phone holds -- so switching names and back
+    // brings them all back. Otherwise, this phone's own uploads.
+    let owner: Record<string, unknown> = { source: 'guest', client_id: clientId };
+    if (body['member_id'] !== undefined && (await guestListFor(link.event_id))) {
+      const who = await identify(link.event_id, body['member_id'], clientId);
+      if (!who.ok) { sendError(res, who.status, who.code, who.message); return; }
+      if (who.guest) owner = { source: 'guest', member_id: who.guest.id };
+    }
+
     // Videos are included here even though the projector never shows
     // them — a guest who uploaded the wrong video needs to remove it.
     const { data, error } = await supabase
@@ -1053,7 +1152,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at, is_approved')
       .eq('host_kind', 'event')
       .eq('host_id', link.event_id)
-      .contains('metadata', { source: 'guest', client_id: clientId })
+      .contains('metadata', owner)
       // Unposted booth pictures live in the booth's own carousel, not in
       // the gallery's "Yours".
       .or('metadata->>posted.is.null,metadata->>posted.neq.false')
@@ -1117,7 +1216,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       && row.host_kind === 'event'
       && row.host_id === link.event_id
       && meta['source'] === 'guest'
-      && meta['client_id'] === clientId;
+      && (await mayManage(link.event_id, meta, clientId));
     if (!owned) {
       sendError(res, 404, 'not_found', 'that upload is not yours to remove');
       return;
@@ -1209,7 +1308,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Generation costs money per call, so it is capped harder than
     // anything else on the guest path — per device AND per link.
     // Who, before anything is spent on a model call.
-    const who = await identify(link.event_id, body['member_id']);
+    const who = await identify(link.event_id, body['member_id'], clientId);
     if (!who.ok) {
       sendError(res, who.status, who.code, who.message);
       return;
@@ -1390,9 +1489,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       && row.host_kind === 'event'
       && row.host_id === link.event_id
       && meta['source'] === 'guest'
-      && meta['client_id'] === clientId
       && meta['album'] === 'booth'
-      && 'posted' in meta;
+      && 'posted' in meta
+      && (await mayManage(link.event_id, meta, clientId));
     if (!owned) {
       sendError(res, 404, 'not_found', 'that picture is not yours to post');
       return;
@@ -1466,8 +1565,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       && row.host_kind === 'event'
       && row.host_id === link.event_id
       && meta['source'] === 'guest'
-      && meta['client_id'] === clientId
-      && meta['album'] === 'booth';
+      && meta['album'] === 'booth'
+      && (await mayManage(link.event_id, meta, clientId));
     if (!owned) {
       sendError(res, 404, 'not_found', 'that picture is not yours to take down');
       return;
@@ -1521,6 +1620,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     postBooth: guarded(postBooth),
     unpostBooth: guarded(unpostBooth),
     searchGuests: guarded(searchGuests),
+    claimGuest: guarded(claimGuest),
+    releaseGuest: guarded(releaseGuest),
   };
 }
 
@@ -1528,6 +1629,8 @@ export function mountGuestRoutes(router: Router, routes: ReturnType<typeof creat
   router.get('/public/event-media/links/:code', routes.getLink);
   router.get('/public/event-media/links/:code/media', routes.listMedia);
   router.get('/public/event-media/links/:code/guests', routes.searchGuests);
+  router.post('/public/event-media/links/:code/guests/claim', routes.claimGuest);
+  router.post('/public/event-media/links/:code/guests/release', routes.releaseGuest);
   router.post('/public/event-media/links/:code/uploads', routes.mintUploads);
   router.post('/public/event-media/links/:code/uploads/complete', routes.completeUploads);
   // POST, not GET, for both: client_id is the ownership credential and

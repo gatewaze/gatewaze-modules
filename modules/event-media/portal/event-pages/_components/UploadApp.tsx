@@ -115,8 +115,12 @@ const STYLES = `
 .ua-mini-danger{background:#b42318}
 .ua-empty{margin-top:18px;text-align:center;font-size:14px;color:rgba(255,255,255,.55);line-height:1.5}
 .ua-more{display:block;margin:16px auto 0;height:42px;padding:0 20px;border-radius:999px;font-size:14px;font-weight:700;background:rgba(255,255,255,.1)}
-.ua-view{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.94);display:flex;align-items:center;justify-content:center;padding:16px}
-.ua-view img,.ua-view video{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
+.ua-view{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.96)}
+.ua-vtrack{position:absolute;inset:0;display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.ua-vtrack::-webkit-scrollbar{display:none}
+.ua-vslide{flex:0 0 100%;height:100%;scroll-snap-align:center;scroll-snap-stop:always;display:flex;align-items:center;justify-content:center;padding:16px}
+.ua-vslide img,.ua-vslide video{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;user-select:none;-webkit-user-drag:none}
 .ua-view-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;
   background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center}
 .ua-view-count{position:absolute;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 16px);text-align:center;
@@ -146,7 +150,6 @@ const X_PATH = 'M6 18L18 6M6 6l12 12'
 const TRASH_PATH = 'M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0'
 const CHEVRON_L = 'M15.75 19.5L8.25 12l7.5-7.5'
 const CHEVRON_R = 'M8.25 4.5l7.5 7.5-7.5 7.5'
-const SWIPE_PX = 50
 
 export default function UploadApp(props: Props) {
   const {
@@ -156,9 +159,10 @@ export default function UploadApp(props: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [tab, setTab] = useState<'mine' | 'everyone'>('mine')
   const [confirming, setConfirming] = useState<string | null>(null)
-  // The large view: which list, and where in it. Swipe or arrow keys to move.
-  const [viewing, setViewing] = useState<{ list: 'mine' | 'everyone'; index: number } | null>(null)
-  const touchX = useRef<number | null>(null)
+  // The large view: which list, and which photo in it (by id, so a list
+  // that grows underneath -- Everyone's is live -- does not move it).
+  const [viewing, setViewing] = useState<{ list: 'mine' | 'everyone'; id: string } | null>(null)
+  const trackRef = useRef<HTMLDivElement | null>(null)
 
   // The portal's own animated background shows through; the event page
   // itself does not. That background is a fixed, pointer-events:none layer
@@ -189,22 +193,39 @@ export default function UploadApp(props: Props) {
 
   const viewList = viewing
     ? viewing.list === 'mine'
-      ? tiles.map((t) => ({ src: t.full ?? t.src, isVideo: t.isVideo }))
-      : everyone.map((it) => ({ src: it.variants?.medium || it.url, isVideo: it.kind === 'video' }))
+      ? tiles.map((t) => ({ id: t.key, src: t.full ?? t.src, isVideo: t.isVideo }))
+      : everyone.map((it) => ({ id: it.id, src: it.variants?.medium || it.url, isVideo: it.kind === 'video' }))
     : []
-  const viewed = viewing ? viewList[Math.min(viewing.index, viewList.length - 1)] ?? null : null
-  const step = (d: number) => setViewing((v) => {
-    if (!v) return v
-    const n = v.list === 'mine' ? tiles.length : everyone.length
-    const next = v.index + d
-    return next < 0 || next >= n ? v : { ...v, index: next }
+  const viewIndex = viewing ? Math.max(0, viewList.findIndex((v) => v.id === viewing.id)) : 0
+
+  /** Go to a slide: the track scrolls, and scrolling sets the photo. */
+  const goTo = (i: number, smooth = true) => {
+    const el = trackRef.current
+    if (!el || i < 0 || i >= viewList.length) return
+    el.scrollTo({ left: i * el.clientWidth, behavior: smooth ? 'smooth' : 'auto' })
+  }
+  const onTrackScroll = () => {
+    const el = trackRef.current
+    if (!el || !viewing || el.clientWidth === 0) return
+    const i = Math.round(el.scrollLeft / el.clientWidth)
+    const id = viewList[i]?.id
+    if (id && id !== viewing.id) setViewing({ list: viewing.list, id })
+  }
+
+  // Open on the photo that was tapped, without animating to it.
+  const openedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!viewing) { openedRef.current = null; return }
+    if (openedRef.current === `${viewing.list}`) return
+    openedRef.current = `${viewing.list}`
+    requestAnimationFrame(() => goTo(viewIndex, false))
   })
 
   useEffect(() => {
     if (!viewing) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') step(-1)
-      else if (e.key === 'ArrowRight') step(1)
+      if (e.key === 'ArrowLeft') goTo(viewIndex - 1)
+      else if (e.key === 'ArrowRight') goTo(viewIndex + 1)
       else if (e.key === 'Escape') setViewing(null)
     }
     window.addEventListener('keydown', onKey)
@@ -220,7 +241,7 @@ export default function UploadApp(props: Props) {
     return (
       <div key={t.key} className="ua-tile">
         <button type="button" className="ua-dim" style={{ background: 'transparent' }} aria-label="View photo"
-          onClick={() => setViewing({ list: 'mine', index })}>
+          onClick={() => setViewing({ list: 'mine', id: t.key })}>
           {t.isVideo
             ? <video src={t.src} muted playsInline preload="metadata" />
             // eslint-disable-next-line @next/next/no-img-element -- local preview or thumbnail
@@ -333,7 +354,7 @@ export default function UploadApp(props: Props) {
             <div className="ua-scroll">
             {tab === 'mine' && (
               tiles.length === 0
-                ? <p className="ua-empty">Photos you add appear here. Tap × on any you&apos;d rather not share.</p>
+                ? <p className="ua-empty">Photos you add appear here. Tap the bin on any you&apos;d rather not share.</p>
                 : <div className="ua-grid">{tiles.map((t, i) => tileView(t, i))}</div>
             )}
 
@@ -345,7 +366,7 @@ export default function UploadApp(props: Props) {
                     <div className="ua-grid">
                       {everyone.map((it, i) => (
                         <button key={it.id} type="button" className="ua-tile" aria-label={it.guest_name ? `Photo by ${it.guest_name}` : 'Photo'}
-                          onClick={() => setViewing({ list: 'everyone', index: i })}>
+                          onClick={() => setViewing({ list: 'everyone', id: it.id })}>
                           {it.kind === 'video'
                             ? <video src={it.url} muted playsInline preload="metadata" />
                             // eslint-disable-next-line @next/next/no-img-element -- gallery thumbnail
@@ -366,42 +387,38 @@ export default function UploadApp(props: Props) {
         )}
       </div>
 
-      {viewing && viewed && (
-        <div
-          className="ua-view"
-          role="dialog"
-          aria-label="Photo"
-          onClick={() => setViewing(null)}
-          onTouchStart={(e) => { touchX.current = e.touches[0]?.clientX ?? null }}
-          onTouchEnd={(e) => {
-            const start = touchX.current
-            touchX.current = null
-            const end = e.changedTouches[0]?.clientX
-            if (start === null || end === undefined) return
-            const dx = end - start
-            if (Math.abs(dx) >= SWIPE_PX) step(dx < 0 ? 1 : -1)
-          }}
-        >
-          {viewed.isVideo
-            ? <video key={viewed.src} src={viewed.src} controls autoPlay playsInline onClick={(e) => e.stopPropagation()} />
-            // eslint-disable-next-line @next/next/no-img-element -- full-size view
-            : <img key={viewed.src} src={viewed.src} alt="" onClick={(e) => e.stopPropagation()} />}
+      {viewing && viewList.length > 0 && (
+        <div className="ua-view" role="dialog" aria-label="Photo">
+          {/* A real carousel: the photo follows the finger and the next one
+              slides in beside it. Native scrolling with snap points, so it
+              feels like the phone's own photo viewer. Only the photos next
+              to the one on screen are loaded. */}
+          <div ref={trackRef} className="ua-vtrack" onScroll={onTrackScroll}>
+            {viewList.map((v, i) => (
+              <div key={v.id} className="ua-vslide" onClick={() => setViewing(null)}>
+                {Math.abs(i - viewIndex) <= 2 && (v.isVideo
+                  ? <video src={v.src} controls playsInline onClick={(e) => e.stopPropagation()} />
+                  // eslint-disable-next-line @next/next/no-img-element -- full-size view
+                  : <img src={v.src} alt="" draggable={false} onClick={(e) => e.stopPropagation()} />)}
+              </div>
+            ))}
+          </div>
           <button type="button" className="ua-view-close" aria-label="Close" onClick={() => setViewing(null)}>
             <svg width="20" height="20" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d={X_PATH} />
             </svg>
           </button>
-          {viewing.index > 0 && (
-            <button type="button" className="ua-view-nav" style={{ left: 10 }} aria-label="Previous photo" onClick={(e) => { e.stopPropagation(); step(-1) }}>
+          {viewIndex > 0 && (
+            <button type="button" className="ua-view-nav" style={{ left: 10 }} aria-label="Previous photo" onClick={() => goTo(viewIndex - 1)}>
               <svg width="22" height="22" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d={CHEVRON_L} /></svg>
             </button>
           )}
-          {viewing.index < viewList.length - 1 && (
-            <button type="button" className="ua-view-nav" style={{ right: 10 }} aria-label="Next photo" onClick={(e) => { e.stopPropagation(); step(1) }}>
+          {viewIndex < viewList.length - 1 && (
+            <button type="button" className="ua-view-nav" style={{ right: 10 }} aria-label="Next photo" onClick={() => goTo(viewIndex + 1)}>
               <svg width="22" height="22" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d={CHEVRON_R} /></svg>
             </button>
           )}
-          <p className="ua-view-count">{viewing.index + 1} / {viewList.length}</p>
+          <p className="ua-view-count">{viewIndex + 1} / {viewList.length}</p>
         </div>
       )}
     </div>
