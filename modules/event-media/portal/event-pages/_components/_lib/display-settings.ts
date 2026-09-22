@@ -38,16 +38,31 @@ export interface StreamSettings {
  *   day      what guests upload on the day
  *   booth    the photo booth's posters
  */
-export type ViewName = 'preload' | 'ready' | 'day' | 'booth'
+export type ViewName = 'preload' | 'day' | 'booth'
 
 /** Every view, in the order the panel lists them and a rotation runs. */
-export const VIEW_ORDER: readonly ViewName[] = ['preload', 'ready', 'day', 'booth']
+export const VIEW_ORDER: readonly ViewName[] = ['preload', 'day', 'booth']
 
 export const VIEW_LABEL: Record<ViewName, string> = {
   preload: 'Preload',
-  ready: 'Getting ready',
   day: 'The day',
   booth: 'Photo booth',
+}
+
+/**
+ * Getting ready is part of the day on the projector. Photos taken before
+ * the event are still filed under Getting ready, but The day shows them
+ * alongside its own until The day album has this many photos of its own;
+ * from then on it shows The day alone. There is no separate projector
+ * view -- or setting -- for Getting ready (asked 2026-09-22).
+ */
+export const DAY_ONLY_AFTER = 20
+
+/** Which albums The day view draws from, given every photo loaded. */
+export function dayAlbums(all: ReadonlyArray<{ album?: string | null }>, threshold: number = DAY_ONLY_AFTER): Set<string> {
+  let own = 0
+  for (const p of all) if (p.album === 'day') own++
+  return own >= threshold ? new Set(['day']) : new Set(['day', 'ready'])
 }
 
 /** What "in turn" rotated through before it could be chosen. */
@@ -56,13 +71,6 @@ export const DEFAULT_ROTATION: readonly ViewName[] = ['day', 'booth']
 // The selfies are stand-ins, never billed as programmes, so they get the
 // cinematic treatment rather than Wedflix.
 export const DEFAULT_PRELOAD: StreamSettings = {
-  mode: 'slideshow', effect: 'cinematic', intervalMs: 8000, camera: 'pan',
-  columns: 0, blurTransition: true,
-}
-
-// Guests' own photographs, like the day's, so the same treatment; not
-// Wedflix by default, because the morning's photos are the warm-up.
-export const DEFAULT_READY: StreamSettings = {
   mode: 'slideshow', effect: 'cinematic', intervalMs: 8000, camera: 'pan',
   columns: 0, blurTransition: true,
 }
@@ -103,7 +111,6 @@ function merge(stored: unknown, base: StreamSettings): StreamSettings {
  */
 export function migrateStreams(stored: Record<string, unknown> | null | undefined): {
   preload: StreamSettings
-  ready: StreamSettings
   day: StreamSettings
   booth: StreamSettings
 } {
@@ -121,7 +128,6 @@ export function migrateStreams(stored: Record<string, unknown> | null | undefine
   }
   return {
     preload: 'preload' in s ? merge(s['preload'], DEFAULT_PRELOAD) : DEFAULT_PRELOAD,
-    ready: 'ready' in s ? merge(s['ready'], DEFAULT_READY) : DEFAULT_READY,
     day: 'day' in s ? merge(s['day'], DEFAULT_DAY) : foldedDay,
     booth: 'booth' in s ? merge(s['booth'], DEFAULT_BOOTH) : DEFAULT_BOOTH,
   }
@@ -134,6 +140,8 @@ export function migrateStreams(stored: Record<string, unknown> | null | undefine
  * empty screen.
  */
 export function normaliseStream(v: unknown): ViewName | 'mix' {
+  // Getting ready is shown as part of the day now.
+  if (v === 'ready') return 'day'
   return v === 'mix' || (VIEW_ORDER as readonly unknown[]).includes(v) ? (v as ViewName | 'mix') : 'preload'
 }
 
@@ -144,7 +152,7 @@ export function normaliseStream(v: unknown): ViewName | 'mix' {
  * booth, which is what "in turn" always meant until now.
  */
 export function normaliseRotation(v: unknown): ViewName[] {
-  const picked = Array.isArray(v) ? v : []
+  const picked = (Array.isArray(v) ? v : []).map((x) => (x === 'ready' ? 'day' : x))
   const out = VIEW_ORDER.filter((name) => picked.includes(name))
   return out.length > 0 ? out : [...DEFAULT_ROTATION]
 }

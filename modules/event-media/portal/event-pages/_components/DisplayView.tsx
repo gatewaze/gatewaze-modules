@@ -33,11 +33,11 @@ import { extractPalette, type PhotoPalette } from './_lib/photo-fx'
 import {
   DEFAULT_BOOTH,
   DEFAULT_PRELOAD,
-  DEFAULT_READY,
   DEFAULT_DAY,
   DEFAULT_ROTATION,
   VIEW_LABEL,
   VIEW_ORDER,
+  dayAlbums,
   migrateStreams,
   nextInRotation,
   normaliseRotation,
@@ -117,7 +117,6 @@ interface DisplaySettings {
   rotation: ViewName[]
   /** Per-stream treatment. */
   preload: StreamSettings
-  ready: StreamSettings
   day: StreamSettings
   booth: StreamSettings
   /** How pronounced the 3D relief is. 0 is a flat camera move. */
@@ -157,7 +156,6 @@ const DEFAULT_SETTINGS: DisplaySettings = {
   mixSeconds: 90,
   rotation: [...DEFAULT_ROTATION],
   preload: DEFAULT_PRELOAD,
-  ready: DEFAULT_READY,
   day: DEFAULT_DAY,
   booth: DEFAULT_BOOTH,
   depthStrength: 1,
@@ -200,7 +198,6 @@ function rankFor(id: string): boolean {
  * Split the incoming media into the view being shown.
  *
  *   preload  the selfies, all of them
- *   ready    Getting ready: guests' photos from before they arrive
  *   day      the day's uploads
  *   booth    the booth's posters
  *
@@ -227,7 +224,11 @@ function poolFor(all: DisplayItem[], mode: ViewName, wedflixOnly = false, needsL
     // at all, and those are the selfies.
     return shown.filter((p) => p.album !== 'day' && p.album !== 'booth' && p.album !== 'ready')
   }
-  const inView = shown.filter((p) => p.album === mode)
+  // The day also carries Getting ready until it has enough of its own
+  // (dayAlbums, display-settings.ts). Counted over everything loaded, not
+  // just what is ready to show, so the switch does not flicker.
+  const albums = mode === 'day' ? dayAlbums(all) : new Set([mode])
+  const inView = shown.filter((p) => albums.has(p.album ?? ''))
   return wedflixOnly ? inView.filter((p) => hasBrowseCard(p)) : inView
 }
 
