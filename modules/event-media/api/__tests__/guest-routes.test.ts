@@ -1056,3 +1056,48 @@ describe('guests pick themselves from the invitation list', () => {
     expect(clear.some((f) => f.includes('member_id'))).toBe(false);
   });
 });
+
+
+describe('taking a booth picture back off the big screen', () => {
+  const MEDIA = '77777777-2222-4333-8444-555555555555';
+  const row = (over = {}) => ({
+    id: MEDIA, host_kind: 'event', host_id: EVENT_ID,
+    metadata: { source: 'guest', client_id: CLIENT_ID, album: 'booth', posted: true, look: 'Synthwave' },
+    ...over,
+  });
+  const unpost = async (existingMedia) => {
+    const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia });
+    const res = mockRes();
+    await createGuestRoutes(deps).unpostBooth(req({ body: { client_id: CLIENT_ID, media_id: MEDIA } }), res);
+    return { res, supabase };
+  };
+
+  it('marks it unposted and keeps everything else', async () => {
+    const { res, supabase } = await unpost(row());
+    expect(res.statusCode).toBe(200);
+    const upd = supabase.state.updated[0].fields;
+    expect(upd.metadata.posted).toBe(false);
+    expect(upd.metadata.look).toBe('Synthwave');
+    expect(Object.keys(upd)).toEqual(['metadata']);
+  });
+
+  it('works for a booth picture an older page uploaded rather than kept', async () => {
+    const { metadata } = row();
+    const { posted, ...legacy } = metadata;
+    const { res } = await unpost(row({ metadata: legacy }));
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses anyone else\'s picture, and anything not from the booth', async () => {
+    for (const r of [
+      null,
+      row({ metadata: { ...row().metadata, client_id: '99999999-2222-4333-8444-555555555555' } }),
+      row({ host_id: '99999999-2222-4333-8444-555555555555' }),
+      row({ metadata: { ...row().metadata, album: 'day' } }),
+    ]) {
+      const { res, supabase } = await unpost(r);
+      expect(res.statusCode).toBe(404);
+      expect(supabase.state.updated ?? []).toHaveLength(0);
+    }
+  });
+});

@@ -1,7 +1,7 @@
 // @ts-nocheck — vitest harness.
 
 import { describe, it, expect } from 'vitest';
-import { addPicture, markPosted, removePicture, sanitiseHistory, HISTORY_CAP } from '../event-pages/_components/_lib/booth-history.js';
+import { addPicture, markPosted, markUnposted, removePicture, sanitiseHistory, HISTORY_CAP } from '../event-pages/_components/_lib/booth-history.js';
 
 const pic = (id, over = {}) => ({
   id, image: `data:image/jpeg;base64,${id}`, label: '1970s', styled: true, note: null, createdAt: 1, posted: false, mediaId: null, ...over,
@@ -31,6 +31,15 @@ describe('markPosted', () => {
     expect(list.map((p) => p.posted)).toEqual([false, true]);
     expect(list[1].mediaId).toBe('m-1');
     expect(list[0].mediaId).toBeNull();
+  });
+});
+
+describe('markUnposted', () => {
+  // Off the screen, but still theirs: the upload id is kept for Delete.
+  it('takes it off the screen and keeps its upload id', () => {
+    const list = markUnposted(markPosted([pic('a')], 'a', 'm-1'), 'a');
+    expect(list[0].posted).toBe(false);
+    expect(list[0].mediaId).toBe('m-1');
   });
 });
 

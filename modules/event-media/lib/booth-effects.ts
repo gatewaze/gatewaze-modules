@@ -42,6 +42,8 @@ export interface BoothEffect {
   kind: BoothEffectKind;
   /** The look, without guard rails — style effects only. */
   style?: string;
+  /** Exaggerated on purpose: drops the natural-proportions rule. */
+  caricature?: boolean;
 }
 
 const SAME_PEOPLE_FIRST =
@@ -59,13 +61,29 @@ const KEEP =
 
 /** Posters and covers: see the note above the era looks. */
 const POSTER_FACES =
-  'Keep each face as large and as clear in the frame as in the input photo, facing the camera. ' +
+  'Frame the people close, from about the chest up, so their faces are large and clear and facing ' +
+  'the camera -- by moving the camera closer, never by enlarging the heads. ' +
   'Restyle their clothes, and any hoods or hats, to suit the look rather than keeping what they wear in the input.';
 
 /** Keep a selfie a selfie: see the note above the decade effects. */
+// Framing, not face size: "keep each face as large as in the input" was
+// read as "make the heads bigger" once the body was redrawn, and gave
+// guests oversized heads (seen 2026-09-22).
 const DECADE_FRAMING =
-  'Keep the original framing, crop and camera distance, so each face is as large in the frame as ' +
-  'in the input photo. No hats or sunglasses that were not in the input.';
+  'Keep the original framing, crop and camera distance. No hats or sunglasses that were not in the input.';
+
+/**
+ * Physically believable, with bodies in proportion. Posters put people in
+ * cars and on stages, and the model would seat a guest where no body
+ * could fit, or grow a head to fill the frame (both seen 2026-09-22).
+ */
+const REALISTIC =
+  'The scene must be physically possible: people are the right size for everything around them and ' +
+  'sit, stand and lean in positions a real body can take, never too big for a car, chair or doorway, ' +
+  'and never overlapping objects impossibly.';
+const PROPORTIONS =
+  'Keep every body in natural proportion: heads the correct size for their bodies, no enlarged heads, ' +
+  'no stretched or shrunken limbs.';
 
 // Widened 2026-09-22 from names alone: poster looks also printed
 // invented titles and taglines ("TOP GUNS", "SUMMER SWING").
@@ -384,8 +402,9 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
  * single trailing instruction is not enough.
  */
 export function buildPrompt(effect: BoothEffect): string {
+  const body = effect.caricature ? REALISTIC : `${REALISTIC} ${PROPORTIONS}`;
   return `${SAME_PEOPLE_FIRST} Now restyle the photo as ${effect.style} ` +
-    `${KEEP} ${NO_NAMES} ${SAME_PEOPLE_LAST}`;
+    `${KEEP} ${body} ${NO_NAMES} ${SAME_PEOPLE_LAST}`;
 }
 
 export function boothEffect(id: string): BoothEffect | null {

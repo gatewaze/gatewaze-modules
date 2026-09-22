@@ -24,6 +24,8 @@ describe('booth eras', () => {
       expect(prompt).toMatch(/Keep the same people with their exact same faces/);
       expect(prompt).toMatch(/Do not add any titles, taglines, personal names/);
       expect(prompt).toMatch(/Reminder: do not add, invent or duplicate any person/);
+      expect(prompt).toMatch(/The scene must be physically possible/);
+      expect(prompt).toMatch(/heads the correct size for their bodies/);
     }
   });
 
@@ -39,5 +41,20 @@ describe('booth eras', () => {
     expect(isEraSetting('all')).toBe(true);
     expect(isEraSetting('1970s')).toBe(true);
     for (const v of ['1920s', '', null, 1980, 'ALL']) expect(isEraSetting(v)).toBe(false);
+  });
+});
+
+describe('caricatures', () => {
+  it('keep the physics rule but may exaggerate proportions', () => {
+    const p = buildPrompt({ id: 'x', label: 'x', blurb: '', kind: 'style', style: 'a caricature', caricature: true });
+    expect(p).toMatch(/physically possible/);
+    expect(p).not.toMatch(/heads the correct size/);
+  });
+
+  // The old wording asked for large faces, which the model met with large heads.
+  it('never asks for faces as large as the input', () => {
+    for (const e of BOOTH_EFFECTS.filter((x) => x.style)) {
+      expect(buildPrompt(e)).not.toMatch(/as large in the frame as|as large and as clear in the frame as in the input/);
+    }
   });
 });

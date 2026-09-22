@@ -831,6 +831,21 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     }
   }, [code, guest])
 
+  /** Take a booth picture back off the big screen. */
+  const unpostKept = useCallback(async (mediaId: string): Promise<boolean> => {
+    if (!code || !guest) return false
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/booth/unpost`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: guest.client_id, media_id: mediaId }),
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  }, [code, guest])
+
   const acceptShot = useCallback(async () => {
     if (!shot) return
     // A kept booth picture is posted, not uploaded a second time.
@@ -1656,6 +1671,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       onSaveImage={saveImage}
       onRemoveUpload={removeUpload}
       onPostKept={postKept}
+      onUnpostKept={unpostKept}
     />,
     document.body,
   ) : null
