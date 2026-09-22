@@ -245,6 +245,12 @@ export default function BoothExperience(props: Props) {
   const [slide, setSlide] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [postingId, setPostingId] = useState<string | null>(null)
+  // The space the Polaroid actually has, between the top bar and the
+  // buttons. Measured, not derived from the screen height: on an iPhone
+  // the notch, the home bar and Safari's toolbars take a share the page
+  // cannot predict, and a Polaroid sized from the whole screen overlapped
+  // both (Dan's phone, 2026-09-22).
+  const [trackBox, setTrackBox] = useState<{ w: number; h: number } | null>(null)
 
   const rootRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -394,6 +400,19 @@ export default function BoothExperience(props: Props) {
     setCarousel(true)
     onDiscard()
   }, [shot, generating, look, onDiscard])
+
+  useEffect(() => {
+    if (!carousel) return
+    const el = trackRef.current
+    if (!el) return
+    const apply = () => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) setTrackBox({ w: el.clientWidth, h: el.clientHeight })
+    }
+    apply()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(apply) : null
+    ro?.observe(el)
+    return () => ro?.disconnect()
+  }, [carousel])
 
   // Open on the newest, without an animated scroll from wherever it was.
   useEffect(() => {
@@ -724,7 +743,22 @@ export default function BoothExperience(props: Props) {
           </button>
         )}
         <span className="bx-top-right">
-          {inside && look && <span className="bx-pill bx-glass">{look.label}</span>}
+          {/* The era, which is also the way to change it: back out to the
+              board of looks. */}
+          {inside && look && (
+            <button
+              type="button"
+              onClick={leave}
+              disabled={busy || count !== null}
+              className="bx-pill bx-glass"
+              aria-label={`${look.label} — choose another era`}
+            >
+              {look.label}
+              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+              </svg>
+            </button>
+          )}
           {pictures.length > 0 && !busy && count === null && (
             <button type="button" onClick={() => { setSlide(0); setCarousel(true) }} className="bx-pill bx-glass" aria-label="My photos">
               <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" aria-hidden="true">
@@ -749,7 +783,11 @@ export default function BoothExperience(props: Props) {
         const aspect = room
           ? (room.window.w * room.width) / (room.window.h * room.height)
           : 0.72
-        const pol = polaroidSize(vp.w, vp.h, aspect, 300)
+        // Sized to the measured gap, with a little air for the tilt and
+        // the shadow; until it is measured, a cautious guess.
+        const pol = trackBox
+          ? polaroidSize(trackBox.w, trackBox.h, aspect, 56)
+          : polaroidSize(vp.w, vp.h, aspect, 380)
         const current = pictures[Math.min(slide, pictures.length - 1)]!
         const confirming = confirmDelete ? pictures.find((p) => p.id === confirmDelete) ?? null : null
         return (
