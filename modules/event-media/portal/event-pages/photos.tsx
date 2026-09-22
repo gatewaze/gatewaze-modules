@@ -1778,7 +1778,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
 
   const nameStep = needsName ? (
     <div>
-      <p className="ua-h1">{link!.settings.guest_list ? 'Who are you?' : 'Add your photos'}</p>
+      <p className="ua-h1" style={{ fontSize: 26 }}>{link!.settings.guest_list ? 'Who are you?' : 'Add your photos'}</p>
       <p className="ua-sub" style={{ marginBottom: 12 }}>
         {link!.settings.guest_list
           ? 'Find your name so your photos are yours.'
