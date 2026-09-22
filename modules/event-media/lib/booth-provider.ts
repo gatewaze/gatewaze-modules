@@ -30,7 +30,7 @@
  */
 
 import { faceSwapConfigured, faceSwapStatus, runFaceSwap } from './face-swap.js';
-import { CARD_GENRES as SHARED_CARD_GENRES } from './card-copy.js';
+import { CARD_GENRES as SHARED_CARD_GENRES, cardIsSuitable } from './card-copy.js';
 
 export type BoothResult =
   | { ok: true; image: Uint8Array; contentType: string }
@@ -358,17 +358,21 @@ export function parseYesNo(text: string): boolean | null {
 }
 
 /**
- * Does this background plate still show a person? true, false, or null
+ * Does this background plate still show a person in the foreground?
+ * true, false, or null
  * when the model could not be asked or gave no clear answer. A plate that
  * kept its person makes the projector draw them twice (reported
  * 2026-09-22), and a pixel comparison cannot tell a person removed from a
  * person redrawn -- so a model looks.
  */
 export async function plateHasPeople(plateUrl: string): Promise<boolean | null> {
+  // Foreground only. Small or distant people behind are harmless -- the
+  // projector only moves the main subjects -- and asking about "any
+  // person" flagged nearly half of all plates (scan, 2026-09-22).
   const r = await askVision(plateUrl,
-    'Look carefully at this photograph. Is there any person in it, or any part of a person -- a face, ' +
-    'head, hair, body, arm, hand, silhouette or reflection -- anywhere, including at the edges? ' +
-    'Answer with exactly one word: YES or NO.');
+    'Look at this photograph. Is there a person in the foreground, close to the camera and large in ' +
+    'the frame -- their face, head or upper body taking up a noticeable part of the picture? Small or ' +
+    'distant people in the background do not count. Answer with exactly one word: YES or NO.');
   return r.ok ? parseYesNo(r.text) : null;
 }
 
@@ -403,6 +407,14 @@ async function cardCopyOnce(imageUrl: string): Promise<
     'eyebrow: 1-3 words, Title Case, e.g. "Season One", "Limited Series",',
     '  "New Episodes", "A Wedflix Original".',
     'Never mention weddings, brides, grooms, vows or marriage in the title.',
+    'Never guess who anyone is or how they are related: no best man, bridesmaid, groom,',
+    '  bride, usher, father or mother of the bride, maid of honour, in-laws, family or',
+    '  couple roles, in the title, the words or the eyebrow. You do not know these',
+    '  people, and a wrong guess is awkward. Describe what they are doing, not who they are.',
+    'Never comment on anyone\'s sexuality, gender, race, religion, age, body, weight, looks',
+    '  or relationship status. The title must make sense as a real programme name.',
+    'Keep the whole card clear of wedding themes -- no rings, aisles, altars, speeches,',
+    '  toasts to the couple or honeymoons. Most cards should read like ordinary TV.',
   ].join('\n');
 
   try {
@@ -423,6 +435,8 @@ async function cardCopyOnce(imageUrl: string): Promise<
       ? parsed.words.map((w) => clean(w, 24)).filter(Boolean).slice(0, 3)
       : [];
     if (!title || words.length !== 3) return { ok: false, error: 'incomplete' };
+    // Enforced, not just asked for: see card-copy.ts.
+    if (!cardIsSuitable({ title, words, eyebrow: clean(parsed.eyebrow, 28) })) return { ok: false, error: 'unsuitable' };
 
     return {
       ok: true,
