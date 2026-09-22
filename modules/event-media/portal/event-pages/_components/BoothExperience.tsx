@@ -54,6 +54,8 @@ interface Shot {
   filterLabel: string | null
   busy: string | null
   error: string | null
+  /** The server's kept copy of `preview`, when it kept one. */
+  mediaId?: string | null
 }
 
 interface Props {
@@ -84,6 +86,8 @@ interface Props {
   onSaveImage: (dataUrl: string) => boolean
   /** Remove one of this device's uploads from the event. */
   onRemoveUpload: (mediaId: string) => Promise<boolean>
+  /** Put a picture the server already kept onto the big screen. */
+  onPostKept: (mediaId: string) => Promise<boolean>
 }
 
 type Phase = 'outside' | 'to-inside' | 'inside' | 'to-outside'
@@ -224,7 +228,7 @@ export default function BoothExperience(props: Props) {
   const {
     theme, effects, faces, shot, progress, statusText, generating, primaryColor,
     onCaptured, onFallbackCamera, onAccept, onSave, onDiscard, onOriginal, onClose,
-    historyKey, onPostImage, onSaveImage, onRemoveUpload,
+    historyKey, onPostImage, onSaveImage, onRemoveUpload, onPostKept,
   } = props
 
   const [vp, setVp] = useState({ w: 390, h: 844 })
@@ -394,7 +398,8 @@ export default function BoothExperience(props: Props) {
       note: styled ? null : 'That look did not work this time, so here is your photo as it was.',
       createdAt: Date.now(),
       posted: false,
-      mediaId: null,
+      // Kept on the server already: posting flips it on, deleting removes it.
+      mediaId: styled ? shot.mediaId ?? null : null,
     }))
     setSlide(0)
     setCarousel(true)
@@ -440,9 +445,14 @@ export default function BoothExperience(props: Props) {
     if (pic.posted || postingId) return
     setPostingId(pic.id)
     try {
-      await onPostImage(pic.image, pic.styled, (mediaId) => {
-        setPictures((list) => markPosted(list, pic.id, mediaId))
-      })
+      if (pic.mediaId) {
+        // Kept by the server when it was made: just put it on.
+        if (!(await onPostKept(pic.mediaId))) throw new Error('post failed')
+      } else {
+        await onPostImage(pic.image, pic.styled, (mediaId) => {
+          setPictures((list) => markPosted(list, pic.id, mediaId))
+        })
+      }
       setPictures((list) => markPosted(list, pic.id))
       flashNotice('Sent to the big screen')
     } catch {
@@ -450,7 +460,7 @@ export default function BoothExperience(props: Props) {
     } finally {
       setPostingId(null)
     }
-  }, [postingId, onPostImage, flashNotice])
+  }, [postingId, onPostImage, onPostKept, flashNotice])
 
   const savePicture = useCallback((pic: BoothPicture) => {
     if (!onSaveImage(pic.image)) flashNotice('That one would not save. Try again.')
@@ -475,6 +485,8 @@ export default function BoothExperience(props: Props) {
     setSlide((i) => Math.max(0, Math.min(i, remaining - 1)))
     if (remaining <= 0) setCarousel(false)
     flashNotice(pic.posted ? 'Deleted, and taken off the big screen' : 'Deleted')
+    // (A kept picture is removed from the event above whether or not it
+    // was ever posted -- deleting means gone.)
   }, [pictures.length, onRemoveUpload, flashNotice])
 
   /** Walk in. Every visit starts with the live camera and no picture. */
@@ -875,7 +887,9 @@ export default function BoothExperience(props: Props) {
                   <p className="bx-confirm-body">
                     {confirming.posted
                       ? 'It will be removed from your phone and taken off the big screen.'
-                      : 'It will be removed from your phone.'}
+                      : confirming.mediaId
+                        ? 'It will be removed from your phone and from the event.'
+                        : 'It will be removed from your phone.'}
                   </p>
                   <button type="button" className="bx-primary bx-danger" onClick={() => deletePicture(confirming)}>Delete</button>
                   <button type="button" className="bx-btn" onClick={() => setConfirmDelete(null)}>Keep it</button>

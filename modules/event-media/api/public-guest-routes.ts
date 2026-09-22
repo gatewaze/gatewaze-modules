@@ -392,6 +392,29 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   /**
+   * What every photo bound for the projector gets once it exists: its 3D
+   * layers and browse copy, and its thumbnails. Fire-and-forget.
+   */
+  function processNewImage(mediaId: string, storagePath: string): void {
+    void generateLayers(mediaId, storagePath);
+    // invoke() resolves { data, error } on a non-2xx rather than
+    // rejecting, so the error envelope must be checked or edge-fn
+    // failures are invisible (evidence review 2026-09-19, F4).
+    void supabase.functions
+      .invoke('media-process-image', { body: { mediaId, table: 'host_media' } })
+      .then(({ error }: { error: { message?: string } | null }) => {
+        if (error) {
+          logger.warn('media-process-image returned an error', { mediaId, error: error.message ?? String(error) });
+        }
+      })
+      .catch((err: unknown) => {
+        logger.warn('media-process-image invoke failed', {
+          mediaId, error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }
+
+  /**
    * A resized copy for a browser. Through Bunny when configured, so
    * Supabase's per-transformation render endpoint is never hit; otherwise
    * the render endpoint, as before.
@@ -515,6 +538,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       .eq('host_id', link.event_id)
       .eq('access_level', 'public')
       .eq('is_approved', true)
+      // Booth pictures are kept whether or not the guest posts them, and
+      // only posted ones are anyone else's to see. A constant filter: no
+      // request input reaches it.
+      .or('metadata->>posted.is.null,metadata->>posted.neq.false')
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
       // Over-fetch: hidden rows are filtered below and would otherwise
@@ -815,31 +842,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       createdCount += 1;
       items.push({ media_id: p.media_id, status: 'created', item: mapFeedItem(inserted as FeedRow) });
 
-      if (p.mime_type.startsWith('image/')) {
-        // The projector's 3D layers, alongside the thumbnails.
-        void generateLayers(p.media_id, p.storage_path);
-
-        // Fire-and-forget variant generation. invoke() resolves
-        // { data, error } on a non-2xx rather than rejecting, so the
-        // error envelope must be checked or edge-fn failures are
-        // invisible (evidence review 2026-09-19, F4).
-        void supabase.functions
-          .invoke('media-process-image', { body: { mediaId: p.media_id, table: 'host_media' } })
-          .then(({ error }: { error: { message?: string } | null }) => {
-            if (error) {
-              logger.warn('media-process-image returned an error', {
-                mediaId: p.media_id,
-                error: error.message ?? String(error),
-              });
-            }
-          })
-          .catch((err: unknown) => {
-            logger.warn('media-process-image invoke failed', {
-              mediaId: p.media_id,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
-      }
+      if (p.mime_type.startsWith('image/')) processNewImage(p.media_id, p.storage_path);
     }
 
     if (createdCount > 0) {
@@ -884,6 +887,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       .eq('host_kind', 'event')
       .eq('host_id', link.event_id)
       .contains('metadata', { source: 'guest', client_id: clientId })
+      // Unposted booth pictures live in the booth's own carousel, not in
+      // the gallery's "Yours".
+      .or('metadata->>posted.is.null,metadata->>posted.neq.false')
       .order('created_at', { ascending: false })
       .limit(200);
 
@@ -973,12 +979,19 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   // ────────────────────────────────────────────────────────────────────
   // POST /public/event-media/links/:code/booth
   //
-  // Preview-only: applies one booth effect — a reference-face swap or a
-  // whole-scene restyle — to the guest's freshly taken photo and hands
-  // back a TEMPORARY image. Nothing is added to the gallery here: the
-  // guest still has to choose to upload it, and can always keep their
-  // original instead. Somebody's face is being altered, so this is
-  // opt-in per deployment, per link and per tap.
+  // Applies one booth effect — a reference-face swap or a whole-scene
+  // restyle — to the guest's freshly taken photo. Somebody's face is
+  // being altered, so this is opt-in per deployment, per link and per tap.
+  //
+  // Every picture it makes is KEPT: stored and recorded against the
+  // guest's device, but marked unposted, which keeps it off the projector
+  // and out of the gallery until the guest presses "Put it on the big
+  // screen" (POST .../booth/post). The response carries a URL rather than
+  // the image itself: holding every picture in memory as base64 is what
+  // would have run the API out of memory with a room full of guests.
+  // Clients from before this ask for `return: 'url'`; anything else gets
+  // the inline image as before, so a page open across the deploy keeps
+  // working.
   // ────────────────────────────────────────────────────────────────────
   async function faceFilter(req: Request, res: Response): Promise<void> {
     const ctx = await resolveLink(req, res, 'facefilter', GUEST_RATE_LIMITS.mintPerIp);
@@ -1079,16 +1092,157 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         return;
       }
 
-      // Hand the preview back inline: it exists only in the guest's
-      // browser until they choose to upload it.
+      const kept = await keepBoothPicture({
+        link,
+        clientId,
+        guestName: cleanGuestName(body['guest_name']),
+        image: result.image,
+        contentType: result.contentType,
+        look: filter ? `Be ${filter.label}` : effect!.label,
+        lookId: filter ? `filter:${filter.id}` : effect!.id,
+      });
+      const wantsUrl = body['return'] === 'url';
       res.status(200).json({
         filter: filter ? { id: filter.id, label: filter.label } : null,
         effect: effect ? { id: effect.id, label: effect.label } : null,
-        image: `data:${result.contentType};base64,${Buffer.from(result.image).toString('base64')}`,
+        media_id: kept?.mediaId ?? null,
+        image_url: kept?.url ?? null,
+        // Inline only for an older page, or if keeping it failed.
+        ...(wantsUrl && kept
+          ? {}
+          : { image: `data:${result.contentType};base64,${Buffer.from(result.image).toString('base64')}` }),
       });
     } finally {
       await removeObject(scratchPath);
     }
+  }
+
+  /**
+   * Store a booth picture and record it, unposted, against the guest's
+   * device. Returns null if either step fails; the guest still gets their
+   * picture, inline, and simply cannot delete it from the event later.
+   */
+  async function keepBoothPicture(opts: {
+    link: UploadLinkRow;
+    clientId: string;
+    guestName: string | null;
+    image: Uint8Array | Buffer;
+    contentType: string;
+    look: string;
+    lookId: string;
+  }): Promise<{ mediaId: string; url: string } | null> {
+    const { link } = opts;
+    const mediaId = newMediaId();
+    const ext = opts.contentType === 'image/png' ? 'png' : opts.contentType === 'image/webp' ? 'webp' : 'jpg';
+    const storagePath = `event/${link.event_id}/${mediaId}/booth.${ext}`;
+    const bytes = Buffer.from(opts.image);
+    const { error: upErr } = await supabase.storage
+      .from(storageBucket)
+      .upload(storagePath, bytes, { contentType: opts.contentType, upsert: false });
+    if (upErr) {
+      logger.error('booth picture store failed', { error: upErr.message });
+      return null;
+    }
+    const { error: insErr } = await supabase.from('host_media').insert({
+      id: mediaId,
+      host_kind: 'event',
+      host_id: link.event_id,
+      storage_path: storagePath,
+      filename: `booth.${ext}`,
+      mime_type: opts.contentType,
+      bytes: bytes.length,
+      uploaded_by: null,
+      access_level: 'public',
+      is_approved: link.auto_approve,
+      metadata: {
+        source: 'guest',
+        upload_link_id: link.id,
+        guest_name: opts.guestName,
+        client_id: opts.clientId,
+        captured: true,
+        album: 'booth',
+        look: opts.look,
+        look_id: opts.lookId,
+        // Off the projector and out of the gallery until the guest posts it.
+        posted: false,
+      },
+    });
+    if (insErr) {
+      logger.error('booth picture record failed', { error: insErr.message });
+      await removeObject(storagePath);
+      return null;
+    }
+    return { mediaId, url: toBrowserUrl(storagePath) };
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // POST /public/event-media/links/:code/booth/post
+  // The guest puts one of their kept booth pictures on the big screen.
+  // ────────────────────────────────────────────────────────────────────
+  async function postBooth(req: Request, res: Response): Promise<void> {
+    const ctx = await resolveLink(req, res, 'mine', GUEST_RATE_LIMITS.completePerIp);
+    if (!ctx) return;
+    const { link } = ctx;
+
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const clientId = typeof body['client_id'] === 'string' && UUID_RE.test(body['client_id'])
+      ? body['client_id']
+      : null;
+    const mediaId = typeof body['media_id'] === 'string' && UUID_RE.test(body['media_id'])
+      ? body['media_id']
+      : null;
+    if (!clientId || !mediaId) {
+      sendError(res, 400, 'invalid_request', 'client_id and media_id must be UUIDs');
+      return;
+    }
+    if (!(await checkRate(res, guestRateKey('booth_post', clientId), GUEST_RATE_LIMITS.completePerClient))) return;
+
+    const { data: row, error } = await supabase
+      .from('host_media')
+      .select('id, storage_path, metadata, host_id, host_kind')
+      .eq('id', mediaId)
+      .maybeSingle();
+    if (error) {
+      sendError(res, 500, 'fetch_failed', 'could not look up that picture');
+      return;
+    }
+    const meta = (row?.metadata ?? {}) as Record<string, unknown>;
+    // The same ownership test as deleting: this event, a guest's, this
+    // device's -- and one of the booth's kept pictures. One 404 for all.
+    const owned = row
+      && row.host_kind === 'event'
+      && row.host_id === link.event_id
+      && meta['source'] === 'guest'
+      && meta['client_id'] === clientId
+      && meta['album'] === 'booth'
+      && 'posted' in meta;
+    if (!owned) {
+      sendError(res, 404, 'not_found', 'that picture is not yours to post');
+      return;
+    }
+    if (meta['posted'] === true) {
+      res.status(200).json({ posted: mediaId, already: true });
+      return;
+    }
+
+    // Posting is when it arrives: the projector takes new photos by time,
+    // so the picture is dated now, not when it was made.
+    const { error: updErr } = await supabase
+      .from('host_media')
+      .update({ metadata: { ...meta, posted: true }, created_at: new Date().toISOString() })
+      .eq('id', mediaId);
+    if (updErr) {
+      logger.error('booth post failed', { error: updErr.message });
+      sendError(res, 500, 'post_failed', 'could not post that picture');
+      return;
+    }
+
+    // Layers and thumbnails only for pictures that will be shown.
+    processNewImage(mediaId, row.storage_path as string);
+    const { error: incErr } = await supabase.rpc('events_media_upload_links_increment', { p_link_id: link.id, p_n: 1 });
+    if (incErr) logger.warn('uploads_count increment failed', { error: incErr.message });
+
+    res.status(200).json({ posted: mediaId });
   }
 
   // Crash guard: these are the platform's first UNAUTHENTICATED express
@@ -1121,6 +1275,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     listMine: guarded(listMine),
     deleteMine: guarded(deleteMine),
     faceFilter: guarded(faceFilter),
+    postBooth: guarded(postBooth),
   };
 }
 
@@ -1136,5 +1291,6 @@ export function mountGuestRoutes(router: Router, routes: ReturnType<typeof creat
   // `/booth` is the current spelling; `/face-filter` is kept because
   // phones that already have the page open are still posting to it.
   router.post('/public/event-media/links/:code/booth', routes.faceFilter);
+  router.post('/public/event-media/links/:code/booth/post', routes.postBooth);
   router.post('/public/event-media/links/:code/face-filter', routes.faceFilter);
 }
