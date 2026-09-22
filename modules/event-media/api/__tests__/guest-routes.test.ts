@@ -2,6 +2,24 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createGuestRoutes } from '../public-guest-routes.js';
+import * as provider from '../../lib/booth-provider.js';
+
+// The booth's model calls are replaced wholesale, so no test can reach
+// fal: the style call is steered per test, and the projector-layer steps
+// that run after a post simply report "not configured".
+vi.mock('../../lib/booth-provider.js', async (importOriginal) => {
+  const real = await importOriginal();
+  const off = () => Promise.resolve({ ok: false, error: 'not_configured' });
+  return {
+    ...real,
+    runStyle: vi.fn(off),
+    runSwap: vi.fn(off),
+    runDepth: vi.fn(off),
+    runCutout: vi.fn(off),
+    runPlate: vi.fn(off),
+    runCardCopy: vi.fn(off),
+  };
+});
 import { mintTicket, TICKET_TTL_SECONDS } from '../../lib/upload-tickets.js';
 
 const SECRET = 'guest-routes-test-secret';
@@ -65,6 +83,11 @@ function makeSupabase(config) {
       contains: () => b,
       order: () => b,
       limit: () => b,
+      update: (fields) => {
+        (state.updated ??= []).push({ table, fields });
+        const u = { eq: () => u, then: (resolve) => resolve({ data: null, error: config.updateError ? { message: config.updateError } : null }) };
+        return u;
+      },
       delete: () => {
         state.deleted.push(table);
         const d = { eq: () => d, then: (resolve) => resolve({ data: null, error: null }) };
@@ -112,6 +135,11 @@ function makeSupabase(config) {
             : { data: { signedUrl: 'http://internal-supabase:8000/storage/v1/object/upload/sign/x?token=t' }, error: null },
         ),
         createSignedUrl: () => Promise.resolve({ data: { signedUrl: 'https://signed.example/head' }, error: null }),
+        upload: (path, bytes, opts) => {
+          (state.uploads ??= []).push({ path, bytes: bytes.length, contentType: opts?.contentType });
+          const fail = config.uploadErrorOn && path.includes(config.uploadErrorOn);
+          return Promise.resolve({ data: null, error: fail ? { message: 'storage down' } : null });
+        },
         remove: (paths) => { state.removed.push(...paths); return Promise.resolve({ data: null, error: null }); },
         download: (path) => {
           (state.downloads ??= []).push(path);
@@ -763,5 +791,125 @@ describe('completeUploads', () => {
     const res = mockRes();
     await routes.completeUploads(req({ body: { tickets: [ticketFor()] } }), res);
     expect(res.statusCode).toBe(429);
+  });
+});
+
+
+describe('booth pictures are kept, and posted only when the guest chooses', () => {
+  const PHOTO = 'data:image/jpeg;base64,' + Buffer.from('selfie').toString('base64');
+  const MEDIA = '77777777-2222-4333-8444-555555555555';
+  const BOOTH_LINK = { ...ACTIVE_LINK, allow_face_filter: true };
+
+  beforeEach(() => {
+    process.env.BOOTH_PROVIDER = 'fal';
+    process.env.FAL_API_KEY = 'test-placeholder';
+    provider.runStyle.mockResolvedValue({ ok: true, image: new Uint8Array([1, 2, 3, 4]), contentType: 'image/jpeg' });
+  });
+  afterEach(() => {
+    delete process.env.BOOTH_PROVIDER;
+    delete process.env.FAL_API_KEY;
+  });
+
+  const generate = async (body, config = {}) => {
+    const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW, ...config });
+    const res = mockRes();
+    await createGuestRoutes(deps).faceFilter(req({ body: { client_id: CLIENT_ID, image: PHOTO, effect: 'decade-1970s', ...body } }), res);
+    return { res, supabase };
+  };
+
+  it('stores every picture it makes, unposted, against the guest', async () => {
+    const { res, supabase } = await generate({ return: 'url', guest_name: 'Auntie Carol' });
+    expect(res.statusCode).toBe(200);
+    const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');
+    expect(row.metadata.posted).toBe(false);
+    expect(row.metadata.client_id).toBe(CLIENT_ID);
+    expect(row.metadata.source).toBe('guest');
+    expect(row.metadata.guest_name).toBe('Auntie Carol');
+    expect(row.metadata.look).toBe('1970s');
+    expect(supabase.state.uploads.some((u) => u.path === row.storage_path)).toBe(true);
+    expect(res.body.media_id).toBe(row.id);
+  });
+
+  // The memory fix: a room full of guests must not hold every picture
+  // in the API process as base64.
+  it('answers with a URL, not the picture, for a current page', async () => {
+    const { res } = await generate({ return: 'url' });
+    expect(res.body.image_url).toContain('/booth.jpg');
+    expect(res.body.image).toBeUndefined();
+  });
+
+  it('still answers inline for a page from before the change', async () => {
+    const { res } = await generate({});
+    expect(res.body.image).toMatch(/^data:image\/jpeg;base64,/);
+  });
+
+  it('still hands the guest their picture if keeping it fails', async () => {
+    const { res } = await generate({ return: 'url' }, { uploadErrorOn: '/booth.' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.media_id).toBeNull();
+    expect(res.body.image).toMatch(/^data:image\/jpeg;base64,/);
+  });
+
+  // A kept picture is invisible to everyone until posted.
+  it('keeps unposted pictures out of the feed and out of "Yours"', async () => {
+    const orCalls = [];
+    const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW, mediaRows: [] });
+    const realFrom = supabase.from;
+    supabase.from = (t) => { const b = realFrom(t); const or = b.or; b.or = (f) => { orCalls.push(f); return or(f); }; return b; };
+    const routes = createGuestRoutes(deps);
+    await routes.listMedia(req(), mockRes());
+    await routes.listMine(req({ body: { client_id: CLIENT_ID } }), mockRes());
+    const filter = 'metadata->>posted.is.null,metadata->>posted.neq.false';
+    expect(orCalls.filter((f) => f === filter)).toHaveLength(2);
+  });
+
+  const post = async (existingMedia, body = {}) => {
+    const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW, existingMedia });
+    const res = mockRes();
+    await createGuestRoutes(deps).postBooth(req({ body: { client_id: CLIENT_ID, media_id: MEDIA, ...body } }), res);
+    return { res, supabase };
+  };
+  const kept = (over = {}) => ({
+    id: MEDIA, host_kind: 'event', host_id: EVENT_ID, storage_path: `event/${EVENT_ID}/${MEDIA}/booth.jpg`,
+    metadata: { source: 'guest', client_id: CLIENT_ID, album: 'booth', posted: false, look: '1970s' },
+    ...over,
+  });
+
+  it('posting puts it on the projector, dated now, and makes its layers', async () => {
+    const before = Date.now();
+    const { res, supabase } = await post(kept());
+    expect(res.statusCode).toBe(200);
+    const upd = supabase.state.updated.find((u) => u.table === 'host_media').fields;
+    expect(upd.metadata.posted).toBe(true);
+    expect(upd.metadata.look).toBe('1970s');
+    expect(Date.parse(upd.created_at)).toBeGreaterThanOrEqual(before);
+    expect(supabase.state.invoked[0].name).toBe('media-process-image');
+  });
+
+  it('refuses a picture that is not this device\'s, identically', async () => {
+    for (const row of [
+      null,
+      kept({ metadata: { ...kept().metadata, client_id: '99999999-2222-4333-8444-555555555555' } }),
+      kept({ host_id: '99999999-2222-4333-8444-555555555555' }),
+      kept({ metadata: { ...kept().metadata, source: 'admin' } }),
+      // An ordinary upload is not the booth's to post.
+      kept({ metadata: { source: 'guest', client_id: CLIENT_ID, album: 'day' } }),
+    ]) {
+      const { res, supabase } = await post(row);
+      expect(res.statusCode).toBe(404);
+      expect(supabase.state.updated ?? []).toHaveLength(0);
+    }
+  });
+
+  it('posting twice is harmless', async () => {
+    const { res, supabase } = await post(kept({ metadata: { ...kept().metadata, posted: true } }));
+    expect(res.statusCode).toBe(200);
+    expect(res.body.already).toBe(true);
+    expect(supabase.state.updated ?? []).toHaveLength(0);
+  });
+
+  it('rejects malformed ids before touching the database', async () => {
+    const { res } = await post(kept(), { media_id: "x' or 1=1" });
+    expect(res.statusCode).toBe(400);
   });
 });

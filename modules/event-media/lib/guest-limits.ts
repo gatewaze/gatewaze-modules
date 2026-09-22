@@ -136,9 +136,15 @@ export const GUEST_RATE_LIMITS = {
   // is one NAT and every guest shares it. Without this, one caller
   // could drain the whole hourly budget in about three minutes and
   // leave the real guests 429'd for the rest of the hour. A per-link
-  // burst cap spreads the damage over the full hour instead: 30/min is
-  // far more than a room full of guests will ever ask for together.
-  faceFilterPerLinkBurst: { max: 30, windowMs: 60_000 },
+  // burst cap spreads the damage over the full hour instead.
+  //
+  // It was 30/min, which would have turned away seventy of a hundred
+  // guests trying the booth at once (asked 2026-09-22). 90/min lets a
+  // full room through within about a minute while keeping the burst
+  // under a quarter of the hourly cap (pinned in booth-effects.test.ts),
+  // so a deliberate drain still takes over four minutes. Spend is
+  // bounded by the hourly cap above either way.
+  faceFilterPerLinkBurst: { max: 90, windowMs: 60_000 },
 } as const;
 
 export function guestRateKey(op: string, discriminator: string): string {

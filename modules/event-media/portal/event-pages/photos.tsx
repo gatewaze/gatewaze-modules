@@ -142,6 +142,24 @@ function effectiveMime(file: File): string {
   return map[ext] ?? ''
 }
 
+/** Fetch an image and hold it as a data URL; null if that fails. */
+async function fetchAsDataUrl(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const blob = await res.blob()
+    if (!blob.type.startsWith('image/')) return null
+    return await new Promise<string | null>((resolve) => {
+      const r = new FileReader()
+      r.onload = () => resolve(typeof r.result === 'string' ? r.result : null)
+      r.onerror = () => resolve(null)
+      r.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
+
 function putWithProgress(url: string, file: File, mime: string, onProgress: (pct: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -203,6 +221,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     /** Which effect is generating, so the picker can show it working. */
     busy: string | null
     error: string | null
+    /** The kept copy of `preview` on the server, if it was kept. */
+    mediaId?: string | null
   } | null>(null)
   // Can this browser hand a FILE to the share sheet? On iOS that sheet
   // is what puts "Save Image" in front of a guest; long-pressing the
@@ -685,10 +705,23 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         headers: { 'Content-Type': 'application/json' },
         // Always send the ORIGINAL, never the current preview: effects
         // must not stack on top of one another.
-        body: JSON.stringify({ client_id: guest.client_id, image: shot.original, ...payload }),
+        // A URL back rather than the picture: the server keeps every
+        // picture it makes, and handing each back inline is what would
+        // have run it out of memory with a room full of guests.
+        body: JSON.stringify({
+          client_id: guest.client_id,
+          guest_name: guest.name,
+          image: shot.original,
+          return: 'url',
+          ...payload,
+        }),
       })
       const data = await res.json().catch(() => null)
-      if (!res.ok || !data?.image) {
+      // The picture as a data URL all the same: Save has to hand the
+      // bytes to the share sheet synchronously, inside the tap.
+      let image: string | null = typeof data?.image === 'string' ? data.image : null
+      if (res.ok && !image && typeof data?.image_url === 'string') image = await fetchAsDataUrl(data.image_url)
+      if (!res.ok || !image) {
         setShot((s) => (s ? {
           ...s,
           busy: null,
@@ -699,8 +732,9 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       setShot((s) => (s ? {
         ...s,
         busy: null,
-        preview: data.image,
+        preview: image,
         filterLabel: data.effect?.label ?? data.filter?.label ?? null,
+        mediaId: typeof data?.media_id === 'string' ? data.media_id : null,
       } : s))
     } catch {
       setShot((s) => (s ? { ...s, busy: null, error: 'could not reach the photo booth' } : s))
@@ -758,11 +792,31 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     enqueueFiles(dt.files, true, fromBooth, onMediaId)
   }, [enqueueFiles])
 
+  /** Put a booth picture the server already kept onto the big screen. */
+  const postKept = useCallback(async (mediaId: string): Promise<boolean> => {
+    if (!code || !guest) return false
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/booth/post`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: guest.client_id, media_id: mediaId }),
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  }, [code, guest])
+
   const acceptShot = useCallback(async () => {
     if (!shot) return
+    // A kept booth picture is posted, not uploaded a second time.
+    if (shot.preview && shot.mediaId && (await postKept(shot.mediaId))) {
+      setShot(null)
+      return
+    }
     await postImage(shot.preview ?? shot.original, Boolean(shot.preview))
     setShot(null)
-  }, [shot, postImage])
+  }, [shot, postImage, postKept])
 
   /**
    * Keep whichever version is on screen.
@@ -1545,6 +1599,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       onPostImage={postImage}
       onSaveImage={saveImage}
       onRemoveUpload={removeUpload}
+      onPostKept={postKept}
     />,
     document.body,
   ) : null
