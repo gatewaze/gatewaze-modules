@@ -265,11 +265,15 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   // every photo of theirs off the projector and the gallery.
   const [uploaders, setUploaders] = useState<Array<{ memberId: string; name: string; photos: number }>>([]);
   const [blocked, setBlocked] = useState<Set<string>>(new Set());
+  // Names claimed by a phone (one phone per name).
+  const [claims, setClaims] = useState<Array<{ member_id: string; guest_name: string | null; claimed_at: string }>>([]);
   const loadGuests = useCallback(async () => {
-    const [{ data: rows }, { data: blocks }] = await Promise.all([
+    const [{ data: rows }, { data: blocks }, { data: held }] = await Promise.all([
       supabase.from('host_media').select('metadata').eq('host_kind', 'event').eq('host_id', eventId).limit(5000),
       supabase.from('events_media_guest_blocks').select('member_id').eq('event_id', eventId),
+      supabase.from('events_media_guest_claims').select('member_id, guest_name, claimed_at').eq('event_id', eventId).order('claimed_at', { ascending: false }),
     ]);
+    setClaims((held ?? []) as Array<{ member_id: string; guest_name: string | null; claimed_at: string }>);
     const byMember = new Map<string, { memberId: string; name: string; photos: number }>();
     for (const r of (rows ?? []) as Array<{ metadata: Record<string, unknown> | null }>) {
       const m = r.metadata ?? {};
@@ -286,6 +290,16 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   useEffect(() => {
     if (expanded) void loadGuests();
   }, [expanded, loadGuests]);
+
+  /** Free a name so its real owner can choose it on their own phone. */
+  const releaseName = async (c: { member_id: string; guest_name: string | null }) => {
+    const name = c.guest_name ?? 'this guest';
+    if (!window.confirm(`Release ${name}? Whoever chose it will be asked who they are next time, and the real ${name} can then choose it.`)) return;
+    const { error } = await supabase.from('events_media_guest_claims').delete().eq('event_id', eventId).eq('member_id', c.member_id);
+    if (error) { toast.error('Could not release that name'); return; }
+    toast.success(`${name} is free to choose again`);
+    await loadGuests();
+  };
 
   const toggleBlock = async (g: { memberId: string; name: string }) => {
     const isBlocked = blocked.has(g.memberId);
@@ -567,6 +581,25 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
           </div>
 
           <KeyPeoplePanel eventId={eventId} />
+
+          {claims.length > 0 && (
+            <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
+              <p className="text-sm font-medium mb-1">Names chosen ({claims.length})</p>
+              <p className="text-xs text-gray-500 mb-2">
+                Each name can be chosen on one phone only. If someone picked the wrong person, release the name.
+              </p>
+              <div className="space-y-1 mb-2 max-h-48 overflow-y-auto">
+                {claims.map((c) => (
+                  <div key={c.member_id} className="flex items-center gap-2 text-sm">
+                    <span>{c.guest_name ?? 'Guest'}</span>
+                    <span className="text-xs text-gray-500">{new Date(c.claimed_at).toLocaleString()}</span>
+                    <span className="flex-1" />
+                    <button className="text-xs underline" onClick={() => void releaseName(c)}>Release</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Photo booth. Style effects need only the provider; face
               swaps also need the reference faces uploaded below. Both
