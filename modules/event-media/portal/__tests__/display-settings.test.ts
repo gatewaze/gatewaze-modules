@@ -17,7 +17,8 @@ import {
   normaliseStream,
   normaliseRotation,
   nextInRotation,
-  DEFAULT_READY,
+  dayAlbums,
+  DAY_ONLY_AFTER,
   DEFAULT_PRELOAD,
   DEFAULT_DAY,
   DEFAULT_BOOTH,
@@ -68,8 +69,12 @@ describe('migrateStreams', () => {
 });
 
 describe('normaliseStream', () => {
-  it('accepts the four views and the rotation', () => {
-    for (const v of ['preload', 'ready', 'day', 'booth', 'mix']) expect(normaliseStream(v)).toBe(v);
+  it('accepts the three views and the rotation', () => {
+    for (const v of ['preload', 'day', 'booth', 'mix']) expect(normaliseStream(v)).toBe(v);
+  });
+
+  it('turns a saved Getting ready view into The day', () => {
+    expect(normaliseStream('ready')).toBe('day');
   });
 
   // Preload is the only view certain to have photos before the day, so
@@ -98,23 +103,29 @@ describe('Preload settings', () => {
   });
 });
 
-describe('Getting ready', () => {
-  it('has its own defaults, and keeps a saved block', () => {
-    expect(migrateStreams({}).ready).toEqual(DEFAULT_READY);
-    expect(migrateStreams({ ready: { effect: 'wedflix' } }).ready.effect).toBe('wedflix');
+describe('Getting ready is part of the day', () => {
+  const photos = (day, ready) => [
+    ...Array.from({ length: day }, () => ({ album: 'day' })),
+    ...Array.from({ length: ready }, () => ({ album: 'ready' })),
+  ];
+  it('shows Getting ready alongside the day until the day has its own', () => {
+    expect([...dayAlbums(photos(0, 5))].sort()).toEqual(['day', 'ready']);
+    expect([...dayAlbums(photos(DAY_ONLY_AFTER - 1, 5))].sort()).toEqual(['day', 'ready']);
   });
-
-  // Adding a view must not disturb a setup saved before it existed.
-  it('leaves an older save\'s other views alone', () => {
-    const m = migrateStreams({ day: { effect: 'blur' }, booth: { columns: 2 } });
-    expect(m.day.effect).toBe('blur');
-    expect(m.booth.columns).toBe(2);
+  it('shows the day alone from the twentieth photo of its own', () => {
+    expect(DAY_ONLY_AFTER).toBe(20);
+    expect([...dayAlbums(photos(20, 50))]).toEqual(['day']);
+  });
+  it('has no separate setting any more', () => {
+    expect('ready' in migrateStreams({ ready: { effect: 'blur' } })).toBe(false);
   });
 });
 
 describe('normaliseRotation', () => {
   it('keeps known views once each, in panel order', () => {
-    expect(normaliseRotation(['booth', 'ready', 'booth', 'nope'])).toEqual(['ready', 'booth']);
+    expect(normaliseRotation(['booth', 'day', 'booth', 'nope'])).toEqual(['day', 'booth']);
+    // A saved Getting ready becomes the day, once.
+    expect(normaliseRotation(['ready', 'day', 'booth'])).toEqual(['day', 'booth']);
   });
 
   // "In turn" used to mean the day and the booth; a save from then, or a
@@ -128,28 +139,28 @@ describe('nextInRotation', () => {
   const all = () => true;
 
   it('walks the rotation in order and wraps', () => {
-    const r = ['preload', 'ready', 'day'];
-    expect(nextInRotation(r, 'preload', all)).toBe('ready');
-    expect(nextInRotation(r, 'ready', all)).toBe('day');
-    expect(nextInRotation(r, 'day', all)).toBe('preload');
+    const r = ['preload', 'day', 'booth'];
+    expect(nextInRotation(r, 'preload', all)).toBe('day');
+    expect(nextInRotation(r, 'day', all)).toBe('booth');
+    expect(nextInRotation(r, 'booth', all)).toBe('preload');
   });
 
   // The morning of the wedding, the booth has nothing yet.
   it('skips a view with nothing to show', () => {
     const has = (v) => v !== 'booth';
-    expect(nextInRotation(['ready', 'day', 'booth'], 'day', has)).toBe('ready');
+    expect(nextInRotation(['preload', 'day', 'booth'], 'day', has)).toBe('preload');
   });
 
   it('stays put when no other view has photos', () => {
-    expect(nextInRotation(['ready', 'day'], 'day', (v) => v === 'day')).toBe('day');
+    expect(nextInRotation(['preload', 'day'], 'day', (v) => v === 'day')).toBe('day');
   });
 
   it('starts from the first when the current view left the rotation', () => {
-    expect(nextInRotation(['ready', 'booth'], 'day', all)).toBe('ready');
-    expect(nextInRotation(['ready', 'booth'], 'day', () => false)).toBe('ready');
+    expect(nextInRotation(['preload', 'booth'], 'day', all)).toBe('preload');
+    expect(nextInRotation(['preload', 'booth'], 'day', () => false)).toBe('preload');
   });
 
   it('holds a one-view rotation on that view', () => {
-    expect(nextInRotation(['ready'], 'ready', all)).toBe('ready');
+    expect(nextInRotation(['booth'], 'booth', all)).toBe('booth');
   });
 });
