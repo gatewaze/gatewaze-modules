@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { QRCodeService } from '@/utils/qrCodeService';
 import { toast } from 'sonner';
+import { BOOTH_ERAS } from '../../lib/booth-eras';
 
 interface GuestUploadLinksPanelProps {
   eventId: string; // events.id uuid
@@ -210,6 +211,37 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
       setLoaded(true);
     }
   }, [eventId]);
+
+  // Which booth eras guests are offered: all of them (an era picker), or
+  // one, for a themed party -- the booth then opens straight into it.
+  const [boothEra, setBoothEra] = useState<string>('all');
+  useEffect(() => {
+    if (!expanded) return;
+    let cancelled = false;
+    void supabase
+      .from('events_media_booth_settings')
+      .select('era')
+      .eq('event_id', eventId)
+      .maybeSingle()
+      .then(({ data }: { data: { era?: string } | null }) => {
+        if (!cancelled && data?.era) setBoothEra(data.era);
+      });
+    return () => { cancelled = true; };
+  }, [expanded, eventId]);
+
+  const saveBoothEra = async (era: string) => {
+    const prev = boothEra;
+    setBoothEra(era);
+    const { error } = await supabase
+      .from('events_media_booth_settings')
+      .upsert({ event_id: eventId, era, updated_at: new Date().toISOString() }, { onConflict: 'event_id' });
+    if (error) {
+      setBoothEra(prev);
+      toast.error('Could not save the booth era');
+      return;
+    }
+    toast.success(era === 'all' ? 'Guests choose from every era' : `The booth is ${era} only`);
+  };
 
   const loadPending = useCallback(async () => {
     // Unapproved guest rows (auto_approve=false moderation queue) —
@@ -427,6 +459,19 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
               are offered to guests only when the link opts in. */}
           <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
             <p className="text-sm font-medium mb-1">Photo booth</p>
+            <label className="flex flex-wrap items-center gap-2 text-sm mb-2">
+              Eras
+              <select
+                value={boothEra}
+                onChange={(e) => void saveBoothEra(e.target.value)}
+                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="all">All eras — guests pick one</option>
+                {BOOTH_ERAS.map((era) => (
+                  <option key={era.key} value={era.key}>{era.label} only — a themed event</option>
+                ))}
+              </select>
+            </label>
             {provider && !provider.configured ? (
               <p className="text-xs text-gray-500 mb-2">
                 Not available — {provider.reason}. Set BOOTH_PROVIDER=fal and FAL_API_KEY to

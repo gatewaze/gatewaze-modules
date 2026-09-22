@@ -97,6 +97,7 @@ function makeSupabase(config) {
         if (table === 'events_media_upload_links') return Promise.resolve({ data: config.link ?? null, error: null });
         if (table === 'events') return Promise.resolve({ data: config.event ?? null, error: null });
         if (table === 'host_media') return Promise.resolve({ data: config.existingMedia ?? null, error: null });
+        if (table === 'events_media_booth_settings') return Promise.resolve({ data: config.boothSetting ?? null, error: null });
         return Promise.resolve({ data: null, error: null });
       },
       then: (resolve) => {
@@ -289,7 +290,7 @@ describe('link resolution', () => {
   });
 });
 
-describe('getLink: booth theme', () => {
+describe('getLink: the illustrated booth', () => {
   const ROOM = {
     image: 'inside.webp', width: 941, height: 1672,
     window: { x: 0.16, y: 0.18, w: 0.67, h: 0.53 },
@@ -297,8 +298,14 @@ describe('getLink: booth theme', () => {
     panel: { x: 0.14, y: 0.73, w: 0.72, h: 0.18 },
   };
   const THEME = {
-    version: 1, default_interior: 'main', interiors: { main: ROOM },
-    outside: { image: 'outside.webp', width: 941, height: 1672, tiles: [{ effect: 'decade-1990s', x: 0.3, y: 0.6, w: 0.3, h: 0.2 }] },
+    version: 2,
+    picker: { image: 'eras.webp', width: 941, height: 1672, tiles: [
+      { key: '1980s', x: 0.3, y: 0.2, w: 0.3, h: 0.2 }, { key: '1970s', x: 0.6, y: 0.2, w: 0.3, h: 0.2 },
+    ] },
+    eras: {
+      '1980s': { interior: ROOM, samples: { 'top-gun': 'sample-top-gun.webp' } },
+      '1970s': { interior: { ...ROOM, image: 'inside-1970s.webp' } },
+    },
   };
   const BOOTH_LINK = { ...ACTIVE_LINK, allow_face_filter: true };
 
@@ -319,24 +326,42 @@ describe('getLink: booth theme', () => {
     return { res, supabase, routes };
   };
 
-  it('serves the event theme with its images resolved inside the event folder', async () => {
+  it('offers every era the theme has a booth for, each with its six looks', async () => {
     const { res, supabase } = await get({ themeJson: THEME });
     expect(supabase.state.downloads).toEqual([`event/${EVENT_ID}/booth-theme/theme.json`]);
-    expect(res.body.booth_theme.outside.image).toContain(`/event/${EVENT_ID}/booth-theme/outside.webp`);
-    expect(res.body.booth_theme.outside.tiles[0].effect).toBe('decade-1990s');
+    const { booth } = res.body;
+    expect(booth.eras.map((e) => e.key)).toEqual(['1970s', '1980s']);
+    const eighties = booth.eras.find((e) => e.key === '1980s');
+    expect(eighties.looks).toHaveLength(6);
+    expect(eighties.looks.find((l) => l.id === 'top-gun').sample).toContain(`/event/${EVENT_ID}/booth-theme/sample-top-gun.webp`);
+    expect(eighties.looks.find((l) => l.id === 'synthwave').sample).toBeNull();
+    expect(eighties.interior.image).toContain(`/event/${EVENT_ID}/booth-theme/inside.webp`);
+    expect(booth.picker.tiles.map((t) => t.key)).toEqual(['1980s', '1970s']);
   });
 
-  it('serves no theme when the event has none', async () => {
+  // An 80s party: the picker is skipped and only the 80s booth offered.
+  it('offers just the one era an event is themed on', async () => {
+    const { res } = await get({ themeJson: THEME, tables: {}, boothSetting: { era: '1980s' } });
+    expect(res.body.booth.eras.map((e) => e.key)).toEqual(['1980s']);
+    expect(res.body.booth.picker.tiles.map((t) => t.key)).toEqual(['1980s']);
+  });
+
+  it('treats a garbled setting as all eras', async () => {
+    const { res } = await get({ themeJson: THEME, boothSetting: { era: 'drop table' } });
+    expect(res.body.booth.eras).toHaveLength(2);
+  });
+
+  it('serves no booth when the event has no theme', async () => {
     const { res } = await get({});
     expect(res.statusCode).toBe(200);
-    expect(res.body.booth_theme).toBeNull();
+    expect(res.body.booth).toBeNull();
   });
 
-  // Without the booth there are no looks, and a theme with no looks is
-  // a board of buttons that do nothing.
-  it('serves no theme when the link does not offer the booth', async () => {
+  // Without the booth there are no looks, and a board of looks that do
+  // nothing is worse than no board.
+  it('serves no booth when the link does not offer it', async () => {
     const { res, supabase } = await get({ themeJson: THEME, link: ACTIVE_LINK });
-    expect(res.body.booth_theme).toBeNull();
+    expect(res.body.booth).toBeNull();
     expect(supabase.state.downloads).toBeUndefined();
   });
 
@@ -825,7 +850,7 @@ describe('booth pictures are kept, and posted only when the guest chooses', () =
     expect(row.metadata.client_id).toBe(CLIENT_ID);
     expect(row.metadata.source).toBe('guest');
     expect(row.metadata.guest_name).toBe('Auntie Carol');
-    expect(row.metadata.look).toBe('1970s');
+    expect(row.metadata.look).toBe('Seventies lounge');
     expect(supabase.state.uploads.some((u) => u.path === row.storage_path)).toBe(true);
     expect(res.body.media_id).toBe(row.id);
   });

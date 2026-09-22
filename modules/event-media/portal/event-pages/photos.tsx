@@ -23,7 +23,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
-import BoothExperience, { type BoothLook, type BoothThemeView } from './_components/BoothExperience'
+import BoothExperience, { type BoothLook, type BoothView } from './_components/BoothExperience'
 
 // Same-origin ALWAYS: the portal proxies /api/public/* to the api
 // service (next.config rewrites). NEXT_PUBLIC_API_URL is unreliable in
@@ -98,7 +98,7 @@ interface LinkInfo {
   face_filters?: Array<{ id: string; label: string; preview: string }>
   booth_effects?: Array<{ id: string; label: string; blurb: string; kind: 'swap' | 'style' }>
   /** The illustrated booth, when the event has one (lib/booth-theme.ts). */
-  booth_theme?: BoothThemeView | null
+  booth?: BoothView | null
 }
 
 interface GalleryItem {
@@ -1010,7 +1010,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const activeSection = boothOpen ? section : 'upload'
   // With a theme, the booth is a place you walk into rather than a card:
   // full screen, over everything, on phones and desktops alike.
-  const boothTheme = link?.booth_theme ?? null
+  const boothTheme = link?.booth && link.booth.eras.length > 0 ? link.booth : null
   const immersiveBooth = activeSection === 'booth' && Boolean(boothTheme) && mounted
 
   // On phones, a guest with an upload code gets a full-viewport
@@ -1580,7 +1580,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
 
   const booth = immersiveBooth ? createPortal(
     <BoothExperience
-      theme={boothTheme!}
+      booth={boothTheme!}
       effects={boothStyles}
       faces={boothFaces}
       shot={shot}
