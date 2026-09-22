@@ -48,7 +48,8 @@ export interface BoothInterior extends BoothScene {
 
 /** A painted board: tiles drawn on artwork, each naming what it opens. */
 export interface PaintedBoard extends BoothScene {
-  tiles: Array<Rect & { key: string }>;
+  /** `window`: where on the tile the page drops a picture (a decade's photo of the key people). */
+  tiles: Array<Rect & { key: string; window?: Rect }>;
 }
 
 export interface ThemeEra {
@@ -116,7 +117,8 @@ function board(v: unknown, url: (f: string) => string, allowed: (key: string) =>
     const r = rect(t);
     const key = t['key'];
     if (!r || typeof key !== 'string' || !allowed(key)) continue;
-    tiles.push({ ...r, key });
+    const win = t['window'] === undefined ? null : rect(t['window']);
+    tiles.push({ ...r, key, ...(win ? { window: win } : {}) });
   }
   return tiles.length > 0 ? { ...s, tiles } : null;
 }

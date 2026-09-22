@@ -394,6 +394,126 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
       'ruined city and a low sun behind, desaturated cool grading with warm highlights, no symbols, ' +
       'emblems or lettering. ' + POSTER_FACES,
   },
+
+  // 1940s
+  {
+    id: 'decade-1940s', label: 'Victory dance', blurb: 'Big band, dance hall, victory rolls', kind: 'style',
+    style: 'a 1940s dance hall photograph: 1940s fashion such as tea dresses, victory-roll hair, high-waisted ' +
+      'trousers, braces and wide ties, a big band on a bunting-hung stage behind, warm tungsten light, ' +
+      'faded 1940s colour film. Style the existing hair into a 1940s shape but keep its colour and length. ' +
+      DECADE_FRAMING,
+  },
+  {
+    id: 'forties-noir', label: 'Film noir', blurb: 'Venetian-blind shadows, black and white', kind: 'style',
+    style: 'a 1940s film noir still in black and white: trench coats, fedoras only if the input has hats, ' +
+      'satin blouses, hard low-key light through venetian blinds throwing striped shadows, cigarette-free ' +
+      'smoky haze, deep blacks. Style the existing hair into a 1940s shape but keep its colour and length. ' +
+      DECADE_FRAMING,
+  },
+  {
+    id: 'forties-technicolor', label: 'Technicolor star', blurb: 'Studio glamour in saturated colour', kind: 'style',
+    style: 'a 1940s Technicolor studio star portrait: glamorous 1940s evening wear, rich saturated three-strip ' +
+      'Technicolor colour, a painted studio backdrop, soft diffused key light, glossy finish. Style the ' +
+      'existing hair into a 1940s shape but keep its colour and length. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'forties-swing', label: 'Swing time', blurb: 'Jitterbug club, brass and spotlights', kind: 'style',
+    style: 'a 1940s swing club photograph: people mid-dance in a jitterbug club, 1940s dance clothes such ' +
+      'as swing skirts, saddle shoes and zoot-free suits, a brass section and spotlights behind, black ' +
+      'and white press-camera flash. Style the existing hair into a 1940s shape but keep its colour and ' +
+      'length. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'forties-travel-poster', label: 'Travel poster', blurb: 'Painted seaside travel poster', kind: 'style',
+    style: 'a painted 1940s seaside travel poster: flat gouache illustration, a sunny promenade, striped ' +
+      'deckchairs and a pier behind, 1940s holiday clothes, limited poster palette, lithograph texture, no ' +
+      'lettering at all. ' + POSTER_FACES,
+  },
+  {
+    id: 'forties-cafe', label: 'Café society', blurb: 'Parisian street café, sepia tones', kind: 'style',
+    style: 'a 1940s Parisian street café photograph: little round tables, bicycles and a striped awning, ' +
+      '1940s coats, berets only if the input has hats, soft sepia-toned print. Style the existing hair into ' +
+      'a 1940s shape but keep its colour and length. ' + DECADE_FRAMING,
+  },
+
+  // 2000s
+  {
+    id: 'decade-2000s', label: 'Digicam flash', blurb: 'Compact camera, harsh flash, low-rise denim', kind: 'style',
+    style: 'a 2000s compact digital camera snapshot: 2000s fashion such as low-rise jeans, trucker jackets, ' +
+      'layered tank tops and chunky belts, harsh built-in flash, slightly blown highlights, early digital ' +
+      'noise and cool colour. Style the existing hair into a 2000s shape but keep its colour and length. ' +
+      DECADE_FRAMING,
+  },
+  {
+    id: 'noughties-popstar', label: 'Pop star', blurb: 'Glossy album cover, metallic and frosted', kind: 'style',
+    style: 'a 2000s pop album cover photograph: metallic and pastel outfits, butterfly clips only in long ' +
+      'hair, a glossy white studio with a soft glow, heavy airbrushed retouching look, no lettering. Style ' +
+      'the existing hair into a 2000s shape but keep its colour and length. ' + POSTER_FACES,
+  },
+  {
+    id: 'noughties-teen-movie', label: 'Teen movie', blurb: 'High-school comedy poster, bright sky', kind: 'style',
+    style: 'a 2000s teen comedy movie poster: bright blue sky, a high-school lawn and lockers behind, 2000s ' +
+      'teen fashion such as hoodies, cargo trousers and layered tops, punchy saturated colour, no ' +
+      'lettering at all. ' + POSTER_FACES,
+  },
+  {
+    id: 'noughties-red-carpet', label: 'Red carpet', blurb: 'Paparazzi flashes, premiere night', kind: 'style',
+    style: 'a 2000s red carpet premiere photograph: a step-and-repeat wall with no logos or lettering, ' +
+      'paparazzi flashes going off, 2000s evening wear such as slip dresses and velvet blazers, crisp ' +
+      'flash-lit digital photo. Style the existing hair into a 2000s shape but keep its colour and length. ' +
+      DECADE_FRAMING,
+  },
+  {
+    id: 'noughties-club', label: 'Club night', blurb: 'Velvet rope, bling and purple haze', kind: 'style',
+    style: 'a 2000s R&B club night photograph: a velvet rope and purple and blue club lights behind, 2000s ' +
+      'going-out clothes such as satin shirts, halter tops and chunky jewellery, flash and haze. Style the ' +
+      'existing hair into a 2000s shape but keep its colour and length. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'noughties-webcam', label: 'Webcam era', blurb: 'Bedroom webcam, fairy lights, low-res', kind: 'style',
+    style: 'a 2000s bedroom webcam photo: fairy lights and band-free posters on the wall behind, 2000s ' +
+      'hoodies and graphic tees, low-resolution webcam colour with a slight blur, soft screen glow, no ' +
+      'interface or text. Style the existing hair into a 2000s shape but keep its colour and length. ' +
+      DECADE_FRAMING,
+  },
+
+  // 2020s
+  {
+    id: 'decade-2020s', label: 'Portrait mode', blurb: 'Golden hour, creamy background blur', kind: 'style',
+    style: 'a 2020s smartphone portrait-mode photograph: golden-hour light, creamy background blur of a city ' +
+      'park, 2020s fashion such as oversized blazers, knitwear and wide-leg trousers, clean natural colour. ' +
+      'Style the existing hair into a 2020s shape but keep its colour and length. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'twenties-neon-city', label: 'Neon city', blurb: 'Rainy night street, neon reflections', kind: 'style',
+    style: 'a 2020s night-time city street photograph: rain-wet pavement reflecting neon signs with no ' +
+      'readable lettering, teal and magenta colour grade, 2020s streetwear such as puffer jackets and ' +
+      'technical coats, cinematic shallow focus. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'twenties-film-camera', label: '35mm revival', blurb: 'Grainy film camera, warm and soft', kind: 'style',
+    style: 'a 2020s 35mm film camera photograph: warm Portra-style colour, soft grain, gentle halation around ' +
+      'highlights, a sunny beach or park behind, relaxed 2020s clothes such as linen shirts and knit vests. ' +
+      'Style the existing hair into a 2020s shape but keep its colour and length. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'twenties-prestige-drama', label: 'Prestige drama', blurb: 'Moody streaming-series key art', kind: 'style',
+    style: 'a 2020s prestige streaming drama key art photograph: moody dark backdrop, dramatic side light, ' +
+      'muted teal and amber grade, tailored dark clothing, no lettering, logos or symbols. ' + POSTER_FACES,
+  },
+  {
+    id: 'twenties-streetwear', label: 'Streetwear', blurb: 'Lookbook shoot, pastel studio', kind: 'style',
+    style: 'a 2020s streetwear lookbook photograph: a pastel colour-block studio set, 2020s streetwear such ' +
+      'as oversized hoodies, cargo trousers, bucket hats only if the input has hats and chunky trainers, ' +
+      'crisp even light. Style the existing hair into a 2020s shape but keep its colour and length. ' +
+      DECADE_FRAMING,
+  },
+  {
+    id: 'twenties-garden-party', label: 'Garden party', blurb: 'Fairy lights, meadow flowers, dusk', kind: 'style',
+    style: 'a 2020s garden party photograph at dusk: festoon lights, meadow flowers and a long table behind, ' +
+      '2020s summer wedding-guest fashion such as floral midi dresses and relaxed linen suits, soft warm ' +
+      'light. Style the existing hair into a 2020s shape but keep its colour and length. ' + DECADE_FRAMING,
+  },
 ];
 
 /**
@@ -405,6 +525,33 @@ export function buildPrompt(effect: BoothEffect): string {
   const body = effect.caricature ? REALISTIC : `${REALISTIC} ${PROPORTIONS}`;
   return `${SAME_PEOPLE_FIRST} Now restyle the photo as ${effect.style} ` +
     `${KEEP} ${body} ${NO_NAMES} ${SAME_PEOPLE_LAST}`;
+}
+
+/**
+ * The prompt for a look's EXAMPLE picture: not a guest's photo restyled,
+ * but the event's key people made fresh from their reference photos, so
+ * every sample in the booth shows them. Same guard rails as a guest's
+ * picture, with the people counted and named from the references.
+ */
+export function buildSamplePrompt(
+  effect: BoothEffect,
+  people: ReadonlyArray<{ name: string; photos: number }>,
+): string {
+  const n = people.length;
+  let first = 1;
+  const who = people.map((p) => {
+    const span = p.photos > 1 ? `images ${first} to ${first + p.photos - 1} show` : `image ${first} shows`;
+    first += p.photos;
+    return `${span} ${p.name}`;
+  }).join('; ');
+  const count = n === 1 ? 'exactly one person' : `exactly ${n} people`;
+  const body = effect.caricature ? REALISTIC : `${REALISTIC} ${PROPORTIONS}`;
+  return `These are reference photos: ${who}. CRITICAL RULE: create one new photograph showing ${count}, ` +
+    `${n === 1 ? 'that person' : 'these people together'}, and no one else. ` +
+    `Make it ${effect.style} Frame them from about the waist up, facing the camera, close enough that ` +
+    `every face is large and clear. Keep each person's exact face, features, skin tone, eyeglasses and ` +
+    `identity from their reference photos. Do not beautify them. Photorealistic. ${body} ${NO_NAMES} ` +
+    `Reminder: ${count} in the picture, each exactly as in their references.`;
 }
 
 export function boothEffect(id: string): BoothEffect | null {

@@ -437,6 +437,20 @@ export async function runPlate(imageUrl: string): Promise<BoothResult> {
   });
 }
 
+/**
+ * Make a new picture from several reference photos -- the event's key
+ * people -- for the booth's examples. The model takes up to ten images.
+ */
+export async function runStyleRefs(imageUrls: string[], prompt: string): Promise<BoothResult> {
+  if (!styleConfigured()) return { ok: false, error: 'not_configured' };
+  if (imageUrls.length === 0) return { ok: false, error: 'provider_error', detail: 'no references' };
+  return runFal(model('BOOTH_STYLE_MODEL', DEFAULT_STYLE_MODEL), {
+    prompt,
+    image_urls: imageUrls.slice(0, 10),
+    output_format: 'jpeg',
+  });
+}
+
 /** Restyle `imageUrl` with a catalogue prompt, keeping the faces. */
 export async function runStyle(imageUrl: string, prompt: string): Promise<BoothResult> {
   if (!styleConfigured()) return { ok: false, error: 'not_configured' };
