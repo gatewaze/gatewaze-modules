@@ -16,12 +16,25 @@ import { useEffect, useRef, useState } from 'react'
 interface Props {
   code: string
   darkMode?: boolean
-  onPick: (guest: { id: string; name: string }) => void
+  /** This phone, so names it already holds are still offered to it. */
+  clientId?: string
+  /** Resolves to an error to show, or null once the name is theirs. */
+  onPick: (guest: { id: string; name: string }) => Promise<string | null> | void
 }
 
 const DEBOUNCE_MS = 220
 
-export default function GuestPicker({ code, darkMode, onPick }: Props) {
+export default function GuestPicker({ code, darkMode, clientId, onPick }: Props) {
+  const [pickError, setPickError] = useState<string | null>(null)
+  const [picking, setPicking] = useState(false)
+  const choose = async (g: { id: string; name: string }) => {
+    if (picking) return
+    setPicking(true)
+    setPickError(null)
+    const err = await onPick(g)
+    setPicking(false)
+    if (err) setPickError(err)
+  }
   const [q, setQ] = useState('')
   const [matches, setMatches] = useState<Array<{ id: string; name: string }>>([])
   const [searching, setSearching] = useState(false)
@@ -34,7 +47,7 @@ export default function GuestPicker({ code, darkMode, onPick }: Props) {
     const mine = ++seq.current
     setSearching(true)
     const t = setTimeout(() => {
-      fetch(`/api/public/event-media/links/${code}/guests?${new URLSearchParams({ q: query })}`)
+      fetch(`/api/public/event-media/links/${code}/guests?${new URLSearchParams({ q: query, ...(clientId ? { client_id: clientId } : {}) })}`)
         .then((r) => (r.ok ? r.json() : { guests: [] }))
         .then((data) => {
           // Only the latest keystroke's answer counts.
@@ -46,7 +59,7 @@ export default function GuestPicker({ code, darkMode, onPick }: Props) {
         .finally(() => { if (mine === seq.current) setSearching(false) })
     }, DEBOUNCE_MS)
     return () => clearTimeout(t)
-  }, [q, code])
+  }, [q, code, clientId])
 
   const border = darkMode ? 'border-white/20' : 'border-gray-200'
   const rowText = darkMode ? 'text-white' : 'text-gray-900'
@@ -87,7 +100,8 @@ export default function GuestPicker({ code, darkMode, onPick }: Props) {
               <button
                 type="button"
                 role="option"
-                onClick={() => onPick(g)}
+                onClick={() => void choose(g)}
+                disabled={picking}
                 className={darkMode ? undefined : `w-full text-left px-4 py-4 text-lg ${rowText} hover:bg-gray-50 border-b last:border-b-0 ${border}`}
                 style={darkMode ? {
                   // Big enough to hit with a thumb: 56px+ rows, 18px names.
@@ -103,6 +117,11 @@ export default function GuestPicker({ code, darkMode, onPick }: Props) {
             </li>
           ))}
         </ul>
+      )}
+      {pickError && (
+        <p role="alert" style={{ marginTop: 10, borderRadius: 10, padding: '10px 12px', background: '#fef3c7', color: '#78350f', fontSize: 14 }}>
+          {pickError}
+        </p>
       )}
       {q.trim().length > 0 && q.trim().length < 2 && (
         <p className={`text-xs mt-2 ${hint}`}>Keep typing…</p>

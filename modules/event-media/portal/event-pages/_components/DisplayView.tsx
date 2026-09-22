@@ -946,14 +946,21 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
   // ── QR overlay ────────────────────────────────────────────────────
 
+  // The QR goes where the screen is pointing people: the booth's own
+  // page while the booth's posters are up, the wedding-photos page for
+  // every other view. Built from this page's own address, so it works on
+  // the event's own domain and on the portal alike.
+  const qrTab: 'booth' | 'photos' = activeStream === 'booth' ? 'booth' : 'photos'
   useEffect(() => {
     if (!code || settings.qrMode === 'hidden') { setQrDataUrl(null); return }
-    const target = `${window.location.origin}/u/${code}`
+    const target = `${window.location.origin}${window.location.pathname}?u=${code}${qrTab === 'booth' ? '&tab=booth' : ''}`
+    let cancelled = false
     import('qrcode')
       .then((QRCode) => QRCode.toDataURL(target, { width: 512, margin: 1 }))
-      .then(setQrDataUrl)
-      .catch(() => setQrDataUrl(null)) // dep unavailable → no QR, page still works
-  }, [code, settings.qrMode])
+      .then((url) => { if (!cancelled) setQrDataUrl(url) })
+      .catch(() => { if (!cancelled) setQrDataUrl(null) }) // dep unavailable → no QR, page still works
+    return () => { cancelled = true }
+  }, [code, settings.qrMode, qrTab])
 
   // ── Live camera layer ─────────────────────────────────────────────
 
@@ -1382,7 +1389,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
           )}
           {/* eslint-disable-next-line @next/next/no-img-element -- data-URL QR */}
           <img src={qrDataUrl} alt="Upload QR" className="w-72 h-72 rounded-xl bg-white p-3" />
-          <p className="text-white text-3xl font-light">Scan to add your photos</p>
+          <p className="text-white text-3xl font-light">{qrTab === 'booth' ? 'Scan to use the photo booth' : 'Scan to add your photos'}</p>
         </div>
       )}
 

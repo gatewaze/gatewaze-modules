@@ -35,7 +35,8 @@ const API_BASE = ''
 const MINT_BATCH = 20
 const CONCURRENCY = 3
 const GALLERY_PAGE = 50
-const GALLERY_REFRESH_MS = 30_000
+// Everyone's photos refresh while the guest is looking at them.
+const GALLERY_REFRESH_MS = 8_000
 
 // Booth generation takes 13-20 seconds and the provider reports no
 // progress at all. So the bar is honest about that: it eases toward 90%
@@ -150,6 +151,33 @@ function effectiveMime(file: File): string {
     mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
   }
   return map[ext] ?? ''
+}
+
+/**
+ * This phone's id, kept for the event whoever the guest says they are:
+ * the name a phone holds is tied to it, so switching names and back must
+ * not mint a new one.
+ */
+function deviceIdFor(eventIdentifier: string): string {
+  const key = `event_media_device:${eventIdentifier}`
+  const fresh = () => (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0
+      return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
+    }))
+  try {
+    let id = localStorage.getItem(key)
+    if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
+      // An older phone already has an id inside its saved guest.
+      const saved = JSON.parse(localStorage.getItem(`event_media_guest:${eventIdentifier}`) || 'null')
+      id = saved && typeof saved.client_id === 'string' ? saved.client_id : fresh()
+      localStorage.setItem(key, id!)
+    }
+    return id!
+  } catch {
+    return fresh()
+  }
 }
 
 /** Fetch an image and hold it as a data URL; null if that fails. */
@@ -451,12 +479,39 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     }
   }, [code])
 
+  /**
+   * Everyone's photos, live: every few seconds the newest page is read
+   * and anything new goes on the front. Pages already loaded with "Show
+   * more" stay put, and a photo that has been removed drops out.
+   */
+  const refreshGallery = useCallback(async () => {
+    if (!code) return
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/media?${new URLSearchParams({ limit: String(GALLERY_PAGE) })}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const fresh = (data.items ?? []) as GalleryItem[]
+      setItems((prev) => {
+        const freshIds = new Set(fresh.map((i) => i.id))
+        const oldest = fresh[fresh.length - 1]?.created_at
+        // Within the span the page covers, the page is the truth.
+        const older = prev.filter((i) => !freshIds.has(i.id) && oldest !== undefined && i.created_at < oldest)
+        const next = [...fresh, ...older]
+        const same = next.length === prev.length && next.every((i, k) => i.id === prev[k]?.id)
+        return same ? prev : next
+      })
+      setNextCursor((c) => c ?? data.next_cursor ?? null)
+    } catch {
+      // the next tick tries again
+    }
+  }, [code])
+
   useEffect(() => {
     if (!link?.settings.show_gallery) return
     loadGallery()
-    const interval = setInterval(() => loadGallery(), GALLERY_REFRESH_MS)
+    const interval = setInterval(() => void refreshGallery(), GALLERY_REFRESH_MS)
     return () => clearInterval(interval)
-  }, [link, loadGallery])
+  }, [link, loadGallery, refreshGallery])
 
 
   // ── "Yours": the guest's own uploads ──────────────────────────────
@@ -468,7 +523,8 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/mine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: guest.client_id }),
+        // With a guest list, the guest's photos -- whichever phone sent them.
+        body: JSON.stringify({ client_id: guest.client_id, ...(guest.member_id ? { member_id: guest.member_id } : {}) }),
       })
       if (!res.ok) return
       const data = await res.json()
@@ -663,11 +719,11 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
         if (!mintData?.items) {
           const why = (mintData as { error?: string; message?: string } | null)
           // Not on the list (any more): back to "Who are you?".
-          if (why?.error === 'guest_required') forgetGuest()
+          if (why?.error === 'guest_required' || why?.error === 'name_taken') forgetGuest()
           if (why?.error === 'guest_blocked') setUploadNotice('Uploads are paused for you — please speak to the hosts.')
           batch.forEach((q) => patchItem(q.key, { status: 'failed', error: why?.message ?? 'could not start upload' }))
           // Nothing else in the queue can succeed until that changes.
-          if (why?.error === 'guest_required' || why?.error === 'guest_blocked') break
+          if (why?.error === 'guest_required' || why?.error === 'guest_blocked' || why?.error === 'name_taken') break
           continue
         }
 
@@ -1090,38 +1146,58 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const saveName = useCallback(() => {
     const name = nameInput.trim().slice(0, 80)
     if (!name) return
-    // The server requires a UUID client_id — keep the fallback (old
-    // WebViews without crypto.randomUUID) UUID-shaped.
-    const fallbackUuid = () =>
-      'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0
-        const v = c === 'x' ? r : (r & 0x3) | 0x8
-        return v.toString(16)
-      })
     const next = {
       name,
-      client_id: guest?.client_id ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : fallbackUuid()),
+      // This phone's own id, the same whatever name it gives.
+      client_id: deviceIdFor(eventIdentifier),
     }
     setGuest(next)
     try { localStorage.setItem(guestKey, JSON.stringify(next)) } catch { /* private mode */ }
-  }, [nameInput, guest, guestKey])
+  }, [nameInput, eventIdentifier, guestKey])
 
   /** A name chosen from the invitation list. */
-  const pickGuest = useCallback((g: { id: string; name: string }) => {
-    const fallbackUuid = () =>
-      'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0
-        const v = c === 'x' ? r : (r & 0x3) | 0x8
-        return v.toString(16)
+  /**
+   * A name chosen from the invitation list -- claimed for this phone on
+   * the server, so nobody else can choose it. Resolves to an error message
+   * for the picker to show, or null once it is theirs.
+   */
+  const pickGuest = useCallback(async (g: { id: string; name: string }): Promise<string | null> => {
+    if (!code) return 'Something went wrong — try again.'
+    const clientId = deviceIdFor(eventIdentifier)
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/guests/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId, member_id: g.id }),
       })
-    const next = {
-      name: g.name,
-      member_id: g.id,
-      client_id: guest?.client_id ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : fallbackUuid()),
+      const body = await res.json().catch(() => null)
+      if (res.status === 409) return `${g.name} has already been chosen on another phone. If that's you, please ask the hosts.`
+      if (res.status === 403) return 'Uploads are paused for this guest — please speak to the hosts.'
+      if (!res.ok) return body?.message ?? 'Could not choose that name — try again.'
+    } catch {
+      return 'No connection — try again in a moment.'
     }
+    const next = { name: g.name, member_id: g.id, client_id: clientId }
     setGuest(next)
     try { localStorage.setItem(guestKey, JSON.stringify(next)) } catch { /* private mode */ }
-  }, [guest, guestKey])
+    return null
+  }, [code, eventIdentifier, guestKey])
+
+  /** "Not you?": let the name go, so its real owner can choose it. */
+  const notMe = useCallback(() => {
+    const was = guest
+    if (code && was?.member_id) {
+      void fetch(`${API_BASE}/api/public/event-media/links/${code}/guests/release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: was.client_id, member_id: was.member_id }),
+      }).catch(() => { /* the organiser can release it */ })
+    }
+    setGuest(null)
+    setMine([])
+    setNameInput('')
+    try { localStorage.removeItem(guestKey) } catch { /* ignore */ }
+  }, [code, guest, guestKey])
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -1785,7 +1861,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
           : 'Tell us your name once — it’s remembered on this device.'}
       </p>
       {link!.settings.guest_list ? (
-        <GuestPicker code={code!} darkMode onPick={pickGuest} />
+        <GuestPicker code={code!} darkMode clientId={deviceIdFor(eventIdentifier)} onPick={pickGuest} />
       ) : (
         <div style={{ display: 'flex', gap: 8 }}>
           <input
@@ -1812,7 +1888,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       primaryColor={primaryColor}
       nameStep={nameStep}
       guestName={guest?.name ?? null}
-      onNotMe={() => { setGuest(null); setNameInput(''); try { localStorage.removeItem(guestKey) } catch { /* ignore */ } }}
+      onNotMe={notMe}
       allowVideo={link!.settings.allow_video}
       tiles={uploadTiles}
       onAdd={(files) => { setUploadNotice(null); enqueueFiles(files, false) }}
