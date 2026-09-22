@@ -24,6 +24,7 @@ import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
 import GuestPicker from './_components/GuestPicker'
+import UploadApp, { type UploadTile } from './_components/UploadApp'
 import BoothExperience, { type BoothLook, type BoothView } from './_components/BoothExperience'
 
 // Same-origin ALWAYS: the portal proxies /api/public/* to the api
@@ -127,6 +128,12 @@ interface QueueItem {
   booth?: boolean
   /** Told the upload's id once minted, so it can be removed later. */
   onMediaId?: (mediaId: string) => void
+  /** Local preview while it uploads (object URL). */
+  preview?: string
+  /** The server's id for it, once minted. */
+  mediaId?: string
+  /** The guest removed it mid-upload: delete it the moment it lands. */
+  discard?: boolean
   status: QueueStatus
   progress: number
   error?: string
@@ -485,6 +492,11 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     }
   }, [code, guest])
 
+  // The guest's own uploads, as soon as we know who they are.
+  useEffect(() => {
+    if (guest) void loadMine()
+  }, [guest, loadMine])
+
   /** The server no longer accepts this name: ask again. */
   const forgetGuest = useCallback(() => {
     setGuest((g) => (g ? { ...g, member_id: null } : g))
@@ -538,7 +550,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
             }
           })
           loadGallery() // fresh uploads appear immediately
-          if (tabRef.current === 'mine') void loadMine()
+          // Always: "Your photos" is the main view of the upload screen.
+          void loadMine()
         } else {
           // put them back; the timer retries (complete is idempotent)
           pendingTicketsRef.current = [...batch, ...pendingTicketsRef.current]
@@ -629,7 +642,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
             return
           }
           const mediaId = (minted as { media_id?: unknown }).media_id
-          if (typeof mediaId === 'string') q.onMediaId?.(mediaId)
+          if (typeof mediaId === 'string') {
+            q.onMediaId?.(mediaId)
+            patchItem(q.key, { mediaId })
+          }
           jobs.push(() => putMinted(q, { upload_url: minted.upload_url!, ticket: minted.ticket! }))
         })
 
@@ -663,12 +679,48 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       file,
       booth,
       onMediaId,
+      preview: booth ? undefined : (() => { try { return URL.createObjectURL(file) } catch { return undefined } })(),
       status: 'waiting',
       progress: 0,
     }))
     setQueueSafe((prev) => [...prev, ...fresh])
     void pumpQueue()
   }, [setQueueSafe, pumpQueue])
+
+  /** Remove a tile from "Your photos": cancel, or delete from the event. */
+  const removeTile = useCallback(async (t: UploadTile) => {
+    const q = queueRef.current.find((x) => x.key === t.key)
+    if (q) {
+      if (q.status === 'waiting' || q.status === 'failed') {
+        if (q.preview) URL.revokeObjectURL(q.preview)
+        setQueueSafe((prev) => prev.filter((x) => x.key !== q.key))
+        return
+      }
+      if (q.status !== 'done') {
+        // Mid-flight: hidden now, deleted the moment it lands.
+        setQueueSafe((prev) => prev.map((x) => (x.key === q.key ? { ...x, discard: true } : x)))
+        return
+      }
+    }
+    const id = t.mediaId
+    if (id && (await removeUpload(id))) {
+      setQueueSafe((prev) => prev.filter((x) => x.mediaId !== id))
+    }
+  }, [removeUpload, setQueueSafe])
+
+  // Removed mid-upload: once it has landed, take it straight back out.
+  useEffect(() => {
+    for (const q of queue) {
+      if (!q.discard) continue
+      if (q.status === 'failed') {
+        setQueueSafe((prev) => prev.filter((x) => x.key !== q.key))
+      } else if (q.status === 'done' && q.mediaId) {
+        const id = q.mediaId
+        setQueueSafe((prev) => prev.filter((x) => x.key !== q.key))
+        void removeUpload(id)
+      }
+    }
+  }, [queue, removeUpload, setQueueSafe])
 
   const retryItem = useCallback((key: string) => {
     patchItem(key, { status: 'waiting', progress: 0, error: undefined })
@@ -1649,6 +1701,90 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     </div>
   )
 
+  // ── The wedding-photos screen (UploadApp) ─────────────────────────
+  // "Your photos": what is uploading now, then what the server has.
+  // Booth pictures are the booth's own business, so they stay out.
+  const mineIds = new Set(mine.map((m) => m.id))
+  const uploadTiles: UploadTile[] = [
+    ...queue
+      .filter((q) => !q.booth && !q.discard && !(q.mediaId && mineIds.has(q.mediaId)))
+      .slice()
+      .reverse()
+      .map((q) => ({
+        key: q.key,
+        src: q.preview ?? '',
+        isVideo: effectiveMime(q.file).startsWith('video/'),
+        state: q.status,
+        progress: q.progress,
+        error: q.error,
+        mediaId: q.mediaId ?? null,
+      })),
+    ...mine
+      .filter((m) => !(m as { album?: string }).album || (m as { album?: string }).album !== 'booth')
+      .map((m) => ({
+        key: m.id,
+        src: m.variants?.thumb || m.url,
+        full: m.variants?.medium || m.url,
+        isVideo: m.kind === 'video',
+        state: (m.pending ? 'pending' : 'done') as UploadTile['state'],
+        progress: 100,
+        mediaId: m.id,
+      })),
+  ]
+
+  const nameStep = needsName ? (
+    <div>
+      <p className="ua-h1">{link!.settings.guest_list ? 'Who are you?' : 'Add your photos'}</p>
+      <p className="ua-sub" style={{ marginBottom: 12 }}>
+        {link!.settings.guest_list
+          ? 'Find your name so your photos are yours.'
+          : 'Tell us your name once — it’s remembered on this device.'}
+      </p>
+      {link!.settings.guest_list ? (
+        <GuestPicker code={code!} darkMode onPick={pickGuest} />
+      ) : (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            type="text"
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') saveName() }}
+            placeholder="Your name"
+            maxLength={80}
+            style={{ flex: 1, borderRadius: 10, border: '1px solid #ccc', padding: '10px 12px', color: '#111', fontSize: 16 }}
+          />
+          <button type="button" onClick={saveName} disabled={!nameInput.trim()}
+            style={{ borderRadius: 10, padding: '0 16px', color: '#fff', fontWeight: 700, backgroundColor: primaryColor, opacity: nameInput.trim() ? 1 : 0.5 }}>
+            That&apos;s me
+          </button>
+        </div>
+      )}
+    </div>
+  ) : null
+
+  const uploadApp = canUpload && mounted && activeSection === 'upload' ? createPortal(
+    <UploadApp
+      eventName={link!.event.name ?? 'Event photos'}
+      primaryColor={primaryColor}
+      nameStep={nameStep}
+      guestName={guest?.name ?? null}
+      onNotMe={() => { setGuest(null); setNameInput(''); try { localStorage.removeItem(guestKey) } catch { /* ignore */ } }}
+      allowVideo={link!.settings.allow_video}
+      tiles={uploadTiles}
+      onAdd={(files) => { setUploadNotice(null); enqueueFiles(files, false) }}
+      onDelete={(t) => void removeTile(t)}
+      onRetry={(t) => retryItem(t.key)}
+      notice={uploadNotice}
+      onOpenBooth={boothOpen ? () => setSection('booth') : null}
+      showGallery={Boolean(link!.settings.show_gallery)}
+      everyone={items}
+      hasMore={Boolean(nextCursor)}
+      loadingMore={galleryLoading}
+      onLoadMore={() => loadGallery(nextCursor)}
+    />,
+    document.body,
+  ) : null
+
   const booth = immersiveBooth ? createPortal(
     <BoothExperience
       booth={boothTheme!}
@@ -1675,6 +1811,9 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     />,
     document.body,
   ) : null
+
+  // The upload screen is the whole page while it is up.
+  if (uploadApp) return <>{uploadApp}{booth}</>
 
   if (mobileTakeover) {
     return <>{createPortal(
