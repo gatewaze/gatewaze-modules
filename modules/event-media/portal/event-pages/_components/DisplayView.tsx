@@ -406,6 +406,15 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const settingsKey = `event_media_display:${code ?? ''}`
   const [settings, setSettings] = useState<DisplaySettings>(DEFAULT_SETTINGS)
   const [linkInfo, setLinkInfo] = useState<{ eventId: string | null; logoUrl: string | null; identifier: string | null } | null>(null)
+  // The pose everyone is being asked for, so the room can see it without
+  // opening a phone (asked 2026-09-22). Re-read as the slots turn over.
+  const [posesInfo, setPosesInfo] = useState<{
+    mode: string
+    current: { label: string; instruction: string } | null
+    next: { label: string } | null
+    changes_at: string | null
+  } | null>(null)
+  const [poseNow, setPoseNow] = useState(() => Date.now())
   const [photos, setPhotos] = useState<DisplayItem[]>([])
   // Mirrored so the upload handler can pool without depending on
   // settings, which would re-create it on every unrelated change.
@@ -579,9 +588,28 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
           logoUrl: data.logo_url ?? null,
           identifier: data.event?.identifier ?? null,
         })
+        setPosesInfo(data.booth?.poses ?? null)
       })
       .catch(() => { /* poll retries below */ })
   }, [code])
+
+  useEffect(() => {
+    if (posesInfo?.mode !== 'hour') return
+    const t = setInterval(() => setPoseNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [posesInfo?.mode])
+
+  useEffect(() => {
+    if (posesInfo?.mode !== 'hour' || !posesInfo.changes_at || !code) return
+    const due = new Date(posesInfo.changes_at).getTime() - Date.now()
+    const t = setTimeout(() => {
+      fetch(`${API_BASE}/api/public/event-media/links/${code}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => { if (data?.booth?.poses) setPosesInfo(data.booth.poses) })
+        .catch(() => { /* the next slot tries again */ })
+    }, Math.max(1000, due + 1500))
+    return () => clearTimeout(t)
+  }, [posesInfo, code])
 
   // A projector is opened once and left running for hours. When a new
   // version is deployed it reloads itself -- after a pause, because the
@@ -1450,6 +1478,24 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
 
       {/* Corner QR + logo card. Top right so the bottom right belongs to
           the Wedflix wordmark, where a streaming service puts it. */}
+      {/* The pose the whole room is being asked for. Bottom left, out of
+          the way of the QR, and only while the booth is on screen. */}
+      {posesInfo?.mode === 'hour' && posesInfo.current && activeStream === 'booth' && (
+        <div className="absolute bottom-8 left-8 max-w-[34rem] rounded-2xl px-7 py-5 bg-black/55 backdrop-blur text-white shadow-2xl">
+          <p className="text-lg uppercase tracking-[.2em] text-white/60">Everyone right now</p>
+          <p className="text-5xl font-extrabold mt-1">{posesInfo.current.label}</p>
+          <p className="text-2xl text-white/85 mt-1">{posesInfo.current.instruction}</p>
+          {posesInfo.changes_at && posesInfo.next && (
+            <p className="text-xl text-white/60 mt-3">
+              Changes in {(() => {
+                const left = Math.max(0, new Date(posesInfo.changes_at).getTime() - poseNow)
+                return `${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`
+              })()} — next: {posesInfo.next.label}
+            </p>
+          )}
+        </div>
+      )}
+
       {qrCorner && (
         <div className="absolute top-6 right-6 bg-white/95 rounded-xl p-3 flex flex-col items-center gap-2 shadow-xl">
           {/* eslint-disable-next-line @next/next/no-img-element -- data-URL QR */}

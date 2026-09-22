@@ -376,6 +376,27 @@ export async function plateHasPeople(plateUrl: string): Promise<boolean | null> 
   return r.ok ? parseYesNo(r.text) : null;
 }
 
+/**
+ * How many fingers are being held up in this photograph?
+ *
+ * The booth's other way to choose a look: hold up one to five fingers
+ * and the picture itself decides (asked 2026-09-22). Returns 0 when
+ * nobody is holding any up, and null when the model could not be asked
+ * or gave an answer that was not a number -- both of which mean "use
+ * what they picked on the way in".
+ */
+export async function readFingers(imageUrl: string): Promise<number | null> {
+  const r = await askVision(imageUrl,
+    'Look at the hands in this photograph. How many fingers is the person nearest the camera ' +
+    'deliberately holding up towards the camera, as if choosing a number between one and five? ' +
+    'Count raised fingers on one hand only. If more than one person is holding up fingers, count ' +
+    'the clearest hand. If nobody is deliberately holding up fingers, answer 0. ' +
+    'Answer with exactly one digit: 0, 1, 2, 3, 4 or 5.');
+  if (!r.ok) return null;
+  const m = /\b([0-5])\b/.exec(r.text.trim());
+  return m ? Number(m[1]) : null;
+}
+
 async function cardCopyOnce(imageUrl: string): Promise<
   { ok: true; copy: CardCopy } | { ok: false; error: string }
 > {

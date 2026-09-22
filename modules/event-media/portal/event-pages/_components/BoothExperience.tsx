@@ -60,18 +60,37 @@ export interface BoothView {
   /** Painted era picker; a plain grid when absent. */
   picker: Painted | null
   eras: BoothEraView[]
+  poses?: BoothPoses | null
 }
 
 export interface BoothLook {
   key: string
   payload: { filter_id: string } | { effect: string }
   label: string
+  /** The pose the booth asked for, when it asked for one. */
+  pose?: string | null
+  /** Let the fingers in the photo choose the look, within this decade. */
+  fingers?: boolean
+  decade?: string | null
+}
+
+/** Poses as the link endpoint serves them (lib/booth-poses.ts). */
+export interface BoothPoses {
+  mode: 'off' | 'hour' | 'card'
+  minutes: number
+  fingers: boolean
+  current: { id: string; label: string; instruction: string } | null
+  next: { id: string; label: string; instruction: string } | null
+  changes_at: string | null
+  all: Array<{ id: string; label: string; instruction: string; group: boolean }>
 }
 
 interface Shot {
   original: string
   preview: string | null
   filterLabel: string | null
+  /** 1-5 when the booth read a hand and chose the look from it. */
+  fingers?: number | null
   busy: string | null
   error: string | null
   /** The server's kept copy of `preview`, when it kept one. */
@@ -287,6 +306,30 @@ const STYLES = `
 @keyframes bx-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @keyframes bx-rise-x{from{opacity:0;margin-top:8px}to{opacity:1;margin-top:0}}
 @media (prefers-reduced-motion:reduce){.bx-root *{animation:none!important;transition:none!important}}
+.bx-pose{position:absolute;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 56px);z-index:6;
+  margin:0 auto;max-width:30rem;border-radius:16px;padding:12px 14px;text-align:center;
+  background:rgba(10,8,20,.62);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.bx-pose-compact{position:static;margin:0 0 10px;padding:10px 12px}
+.bx-pose-kicker{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.6)}
+.bx-pose-label{font-size:19px;font-weight:800;margin-top:2px}
+.bx-pose-say{font-size:14px;color:rgba(255,255,255,.85);margin-top:2px;line-height:1.3}
+.bx-pose-next{font-size:12px;color:rgba(255,255,255,.62);margin-top:6px}
+.bx-pose-live{position:absolute;left:8px;right:8px;top:8px;pointer-events:none;border-radius:12px;padding:8px 10px;text-align:center;
+  background:rgba(0,0,0,.45);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.bx-pose-hold{position:absolute;left:8px;right:8px;top:8px;pointer-events:none;border-radius:12px;padding:8px 10px;text-align:center;
+  font-size:16px;font-weight:800;background:rgba(0,0,0,.5);animation:bx-pulse 1s ease-in-out infinite}
+@keyframes bx-pulse{0%,100%{opacity:.85}50%{opacity:1}}
+.bx-fingers{position:absolute;left:8px;right:8px;bottom:100px;border-radius:12px;padding:7px 8px;pointer-events:none;
+  background:rgba(0,0,0,.45);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.bx-fingers-say{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.7);text-align:center}
+.bx-fingers-row{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 10px;margin-top:4px}
+.bx-finger{display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(255,255,255,.9)}
+.bx-finger b{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:11px;background:rgba(255,255,255,.22)}
+.bx-fingers-said{position:absolute;left:8px;right:8px;top:8px;pointer-events:none;border-radius:12px;padding:8px 10px;text-align:center;
+  font-size:14px;font-weight:700;background:rgba(0,0,0,.5)}
+
 /* A sideways phone: short and wide. More columns across the extra width,
    so a decade or a look is still a comfortable tap and fewer of them are
    below the fold (asked 2026-09-22). */
@@ -349,6 +392,11 @@ export default function BoothExperience(props: Props) {
   const [eraKey, setEraKey] = useState<string>(opened?.era ?? eras[0]!.key)
   const [look, setLook] = useState<BoothLook | null>(opened?.look ?? null)
   const [pressed, setPressed] = useState<number | null>(null)
+  // The pose this sitting is doing. In 'hour' mode it is whatever the
+  // clock says; in 'card' mode the booth deals one when they walk in.
+  const [dealt, setDealt] = useState<{ id: string; label: string; instruction: string } | null>(null)
+  // Ticks once a second so the countdown to the next pose stays honest.
+  const [now, setNow] = useState(() => Date.now())
   const [cam, setCam] = useState<CamState>('off')
   const [count, setCount] = useState<number | null>(null)
   const [coinDrop, setCoinDrop] = useState(false)
@@ -376,6 +424,10 @@ export default function BoothExperience(props: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const trackRef = useRef<HTMLDivElement | null>(null)
   const recordedRef = useRef<string | null>(null)
+  // Read at the moment the shutter fires, not when capture() was made.
+  const poseRef = useRef<string | null>(null)
+  const fingersRef = useRef(false)
+  const eraRef = useRef<string>('')
   // Always the current shutter, for listeners that outlive a render.
   const insertCoinRef = useRef<() => void>(() => {})
   const timers = useRef<Array<ReturnType<typeof setTimeout>>>([])
@@ -384,6 +436,10 @@ export default function BoothExperience(props: Props) {
   }, [])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
 
+  const poses = booth.poses ?? null
+  const posing = poses && poses.mode !== 'off'
+  const pose = poses?.mode === 'card' ? dealt : poses?.current ?? null
+  const fingersOn = poses?.fingers === true
   const era = eras.find((e) => e.key === eraKey) ?? eras[0]!
   const interior = era.interior
   const inside = phase === 'inside' || phase === 'to-outside'
@@ -646,11 +702,35 @@ export default function BoothExperience(props: Props) {
     // was ever posted -- deleting means gone.)
   }, [pictures.length, onRemoveUpload, flashNotice])
 
+  useEffect(() => {
+    if (!posing) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [posing])
+
+  // When the photo itself chose the look, say so: otherwise a guest who
+  // held up three fingers has no idea whether the booth noticed.
+  const saidFingers = useRef<string | null>(null)
+  useEffect(() => {
+    const n = shot?.fingers
+    const label = shot?.filterLabel
+    if (!n || !label || shot?.busy) return
+    const key = `${n}:${label}`
+    if (saidFingers.current === key) return
+    saidFingers.current = key
+    flashNotice(`You held up ${n} — ${label}`)
+  }, [shot?.fingers, shot?.filterLabel, shot?.busy, flashNotice])
+
   /** Walk in. Every visit starts with the live camera and no picture. */
   const enter = useCallback((chosen: BoothLook | null, tileIndex: number | null) => {
     if (phase !== 'board') return
     setPressed(tileIndex)
     setMoreOpen(false)
+    // A fresh card each sitting, so nobody gets the same one twice over.
+    if (poses?.mode === 'card' && poses.all.length > 0) {
+      const deck = poses.all
+      setDealt(deck[Math.floor(Math.random() * deck.length)] ?? null)
+    }
     setLook(chosen)
     later(() => {
       setPhase('to-inside')
@@ -745,7 +825,12 @@ export default function BoothExperience(props: Props) {
     ctx.translate(canvas.width, 0)
     ctx.scale(-1, 1)
     ctx.drawImage(v, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height)
-    onCaptured(canvas.toDataURL('image/jpeg', 0.9), look)
+    onCaptured(canvas.toDataURL('image/jpeg', 0.9), look && {
+      ...look,
+      pose: poseRef.current,
+      fingers: fingersRef.current,
+      decade: eraRef.current,
+    })
   }, [interior, look, onCaptured, onFallbackCamera])
 
   /** The shutter, and the coin slot, which does the same thing. */
@@ -781,7 +866,11 @@ export default function BoothExperience(props: Props) {
   // artwork for their plain card grids, which lay themselves out to any
   // shape. Landscape artwork of its own would be better still -- the
   // theme takes an `interior_landscape` per decade when there is one.
-  const landscape = vp.w > vp.h * 1.25 && vp.h < 620
+  // Wider than it is tall: a phone turned sideways, or an iPad on a
+  // tripod. The artwork follows the shape of the screen; the cramped
+  // layout rules in the stylesheet are keyed to a SHORT screen instead,
+  // so an iPad gets the wide booth without the squeezed chrome.
+  const landscape = vp.w > vp.h * 1.25
   const insideArt = (landscape && era.interiorLandscape) || interior
   const insideBox = landscape
     ? era.interiorLandscape
@@ -815,7 +904,50 @@ export default function BoothExperience(props: Props) {
     const l = era.looks.find((x) => x.id === id)
     return { key: id, payload: { effect: id }, label: l?.label ?? effects.find((e) => e.id === id)?.label ?? id }
   }
+  poseRef.current = pose?.id ?? null
+  fingersRef.current = fingersOn
+  eraRef.current = era.key
   const onPicker = phase === 'picker'
+
+  /** "changes in 12:34", for the pose everyone is being asked for. */
+  const changesIn = (() => {
+    if (poses?.mode !== 'hour' || !poses.changes_at) return null
+    const left = Math.max(0, new Date(poses.changes_at).getTime() - now)
+    const mins = Math.floor(left / 60000)
+    const secs = Math.floor((left % 60000) / 1000)
+    return `${mins}:${String(secs).padStart(2, '0')}`
+  })()
+
+  /** The pose card: what to do now, and what is coming next. */
+  const poseCard = (compact: boolean) => (!posing || !pose ? null : (
+    <div className={`bx-pose${compact ? ' bx-pose-compact' : ''}`}>
+      <p className="bx-pose-kicker">
+        {poses!.mode === 'hour' ? 'Everyone right now' : 'Your pose'}
+      </p>
+      <p className="bx-pose-label">{pose.label}</p>
+      <p className="bx-pose-say">{pose.instruction}</p>
+      {changesIn && poses!.next && (
+        <p className="bx-pose-next">
+          Changes in <b>{changesIn}</b> — next up: {poses!.next.label}
+        </p>
+      )}
+    </div>
+  ))
+
+  /** The five looks a hand can choose between, numbered. */
+  const fingerLegend = (!fingersOn ? null : (
+    <div className="bx-fingers">
+      <p className="bx-fingers-say">Hold up fingers to pick your look</p>
+      <div className="bx-fingers-row">
+        {era.looks.slice(1, 6).map((l, i) => (
+          <span key={l.id} className="bx-finger">
+            <b>{i + 1}</b>
+            {l.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  ))
 
   /** Artwork with tiles on it, laid out to fill the screen. */
   const painted = (
@@ -908,6 +1040,7 @@ export default function BoothExperience(props: Props) {
 
       {/* ── Outside: the era picker, or an era's board of looks ──── */}
       <div className="bx-fill" style={outsideStyle} aria-hidden={inside}>
+        {poses?.mode === 'hour' && poseCard(false)}
         {onPicker
           ? booth.picker && !landscape
             ? painted(
@@ -1010,6 +1143,14 @@ export default function BoothExperience(props: Props) {
               />
             )}
 
+            {!result && count === null && posing && pose && (
+              <div className="bx-pose-live">
+                <p className="bx-pose-label">{pose.label}</p>
+                <p className="bx-pose-say">{pose.instruction}</p>
+              </div>
+            )}
+            {count !== null && pose && <div className="bx-pose-hold">{pose.instruction}</div>}
+            {!result && count === null && fingerLegend}
             {count !== null && <div key={`count-${count}`} className="bx-count">{count}</div>}
             {flash > 0 && <div key={`flash-${flash}`} className="bx-flash" />}
 

@@ -32,11 +32,12 @@ import {
   validateMintFile,
 } from '../lib/guest-limits.js';
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
-import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { BOOTH_POSES, boothPose, fingerLook, poseChangesAt, poseOfTheHour } from '../lib/booth-poses.js';
+import { plateHasPeople, readFingers, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
-import { erasFor, isEraSetting } from '../lib/booth-eras.js';
+import { BOOTH_ERAS, erasFor, isEraSetting } from '../lib/booth-eras.js';
 import eventMediaModule from '../index.js';
 import { displayName, matchGuests, type GuestEntry } from '../lib/guest-identity.js';
 import {
@@ -415,10 +416,36 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (!theme) return null;
     const { data: settings } = await supabase
       .from('events_media_booth_settings')
-      .select('era')
+      .select('era, pose_mode, pose_minutes, pose_offset, fingers_pick')
       .eq('event_id', eventId)
       .maybeSingle();
     const setting = isEraSetting(settings?.era) ? settings!.era : 'all';
+    // Poses (migration 012). Everything a booth or a projector needs to
+    // work out for itself which pose is being asked for right now.
+    const poseMode = settings?.pose_mode === 'hour' || settings?.pose_mode === 'card' ? settings.pose_mode : 'off';
+    const poseMinutes = Number.isInteger(settings?.pose_minutes) ? Math.min(240, Math.max(5, settings!.pose_minutes)) : 30;
+    const now = new Date();
+    const current = poseMode === 'hour'
+      ? poseOfTheHour(now, poseMinutes, Number.isInteger(settings?.pose_offset) ? settings!.pose_offset : 0)
+      : null;
+    const poses = {
+      mode: poseMode,
+      minutes: poseMinutes,
+      fingers: settings?.fingers_pick === true,
+      current: current ? { id: current.id, label: current.label, instruction: current.instruction } : null,
+      changes_at: poseMode === 'hour' ? poseChangesAt(now, poseMinutes).toISOString() : null,
+      next: poseMode === 'hour'
+        ? (() => {
+          const n = poseOfTheHour(poseChangesAt(now, poseMinutes), poseMinutes,
+            Number.isInteger(settings?.pose_offset) ? settings!.pose_offset : 0);
+          return { id: n.id, label: n.label, instruction: n.instruction };
+        })()
+        : null,
+      // The whole deck, for the booth that deals its own card.
+      all: poseMode === 'card'
+        ? BOOTH_POSES.map((p) => ({ id: p.id, label: p.label, instruction: p.instruction, group: p.group === true }))
+        : [],
+    };
     const byId = new Map(effects.map((e) => [e.id, e]));
     const eras = erasFor(setting)
       .filter((era) => theme.eras[era.key])
@@ -443,7 +470,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const picker = theme.picker
       ? { ...theme.picker, tiles: theme.picker.tiles.filter((t) => keys.has(t.key)) }
       : null;
-    return { picker: picker && picker.tiles.length > 0 ? picker : null, eras };
+    return { picker: picker && picker.tiles.length > 0 ? picker : null, eras, poses };
   }
 
 
@@ -1321,7 +1348,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const filterId = typeof body['filter_id'] === 'string' && UUID_RE.test(body['filter_id'])
       ? body['filter_id']
       : null;
-    const effect = typeof body['effect'] === 'string' ? boothEffect(body['effect']) : null;
+    let effect = typeof body['effect'] === 'string' ? boothEffect(body['effect']) : null;
+    // What the booth asked them to do, if anything: the prompt has to be
+    // told, or the model tidies the pose away.
+    const pose = boothPose(body['pose']);
+    // "Hold up one to five fingers": the photo chooses its own look from
+    // the decade the guest is standing in.
+    const wantsFingers = body['fingers'] === true;
+    const era = typeof body['decade'] === 'string' ? BOOTH_ERAS.find((e) => e.key === body['decade']) ?? null : null;
     // The guest's photo arrives as a data URL from the camera step so
     // it never has to be published before they have seen the result.
     const dataUrl = typeof body['image'] === 'string' ? body['image'] : '';
@@ -1388,9 +1422,18 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
 
     try {
+      // Fingers first: what they held up decides which look is made.
+      // A hand nobody can read, or none at all, keeps the look they
+      // chose on the way in, so a photo is never wasted on a misread.
+      let fingers: number | null = null;
+      if (wantsFingers && era && effect) {
+        fingers = await readFingers(toPublicUrl(scratchPath));
+        const chosen = fingers === null ? null : boothEffect(fingerLook(fingers, era.looks) ?? '');
+        if (chosen && chosen.kind === 'style' && chosen.style) effect = chosen;
+      }
       const result = filter
         ? await runSwap(toPublicUrl(filter.source_path), toPublicUrl(scratchPath))
-        : await runStyle(toPublicUrl(scratchPath), buildPrompt(effect!));
+        : await runStyle(toPublicUrl(scratchPath), buildPrompt(effect!, pose?.prompt ?? null));
       if (!result.ok) {
         const status = result.error === 'no_face' ? 422 : result.error === 'timeout' ? 504 : 502;
         if (result.error !== 'no_face') {
@@ -1415,11 +1458,15 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         contentType: result.contentType,
         look: filter ? `Be ${filter.label}` : effect!.label,
         lookId: filter ? `filter:${filter.id}` : effect!.id,
+        pose: pose ? { id: pose.id, label: pose.label } : null,
       });
       const wantsUrl = body['return'] === 'url';
       res.status(200).json({
         filter: filter ? { id: filter.id, label: filter.label } : null,
         effect: effect ? { id: effect.id, label: effect.label } : null,
+        pose: pose ? { id: pose.id, label: pose.label } : null,
+        // What the booth read in their hand, so it can say so.
+        fingers,
         media_id: kept?.mediaId ?? null,
         image_url: kept?.url ?? null,
         // Inline only for an older page, or if keeping it failed.
@@ -1446,6 +1493,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     contentType: string;
     look: string;
     lookId: string;
+    pose?: { id: string; label: string } | null;
   }): Promise<{ mediaId: string; url: string } | null> {
     const { link } = opts;
     const mediaId = newMediaId();
@@ -1480,6 +1528,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         album: 'booth',
         look: opts.look,
         look_id: opts.lookId,
+        // What the booth asked them to do, when it asked for anything.
+        ...(opts.pose ? { pose: opts.pose.id, pose_label: opts.pose.label } : {}),
         // Off the projector and out of the gallery until the guest posts it.
         posted: false,
       },
