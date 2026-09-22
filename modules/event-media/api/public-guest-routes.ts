@@ -36,6 +36,7 @@ import { runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleCon
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
+import { erasFor, isEraSetting } from '../lib/booth-eras.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -200,8 +201,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   const THEME_MAX_BYTES = 64 * 1024;
   const themeCache = new Map<string, { at: number; raw: unknown }>();
 
-  async function boothThemeFor(eventId: string, offered: string[]): Promise<BoothTheme | null> {
-    if (offered.length === 0) return null;
+  async function boothThemeFor(eventId: string, offered: Set<string>): Promise<BoothTheme | null> {
+    if (offered.size === 0) return null;
     const dir = `event/${eventId}/booth-theme`;
     let hit = themeCache.get(eventId);
     if (!hit || Date.now() - hit.at > THEME_TTL_MS) {
@@ -216,8 +217,55 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       themeCache.set(eventId, hit);
     }
     if (hit.raw === null) return null;
-    return parseBoothTheme(hit.raw, new Set(offered), (file) => toBrowserUrl(`${dir}/${file}`));
+    const looksFor = (era: string) =>
+      new Set((erasFor(era).find((e) => e.key === era)?.looks ?? []).filter((id) => offered.has(id)));
+    return parseBoothTheme(hit.raw, looksFor, (file) => toBrowserUrl(`${dir}/${file}`));
   }
+
+  /**
+   * The illustrated booth as the guest page needs it: the eras this event
+   * offers (all, or the one it is themed on), each with its artwork and
+   * its six looks. Only eras the theme has an interior for are offered.
+   */
+  async function boothFor(
+    eventId: string,
+    effects: Array<{ id: string; label: string; blurb: string }>,
+  ) {
+    const offered = new Set(effects.map((e) => e.id));
+    const theme = await boothThemeFor(eventId, offered);
+    if (!theme) return null;
+    const { data: settings } = await supabase
+      .from('events_media_booth_settings')
+      .select('era')
+      .eq('event_id', eventId)
+      .maybeSingle();
+    const setting = isEraSetting(settings?.era) ? settings!.era : 'all';
+    const byId = new Map(effects.map((e) => [e.id, e]));
+    const eras = erasFor(setting)
+      .filter((era) => theme.eras[era.key])
+      .map((era) => {
+        const art = theme.eras[era.key]!;
+        return {
+          key: era.key,
+          label: era.label,
+          blurb: era.blurb,
+          card: art.card,
+          interior: art.interior,
+          board: art.board,
+          looks: era.looks
+            .filter((id) => byId.has(id))
+            .map((id) => ({ ...byId.get(id)!, sample: art.samples[id] ?? null })),
+        };
+      })
+      .filter((era) => era.looks.length > 0);
+    if (eras.length === 0) return null;
+    const keys = new Set(eras.map((e) => e.key));
+    const picker = theme.picker
+      ? { ...theme.picker, tiles: theme.picker.tiles.filter((t) => keys.has(t.key)) }
+      : null;
+    return { picker: picker && picker.tiles.length > 0 ? picker : null, eras };
+  }
+
 
   // ────────────────────────────────────────────────────────────────────
   // GET /public/event-media/links/:code
@@ -246,7 +294,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
 
     const boothEffects = link.allow_face_filter && styleConfigured() ? publicEffects() : [];
-    const boothTheme = await boothThemeFor(link.event_id, boothEffects.map((e) => e.id));
+    const booth = await boothFor(link.event_id, boothEffects);
 
     res.status(200).json({
       event: {
@@ -273,7 +321,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // provider — unlike swaps, which need reference faces uploaded.
       booth_effects: boothEffects,
       // The illustrated booth, when this event has one; null otherwise.
-      booth_theme: boothTheme,
+      booth,
       logo_url: link.logo_url && /^https?:\/\//.test(link.logo_url)
         ? link.logo_url
         : link.logo_url

@@ -5,12 +5,14 @@
 /**
  * The illustrated photo booth: a full-screen place rather than a form.
  *
- * Outside, the guest sees the front of a booth with a board of looks
- * (one tile per decade). Tapping a tile walks them INSIDE: the booth
- * interior fills the screen, their front camera runs live in the booth's
- * window, and the coin slot is the shutter -- tap it, a coin drops, 3 2 1,
- * flash. The picture then develops in the same window, and the machine
- * panel under it becomes the controls.
+ * The guest picks an era (a painted board of decades, or a plain grid),
+ * then one of that era's six looks (painted artwork if the event has it,
+ * otherwise cards showing each look's sample picture) -- an event themed
+ * on one era starts at its looks. Choosing a look walks them INSIDE that
+ * era's booth: the interior fills the screen, their front camera runs
+ * live in the booth's window, and the shutter (or the coin slot) takes
+ * the picture -- 3 2 1, flash. It develops in the window, then lands on a
+ * Polaroid in the carousel of everything they have made.
  *
  * Everything drawn on a scene -- tiles, window, coin slot, panel -- is a
  * fraction of that painting, from the event's booth theme (served by the
@@ -36,10 +38,25 @@ import {
 interface Rect { x: number; y: number; w: number; h: number }
 interface Scene { image: string; width: number; height: number; focus_x: number }
 interface Interior extends Scene { window: Rect; coin: Rect; panel: Rect }
-export interface BoothThemeView {
-  outside: Scene & { tiles: Array<Rect & { effect: string; interior?: string }> }
-  interiors: Record<string, Interior>
-  default_interior: string
+/** Painted artwork whose tiles each name what they open. */
+interface Painted extends Scene { tiles: Array<Rect & { key: string }> }
+
+export interface BoothEraView {
+  key: string
+  label: string
+  blurb: string
+  card: string | null
+  interior: Interior
+  /** Painted outside board, when the event has artwork for it. */
+  board: Painted | null
+  looks: Array<{ id: string; label: string; blurb: string; sample: string | null }>
+}
+
+/** The booth as the link endpoint serves it (lib/booth-theme.ts). */
+export interface BoothView {
+  /** Painted era picker; a plain grid when absent. */
+  picker: Painted | null
+  eras: BoothEraView[]
 }
 
 export interface BoothLook {
@@ -59,7 +76,7 @@ interface Shot {
 }
 
 interface Props {
-  theme: BoothThemeView
+  booth: BoothView
   effects: Array<{ id: string; label: string; blurb: string }>
   faces: Array<{ id: string; label: string; preview: string }>
   shot: Shot | null
@@ -90,7 +107,11 @@ interface Props {
   onPostKept: (mediaId: string) => Promise<boolean>
 }
 
-type Phase = 'outside' | 'to-inside' | 'inside' | 'to-outside'
+/**
+ * picker -> board -> (to-inside) -> inside -> (to-outside) -> board.
+ * An event with one era starts on its board and never shows the picker.
+ */
+type Phase = 'picker' | 'board' | 'to-inside' | 'inside' | 'to-outside'
 type CamState = 'off' | 'starting' | 'live' | 'blocked'
 
 /** Walking through the curtain. */
@@ -185,6 +206,25 @@ const STYLES = `
 .bx-danger{background:#b42318}
 .bx-confirm-title{font-size:17px;font-weight:700;text-align:center}
 .bx-confirm-body{font-size:14px;color:rgba(255,255,255,.75);text-align:center;line-height:1.4}
+.bx-screen{position:absolute;inset:0;overflow:hidden}
+.bx-screen-bg{position:absolute;inset:-40px;width:calc(100% + 80px);height:calc(100% + 80px);object-fit:cover;
+  filter:blur(20px) brightness(.5) saturate(1.15);max-width:none;pointer-events:none}
+.bx-screen-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.35),rgba(0,0,0,.1) 30%,rgba(0,0,0,.45))}
+.bx-screen-body{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:calc(env(safe-area-inset-top,0px) + 68px) 16px calc(env(safe-area-inset-bottom,0px) + 84px)}
+.bx-h1{font-size:30px;font-weight:800;text-align:center;letter-spacing:.01em;text-shadow:0 2px 16px rgba(0,0,0,.6)}
+.bx-sub{font-size:14px;text-align:center;color:rgba(255,255,255,.75);margin-top:4px}
+.bx-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:30rem;margin:18px auto 0}
+.bx-card{position:relative;display:block;width:100%;aspect-ratio:3/4;border-radius:14px;overflow:hidden;background:#1d1d22;
+  box-shadow:0 10px 24px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12);transition:transform 160ms ease,box-shadow 160ms ease}
+.bx-card img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;max-width:none}
+.bx-card-blank{position:absolute;inset:0;background:linear-gradient(135deg,#3a2a4a,#1b2a3a)}
+.bx-card-label{position:absolute;left:0;right:0;bottom:0;padding:28px 10px 10px;text-align:left;
+  background:linear-gradient(180deg,rgba(0,0,0,0),rgba(0,0,0,.82))}
+.bx-card-label b{display:block;font-size:16px;font-weight:800;line-height:1.15}
+.bx-card-label span{display:block;font-size:11px;line-height:1.25;margin-top:2px;color:rgba(255,255,255,.75)}
+.bx-card-pressed{transform:scale(.95);box-shadow:0 0 0 3px rgba(255,255,255,.9),0 0 30px 8px rgba(255,80,200,.5)}
+.bx-more-inline{display:block;margin:18px auto 0;height:44px;padding:0 22px;border-radius:999px;font-size:14px;font-weight:700}
 .bx-panel{position:absolute;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .bx-controls{pointer-events:auto;width:100%;height:100%;border-radius:14px;padding:10px;display:flex;
   flex-direction:column;justify-content:center;gap:8px;animation:bx-rise 380ms ease-out both}
@@ -226,14 +266,15 @@ const STYLES = `
 
 export default function BoothExperience(props: Props) {
   const {
-    theme, effects, faces, shot, progress, statusText, generating, primaryColor,
+    booth, effects, faces, shot, progress, statusText, generating, primaryColor,
     onCaptured, onFallbackCamera, onAccept, onSave, onDiscard, onOriginal, onClose,
     historyKey, onPostImage, onSaveImage, onRemoveUpload, onPostKept,
   } = props
 
   const [vp, setVp] = useState({ w: 390, h: 844 })
-  const [phase, setPhase] = useState<Phase>('outside')
-  const [interiorKey, setInteriorKey] = useState<string>(theme.default_interior)
+  const eras = booth.eras
+  const [phase, setPhase] = useState<Phase>(eras.length === 1 ? 'board' : 'picker')
+  const [eraKey, setEraKey] = useState<string>(eras[0]!.key)
   const [look, setLook] = useState<BoothLook | null>(null)
   const [pressed, setPressed] = useState<number | null>(null)
   const [cam, setCam] = useState<CamState>('off')
@@ -266,7 +307,8 @@ export default function BoothExperience(props: Props) {
   }, [])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
 
-  const interior = theme.interiors[interiorKey] ?? theme.interiors[theme.default_interior]
+  const era = eras.find((e) => e.key === eraKey) ?? eras[0]!
+  const interior = era.interior
   const inside = phase === 'inside' || phase === 'to-outside'
   const busy = Boolean(shot?.busy)
   // The camera runs only while there is nothing in the window to look at,
@@ -313,11 +355,11 @@ export default function BoothExperience(props: Props) {
   // Warm every interior while the guest reads the board, so walking in
   // never shows an empty booth loading.
   useEffect(() => {
-    for (const i of Object.values(theme.interiors)) {
+    for (const e of booth.eras) {
       const img = new window.Image()
-      img.src = i.image
+      img.src = e.interior.image
     }
-  }, [theme])
+  }, [booth])
 
   // The live camera. Started only when wanted and always stopped on the
   // way out, so the phone's camera light goes off as soon as the picture
@@ -490,20 +532,30 @@ export default function BoothExperience(props: Props) {
   }, [pictures.length, onRemoveUpload, flashNotice])
 
   /** Walk in. Every visit starts with the live camera and no picture. */
-  const enter = useCallback((key: string, chosen: BoothLook | null, tileIndex: number | null) => {
-    if (phase !== 'outside') return
+  const enter = useCallback((chosen: BoothLook | null, tileIndex: number | null) => {
+    if (phase !== 'board') return
     setPressed(tileIndex)
     setMoreOpen(false)
     setLook(chosen)
     later(() => {
       setPhase('to-inside')
       later(() => {
-        setInteriorKey(theme.interiors[key] ? key : theme.default_interior)
         setPhase('inside')
         setPressed(null)
       }, ENTER_MS)
     }, 160)
-  }, [phase, later, theme])
+  }, [phase, later])
+
+  /** From the era picker to that era's board of looks. */
+  const chooseEra = useCallback((key: string, tileIndex: number | null) => {
+    if (phase !== 'picker') return
+    setPressed(tileIndex)
+    later(() => {
+      setEraKey(key)
+      setPhase('board')
+      setPressed(null)
+    }, 180)
+  }, [phase, later])
 
   /**
    * Step outside. The picture goes with it: walking back in, to the same
@@ -516,7 +568,7 @@ export default function BoothExperience(props: Props) {
     if (busy || count !== null) return
     setPhase('to-outside')
     onDiscard()
-    later(() => setPhase('outside'), ARRIVE_MS)
+    later(() => setPhase('board'), ARRIVE_MS)
   }, [busy, count, later, onDiscard])
 
   const capture = useCallback(() => {
@@ -564,7 +616,6 @@ export default function BoothExperience(props: Props) {
 
   // ── Layout ─────────────────────────────────────────────────────────
 
-  const outsideBox = stageRect(vp.w, vp.h, theme.outside.width, theme.outside.height, theme.outside.focus_x)
   const insideBox = stageRect(vp.w, vp.h, interior.width, interior.height, interior.focus_x)
 
   // Through the curtain: the board swells and darkens, then the interior
@@ -575,7 +626,7 @@ export default function BoothExperience(props: Props) {
     transform: phase === 'to-inside' ? 'scale(2.4)' : 'scale(1)',
     opacity: phase === 'to-inside' || inside ? 0 : 1,
     filter: phase === 'to-inside' ? 'blur(6px) brightness(.4)' : 'none',
-    pointerEvents: phase === 'outside' ? 'auto' : 'none',
+    pointerEvents: phase === 'picker' || phase === 'board' ? 'auto' : 'none',
   } as const
   const insideStyle = {
     transition: `transform ${ARRIVE_MS}ms cubic-bezier(.2,.7,.3,1), opacity ${ARRIVE_MS}ms ease-out`,
@@ -584,10 +635,83 @@ export default function BoothExperience(props: Props) {
     pointerEvents: phase === 'inside' ? 'auto' : 'none',
   } as const
 
-  const tileLooks = new Set(theme.outside.tiles.map((t) => t.effect))
-  const extraEffects = effects.filter((e) => !tileLooks.has(e.id))
+  // "More looks": the reference faces, and any look no era offers.
+  const eraLooks = new Set(eras.flatMap((e) => e.looks.map((l) => l.id)))
+  const extraEffects = effects.filter((e) => !eraLooks.has(e.id))
   const hasMore = faces.length > 0 || extraEffects.length > 0
-  const labelFor = (id: string) => effects.find((e) => e.id === id)?.label ?? id
+  const lookOf = (id: string): BoothLook => {
+    const l = era.looks.find((x) => x.id === id)
+    return { key: id, payload: { effect: id }, label: l?.label ?? effects.find((e) => e.id === id)?.label ?? id }
+  }
+  const onPicker = phase === 'picker'
+
+  /** Artwork with tiles on it, laid out to fill the screen. */
+  const painted = (art: Painted, labelOf: (key: string) => string, onTap: (key: string, i: number) => void) => (
+    <div className="bx-abs" style={stageRect(vp.w, vp.h, art.width, art.height, art.focus_x)}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- themed artwork */}
+      <img src={art.image} alt="" draggable={false} className="bx-art" />
+      {art.tiles.map((t, i) => (
+        <button
+          key={`${t.key}-${i}`}
+          type="button"
+          aria-label={labelOf(t.key)}
+          onClick={() => onTap(t.key, i)}
+          className="bx-tile"
+          style={{
+            ...pctStyle(t),
+            transform: pressed === i ? 'scale(.94)' : 'scale(1)',
+            boxShadow: pressed === i ? '0 0 0 3px rgba(255,255,255,.9), 0 0 30px 8px rgba(255,80,200,.6)' : 'none',
+          }}
+        />
+      ))}
+    </div>
+  )
+
+  /** A board of cards, for when there is no painted artwork. */
+  const cards = (
+    backdrop: string,
+    title: string,
+    subtitle: string,
+    items: Array<{ key: string; label: string; blurb: string; image: string | null; aria: string }>,
+    onTap: (key: string, i: number) => void,
+    more = false,
+  ) => (
+    <div className="bx-screen">
+      {/* eslint-disable-next-line @next/next/no-img-element -- themed artwork, blurred */}
+      <img src={backdrop} alt="" className="bx-screen-bg" draggable={false} />
+      <div className="bx-screen-shade" />
+      <div className="bx-screen-body">
+        <p className="bx-h1">{title}</p>
+        <p className="bx-sub">{subtitle}</p>
+        <div className="bx-grid">
+          {items.map((it, i) => (
+            <button
+              key={it.key}
+              type="button"
+              aria-label={it.aria}
+              className={`bx-card${pressed === i ? ' bx-card-pressed' : ''}`}
+              onClick={() => onTap(it.key, i)}
+            >
+              {it.image
+                // eslint-disable-next-line @next/next/no-img-element -- sample picture
+                ? <img src={it.image} alt="" draggable={false} />
+                : <span className="bx-card-blank" />}
+              <span className="bx-card-label">
+                <b>{it.label}</b>
+                <span>{it.blurb}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        {/* At the end of the list rather than floating over its last row. */}
+        {more && (
+          <button type="button" onClick={() => setMoreOpen(true)} className="bx-more-inline bx-glass">
+            More looks
+          </button>
+        )}
+      </div>
+    </div>
+  )
   const result = shot ? shot.preview ?? shot.original : null
   const showControls = Boolean(shot) && !busy && !generating
   const topInset = 'calc(env(safe-area-inset-top, 0px) + 10px)'
@@ -596,30 +720,33 @@ export default function BoothExperience(props: Props) {
     <div ref={rootRef} className="bx-root" data-event-media-overlay="" role="dialog" aria-modal="true" aria-label="Photo booth">
       <style>{STYLES}</style>
 
-      {/* ── Outside ──────────────────────────────────────────────── */}
+      {/* ── Outside: the era picker, or an era's board of looks ──── */}
       <div className="bx-fill" style={outsideStyle} aria-hidden={inside}>
-        <div className="bx-abs" style={outsideBox}>
-          {/* eslint-disable-next-line @next/next/no-img-element -- themed artwork */}
-          <img src={theme.outside.image} alt="" draggable={false} className="bx-art" />
-          {theme.outside.tiles.map((t, i) => (
-            <button
-              key={`${t.effect}-${i}`}
-              type="button"
-              aria-label={`${labelFor(t.effect)} photo booth`}
-              onClick={() => enter(t.interior ?? theme.default_interior, {
-                key: t.effect, payload: { effect: t.effect }, label: labelFor(t.effect),
-              }, i)}
-              className="bx-tile"
-              style={{
-                ...pctStyle(t),
-                transform: pressed === i ? 'scale(.94)' : 'scale(1)',
-                boxShadow: pressed === i ? '0 0 0 3px rgba(255,255,255,.9), 0 0 30px 8px rgba(255,80,200,.6)' : 'none',
-              }}
-            />
-          ))}
-        </div>
+        {onPicker
+          ? booth.picker
+            ? painted(booth.picker, (k) => `${eras.find((e) => e.key === k)?.label ?? k} photo booth`, chooseEra)
+            : cards(
+              eras[0]!.interior.image,
+              'Choose your era',
+              'Step into a photo booth from another decade',
+              eras.map((e) => ({
+                key: e.key, label: e.label, blurb: e.blurb, aria: `${e.label} photo booth`,
+                image: e.card ?? e.looks.find((l) => l.sample)?.sample ?? e.interior.image,
+              })),
+              chooseEra,
+            )
+          : era.board
+            ? painted(era.board, (k) => `${lookOf(k).label} look`, (k, i) => enter(lookOf(k), i))
+            : cards(
+              era.interior.image,
+              era.label,
+              'Choose your look',
+              era.looks.map((l) => ({ key: l.id, label: l.label, blurb: l.blurb, image: l.sample, aria: `${l.label} look` })),
+              (k, i) => enter(lookOf(k), i),
+              hasMore,
+            )}
 
-        {hasMore && phase === 'outside' && (
+        {hasMore && phase === 'board' && era.board && (
           <button
             type="button"
             onClick={() => setMoreOpen(true)}
@@ -746,6 +873,13 @@ export default function BoothExperience(props: Props) {
             </svg>
             Step outside
           </button>
+        ) : phase === 'board' && eras.length > 1 ? (
+          <button type="button" onClick={() => setPhase('picker')} className="bx-pill bx-glass" aria-label="Choose another era">
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+            Eras
+          </button>
         ) : (
           <button type="button" onClick={onClose} disabled={busy} className="bx-pill bx-glass" aria-label="Leave the photo booth">
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
@@ -763,7 +897,7 @@ export default function BoothExperience(props: Props) {
               onClick={leave}
               disabled={busy || count !== null}
               className="bx-pill bx-glass"
-              aria-label={`${look.label} — choose another era`}
+              aria-label={`${look.label} — choose another look`}
             >
               {look.label}
               <svg width="14" height="14" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
@@ -791,7 +925,7 @@ export default function BoothExperience(props: Props) {
       {/* ── The Polaroids ────────────────────────────────────────── */}
       {carousel && pictures.length > 0 && (() => {
         const room = inside ? interior : null
-        const backdrop = room ? room.image : theme.outside.image
+        const backdrop = room ? room.image : onPicker && booth.picker ? booth.picker.image : era.interior.image
         const aspect = room
           ? (room.window.w * room.width) / (room.window.h * room.height)
           : 0.72
@@ -916,7 +1050,7 @@ export default function BoothExperience(props: Props) {
                   <button
                     key={f.id}
                     type="button"
-                    onClick={() => enter(theme.default_interior, {
+                    onClick={() => enter({
                       key: `filter:${f.id}`, payload: { filter_id: f.id }, label: `Be ${f.label}`,
                     }, null)}
                     className="bx-face"
@@ -934,7 +1068,7 @@ export default function BoothExperience(props: Props) {
                   <button
                     key={e.id}
                     type="button"
-                    onClick={() => enter(theme.default_interior, { key: e.id, payload: { effect: e.id }, label: e.label }, null)}
+                    onClick={() => enter({ key: e.id, payload: { effect: e.id }, label: e.label }, null)}
                     className="bx-look"
                   >
                     <b>{e.label}</b>

@@ -31,7 +31,7 @@ describe('the effect catalogue', () => {
     for (const e of BOOTH_EFFECTS.filter((x) => x.kind === 'style')) {
       const p = buildPrompt(e);
       expect(p, e.id).toMatch(/exact same faces/);
-      expect(p, e.id).toMatch(/Do not add any personal names/);
+      expect(p, e.id).toMatch(/Do not add any titles, taglines, personal names/);
     }
   });
 
