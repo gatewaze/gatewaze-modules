@@ -214,3 +214,16 @@ describe('display pool', () => {
     expect(pool.length).toBe(2);
   });
 });
+
+
+import { parseYesNo } from '../booth-provider.js';
+describe('parseYesNo', () => {
+  it('reads plain and chatty answers, and refuses to guess', () => {
+    expect(parseYesNo('YES')).toBe(true);
+    expect(parseYesNo('No.')).toBe(false);
+    expect(parseYesNo('  yes, a man on the left')).toBe(true);
+    expect(parseYesNo('I think the answer is NO')).toBe(false);
+    expect(parseYesNo('maybe')).toBeNull();
+    expect(parseYesNo('yes and no')).toBeNull();
+  });
+});

@@ -304,12 +304,78 @@ export async function runCardCopy(imageUrl: string): Promise<
   return cardCopyOnce(imageUrl);
 }
 
+/**
+ * Ask the vision model about one image; its plain-text answer. The URL is
+ * ours (storage), the prompt is ours; the answer is treated as untrusted.
+ */
+async function askVision(imageUrl: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  const headers = { Authorization: `Key ${falKey()!}`, 'Content-Type': 'application/json' };
+  try {
+    const submit = await withTimeout(
+      fetch(`https://queue.fal.run/${model('BOOTH_VISION_MODEL', DEFAULT_VISION_MODEL)}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model: 'google/gemini-flash-1.5', prompt, image_url: imageUrl }),
+      }),
+      SUBMIT_TIMEOUT_MS,
+    );
+    if (!submit.ok) return { ok: false, error: `submit ${submit.status}` };
+    const queued = await submit.json() as FalQueued;
+    if (!queued.status_url?.startsWith('https://queue.fal.run/') ||
+        !queued.response_url?.startsWith('https://queue.fal.run/')) {
+      return { ok: false, error: 'unexpected queue host' };
+    }
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+    let done = false;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      const poll = await withTimeout(fetch(queued.status_url, { headers }), SUBMIT_TIMEOUT_MS);
+      if (!poll.ok) continue;
+      const state = await poll.json() as { status?: string };
+      if (state.status === 'COMPLETED') { done = true; break; }
+      if (state.status !== 'IN_QUEUE' && state.status !== 'IN_PROGRESS') {
+        return { ok: false, error: String(state.status ?? 'unknown') };
+      }
+    }
+    if (!done) return { ok: false, error: 'timeout' };
+    const resp = await withTimeout(fetch(queued.response_url, { headers }), SUBMIT_TIMEOUT_MS);
+    if (!resp.ok) return { ok: false, error: `result ${resp.status}` };
+    const body = await resp.json() as { output?: unknown; text?: unknown };
+    const text = typeof body.output === 'string' ? body.output : typeof body.text === 'string' ? body.text : '';
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Read a yes/no answer; null when it is neither. */
+export function parseYesNo(text: string): boolean | null {
+  const t = text.trim().toUpperCase();
+  const yes = /\bYES\b/.test(t), no = /\bNO\b/.test(t);
+  // Both, or neither: not an answer.
+  return yes === no ? null : yes;
+}
+
+/**
+ * Does this background plate still show a person? true, false, or null
+ * when the model could not be asked or gave no clear answer. A plate that
+ * kept its person makes the projector draw them twice (reported
+ * 2026-09-22), and a pixel comparison cannot tell a person removed from a
+ * person redrawn -- so a model looks.
+ */
+export async function plateHasPeople(plateUrl: string): Promise<boolean | null> {
+  const r = await askVision(plateUrl,
+    'Look carefully at this photograph. Is there any person in it, or any part of a person -- a face, ' +
+    'head, hair, body, arm, hand, silhouette or reflection -- anywhere, including at the edges? ' +
+    'Answer with exactly one word: YES or NO.');
+  return r.ok ? parseYesNo(r.text) : null;
+}
+
 async function cardCopyOnce(imageUrl: string): Promise<
   { ok: true; copy: CardCopy } | { ok: false; error: string }
 > {
   if (!falEnabled()) return { ok: false, error: 'not_configured' };
-  const key = falKey()!;
-  const headers = { Authorization: `Key ${key}`, 'Content-Type': 'application/json' };
   const prompt = [
     'You are writing browse-screen copy for a spoof streaming service at a wedding.',
     'Invent a programme based on WHAT YOU ACTUALLY SEE in the photograph.',
@@ -340,38 +406,9 @@ async function cardCopyOnce(imageUrl: string): Promise<
   ].join('\n');
 
   try {
-    const submit = await withTimeout(
-      fetch(`https://queue.fal.run/${model('BOOTH_VISION_MODEL', DEFAULT_VISION_MODEL)}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ model: 'google/gemini-flash-1.5', prompt, image_url: imageUrl }),
-      }),
-      SUBMIT_TIMEOUT_MS,
-    );
-    if (!submit.ok) return { ok: false, error: `submit ${submit.status}` };
-    const queued = await submit.json() as FalQueued;
-    if (!queued.status_url?.startsWith('https://queue.fal.run/') ||
-        !queued.response_url?.startsWith('https://queue.fal.run/')) {
-      return { ok: false, error: 'unexpected queue host' };
-    }
-
-    const deadline = Date.now() + POLL_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      const poll = await withTimeout(fetch(queued.status_url, { headers }), SUBMIT_TIMEOUT_MS);
-      if (!poll.ok) continue;
-      const state = await poll.json() as { status?: string };
-      if (state.status === 'COMPLETED') break;
-      if (state.status !== 'IN_QUEUE' && state.status !== 'IN_PROGRESS') {
-        return { ok: false, error: String(state.status ?? 'unknown') };
-      }
-    }
-
-    const resp = await withTimeout(fetch(queued.response_url, { headers }), SUBMIT_TIMEOUT_MS);
-    if (!resp.ok) return { ok: false, error: `result ${resp.status}` };
-    const body = await resp.json() as { output?: unknown; text?: unknown };
-    const raw = typeof body.output === 'string' ? body.output
-      : typeof body.text === 'string' ? body.text : '';
+    const said = await askVision(imageUrl, prompt);
+    if (!said.ok) return said;
+    const raw = said.text;
     const match = /\{[\s\S]*\}/.exec(raw);
     if (!match) return { ok: false, error: 'no json' };
     const parsed = parseCard(match[0]);
@@ -424,14 +461,21 @@ export async function runCutout(imageUrl: string): Promise<BoothResult> {
  * them is real reconstructed scene rather than stretched neighbouring
  * pixels.
  */
-export async function runPlate(imageUrl: string): Promise<BoothResult> {
+export async function runPlate(imageUrl: string, strict = false): Promise<BoothResult> {
   if (!falEnabled()) return { ok: false, error: 'not_configured' };
   return runFal(model('BOOTH_STYLE_MODEL', DEFAULT_STYLE_MODEL), {
     prompt:
       'Remove the people from this photograph completely. Reconstruct the scene behind them ' +
       'plausibly and seamlessly, continuing the walls, furniture, floor and background exactly as ' +
       'they would appear with nobody standing there. Keep the camera angle, framing, lighting, ' +
-      'colour and every remaining detail identical. The result must contain no people at all.',
+      'colour and every remaining detail identical. The result must contain no people at all.' +
+      // The second attempt, after a first that left someone in: say it
+      // every way the model might otherwise wriggle out of it.
+      (strict
+        ? ' There must be no person, face, head, hair, body, arm, hand, silhouette, reflection or ' +
+          'partial figure anywhere in the image, including at the edges and in the background. ' +
+          'Where a person was, show only what would be behind them.'
+        : ''),
     image_urls: [imageUrl],
     output_format: 'jpeg',
   });

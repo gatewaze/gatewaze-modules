@@ -32,7 +32,7 @@ import {
   validateMintFile,
 } from '../lib/guest-limits.js';
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
-import { runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
@@ -580,6 +580,47 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * request, so anything thrown here would surface as an
    * unhandledRejection and take the API process down.
    */
+  /** Point a variant at an existing object, merging like storeVariant. */
+  async function setVariantPath(mediaId: string, name: string, path: string): Promise<void> {
+    const { data: row } = await supabase.from('host_media').select('variants').eq('id', mediaId).maybeSingle();
+    const variants = { ...((row?.variants ?? {}) as Record<string, unknown>), [name]: path };
+    await supabase.from('host_media').update({ variants }).eq('id', mediaId);
+  }
+
+  /**
+   * The background plate, checked before it is kept. The image model
+   * sometimes redraws the scene with the person still in it; the
+   * projector then draws them twice. So a vision model looks at every
+   * plate: a plate with a person in it is retried once with a firmer
+   * prompt, and if that fails too the plate is pointed at the photo
+   * itself -- which the display reads as "no usable plate" and shows the
+   * photo flat, straight away, rather than doubled or four minutes late.
+   * When the check itself cannot run, the plate is kept (the display's
+   * own pixel check still applies).
+   */
+  async function checkedPlate(mediaId: string, storagePath: string, src: string): Promise<void> {
+    const dir = storagePath.slice(0, storagePath.lastIndexOf('/'));
+    for (const strict of [false, true]) {
+      const r = await runPlate(src, strict);
+      if (!r.ok) {
+        logger.warn('layer generation failed', { mediaId, name: 'plate', error: r.error, detail: r.detail });
+        continue;
+      }
+      const candidate = `${dir}/variants/plate-check-${strict ? 2 : 1}.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from(storageBucket)
+        .upload(candidate, r.image, { contentType: 'image/jpeg', upsert: true });
+      const people = upErr ? null : await plateHasPeople(toPublicUrl(candidate));
+      await removeObject(candidate);
+      if (people !== true) {
+        await storeVariant(mediaId, storagePath, 'plate', r.image, 'image/jpeg', 'jpg');
+        return;
+      }
+      logger.warn('plate still shows a person', { mediaId, attempt: strict ? 2 : 1 });
+    }
+    await setVariantPath(mediaId, 'plate', storagePath);
+  }
+
   async function generateLayers(mediaId: string, storagePath: string): Promise<void> {
     try {
       const src = toPublicUrl(storagePath);
@@ -604,16 +645,15 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         await supabase.from('host_media').update({ metadata }).eq('id', mediaId);
       })();
 
-      const [depth, cutout, plate] = await Promise.all([
+      const [depth, cutout] = await Promise.all([
         runDepth(src),
         runCutout(src),
-        runPlate(src),
+        checkedPlate(mediaId, storagePath, src),
       ]);
 
       if (depth.ok) await storeVariant(mediaId, storagePath, 'depth', depth.image, 'image/png', 'png');
       if (cutout.ok) await storeVariant(mediaId, storagePath, 'cutout', cutout.image, 'image/png', 'png');
-      if (plate.ok) await storeVariant(mediaId, storagePath, 'plate', plate.image, 'image/jpeg', 'jpg');
-      for (const [name, r] of [['depth', depth], ['cutout', cutout], ['plate', plate]] as const) {
+      for (const [name, r] of [['depth', depth], ['cutout', cutout]] as const) {
         if (!r.ok) logger.warn('layer generation failed', { mediaId, name, error: r.error, detail: r.detail });
       }
     } catch (err) {

@@ -55,6 +55,12 @@ const FONTS: Array<[string, string]> = [
   ['Parisienne', ''], ['Orbitron', ':wght@700'], ['Special+Elite', ''],
   ['Cinzel', ':wght@900'], ['Abril+Fatface', ''], ['Lobster', ''],
   ['Anton', ''], ['Rye', ''], ['Bebas+Neue', ''],
+  // More faces, so a projector full of one genre does not repeat one look.
+  ['Righteous', ''], ['Permanent+Marker', ''], ['Pacifico', ''], ['Russo+One', ''],
+  ['Black+Ops+One', ''], ['Cormorant+Garamond', ':wght@700'], ['Staatliches', ''],
+  ['Audiowide', ''], ['Shrikhand', ''], ['Nosifer', ''], ['Great+Vibes', ''],
+  ['DM+Serif+Display', ':ital@0;1'], ['Syne', ':wght@800'], ['Bowlby+One', ''],
+  ['Limelight', ''], ['Rock+Salt', ''], ['Unica+One', ''], ['Yeseva+One', ''],
 ]
 
 const GENRE_STYLE: Record<string, React.CSSProperties> = {
@@ -122,6 +128,79 @@ const GENRE_STYLE: Record<string, React.CSSProperties> = {
     letterSpacing: '.09em', textTransform: 'uppercase',
     textShadow: '0 3px 16px rgba(0,0,0,.8)',
   },
+}
+
+/**
+ * Second and third faces per genre. A card takes one of its genre's faces
+ * by its title, so the same programme always looks the same but two
+ * horror cards in a row usually do not (asked 2026-09-22).
+ */
+const GENRE_ALT: Record<string, Array<{ style: React.CSSProperties; scale: number }>> = {
+  horror: [
+    { style: { fontFamily: '"Nosifer", Impact, fantasy', color: '#e11d1d', letterSpacing: '.02em', textShadow: '0 0 24px rgba(225,29,29,.55)' }, scale: 0.8 },
+    { style: { fontFamily: '"Black Ops One", Impact, sans-serif', color: '#f1f1f1', letterSpacing: '.06em', textTransform: 'uppercase', textShadow: '0 0 20px rgba(200,0,0,.7)' }, scale: 0.95 },
+  ],
+  comedy: [
+    { style: { fontFamily: '"Shrikhand", Georgia, cursive', color: '#ffcf33', textShadow: '0 .05em 0 #b8541b' }, scale: 0.95 },
+    { style: { fontFamily: '"Righteous", Impact, sans-serif', color: '#fff', letterSpacing: '.02em', textShadow: '0 .06em 0 #e2231a' }, scale: 1.0 },
+  ],
+  thriller: [
+    { style: { fontFamily: '"Staatliches", Impact, sans-serif', color: '#fff', letterSpacing: '.2em', textShadow: '0 3px 16px rgba(0,0,0,.85)' }, scale: 1.05 },
+    { style: { fontFamily: '"Unica One", Impact, sans-serif', color: '#e8e8e8', letterSpacing: '.3em', textTransform: 'uppercase' }, scale: 0.95 },
+  ],
+  eighties: [
+    { style: { fontFamily: '"Audiowide", Impact, sans-serif', textTransform: 'uppercase', background: 'linear-gradient(180deg,#ff6ad5 0%,#c774e8 45%,#8795e8 55%,#94d0ff 100%)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent', filter: 'drop-shadow(0 3px 2px rgba(0,0,0,.7))' }, scale: 0.85 },
+    { style: { fontFamily: '"Bowlby One", Impact, sans-serif', color: '#ffe14d', textTransform: 'uppercase', textShadow: '3px 3px 0 #ff2d95, 6px 6px 0 #00d4ff' }, scale: 0.85 },
+  ],
+  doc: [
+    { style: { fontFamily: '"Cormorant Garamond", Georgia, serif', fontWeight: 700, color: '#f4f1ea', letterSpacing: '.08em', textTransform: 'uppercase' }, scale: 1.05 },
+    { style: { fontFamily: '"DM Serif Display", Georgia, serif', color: '#fff', letterSpacing: '.01em' }, scale: 1.0 },
+  ],
+  romance: [
+    { style: { fontFamily: '"Great Vibes", "Snell Roundhand", cursive', color: '#ffe3ea', textShadow: '0 2px 18px rgba(255,120,160,.45)' }, scale: 1.35 },
+    { style: { fontFamily: '"Yeseva One", Georgia, serif', color: '#ffd6e0', letterSpacing: '.01em' }, scale: 0.95 },
+  ],
+  scifi: [
+    { style: { fontFamily: '"Audiowide", Futura, sans-serif', color: '#b5f3ff', letterSpacing: '.12em', textTransform: 'uppercase', textShadow: '0 0 22px rgba(80,200,255,.85)' }, scale: 0.85 },
+    { style: { fontFamily: '"Russo One", Futura, sans-serif', color: '#e8faff', letterSpacing: '.06em', textTransform: 'uppercase', textShadow: '0 0 18px rgba(120,120,255,.8)' }, scale: 0.9 },
+  ],
+  crime: [
+    { style: { fontFamily: '"Black Ops One", "Courier New", monospace', color: '#f5d90a', letterSpacing: '.05em', textTransform: 'uppercase', textShadow: '0 3px 14px rgba(0,0,0,.85)' }, scale: 0.95 },
+    { style: { fontFamily: '"Staatliches", Impact, sans-serif', color: '#fff', letterSpacing: '.14em', textShadow: '0 2px 12px rgba(0,0,0,.85)' }, scale: 1.05 },
+  ],
+  epic: [
+    { style: { fontFamily: '"Cormorant Garamond", Georgia, serif', fontWeight: 700, color: '#f3dca0', letterSpacing: '.12em', textTransform: 'uppercase', textShadow: '0 3px 20px rgba(0,0,0,.85)' }, scale: 1.05 },
+    { style: { fontFamily: '"Limelight", Georgia, serif', color: '#fff', letterSpacing: '.04em', textShadow: '0 3px 20px rgba(0,0,0,.85)' }, scale: 0.95 },
+  ],
+  noir: [
+    { style: { fontFamily: '"Limelight", Georgia, serif', color: '#f5f0e6', letterSpacing: '.03em', textShadow: '0 4px 20px rgba(0,0,0,.9)' }, scale: 0.95 },
+    { style: { fontFamily: '"DM Serif Display", Georgia, serif', fontStyle: 'italic', color: '#f5f0e6', textShadow: '0 4px 20px rgba(0,0,0,.9)' }, scale: 1.05 },
+  ],
+  musical: [
+    { style: { fontFamily: '"Pacifico", "Brush Script MT", cursive', color: '#ffd35c', textShadow: '0 0 24px rgba(255,190,60,.5)' }, scale: 1.0 },
+    { style: { fontFamily: '"Shrikhand", Georgia, cursive', color: '#ff7ab8', textShadow: '0 .05em 0 #7a1f5c' }, scale: 0.95 },
+  ],
+  reality: [
+    { style: { fontFamily: '"Permanent Marker", Impact, cursive', color: '#fff', textShadow: '0 3px 14px rgba(0,0,0,.8)' }, scale: 1.0 },
+    { style: { fontFamily: '"Syne", Impact, sans-serif', fontWeight: 800, color: '#fff', letterSpacing: '-.01em', textTransform: 'uppercase', textShadow: '0 3px 16px rgba(0,0,0,.8)' }, scale: 1.0 },
+  ],
+  western: [
+    { style: { fontFamily: '"Limelight", Georgia, serif', color: '#f0d49a', letterSpacing: '.06em', textTransform: 'uppercase', textShadow: '0 3px 14px rgba(0,0,0,.8)' }, scale: 0.9 },
+    { style: { fontFamily: '"Rock Salt", Georgia, cursive', color: '#f3dcb0', textShadow: '0 3px 14px rgba(0,0,0,.85)' }, scale: 0.85 },
+  ],
+  heist: [
+    { style: { fontFamily: '"Russo One", Impact, sans-serif', color: '#fff', letterSpacing: '.05em', textTransform: 'uppercase', textShadow: '0 3px 16px rgba(0,0,0,.8)' }, scale: 0.95 },
+    { style: { fontFamily: '"Unica One", Impact, sans-serif', color: '#d4af37', letterSpacing: '.25em', textTransform: 'uppercase', textShadow: '0 3px 16px rgba(0,0,0,.85)' }, scale: 1.0 },
+  ],
+}
+
+/** The genre's faces, one picked by the title so it never flickers. */
+function titleFace(genre: string, title: string): { style: React.CSSProperties; scale: number } {
+  const base = { style: GENRE_STYLE[genre] ?? GENRE_STYLE['doc']!, scale: GENRE_SCALE[genre] ?? 1 }
+  const faces = [base, ...(GENRE_ALT[genre] ?? [])]
+  let h = 0
+  for (let i = 0; i < title.length; i++) h = (h * 31 + title.charCodeAt(i)) | 0
+  return faces[Math.abs(h) % faces.length]!
 }
 
 /**
@@ -216,8 +295,10 @@ export default function WedflixCard({ copy, slideKey, durationMs, showRank = fal
     return () => timers.forEach(clearTimeout)
   }, [slideKey, schedule])
 
-  const style = GENRE_STYLE[copy.genre] ?? GENRE_STYLE['doc']!
-  const scale = GENRE_SCALE[copy.genre] ?? 1
+  const { style, scale } = titleFace(copy.genre, copy.title)
+  // The Wedflix mark sits above the title only on its own originals; a
+  // "New Episodes" or "Season Two" card is someone else's programme.
+  const isOriginal = /wedflix original/i.test(copy.eyebrow ?? '')
   // In rises gently into place; out sinks back the way it came, quicker.
   const fade = (beat: Beat, lift = true): React.CSSProperties => {
     const visible = on[beat]
@@ -245,9 +326,11 @@ export default function WedflixCard({ copy, slideKey, durationMs, showRank = fal
 
       <div className="absolute" style={{ left: '5%', bottom: '13%', maxWidth: '48%' }}>
         <div style={fade('title')}>
-          <div style={{ marginBottom: '1.1em', filter: 'drop-shadow(0 .05em .09em rgba(0,0,0,.6))' }}>
-            <Wordmark height="clamp(17px, 1.85vw, 34px)" />
-          </div>
+          {isOriginal && (
+            <div style={{ marginBottom: '1.1em', filter: 'drop-shadow(0 .05em .09em rgba(0,0,0,.6))' }}>
+              <Wordmark height="clamp(17px, 1.85vw, 34px)" />
+            </div>
+          )}
 
           {copy.eyebrow && (
             <div

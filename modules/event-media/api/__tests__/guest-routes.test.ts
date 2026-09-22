@@ -18,6 +18,7 @@ vi.mock('../../lib/booth-provider.js', async (importOriginal) => {
     runCutout: vi.fn(off),
     runPlate: vi.fn(off),
     runCardCopy: vi.fn(off),
+    plateHasPeople: vi.fn(async () => null),
   };
 });
 import { mintTicket, TICKET_TTL_SECONDS } from '../../lib/upload-tickets.js';
@@ -1182,5 +1183,66 @@ describe('one phone per name', () => {
   it('releases a name only for the phone that holds it', async () => {
     const { res } = await run('releaseGuest', cfg({ claims: { [DAN]: CLIENT_ID } }), { body: { client_id: CLIENT_ID, member_id: DAN } });
     expect(res.statusCode).toBe(200);
+  });
+});
+
+
+describe('background plates are checked for people', () => {
+  const IMG = { ok: true, image: new Uint8Array([9]), contentType: 'image/jpeg' };
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+  const complete = async () => {
+    const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: null });
+    const updates = [];
+    const realFrom = supabase.from;
+    supabase.from = (t) => { const b = realFrom(t); const u = b.update; b.update = (f) => { if (f.variants) updates.push(f.variants); return u(f); }; return b; };
+    stubHead({ ok: true, headers: { get: (k) => ({ 'content-length': '1000', 'content-type': 'image/jpeg' })[k] ?? null } });
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor()] } }), mockRes());
+    await settle();
+    return { updates, supabase };
+  };
+  const path = `event/${EVENT_ID}/11111111-2222-3333-4444-555555555555/photo.jpg`;
+
+  beforeEach(() => {
+    process.env.BOOTH_PROVIDER = 'fal';
+    process.env.FAL_API_KEY = 'test-placeholder';
+    provider.runPlate.mockReset();
+    provider.plateHasPeople.mockReset();
+  });
+  afterEach(() => {
+    delete process.env.BOOTH_PROVIDER;
+    delete process.env.FAL_API_KEY;
+  });
+
+  it('keeps a clean plate', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(false);
+    const { updates } = await complete();
+    expect(provider.runPlate).toHaveBeenCalledTimes(1);
+    expect(updates.at(-1).plate).toMatch(/variants\/plate\.jpg$/);
+  });
+
+  it('retries once, firmly, when the plate still shows a person', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const { updates } = await complete();
+    expect(provider.runPlate).toHaveBeenCalledTimes(2);
+    expect(provider.runPlate.mock.calls[1][1]).toBe(true);
+    expect(updates.at(-1).plate).toMatch(/variants\/plate\.jpg$/);
+  });
+
+  // The double-exposure fault: never keep a plate with a person in it.
+  it('falls back to the photo itself (shown flat) when both attempts keep a person', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(true);
+    const { updates } = await complete();
+    expect(updates.at(-1).plate).toBe(path);
+  });
+
+  it('keeps the plate when the check cannot run', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(null);
+    const { updates } = await complete();
+    expect(provider.runPlate).toHaveBeenCalledTimes(1);
+    expect(updates.at(-1).plate).toMatch(/variants\/plate\.jpg$/);
   });
 });
