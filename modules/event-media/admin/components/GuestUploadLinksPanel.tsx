@@ -127,6 +127,22 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     [baseUrl, customDomainUrl, eventIdentifier],
   );
 
+  // Deep links for their own QR codes: the wedding-photos screen, or
+  // straight into the photo booth. Full page URLs rather than /u/<code>,
+  // whose redirect drops anything after the code.
+  const sectionUrl = useCallback(
+    (link: UploadLink, tab: 'photos' | 'booth') => {
+      const base = customDomainUrl
+        ? `${baseUrl}/photos`
+        : eventIdentifier
+          ? `${baseUrl}/events/${eventIdentifier}/photos`
+          : null;
+      if (!base) return null;
+      return `${base}?u=${link.short_code}${tab === 'booth' ? '&tab=booth' : ''}`;
+    },
+    [baseUrl, customDomainUrl, eventIdentifier],
+  );
+
   // ── Face filters ──────────────────────────────────────────────────
 
   const [filters, setFilters] = useState<FaceFilter[]>([]);
@@ -352,16 +368,18 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     }
   };
 
-  const downloadQr = async (link: UploadLink, size: number) => {
+  const downloadQr = async (link: UploadLink, size: number, target?: { url: string | null; name: string }) => {
+    const data = target ? target.url : linkUrl(link);
+    if (!data) { toast.error('Event identifier still loading'); return; }
     try {
       const dataUrl = await QRCodeService.generateQRCode({
-        data: linkUrl(link),
+        data,
         size,
         color: '#000000',
         backgroundColor: '#ffffff',
       });
       const a = document.createElement('a');
-      a.download = `${link.label.replace(/[^a-zA-Z0-9]/g, '_')}_qr_${size}.png`;
+      a.download = `${link.label.replace(/[^a-zA-Z0-9]/g, '_')}${target ? `_${target.name}` : ''}_qr_${size}.png`;
       a.href = dataUrl;
       a.click();
       toast.success('QR code downloaded');
@@ -441,6 +459,29 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
               <button className="text-xs underline text-red-600" onClick={() => toggleActive(link)}>
                 {link.is_active ? 'Deactivate' : 'Activate'}
               </button>
+              {/* Deep links, each with its own QR: straight to the
+                  wedding-photos screen, or straight into the booth. */}
+              <div className="basis-full flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-xs text-gray-600 dark:text-gray-300">
+                {([['photos', 'Wedding photos'], ['booth', 'Photo booth']] as const).map(([tab, label]) => (
+                  <span key={tab} className="flex items-center gap-2">
+                    <span className="font-medium">{label}:</span>
+                    <button
+                      className="underline"
+                      onClick={async () => {
+                        const url = sectionUrl(link, tab);
+                        if (!url) { toast.error('Event identifier still loading'); return; }
+                        try { await navigator.clipboard.writeText(url); toast.success(`${label} link copied`); }
+                        catch { toast.error('Could not copy URL'); }
+                      }}
+                    >
+                      Copy link
+                    </button>
+                    <button className="underline" onClick={() => downloadQr(link, 1200, { url: sectionUrl(link, tab), name: tab })}>
+                      QR
+                    </button>
+                  </span>
+                ))}
+              </div>
             </div>
           ))}
 
@@ -530,13 +571,13 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
           <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
             <p className="text-sm font-medium mb-1">Photo booth</p>
             <label className="flex flex-wrap items-center gap-2 text-sm mb-2">
-              Eras
+              Decades
               <select
                 value={boothEra}
                 onChange={(e) => void saveBoothEra(e.target.value)}
                 className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
               >
-                <option value="all">All eras — guests pick one</option>
+                <option value="all">All decades — guests pick one</option>
                 {BOOTH_ERAS.map((era) => (
                   <option key={era.key} value={era.key}>{era.label} only — a themed event</option>
                 ))}
