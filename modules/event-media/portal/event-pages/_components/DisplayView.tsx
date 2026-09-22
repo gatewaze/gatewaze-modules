@@ -300,6 +300,44 @@ function wallLayoutFor(count: number, columns = 0) {
 
 /** One labelled settings row. The label sits above its options so a
  *  long option list wraps cleanly instead of clipping off the panel. */
+/**
+ * One photo in a wall cell.
+ *
+ * The cells sit edge to edge with no border, so a photo that does not
+ * fill its cell would otherwise show black bands above and below -- the
+ * photos are all shapes. Behind each one goes a blurred, darkened copy of
+ * itself, scaled past the edges so the blur has nothing to smear in from,
+ * which fills the cell with that photo's own colours (asked 2026-09-22).
+ * A wall that crops its photos to fill needs no such backing.
+ */
+function WallPicture({ item, fit, style }: {
+  item: DisplayItem
+  fit: string
+  style?: React.CSSProperties
+}) {
+  const src = item.variants?.medium || item.url
+  return (
+    <div className="absolute inset-0" style={style}>
+      {fit === 'object-contain' && (
+        // eslint-disable-next-line @next/next/no-img-element -- ambient fill
+        <img
+          src={src}
+          alt=""
+          aria-hidden="true"
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{ transform: 'scale(1.2)', filter: 'blur(34px) saturate(1.4) brightness(.5)' }}
+        />
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element -- wall cell */}
+      <img
+        src={src}
+        alt={item.guest_name ? `Photo by ${item.guest_name}` : ''}
+        className={`absolute inset-0 w-full h-full ${fit}`}
+      />
+    </div>
+  )
+}
+
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
@@ -1336,7 +1374,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         </div>
       ) : (
         <div
-          className="absolute inset-0 grid gap-1 p-1"
+          className="absolute inset-0 grid"
           style={{
             gridTemplateColumns: `repeat(${wallLayoutFor(Math.max(pool.length, 1), view.columns).cols}, 1fr)`,
             gridTemplateRows: `repeat(${wallLayoutFor(Math.max(pool.length, 1), view.columns).rows}, 1fr)`,
@@ -1345,25 +1383,21 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
           {wallCells.map((cell, i) => (
             <div key={i} className="relative overflow-hidden bg-black">
               {cell.previous && cell.previous.id !== cell.current?.id && (
-                // eslint-disable-next-line @next/next/no-img-element -- wall cell (outgoing)
                 // Fades out as the new one fades in. It used to stay put
                 // underneath, so a smaller incoming photo left the old one
                 // showing round its edges (projector, 2026-09-22).
-                <img
+                <WallPicture
                   key={`out-${cell.previous.id}-${cell.current?.id ?? ''}`}
-                  src={cell.previous.variants?.medium || cell.previous.url}
-                  alt=""
-                  className={`absolute inset-0 w-full h-full ${wallFit}`}
+                  item={cell.previous}
+                  fit={wallFit}
                   style={{ animation: 'emfadeout 900ms ease forwards' }}
                 />
               )}
               {cell.current && (
-                // eslint-disable-next-line @next/next/no-img-element -- wall cell; object-cover crops to fill
-                <img
+                <WallPicture
                   key={cell.current.id}
-                  src={cell.current.variants?.medium || cell.current.url}
-                  alt={cell.current.guest_name ? `Photo by ${cell.current.guest_name}` : ''}
-                  className={`absolute inset-0 w-full h-full ${wallFit}`}
+                  item={cell.current}
+                  fit={wallFit}
                   style={{ animation: slideAnimation(view.effect, cell.current.id, view.intervalMs) }}
                 />
               )}

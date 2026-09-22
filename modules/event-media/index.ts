@@ -7,7 +7,7 @@ const eventMediaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Media',
   description: 'Photo and video galleries, media uploads, and album management for events',
-  version: '1.48.1',
+  version: '1.48.2',
   features: [
     'event-media',
     'event-media.upload',
