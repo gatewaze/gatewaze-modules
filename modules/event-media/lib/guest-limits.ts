@@ -113,6 +113,8 @@ export function newMediaId(): string {
 export const GUEST_RATE_LIMITS = {
   resolvePerIp: { max: 120, windowMs: 60_000 },
   mediaListPerIp: { max: 300, windowMs: 60_000 },
+  // Name search runs as guests type, and a whole venue shares one IP.
+  guestSearchPerIp: { max: 600, windowMs: 60_000 },
   mintPerClient: { max: 20, windowMs: 60_000 },
   mintPerIp: { max: 120, windowMs: 60_000 },
   completePerClient: { max: 20, windowMs: 60_000 },

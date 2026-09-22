@@ -938,3 +938,121 @@ describe('booth pictures are kept, and posted only when the guest chooses', () =
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('guests pick themselves from the invitation list', () => {
+  const DAN = 'aaaaaaaa-0000-4000-8000-00000000da01';
+  const DAVID = 'aaaaaaaa-0000-4000-8000-00000000da02';
+  const INVITES = {
+    data: [
+      { invite_party_members: { id: DAN, first_name: 'Dan', last_name: 'Baker' } },
+      { invite_party_members: { id: DAVID, first_name: 'David', last_name: 'Jones' } },
+    ],
+    error: null,
+  };
+  const withList = (blocked = [], over = {}) => ({
+    link: { ...ACTIVE_LINK, allow_face_filter: true },
+    event: EVENT_ROW,
+    tables: {
+      invite_party_member_events: INVITES,
+      events_media_guest_blocks: { data: blocked.map((member_id) => ({ member_id })), error: null },
+    },
+    ...over,
+  });
+  const run = async (fn, config, request) => {
+    const { deps, supabase } = makeDeps(config);
+    const res = mockRes();
+    await createGuestRoutes(deps)[fn](req(request), res);
+    return { res, supabase };
+  };
+  const ticketPayload = (t) => JSON.parse(Buffer.from(t.split('.')[0], 'base64url').toString('utf8'));
+  const FILE = [{ filename: 'a.jpg', mime_type: 'image/jpeg', bytes: 10 }];
+
+  it('tells the page there is a guest list, or that there is not', async () => {
+    expect((await run('getLink', withList(), {})).res.body.settings.guest_list).toBe(true);
+    const none = { link: ACTIVE_LINK, event: EVENT_ROW, tables: { invite_party_member_events: { data: null, error: { message: 'relation does not exist' } } } };
+    expect((await run('getLink', none, {})).res.body.settings.guest_list).toBe(false);
+  });
+
+  it('suggests matching names, a couple of letters in', async () => {
+    const { res } = await run('searchGuests', withList(), { query: { q: 'da' } });
+    expect(res.body.guests).toEqual([{ id: DAN, name: 'Dan Baker' }, { id: DAVID, name: 'David Jones' }]);
+    expect((await run('searchGuests', withList(), { query: { q: 'd' } })).res.body.guests).toEqual([]);
+  });
+
+  it('has nothing to search on an event without invitations', async () => {
+    const none = { link: ACTIVE_LINK, event: EVENT_ROW, tables: { invite_party_member_events: { data: [], error: null } } };
+    expect((await run('searchGuests', none, { query: { q: 'da' } })).res.statusCode).toBe(404);
+  });
+
+  // No new names: an upload must name someone on the list.
+  it('refuses an upload without a guest from the list', async () => {
+    for (const member_id of [undefined, 'Dan', 'bbbbbbbb-0000-4000-8000-000000000000']) {
+      const { res } = await run('mintUploads', withList(), { body: { client_id: CLIENT_ID, guest_name: 'Somebody New', member_id, files: FILE } });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toBe('guest_required');
+    }
+  });
+
+  it('records the guest, named as on the invitation, whatever the phone says', async () => {
+    const { res } = await run('mintUploads', withList(), { body: { client_id: CLIENT_ID, guest_name: 'The Real Dan', member_id: DAN, files: FILE } });
+    expect(res.statusCode).toBe(200);
+    const p = ticketPayload(res.body.items[0].ticket);
+    expect(p.member_id).toBe(DAN);
+    expect(p.guest_name).toBe('Dan Baker');
+  });
+
+  it('turns a blocked guest away at every door', async () => {
+    const mint = await run('mintUploads', withList([DAN]), { body: { client_id: CLIENT_ID, member_id: DAN, files: FILE } });
+    expect(mint.res.statusCode).toBe(403);
+    expect(mint.res.body.error).toBe('guest_blocked');
+
+    provider.runStyle.mockClear();
+    process.env.BOOTH_PROVIDER = 'fal';
+    process.env.FAL_API_KEY = 'test-placeholder';
+    try {
+      const booth = await run('faceFilter', withList([DAN]), {
+        body: { client_id: CLIENT_ID, member_id: DAN, effect: 'decade-1970s', image: 'data:image/jpeg;base64,' + Buffer.from('x').toString('base64') },
+      });
+      expect(booth.res.statusCode).toBe(403);
+      // Refused before any money was spent.
+      expect(provider.runStyle).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.BOOTH_PROVIDER;
+      delete process.env.FAL_API_KEY;
+    }
+
+    const post = await run('postBooth', withList([DAN], {
+      existingMedia: {
+        id: '77777777-2222-4333-8444-555555555555', host_kind: 'event', host_id: EVENT_ID, storage_path: 'x',
+        metadata: { source: 'guest', client_id: CLIENT_ID, album: 'booth', posted: false, member_id: DAN },
+      },
+    }), { body: { client_id: CLIENT_ID, media_id: '77777777-2222-4333-8444-555555555555' } });
+    expect(post.res.statusCode).toBe(403);
+  });
+
+  it('drops an upload whose guest was blocked after it started', async () => {
+    const ticket = ticketFor({ member_id: DAN });
+    const { deps, supabase } = makeDeps({ ...withList([DAN]), existingMedia: null });
+    const res = mockRes();
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticket] } }), res);
+    expect(res.body.items[0].error).toBe('guest_blocked');
+    expect(supabase.state.inserted).toHaveLength(0);
+    expect(supabase.state.removed.length).toBeGreaterThan(0);
+  });
+
+  it('keeps a blocked guest\'s photos out of the feed, and nobody else\'s', async () => {
+    const orCalls = [];
+    const { deps, supabase } = makeDeps({ ...withList([DAN]), mediaRows: [] });
+    const realFrom = supabase.from;
+    supabase.from = (t) => { const b = realFrom(t); const or = b.or; b.or = (f) => { orCalls.push(f); return or(f); }; return b; };
+    await createGuestRoutes(deps).listMedia(req(), mockRes());
+    expect(orCalls).toContain(`metadata->>member_id.is.null,metadata->>member_id.not.in.(${DAN})`);
+
+    const clear = [];
+    const two = makeDeps({ ...withList([]), mediaRows: [] });
+    const rf = two.supabase.from;
+    two.supabase.from = (t) => { const b = rf(t); const or = b.or; b.or = (f) => { clear.push(f); return or(f); }; return b; };
+    await createGuestRoutes(two.deps).listMedia(req(), mockRes());
+    expect(clear.some((f) => f.includes('member_id'))).toBe(false);
+  });
+});

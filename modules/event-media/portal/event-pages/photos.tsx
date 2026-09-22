@@ -23,6 +23,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
+import GuestPicker from './_components/GuestPicker'
 import BoothExperience, { type BoothLook, type BoothView } from './_components/BoothExperience'
 
 // Same-origin ALWAYS: the portal proxies /api/public/* to the api
@@ -89,6 +90,8 @@ interface LinkInfo {
   event: { identifier: string | null; slug: string | null; event_id?: string | null; name: string | null }
   settings: {
     require_name: boolean
+    /** Guests choose their name from the invitation list. */
+    guest_list?: boolean
     allow_video: boolean
     show_gallery: boolean
     max_photo_bytes: number
@@ -186,8 +189,12 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const [code, setCode] = useState<string | null>(null)
   const [link, setLink] = useState<LinkInfo | null>(null)
   const [loading, setLoading] = useState(true)
-  const [guest, setGuest] = useState<{ name: string; client_id: string } | null>(null)
+  // member_id: the invitation guest they chose, on an event with a list.
+  const [guest, setGuest] = useState<{ name: string; client_id: string; member_id?: string | null } | null>(null)
   const [nameInput, setNameInput] = useState('')
+  // Said plainly when the server turns this guest away, rather than a row
+  // of "retry" links that can never succeed.
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null)
 
   const [queue, setQueue] = useState<QueueItem[]>([])
   const queueRef = useRef<QueueItem[]>([])
@@ -478,6 +485,15 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     }
   }, [code, guest])
 
+  /** The server no longer accepts this name: ask again. */
+  const forgetGuest = useCallback(() => {
+    setGuest((g) => (g ? { ...g, member_id: null } : g))
+    try {
+      const raw = localStorage.getItem(guestKey)
+      if (raw) localStorage.setItem(guestKey, JSON.stringify({ ...JSON.parse(raw), member_id: null }))
+    } catch { /* ignore */ }
+  }, [guestKey])
+
   // ── Upload queue ──────────────────────────────────────────────────
 
   // queueRef is the SYNCHRONOUS source of truth; React state mirrors it
@@ -578,6 +594,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               guest_name: guest.name,
+              member_id: guest.member_id ?? null,
               client_id: guest.client_id,
               files: batch.map((q) => ({
                 filename: q.file.name || 'photo.jpg',
@@ -593,7 +610,13 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
           mintData = null
         }
         if (!mintData?.items) {
-          batch.forEach((q) => patchItem(q.key, { status: 'failed', error: 'could not start upload' }))
+          const why = (mintData as { error?: string; message?: string } | null)
+          // Not on the list (any more): back to "Who are you?".
+          if (why?.error === 'guest_required') forgetGuest()
+          if (why?.error === 'guest_blocked') setUploadNotice('Uploads are paused for you — please speak to the hosts.')
+          batch.forEach((q) => patchItem(q.key, { status: 'failed', error: why?.message ?? 'could not start upload' }))
+          // Nothing else in the queue can succeed until that changes.
+          if (why?.error === 'guest_required' || why?.error === 'guest_blocked') break
           continue
         }
 
@@ -625,7 +648,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     } finally {
       pumpingRef.current = false
     }
-  }, [code, guest, patchItem, putMinted, flushCompletes])
+  }, [code, guest, patchItem, putMinted, flushCompletes, forgetGuest])
 
   const enqueueFiles = useCallback((
     files: FileList | null,
@@ -711,6 +734,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         body: JSON.stringify({
           client_id: guest.client_id,
           guest_name: guest.name,
+          member_id: guest.member_id ?? null,
           image: shot.original,
           return: 'url',
           ...payload,
@@ -977,6 +1001,23 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     try { localStorage.setItem(guestKey, JSON.stringify(next)) } catch { /* private mode */ }
   }, [nameInput, guest, guestKey])
 
+  /** A name chosen from the invitation list. */
+  const pickGuest = useCallback((g: { id: string; name: string }) => {
+    const fallbackUuid = () =>
+      'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0
+        const v = c === 'x' ? r : (r & 0x3) | 0x8
+        return v.toString(16)
+      })
+    const next = {
+      name: g.name,
+      member_id: g.id,
+      client_id: guest?.client_id ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : fallbackUuid()),
+    }
+    setGuest(next)
+    try { localStorage.setItem(guestKey, JSON.stringify(next)) } catch { /* private mode */ }
+  }, [guest, guestKey])
+
   // ── Render ────────────────────────────────────────────────────────
 
   const text = darkMode ? 'text-white' : 'text-gray-900'
@@ -997,7 +1038,11 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
 
   const canUpload = Boolean(code && link)
   canUploadRef.current = canUpload
-  const needsName = canUpload && link!.settings.require_name && !guest
+  // With an invitation list the name must come from it; a name typed on
+  // this device before the list existed does not count.
+  const needsName = canUpload && (link!.settings.guest_list
+    ? !guest?.member_id
+    : link!.settings.require_name && !guest)
   const activeCount = queue.filter((q) => q.status === 'waiting' || q.status === 'uploading' || q.status === 'processing').length
   const failedItems = queue.filter((q) => q.status === 'failed')
 
@@ -1058,7 +1103,13 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         <div className={`${cardBg} rounded-2xl shadow p-5 mb-6`}>
           {needsName ? (
             <div>
-              <h2 className={`text-lg font-semibold mb-1 ${text}`}>Add your photos</h2>
+              <h2 className={`text-lg font-semibold mb-1 ${text}`}>
+                {link!.settings.guest_list ? 'Who are you?' : 'Add your photos'}
+              </h2>
+              {link!.settings.guest_list ? (
+                <GuestPicker code={code!} darkMode={darkMode} onPick={pickGuest} />
+              ) : (
+              <>
               <p className={`text-sm mb-3 ${subText}`}>Tell us your name once — it&apos;s remembered on this device.</p>
               <div className="flex gap-2">
                 <input
@@ -1079,6 +1130,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
                   That&apos;s me
                 </button>
               </div>
+              </>
+              )}
             </div>
           ) : (
             <div>
@@ -1101,6 +1154,9 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
                   <span className={`text-sm ${subText}`}>{activeCount} uploading…</span>
                 )}
               </div>
+              {uploadNotice && (
+                <p role="alert" className="mb-3 rounded-lg bg-amber-100 text-amber-900 text-sm px-3 py-2">{uploadNotice}</p>
+              )}
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => cameraInputRef.current?.click()}
