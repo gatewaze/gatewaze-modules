@@ -108,6 +108,12 @@ interface Props {
   onPostKept: (mediaId: string) => Promise<boolean>
   /** Take one back off the big screen. */
   onUnpostKept: (mediaId: string) => Promise<boolean>
+  /**
+   * A link straight to one look: open inside that decade's booth with the
+   * camera running, skipping the decade picker and the board. Ignored
+   * when the decade or the look is not one this event offers.
+   */
+  openAt?: { era: string; look: string } | null
 }
 
 /**
@@ -303,13 +309,18 @@ export default function BoothExperience(props: Props) {
     booth, effects, faces, shot, progress, statusText, generating, primaryColor,
     onCaptured, onFallbackCamera, onAccept, onSave, onDiscard, onOriginal, onClose,
     historyKey, onPostImage, onSaveImage, onRemoveUpload, onPostKept, onUnpostKept,
+    openAt,
   } = props
 
   const [vp, setVp] = useState({ w: 390, h: 844 })
   const eras = booth.eras
-  const [phase, setPhase] = useState<Phase>(eras.length === 1 ? 'board' : 'picker')
-  const [eraKey, setEraKey] = useState<string>(eras[0]!.key)
-  const [look, setLook] = useState<BoothLook | null>(null)
+  // Where this visit begins. A link naming a decade and a look (shared as
+  // "take a photo of yourself in this", 2026-09-22) starts inside that
+  // booth; otherwise at the decade picker, or at the only decade's board.
+  const opened = openedAt(eras, openAt)
+  const [phase, setPhase] = useState<Phase>(opened ? 'inside' : eras.length === 1 ? 'board' : 'picker')
+  const [eraKey, setEraKey] = useState<string>(opened?.era ?? eras[0]!.key)
+  const [look, setLook] = useState<BoothLook | null>(opened?.look ?? null)
   const [pressed, setPressed] = useState<number | null>(null)
   const [cam, setCam] = useState<CamState>('off')
   const [count, setCount] = useState<number | null>(null)
@@ -1217,4 +1228,19 @@ export default function BoothExperience(props: Props) {
       )}
     </div>
   )
+}
+
+/**
+ * The decade and look a link asked for, if this event offers them. Read
+ * once, when the booth opens: changing the address afterwards does not
+ * drag a guest mid-sitting into another booth.
+ */
+function openedAt(
+  eras: BoothEraView[],
+  at: { era: string; look: string } | null | undefined,
+): { era: string; look: BoothLook } | null {
+  if (!at) return null
+  const era = eras.find((e) => e.key === at.era)
+  const look = era?.looks.find((l) => l.id === at.look)
+  return era && look ? { era: era.key, look: { key: look.id, payload: { effect: look.id }, label: look.label } } : null
 }
