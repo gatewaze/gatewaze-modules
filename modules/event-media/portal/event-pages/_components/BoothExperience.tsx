@@ -40,7 +40,7 @@ interface Rect { x: number; y: number; w: number; h: number }
 interface Scene { image: string; width: number; height: number; focus_x: number }
 interface Interior extends Scene { window: Rect; coin: Rect; panel: Rect }
 /** Painted artwork whose tiles each name what they open. */
-interface Painted extends Scene { tiles: Array<Rect & { key: string }> }
+interface Painted extends Scene { tiles: Array<Rect & { key: string; window?: Rect }> }
 
 export interface BoothEraView {
   key: string
@@ -240,6 +240,7 @@ const STYLES = `
 .bx-icon{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;
   background:rgba(255,255,255,.12);box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)}
 .bx-icon-danger{color:#fecaca;background:rgba(180,35,24,.28);box-shadow:inset 0 0 0 1px rgba(254,202,202,.35)}
+.bx-window-pic{position:absolute;object-fit:cover;max-width:none;pointer-events:none}
 .bx-panel{position:absolute;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .bx-controls{pointer-events:auto;width:100%;height:100%;border-radius:14px;padding:10px;display:flex;
   flex-direction:column;justify-content:center;gap:8px;animation:bx-rise 380ms ease-out both}
@@ -738,10 +739,24 @@ export default function BoothExperience(props: Props) {
   const onPicker = phase === 'picker'
 
   /** Artwork with tiles on it, laid out to fill the screen. */
-  const painted = (art: Painted, labelOf: (key: string) => string, onTap: (key: string, i: number) => void) => (
+  const painted = (
+    art: Painted,
+    labelOf: (key: string) => string,
+    onTap: (key: string, i: number) => void,
+    pictureOf?: (key: string) => string | null,
+  ) => (
     <div className="bx-abs" style={stageRect(vp.w, vp.h, art.width, art.height, art.focus_x)}>
       {/* eslint-disable-next-line @next/next/no-img-element -- themed artwork */}
       <img src={art.image} alt="" draggable={false} className="bx-art" />
+      {/* A tile's own picture -- a decade's photo of the key people --
+          dropped into the frame painted on the artwork. */}
+      {art.tiles.map((t, i) => {
+        const pic = t.window && pictureOf ? pictureOf(t.key) : null
+        return pic ? (
+          // eslint-disable-next-line @next/next/no-img-element -- sample picture
+          <img key={`pic-${t.key}-${i}`} src={pic} alt="" draggable={false} className="bx-window-pic" style={pctStyle(t.window!)} />
+        ) : null
+      })}
       {art.tiles.map((t, i) => (
         <button
           key={`${t.key}-${i}`}
@@ -816,7 +831,15 @@ export default function BoothExperience(props: Props) {
       <div className="bx-fill" style={outsideStyle} aria-hidden={inside}>
         {onPicker
           ? booth.picker
-            ? painted(booth.picker, (k) => `${eras.find((e) => e.key === k)?.label ?? k} photo booth`, chooseEra)
+            ? painted(
+              booth.picker,
+              (k) => `${eras.find((e) => e.key === k)?.label ?? k} photo booth`,
+              chooseEra,
+              (k) => {
+                const e = eras.find((x) => x.key === k)
+                return e ? e.card ?? e.looks.find((l) => l.sample)?.sample ?? null : null
+              },
+            )
             : cards(
               eras[0]!.interior.image,
               'Choose your decade',

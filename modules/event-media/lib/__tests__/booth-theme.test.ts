@@ -87,6 +87,16 @@ describe('parseBoothTheme', () => {
     expect(t).toBeNull();
   });
 
+  it('keeps a picture window on a picker tile, and drops a bad one', () => {
+    const picker = { ...theme().picker, tiles: [
+      { key: '1980s', x: 0.1, y: 0.3, w: 0.25, h: 0.17, window: { x: 0.11, y: 0.31, w: 0.21, h: 0.1 } },
+      { key: '1970s', x: 0.4, y: 0.3, w: 0.25, h: 0.17, window: { x: 0.9, y: 0.3, w: 0.5, h: 0.1 } },
+    ] };
+    const t = parseBoothTheme(theme({ picker }), looksFor, url);
+    expect(t.picker.tiles[0].window).toEqual({ x: 0.11, y: 0.31, w: 0.21, h: 0.1 });
+    expect(t.picker.tiles[1].window).toBeUndefined();
+  });
+
   it('works without a picker or a board', () => {
     const { picker, ...rest } = theme();
     const t = parseBoothTheme(rest, looksFor, url);

@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { BOOTH_ERAS, eraLooksResolve, erasFor, isEraSetting } from '../booth-eras.js';
-import { BOOTH_EFFECTS, buildPrompt } from '../booth-effects.js';
+import { BOOTH_EFFECTS, buildPrompt, buildSamplePrompt } from '../booth-effects.js';
 
 describe('booth eras', () => {
   it('gives every era exactly six looks, none repeated anywhere', () => {
@@ -56,5 +56,22 @@ describe('caricatures', () => {
     for (const e of BOOTH_EFFECTS.filter((x) => x.style)) {
       expect(buildPrompt(e)).not.toMatch(/as large in the frame as|as large and as clear in the frame as in the input/);
     }
+  });
+});
+
+describe('example pictures of the key people', () => {
+  const look = BOOTH_EFFECTS.find((e) => e.id === 'top-gun');
+  it('counts and names the people from their reference photos', () => {
+    const p = buildSamplePrompt(look, [{ name: 'Dan', photos: 3 }, { name: 'Sarah', photos: 2 }]);
+    expect(p).toMatch(/images 1 to 3 show Dan; images 4 to 5 show Sarah/);
+    expect(p).toMatch(/exactly 2 people/);
+    expect(p).toMatch(/physically possible/);
+    expect(p).toMatch(/heads the correct size/);
+    expect(p).toMatch(/Do not add any titles/);
+  });
+  it('handles one person and one photo', () => {
+    const p = buildSamplePrompt(look, [{ name: 'Sam', photos: 1 }]);
+    expect(p).toMatch(/image 1 shows Sam/);
+    expect(p).toMatch(/exactly one person/);
   });
 });

@@ -13,6 +13,7 @@ import { supabase } from '@/lib/supabase';
 import { QRCodeService } from '@/utils/qrCodeService';
 import { toast } from 'sonner';
 import { BOOTH_ERAS } from '../../lib/booth-eras';
+import { KeyPeoplePanel } from './KeyPeoplePanel';
 
 interface GuestUploadLinksPanelProps {
   eventId: string; // events.id uuid
@@ -564,6 +565,8 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
               </div>
             )}
           </div>
+
+          <KeyPeoplePanel eventId={eventId} />
 
           {/* Photo booth. Style effects need only the provider; face
               swaps also need the reference faces uploaded below. Both

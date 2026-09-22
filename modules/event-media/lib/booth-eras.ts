@@ -25,6 +25,10 @@ export interface BoothEra {
 
 export const BOOTH_ERAS: BoothEra[] = [
   {
+    key: '1940s', label: '1940s', blurb: 'Dance halls, film noir and Technicolor',
+    looks: ['decade-1940s', 'forties-noir', 'forties-technicolor', 'forties-swing', 'forties-travel-poster', 'forties-cafe'],
+  },
+  {
     key: '1950s', label: '1950s', blurb: 'Diners, sock hops and silver-screen glamour',
     looks: ['decade-1950s', 'fifties-sockhop', 'fifties-hollywood', 'fifties-drivein', 'fifties-rocknroll', 'fifties-atomic'],
   },
@@ -45,8 +49,16 @@ export const BOOTH_ERAS: BoothEra[] = [
     looks: ['decade-1990s', 'nineties-sitcom', 'nineties-grunge', 'nineties-popvideo', 'nineties-rave', 'nineties-yearbook'],
   },
   {
+    key: '2000s', label: '2000s', blurb: 'Digicams, pop stars and red carpets',
+    looks: ['decade-2000s', 'noughties-popstar', 'noughties-teen-movie', 'noughties-red-carpet', 'noughties-club', 'noughties-webcam'],
+  },
+  {
     key: '2010s', label: '2010s', blurb: 'Festivals, filters and blockbusters',
     looks: ['decade-2010s', 'tens-hipster', 'tens-blockbuster', 'tens-festival', 'tens-rustic', 'tens-dystopia'],
+  },
+  {
+    key: '2020s', label: '2020s', blurb: 'Portrait mode, neon cities and film revival',
+    looks: ['decade-2020s', 'twenties-neon-city', 'twenties-film-camera', 'twenties-prestige-drama', 'twenties-streetwear', 'twenties-garden-party'],
   },
 ];
 
