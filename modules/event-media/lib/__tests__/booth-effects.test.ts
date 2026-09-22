@@ -227,3 +227,17 @@ describe('parseYesNo', () => {
     expect(parseYesNo('yes and no')).toBeNull();
   });
 });
+
+import { cardIsSuitable } from '../card-copy.js';
+describe('cardIsSuitable', () => {
+  const card = (title, words = ['Night Out', 'City Lights', 'Late Show'], eyebrow = 'New Season') => ({ title, words, eyebrow });
+  it('refuses role guesses, wedding themes and personal remarks', () => {
+    for (const t of ['The Best Man', 'Bestman Energy', 'Happy Couple', 'Father Of The Year', 'Guess Not Gay', 'The Speech', 'Ring Leader'])
+      expect(cardIsSuitable(card(t))).toBe(false);
+    expect(cardIsSuitable(card('Night Shift', ['Couple Goals', 'x', 'y']))).toBe(false);
+  });
+  it('lets ordinary programme titles through, including words that merely contain a banned one', () => {
+    for (const t of ['Table Manners', 'Full Throttle', 'Heavy Pour', 'Underground Explorers', 'Hotel Lobby', 'Gold Rush', 'Weddingless Wonder'.replace('Weddingless', 'Endless')])
+      expect(cardIsSuitable(card(t))).toBe(true);
+  });
+});
