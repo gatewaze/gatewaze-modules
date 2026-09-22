@@ -645,6 +645,24 @@ export default function BoothExperience(props: Props) {
     later(() => setPhase('board'), ARRIVE_MS)
   }, [busy, count, later, onDiscard])
 
+  /**
+   * "New decade": all the way back to the decade picker, not just to this
+   * decade's board of looks. An event with one decade has no picker, so
+   * it goes to the board instead.
+   */
+  const newDecade = useCallback(() => {
+    if (busy || count !== null) return
+    setCarousel(false)
+    const target: Phase = eras.length > 1 ? 'picker' : 'board'
+    if (phase === 'inside') {
+      setPhase('to-outside')
+      onDiscard()
+      later(() => setPhase(target), ARRIVE_MS)
+    } else {
+      setPhase(target)
+    }
+  }, [busy, count, eras.length, phase, onDiscard, later])
+
   const capture = useCallback(() => {
     const v = videoRef.current
     if (!v || !v.videoWidth) { onFallbackCamera(look); return }
@@ -801,7 +819,7 @@ export default function BoothExperience(props: Props) {
             ? painted(booth.picker, (k) => `${eras.find((e) => e.key === k)?.label ?? k} photo booth`, chooseEra)
             : cards(
               eras[0]!.interior.image,
-              'Choose your era',
+              'Choose your decade',
               'Step into a photo booth from another decade',
               eras.map((e) => ({
                 key: e.key, label: e.label, blurb: e.blurb, aria: `${e.label} photo booth`,
@@ -927,7 +945,7 @@ export default function BoothExperience(props: Props) {
                 <div className="bx-row">
                   <button type="button" onClick={onSave} className="bx-btn">Save</button>
                   <button type="button" onClick={onDiscard} className="bx-btn">Retake</button>
-                  <button type="button" onClick={leave} className="bx-btn">New era</button>
+                  <button type="button" onClick={newDecade} className="bx-btn">New decade</button>
                 </div>
                 {shot?.preview && (
                   <button type="button" onClick={onOriginal} className="bx-link">Use my original instead</button>
@@ -948,11 +966,11 @@ export default function BoothExperience(props: Props) {
             Step outside
           </button>
         ) : phase === 'board' && eras.length > 1 ? (
-          <button type="button" onClick={() => setPhase('picker')} className="bx-pill bx-glass" aria-label="Choose another era">
+          <button type="button" onClick={() => setPhase('picker')} className="bx-pill bx-glass" aria-label="Choose another decade">
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
             </svg>
-            Eras
+            Decades
           </button>
         ) : (
           <button type="button" onClick={onClose} disabled={busy} className="bx-pill bx-glass" aria-label="Leave the photo booth">
@@ -1102,7 +1120,7 @@ export default function BoothExperience(props: Props) {
               <div className="bx-icons">
                 <IconButton label="Save to my phone" onClick={() => savePicture(current)} d={ICON.save} />
                 {inside && <IconButton label="Retake" onClick={() => setCarousel(false)} d={ICON.retake} />}
-                <IconButton label="New era" onClick={() => { setCarousel(false); if (inside) leave() }} d={ICON.era} />
+                <IconButton label="New decade" onClick={newDecade} d={ICON.era} />
                 <IconButton label="Delete" danger onClick={() => setConfirmDelete(current.id)} d={ICON.trash} />
               </div>
             </div>

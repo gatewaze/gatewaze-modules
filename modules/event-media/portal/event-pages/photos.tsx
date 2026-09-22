@@ -19,7 +19,7 @@
  * Per spec-event-media-guest-uploads §6.2.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
@@ -187,7 +187,42 @@ function putWithProgress(url: string, file: File, mime: string, onProgress: (pct
   })
 }
 
-export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMode }: Props) {
+/**
+ * What a phone shows before the page's own code has run: a full-screen
+ * cover in the upload screen's colours, so the event page underneath
+ * does not flash up first. It is the Suspense fallback, which the server
+ * renders into the HTML -- the page itself reads the URL, so it can only
+ * render in the browser. Phones only: a desktop visitor to the photos tab
+ * without an upload code should just see the event page.
+ */
+const COVER_CSS = `
+.em-cover{display:none}
+@media (max-width:767px){.em-cover{display:flex;position:fixed;inset:0;z-index:60;align-items:center;justify-content:center;
+  background:radial-gradient(120% 80% at 50% -10%,#2a2140 0%,#141019 55%,#0b0a0f 100%)}}
+.em-cover i{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:rgba(255,255,255,.85);
+  animation:em-spin 900ms linear infinite}
+@keyframes em-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.em-cover i{animation:none}}
+`
+
+function PhotosCover() {
+  return (
+    <div className="em-cover" aria-busy="true" aria-label="Loading">
+      <style>{COVER_CSS}</style>
+      <i />
+    </div>
+  )
+}
+
+export default function GuestPhotosPage(props: Props) {
+  return (
+    <Suspense fallback={<PhotosCover />}>
+      <GuestPhotosInner {...props} />
+    </Suspense>
+  )
+}
+
+function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const searchParams = useSearchParams()
 
   const codeKey = `event_media_upload_code:${eventIdentifier}`
@@ -269,7 +304,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   // otherwise invisible: nothing on the upload card hinted it existed,
   // and it only appeared AFTER a guest had already taken a photo with
   // one particular button.
-  const [section, setSection] = useState<'upload' | 'booth'>('upload')
+  // ?tab=booth opens straight into the photo booth: the booth's own QR.
+  const [section, setSection] = useState<'upload' | 'booth'>(
+    () => (searchParams.get('tab') === 'booth' ? 'booth' : 'upload'),
+  )
   // A look chosen before the camera opens, applied as soon as the photo
   // comes back — so the guest picks the result they want, rather than
   // discovering the options afterwards.
@@ -1100,6 +1138,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   }
 
   if (loading) {
+    // With an upload code on the way in, keep covering until the screen is ready.
+    if (code) return <PhotosCover />
     return <div className={`p-8 text-center ${subText}`}>Loading…</div>
   }
 
