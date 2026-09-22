@@ -350,6 +350,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // A look chosen before the camera opens, applied as soon as the photo
   // comes back — so the guest picks the result they want, rather than
   // discovering the options afterwards.
+  const [pendingExtra, setPendingExtra] = useState<{ pose?: string | null; fingers?: boolean; decade?: string | null } | null>(null)
   const [pendingLook, setPendingLook] = useState<
     { key: string; payload: { filter_id: string } | { effect: string } } | null
   >(null)
@@ -876,6 +877,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const applyEffect = useCallback(async (
     key: string,
     payload: { filter_id: string } | { effect: string },
+    extra?: { pose?: string | null; fingers?: boolean; decade?: string | null },
   ) => {
     if (!code || !guest || !shot) return
     setShot((s) => (s ? { ...s, busy: key, error: null } : s))
@@ -895,6 +897,10 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
           image: shot.original,
           return: 'url',
           ...payload,
+          // What the booth asked them to do, and whether their hand is
+          // allowed to change the look.
+          ...(extra?.pose ? { pose: extra.pose } : {}),
+          ...(extra?.fingers && extra.decade ? { fingers: true, decade: extra.decade } : {}),
         }),
       })
       const data = await res.json().catch(() => null)
@@ -915,6 +921,8 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
         busy: null,
         preview: image,
         filterLabel: data.effect?.label ?? data.filter?.label ?? null,
+        // 1-5 when the booth read a hand and changed the look to match.
+        fingers: typeof data?.fingers === 'number' && data.fingers >= 1 && data.fingers <= 5 ? data.fingers : null,
         mediaId: typeof data?.media_id === 'string' ? data.media_id : null,
       } : s))
     } catch {
@@ -1110,6 +1118,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // live camera in its window, and goes through the same look-then-apply
   // path as the camera app does.
   const onBoothCaptured = useCallback((dataUrl: string, look: BoothLook | null) => {
+    setPendingExtra(look ? { pose: look.pose ?? null, fingers: look.fingers === true, decade: look.decade ?? null } : null)
     setPendingLook(look ? { key: look.key, payload: look.payload } : null)
     setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
   }, [])
@@ -1124,9 +1133,11 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   useEffect(() => {
     if (!shot || !pendingLook || shot.busy || shot.preview) return
     const look = pendingLook
+    const extra = pendingExtra
     setPendingLook(null)
-    void applyEffect(look.key, look.payload)
-  }, [shot, pendingLook, applyEffect])
+    setPendingExtra(null)
+    void applyEffect(look.key, look.payload, extra ?? undefined)
+  }, [shot, pendingLook, pendingExtra, applyEffect])
 
   // Safety net: retry stranded completion tickets (a failed flush keeps
   // them pending; complete is idempotent so re-sending is safe), and
@@ -1209,6 +1220,44 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     setNameInput('')
     try { localStorage.removeItem(guestKey) } catch { /* ignore */ }
   }, [code, guest, guestKey])
+
+  /**
+   * The pose the whole party is being asked for, with the time left in
+   * this one -- shown on the photos tab as well as in the booth, so a
+   * guest sees it without opening anything (asked 2026-09-22).
+   */
+  const posesPayload = link?.booth?.poses ?? null
+  const [poseTick, setPoseTick] = useState(() => Date.now())
+  useEffect(() => {
+    if (posesPayload?.mode !== 'hour') return
+    const t = setInterval(() => setPoseTick(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [posesPayload?.mode])
+  // When the slot turns over, ask the server for the new pose.
+  useEffect(() => {
+    if (posesPayload?.mode !== 'hour' || !posesPayload.changes_at || !code) return
+    const due = new Date(posesPayload.changes_at).getTime() - Date.now()
+    const t = setTimeout(() => {
+      // Just the pose: the rest of the link has not changed.
+      fetch(`${API_BASE}/api/public/event-media/links/${code}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.booth?.poses) setLink((l) => (l && l.booth ? { ...l, booth: { ...l.booth, poses: data.booth.poses } } : l))
+        })
+        .catch(() => { /* the next slot tries again */ })
+    }, Math.max(1000, due + 1500))
+    return () => clearTimeout(t)
+  }, [posesPayload, code])
+  const posePrompt = (() => {
+    const p = posesPayload
+    if (!p || p.mode !== 'hour' || !p.current) return null
+    let countdown: string | null = null
+    if (p.changes_at) {
+      const left = Math.max(0, new Date(p.changes_at).getTime() - poseTick)
+      countdown = `${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`
+    }
+    return { label: p.current.label, instruction: p.current.instruction, countdown, next: p.next?.label ?? null }
+  })()
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -1896,6 +1945,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const uploadApp = canUpload && mounted && activeSection === 'upload' ? createPortal(
     <UploadApp
       eventName={link!.event.name ?? 'Event photos'}
+      pose={posePrompt}
       primaryColor={primaryColor}
       nameStep={nameStep}
       guestName={guest?.name ?? null}

@@ -521,10 +521,26 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
  * style on both sides — see the note at the top of this file for why a
  * single trailing instruction is not enough.
  */
-export function buildPrompt(effect: BoothEffect): string {
+/**
+ * The pose is the point.
+ *
+ * Without this, a model handed "restyle as a 1940s noir portrait" will
+ * quietly tidy everyone into a neat row facing the lens -- which throws
+ * away the one thing the guests actually did. Said twice, before and
+ * after the style, because the instructions at the ends of a prompt are
+ * the ones that survive.
+ */
+const POSE_KEEP = (pose: string) =>
+  `The people are ${pose}. This pose is the subject of the picture: keep it exactly -- ` +
+  'the same gestures, the same arms and hands, who is where, who is touching whom, ' +
+  'the same expressions and where each person is looking. Do not straighten them up, ' +
+  'do not turn them to face the camera, and do not rearrange them into a tidy group.';
+
+export function buildPrompt(effect: BoothEffect, pose?: string | null): string {
   const body = effect.caricature ? REALISTIC : `${REALISTIC} ${PROPORTIONS}`;
-  return `${SAME_PEOPLE_FIRST} Now restyle the photo as ${effect.style} ` +
-    `${KEEP} ${body} ${NO_NAMES} ${SAME_PEOPLE_LAST}`;
+  const keepPose = pose ? ` ${POSE_KEEP(pose)}` : '';
+  return `${SAME_PEOPLE_FIRST}${keepPose} Now restyle the photo as ${effect.style} ` +
+    `${KEEP} ${body} ${NO_NAMES}${keepPose} ${SAME_PEOPLE_LAST}`;
 }
 
 /**

@@ -13,6 +13,7 @@ vi.mock('../../lib/booth-provider.js', async (importOriginal) => {
   return {
     ...real,
     runStyle: vi.fn(off),
+    readFingers: vi.fn(async () => null),
     runSwap: vi.fn(off),
     runDepth: vi.fn(off),
     runCutout: vi.fn(off),
@@ -1244,5 +1245,76 @@ describe('background plates are checked for people', () => {
     const { updates } = await complete();
     expect(provider.runPlate).toHaveBeenCalledTimes(1);
     expect(updates.at(-1).plate).toMatch(/variants\/plate\.jpg$/);
+  });
+});
+
+
+describe('poses and fingers in the booth', () => {
+  const BOOTH_LINK = { ...ACTIVE_LINK, allow_face_filter: true };
+  const PHOTO_ = 'data:image/jpeg;base64,' + Buffer.from('x').toString('base64');
+  const shoot = async (body, config = {}) => {
+    const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW, ...config });
+    const res = mockRes();
+    await createGuestRoutes(deps).faceFilter(req({ body: { client_id: CLIENT_ID, image: PHOTO_, effect: 'decade-1970s', ...body } }), res);
+    return { res, supabase };
+  };
+  beforeEach(() => {
+    process.env.BOOTH_PROVIDER = 'fal';
+    process.env.FAL_API_KEY = 'test-placeholder';
+    provider.runStyle.mockReset();
+    provider.runStyle.mockResolvedValue({ ok: true, image: new Uint8Array([1]), contentType: 'image/jpeg' });
+    provider.readFingers.mockReset();
+    provider.readFingers.mockResolvedValue(null);
+  });
+  afterEach(() => {
+    delete process.env.BOOTH_PROVIDER;
+    delete process.env.FAL_API_KEY;
+  });
+
+  it('tells the model the pose, and records it against the picture', async () => {
+    const { res, supabase } = await shoot({ pose: 'huddle', return: 'url' });
+    expect(res.statusCode).toBe(200);
+    expect(provider.runStyle.mock.calls[0][1]).toMatch(/heads pressed together in a tight huddle/);
+    expect(res.body.pose).toEqual({ id: 'huddle', label: 'The huddle' });
+    const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');
+    expect(row.metadata.pose).toBe('huddle');
+  });
+
+  // A pose is a fixed list; anything else is simply not a pose.
+  it('ignores a pose it does not know', async () => {
+    const { res } = await shoot({ pose: 'do a backflip off the bar' });
+    expect(res.statusCode).toBe(200);
+    expect(provider.runStyle.mock.calls[0][1]).not.toMatch(/backflip/);
+    expect(res.body.pose).toBeNull();
+  });
+
+  it('lets the fingers in the photo choose the look', async () => {
+    provider.readFingers.mockResolvedValue(3);
+    const { res, supabase } = await shoot({ fingers: true, decade: '1970s', return: 'url' });
+    expect(res.statusCode).toBe(200);
+    // The 1970s looks, after the decade itself: the third is theirs.
+    const { BOOTH_ERAS } = await import('../../lib/booth-eras.js');
+    const expected = BOOTH_ERAS.find((e) => e.key === '1970s').looks[3];
+    expect(res.body.effect.id).toBe(expected);
+    expect(res.body.fingers).toBe(3);
+    const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');
+    expect(row.metadata.look_id).toBe(expected);
+  });
+
+  // Never waste a guest's photo on a hand the model could not read.
+  it('keeps the look they picked when no fingers are held up, or the read fails', async () => {
+    for (const answer of [0, null, 9]) {
+      provider.readFingers.mockResolvedValue(answer);
+      const { res } = await shoot({ fingers: true, decade: '1970s' });
+      expect(res.body.effect.id).toBe('decade-1970s');
+      expect(res.body.fingers).toBe(answer === 9 ? 9 : answer);
+    }
+  });
+
+  it('does not pay for a finger read unless the booth asked for one', async () => {
+    await shoot({ decade: '1970s' });
+    expect(provider.readFingers).not.toHaveBeenCalled();
+    await shoot({ fingers: true });
+    expect(provider.readFingers).not.toHaveBeenCalled(); // no decade, no looks to choose from
   });
 });

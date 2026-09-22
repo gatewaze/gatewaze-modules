@@ -43,6 +43,8 @@ interface GalleryItem {
 
 interface Props {
   eventName: string
+  /** The pose everyone is being asked for, if the booth is asking. */
+  pose?: { label: string; instruction: string; countdown: string | null; next: string | null } | null
   primaryColor: string
   /** "Who are you?" when the guest has not said yet; null once they have. */
   nameStep: React.ReactNode | null
@@ -84,6 +86,14 @@ const STYLES = `
 .ua-card{margin-top:16px;border-radius:18px;padding:16px;background:rgba(10,8,20,.5);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
 .ua-h1{font-size:22px;font-weight:800}
 .ua-sub{font-size:14px;color:rgba(255,255,255,.65);margin-top:4px;line-height:1.4}
+.ua-pose{margin-top:14px;width:100%;display:flex;flex-direction:column;gap:2px;text-align:left;border-radius:18px;padding:14px 16px;
+  background:linear-gradient(135deg,rgba(124,58,237,.55),rgba(190,24,93,.45));
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.2);color:#fff}
+.ua-pose-kicker{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;opacity:.75}
+.ua-pose-label{font-size:20px;font-weight:800}
+.ua-pose-say{font-size:14px;opacity:.9;line-height:1.3}
+.ua-pose-next{font-size:12px;opacity:.75;margin-top:4px}
+.ua-pose-go{font-size:13px;font-weight:700;margin-top:6px}
 .ua-panel{margin-top:14px;border-radius:18px;padding:16px;background:rgba(10,8,20,.45);
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
 .ua-panel h2{font-size:18px;font-weight:800}
@@ -167,7 +177,7 @@ const CHEVRON_R = 'M8.25 4.5l7.5 7.5-7.5 7.5'
 
 export default function UploadApp(props: Props) {
   const {
-    eventName, primaryColor, nameStep, guestName, onNotMe, allowVideo, tiles, onAdd, onDelete, onRetry,
+    eventName, pose, primaryColor, nameStep, guestName, onNotMe, allowVideo, tiles, onAdd, onDelete, onRetry,
     notice, onOpenBooth, showGallery, everyone, hasMore, loadingMore, onLoadMore,
   } = props
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -315,6 +325,15 @@ export default function UploadApp(props: Props) {
           <div className="ua-card">{nameStep}</div>
         ) : (
           <>
+            {pose && (
+              <button type="button" className="ua-pose" onClick={onOpenBooth ?? undefined} disabled={!onOpenBooth}>
+                <span className="ua-pose-kicker">Everyone right now</span>
+                <span className="ua-pose-label">{pose.label}</span>
+                <span className="ua-pose-say">{pose.instruction}</span>
+                {pose.countdown && <span className="ua-pose-next">Changes in {pose.countdown}{pose.next ? ` — next: ${pose.next}` : ''}</span>}
+                {onOpenBooth && <span className="ua-pose-go">Take it in the photo booth →</span>}
+              </button>
+            )}
             <div className="ua-panel">
               <h2>Share your photos</h2>
               <p>Pick as many as you like from your phone — they upload straight away.</p>

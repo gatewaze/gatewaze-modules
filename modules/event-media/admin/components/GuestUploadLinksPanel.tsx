@@ -248,19 +248,44 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   // Which booth eras guests are offered: all of them (an era picker), or
   // one, for a themed party -- the booth then opens straight into it.
   const [boothEra, setBoothEra] = useState<string>('all');
+  // Poses: what the booth asks people to do (migration 012).
+  const [poseMode, setPoseMode] = useState<'off' | 'hour' | 'card'>('off');
+  const [poseMinutes, setPoseMinutes] = useState(30);
+  const [fingersPick, setFingersPick] = useState(false);
   useEffect(() => {
     if (!expanded) return;
     let cancelled = false;
     void supabase
       .from('events_media_booth_settings')
-      .select('era')
+      .select('era, pose_mode, pose_minutes, fingers_pick')
       .eq('event_id', eventId)
       .maybeSingle()
-      .then(({ data }: { data: { era?: string } | null }) => {
-        if (!cancelled && data?.era) setBoothEra(data.era);
+      .then(({ data }: { data: { era?: string; pose_mode?: string; pose_minutes?: number; fingers_pick?: boolean } | null }) => {
+        if (cancelled || !data) return;
+        if (data.era) setBoothEra(data.era);
+        if (data.pose_mode === 'hour' || data.pose_mode === 'card') setPoseMode(data.pose_mode);
+        if (typeof data.pose_minutes === 'number') setPoseMinutes(data.pose_minutes);
+        setFingersPick(data.fingers_pick === true);
       });
     return () => { cancelled = true; };
   }, [expanded, eventId]);
+
+  /** Save one booth setting, putting it back if the write is refused. */
+  const saveBooth = async (
+    patch: Record<string, unknown>,
+    undo: () => void,
+    said: string,
+  ) => {
+    const { error } = await supabase
+      .from('events_media_booth_settings')
+      .upsert({ event_id: eventId, era: boothEra, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'event_id' });
+    if (error) {
+      undo();
+      toast.error('Could not save that booth setting');
+      return;
+    }
+    toast.success(said);
+  };
 
   const saveBoothEra = async (era: string) => {
     const prev = boothEra;
@@ -680,6 +705,57 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                   <option key={era.key} value={era.key}>{era.label} only — a themed event</option>
                 ))}
               </select>
+            </label>
+
+            {/* Poses: the booth asks people to do something, rather than
+                photographing them sitting still. */}
+            <label className="flex items-center gap-2 text-sm">
+              Poses
+              <select
+                value={poseMode}
+                onChange={(e) => {
+                  const next = e.target.value as 'off' | 'hour' | 'card';
+                  const prev = poseMode;
+                  setPoseMode(next);
+                  void saveBooth({ pose_mode: next }, () => setPoseMode(prev),
+                    next === 'off' ? 'The booth just takes the photo'
+                      : next === 'hour' ? 'Everyone gets the same pose, rotating'
+                        : 'The booth deals a pose each time');
+                }}
+                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="off">Off — just take the photo</option>
+                <option value="hour">Pose of the hour — everyone does the same one</option>
+                <option value="card">Pose card — a different one each time</option>
+              </select>
+              {poseMode === 'hour' && (
+                <select
+                  value={String(poseMinutes)}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    const prev = poseMinutes;
+                    setPoseMinutes(next);
+                    void saveBooth({ pose_minutes: next }, () => setPoseMinutes(prev), `A new pose every ${next} minutes`);
+                  }}
+                  className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
+                >
+                  {[15, 30, 45, 60].map((m) => <option key={m} value={m}>every {m} min</option>)}
+                </select>
+              )}
+            </label>
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={fingersPick}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setFingersPick(next);
+                  void saveBooth({ fingers_pick: next }, () => setFingersPick(!next),
+                    next ? 'Guests can pick their look by holding up fingers' : 'Fingers no longer pick the look');
+                }}
+              />
+              Let guests pick their look by holding up 1–5 fingers in the photo
             </label>
             {provider && !provider.configured ? (
               <p className="text-xs text-gray-500 mb-2">
