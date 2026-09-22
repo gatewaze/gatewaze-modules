@@ -30,6 +30,8 @@ export interface UploadTicketPayload {
   captured: boolean;
   /** Booth output rather than a plain photo; picks the album. */
   booth?: boolean;
+  /** The invitation guest who uploaded, when the event has a guest list. */
+  member_id?: string | null;
   exp: number; // unix seconds
 }
 

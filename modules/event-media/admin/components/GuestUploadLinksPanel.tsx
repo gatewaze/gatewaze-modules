@@ -243,6 +243,43 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     toast.success(era === 'all' ? 'Guests choose from every era' : `The booth is ${era} only`);
   };
 
+  // Guests who have uploaded, from the invitation list, and who is
+  // blocked. Blocking stops a guest uploading or using the booth and takes
+  // every photo of theirs off the projector and the gallery.
+  const [uploaders, setUploaders] = useState<Array<{ memberId: string; name: string; photos: number }>>([]);
+  const [blocked, setBlocked] = useState<Set<string>>(new Set());
+  const loadGuests = useCallback(async () => {
+    const [{ data: rows }, { data: blocks }] = await Promise.all([
+      supabase.from('host_media').select('metadata').eq('host_kind', 'event').eq('host_id', eventId).limit(5000),
+      supabase.from('events_media_guest_blocks').select('member_id').eq('event_id', eventId),
+    ]);
+    const byMember = new Map<string, { memberId: string; name: string; photos: number }>();
+    for (const r of (rows ?? []) as Array<{ metadata: Record<string, unknown> | null }>) {
+      const m = r.metadata ?? {};
+      const id = typeof m['member_id'] === 'string' ? (m['member_id'] as string) : null;
+      if (!id) continue;
+      const entry = byMember.get(id) ?? { memberId: id, name: String(m['guest_name'] ?? 'Guest'), photos: 0 };
+      entry.photos += 1;
+      byMember.set(id, entry);
+    }
+    setUploaders([...byMember.values()].sort((a, b) => b.photos - a.photos || a.name.localeCompare(b.name)));
+    setBlocked(new Set(((blocks ?? []) as Array<{ member_id: string }>).map((b) => b.member_id)));
+  }, [eventId]);
+
+  useEffect(() => {
+    if (expanded) void loadGuests();
+  }, [expanded, loadGuests]);
+
+  const toggleBlock = async (g: { memberId: string; name: string }) => {
+    const isBlocked = blocked.has(g.memberId);
+    const { error } = isBlocked
+      ? await supabase.from('events_media_guest_blocks').delete().eq('event_id', eventId).eq('member_id', g.memberId)
+      : await supabase.from('events_media_guest_blocks').insert({ event_id: eventId, member_id: g.memberId, guest_name: g.name });
+    if (error) { toast.error('Could not update that guest'); return; }
+    toast.success(isBlocked ? `${g.name} can upload again` : `${g.name} is blocked; their photos are off the screen`);
+    await loadGuests();
+  };
+
   const loadPending = useCallback(async () => {
     // Unapproved guest rows (auto_approve=false moderation queue) —
     // admin read via the user's own session, RLS admin policy applies.
@@ -453,6 +490,39 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
           ) : (
             <button className="text-sm underline" onClick={() => setShowCreate(true)}>+ New upload link</button>
           )}
+
+          {/* Guests who have uploaded, and blocking. */}
+          <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
+            <p className="text-sm font-medium mb-1">Guests</p>
+            {uploaders.length === 0 ? (
+              <p className="text-xs text-gray-500 mb-2">
+                No uploads from guests on the invitation list yet. Guests choose their name from the
+                people who accepted, and every photo is recorded against them.
+              </p>
+            ) : (
+              <div className="space-y-1 mb-2">
+                {uploaders.map((g) => {
+                  const isBlocked = blocked.has(g.memberId);
+                  return (
+                    <div key={g.memberId} className="flex items-center gap-2 text-sm">
+                      <span className={isBlocked ? 'line-through text-gray-400' : ''}>{g.name}</span>
+                      <span className="text-xs text-gray-500">{g.photos} photo{g.photos === 1 ? '' : 's'}</span>
+                      {isBlocked && (
+                        <span className="text-xs rounded-full bg-red-100 text-red-700 px-2 py-0.5">blocked</span>
+                      )}
+                      <span className="flex-1" />
+                      <button
+                        className={`text-xs underline ${isBlocked ? '' : 'text-red-600'}`}
+                        onClick={() => void toggleBlock(g)}
+                      >
+                        {isBlocked ? 'Unblock' : 'Block'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           {/* Photo booth. Style effects need only the provider; face
               swaps also need the reference faces uploaded below. Both

@@ -37,6 +37,7 @@ import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
 import { erasFor, isEraSetting } from '../lib/booth-eras.js';
+import { displayName, matchGuests, type GuestEntry } from '../lib/guest-identity.js';
 import {
   TICKET_TTL_SECONDS,
   mintTicket,
@@ -194,6 +195,94 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     return { link: link as UploadLinkRow, event: event as EventRow };
   }
 
+  // ── Guest identity (lib/guest-identity.ts) ──────────────────────────
+  // The accepted invitation list, and the organiser's block list, per
+  // event. Cached briefly: the list changes rarely, and a block should
+  // bite within seconds, not minutes.
+  const GUEST_LIST_TTL_MS = 60_000;
+  const BLOCKS_TTL_MS = 10_000;
+  const guestListCache = new Map<string, { at: number; list: GuestEntry[] | null }>();
+  const blocksCache = new Map<string, { at: number; ids: Set<string> }>();
+
+  /** null: the event has no invitation list, so names are typed freely. */
+  async function guestListFor(eventId: string): Promise<GuestEntry[] | null> {
+    const hit = guestListCache.get(eventId);
+    if (hit && Date.now() - hit.at < GUEST_LIST_TTL_MS) return hit.list;
+    let list: GuestEntry[] | null = null;
+    try {
+      const { data, error } = await supabase
+        .from('invite_party_member_events')
+        .select('invite_party_members(id, first_name, last_name)')
+        .eq('event_id', eventId)
+        .eq('rsvp_status', 'accepted')
+        .limit(5000);
+      // An error usually means the invitations module is not installed
+      // here, which is simply "no guest list".
+      if (!error) {
+        const out: GuestEntry[] = [];
+        for (const r of (data ?? []) as Array<{ invite_party_members: { id: string; first_name: unknown; last_name: unknown } | null }>) {
+          const m = r.invite_party_members;
+          const name = m ? displayName(m.first_name, m.last_name) : null;
+          if (m && name && UUID_RE.test(m.id)) out.push({ id: m.id, name });
+        }
+        list = out.length > 0 ? out : null;
+      }
+    } catch {
+      list = null;
+    }
+    guestListCache.set(eventId, { at: Date.now(), list });
+    return list;
+  }
+
+  async function blockedFor(eventId: string): Promise<Set<string>> {
+    const hit = blocksCache.get(eventId);
+    if (hit && Date.now() - hit.at < BLOCKS_TTL_MS) return hit.ids;
+    const ids = new Set<string>();
+    const { data, error } = await supabase
+      .from('events_media_guest_blocks')
+      .select('member_id')
+      .eq('event_id', eventId);
+    if (!error) for (const r of (data ?? []) as Array<{ member_id: string }>) if (UUID_RE.test(r.member_id)) ids.add(r.member_id);
+    blocksCache.set(eventId, { at: Date.now(), ids });
+    return ids;
+  }
+
+  /**
+   * Who is uploading. With a guest list, the member id must name someone
+   * on it who has not been blocked; without one, any typed name will do
+   * (guest: null) and the caller falls back to that.
+   */
+  async function identify(eventId: string, raw: unknown): Promise<
+    | { ok: true; guest: GuestEntry | null }
+    | { ok: false; status: number; code: string; message: string }
+  > {
+    const list = await guestListFor(eventId);
+    if (!list) return { ok: true, guest: null };
+    const id = typeof raw === 'string' && UUID_RE.test(raw) ? raw : null;
+    const guest = id ? list.find((g) => g.id === id) ?? null : null;
+    if (!guest) return { ok: false, status: 400, code: 'guest_required', message: 'please choose your name from the guest list' };
+    if ((await blockedFor(eventId)).has(guest.id)) {
+      return { ok: false, status: 403, code: 'guest_blocked', message: 'uploads are paused for this guest' };
+    }
+    return { ok: true, guest };
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // GET /public/event-media/links/:code/guests?q=da
+  // A few names from the accepted invitation list, for the name picker.
+  // At least two letters, at most eight matches: never the whole list.
+  // ────────────────────────────────────────────────────────────────────
+  async function searchGuests(req: Request, res: Response): Promise<void> {
+    const ctx = await resolveLink(req, res, 'guests', GUEST_RATE_LIMITS.guestSearchPerIp);
+    if (!ctx) return;
+    const list = await guestListFor(ctx.link.event_id);
+    if (!list) {
+      sendError(res, 404, 'no_guest_list', 'this event has no guest list');
+      return;
+    }
+    res.status(200).json({ guests: matchGuests(list, req.query['q']) });
+  }
+
   // Booth themes (lib/booth-theme.ts), cached per event -- misses too, so
   // an event without one costs one storage read per window rather than
   // one per guest page load.
@@ -315,6 +404,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         show_gallery: link.show_gallery,
         max_photo_bytes: link.max_photo_bytes,
         max_video_bytes: link.max_video_bytes,
+        // Guests pick their name from the invitation list rather than
+        // typing one.
+        guest_list: Boolean(await guestListFor(link.event_id)),
       },
       face_filters: faceFilters,
       // Style effects need no per-event setup, so they turn on with the
@@ -596,6 +688,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // eat into the page size.
       .limit(limit * 2 + 1);
 
+    // A blocked guest's photos leave the projector and the gallery. The
+    // ids are the event's own block rows, UUID-checked; no request input
+    // reaches this filter. Null-safe, so photos with no guest stay.
+    const blocked = [...(await blockedFor(link.event_id))];
+    if (blocked.length > 0) {
+      query = query.or(`metadata->>member_id.is.null,metadata->>member_id.not.in.(${blocked.join(',')})`);
+    }
+
     if (filter === 'photo') query = query.like('mime_type', 'image/%');
     else if (filter === 'video') query = query.like('mime_type', 'video/%');
 
@@ -658,7 +758,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
     if (!(await checkRate(res, guestRateKey('mint', clientId), GUEST_RATE_LIMITS.mintPerClient))) return;
 
-    const guestName = cleanGuestName(body['guest_name']);
+    const who = await identify(link.event_id, body['member_id']);
+    if (!who.ok) {
+      sendError(res, who.status, who.code, who.message);
+      return;
+    }
+    // The invitation's own name, never what the phone says, when there is one.
+    const guestName = who.guest ? who.guest.name : cleanGuestName(body['guest_name']);
     if (link.require_name && !guestName) {
       sendError(res, 400, 'name_required', 'please tell us your name first');
       return;
@@ -703,6 +809,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         client_id: clientId,
         captured: v.file.captured,
         booth: v.file.booth,
+        member_id: who.guest?.id ?? null,
         exp: nowSeconds + TICKET_TTL_SECONDS,
       };
 
@@ -747,6 +854,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         source: 'guest',
         upload_link_id: null, // filled by caller (link.id)
         guest_name: p.guest_name || null,
+        member_id: p.member_id ?? null,
         client_id: p.client_id,
         captured: p.captured,
         // Which stream this belongs to: the booth's posters on their own,
@@ -824,6 +932,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // Ticket must belong to this link (and therefore this event).
       if (p.code !== link.short_code || p.event_id !== link.event_id) {
         items.push({ media_id: p.media_id, status: 'failed', error: 'invalid_ticket' });
+        continue;
+      }
+
+      // Blocked between minting and finishing: the bytes go, no row is made.
+      if (p.member_id && (await blockedFor(link.event_id)).has(p.member_id)) {
+        await removeObject(p.storage_path);
+        items.push({ media_id: p.media_id, status: 'failed', error: 'guest_blocked' });
         continue;
       }
 
@@ -1089,6 +1204,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     // Generation costs money per call, so it is capped harder than
     // anything else on the guest path — per device AND per link.
+    // Who, before anything is spent on a model call.
+    const who = await identify(link.event_id, body['member_id']);
+    if (!who.ok) {
+      sendError(res, who.status, who.code, who.message);
+      return;
+    }
+
     if (!(await checkRate(res, guestRateKey('facefilter', clientId), GUEST_RATE_LIMITS.faceFilterPerClient))) return;
     if (!(await checkRate(res, guestRateKey('facefilter_burst', link.short_code), GUEST_RATE_LIMITS.faceFilterPerLinkBurst))) return;
     if (!(await checkRate(res, guestRateKey('facefilter_link', link.short_code), GUEST_RATE_LIMITS.faceFilterPerLinkHourly))) return;
@@ -1143,7 +1265,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       const kept = await keepBoothPicture({
         link,
         clientId,
-        guestName: cleanGuestName(body['guest_name']),
+        guestName: who.guest ? who.guest.name : cleanGuestName(body['guest_name']),
+        memberId: who.guest?.id ?? null,
         image: result.image,
         contentType: result.contentType,
         look: filter ? `Be ${filter.label}` : effect!.label,
@@ -1174,6 +1297,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     link: UploadLinkRow;
     clientId: string;
     guestName: string | null;
+    memberId: string | null;
     image: Uint8Array | Buffer;
     contentType: string;
     look: string;
@@ -1206,6 +1330,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         source: 'guest',
         upload_link_id: link.id,
         guest_name: opts.guestName,
+        member_id: opts.memberId,
         client_id: opts.clientId,
         captured: true,
         album: 'booth',
@@ -1272,6 +1397,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       res.status(200).json({ posted: mediaId, already: true });
       return;
     }
+    if (typeof meta['member_id'] === 'string' && (await blockedFor(link.event_id)).has(meta['member_id'])) {
+      sendError(res, 403, 'guest_blocked', 'uploads are paused for this guest');
+      return;
+    }
 
     // Posting is when it arrives: the projector takes new photos by time,
     // so the picture is dated now, not when it was made.
@@ -1324,12 +1453,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     deleteMine: guarded(deleteMine),
     faceFilter: guarded(faceFilter),
     postBooth: guarded(postBooth),
+    searchGuests: guarded(searchGuests),
   };
 }
 
 export function mountGuestRoutes(router: Router, routes: ReturnType<typeof createGuestRoutes>): void {
   router.get('/public/event-media/links/:code', routes.getLink);
   router.get('/public/event-media/links/:code/media', routes.listMedia);
+  router.get('/public/event-media/links/:code/guests', routes.searchGuests);
   router.post('/public/event-media/links/:code/uploads', routes.mintUploads);
   router.post('/public/event-media/links/:code/uploads/complete', routes.completeUploads);
   // POST, not GET, for both: client_id is the ownership credential and
