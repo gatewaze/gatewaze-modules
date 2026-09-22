@@ -6,6 +6,7 @@
  */
 
 import { randomUUID, getRandomValues } from 'node:crypto';
+import { readyPrompt } from './ready-prompts.js';
 
 // ── Mime allowlists ─────────────────────────────────────────────────
 
@@ -165,6 +166,8 @@ export interface MintFileInput {
   captured: boolean;
   /** Came out of the photo booth rather than the camera or library. */
   booth: boolean;
+  /** Which of the morning's asks it answers, if any. */
+  prompt?: string | null;
 }
 
 export type MintFileValidation =
@@ -199,5 +202,9 @@ export function validateMintFile(
   }
   const captured = r['captured'] === true;
   const booth = r['booth'] === true;
-  return { ok: true, file: { filename, mime_type: mimeType, bytes, captured, booth }, kind };
+  // Which of the morning's asks this photo answers (lib/ready-prompts.ts).
+  // Checked against the list there, so nothing a guest types reaches the
+  // row; an unknown one is simply dropped.
+  const prompt = readyPrompt(r['prompt'])?.id ?? null;
+  return { ok: true, file: { filename, mime_type: mimeType, bytes, captured, booth, prompt }, kind };
 }

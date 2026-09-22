@@ -45,6 +45,20 @@ interface Props {
   eventName: string
   /** The pose everyone is being asked for, if the booth is asking. */
   pose?: { label: string; instruction: string; countdown: string | null; next: string | null } | null
+  /**
+   * The morning before. When the event has not started yet, the app
+   * leads with things to photograph rather than an upload button --
+   * nobody opens an app to upload a picture of their own half-done hair,
+   * but they will take one they have been asked for (2026-09-22).
+   */
+  ready?: {
+    countdown: string
+    prompts: Array<{ id: string; label: string; blurb: string; camera: 'user' | 'environment' }>
+    /** Which asks this phone has already answered. */
+    done: string[]
+  } | null
+  /** Take a photo for one of the morning's asks. */
+  onPrompt?: (prompt: { id: string; camera: 'user' | 'environment' }, files: FileList) => void
   primaryColor: string
   /** "Who are you?" when the guest has not said yet; null once they have. */
   nameStep: React.ReactNode | null
@@ -86,6 +100,21 @@ const STYLES = `
 .ua-card{margin-top:16px;border-radius:18px;padding:16px;background:rgba(10,8,20,.5);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
 .ua-h1{font-size:22px;font-weight:800}
 .ua-sub{font-size:14px;color:rgba(255,255,255,.65);margin-top:4px;line-height:1.4}
+.ua-ready{margin-top:14px;border-radius:18px;padding:14px 16px;
+  background:linear-gradient(135deg,rgba(14,116,144,.5),rgba(76,29,149,.45));
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.2)}
+.ua-ready-kicker{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;opacity:.75}
+.ua-ready-count{font-size:20px;font-weight:800;margin-top:2px}
+.ua-ready-say{font-size:13px;opacity:.85;line-height:1.35;margin-top:3px}
+.ua-ready-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.ua-ask{position:relative;display:flex;flex-direction:column;gap:1px;text-align:left;border-radius:14px;padding:10px 12px;
+  background:rgba(10,8,20,.42);box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);color:#fff;transition:transform 120ms ease}
+.ua-ask:active{transform:scale(.97)}
+.ua-ask-done{opacity:.62}
+.ua-ask-label{font-size:15px;font-weight:800}
+.ua-ask-blurb{font-size:11px;opacity:.75;line-height:1.25}
+.ua-ask-tick{position:absolute;top:8px;right:10px;font-size:13px;font-weight:800;color:#86efac}
+.ua-hidden{display:none}
 .ua-pose{margin-top:14px;width:100%;display:flex;flex-direction:column;gap:2px;text-align:left;border-radius:18px;padding:14px 16px;
   background:linear-gradient(135deg,rgba(124,58,237,.55),rgba(190,24,93,.45));
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.2);color:#fff}
@@ -177,7 +206,7 @@ const CHEVRON_R = 'M8.25 4.5l7.5 7.5-7.5 7.5'
 
 export default function UploadApp(props: Props) {
   const {
-    eventName, pose, primaryColor, nameStep, guestName, onNotMe, allowVideo, tiles, onAdd, onDelete, onRetry,
+    eventName, pose, ready, onPrompt, primaryColor, nameStep, guestName, onNotMe, allowVideo, tiles, onAdd, onDelete, onRetry,
     notice, onOpenBooth, showGallery, everyone, hasMore, loadingMore, onLoadMore,
   } = props
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -187,6 +216,8 @@ export default function UploadApp(props: Props) {
   // that grows underneath -- Everyone's is live -- does not move it).
   const [viewing, setViewing] = useState<{ list: 'mine' | 'everyone'; id: string } | null>(null)
   const trackRef = useRef<HTMLDivElement | null>(null)
+  // One hidden camera input per ask, so each opens the right camera.
+  const promptRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   // The portal's own animated background shows through; the event page
   // itself does not. That background is a fixed, pointer-events:none layer
@@ -325,6 +356,41 @@ export default function UploadApp(props: Props) {
           <div className="ua-card">{nameStep}</div>
         ) : (
           <>
+            {ready && (
+              <div className="ua-ready">
+                <p className="ua-ready-kicker">Getting ready</p>
+                <p className="ua-ready-count">{ready.countdown}</p>
+                <p className="ua-ready-say">Take one of these while you get ready — they go up on the big screen tomorrow.</p>
+                <div className="ua-ready-grid">
+                  {ready.prompts.map((p) => {
+                    const done = ready.done.includes(p.id)
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`ua-ask${done ? ' ua-ask-done' : ''}`}
+                        onClick={() => promptRefs.current[p.id]?.click()}
+                      >
+                        <span className="ua-ask-label">{p.label}</span>
+                        <span className="ua-ask-blurb">{p.blurb}</span>
+                        {done && <span className="ua-ask-tick" aria-label="done">✓</span>}
+                        <input
+                          ref={(el) => { promptRefs.current[p.id] = el }}
+                          type="file"
+                          accept="image/*"
+                          capture={p.camera}
+                          className="ua-hidden"
+                          onChange={(e) => {
+                            if (e.target.files?.length && onPrompt) onPrompt({ id: p.id, camera: p.camera }, e.target.files)
+                            e.target.value = ''
+                          }}
+                        />
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
             {pose && (
               <button type="button" className="ua-pose" onClick={onOpenBooth ?? undefined} disabled={!onOpenBooth}>
                 <span className="ua-pose-kicker">Everyone right now</span>
