@@ -1138,8 +1138,12 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   }
 
   if (loading) {
-    // With an upload code on the way in, keep covering until the screen is ready.
-    if (code) return <PhotosCover />
+    // With an upload code on the way in, keep covering until the screen is
+    // ready. The URL, not the `code` state: state is only filled in after
+    // the first render, and the first render is the one the server sends
+    // -- it is the render that has to cover the event page.
+    const urlCode = searchParams.get('u')
+    if (code || (urlCode && /^[a-z0-9]{6,16}$/.test(urlCode))) return <PhotosCover />
     return <div className={`p-8 text-center ${subText}`}>Loading…</div>
   }
 
