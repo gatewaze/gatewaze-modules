@@ -33,6 +33,7 @@ import {
 } from '../lib/guest-limits.js';
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
 import { BOOTH_POSES, boothPose, fingerLook, poseChangesAt, poseOfTheHour } from '../lib/booth-poses.js';
+import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js';
 import { plateHasPeople, readFingers, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
@@ -518,7 +519,21 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // cross-event guard must accept either spelling.
         event_id: event.event_id,
         name: event.event_title,
+        starts_at: event.event_start ?? null,
       },
+      // The morning before: from a day and a half out until the event
+      // starts, the app leads with things to photograph while everyone
+      // is getting ready (lib/ready-prompts.ts).
+      ready: (() => {
+        const w = readyWindow(event.event_start, Date.now());
+        return {
+          active: w.active,
+          starts_at: w.starts_at,
+          prompts: w.active
+            ? READY_PROMPTS.map((p) => ({ id: p.id, label: p.label, blurb: p.blurb, camera: p.camera }))
+            : [],
+        };
+      })(),
       settings: {
         require_name: link.require_name,
         allow_video: link.allow_video,
@@ -970,6 +985,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         client_id: clientId,
         captured: v.file.captured,
         booth: v.file.booth,
+        prompt: v.file.prompt ?? null,
         member_id: who.guest?.id ?? null,
         exp: nowSeconds + TICKET_TTL_SECONDS,
       };
@@ -1022,6 +1038,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // and a guest's photo under Getting ready until the event starts,
         // The day after. The guest never chooses.
         album: albumForUpload({ booth: Boolean(p.booth), eventStart, now: Date.now() }),
+        // What the morning asked them for, recorded so a caption can be
+        // put under it later.
+        ...(readyPrompt(p.prompt)
+          ? { prompt: readyPrompt(p.prompt)!.id, prompt_label: readyPrompt(p.prompt)!.label }
+          : {}),
       },
     };
   }

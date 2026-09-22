@@ -104,6 +104,12 @@ interface LinkInfo {
   booth_effects?: Array<{ id: string; label: string; blurb: string; kind: 'swap' | 'style' }>
   /** The illustrated booth, when the event has one (lib/booth-theme.ts). */
   booth?: BoothView | null
+  /** The morning before the event (lib/ready-prompts.ts). */
+  ready?: {
+    active: boolean
+    starts_at: string | null
+    prompts: Array<{ id: string; label: string; blurb: string; camera: 'user' | 'environment' }>
+  } | null
 }
 
 interface GalleryItem {
@@ -125,6 +131,8 @@ type QueueStatus = 'waiting' | 'uploading' | 'processing' | 'done' | 'failed'
 interface QueueItem {
   key: string
   file: File
+  /** Which of the morning's asks this answers (lib/ready-prompts.ts). */
+  prompt?: string | null
   /** Booth output — goes in its own album, not the day's photos. */
   booth?: boolean
   /** Told the upload's id once minted, so it can be removed later. */
@@ -721,6 +729,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
                 bytes: q.file.size,
                 captured: q.key.startsWith('cam-'),
                 booth: Boolean(q.booth),
+                prompt: q.prompt ?? null,
               })),
             }),
           })
@@ -777,6 +786,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     camera: boolean,
     booth = false,
     onMediaId?: (mediaId: string) => void,
+    prompt?: string | null,
   ) => {
     if (!files || files.length === 0) return
     const stamp = Date.now()
@@ -784,6 +794,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       key: `${camera ? 'cam' : 'pick'}-${stamp}-${i}-${file.name}`,
       file,
       booth,
+      prompt: prompt ?? null,
       onMediaId,
       preview: booth ? undefined : (() => { try { return URL.createObjectURL(file) } catch { return undefined } })(),
       status: 'waiting',
@@ -1258,6 +1269,48 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     }
     return { label: p.current.label, instruction: p.current.instruction, countdown, next: p.next?.label ?? null }
   })()
+
+  /**
+   * The morning before the event: a countdown and a handful of things to
+   * photograph. The asks answered on this phone are remembered so they
+   * can be ticked off (and so the list keeps moving through the day).
+   */
+  const readyPayload = link?.ready?.active ? link.ready : null
+  const [askedDone, setAskedDone] = useState<string[]>([])
+  useEffect(() => {
+    if (!readyPayload) return
+    try {
+      const saved = JSON.parse(localStorage.getItem(`event_media_asks:${eventIdentifier}`) || '[]')
+      if (Array.isArray(saved)) setAskedDone(saved.filter((x) => typeof x === 'string'))
+    } catch { /* private mode */ }
+  }, [readyPayload, eventIdentifier])
+  const [readyTick, setReadyTick] = useState(() => Date.now())
+  useEffect(() => {
+    if (!readyPayload) return
+    const t = setInterval(() => setReadyTick(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [readyPayload])
+  const readyProps = (() => {
+    if (!readyPayload?.starts_at) return null
+    const left = Date.parse(readyPayload.starts_at) - readyTick
+    if (!Number.isFinite(left) || left <= 0) return null
+    const hours = Math.floor(left / 3_600_000)
+    const mins = Math.floor((left % 3_600_000) / 60_000)
+    const countdown = hours >= 1
+      ? `${hours} hour${hours === 1 ? '' : 's'} ${mins} min to go`
+      : `${mins} minute${mins === 1 ? '' : 's'} to go`
+    return { countdown, prompts: readyPayload.prompts, done: askedDone }
+  })()
+
+  const onPrompt = useCallback((prompt: { id: string; camera: 'user' | 'environment' }, files: FileList) => {
+    setUploadNotice(null)
+    enqueueFiles(files, true, false, undefined, prompt.id)
+    setAskedDone((done) => {
+      const next = done.includes(prompt.id) ? done : [...done, prompt.id]
+      try { localStorage.setItem(`event_media_asks:${eventIdentifier}`, JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
+  }, [enqueueFiles, eventIdentifier])
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -1946,6 +1999,8 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     <UploadApp
       eventName={link!.event.name ?? 'Event photos'}
       pose={posePrompt}
+      ready={readyProps}
+      onPrompt={onPrompt}
       primaryColor={primaryColor}
       nameStep={nameStep}
       guestName={guest?.name ?? null}

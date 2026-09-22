@@ -96,3 +96,37 @@ describe('a pose in the prompt', () => {
     expect(buildPrompt(effect)).not.toMatch(/This pose is the subject/);
   });
 });
+
+import { READY_PROMPTS, readyPrompt, readyWindow, READY_OPENS_MS } from '../ready-prompts.js';
+
+describe('the morning before', () => {
+  const start = Date.parse('2026-09-25T13:30:00Z');
+
+  it('opens a day and a half out and closes when the event starts', () => {
+    expect(readyWindow(new Date(start).toISOString(), start - 60 * 60_000).active).toBe(true);
+    expect(readyWindow(new Date(start).toISOString(), start - READY_OPENS_MS + 1000).active).toBe(true);
+    // Too early, and once it has begun.
+    expect(readyWindow(new Date(start).toISOString(), start - READY_OPENS_MS - 1000).active).toBe(false);
+    expect(readyWindow(new Date(start).toISOString(), start + 1000).active).toBe(false);
+  });
+
+  it('is simply off when the event has no start time', () => {
+    for (const bad of [null, undefined, '', 'soon']) {
+      expect(readyWindow(bad, Date.now())).toEqual({ active: false, starts_at: null, until: null });
+    }
+  });
+
+  it('asks for things anyone can photograph alone, and points the right camera', () => {
+    expect(READY_PROMPTS.length).toBeGreaterThanOrEqual(8);
+    for (const p of READY_PROMPTS) {
+      expect(p.id).toMatch(/^[a-z][a-z0-9-]{1,20}$/);
+      expect(p.label.length).toBeLessThanOrEqual(20);
+      expect(p.blurb.length).toBeLessThanOrEqual(56);
+      expect(['user', 'environment']).toContain(p.camera);
+    }
+    // A face wants the front camera; shoes want the back one.
+    expect(readyPrompt('mirror').camera).toBe('user');
+    expect(readyPrompt('shoes').camera).toBe('environment');
+    expect(readyPrompt('nope')).toBeNull();
+  });
+});
