@@ -123,3 +123,42 @@ export function zoomToWindow(
     height,
   }
 }
+
+/**
+ * Landscape artwork on a landscape screen.
+ *
+ * The booth is drawn for this shape, so it fills the screen rather than
+ * sitting between blurred gutters -- but a wider screen than the artwork
+ * must crop somewhere, and the crop must not eat the parts a guest uses.
+ * The artwork is scaled to cover, then slid so the camera window stays
+ * whole and the coin slot stays on the screen. If it cannot have both, it
+ * falls back to fitting the whole booth in view.
+ */
+export function stageCover(
+  viewW: number,
+  viewH: number,
+  imgW: number,
+  imgH: number,
+  win: { x: number; y: number; w: number; h: number },
+  coin: { x: number; y: number; w: number; h: number },
+): Box {
+  const scale = Math.max(viewW / imgW, viewH / imgH)
+  const width = imgW * scale
+  const height = imgH * scale
+  // Start centred on the window, then hold the artwork over the edges.
+  const place = (viewLen: number, len: number, mid: number) =>
+    Math.min(0, Math.max(viewLen - len, viewLen / 2 - mid * len))
+  let left = place(viewW, width, win.x + win.w / 2)
+  let top = place(viewH, height, win.y + win.h / 2)
+  const onScreen = (r: { x: number; y: number; w: number; h: number }) =>
+    left + r.x * width >= -0.5 && left + (r.x + r.w) * width <= viewW + 0.5
+    && top + r.y * height >= -0.5 && top + (r.y + r.h) * height <= viewH + 0.5
+  if (!onScreen(win) || !onScreen(coin)) {
+    // Both matter more than filling the screen; show the whole booth.
+    const fit = Math.min(viewW / imgW, viewH / imgH)
+    const w2 = imgW * fit
+    const h2 = imgH * fit
+    return { left: (viewW - w2) / 2, top: (viewH - h2) / 2, width: w2, height: h2 }
+  }
+  return { left, top, width, height }
+}

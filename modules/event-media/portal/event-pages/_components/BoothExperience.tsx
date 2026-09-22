@@ -25,7 +25,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { coverCrop, pctStyle, polaroidSize, stageRect, zoomToWindow } from './_lib/booth-stage'
+import { coverCrop, pctStyle, polaroidSize, stageCover, stageRect, zoomToWindow } from './_lib/booth-stage'
 import {
   addPicture,
   loadHistory,
@@ -376,6 +376,8 @@ export default function BoothExperience(props: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const trackRef = useRef<HTMLDivElement | null>(null)
   const recordedRef = useRef<string | null>(null)
+  // Always the current shutter, for listeners that outlive a render.
+  const insertCoinRef = useRef<() => void>(() => {})
   const timers = useRef<Array<ReturnType<typeof setTimeout>>>([])
   const later = useCallback((fn: () => void, ms: number) => {
     timers.current.push(setTimeout(fn, ms))
@@ -702,6 +704,32 @@ export default function BoothExperience(props: Props) {
     }
   }, [busy, count, eras.length, phase, onDiscard, later])
 
+  /**
+   * A shutter that is not on the screen.
+   *
+   * A phone's own volume buttons are the phone's, not the page's -- no
+   * browser hands them to a website. A Bluetooth shutter remote is a
+   * different thing: it pairs as a keyboard and sends a key, so the booth
+   * listens for the keys those remotes send, plus the space bar and
+   * return for anyone with a keyboard (asked 2026-09-22).
+   */
+  useEffect(() => {
+    if (!inside) return
+    const onKey = (e: KeyboardEvent) => {
+      const remote = e.key === 'AudioVolumeUp' || e.key === 'AudioVolumeDown' || e.key === 'VolumeUp' || e.key === 'VolumeDown'
+      const typing = e.target instanceof HTMLElement
+        && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)
+      // Space or return on a focused button is that button's, not ours.
+      const focusedControl = e.target instanceof HTMLElement && e.target.tagName === 'BUTTON'
+      if (!remote && (typing || focusedControl || (e.key !== ' ' && e.key !== 'Enter'))) return
+      if (e.repeat) return
+      e.preventDefault()
+      insertCoinRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [inside])
+
   const capture = useCallback(() => {
     const v = videoRef.current
     if (!v || !v.videoWidth) { onFallbackCamera(look); return }
@@ -739,6 +767,7 @@ export default function BoothExperience(props: Props) {
       }, COUNT_FROM * COUNT_STEP_MS)
     }, COIN_MS)
   }, [count, shot, cam, look, later, capture, onFallbackCamera])
+  insertCoinRef.current = insertCoin
 
   const accept = useCallback(() => {
     onAccept()
@@ -754,8 +783,11 @@ export default function BoothExperience(props: Props) {
   // theme takes an `interior_landscape` per decade when there is one.
   const landscape = vp.w > vp.h * 1.25 && vp.h < 620
   const insideArt = (landscape && era.interiorLandscape) || interior
-  const insideBox = landscape && !era.interiorLandscape
-    ? zoomToWindow(vp.w, vp.h, interior.width, interior.height, interior.window)
+  const insideBox = landscape
+    ? era.interiorLandscape
+      // Artwork drawn for this shape: fill the screen with it.
+      ? stageCover(vp.w, vp.h, insideArt.width, insideArt.height, insideArt.window, insideArt.coin)
+      : zoomToWindow(vp.w, vp.h, interior.width, interior.height, interior.window)
     : stageRect(vp.w, vp.h, insideArt.width, insideArt.height, insideArt.focus_x)
 
   // Through the curtain: the board swells and darkens, then the interior
