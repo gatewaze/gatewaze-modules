@@ -1426,6 +1426,68 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     res.status(200).json({ posted: mediaId });
   }
 
+  // ────────────────────────────────────────────────────────────────────
+  // POST /public/event-media/links/:code/booth/unpost
+  // The guest takes one of their booth pictures back off the big screen.
+  // It stays kept -- on their phone and in the event -- just unposted.
+  // ────────────────────────────────────────────────────────────────────
+  async function unpostBooth(req: Request, res: Response): Promise<void> {
+    const ctx = await resolveLink(req, res, 'mine', GUEST_RATE_LIMITS.completePerIp);
+    if (!ctx) return;
+    const { link } = ctx;
+
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const clientId = typeof body['client_id'] === 'string' && UUID_RE.test(body['client_id'])
+      ? body['client_id']
+      : null;
+    const mediaId = typeof body['media_id'] === 'string' && UUID_RE.test(body['media_id'])
+      ? body['media_id']
+      : null;
+    if (!clientId || !mediaId) {
+      sendError(res, 400, 'invalid_request', 'client_id and media_id must be UUIDs');
+      return;
+    }
+    if (!(await checkRate(res, guestRateKey('booth_post', clientId), GUEST_RATE_LIMITS.completePerClient))) return;
+
+    const { data: row, error } = await supabase
+      .from('host_media')
+      .select('id, metadata, host_id, host_kind')
+      .eq('id', mediaId)
+      .maybeSingle();
+    if (error) {
+      sendError(res, 500, 'fetch_failed', 'could not look up that picture');
+      return;
+    }
+    const meta = (row?.metadata ?? {}) as Record<string, unknown>;
+    // Same test as posting, less the kept-picture condition: a booth
+    // picture posted by an older page (uploaded rather than kept) can be
+    // taken down too.
+    const owned = row
+      && row.host_kind === 'event'
+      && row.host_id === link.event_id
+      && meta['source'] === 'guest'
+      && meta['client_id'] === clientId
+      && meta['album'] === 'booth';
+    if (!owned) {
+      sendError(res, 404, 'not_found', 'that picture is not yours to take down');
+      return;
+    }
+    if (meta['posted'] === false) {
+      res.status(200).json({ unposted: mediaId, already: true });
+      return;
+    }
+    const { error: updErr } = await supabase
+      .from('host_media')
+      .update({ metadata: { ...meta, posted: false } })
+      .eq('id', mediaId);
+    if (updErr) {
+      logger.error('booth unpost failed', { error: updErr.message });
+      sendError(res, 500, 'unpost_failed', 'could not take that picture down');
+      return;
+    }
+    res.status(200).json({ unposted: mediaId });
+  }
+
   // Crash guard: these are the platform's first UNAUTHENTICATED express
   // handlers in module space — an uncaught rejection here would become
   // an unhandledRejection and take the whole API process down (Sentry
@@ -1457,6 +1519,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     deleteMine: guarded(deleteMine),
     faceFilter: guarded(faceFilter),
     postBooth: guarded(postBooth),
+    unpostBooth: guarded(unpostBooth),
     searchGuests: guarded(searchGuests),
   };
 }
@@ -1475,5 +1538,6 @@ export function mountGuestRoutes(router: Router, routes: ReturnType<typeof creat
   // phones that already have the page open are still posting to it.
   router.post('/public/event-media/links/:code/booth', routes.faceFilter);
   router.post('/public/event-media/links/:code/booth/post', routes.postBooth);
+  router.post('/public/event-media/links/:code/booth/unpost', routes.unpostBooth);
   router.post('/public/event-media/links/:code/face-filter', routes.faceFilter);
 }

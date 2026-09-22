@@ -41,6 +41,10 @@ export function markPosted(list: BoothPicture[], id: string, mediaId: string | n
   return list.map((p) => (p.id === id ? { ...p, posted: true, mediaId: mediaId ?? p.mediaId } : p))
 }
 
+export function markUnposted(list: BoothPicture[], id: string): BoothPicture[] {
+  return list.map((p) => (p.id === id ? { ...p, posted: false } : p))
+}
+
 export function removePicture(list: BoothPicture[], id: string): BoothPicture[] {
   return list.filter((p) => p.id !== id)
 }

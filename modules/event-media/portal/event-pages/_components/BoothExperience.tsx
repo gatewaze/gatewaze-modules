@@ -30,6 +30,7 @@ import {
   addPicture,
   loadHistory,
   markPosted,
+  markUnposted,
   removePicture,
   saveHistory,
   type BoothPicture,
@@ -105,6 +106,8 @@ interface Props {
   onRemoveUpload: (mediaId: string) => Promise<boolean>
   /** Put a picture the server already kept onto the big screen. */
   onPostKept: (mediaId: string) => Promise<boolean>
+  /** Take one back off the big screen. */
+  onUnpostKept: (mediaId: string) => Promise<boolean>
 }
 
 /**
@@ -225,6 +228,18 @@ const STYLES = `
 .bx-card-label span{display:block;font-size:11px;line-height:1.25;margin-top:2px;color:rgba(255,255,255,.75)}
 .bx-card-pressed{transform:scale(.95);box-shadow:0 0 0 3px rgba(255,255,255,.9),0 0 30px 8px rgba(255,80,200,.5)}
 .bx-more-inline{display:block;margin:18px auto 0;height:44px;padding:0 22px;border-radius:999px;font-size:14px;font-weight:700}
+.bx-live{width:100%;max-width:26rem;height:48px;border-radius:12px;display:flex;align-items:center;gap:10px;
+  padding:0 8px 0 14px;background:#157f3c;box-shadow:0 0 0 2px rgba(74,222,128,.55),0 6px 20px rgba(21,127,60,.45)}
+.bx-live-dot{width:10px;height:10px;border-radius:50%;background:#bbf7d0;box-shadow:0 0 0 0 rgba(187,247,208,.8);
+  animation:bx-pulse 1.6s ease-out infinite}
+.bx-live-text{flex:1;text-align:left;font-size:15px;font-weight:800}
+.bx-live-remove{height:34px;padding:0 14px;border-radius:9px;font-size:13px;font-weight:700;background:rgba(0,0,0,.28);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.35)}
+@keyframes bx-pulse{0%{box-shadow:0 0 0 0 rgba(187,247,208,.8)}100%{box-shadow:0 0 0 10px rgba(187,247,208,0)}}
+.bx-icons{display:flex;justify-content:center;gap:18px}
+.bx-icon{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.12);box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)}
+.bx-icon-danger{color:#fecaca;background:rgba(180,35,24,.28);box-shadow:inset 0 0 0 1px rgba(254,202,202,.35)}
 .bx-panel{position:absolute;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .bx-controls{pointer-events:auto;width:100%;height:100%;border-radius:14px;padding:10px;display:flex;
   flex-direction:column;justify-content:center;gap:8px;animation:bx-rise 380ms ease-out both}
@@ -264,11 +279,29 @@ const STYLES = `
 @media (prefers-reduced-motion:reduce){.bx-root *{animation:none!important;transition:none!important}}
 `
 
+// Heroicons outline paths, drawn inline so nothing is fetched.
+const ICON = {
+  save: 'M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3',
+  retake: 'M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99',
+  era: 'M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5',
+  trash: 'M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0',
+}
+
+function IconButton({ label, d, onClick, danger = false }: { label: string; d: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button type="button" aria-label={label} title={label} onClick={onClick} className={`bx-icon${danger ? ' bx-icon-danger' : ''}`}>
+      <svg width="24" height="24" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" d={d} />
+      </svg>
+    </button>
+  )
+}
+
 export default function BoothExperience(props: Props) {
   const {
     booth, effects, faces, shot, progress, statusText, generating, primaryColor,
     onCaptured, onFallbackCamera, onAccept, onSave, onDiscard, onOriginal, onClose,
-    historyKey, onPostImage, onSaveImage, onRemoveUpload, onPostKept,
+    historyKey, onPostImage, onSaveImage, onRemoveUpload, onPostKept, onUnpostKept,
   } = props
 
   const [vp, setVp] = useState({ w: 390, h: 844 })
@@ -296,6 +329,9 @@ export default function BoothExperience(props: Props) {
   // cannot predict, and a Polaroid sized from the whole screen overlapped
   // both (Dan's phone, 2026-09-22).
   const [trackBox, setTrackBox] = useState<{ w: number; h: number } | null>(null)
+  // Safety net: whatever the sums say, measure the Polaroid as drawn and
+  // shrink it until it fits the space between the header and the buttons.
+  const [fitScale, setFitScale] = useState(1)
 
   const rootRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -474,6 +510,17 @@ export default function BoothExperience(props: Props) {
     return () => ro?.disconnect()
   }, [carousel])
 
+  useEffect(() => {
+    if (!carousel || !trackBox) return
+    const fig = trackRef.current?.querySelector('.bx-polaroid') as HTMLElement | null
+    if (!fig) return
+    const h = fig.offsetHeight
+    const w = fig.offsetWidth
+    if (!h || !w) return
+    // Room for the tilt and the shadow.
+    setFitScale(Math.min(1, (trackBox.h - 24) / h, (trackBox.w - 24) / w))
+  }, [carousel, trackBox, pictures.length])
+
   // Open on the newest, without an animated scroll from wherever it was.
   useEffect(() => {
     if (!carousel) return
@@ -516,6 +563,20 @@ export default function BoothExperience(props: Props) {
       setPostingId(null)
     }
   }, [postingId, onPostImage, onPostKept, flashNotice])
+
+  const unpostPicture = useCallback(async (pic: BoothPicture) => {
+    if (!pic.posted || !pic.mediaId || postingId) return
+    setPostingId(pic.id)
+    try {
+      if (!(await onUnpostKept(pic.mediaId))) throw new Error('unpost failed')
+      setPictures((list) => markUnposted(list, pic.id))
+      flashNotice('Taken off the big screen')
+    } catch {
+      flashNotice('Could not take it down. Try again in a moment.')
+    } finally {
+      setPostingId(null)
+    }
+  }, [postingId, onUnpostKept, flashNotice])
 
   const savePicture = useCallback((pic: BoothPicture) => {
     if (!onSaveImage(pic.image)) flashNotice('That one would not save. Try again.')
@@ -971,8 +1032,12 @@ export default function BoothExperience(props: Props) {
                     className="bx-polaroid"
                     style={{
                       width: pol.frameW,
-                      padding: `${pol.side}px ${pol.side}px ${pol.bottom}px`,
-                      transform: `rotate(${((i % 3) - 1) * 1.1}deg)`,
+                      // No bottom padding: the caption below the photo IS the
+                      // deep bottom border. Counting it twice made every
+                      // Polaroid a quarter of its width too tall, which ran
+                      // it under the header and buttons (2026-09-22).
+                      padding: `${pol.side}px ${pol.side}px 0`,
+                      transform: `rotate(${((i % 3) - 1) * 1.1}deg) scale(${fitScale})`,
                     }}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element -- local data URL */}
@@ -1007,22 +1072,38 @@ export default function BoothExperience(props: Props) {
                   ))}
                 </div>
               )}
-              <button
-                type="button"
-                className="bx-primary"
-                style={{ backgroundColor: current.posted ? 'rgba(255,255,255,.14)' : primaryColor }}
-                disabled={current.posted || postingId === current.id}
-                onClick={() => postPicture(current)}
-              >
-                {current.posted ? '✓ On the big screen' : postingId === current.id ? 'Sending…' : 'Put it on the big screen'}
-              </button>
-              <div className="bx-row bx-row-4">
-                <button type="button" className="bx-btn" onClick={() => savePicture(current)}>Save</button>
-                {inside
-                  ? <button type="button" className="bx-btn" onClick={() => setCarousel(false)}>Retake</button>
-                  : <span />}
-                <button type="button" className="bx-btn" onClick={() => { setCarousel(false); if (inside) leave() }}>New era</button>
-                <button type="button" className="bx-btn bx-btn-danger" onClick={() => setConfirmDelete(current.id)}>Delete</button>
+              {current.posted ? (
+                // Unmistakably on, and just as easy to take off again.
+                <div className="bx-live" role="status">
+                  <span className="bx-live-dot" aria-hidden="true" />
+                  <span className="bx-live-text">On the big screen</span>
+                  {current.mediaId && (
+                    <button
+                      type="button"
+                      className="bx-live-remove"
+                      disabled={postingId === current.id}
+                      onClick={() => unpostPicture(current)}
+                    >
+                      {postingId === current.id ? 'Removing…' : 'Remove'}
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="bx-primary"
+                  style={{ backgroundColor: primaryColor }}
+                  disabled={postingId === current.id}
+                  onClick={() => postPicture(current)}
+                >
+                  {postingId === current.id ? 'Sending…' : 'Put it on the big screen'}
+                </button>
+              )}
+              <div className="bx-icons">
+                <IconButton label="Save to my phone" onClick={() => savePicture(current)} d={ICON.save} />
+                {inside && <IconButton label="Retake" onClick={() => setCarousel(false)} d={ICON.retake} />}
+                <IconButton label="New era" onClick={() => { setCarousel(false); if (inside) leave() }} d={ICON.era} />
+                <IconButton label="Delete" danger onClick={() => setConfirmDelete(current.id)} d={ICON.trash} />
               </div>
             </div>
 
