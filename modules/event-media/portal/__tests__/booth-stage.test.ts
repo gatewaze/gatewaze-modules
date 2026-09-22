@@ -130,3 +130,34 @@ describe('zoomToWindow: a sideways phone steps closer', () => {
     expect(b.width).toBeGreaterThanOrEqual(390);
   });
 });
+
+import { stageCover } from '../event-pages/_components/_lib/booth-stage';
+
+describe('stageCover: landscape artwork on a landscape screen', () => {
+  // As measured from the artwork itself (1980s booth).
+  const ART = { w: 1672, h: 941 };
+  const WIN = { x: 0.174, y: 0.2171, w: 0.592, h: 0.5979 };
+  const COIN = { x: 0.814, y: 0.6604, w: 0.06, h: 0.1419 };
+  const on = (b, r, view) => b.left + r.x * b.width >= -0.5 && b.left + (r.x + r.w) * b.width <= view.w + 0.5
+    && b.top + r.y * b.height >= -0.5 && b.top + (r.y + r.h) * b.height <= view.h + 0.5;
+
+  it('fills the screen, keeping the camera and the coin slot on it', () => {
+    const view = { w: 844, h: 390 };
+    const b = stageCover(view.w, view.h, ART.w, ART.h, WIN, COIN);
+    expect(b.left).toBeLessThanOrEqual(0);
+    expect(b.top).toBeLessThanOrEqual(0);
+    expect(b.left + b.width).toBeGreaterThanOrEqual(view.w);
+    expect(b.top + b.height).toBeGreaterThanOrEqual(view.h);
+    expect(on(b, WIN, view)).toBe(true);
+    expect(on(b, COIN, view)).toBe(true);
+  });
+
+  // Filling the screen is worth less than being able to use the booth.
+  it('shows the whole booth instead when covering would cut something off', () => {
+    const view = { w: 1200, h: 200 }; // absurdly letterboxed
+    const b = stageCover(view.w, view.h, ART.w, ART.h, WIN, COIN);
+    expect(on(b, WIN, view)).toBe(true);
+    expect(on(b, COIN, view)).toBe(true);
+    expect(b.height).toBeLessThanOrEqual(view.h + 0.5);
+  });
+});
