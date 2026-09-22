@@ -80,3 +80,46 @@ export function polaroidSize(
   const photoH = photoW / a
   return { photoW, photoH, side, bottom, frameW: photoW + 2 * side, frameH: photoH + side + bottom }
 }
+
+/**
+ * A sideways phone, standing close to the booth.
+ *
+ * The artwork is a portrait booth. Scaled to a landscape screen's height
+ * it becomes a narrow strip down the middle -- the camera window a few
+ * centimetres across, the tiles too small to hit. So in landscape the
+ * page steps closer instead: the stage is scaled until the booth's own
+ * window fills `share` of the screen height, and centred on that window.
+ * Whatever falls outside the screen (usually the coin slot below) is
+ * covered by the shutter inside the window, which does the same thing.
+ *
+ * Returned in the same shape as stageRect, so the tiles, window, coin
+ * slot and panel keep their positions within the artwork.
+ */
+export function zoomToWindow(
+  viewW: number,
+  viewH: number,
+  imgW: number,
+  imgH: number,
+  win: { x: number; y: number; w: number; h: number },
+  share = 0.82,
+): Box {
+  // Tall enough that the window takes its share of the screen, but never
+  // smaller than filling the height (that is the portrait behaviour).
+  const height = Math.max(viewH, (viewH * share) / win.h)
+  const width = height * (imgW / imgH)
+  // Put the window in the middle of the screen. Where the artwork is
+  // bigger than the screen it is held over the edges, so no gap opens at
+  // the side or the top; where it is narrower than a wide screen (the
+  // usual case, the artwork being portrait) it simply sits centred and
+  // the page's ambient fill covers the rest.
+  const centre = (viewLen: number, len: number, mid: number) => {
+    const wanted = viewLen / 2 - mid * len
+    return len >= viewLen ? Math.min(0, Math.max(viewLen - len, wanted)) : wanted
+  }
+  return {
+    left: centre(viewW, width, win.x + win.w / 2),
+    top: centre(viewH, height, win.y + win.h / 2),
+    width,
+    height,
+  }
+}

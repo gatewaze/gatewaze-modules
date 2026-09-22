@@ -129,6 +129,20 @@ const STYLES = `
   background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center}
 @media (min-width:640px){.ua-grid{grid-template-columns:repeat(4,1fr)}}
 @media (prefers-reduced-motion:reduce){.ua-root *{transition:none!important;animation:none!important}}
+/* A phone held sideways. The page keeps its shape -- header, panel,
+   tabs, then the photos -- but everything above the photos is squeezed,
+   so the grid still gets most of a short screen (asked 2026-09-22). */
+@media (orientation: landscape) and (max-height: 620px) {
+  .ua-wrap{max-width:52rem;padding-top:calc(env(safe-area-inset-top,0px) + 8px)}
+  .ua-panel{margin-top:8px;padding:10px 14px;display:flex;align-items:center;gap:12px}
+  .ua-panel h2{font-size:15px}
+  .ua-panel p{display:none}
+  .ua-btn{margin-top:0;margin-left:auto;height:42px;flex:none}
+  .ua-tabs{margin-top:8px}
+  .ua-grid{grid-template-columns:repeat(4, 1fr)}
+  .ua-card{margin-top:8px;padding:12px}
+  .ua-h1{font-size:20px}
+}
 `
 
 function Ring({ pct, color }: { pct: number; color: string }) {

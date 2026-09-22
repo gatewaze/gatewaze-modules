@@ -27,6 +27,22 @@ const theme = (over = {}) => ({
   ...over,
 });
 
+describe('a landscape booth', () => {
+  const wide = { ...ROOM, image: 'inside-1980s-wide.webp', width: 1672, height: 941 };
+  it('is kept when the theme draws one, and is null otherwise', () => {
+    const t = parseBoothTheme(theme({ eras: { '1980s': { interior: ROOM, interior_landscape: wide } } }), looksFor, url);
+    expect(t.eras['1980s'].interior_landscape.image).toBe('https://cdn.example/booth-theme/inside-1980s-wide.webp');
+    expect(parseBoothTheme(theme(), looksFor, url).eras['1980s'].interior_landscape).toBeNull();
+  });
+  // A half-drawn landscape booth must not replace a working portrait one.
+  it('is dropped when malformed, leaving the portrait booth', () => {
+    const bad = { ...wide, coin: { x: 0.9, y: 0.9, w: 0.5, h: 0.5 } };
+    const t = parseBoothTheme(theme({ eras: { '1980s': { interior: ROOM, interior_landscape: bad } } }), looksFor, url);
+    expect(t.eras['1980s'].interior_landscape).toBeNull();
+    expect(t.eras['1980s'].interior.image).toBe('https://cdn.example/booth-theme/inside-1980s.webp');
+  });
+});
+
 describe('parseBoothTheme', () => {
   it('accepts a well-formed theme and resolves every image to a URL', () => {
     const t = parseBoothTheme(theme(), looksFor, url);
