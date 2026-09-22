@@ -19,7 +19,7 @@
  * Per spec-event-media-guest-uploads §6.2.
  */
 
-import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
@@ -332,9 +332,20 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // otherwise invisible: nothing on the upload card hinted it existed,
   // and it only appeared AFTER a guest had already taken a photo with
   // one particular button.
+  // ?decade=1980s&look=top-gun opens that booth directly -- a link to
+  // send round: "take a photo of yourself in this". Validated against
+  // what the event actually offers inside the booth itself.
+  const openBoothAt = useMemo(() => {
+    const ok = (v: string | null) => (v && /^[a-z0-9][a-z0-9-]{0,40}$/.test(v) ? v : null)
+    const era = ok(searchParams.get('decade'))
+    const look = ok(searchParams.get('look'))
+    return era && look ? { era, look } : null
+  }, [searchParams])
+
   // ?tab=booth opens straight into the photo booth: the booth's own QR.
   const [section, setSection] = useState<'upload' | 'booth'>(
-    () => (searchParams.get('tab') === 'booth' ? 'booth' : 'upload'),
+    // A link to one look means the booth, whether or not it says tab=booth.
+    () => (searchParams.get('tab') === 'booth' || openBoothAt ? 'booth' : 'upload'),
   )
   // A look chosen before the camera opens, applied as soon as the photo
   // comes back — so the guest picks the result they want, rather than
@@ -1915,6 +1926,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       statusText={shot?.busy ? BOOTH_STATUS[boothStatus] : 'Here you go…'}
       generating={Boolean(shot?.busy) || boothFinishing}
       primaryColor={primaryColor}
+      openAt={openBoothAt}
       onCaptured={onBoothCaptured}
       onFallbackCamera={onBoothFallback}
       onAccept={acceptShot}

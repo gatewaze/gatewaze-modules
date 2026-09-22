@@ -13,6 +13,7 @@ import { supabase } from '@/lib/supabase';
 import { QRCodeService } from '@/utils/qrCodeService';
 import { toast } from 'sonner';
 import { BOOTH_ERAS } from '../../lib/booth-eras';
+import { boothEffect } from '../../lib/booth-effects';
 import { KeyPeoplePanel } from './KeyPeoplePanel';
 
 interface GuestUploadLinksPanelProps {
@@ -143,6 +144,21 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     },
     [baseUrl, customDomainUrl, eventIdentifier],
   );
+
+  /**
+   * A link that opens one look's booth directly -- to send round with
+   * "take a photo of yourself in this" (asked 2026-09-22).
+   */
+  const lookUrl = useCallback(
+    (link: UploadLink, decade: string, look: string) => {
+      const base = sectionUrl(link, 'booth');
+      return base ? `${base}&decade=${encodeURIComponent(decade)}&look=${encodeURIComponent(look)}` : null;
+    },
+    [sectionUrl],
+  );
+
+  // Which decade's looks the link list is showing, per link.
+  const [lookDecade, setLookDecade] = useState<Record<string, string>>({});
 
   // ── Face filters ──────────────────────────────────────────────────
 
@@ -496,6 +512,52 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                     </button>
                   </span>
                 ))}
+              </div>
+
+              {/* One look at a time: a link (and QR) that opens that
+                  booth with the camera already running. */}
+              <div className="basis-full pt-1 text-xs text-gray-600 dark:text-gray-300">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium">One look:</span>
+                  <select
+                    className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-1.5 py-1 text-xs"
+                    value={lookDecade[link.id] ?? ''}
+                    onChange={(e) => setLookDecade((m) => ({ ...m, [link.id]: e.target.value }))}
+                  >
+                    <option value="">Choose a decade…</option>
+                    {BOOTH_ERAS.map((era) => (
+                      <option key={era.key} value={era.key}>{era.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {(() => {
+                  const era = BOOTH_ERAS.find((e) => e.key === lookDecade[link.id]);
+                  if (!era) return null;
+                  return (
+                    <div className="mt-1 space-y-1">
+                      {era.looks.map((look) => (
+                        <div key={look} className="flex items-center gap-2">
+                          <span>{boothEffect(look)?.label ?? look}</span>
+                          <span className="flex-1" />
+                          <button
+                            className="underline"
+                            onClick={async () => {
+                              const url = lookUrl(link, era.key, look);
+                              if (!url) { toast.error('Event identifier still loading'); return; }
+                              try { await navigator.clipboard.writeText(url); toast.success('Link copied'); }
+                              catch { toast.error('Could not copy URL'); }
+                            }}
+                          >
+                            Copy link
+                          </button>
+                          <button className="underline" onClick={() => downloadQr(link, 1200, { url: lookUrl(link, era.key, look), name: `${era.key}-${look}` })}>
+                            QR
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           ))}
