@@ -361,34 +361,47 @@ export default function BoothExperience(props: Props) {
     }
   }, [booth])
 
-  // The live camera. Started only when wanted and always stopped on the
-  // way out, so the phone's camera light goes off as soon as the picture
-  // is taken or the guest leaves.
+  // The live camera. Started the first time it is wanted and then kept
+  // running until the guest leaves the booth altogether. It used to stop
+  // after every photo and start again for the next, and each start makes
+  // iOS show its "Camera access allowed" banner over the booth -- which a
+  // page cannot suppress, only avoid causing (asked 2026-09-22). The
+  // camera light stays on while the booth is open; closing it stops it.
+  const streamRef = useRef<MediaStream | null>(null)
   useEffect(() => {
-    if (!cameraWanted) { setCam('off'); return }
+    if (!cameraWanted) return
+    const v = videoRef.current
+    if (streamRef.current) {
+      // Already running: back into the window it goes.
+      if (v && v.srcObject !== streamRef.current) v.srcObject = streamRef.current
+      v?.play().catch(() => { /* resumes on the next tap */ })
+      setCam('live')
+      return
+    }
     if (!navigator.mediaDevices?.getUserMedia) { setCam('blocked'); return }
     let cancelled = false
-    let stream: MediaStream | null = null
     setCam('starting')
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false })
       .then((s) => {
         if (cancelled) { s.getTracks().forEach((t) => t.stop()); return }
-        stream = s
-        const v = videoRef.current
-        if (v) {
-          v.srcObject = s
-          v.play().catch(() => { /* autoplay refusals resolve on the next tap */ })
+        streamRef.current = s
+        const el = videoRef.current
+        if (el) {
+          el.srcObject = s
+          el.play().catch(() => { /* autoplay refusals resolve on the next tap */ })
         }
         setCam('live')
       })
       .catch(() => { if (!cancelled) setCam('blocked') })
-    return () => {
-      cancelled = true
-      stream?.getTracks().forEach((t) => t.stop())
-      if (videoRef.current) videoRef.current.srcObject = null
-    }
+    return () => { cancelled = true }
   }, [cameraWanted])
+
+  // Off when the booth closes.
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+  }, [])
 
   // A camera that never starts (a permission prompt dismissed without an
   // answer, a browser that stalls) must not leave the guest with a dead
