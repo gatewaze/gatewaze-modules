@@ -54,6 +54,12 @@ export interface PaintedBoard extends BoothScene {
 
 export interface ThemeEra {
   interior: BoothInterior;
+  /**
+   * The same booth drawn for a sideways phone. Optional: without one, a
+   * landscape screen steps closer to the portrait booth instead, so the
+   * camera window still fills the screen (asked 2026-09-22).
+   */
+  interior_landscape: BoothInterior | null;
   /** Painted outside board whose tiles name looks; optional. */
   board: PaintedBoard | null;
   /** A picture for this era's card in a plain era grid; optional. */
@@ -161,6 +167,7 @@ export function parseBoothTheme(
     }
     eras[key] = {
       interior: inside,
+      interior_landscape: v['interior_landscape'] === undefined ? null : interior(v['interior_landscape'], url),
       board: v['board'] === undefined ? null : board(v['board'], url, (k) => looks.has(k)),
       card: file(v['card'], url),
       samples,

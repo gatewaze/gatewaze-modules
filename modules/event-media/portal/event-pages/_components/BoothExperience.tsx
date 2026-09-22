@@ -25,7 +25,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { coverCrop, pctStyle, polaroidSize, stageRect } from './_lib/booth-stage'
+import { coverCrop, pctStyle, polaroidSize, stageRect, zoomToWindow } from './_lib/booth-stage'
 import {
   addPicture,
   loadHistory,
@@ -48,6 +48,8 @@ export interface BoothEraView {
   blurb: string
   card: string | null
   interior: Interior
+  /** A landscape-shaped interior, when the event has one drawn. */
+  interiorLandscape?: Interior | null
   /** Painted outside board, when the event has artwork for it. */
   board: Painted | null
   looks: Array<{ id: string; label: string; blurb: string; sample: string | null }>
@@ -155,6 +157,7 @@ const STYLES = `
   font-size:14px;font-weight:600;white-space:nowrap}
 .bx-tile{position:absolute;border-radius:8px;transition:transform 160ms ease,box-shadow 160ms ease}
 .bx-window{position:absolute;overflow:hidden;border-radius:10px;background:#000}
+.bx-ambient{position:absolute;inset:-6%;width:112%;height:112%;object-fit:cover;filter:blur(38px) brightness(.45) saturate(1.2);pointer-events:none}
 .bx-media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;max-width:none}
 .bx-note{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:12px;padding:16px;text-align:center;font-size:14px;line-height:1.35;color:rgba(255,255,255,.82)}
@@ -284,6 +287,30 @@ const STYLES = `
 @keyframes bx-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @keyframes bx-rise-x{from{opacity:0;margin-top:8px}to{opacity:1;margin-top:0}}
 @media (prefers-reduced-motion:reduce){.bx-root *{animation:none!important;transition:none!important}}
+/* A sideways phone: short and wide. More columns across the extra width,
+   so a decade or a look is still a comfortable tap and fewer of them are
+   below the fold (asked 2026-09-22). */
+@media (orientation: landscape) and (max-height: 620px) {
+  .bx-grid{grid-template-columns:repeat(4, 1fr);gap:10px;max-width:56rem;margin-top:10px}
+  /* Short and wide, so a row and a half fits the screen rather than one
+     card filling it. */
+  .bx-card{aspect-ratio:4/3;border-radius:12px}
+  .bx-card-label{padding:20px 8px 7px}
+  .bx-card-label b{font-size:13px}
+  .bx-card-label span{display:none}
+  .bx-screen-body{padding-top:calc(env(safe-area-inset-top, 0px) + 46px)}
+  .bx-h1{font-size:20px}
+  .bx-sub{font-size:12px}
+  /* The Polaroid takes the height and its controls stand beside it,
+     rather than below where there is no room for either. */
+  .bx-track{top:calc(env(safe-area-inset-top,0px) + 40px);bottom:12px;right:auto;width:calc(100% - 232px)}
+  .bx-car-foot{position:absolute;left:auto;right:0;top:0;bottom:0;width:224px;justify-content:center;gap:8px;
+    padding:calc(env(safe-area-inset-top,0px) + 40px) 14px 12px}
+  .bx-live{height:42px}
+  .bx-live-text{font-size:13px}
+  .bx-icon{width:44px;height:44px}
+  .bx-arrow{display:none}
+}
 `
 
 // Heroicons outline paths, drawn inline so nothing is fetched.
@@ -678,7 +705,7 @@ export default function BoothExperience(props: Props) {
   const capture = useCallback(() => {
     const v = videoRef.current
     if (!v || !v.videoWidth) { onFallbackCamera(look); return }
-    const aspect = (interior.window.w * interior.width) / (interior.window.h * interior.height)
+    const aspect = (insideArt.window.w * insideArt.width) / (insideArt.window.h * insideArt.height)
     const crop = coverCrop(v.videoWidth, v.videoHeight, aspect)
     const scale = Math.min(1, 1600 / Math.max(crop.sw, crop.sh))
     const canvas = document.createElement('canvas')
@@ -720,7 +747,16 @@ export default function BoothExperience(props: Props) {
 
   // ── Layout ─────────────────────────────────────────────────────────
 
-  const insideBox = stageRect(vp.w, vp.h, interior.width, interior.height, interior.focus_x)
+  // A phone held sideways: short and wide. The booth then steps closer
+  // (zoomToWindow) and the decade picker and board drop the painted
+  // artwork for their plain card grids, which lay themselves out to any
+  // shape. Landscape artwork of its own would be better still -- the
+  // theme takes an `interior_landscape` per decade when there is one.
+  const landscape = vp.w > vp.h * 1.25 && vp.h < 620
+  const insideArt = (landscape && era.interiorLandscape) || interior
+  const insideBox = landscape && !era.interiorLandscape
+    ? zoomToWindow(vp.w, vp.h, interior.width, interior.height, interior.window)
+    : stageRect(vp.w, vp.h, insideArt.width, insideArt.height, insideArt.focus_x)
 
   // Through the curtain: the board swells and darkens, then the interior
   // settles in from slightly too close.
@@ -841,7 +877,7 @@ export default function BoothExperience(props: Props) {
       {/* ── Outside: the era picker, or an era's board of looks ──── */}
       <div className="bx-fill" style={outsideStyle} aria-hidden={inside}>
         {onPicker
-          ? booth.picker
+          ? booth.picker && !landscape
             ? painted(
               booth.picker,
               (k) => `${eras.find((e) => e.key === k)?.label ?? k} photo booth`,
@@ -861,7 +897,7 @@ export default function BoothExperience(props: Props) {
               })),
               chooseEra,
             )
-          : era.board
+          : era.board && !landscape
             ? painted(era.board, (k) => `${lookOf(k).label} look`, (k, i) => enter(lookOf(k), i))
             : cards(
               era.interior.image,
@@ -872,7 +908,7 @@ export default function BoothExperience(props: Props) {
               hasMore,
             )}
 
-        {hasMore && phase === 'board' && era.board && (
+        {hasMore && phase === 'board' && era.board && !landscape && (
           <button
             type="button"
             onClick={() => setMoreOpen(true)}
@@ -886,12 +922,16 @@ export default function BoothExperience(props: Props) {
 
       {/* ── Inside ───────────────────────────────────────────────── */}
       <div className="bx-fill" style={insideStyle} aria-hidden={!inside}>
+        {/* Nothing of the screen is left black: the artwork itself,
+            blurred and darkened, fills whatever the booth does not. */}
+        {/* eslint-disable-next-line @next/next/no-img-element -- ambient fill */}
+        <img src={insideArt.image} alt="" aria-hidden="true" className="bx-ambient" />
         <div className="bx-abs" style={insideBox}>
           {/* eslint-disable-next-line @next/next/no-img-element -- themed artwork */}
-          <img src={interior.image} alt="" draggable={false} className="bx-art" />
+          <img src={insideArt.image} alt="" draggable={false} className="bx-art" />
 
           {/* The window: live camera, then the picture developing in it. */}
-          <div className="bx-window" style={pctStyle(interior.window)}>
+          <div className="bx-window" style={pctStyle(insideArt.window)}>
             <video
               ref={videoRef}
               playsInline
@@ -960,7 +1000,7 @@ export default function BoothExperience(props: Props) {
               onClick={insertCoin}
               disabled={count !== null || cam === 'starting' || cam === 'off'}
               className={`bx-coin${cam === 'live' && count === null ? ' bx-coin-live' : ''}`}
-              style={{ ...pctStyle(interior.coin), opacity: 1 }}
+              style={{ ...pctStyle(insideArt.coin), opacity: 1 }}
             >
               {coinDrop && <span className="bx-coin-drop">£1</span>}
             </button>
@@ -969,7 +1009,7 @@ export default function BoothExperience(props: Props) {
           {/* The machine panel: the controls once there is a picture. It
               covers the coin slot, so it only catches taps when it has
               controls to offer. */}
-          <div className="bx-panel" style={pctStyle(interior.panel)}>
+          <div className="bx-panel" style={pctStyle(insideArt.panel)}>
             {showControls && (
               <div className="bx-controls bx-glass">
                 {shot?.error && <p className="bx-error">{shot.error}</p>}

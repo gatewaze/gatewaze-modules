@@ -430,6 +430,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
           blurb: era.blurb,
           card: art.card,
           interior: art.interior,
+          interiorLandscape: art.interior_landscape,
           board: art.board,
           looks: era.looks
             .filter((id) => byId.has(id))

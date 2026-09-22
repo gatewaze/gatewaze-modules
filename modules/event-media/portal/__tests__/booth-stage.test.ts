@@ -88,3 +88,45 @@ describe('polaroidSize', () => {
     expect(p.photoW).toBeGreaterThanOrEqual(80);
   });
 });
+
+import { zoomToWindow } from '../event-pages/_components/_lib/booth-stage';
+
+describe('zoomToWindow: a sideways phone steps closer', () => {
+  // The booth artwork, and its camera window, as the theme draws them.
+  const ART = { w: 941, h: 1672 };
+  const WIN = { x: 0.16, y: 0.18, w: 0.67, h: 0.53 };
+  const winBox = (b) => ({
+    w: Math.round(WIN.w * b.width),
+    h: Math.round(WIN.h * b.height),
+    cx: Math.round(b.left + (WIN.x + WIN.w / 2) * b.width),
+    cy: Math.round(b.top + (WIN.y + WIN.h / 2) * b.height),
+  });
+
+  it('fills most of a landscape screen with the camera window', () => {
+    const view = { w: 844, h: 390 };
+    const b = zoomToWindow(view.w, view.h, ART.w, ART.h, WIN);
+    const win = winBox(b);
+    expect(win.h / view.h).toBeGreaterThan(0.75);
+    expect(win.w).toBeGreaterThan(200);
+    // Centred on the screen, and the artwork still covers it.
+    expect(Math.abs(win.cx - view.w / 2)).toBeLessThan(2);
+    expect(Math.abs(win.cy - view.h / 2)).toBeLessThan(2);
+    // Taller than the screen (held over the edges), and narrower than it
+    // -- the page's ambient fill covers the sides.
+    expect(b.top).toBeLessThanOrEqual(0);
+    expect(b.height).toBeGreaterThan(view.h);
+    expect(b.left).toBeGreaterThan(0);
+  });
+
+  it('is much bigger than scaling the portrait booth to fit', () => {
+    const fitted = 390 * (ART.w / ART.h) * WIN.w; // window width, portrait rules
+    const zoomed = winBox(zoomToWindow(844, 390, ART.w, ART.h, WIN)).w;
+    expect(zoomed).toBeGreaterThan(fitted * 1.5);
+  });
+
+  it('never zooms out on a portrait screen', () => {
+    const b = zoomToWindow(390, 844, ART.w, ART.h, WIN);
+    expect(b.height).toBeGreaterThanOrEqual(844);
+    expect(b.width).toBeGreaterThanOrEqual(390);
+  });
+});
