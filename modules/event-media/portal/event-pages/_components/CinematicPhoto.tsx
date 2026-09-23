@@ -551,7 +551,11 @@ export default function CinematicPhoto({
        * background travels inside a frame that never moves, so no edge
        * can appear and the letterbox bars stay rock steady.
        */
-      const scale = fitScale(layer.cutout!, w, h) * zoom
+      // The people are not zoomed. Pan + zoom is a move of the camera
+      // past them, so the background travels and grows while they hold
+      // their size and place (asked 2026-09-23); zooming both merely
+      // made the whole photograph bigger, which is not the effect.
+      const scale = fitScale(layer.cutout!, w, h)
       const iw = layer.cutout!.naturalWidth * scale
       const ih = layer.cutout!.naturalHeight * scale
       const wx = place(iw, w, w / 2 - layer.aim.x * iw, 0, 0)
@@ -569,18 +573,27 @@ export default function CinematicPhoto({
       // on the window edge, and sub-pixel rounding there can flash a
       // hairline seam. The margin costs nothing visible.
       const travel = Math.min(1, strength) * 0.97
-      const spareX = (iw * (PLATE_OVERSCAN - 1)) / 2
-      const spareY = (ih * (PLATE_OVERSCAN - 1)) / 2
+      // The background is drawn larger than the window -- by the
+      // overscan, and by the zoom on top of it -- and the spare is what
+      // that gives it to travel within.
+      const bw = iw * PLATE_OVERSCAN * zoom
+      const bh = ih * PLATE_OVERSCAN * zoom
+      const spareX = (bw - iw) / 2
+      const spareY = (bh - ih) / 2
       g.globalAlpha = alpha
       g.drawImage(
         layer.plate!,
         wx - spareX + panX * travel * spareX,
         wy - spareY + panY * travel * spareY,
-        iw * PLATE_OVERSCAN,
-        ih * PLATE_OVERSCAN,
+        bw,
+        bh,
       )
       // The people, exactly where the window puts them, every frame.
       g.drawImage(layer.cutout!, wx, wy, iw, ih)
+      if (alpha > 0.5) {
+        g.canvas.dataset['people'] = Math.round(iw).toString()
+        g.canvas.dataset['background'] = Math.round(bw).toString()
+      }
       g.globalAlpha = 1
       g.restore()
     }
