@@ -178,10 +178,9 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
     blurb: 'Mod colour and pop-art backdrops',
     kind: 'style',
     style:
-      'a 1960s Swinging London fashion photograph: mod 1960s clothing such as shift dresses, bold ' +
-      'op-art and colour-block patterns, slim tailored suits and polo necks, a bright pop-art ' +
-      'studio backdrop, crisp 1960s colour film with slightly faded tones. Style the existing ' +
-      'hair into a 1960s shape but keep its colour and length. ' + DECADE_FRAMING,
+      'a 1960s mod fashion photograph: 1960s clothing such as shift dresses and pinafores in bold ' +
+      'op-art and colour-block patterns, go-go boots, slim tailored suits and polo necks, a bright ' +
+      'pop-art studio backdrop, crisp 1960s colour film with slightly faded tones. ' + DECADE_FRAMING,
   },
   {
     id: 'decade-1970s',
@@ -266,15 +265,15 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
   // 1960s
   {
     id: 'sixties-spy', label: 'Spy thriller', blurb: 'Casino, tuxedos, painted 60s spy poster', kind: 'style',
-    style: 'a painted 1960s spy thriller movie poster: tuxedos and cocktail dresses, a glamorous casino ' +
-      'and a sports car behind, dramatic painted illustration in the 1960s style, bold flat colour ' +
-      'shapes, no lettering at all. ' + POSTER_FACES,
+    style: 'a painted 1960s spy thriller movie poster: dinner jackets and cocktail dresses, a glamorous ' +
+      'casino and a sports car behind, dramatic painted illustration in the 1960s style, bold flat ' +
+      'colour shapes, no lettering at all. ' + POSTER_FACES,
   },
   {
     id: 'sixties-beat', label: 'Beat group', blurb: 'Black-and-white 60s band publicity shot', kind: 'style',
-    style: 'a black-and-white 1960s pop group publicity photograph: sharp collarless suits, shift ' +
-      'dresses and knee boots, a plain studio backdrop, crisp contrast, press-print grain. Style the ' +
-      'existing hair into a 1960s shape but keep its colour and length. ' + DECADE_FRAMING,
+    style: 'a black-and-white 1964 pop group publicity photograph: sharp collarless jackets, ankle ' +
+      'boots, shift dresses and knee-high boots, the plain backdrop of a pop television studio, ' +
+      'crisp contrast, press-print grain. ' + DECADE_FRAMING,
   },
   {
     id: 'sixties-space', label: 'Space race', blurb: 'Vintage astronauts, rocket on the pad', kind: 'style',
@@ -283,17 +282,16 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
       'badges or lettering. ' + DECADE_FRAMING,
   },
   {
-    id: 'sixties-summer-of-love', label: 'Summer of love', blurb: 'Flower crowns and psychedelic colour', kind: 'style',
-    style: 'a 1967 summer of love festival photograph: flower crowns, fringe, kaftans, tinted round ' +
-      'glasses only where the input already has glasses, a sunny festival field with swirling ' +
-      'psychedelic colour washes, warm faded film. Style the existing hair into a 1960s shape but keep ' +
-      'its colour and length. ' + DECADE_FRAMING,
+    id: 'sixties-summer-of-love', label: 'Summer of love', blurb: 'Kaftans, paisley and painted swirls', kind: 'style',
+    style: 'a 1967 psychedelia photograph: kaftans, braided military jackets, paisley and velvet, ' +
+      'tinted round glasses only where the input already has glasses, an outdoor be-in behind with ' +
+      'swirling psychedelic colour washes, warm faded film. This is 1967, before the look softened ' +
+      'into the 1970s: no feathered layers, no shaggy perms. ' + DECADE_FRAMING,
   },
   {
-    id: 'sixties-beach', label: 'Beach party', blurb: 'Surfboards and Kodachrome sunshine', kind: 'style',
-    style: 'a 1960s beach party movie still: surfboards, striped beach towels, 1960s swimwear and ' +
-      'beach shirts, a bright sandy beach and turquoise sea, saturated Kodachrome colour. Style the ' +
-      'existing hair into a 1960s shape but keep its colour and length. ' + DECADE_FRAMING,
+    id: 'sixties-beach', label: 'Down the coast', blurb: 'Seafront, scooters and sunshine', kind: 'style',
+    style: 'a 1960s seaside photograph: a busy beach and a promenade behind, 1960s swimwear, sharp ' +
+      'summer clothes and a parked scooter, saturated period colour film. ' + DECADE_FRAMING,
   },
 
   // 1970s
@@ -536,10 +534,13 @@ const POSE_KEEP = (pose: string) =>
   'the same expressions and where each person is looking. Do not straighten them up, ' +
   'do not turn them to face the camera, and do not rearrange them into a tidy group.';
 
-export function buildPrompt(effect: BoothEffect, pose?: string | null): string {
+export function buildPrompt(effect: BoothEffect, pose?: string | null, place?: string | null): string {
   const body = effect.caricature ? REALISTIC : `${REALISTIC} ${PROPORTIONS}`;
   const keepPose = pose ? ` ${POSE_KEEP(pose)}` : '';
-  return `${SAME_PEOPLE_FIRST}${keepPose} Now restyle the photo as ${effect.style} ` +
+  // Which country's version of this look (lib/booth-places.ts). Handed in
+  // rather than looked up, so the decades and the effects stay apart.
+  const where = place ? ` ${place}` : '';
+  return `${SAME_PEOPLE_FIRST}${keepPose} Now restyle the photo as ${effect.style}${where} ` +
     `${KEEP} ${body} ${NO_NAMES}${keepPose} ${SAME_PEOPLE_LAST}`;
 }
 

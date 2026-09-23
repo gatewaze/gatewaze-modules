@@ -252,20 +252,23 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   const [poseMode, setPoseMode] = useState<'off' | 'hour' | 'card'>('off');
   const [poseMinutes, setPoseMinutes] = useState(30);
   const [fingersPick, setFingersPick] = useState(false);
+  // How long before the event the getting-ready prompts appear.
+  const [readyHours, setReadyHours] = useState(36);
   useEffect(() => {
     if (!expanded) return;
     let cancelled = false;
     void supabase
       .from('events_media_booth_settings')
-      .select('era, pose_mode, pose_minutes, fingers_pick')
+      .select('era, pose_mode, pose_minutes, fingers_pick, ready_hours')
       .eq('event_id', eventId)
       .maybeSingle()
-      .then(({ data }: { data: { era?: string; pose_mode?: string; pose_minutes?: number; fingers_pick?: boolean } | null }) => {
+      .then(({ data }: { data: { era?: string; pose_mode?: string; pose_minutes?: number; fingers_pick?: boolean; ready_hours?: number } | null }) => {
         if (cancelled || !data) return;
         if (data.era) setBoothEra(data.era);
         if (data.pose_mode === 'hour' || data.pose_mode === 'card') setPoseMode(data.pose_mode);
         if (typeof data.pose_minutes === 'number') setPoseMinutes(data.pose_minutes);
         setFingersPick(data.fingers_pick === true);
+        if (typeof data.ready_hours === 'number') setReadyHours(data.ready_hours);
       });
     return () => { cancelled = true; };
   }, [expanded, eventId]);
@@ -756,6 +759,28 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                 }}
               />
               Let guests pick their look by holding up 1–5 fingers in the photo
+            </label>
+
+            {/* The morning before: prompts and a countdown, before the
+                event starts. */}
+            <label className="flex items-center gap-2 text-sm">
+              Getting ready opens
+              <select
+                value={String(readyHours)}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  const prev = readyHours;
+                  setReadyHours(next);
+                  void saveBooth({ ready_hours: next }, () => setReadyHours(prev),
+                    next === 0 ? 'The getting-ready prompts are off' : `Getting ready opens ${next} hours before`);
+                }}
+                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="0">Off</option>
+                {[12, 24, 36, 48, 72, 120].map((h) => (
+                  <option key={h} value={h}>{h} hours before the event</option>
+                ))}
+              </select>
             </label>
             {provider && !provider.configured ? (
               <p className="text-xs text-gray-500 mb-2">

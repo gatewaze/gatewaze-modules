@@ -34,6 +34,7 @@ import {
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
 import { BOOTH_POSES, boothPose, fingerLook, poseChangesAt, poseOfTheHour } from '../lib/booth-poses.js';
 import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js';
+import { BOOTH_PLACES, DEFAULT_PLACE, boothPlace, placeRail } from '../lib/booth-places.js';
 import { plateHasPeople, readFingers, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
@@ -471,7 +472,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const picker = theme.picker
       ? { ...theme.picker, tiles: theme.picker.tiles.filter((t) => keys.has(t.key)) }
       : null;
-    return { picker: picker && picker.tiles.length > 0 ? picker : null, eras, poses };
+    return {
+      picker: picker && picker.tiles.length > 0 ? picker : null,
+      eras,
+      poses,
+      // Britain or America: the same decades, each country's version
+      // (lib/booth-places.ts).
+      places: { options: BOOTH_PLACES, default: DEFAULT_PLACE },
+    };
   }
 
 
@@ -524,8 +532,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // The morning before: from a day and a half out until the event
       // starts, the app leads with things to photograph while everyone
       // is getting ready (lib/ready-prompts.ts).
-      ready: (() => {
-        const w = readyWindow(event.event_start, Date.now());
+      ready: await (async () => {
+        const { data: ms } = await supabase
+          .from('events_media_booth_settings')
+          .select('ready_hours')
+          .eq('event_id', link.event_id)
+          .maybeSingle();
+        const w = readyWindow(event.event_start, Date.now(), ms?.ready_hours ?? null);
         return {
           active: w.active,
           starts_at: w.starts_at,
@@ -1376,6 +1389,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // "Hold up one to five fingers": the photo chooses its own look from
     // the decade the guest is standing in.
     const wantsFingers = body['fingers'] === true;
+    // Whose version of the decade (lib/booth-places.ts); British unless
+    // the guest says otherwise.
+    const place = boothPlace(body['place']);
     const era = typeof body['decade'] === 'string' ? BOOTH_ERAS.find((e) => e.key === body['decade']) ?? null : null;
     // The guest's photo arrives as a data URL from the camera step so
     // it never has to be published before they have seen the result.
@@ -1454,7 +1470,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       }
       const result = filter
         ? await runSwap(toPublicUrl(filter.source_path), toPublicUrl(scratchPath))
-        : await runStyle(toPublicUrl(scratchPath), buildPrompt(effect!, pose?.prompt ?? null));
+        : await runStyle(
+          toPublicUrl(scratchPath),
+          // The decade the look belongs to decides which rail applies.
+          buildPrompt(effect!, pose?.prompt ?? null,
+            placeRail(BOOTH_ERAS.find((e) => e.looks.includes(effect!.id))?.key ?? null, place)),
+        );
       if (!result.ok) {
         const status = result.error === 'no_face' ? 422 : result.error === 'timeout' ? 504 : 502;
         if (result.error !== 'no_face') {
@@ -1480,12 +1501,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         look: filter ? `Be ${filter.label}` : effect!.label,
         lookId: filter ? `filter:${filter.id}` : effect!.id,
         pose: pose ? { id: pose.id, label: pose.label } : null,
+        place,
       });
       const wantsUrl = body['return'] === 'url';
       res.status(200).json({
         filter: filter ? { id: filter.id, label: filter.label } : null,
         effect: effect ? { id: effect.id, label: effect.label } : null,
         pose: pose ? { id: pose.id, label: pose.label } : null,
+        place,
         // What the booth read in their hand, so it can say so.
         fingers,
         media_id: kept?.mediaId ?? null,
@@ -1515,6 +1538,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     look: string;
     lookId: string;
     pose?: { id: string; label: string } | null;
+    place?: string | null;
   }): Promise<{ mediaId: string; url: string } | null> {
     const { link } = opts;
     const mediaId = newMediaId();
@@ -1551,6 +1575,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         look_id: opts.lookId,
         // What the booth asked them to do, when it asked for anything.
         ...(opts.pose ? { pose: opts.pose.id, pose_label: opts.pose.label } : {}),
+        ...(opts.place ? { place: opts.place } : {}),
         // Off the projector and out of the gallery until the guest posts it.
         posted: false,
       },
