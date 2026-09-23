@@ -317,7 +317,7 @@ describe('getLink: the illustrated booth', () => {
       { key: '1980s', x: 0.3, y: 0.2, w: 0.3, h: 0.2 }, { key: '1970s', x: 0.6, y: 0.2, w: 0.3, h: 0.2 },
     ] },
     eras: {
-      '1980s': { interior: ROOM, samples: { 'eighties-portrait': 'sample-eighties-portrait.webp' } },
+      '1980s': { interior: ROOM, samples: { 'uk-decade-1980s': 'sample-uk-decade-1980s.webp' } },
       '1970s': { interior: { ...ROOM, image: 'inside-1970s.webp' } },
     },
   };
@@ -350,8 +350,8 @@ describe('getLink: the illustrated booth', () => {
     expect(eighties.looks.uk).toHaveLength(6);
     expect(eighties.looks.us).toHaveLength(6);
     expect(eighties.looks.uk.map((l) => l.id)).not.toEqual(eighties.looks.us.map((l) => l.id));
-    expect(eighties.looks.uk.find((l) => l.id === 'eighties-portrait').sample)
-      .toContain(`/event/${EVENT_ID}/booth-theme/sample-eighties-portrait.webp`);
+    expect(eighties.looks.uk.find((l) => l.id === 'uk-decade-1980s').sample)
+      .toContain(`/event/${EVENT_ID}/booth-theme/sample-uk-decade-1980s.webp`);
     expect(eighties.looks.uk.find((l) => l.id === 'vhs-box').sample).toBeNull();
     expect(eighties.interior.image).toContain(`/event/${EVENT_ID}/booth-theme/inside.webp`);
     expect(booth.picker.tiles.map((t) => t.key)).toEqual(['1980s', '1970s']);
