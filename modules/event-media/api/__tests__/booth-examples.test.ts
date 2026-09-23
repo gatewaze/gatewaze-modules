@@ -12,7 +12,7 @@ function mockRes() {
   return res;
 }
 
-function makeDb({ people, theme = { version: 2, eras: { '1980s': { interior: {}, samples: { 'eighties-portrait': 'old.jpg' } } } } }) {
+function makeDb({ people, theme = { version: 2, eras: { '1980s': { interior: {}, samples: { 'uk-decade-1980s': 'old.jpg' } } } } }) {
   const state = { uploads: {} };
   const db = {
     from: () => {
@@ -62,7 +62,7 @@ describe('booth examples', () => {
     expect(calls[0].urls).toEqual([`https://pub.example/${dir}a.jpg`, `https://pub.example/${dir}b.jpg`, `https://pub.example/${dir}c.jpg`]);
     expect(calls[0].prompt).toMatch(/images 1 to 2 show Dan; image 3 shows Sarah/);
     const theme = JSON.parse(state.uploads[`event/${EVENT}/booth-theme/theme.json`]);
-    expect(theme.eras['1980s'].samples['eighties-portrait']).toMatch(/^sample-eighties-portrait-[a-z0-9]+\.jpg$/);
+    expect(theme.eras['1980s'].samples['uk-decade-1980s']).toMatch(/^sample-uk-decade-1980s-[a-z0-9]+\.jpg$/);
     // Eras the theme has no booth for are left out of it.
     expect(theme.eras['1950s']).toBeUndefined();
     const status = mockRes();
@@ -97,7 +97,7 @@ describe('booth examples', () => {
     await routes.start({ params: { eventId: EVENT } }, mockRes());
     await flush();
     const theme = JSON.parse(state.uploads[`event/${EVENT}/booth-theme/theme.json`]);
-    expect(theme.eras['1980s'].samples['eighties-portrait']).toBe('old.jpg');
+    expect(theme.eras['1980s'].samples['uk-decade-1980s']).toBe('old.jpg');
   });
 });
 

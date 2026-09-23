@@ -865,6 +865,46 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
       'bunting and union-jack paper hats, best frocks, blazers and knitted tank tops, sandwiches and lemonade, ' +
       'pale English daylight, faded period colour. ' + DECADE_FRAMING,
   },
+  {
+    id: 'uk-decade-1940s', label: 'Forties Britain', blurb: 'Utility clothes and a terraced street', kind: 'style',
+    style: 'a 1940s British street portrait: utility clothing, a tea dress and a demob suit, a terraced street or a village green behind, pale English daylight, faded period colour with fine grain. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-decade-1950s', label: 'Fifties Britain', blurb: 'Austerity smart and a corner shop', kind: 'style',
+    style: 'a 1950s British portrait: a belted day dress, a knitted tank top and a mac, a corner shop or a high street of small British cars behind, soft overcast light, faded period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-decade-1960s', label: 'Sixties Britain', blurb: 'Mod colour and a pop-art backdrop', kind: 'style',
+    style: 'a 1960s British mod photograph: a shift dress or a slim tailored suit with a polo neck, bold op-art colour blocks behind, crisp period colour film with slightly faded tones. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-decade-1970s', label: 'Seventies Britain', blurb: 'Brown, orange and a front room', kind: 'style',
+    style: 'a 1970s British portrait: wide lapels, a tank top and a maxi dress in brown, mustard and orange, a patterned front room with a gas fire behind, warm faded film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-decade-1980s', label: 'Eighties Britain', blurb: 'Shoulder pads and a high street', kind: 'style',
+    style: 'a 1980s British portrait: shoulder pads, a pussy-bow blouse or a shell suit, a high street with a red phone box behind, hard flash and saturated period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-decade-1990s', label: 'Nineties Britain', blurb: 'Parkas, trainers and a rainy street', kind: 'style',
+    style: 'a 1990s British portrait: a parka, a football shirt or a slip dress with chunky trainers, a rainy high street or a pebble-dashed estate behind, flat grey daylight, slightly soft film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-decade-2000s', label: 'Noughties Britain', blurb: 'Bootcut jeans and a going-out top', kind: 'style',
+    style: 'a 2000s British portrait: bootcut jeans and a going-out top, straightened hair and a beaded necklace, a town-centre bar or a shopping centre behind, harsh compact-camera flash. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-decade-2010s', label: 'Twenty-tens Britain', blurb: 'Skinny jeans and a pub garden', kind: 'style',
+    style: 'a 2010s British portrait: skinny jeans, a Breton top and a beanie, a pub garden or an East London brick wall behind, warm filtered phone-camera colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-decade-2020s', label: 'Twenties Britain', blurb: 'Knitted vests and soft daylight', kind: 'style',
+    style: 'a 2020s British portrait: tailored trousers, a knitted vest and chunky trainers, a bright British interior or a city street behind, soft overcast daylight, clean modern phone-portrait look. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-forties-tearoom', label: 'Tea room', blurb: 'China cups, a nippy, a cake stand', kind: 'style',
+    style: 'a 1940s British tea room photograph: white tablecloths, a china cup and a tiered cake stand, waitresses in black and white uniforms, wood panelling and net curtains, warm indoor light, faded period colour. ' + DECADE_FRAMING,
+  },
 ];
 
 /**
