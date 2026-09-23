@@ -227,6 +227,14 @@ const STYLES = `
   display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .bx-track::-webkit-scrollbar{display:none}
 .bx-slide{flex:0 0 100%;scroll-snap-align:center;display:flex;align-items:center;justify-content:center}
+.bx-zoom{position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.94);animation:bx-zoom-in 220ms cubic-bezier(.2,.7,.3,1) both;cursor:zoom-out}
+.bx-zoom img{max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;
+  animation:bx-zoom-img 260ms cubic-bezier(.2,.7,.3,1) both}
+.bx-zoom-hint{position:absolute;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);left:0;right:0;text-align:center;
+  font-size:13px;font-weight:600;color:rgba(255,255,255,.65)}
+@keyframes bx-zoom-in{from{opacity:0}to{opacity:1}}
+@keyframes bx-zoom-img{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:scale(1)}}
 .bx-polaroid{margin:0;border-radius:3px;box-shadow:0 22px 50px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.35);
   background:
     radial-gradient(circle at 8% 12%,rgba(170,130,70,.16),transparent 22%),
@@ -424,6 +432,9 @@ export default function BoothExperience(props: Props) {
   const [pictures, setPictures] = useState<BoothPicture[]>([])
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [carousel, setCarousel] = useState(false)
+  // Tapping a Polaroid opens the photograph full screen: people were
+  // pinching to zoom just to see it (watched, 2026-09-23).
+  const [zoomed, setZoomed] = useState<string | null>(null)
   const [slide, setSlide] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [postingId, setPostingId] = useState<string | null>(null)
@@ -828,12 +839,13 @@ export default function BoothExperience(props: Props) {
    * takes over and leaves the booth.
    */
   const stepBack = useCallback((): boolean => {
+    if (zoomed) { setZoomed(null); return true }
     if (carousel) { setCarousel(false); return true }
     if (confirmDelete) { setConfirmDelete(null); return true }
     if (inside) { leave(); return true }
     if (phase === 'board' && eras.length > 1) { setPhase('picker'); return true }
     return false
-  }, [carousel, confirmDelete, inside, leave, phase, eras.length])
+  }, [zoomed, carousel, confirmDelete, inside, leave, phase, eras.length])
 
   useEffect(() => { onBack?.(stepBack) }, [onBack, stepBack])
 
@@ -1321,7 +1333,12 @@ export default function BoothExperience(props: Props) {
                     }}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element -- local data URL */}
-                    <img src={p.image} alt={p.label ? `Your ${p.label} photo` : 'Your photo'} style={{ width: pol.photoW, height: pol.photoH }} />
+                    <img
+                      src={p.image}
+                      alt={p.label ? `Your ${p.label} photo` : 'Your photo'}
+                      style={{ width: pol.photoW, height: pol.photoH, cursor: 'zoom-in' }}
+                      onClick={() => setZoomed(p.image)}
+                    />
                     <figcaption style={{ height: pol.bottom }}>
                       {p.label && <span className="bx-hand">{p.label}</span>}
                       {p.note && <span className="bx-note-line">{p.note}</span>}
@@ -1386,6 +1403,14 @@ export default function BoothExperience(props: Props) {
                 <IconButton label="Delete" danger onClick={() => setConfirmDelete(current.id)} d={ICON.trash} />
               </div>
             </div>
+
+            {zoomed && (
+              <div className="bx-zoom" role="dialog" aria-label="Your photo, full screen" onClick={() => setZoomed(null)}>
+                {/* eslint-disable-next-line @next/next/no-img-element -- local data URL */}
+                <img src={zoomed} alt="Your photo" />
+                <p className="bx-zoom-hint">Tap to go back</p>
+              </div>
+            )}
 
             {confirming && (
               <div className="bx-sheet-wrap" onClick={() => setConfirmDelete(null)}>
