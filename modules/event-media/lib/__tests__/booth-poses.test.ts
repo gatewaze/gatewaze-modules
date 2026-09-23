@@ -64,7 +64,7 @@ describe('pose of the hour', () => {
 });
 
 describe('fingers choose the look', () => {
-  const looks = BOOTH_ERAS.find((e) => e.key === '1980s').looks;
+  const looks = BOOTH_ERAS.find((e) => e.key === '1980s').looks.uk;
 
   it('gives one look per finger, after the decade itself', () => {
     expect(looks).toHaveLength(6);

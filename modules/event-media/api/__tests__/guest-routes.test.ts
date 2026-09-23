@@ -346,9 +346,12 @@ describe('getLink: the illustrated booth', () => {
     const { booth } = res.body;
     expect(booth.eras.map((e) => e.key)).toEqual(['1970s', '1980s']);
     const eighties = booth.eras.find((e) => e.key === '1980s');
-    expect(eighties.looks).toHaveLength(6);
-    expect(eighties.looks.find((l) => l.id === 'top-gun').sample).toContain(`/event/${EVENT_ID}/booth-theme/sample-top-gun.webp`);
-    expect(eighties.looks.find((l) => l.id === 'synthwave').sample).toBeNull();
+    // A board per place, each with its own six looks.
+    expect(eighties.looks.uk).toHaveLength(6);
+    expect(eighties.looks.us).toHaveLength(6);
+    expect(eighties.looks.uk.map((l) => l.id)).not.toEqual(eighties.looks.us.map((l) => l.id));
+    expect(eighties.looks.uk.find((l) => l.id === 'top-gun').sample).toContain(`/event/${EVENT_ID}/booth-theme/sample-top-gun.webp`);
+    expect(eighties.looks.uk.find((l) => l.id === 'synthwave').sample).toBeNull();
     expect(eighties.interior.image).toContain(`/event/${EVENT_ID}/booth-theme/inside.webp`);
     expect(booth.picker.tiles.map((t) => t.key)).toEqual(['1980s', '1970s']);
   });
@@ -1288,13 +1291,22 @@ describe('poses and fingers in the booth', () => {
     expect(res.body.pose).toBeNull();
   });
 
+  it('picks from the American board when the guest has chosen America', async () => {
+    provider.readFingers.mockResolvedValue(2);
+    const { res } = await shoot({ fingers: true, decade: '1970s', place: 'us' });
+    const { BOOTH_ERAS } = await import('../../lib/booth-eras.js');
+    expect(res.body.effect.id).toBe(BOOTH_ERAS.find((e) => e.key === '1970s').looks.us[2]);
+    expect(res.body.place).toBe('us');
+  });
+
   it('lets the fingers in the photo choose the look', async () => {
     provider.readFingers.mockResolvedValue(3);
     const { res, supabase } = await shoot({ fingers: true, decade: '1970s', return: 'url' });
     expect(res.statusCode).toBe(200);
     // The 1970s looks, after the decade itself: the third is theirs.
     const { BOOTH_ERAS } = await import('../../lib/booth-eras.js');
-    const expected = BOOTH_ERAS.find((e) => e.key === '1970s').looks[3];
+    // The British board, since no place was asked for.
+    const expected = BOOTH_ERAS.find((e) => e.key === '1970s').looks.uk[3];
     expect(res.body.effect.id).toBe(expected);
     expect(res.body.fingers).toBe(3);
     const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');

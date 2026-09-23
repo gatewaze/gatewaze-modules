@@ -1,14 +1,30 @@
 // @ts-nocheck — vitest harness.
 
 import { describe, it, expect } from 'vitest';
-import { BOOTH_ERAS, eraLooksResolve, erasFor, isEraSetting } from '../booth-eras.js';
+import { BOOTH_ERAS, eraAllLooks, eraLooks, eraLooksResolve, erasFor, isEraSetting } from '../booth-eras.js';
 import { BOOTH_EFFECTS, buildPrompt, buildSamplePrompt } from '../booth-effects.js';
 
 describe('booth eras', () => {
-  it('gives every era exactly six looks, none repeated anywhere', () => {
-    const all = BOOTH_ERAS.flatMap((e) => e.looks);
-    for (const era of BOOTH_ERAS) expect(era.looks).toHaveLength(6);
+  it('gives every era six looks in each place, none repeated anywhere', () => {
+    const all = BOOTH_ERAS.flatMap((e) => eraAllLooks(e));
+    for (const era of BOOTH_ERAS) {
+      expect(eraLooks(era, 'uk')).toHaveLength(6);
+      expect(eraLooks(era, 'us')).toHaveLength(6);
+    }
     expect(new Set(all).size).toBe(all.length);
+  });
+
+  // The point of the two boards: a decade is not the same thing in
+  // Britain as in America (asked 2026-09-23).
+  it('makes the two boards genuinely different', () => {
+    for (const era of BOOTH_ERAS) {
+      const uk = eraLooks(era, 'uk');
+      const us = eraLooks(era, 'us');
+      expect(uk.filter((id) => us.includes(id))).toEqual([]);
+    }
+    // Anything but 'us' is the British board.
+    expect(eraLooks(BOOTH_ERAS[0], null)).toEqual(BOOTH_ERAS[0].looks.uk);
+    expect(eraLooks(BOOTH_ERAS[0], 'france')).toEqual(BOOTH_ERAS[0].looks.uk);
   });
 
   it('names only looks that exist as styles', () => {
@@ -18,7 +34,7 @@ describe('booth eras', () => {
   // The guard rails are the feature (see booth-effects.ts): every new look
   // goes out wrapped in them.
   it('sends every era look through the people-count and identity rules', () => {
-    for (const id of BOOTH_ERAS.flatMap((e) => e.looks)) {
+    for (const id of BOOTH_ERAS.flatMap((e) => eraAllLooks(e))) {
       const prompt = buildPrompt(BOOTH_EFFECTS.find((e) => e.id === id));
       expect(prompt).toMatch(/^CRITICAL RULE: reproduce exactly the same number of people/);
       expect(prompt).toMatch(/Keep the same people with their exact same faces/);

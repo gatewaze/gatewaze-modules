@@ -512,6 +512,228 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
       '2020s summer wedding-guest fashion such as floral midi dresses and relaxed linen suits, soft warm ' +
       'light. Style the existing hair into a 2020s shape but keep its colour and length. ' + DECADE_FRAMING,
   },
+
+  // ── America ────────────────────────────────────────────────────
+  // The same decades as the country next door remembers them. A guest
+  // picks British or American at the bottom of the decade page and the
+  // whole board changes (asked 2026-09-23); lib/booth-eras.ts decides
+  // which six belong to which decade and place.
+  {
+    id: 'us-decade-1940s', label: 'Forties America', blurb: 'Studio glamour and big-band nights', kind: 'style',
+    style: 'a 1940s American glamour photograph: Hollywood studio lighting, wide-shouldered suits and satin gowns, a supper-club backdrop, warm silver-screen tones. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-forties-pinup', label: 'Pin-up', blurb: 'Painted nose-art pin-up', kind: 'style',
+    style: 'a painted 1940s American pin-up illustration: bright flat colour, a cheerful posed figure, polka dots and high-waisted swimwear, an aircraft nose-art style background, no lettering at all. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-forties-silverscreen', label: 'Silver screen', blurb: 'Black-and-white star portrait', kind: 'style',
+    style: 'a black-and-white 1940s Hollywood studio portrait: dramatic side lighting, a soft glow, tailored evening wear, a plain grey studio backdrop, fine silver-gelatin grain. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-forties-soda', label: 'Soda fountain', blurb: 'Malt shop stools and sundaes', kind: 'style',
+    style: 'a 1940s American soda fountain photograph: chrome stools, a marble counter, tall sundae glasses, varsity sweaters and day dresses, warm colour film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-forties-usostage', label: 'Big band', blurb: 'Brass section and a swing stage', kind: 'style',
+    style: 'a 1940s American big-band stage photograph: a bandstand with brass instruments and music stands, dance-hall couples mid-swing, warm stage light, period colour film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-forties-route66', label: 'Route 66', blurb: 'Desert highway and a chrome car', kind: 'style',
+    style: 'a 1940s American road trip photograph: a chrome-grilled car on a desert highway, red rock country behind, travel clothes and sunglasses, saturated period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-decade-1950s', label: 'Fifties America', blurb: 'Chrome, pastels and picket fences', kind: 'style',
+    style: 'a 1950s American photograph: pastel colours, full circle skirts and letterman jackets, a chrome-trimmed setting, bright saturated Kodachrome colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-fifties-diner', label: 'Chrome diner', blurb: 'Booths, jukebox and milkshakes', kind: 'style',
+    style: 'a 1950s American diner photograph: red vinyl booths, a jukebox, milkshakes and chrome trim, waitress uniforms and rolled jeans, saturated Kodachrome colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-fifties-drivein-us', label: 'Drive-in', blurb: 'Tail fins and a lit-up screen', kind: 'style',
+    style: 'a 1950s American drive-in movie photograph: a finned car in the foreground, a glowing screen behind, blankets and popcorn, deep night colour with a warm glow. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-fifties-rocknroll-us', label: 'Rock and roll', blurb: 'Quiffs, record hop, stage lights', kind: 'style',
+    style: 'a 1950s American rock and roll record-hop photograph: a stage with a microphone stand, quiffs and poodle skirts, dancers behind, high-contrast period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-fifties-suburbia', label: 'Backyard barbecue', blurb: 'Picket fence and a station wagon', kind: 'style',
+    style: 'a 1950s American suburban backyard photograph: a picket fence, a barbecue and a station wagon on the drive, aprons and short-sleeved shirts, bright cheerful colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-fifties-hotrod', label: 'Hot rod', blurb: 'Flames, chrome and a drag strip', kind: 'style',
+    style: 'a 1950s American hot rod photograph: a flame-painted coupe at a drag strip, oil-stained overalls and cuffed jeans, dust and heat haze, saturated period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-decade-1960s', label: 'Sixties America', blurb: 'Shift dresses and muscle cars', kind: 'style',
+    style: 'a 1960s American photograph: a shift dress or a sharp narrow suit, a muscle car and a sunlit street behind, bright optimistic colour film of the period. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-sixties-madison', label: 'Madison Avenue', blurb: 'Office glamour and old fashioneds', kind: 'style',
+    style: 'a 1960s American advertising-office photograph: wood-panelled walls, a drinks trolley, narrow ties and sheath dresses, cigarette smoke and warm lamplight. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-sixties-surf', label: 'Surf party', blurb: 'Boards, sand and Kodachrome sun', kind: 'style',
+    style: 'a 1960s American beach party photograph: surfboards, striped towels, period swimwear, a bright sandy beach and turquoise Pacific behind, saturated Kodachrome colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-sixties-motown', label: 'Motown revue', blurb: 'Sequins, a revue stage, brass', kind: 'style',
+    style: 'a 1960s American soul revue photograph: matching sequinned stage outfits, a microphone and a brass section behind, warm stage lighting, rich period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-sixties-woodstock', label: 'Woodstock', blurb: 'Festival field and painted swirls', kind: 'style',
+    style: 'a 1969 American music festival photograph: a muddy field and a distant stage, fringed suede, denim and beads, swirling psychedelic colour washes, warm faded film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-sixties-cape', label: 'Cape Canaveral', blurb: 'Silver suits and a launch gantry', kind: 'style',
+    style: 'a 1960s American space programme portrait: silver pressure suits with helmets under the arm, a launch gantry and a rocket behind, bright period colour, no logos, flags, badges or lettering. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-decade-1970s', label: 'Seventies America', blurb: 'Tan, gold and wide collars', kind: 'style',
+    style: 'a 1970s American photograph: wide collars, denim and halter dresses in tan, gold and brown, a sunlit street or a wood-panelled room, warm faded film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-seventies-studio', label: 'Studio disco', blurb: 'Mirror ball and a velvet rope', kind: 'style',
+    style: 'a 1970s American disco photograph: a mirror ball, a crowded dance floor and a velvet rope, sequins, satin and platform shoes, glittering warm light. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-seventies-van', label: 'Road trip', blurb: 'Painted van and a canyon road', kind: 'style',
+    style: 'a 1970s American road trip photograph: a painted camper van on a canyon road, flared jeans and sunglasses, dust and golden late light, warm faded colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-seventies-copshow', label: 'Cop show', blurb: 'Moustaches and a muscle car', kind: 'style',
+    style: 'a 1970s American police drama still: a brown leather jacket and aviator sunglasses, a muscle car at a city kerb, grainy warm film, dramatic low sun. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-seventies-rollerdisco', label: 'Roller disco', blurb: 'Tube socks and a rink', kind: 'style',
+    style: 'a 1970s American roller disco photograph: a wooden rink under coloured lights, satin shorts, tube socks and quad skates, motion and glitter. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-seventies-rodeo', label: 'Rodeo', blurb: 'Fringe, denim and a dusty arena', kind: 'style',
+    style: 'a 1970s American rodeo photograph: a dusty arena and a wooden fence, denim, fringe, a belt buckle and a felt hat, hot dusty light, warm period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-decade-1980s', label: 'Eighties America', blurb: 'Neon, pastels and big hair', kind: 'style',
+    style: 'a 1980s American photograph: pastel blazers with rolled sleeves, neon accents and a mall or a lit street behind, bright flash-lit period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-eighties-mall', label: 'Mall rats', blurb: 'Food court, fountain, high tops', kind: 'style',
+    style: 'a 1980s American shopping mall photograph: a tiled fountain and neon shop signs, acid-wash denim and high-top trainers, flash-lit bright colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-eighties-miami', label: 'Miami nights', blurb: 'Pastel suits and a neon strip', kind: 'style',
+    style: 'a 1980s Miami photograph: pastel linen suits with rolled sleeves, palm trees and neon hotel signs, a convertible on a night strip, saturated neon colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-eighties-prom', label: 'Senior prom', blurb: 'Taffeta, corsages and a balloon arch', kind: 'style',
+    style: 'a 1980s American high-school prom photograph: a balloon arch and a glittery backdrop, taffeta gowns, corsages and rented tuxedos, flash-lit studio colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-eighties-aerobics', label: 'Aerobics', blurb: 'Leotards, leg warmers, neon studio', kind: 'style',
+    style: 'a 1980s American aerobics photograph: a mirrored studio with neon lines, leotards, headbands and leg warmers, bright flash-lit colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-eighties-arcade', label: 'Arcade', blurb: 'Cabinet glow and quarters', kind: 'style',
+    style: 'a 1980s American arcade photograph: rows of glowing cabinets in a dark room, denim jackets and slogan tees, coloured screen light on faces. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-decade-1990s', label: 'Nineties America', blurb: 'Flannel, denim and a mall photo', kind: 'style',
+    style: 'a 1990s American photograph: flannel shirts, baggy jeans and cropped tops, a suburban street or mall behind, slightly soft point-and-shoot colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-nineties-sitcom-us', label: 'Sitcom', blurb: 'Studio apartment and a laugh track', kind: 'style',
+    style: 'a 1990s American sitcom still: a warm studio-lit apartment set with a big sofa, casual nineties clothes, flat television lighting, period video colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-nineties-seattle', label: 'Seattle grunge', blurb: 'Flannel, rain and a club', kind: 'style',
+    style: 'a 1990s American grunge photograph: a dark club or a rainy street, flannel over band tees, ripped jeans and boots, desaturated grainy film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-nineties-hiphop', label: 'Hip hop video', blurb: 'Gold, tracksuits and a block party', kind: 'style',
+    style: 'a 1990s American hip hop video still: a city block party, tracksuits, bucket hats and chunky chains, a wide-angle camcorder look with strong colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-nineties-yearbook-us', label: 'Yearbook', blurb: 'Laser backdrop and a stiff smile', kind: 'style',
+    style: 'a 1990s American school yearbook portrait: a mottled blue studio backdrop or a laser-beam background, a polo shirt or a knitted cardigan, hard flash, slightly soft focus. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-nineties-camp', label: 'Summer camp', blurb: 'Lake, canoes and matching tees', kind: 'style',
+    style: 'a 1990s American summer camp photograph: a lake and canoes behind, matching camp tee shirts and friendship bracelets, bright sunny point-and-shoot colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-decade-2000s', label: 'Noughties America', blurb: 'Low-rise, velour and flash', kind: 'style',
+    style: 'a 2000s American photograph: low-rise jeans, velour tracksuits and trucker caps, a mall or a parking lot behind, harsh digital flash and slight over-sharpening. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-noughties-mtv', label: 'Music channel', blurb: 'Mansion, bling and a camcorder', kind: 'style',
+    style: 'a 2000s American music-channel still: a glossy mansion interior, designer tracksuits and sunglasses indoors, chunky jewellery, wide-angle camcorder look. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-noughties-teenpop', label: 'Teen pop', blurb: 'Stage pyro and a headset mic', kind: 'style',
+    style: 'a 2000s American pop concert photograph: a stage with pyrotechnics and a headset microphone, low-rise trousers and crop tops, hard stage lighting, digital colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-noughties-redcarpet-us', label: 'Red carpet', blurb: 'Step and repeat, flashbulbs', kind: 'style',
+    style: 'a 2000s American red carpet photograph: a step-and-repeat wall with no readable lettering, gowns and dark suits, a wall of camera flashes, hard flash-lit colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-noughties-teenmovie', label: 'Teen movie', blurb: 'Lockers, letterman, lunch trays', kind: 'style',
+    style: 'a 2000s American teen movie still: a high-school corridor of lockers or a cafeteria, letterman jackets and layered tees, bright glossy film colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-noughties-webcam-us', label: 'Webcam', blurb: 'Low-res, bedroom, mirror shot', kind: 'style',
+    style: 'a 2000s American webcam photograph: a bedroom with posters, a low-resolution grainy webcam look, flash in a mirror, hoodies and side-swept fringes. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-decade-2010s', label: 'Twenty-tens America', blurb: 'Brunch, plaid and a filter', kind: 'style',
+    style: 'a 2010s American photograph: plaid shirts, athleisure and a snapback, a coffee shop or a sunny street behind, a warm filtered phone-camera look. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-tens-coachella', label: 'Desert festival', blurb: 'Flower crowns and a ferris wheel', kind: 'style',
+    style: 'a 2010s American desert festival photograph: a ferris wheel and palms behind, fringed kimonos, cut-offs and flower crowns, hazy golden light. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-tens-brooklyn', label: 'Loft party', blurb: 'Exposed brick and string lights', kind: 'style',
+    style: 'a 2010s American loft party photograph: exposed brick, string lights and a record player, beards, denim jackets and slogan tees, warm low light. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-tens-superhero', label: 'Superhero', blurb: 'City skyline and a hero stance', kind: 'style',
+    style: 'a 2010s American superhero film still: a city skyline at dusk, sleek textured costumes with no logos or lettering, dramatic rim lighting, cinematic teal and orange. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-tens-bigsur', label: 'Coast road', blurb: 'Cliffs, a convertible and fog', kind: 'style',
+    style: 'a 2010s American coastal road trip photograph: cliffs, fog and a convertible on a coast road, denim and sunglasses, crisp cinematic colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-tens-brunch', label: 'Brunch', blurb: 'Pancakes, mimosas and marble', kind: 'style',
+    style: 'a 2010s American brunch photograph: a marble table with pancakes and mimosas, bright airy daylight, casual smart clothes, clean crisp digital colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-decade-2020s', label: 'Twenties America', blurb: 'Clean tailoring and portrait mode', kind: 'style',
+    style: 'a 2020s American photograph: oversized tailoring and trainers, a sunlit street or a bright interior, clean modern phone-portrait look with soft background blur. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-twenties-rooftop', label: 'Rooftop', blurb: 'City lights and a warm night', kind: 'style',
+    style: 'a 2020s American rooftop photograph: string lights and a lit city skyline behind, smart casual modern clothes, warm night colour with soft bokeh. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-twenties-film', label: 'Film revival', blurb: '35mm grain and flash', kind: 'style',
+    style: 'a 2020s photograph taken on 35mm film with an on-camera flash: slight grain, soft halation on highlights, natural skin tones, a candid party moment. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-twenties-prestige', label: 'Prestige drama', blurb: 'Moody light and shallow focus', kind: 'style',
+    style: 'a still from a 2020s American prestige television drama: moody directional lighting, muted colour grading, shallow focus, restrained modern clothes. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-twenties-street', label: 'Streetwear', blurb: 'Clean lines and a concrete wall', kind: 'style',
+    style: 'a 2020s American streetwear photograph: a plain concrete wall, oversized layers and box-fresh trainers, crisp daylight, no logos or lettering. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'us-twenties-desert', label: 'Desert party', blurb: 'Long shadows and warm dust', kind: 'style',
+    style: 'a 2020s American desert gathering photograph: sand, long shadows and a low sun, linen and sunglasses, warm dusty colour. ' + DECADE_FRAMING,
+  },
 ];
 
 /**
@@ -553,6 +775,8 @@ export function buildPrompt(effect: BoothEffect, pose?: string | null, place?: s
 export function buildSamplePrompt(
   effect: BoothEffect,
   people: ReadonlyArray<{ name: string; photos: number }>,
+  /** Whose version of the decade (lib/booth-places.ts). */
+  place?: string | null,
 ): string {
   const n = people.length;
   let first = 1;
@@ -565,7 +789,7 @@ export function buildSamplePrompt(
   const body = effect.caricature ? REALISTIC : `${REALISTIC} ${PROPORTIONS}`;
   return `These are reference photos: ${who}. CRITICAL RULE: create one new photograph showing ${count}, ` +
     `${n === 1 ? 'that person' : 'these people together'}, and no one else. ` +
-    `Make it ${effect.style} Frame them from about the waist up, facing the camera, close enough that ` +
+    `Make it ${effect.style}${place ? ` ${place}` : ''} Frame them from about the waist up, facing the camera, close enough that ` +
     `every face is large and clear. Keep each person's exact face, features, skin tone, eyeglasses and ` +
     `identity from their reference photos. Do not beautify them. Photorealistic. ${body} ${NO_NAMES} ` +
     `Reminder: ${count} in the picture, each exactly as in their references.`;

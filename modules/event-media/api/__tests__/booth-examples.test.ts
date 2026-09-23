@@ -56,7 +56,8 @@ describe('booth examples', () => {
     await routes.start({ params: { eventId: EVENT } }, res);
     expect(res.statusCode).toBe(202);
     await flush();
-    const looks = BOOTH_ERAS.flatMap((e) => e.looks).length;
+    // Both boards: every look in Britain and in America.
+    const looks = BOOTH_ERAS.flatMap((e) => [...e.looks.uk, ...e.looks.us]).length;
     expect(calls).toHaveLength(looks);
     expect(calls[0].urls).toEqual([`https://pub.example/${dir}a.jpg`, `https://pub.example/${dir}b.jpg`, `https://pub.example/${dir}c.jpg`]);
     expect(calls[0].prompt).toMatch(/images 1 to 2 show Dan; image 3 shows Sarah/);
