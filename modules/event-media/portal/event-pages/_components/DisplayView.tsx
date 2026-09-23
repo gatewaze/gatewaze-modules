@@ -1276,6 +1276,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
    * snapshots, where filling the cell looks better than letterboxing.
    */
   const wallFit = (view.columns ?? 0) > 0 ? 'object-contain' : 'object-cover'
+  // The wall, with the 3D renderer in every cell.
+  const wallCinematic = view.mode === 'wall' && view.effect === 'cinematic'
 
   const wedflixActive = view.effect === 'wedflix'
   const cinematicActive = view.effect === 'cinematic' || wedflixActive
@@ -1410,6 +1412,30 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
         >
           {wallCells.map((cell, i) => (
             <div key={i} className="relative overflow-hidden bg-black">
+              {/* A wall can be cinematic too: each cell runs the same
+                  renderer as a full-screen slide, on its own photo. The
+                  renderer cross-fades between photos itself, so the cell
+                  keeps one instance and changes its layers (asked
+                  2026-09-23). It is a 2D canvas, so a row of them costs
+                  little. */}
+              {wallCinematic && cell.current ? (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- ambient fill */}
+                  <img src={cell.current.variants?.medium || cell.current.url} alt="" aria-hidden="true" className="bx-none bx-ambient-wall" style={{ position: 'absolute', inset: '-6%', width: '112%', height: '112%', objectFit: 'cover', filter: 'blur(38px) brightness(.45) saturate(1.2)' }} />
+                  <CinematicPhoto
+                    src={displaySrc(cell.current)}
+                    plateSrc={cell.current.variants?.plate ?? null}
+                    cutoutSrc={cell.current.variants?.cutout ?? null}
+                    depthSrc={cell.current.variants?.depth ?? null}
+                    fill={settings.fillBars}
+                    depthStrength={settings.depthStrength ?? 1}
+                    camera={view.camera}
+                    blurTransition={view.blurTransition ?? true}
+                    durationMs={Math.max(view.intervalMs, 2000)}
+                    className="absolute inset-0 w-full h-full"
+                  />
+                </>
+              ) : (<>
               {cell.previous && cell.previous.id !== cell.current?.id && (
                 // Fades out as the new one fades in. It used to stay put
                 // underneath, so a smaller incoming photo left the old one
@@ -1429,6 +1455,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                   style={{ animation: slideAnimation(view.effect, cell.current.id, view.intervalMs) }}
                 />
               )}
+              </>)}
             </div>
           ))}
           {pool.length === 0 && (

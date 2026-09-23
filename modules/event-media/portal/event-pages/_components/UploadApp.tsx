@@ -145,6 +145,8 @@ const STYLES = `
 .ua-mini{font-size:12px;font-weight:700;border-radius:8px;padding:6px 10px;background:rgba(255,255,255,.14)}
 .ua-mini-danger{background:#b42318}
 .ua-empty{margin-top:18px;text-align:center;font-size:14px;color:rgba(255,255,255,.55);line-height:1.5}
+.ua-more-wrap{display:flex;justify-content:center;min-height:52px;align-items:center}
+.ua-more-note{font-size:13px;color:rgba(255,255,255,.6)}
 .ua-more{display:block;margin:16px auto 0;height:42px;padding:0 20px;border-radius:999px;font-size:14px;font-weight:700;background:rgba(255,255,255,.1)}
 .ua-view{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.96)}
 .ua-vtrack{position:absolute;inset:0;display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;
@@ -210,6 +212,8 @@ export default function UploadApp(props: Props) {
   const trackRef = useRef<HTMLDivElement | null>(null)
   // One hidden camera input per ask, so each opens the right camera.
   const selfieRef = useRef<HTMLInputElement | null>(null)
+  // The end of the list: seeing it loads the next page.
+  const moreRef = useRef<HTMLDivElement | null>(null)
 
   // The portal's own animated background shows through; the event page
   // itself does not. That background is a fixed, pointer-events:none layer
@@ -244,6 +248,16 @@ export default function UploadApp(props: Props) {
       : everyone.map((it) => ({ id: it.id, src: it.variants?.medium || it.url, isVideo: it.kind === 'video' }))
     : []
   const viewIndex = viewing ? Math.max(0, viewList.findIndex((v) => v.id === viewing.id)) : 0
+
+  useEffect(() => {
+    const end = moreRef.current
+    if (!end || !hasMore || loadingMore || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onLoadMore()
+    }, { rootMargin: '400px' })
+    io.observe(end)
+    return () => io.disconnect()
+  }, [hasMore, loadingMore, onLoadMore, tab, everyone.length])
 
   /** Go to a slide: the track scrolls, and scrolling sets the photo. */
   const goTo = (i: number, smooth = true) => {
@@ -464,9 +478,14 @@ export default function UploadApp(props: Props) {
                     </div>
                   )}
                 {hasMore && (
-                  <button type="button" className="ua-more" disabled={loadingMore} onClick={onLoadMore}>
-                    {loadingMore ? 'Loading…' : 'Show more'}
-                  </button>
+                  // Scrolling to the end asks for the next page. The
+                  // button stays as the fallback for a browser without
+                  // IntersectionObserver, and while a page is coming.
+                  <div ref={moreRef} className="ua-more-wrap">
+                    {loadingMore
+                      ? <p className="ua-more-note">Loading…</p>
+                      : <button type="button" className="ua-more" onClick={onLoadMore}>Show more</button>}
+                  </div>
                 )}
               </>
             )}

@@ -1197,6 +1197,30 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
    * the server, so nobody else can choose it. Resolves to an error message
    * for the picker to show, or null once it is theirs.
    */
+  /**
+   * The phone's Back button walks back through the app rather than out
+   * of it (asked 2026-09-23). Every screen pushes a history entry; Back
+   * pops one, and the booth steps back a screen -- out of the Polaroids,
+   * out of the booth, back to the decades -- or, at the decade picker,
+   * the app returns to the wedding photos.
+   *
+   * These live above the page's early returns so they run on every
+   * render; the current screen reaches them through a ref, set below.
+   */
+  const boothBackRef = useRef<(() => boolean) | null>(null)
+  const sectionRef = useRef<'upload' | 'booth'>('upload')
+  const pushScreen = useCallback(() => {
+    try { window.history.pushState({ em: Date.now() }, '') } catch { /* older browser */ }
+  }, [])
+  useEffect(() => {
+    const onPop = () => {
+      if (boothBackRef.current?.()) return
+      if (sectionRef.current === 'booth') setSection('upload')
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
   const pickGuest = useCallback(async (g: { id: string; name: string }): Promise<string | null> => {
     if (!code) return 'Something went wrong — try again.'
     const clientId = deviceIdFor(eventIdentifier)
@@ -1344,6 +1368,9 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // page behaves exactly as it did before.
   const boothOpen = canUpload && !needsName && (boothFaces.length > 0 || boothStyles.length > 0)
   const activeSection = boothOpen ? section : 'upload'
+  sectionRef.current = activeSection
+
+
   // With a theme, the booth is a place you walk into rather than a card:
   // full screen, over everything, on phones and desktops alike.
   const boothTheme = link?.booth && link.booth.eras.length > 0 ? link.booth : null
@@ -2023,6 +2050,8 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       generating={Boolean(shot?.busy) || boothFinishing}
       primaryColor={primaryColor}
       openAt={openBoothAt}
+      onDeeper={pushScreen}
+      onBack={(step) => { boothBackRef.current = step }}
       onCaptured={onBoothCaptured}
       onFallbackCamera={onBoothFallback}
       onAccept={acceptShot}

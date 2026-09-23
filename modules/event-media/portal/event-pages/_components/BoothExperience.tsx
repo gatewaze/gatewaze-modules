@@ -141,6 +141,14 @@ interface Props {
   /** Take one back off the big screen. */
   onUnpostKept: (mediaId: string) => Promise<boolean>
   /**
+   * Each screen the guest goes into is a step, so the phone's Back
+   * button comes back out of it rather than leaving the site (asked
+   * 2026-09-23). Called when the booth goes a screen deeper; `onBack`
+   * is handed a function that steps back and says whether it could.
+   */
+  onDeeper?: () => void
+  onBack?: (step: () => boolean) => void
+  /**
    * A link straight to one look: open inside that decade's booth with the
    * camera running, skipping the decade picker and the board. Ignored
    * when the decade or the look is not one this event offers.
@@ -398,7 +406,7 @@ export default function BoothExperience(props: Props) {
     booth, effects, faces, shot, progress, statusText, generating, primaryColor,
     onCaptured, onFallbackCamera, onAccept, onSave, onDiscard, onOriginal, onClose,
     historyKey, onPostImage, onSaveImage, onRemoveUpload, onPostKept, onUnpostKept,
-    openAt,
+    openAt, onDeeper, onBack,
   } = props
 
   const [vp, setVp] = useState({ w: 390, h: 844 })
@@ -757,6 +765,7 @@ export default function BoothExperience(props: Props) {
   const enter = useCallback((chosen: BoothLook | null, tileIndex: number | null) => {
     if (phase !== 'board') return
     setPressed(tileIndex)
+    onDeeper?.()
     // A fresh card each sitting, so nobody gets the same one twice over.
     if (poses?.mode === 'card' && poses.all.length > 0) {
       const deck = poses.all
@@ -776,6 +785,7 @@ export default function BoothExperience(props: Props) {
   const chooseEra = useCallback((key: string, tileIndex: number | null) => {
     if (phase !== 'picker') return
     setPressed(tileIndex)
+    onDeeper?.()
     later(() => {
       setEraKey(key)
       setPhase('board')
@@ -840,6 +850,21 @@ export default function BoothExperience(props: Props) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [inside])
+
+  /**
+   * One screen back: out of the Polaroids, out of the booth, back to the
+   * decades. Returns false at the decade picker, where the page itself
+   * takes over and leaves the booth.
+   */
+  const stepBack = useCallback((): boolean => {
+    if (carousel) { setCarousel(false); return true }
+    if (confirmDelete) { setConfirmDelete(null); return true }
+    if (inside) { leave(); return true }
+    if (phase === 'board' && eras.length > 1) { setPhase('picker'); return true }
+    return false
+  }, [carousel, confirmDelete, inside, leave, phase, eras.length])
+
+  useEffect(() => { onBack?.(stepBack) }, [onBack, stepBack])
 
   const capture = useCallback(() => {
     const v = videoRef.current
