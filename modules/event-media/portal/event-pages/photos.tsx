@@ -1279,14 +1279,6 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
    * can be ticked off (and so the list keeps moving through the day).
    */
   const readyPayload = link?.ready?.active ? link.ready : null
-  const [askedDone, setAskedDone] = useState<string[]>([])
-  useEffect(() => {
-    if (!readyPayload) return
-    try {
-      const saved = JSON.parse(localStorage.getItem(`event_media_asks:${eventIdentifier}`) || '[]')
-      if (Array.isArray(saved)) setAskedDone(saved.filter((x) => typeof x === 'string'))
-    } catch { /* private mode */ }
-  }, [readyPayload, eventIdentifier])
   const [readyTick, setReadyTick] = useState(() => Date.now())
   useEffect(() => {
     if (!readyPayload) return
@@ -1302,18 +1294,14 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     const countdown = hours >= 1
       ? `${hours} hour${hours === 1 ? '' : 's'} ${mins} min to go`
       : `${mins} minute${mins === 1 ? '' : 's'} to go`
-    return { countdown, prompts: readyPayload.prompts, done: askedDone }
+    return { countdown }
   })()
 
-  const onPrompt = useCallback((prompt: { id: string; camera: 'user' | 'environment' }, files: FileList) => {
+  /** A selfie taken on the spot while getting ready. */
+  const onSelfie = useCallback((files: FileList) => {
     setUploadNotice(null)
-    enqueueFiles(files, true, false, undefined, prompt.id)
-    setAskedDone((done) => {
-      const next = done.includes(prompt.id) ? done : [...done, prompt.id]
-      try { localStorage.setItem(`event_media_asks:${eventIdentifier}`, JSON.stringify(next)) } catch { /* ignore */ }
-      return next
-    })
-  }, [enqueueFiles, eventIdentifier])
+    enqueueFiles(files, true)
+  }, [enqueueFiles])
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -2003,7 +1991,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       eventName={link!.event.name ?? 'Event photos'}
       pose={posePrompt}
       ready={readyProps}
-      onPrompt={onPrompt}
+      onSelfie={onSelfie}
       primaryColor={primaryColor}
       nameStep={nameStep}
       guestName={guest?.name ?? null}
