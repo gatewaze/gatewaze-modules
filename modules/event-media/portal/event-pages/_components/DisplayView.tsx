@@ -1228,7 +1228,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       if (toggle) {
         e.preventDefault()
         setShowHint(false)
-        setMenuVisible((v) => !v)
+        setMenuVisible((v) => {
+          if (!v) setEditing(activeStreamRef.current)
+          return !v
+        })
         return
       }
       // A presenter's clicker: its next and previous buttons send the
@@ -1789,7 +1792,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                 <Chip
                   key={val}
                   on={edited.camera === val}
-                  onClick={() => updateSettings({ camera: val })}
+                  onClick={() => updateStream({ camera: val })}
                 >
                   {label}
                 </Chip>
