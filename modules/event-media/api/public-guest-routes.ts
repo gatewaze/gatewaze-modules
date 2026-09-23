@@ -413,7 +413,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    */
   function boardSized(url: string | null): string | null {
     return url && url.includes('/storage/v1/object/public/')
-      ? `${url.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')}?width=480&quality=80`
+      ? `${url.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')}?width=480&resize=contain&quality=80`
       : url;
   }
 
