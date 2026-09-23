@@ -425,7 +425,6 @@ export default function BoothExperience(props: Props) {
   const [count, setCount] = useState<number | null>(null)
   const [coinDrop, setCoinDrop] = useState(false)
   const [flash, setFlash] = useState(0)
-  const [moreOpen, setMoreOpen] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   // The Polaroids: every picture the booth has made on this phone.
   const [pictures, setPictures] = useState<BoothPicture[]>([])
@@ -758,7 +757,6 @@ export default function BoothExperience(props: Props) {
   const enter = useCallback((chosen: BoothLook | null, tileIndex: number | null) => {
     if (phase !== 'board') return
     setPressed(tileIndex)
-    setMoreOpen(false)
     // A fresh card each sitting, so nobody gets the same one twice over.
     if (poses?.mode === 'card' && poses.all.length > 0) {
       const deck = poses.all
@@ -930,10 +928,6 @@ export default function BoothExperience(props: Props) {
     pointerEvents: phase === 'inside' ? 'auto' : 'none',
   } as const
 
-  // "More looks": the reference faces, and any look no era offers.
-  const eraLooks = new Set(eras.flatMap((e) => allLooksOf(e).map((l) => l.id)))
-  const extraEffects = effects.filter((e) => !eraLooks.has(e.id))
-  const hasMore = faces.length > 0 || extraEffects.length > 0
   const lookOf = (id: string): BoothLook => {
     const l = looksHere.find((x) => x.id === id)
     return { key: id, payload: { effect: id }, label: l?.label ?? effects.find((e) => e.id === id)?.label ?? id }
@@ -1000,7 +994,7 @@ export default function BoothExperience(props: Props) {
         const pic = t.window && pictureOf ? pictureOf(t.key) : null
         return pic ? (
           // eslint-disable-next-line @next/next/no-img-element -- sample picture
-          <img key={`pic-${t.key}-${i}`} src={pic} alt="" draggable={false} className="bx-window-pic" style={pctStyle(t.window!)} />
+          <img key={`pic-${t.key}-${i}`} src={pic} alt="" draggable={false} loading="lazy" decoding="async" className="bx-window-pic" style={pctStyle(t.window!)} />
         ) : null
       })}
       {art.tiles.map((t, i) => (
@@ -1047,7 +1041,7 @@ export default function BoothExperience(props: Props) {
             >
               {it.image
                 // eslint-disable-next-line @next/next/no-img-element -- sample picture
-                ? <img src={it.image} alt="" draggable={false} />
+                ? <img src={it.image} alt="" draggable={false} loading="lazy" decoding="async" />
                 : <span className="bx-card-blank" />}
               <span className="bx-card-label">
                 <b>{it.label}</b>
@@ -1105,7 +1099,6 @@ export default function BoothExperience(props: Props) {
               'Choose your look',
               looksHere.map((l) => ({ key: l.id, label: l.label, blurb: l.blurb, image: l.sample, aria: `${l.label} look` })),
               (k, i) => enter(lookOf(k), i),
-              hasMore,
             )}
 
         {onPicker && (booth.places?.options.length ?? 0) > 1 && (
@@ -1127,16 +1120,6 @@ export default function BoothExperience(props: Props) {
           </div>
         )}
 
-        {hasMore && phase === 'board' && era.board && !landscape && (
-          <button
-            type="button"
-            onClick={() => setMoreOpen(true)}
-            className="bx-more bx-glass"
-            style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 18px)' }}
-          >
-            More looks
-          </button>
-        )}
       </div>
 
       {/* ── Inside ───────────────────────────────────────────────── */}
@@ -1448,51 +1431,6 @@ export default function BoothExperience(props: Props) {
       })()}
 
       {/* ── More looks: the faces, and any look not on the board ──── */}
-      {moreOpen && (
-        <div className="bx-sheet-wrap" onClick={() => setMoreOpen(false)}>
-          <div className="bx-scrim" />
-          <div
-            className="bx-sheet bx-glass"
-            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="bx-grip" />
-            {faces.length > 0 && (
-              <div className="bx-faces">
-                {faces.map((f) => (
-                  <button
-                    key={f.id}
-                    type="button"
-                    onClick={() => enter({
-                      key: `filter:${f.id}`, payload: { filter_id: f.id }, label: `Be ${f.label}`,
-                    }, null)}
-                    className="bx-face"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element -- reference face */}
-                    <img src={f.preview} alt="" />
-                    Be {f.label}
-                  </button>
-                ))}
-              </div>
-            )}
-            {extraEffects.length > 0 && (
-              <div className="bx-looks">
-                {extraEffects.map((e) => (
-                  <button
-                    key={e.id}
-                    type="button"
-                    onClick={() => enter({ key: e.id, payload: { effect: e.id }, label: e.label }, null)}
-                    className="bx-look"
-                  >
-                    <b>{e.label}</b>
-                    <span>{e.blurb}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

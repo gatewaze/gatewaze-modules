@@ -5,11 +5,17 @@ import { BOOTH_ERAS, eraAllLooks, eraLooks, eraLooksResolve, erasFor, isEraSetti
 import { BOOTH_EFFECTS, buildPrompt, buildSamplePrompt } from '../booth-effects.js';
 
 describe('booth eras', () => {
-  it('gives every era six looks in each place, none repeated anywhere', () => {
+  it('gives every era at least six looks in each place, none repeated anywhere', () => {
     const all = BOOTH_ERAS.flatMap((e) => eraAllLooks(e));
     for (const era of BOOTH_ERAS) {
-      expect(eraLooks(era, 'uk')).toHaveLength(6);
-      expect(eraLooks(era, 'us')).toHaveLength(6);
+      // Six fills a board; the boards scroll, so more is welcome.
+      expect(eraLooks(era, 'uk').length).toBeGreaterThanOrEqual(6);
+      expect(eraLooks(era, 'us').length).toBeGreaterThanOrEqual(6);
+      // A look appears once on a board, and on one board only.
+      for (const place of ['uk', 'us'] as const) {
+        const list = eraLooks(era, place);
+        expect(new Set(list).size).toBe(list.length);
+      }
     }
     expect(new Set(all).size).toBe(all.length);
   });

@@ -407,6 +407,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   /**
+   * A board picture, at the size a card actually shows it. Storage will
+   * resize on the way out, which turns a 150KB photograph into 60KB --
+   * worth having when a board is ten cards deep on a phone signal.
+   */
+  function boardSized(url: string | null): string | null {
+    return url && url.includes('/storage/v1/object/public/')
+      ? `${url.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')}?width=480&quality=80`
+      : url;
+  }
+
+  /**
    * The illustrated booth as the guest page needs it: the eras this event
    * offers (all, or the one it is themed on), each with its artwork and
    * its six looks. Only eras the theme has an interior for are offered.
@@ -468,7 +479,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
           looks: (['uk', 'us'] as const).reduce((acc, p) => {
             acc[p] = eraLooks(era, p)
               .filter((id) => byId.has(id))
-              .map((id) => ({ ...byId.get(id)!, sample: art.samples[id] ?? null }));
+              .map((id) => ({ ...byId.get(id)!, sample: boardSized(art.samples[id] ?? null) }));
             return acc;
           }, {} as Record<'uk' | 'us', Array<{ id: string; label: string; blurb: string; sample: string | null }>>),
         };
