@@ -51,14 +51,9 @@ interface Props {
    * nobody opens an app to upload a picture of their own half-done hair,
    * but they will take one they have been asked for (2026-09-22).
    */
-  ready?: {
-    countdown: string
-    prompts: Array<{ id: string; label: string; blurb: string; camera: 'user' | 'environment' }>
-    /** Which asks this phone has already answered. */
-    done: string[]
-  } | null
-  /** Take a photo for one of the morning's asks. */
-  onPrompt?: (prompt: { id: string; camera: 'user' | 'environment' }, files: FileList) => void
+  ready?: { countdown: string } | null
+  /** A selfie taken on the spot, while getting ready. */
+  onSelfie?: (files: FileList) => void
   primaryColor: string
   /** "Who are you?" when the guest has not said yet; null once they have. */
   nameStep: React.ReactNode | null
@@ -106,14 +101,11 @@ const STYLES = `
 .ua-ready-kicker{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;opacity:.75}
 .ua-ready-count{font-size:20px;font-weight:800;margin-top:2px}
 .ua-ready-say{font-size:13px;opacity:.85;line-height:1.35;margin-top:3px}
-.ua-ready-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
-.ua-ask{position:relative;display:flex;flex-direction:column;gap:1px;text-align:left;border-radius:14px;padding:10px 12px;
-  background:rgba(10,8,20,.42);box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);color:#fff;transition:transform 120ms ease}
-.ua-ask:active{transform:scale(.97)}
-.ua-ask-done{opacity:.62}
-.ua-ask-label{font-size:15px;font-weight:800}
-.ua-ask-blurb{font-size:11px;opacity:.75;line-height:1.25}
-.ua-ask-tick{position:absolute;top:8px;right:10px;font-size:13px;font-weight:800;color:#86efac}
+.ua-ready-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.ua-ready-btn{display:flex;align-items:center;justify-content:center;gap:7px;height:48px;border-radius:14px;padding:0 10px;
+  font-size:15px;font-weight:800;color:#fff;background:rgba(10,8,20,.45);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.22);transition:transform 120ms ease}
+.ua-ready-btn:active{transform:scale(.97)}
 .ua-hidden{display:none}
 .ua-pose{margin-top:14px;width:100%;display:flex;flex-direction:column;gap:2px;text-align:left;border-radius:18px;padding:14px 16px;
   background:linear-gradient(135deg,rgba(124,58,237,.55),rgba(190,24,93,.45));
@@ -206,7 +198,7 @@ const CHEVRON_R = 'M8.25 4.5l7.5 7.5-7.5 7.5'
 
 export default function UploadApp(props: Props) {
   const {
-    eventName, pose, ready, onPrompt, primaryColor, nameStep, guestName, onNotMe, allowVideo, tiles, onAdd, onDelete, onRetry,
+    eventName, pose, ready, onSelfie, primaryColor, nameStep, guestName, onNotMe, allowVideo, tiles, onAdd, onDelete, onRetry,
     notice, onOpenBooth, showGallery, everyone, hasMore, loadingMore, onLoadMore,
   } = props
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -217,7 +209,7 @@ export default function UploadApp(props: Props) {
   const [viewing, setViewing] = useState<{ list: 'mine' | 'everyone'; id: string } | null>(null)
   const trackRef = useRef<HTMLDivElement | null>(null)
   // One hidden camera input per ask, so each opens the right camera.
-  const promptRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const selfieRef = useRef<HTMLInputElement | null>(null)
 
   // The portal's own animated background shows through; the event page
   // itself does not. That background is a fixed, pointer-events:none layer
@@ -360,35 +352,30 @@ export default function UploadApp(props: Props) {
               <div className="ua-ready">
                 <p className="ua-ready-kicker">Getting ready</p>
                 <p className="ua-ready-count">{ready.countdown}</p>
-                <p className="ua-ready-say">Take one of these while you get ready — they go up on the big screen tomorrow.</p>
-                <div className="ua-ready-grid">
-                  {ready.prompts.map((p) => {
-                    const done = ready.done.includes(p.id)
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className={`ua-ask${done ? ' ua-ask-done' : ''}`}
-                        onClick={() => promptRefs.current[p.id]?.click()}
-                      >
-                        <span className="ua-ask-label">{p.label}</span>
-                        <span className="ua-ask-blurb">{p.blurb}</span>
-                        {done && <span className="ua-ask-tick" aria-label="done">✓</span>}
-                        <input
-                          ref={(el) => { promptRefs.current[p.id] = el }}
-                          type="file"
-                          accept="image/*"
-                          capture={p.camera}
-                          className="ua-hidden"
-                          onChange={(e) => {
-                            if (e.target.files?.length && onPrompt) onPrompt({ id: p.id, camera: p.camera }, e.target.files)
-                            e.target.value = ''
-                          }}
-                        />
-                      </button>
-                    )
-                  })}
+                <p className="ua-ready-say">Share what you get up to with everyone coming today.</p>
+                <div className="ua-ready-row">
+                  <button type="button" className="ua-ready-btn" onClick={() => selfieRef.current?.click()}>
+                    <svg width="20" height="20" fill="none" viewBox="0 0 24 24" strokeWidth={1.9} stroke="currentColor" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z" />
+                    </svg>
+                    Take a selfie
+                  </button>
+                  <button type="button" className="ua-ready-btn" onClick={() => inputRef.current?.click()}>
+                    <svg width="20" height="20" fill="none" viewBox="0 0 24 24" strokeWidth={1.9} stroke="currentColor" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+                    </svg>
+                    Upload a photo
+                  </button>
                 </div>
+                <input
+                  ref={selfieRef}
+                  type="file"
+                  accept="image/*"
+                  capture="user"
+                  className="ua-hidden"
+                  onChange={(e) => { if (e.target.files?.length && onSelfie) onSelfie(e.target.files); e.target.value = '' }}
+                />
               </div>
             )}
             {pose && (
@@ -400,6 +387,7 @@ export default function UploadApp(props: Props) {
                 {onOpenBooth && <span className="ua-pose-go">Take it in the photo booth →</span>}
               </button>
             )}
+            {!ready && (
             <div className="ua-panel">
               <h2>Share your photos</h2>
               <p>Pick as many as you like from your phone — they upload straight away.</p>
@@ -415,6 +403,7 @@ export default function UploadApp(props: Props) {
                 Add photos
               </button>
             </div>
+            )}
             <input
               ref={inputRef}
               type="file"
