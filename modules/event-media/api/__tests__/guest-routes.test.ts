@@ -13,7 +13,6 @@ vi.mock('../../lib/booth-provider.js', async (importOriginal) => {
   return {
     ...real,
     runStyle: vi.fn(off),
-    readFingers: vi.fn(async () => null),
     runSwap: vi.fn(off),
     runDepth: vi.fn(off),
     runCutout: vi.fn(off),
@@ -1253,7 +1252,7 @@ describe('background plates are checked for people', () => {
 });
 
 
-describe('poses and fingers in the booth', () => {
+describe('poses in the booth', () => {
   const BOOTH_LINK = { ...ACTIVE_LINK, allow_face_filter: true };
   const PHOTO_ = 'data:image/jpeg;base64,' + Buffer.from('x').toString('base64');
   const shoot = async (body, config = {}) => {
@@ -1267,8 +1266,6 @@ describe('poses and fingers in the booth', () => {
     process.env.FAL_API_KEY = 'test-placeholder';
     provider.runStyle.mockReset();
     provider.runStyle.mockResolvedValue({ ok: true, image: new Uint8Array([1]), contentType: 'image/jpeg' });
-    provider.readFingers.mockReset();
-    provider.readFingers.mockResolvedValue(null);
   });
   afterEach(() => {
     delete process.env.BOOTH_PROVIDER;
@@ -1313,42 +1310,16 @@ describe('poses and fingers in the booth', () => {
     expect(res.body.pose).toBeNull();
   });
 
-  it('picks from the American board when the guest has chosen America', async () => {
-    provider.readFingers.mockResolvedValue(2);
-    const { res } = await shoot({ fingers: true, decade: '1970s', place: 'us' });
-    const { BOOTH_ERAS } = await import('../../lib/booth-eras.js');
-    expect(res.body.effect.id).toBe(BOOTH_ERAS.find((e) => e.key === '1970s').looks.us[2]);
-    expect(res.body.place).toBe('us');
-  });
-
-  it('lets the fingers in the photo choose the look', async () => {
-    provider.readFingers.mockResolvedValue(3);
-    const { res, supabase } = await shoot({ fingers: true, decade: '1970s', return: 'url' });
+  it('sends the American rail when the guest has chosen America', async () => {
+    const { res } = await shoot({ effect: 'us-decade-1970s', place: 'us' });
     expect(res.statusCode).toBe(200);
-    // The 1970s looks, after the decade itself: the third is theirs.
-    const { BOOTH_ERAS } = await import('../../lib/booth-eras.js');
-    // The British board, since no place was asked for.
-    const expected = BOOTH_ERAS.find((e) => e.key === '1970s').looks.uk[3];
-    expect(res.body.effect.id).toBe(expected);
-    expect(res.body.fingers).toBe(3);
-    const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');
-    expect(row.metadata.look_id).toBe(expected);
+    expect(res.body.place).toBe('us');
+    expect(provider.runStyle.mock.calls[0][1]).toMatch(/Set this in 1970s America/);
   });
 
-  // Never waste a guest's photo on a hand the model could not read.
-  it('keeps the look they picked when no fingers are held up, or the read fails', async () => {
-    for (const answer of [0, null, 9]) {
-      provider.readFingers.mockResolvedValue(answer);
-      const { res } = await shoot({ fingers: true, decade: '1970s' });
-      expect(res.body.effect.id).toBe('decade-1970s');
-      expect(res.body.fingers).toBe(answer === 9 ? 9 : answer);
-    }
-  });
-
-  it('does not pay for a finger read unless the booth asked for one', async () => {
-    await shoot({ decade: '1970s' });
-    expect(provider.readFingers).not.toHaveBeenCalled();
-    await shoot({ fingers: true });
-    expect(provider.readFingers).not.toHaveBeenCalled(); // no decade, no looks to choose from
+  it('sends the British rail by default', async () => {
+    const { res } = await shoot({ effect: 'uk-decade-1970s' });
+    expect(res.body.place).toBe('uk');
+    expect(provider.runStyle.mock.calls[0][1]).toMatch(/Set this in 1970s Britain/);
   });
 });
