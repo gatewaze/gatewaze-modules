@@ -479,16 +479,21 @@ export async function runPlate(imageUrl: string, strict = false): Promise<BoothR
   if (!falEnabled()) return { ok: false, error: 'not_configured' };
   return runFal(model('BOOTH_STYLE_MODEL', DEFAULT_STYLE_MODEL), {
     prompt:
-      'Remove the people from this photograph completely. Reconstruct the scene behind them ' +
-      'plausibly and seamlessly, continuing the walls, furniture, floor and background exactly as ' +
-      'they would appear with nobody standing there. Keep the camera angle, framing, lighting, ' +
-      'colour and every remaining detail identical. The result must contain no people at all.' +
+      'Remove the people from this photograph completely, and with them everything they are ' +
+      'holding, wearing or standing behind -- a microphone and its stand, an instrument, a glass, ' +
+      'a phone, a bouquet, any object that overlaps them or sits in front of them. ' +
+      'Reconstruct the scene behind them plausibly and seamlessly, continuing the walls, ' +
+      'furniture, floor and background exactly as they would appear with nobody standing there ' +
+      'and none of those objects present. Keep the camera angle, framing, lighting, ' +
+      'colour and every remaining detail identical. The result must contain no people at all, ' +
+      'and nothing left hanging in mid-air where a person was holding it.' +
       // The second attempt, after a first that left someone in: say it
       // every way the model might otherwise wriggle out of it.
       (strict
         ? ' There must be no person, face, head, hair, body, arm, hand, silhouette, reflection or ' +
-          'partial figure anywhere in the image, including at the edges and in the background. ' +
-          'Where a person was, show only what would be behind them.'
+          'partial figure anywhere in the image, including at the edges and in the background, and ' +
+          'no object that was in front of a person or held by one. Where a person and their things ' +
+          'were, show only what would be behind them.'
         : ''),
     image_urls: [imageUrl],
     output_format: 'jpeg',
