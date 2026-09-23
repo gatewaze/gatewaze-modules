@@ -253,7 +253,7 @@ const STYLES = `
   filter:blur(20px) brightness(.5) saturate(1.15);max-width:none;pointer-events:none}
 .bx-screen-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.35),rgba(0,0,0,.1) 30%,rgba(0,0,0,.45))}
 .bx-screen-body{position:absolute;inset:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
-  padding:calc(env(safe-area-inset-top,0px) + 68px) 16px calc(env(safe-area-inset-bottom,0px) + 84px)}
+  padding:calc(env(safe-area-inset-top,0px) + 68px) 16px calc(env(safe-area-inset-bottom,0px) + 104px)}
 .bx-h1{font-size:30px;font-weight:800;text-align:center;letter-spacing:.01em;text-shadow:0 2px 16px rgba(0,0,0,.6)}
 .bx-sub{font-size:14px;text-align:center;color:rgba(255,255,255,.75);margin-top:4px}
 .bx-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:30rem;margin:18px auto 0}
@@ -279,7 +279,7 @@ const STYLES = `
 .bx-icon{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;
   background:rgba(255,255,255,.12);box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)}
 .bx-icon-danger{color:#fecaca;background:rgba(180,35,24,.28);box-shadow:inset 0 0 0 1px rgba(254,202,202,.35)}
-.bx-window-pic{position:absolute;object-fit:cover;max-width:none;pointer-events:none}
+.bx-window-pic{position:absolute;object-fit:cover;object-position:50% 0%;max-width:none;pointer-events:none}
 .bx-panel{position:absolute;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .bx-controls{pointer-events:auto;width:100%;height:100%;border-radius:14px;padding:10px;display:flex;
   flex-direction:column;justify-content:center;gap:8px;animation:bx-rise 380ms ease-out both}
@@ -341,7 +341,7 @@ const STYLES = `
 .bx-fingers-said{position:absolute;left:8px;right:8px;top:8px;pointer-events:none;border-radius:12px;padding:8px 10px;text-align:center;
   font-size:14px;font-weight:700;background:rgba(0,0,0,.5)}
 
-.bx-places{position:absolute;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);z-index:6;
+.bx-places{position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);z-index:6;
   margin:0 auto;max-width:26rem;display:flex;gap:8px;border-radius:16px;padding:6px;
   background:rgba(10,8,20,.6);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
@@ -1101,7 +1101,7 @@ export default function BoothExperience(props: Props) {
               (k, i) => enter(lookOf(k), i),
             )}
 
-        {onPicker && (booth.places?.options.length ?? 0) > 1 && (
+        {(phase === 'picker' || phase === 'board') && (booth.places?.options.length ?? 0) > 1 && (
           <div className="bx-places">
             {booth.places!.options.map((o) => (
               <button
