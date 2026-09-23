@@ -267,7 +267,7 @@ const STYLES = `
 .bx-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:30rem;margin:18px auto 0}
 .bx-card{position:relative;display:block;width:100%;aspect-ratio:3/4;border-radius:14px;overflow:hidden;background:#1d1d22;
   box-shadow:0 10px 24px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12);transition:transform 160ms ease,box-shadow 160ms ease}
-.bx-card img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;max-width:none}
+.bx-card img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 0%;max-width:none}
 .bx-card-blank{position:absolute;inset:0;background:linear-gradient(135deg,#3a2a4a,#1b2a3a)}
 .bx-card-label{position:absolute;left:0;right:0;bottom:0;padding:28px 10px 10px;text-align:left;
   background:linear-gradient(180deg,rgba(0,0,0,0),rgba(0,0,0,.82))}

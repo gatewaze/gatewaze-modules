@@ -1221,6 +1221,14 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
+  // A link that lands straight in the booth gets an entry of its own, so
+  // its first Back goes to the wedding photos rather than out of the app.
+  useEffect(() => {
+    if (section === 'booth') pushScreen()
+    // Once, on the way in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const pickGuest = useCallback(async (g: { id: string; name: string }): Promise<string | null> => {
     if (!code) return 'Something went wrong — try again.'
     const clientId = deviceIdFor(eventIdentifier)
@@ -1402,7 +1410,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
           ] as const).map(([val, label]) => (
             <button
               key={val}
-              onClick={() => setSection(val)}
+              onClick={() => { if (val === 'booth' && activeSection !== 'booth') pushScreen(); setSection(val) }}
               className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${
                 activeSection === val
                   ? 'text-white'
@@ -2029,7 +2037,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       onDelete={(t) => void removeTile(t)}
       onRetry={(t) => retryItem(t.key)}
       notice={uploadNotice}
-      onOpenBooth={boothOpen ? () => setSection('booth') : null}
+      onOpenBooth={boothOpen ? () => { pushScreen(); setSection('booth') } : null}
       showGallery={Boolean(link!.settings.show_gallery)}
       everyone={items}
       hasMore={Boolean(nextCursor)}
