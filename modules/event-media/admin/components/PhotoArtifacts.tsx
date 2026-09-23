@@ -165,8 +165,17 @@ export function PhotoArtifacts({ item, onItemChange }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id]);
 
+  // The photo the guest took in the booth, before the model saw it.
+  const selfie = typeof meta.selfie === 'string' ? artifactUrl(item, meta.selfie) : null;
+
   const layers: Array<{ key: string; label: string; url: string | null; note: string; checker?: boolean }> = [
-    { key: 'original', label: 'Original', url: item.cdn_url, note: item.width && item.height ? `${item.width} × ${item.height}` : 'as uploaded' },
+    ...(selfie ? [{ key: 'selfie', label: 'Their selfie', url: selfie, note: 'what the booth photographed' }] : []),
+    {
+      key: 'original',
+      label: selfie ? 'What the booth made' : 'Original',
+      url: item.cdn_url,
+      note: item.width && item.height ? `${item.width} × ${item.height}` : 'as uploaded',
+    },
     { key: 'hires', label: 'Upscaled', url: artifactUrl(item, v.hires), note: 'shown on the projector when present' },
     { key: 'depth', label: 'Depth map', url: artifactUrl(item, v.depth), note: 'brighter is nearer' },
     { key: 'cutout', label: 'People', url: artifactUrl(item, v.cutout), note: 'the layer that holds still', checker: true },

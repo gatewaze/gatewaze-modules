@@ -1353,6 +1353,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // edge function actually wrote (render-URL fallbacks are not
     // stored objects, so only same-prefix paths are removed).
     const paths = [row.storage_path as string];
+    if (typeof meta['selfie'] === 'string' && meta['selfie']) paths.push(meta['selfie']);
     const variants = (row.variants ?? {}) as Record<string, unknown>;
     for (const v of Object.values(variants)) {
       if (typeof v === 'string' && v && !/^https?:\/\//i.test(v)) paths.push(v);
@@ -1518,6 +1519,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         contentType: result.contentType,
         look: filter ? `Be ${filter.label}` : effect!.label,
         lookId: filter ? `filter:${filter.id}` : effect!.id,
+        selfie: bytes,
+        selfieType: mimeType,
         pose: pose ? { id: pose.id, label: pose.label } : null,
         place,
       });
@@ -1557,6 +1560,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     lookId: string;
     pose?: { id: string; label: string } | null;
     place?: string | null;
+    /**
+     * The photograph the guest actually took. Kept beside the picture it
+     * became, so an organiser can see both (asked 2026-09-23); it goes
+     * when the picture goes.
+     */
+    selfie?: Uint8Array | Buffer | null;
+    selfieType?: string | null;
   }): Promise<{ mediaId: string; url: string } | null> {
     const { link } = opts;
     const mediaId = newMediaId();
@@ -1569,6 +1579,18 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (upErr) {
       logger.error('booth picture store failed', { error: upErr.message });
       return null;
+    }
+    // The selfie it was made from, beside it. Best effort: a picture
+    // without its selfie is still a picture.
+    let selfiePath: string | null = null;
+    if (opts.selfie) {
+      const selfieExt = opts.selfieType === 'image/png' ? 'png' : opts.selfieType === 'image/webp' ? 'webp' : 'jpg';
+      const path = `event/${link.event_id}/${mediaId}/selfie.${selfieExt}`;
+      const { error } = await supabase.storage
+        .from(storageBucket)
+        .upload(path, Buffer.from(opts.selfie), { contentType: opts.selfieType || 'image/jpeg', upsert: true });
+      if (error) logger.warn('selfie store failed', { mediaId, error: error.message });
+      else selfiePath = path;
     }
     const { error: insErr } = await supabase.from('host_media').insert({
       id: mediaId,
@@ -1594,6 +1616,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // What the booth asked them to do, when it asked for anything.
         ...(opts.pose ? { pose: opts.pose.id, pose_label: opts.pose.label } : {}),
         ...(opts.place ? { place: opts.place } : {}),
+        // What the guest actually took, for the organiser to look at.
+        ...(selfiePath ? { selfie: selfiePath } : {}),
         // Off the projector and out of the gallery until the guest posts it.
         posted: false,
       },

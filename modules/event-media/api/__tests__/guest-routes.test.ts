@@ -1275,6 +1275,27 @@ describe('poses and fingers in the booth', () => {
     delete process.env.FAL_API_KEY;
   });
 
+  // An organiser wants to see what the guest actually took, next to what
+  // the model made of it (asked 2026-09-23).
+  it('keeps the selfie beside the picture it became', async () => {
+    const { res, supabase } = await shoot({ return: 'url' });
+    expect(res.statusCode).toBe(200);
+    const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');
+    expect(row.metadata.selfie).toBe(`event/${EVENT_ID}/${row.id}/selfie.jpg`);
+    expect(supabase.state.uploads.some((u) => u.path === row.metadata.selfie)).toBe(true);
+  });
+
+  it('takes the selfie away when the guest deletes the picture', async () => {
+    const photo = {
+      id: '44444444-2222-4333-8444-666666666666', host_kind: 'event', host_id: EVENT_ID,
+      storage_path: `event/${EVENT_ID}/x/booth.jpg`, variants: {},
+      metadata: { source: 'guest', client_id: CLIENT_ID, album: 'booth', selfie: `event/${EVENT_ID}/x/selfie.jpg` },
+    };
+    const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW, existingMedia: photo });
+    await createGuestRoutes(deps).deleteMine(req({ body: { client_id: CLIENT_ID, media_id: photo.id } }), mockRes());
+    expect(supabase.state.removed.flat()).toContain(`event/${EVENT_ID}/x/selfie.jpg`);
+  });
+
   it('tells the model the pose, and records it against the picture', async () => {
     const { res, supabase } = await shoot({ pose: 'huddle', return: 'url' });
     expect(res.statusCode).toBe(200);
