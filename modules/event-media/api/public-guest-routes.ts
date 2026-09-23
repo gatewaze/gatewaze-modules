@@ -407,14 +407,18 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   /**
-   * A board picture, at the size a card actually shows it. Storage will
-   * resize on the way out, which turns a 150KB photograph into 60KB --
-   * worth having when a board is ten cards deep on a phone signal.
+   * Board pictures are served as they are.
+   *
+   * Storage resizing looked like free bandwidth and was not: a width on
+   * its own squashes the picture, and `contain` pads it into a square,
+   * both of which put people's heads outside the crop (2026-09-23).
+   * The pictures themselves are not one shape either -- the model
+   * returns 864x1184 for some looks and 1024x1024 for others -- so the
+   * page crops them from the top in CSS, where the shape is known, and
+   * loads them lazily instead.
    */
   function boardSized(url: string | null): string | null {
-    return url && url.includes('/storage/v1/object/public/')
-      ? `${url.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')}?width=480&resize=contain&quality=80`
-      : url;
+    return url;
   }
 
   /**
