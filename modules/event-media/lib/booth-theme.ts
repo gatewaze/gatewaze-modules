@@ -66,6 +66,12 @@ export interface ThemeEra {
   card: string | null;
   /** A sample picture per look id, for a board built in the page. */
   samples: Record<string, string>;
+  /**
+   * The same looks as America would have them. The booth shows whichever
+   * set matches the place a guest has chosen (asked 2026-09-23); where a
+   * look has no American picture the British one stands in.
+   */
+  samples_us: Record<string, string>;
 }
 
 export interface BoothTheme {
@@ -158,19 +164,23 @@ export function parseBoothTheme(
     const inside = interior(v['interior'], url);
     if (!inside) continue;
     const looks = looksFor(key);
-    const samples: Record<string, string> = {};
-    if (isObj(v['samples'])) {
-      for (const [look, f] of Object.entries(v['samples']).slice(0, MAX_SAMPLES)) {
+    const sampleSet = (raw: unknown): Record<string, string> => {
+      const out: Record<string, string> = {};
+      if (!isObj(raw)) return out;
+      for (const [look, f] of Object.entries(raw).slice(0, MAX_SAMPLES)) {
         const u = looks.has(look) ? file(f, url) : null;
-        if (u) samples[look] = u;
+        if (u) out[look] = u;
       }
-    }
+      return out;
+    };
+    const samples = sampleSet(v['samples']);
     eras[key] = {
       interior: inside,
       interior_landscape: v['interior_landscape'] === undefined ? null : interior(v['interior_landscape'], url),
       board: v['board'] === undefined ? null : board(v['board'], url, (k) => looks.has(k)),
       card: file(v['card'], url),
       samples,
+      samples_us: sampleSet(v['samples_us']),
     };
   }
   if (Object.keys(eras).length === 0) return null;

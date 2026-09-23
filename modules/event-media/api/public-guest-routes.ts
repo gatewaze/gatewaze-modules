@@ -39,7 +39,7 @@ import { plateHasPeople, readFingers, runCardCopy, runCutout, runDepth, runPlate
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
-import { BOOTH_ERAS, erasFor, isEraSetting } from '../lib/booth-eras.js';
+import { BOOTH_ERAS, eraAllLooks, eraLooks, erasFor, isEraSetting } from '../lib/booth-eras.js';
 import eventMediaModule from '../index.js';
 import { displayName, matchGuests, type GuestEntry } from '../lib/guest-identity.js';
 import {
@@ -399,8 +399,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       themeCache.set(eventId, hit);
     }
     if (hit.raw === null) return null;
-    const looksFor = (era: string) =>
-      new Set((erasFor(era).find((e) => e.key === era)?.looks ?? []).filter((id) => offered.has(id)));
+    const looksFor = (era: string) => {
+      const found = erasFor(era).find((e) => e.key === era);
+      return new Set((found ? eraAllLooks(found) : []).filter((id) => offered.has(id)));
+    };
     return parseBoothTheme(hit.raw, looksFor, (file) => toBrowserUrl(`${dir}/${file}`));
   }
 
@@ -461,12 +463,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
           interior: art.interior,
           interiorLandscape: art.interior_landscape,
           board: art.board,
-          looks: era.looks
-            .filter((id) => byId.has(id))
-            .map((id) => ({ ...byId.get(id)!, sample: art.samples[id] ?? null })),
+          // A board per place: a decade is not the same thing in Britain
+          // as in America, so each country has its own six looks.
+          looks: (['uk', 'us'] as const).reduce((acc, p) => {
+            acc[p] = eraLooks(era, p)
+              .filter((id) => byId.has(id))
+              .map((id) => ({ ...byId.get(id)!, sample: art.samples[id] ?? null }));
+            return acc;
+          }, {} as Record<'uk' | 'us', Array<{ id: string; label: string; blurb: string; sample: string | null }>>),
         };
       })
-      .filter((era) => era.looks.length > 0);
+      .filter((era) => era.looks.uk.length > 0 || era.looks.us.length > 0);
     if (eras.length === 0) return null;
     const keys = new Set(eras.map((e) => e.key));
     const picker = theme.picker
@@ -1465,7 +1472,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       let fingers: number | null = null;
       if (wantsFingers && era && effect) {
         fingers = await readFingers(toPublicUrl(scratchPath));
-        const chosen = fingers === null ? null : boothEffect(fingerLook(fingers, era.looks) ?? '');
+        const chosen = fingers === null ? null : boothEffect(fingerLook(fingers, eraLooks(era, place)) ?? '');
         if (chosen && chosen.kind === 'style' && chosen.style) effect = chosen;
       }
       const result = filter
@@ -1474,7 +1481,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
           toPublicUrl(scratchPath),
           // The decade the look belongs to decides which rail applies.
           buildPrompt(effect!, pose?.prompt ?? null,
-            placeRail(BOOTH_ERAS.find((e) => e.looks.includes(effect!.id))?.key ?? null, place)),
+            placeRail(BOOTH_ERAS.find((e) => eraAllLooks(e).includes(effect!.id))?.key ?? null, place)),
         );
       if (!result.ok) {
         const status = result.error === 'no_face' ? 422 : result.error === 'timeout' ? 504 : 502;

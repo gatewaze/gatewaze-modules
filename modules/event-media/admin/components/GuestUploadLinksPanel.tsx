@@ -563,7 +563,7 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                   if (!era) return null;
                   return (
                     <div className="mt-1 space-y-1">
-                      {era.looks.map((look) => (
+                      {[...era.looks.uk, ...era.looks.us].map((look) => (
                         <div key={look} className="flex items-center gap-2">
                           <span>{boothEffect(look)?.label ?? look}</span>
                           <span className="flex-1" />

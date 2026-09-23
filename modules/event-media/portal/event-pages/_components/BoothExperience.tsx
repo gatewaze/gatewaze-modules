@@ -52,7 +52,14 @@ export interface BoothEraView {
   interiorLandscape?: Interior | null
   /** Painted outside board, when the event has artwork for it. */
   board: Painted | null
-  looks: Array<{ id: string; label: string; blurb: string; sample: string | null }>
+  /**
+   * A board per place: the same decade, each country's version of it.
+   * An older server sends one flat list; it is read as the British board,
+   * so the booth still works while a deploy is half-way through.
+   */
+  looks:
+    | Record<'uk' | 'us', Array<{ id: string; label: string; blurb: string; sample: string | null }>>
+    | Array<{ id: string; label: string; blurb: string; sample: string | null }>
 }
 
 /** The booth as the link endpoint serves it (lib/booth-theme.ts). */
@@ -338,10 +345,8 @@ const STYLES = `
   margin:0 auto;max-width:26rem;display:flex;gap:8px;border-radius:16px;padding:6px;
   background:rgba(10,8,20,.6);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
-.bx-place{flex:1;border-radius:12px;padding:8px 6px;text-align:center;color:rgba(255,255,255,.75);
-  display:flex;flex-direction:column;gap:1px;transition:background 160ms ease,color 160ms ease}
-.bx-place b{font-size:14px;font-weight:800}
-.bx-place span{font-size:10px;opacity:.7;line-height:1.2}
+.bx-place{flex:1;border-radius:12px;padding:11px 6px;text-align:center;color:rgba(255,255,255,.75);
+  font-size:15px;font-weight:800;transition:background 160ms ease,color 160ms ease}
 .bx-place-on{background:rgba(255,255,255,.18);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.28)}
 
 /* A sideways phone: short and wide. More columns across the extra width,
@@ -411,13 +416,9 @@ export default function BoothExperience(props: Props) {
   const [dealt, setDealt] = useState<{ id: string; label: string; instruction: string } | null>(null)
   // Britain or America. Chosen at the bottom of the decade page and kept
   // for next time (asked 2026-09-23).
-  const [place, setPlace] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem(`${historyKey}:place`)
-      if (saved) return saved
-    } catch { /* private mode */ }
-    return booth.places?.default ?? 'uk'
-  })
+  // Always British when the app opens; a guest can switch while they are
+  // in the booth, and it is back to British next time (asked 2026-09-23).
+  const [place, setPlace] = useState<string>(booth.places?.default ?? 'uk')
   // Ticks once a second so the countdown to the next pose stays honest.
   const [now, setNow] = useState(() => Date.now())
   const [cam, setCam] = useState<CamState>('off')
@@ -465,6 +466,14 @@ export default function BoothExperience(props: Props) {
   const pose = poses?.mode === 'card' ? dealt : poses?.current ?? null
   const fingersOn = poses?.fingers === true
   const era = eras.find((e) => e.key === eraKey) ?? eras[0]!
+  /** The six looks of a decade, in the place the guest has chosen. */
+  const boardOf = (e: BoothEraView) => {
+    if (Array.isArray(e.looks)) return e.looks
+    const here = place === 'us' ? e.looks.us : e.looks.uk
+    return here?.length > 0 ? here : e.looks.uk ?? []
+  }
+  const allLooksOf = (e: BoothEraView) => (Array.isArray(e.looks) ? e.looks : [...(e.looks.uk ?? []), ...(e.looks.us ?? [])])
+  const looksHere = boardOf(era)
   const interior = era.interior
   const inside = phase === 'inside' || phase === 'to-outside'
   const busy = Boolean(shot?.busy)
@@ -922,11 +931,11 @@ export default function BoothExperience(props: Props) {
   } as const
 
   // "More looks": the reference faces, and any look no era offers.
-  const eraLooks = new Set(eras.flatMap((e) => e.looks.map((l) => l.id)))
+  const eraLooks = new Set(eras.flatMap((e) => allLooksOf(e).map((l) => l.id)))
   const extraEffects = effects.filter((e) => !eraLooks.has(e.id))
   const hasMore = faces.length > 0 || extraEffects.length > 0
   const lookOf = (id: string): BoothLook => {
-    const l = era.looks.find((x) => x.id === id)
+    const l = looksHere.find((x) => x.id === id)
     return { key: id, payload: { effect: id }, label: l?.label ?? effects.find((e) => e.id === id)?.label ?? id }
   }
   placeRef.current = place
@@ -965,7 +974,7 @@ export default function BoothExperience(props: Props) {
     <div className="bx-fingers">
       <p className="bx-fingers-say">Hold up fingers to pick your look</p>
       <div className="bx-fingers-row">
-        {era.looks.slice(1, 6).map((l, i) => (
+        {looksHere.slice(1, 6).map((l, i) => (
           <span key={l.id} className="bx-finger">
             <b>{i + 1}</b>
             {l.label}
@@ -1075,7 +1084,7 @@ export default function BoothExperience(props: Props) {
               chooseEra,
               (k) => {
                 const e = eras.find((x) => x.key === k)
-                return e ? e.card ?? e.looks.find((l) => l.sample)?.sample ?? null : null
+                return e ? e.card ?? boardOf(e).map((l) => l.sample).find(Boolean) ?? null : null
               },
             )
             : cards(
@@ -1084,17 +1093,17 @@ export default function BoothExperience(props: Props) {
               'Step into a photo booth from another decade',
               eras.map((e) => ({
                 key: e.key, label: e.label, blurb: e.blurb, aria: `${e.label} photo booth`,
-                image: e.card ?? e.looks.find((l) => l.sample)?.sample ?? e.interior.image,
+                image: e.card ?? boardOf(e).map((l) => l.sample).find(Boolean) ?? e.interior.image,
               })),
               chooseEra,
             )
-          : era.board && !landscape
+          : era.board && !landscape && place !== 'us'
             ? painted(era.board, (k) => `${lookOf(k).label} look`, (k, i) => enter(lookOf(k), i))
             : cards(
               era.interior.image,
               era.label,
               'Choose your look',
-              era.looks.map((l) => ({ key: l.id, label: l.label, blurb: l.blurb, image: l.sample, aria: `${l.label} look` })),
+              looksHere.map((l) => ({ key: l.id, label: l.label, blurb: l.blurb, image: l.sample, aria: `${l.label} look` })),
               (k, i) => enter(lookOf(k), i),
               hasMore,
             )}
@@ -1109,12 +1118,10 @@ export default function BoothExperience(props: Props) {
                 aria-pressed={place === o.id}
                 onClick={() => {
                   setPlace(o.id)
-                  try { localStorage.setItem(`${historyKey}:place`, o.id) } catch { /* private mode */ }
                   flashNotice(`${o.label} decades`)
                 }}
               >
-                <b>{o.label}</b>
-                <span>{o.blurb}</span>
+                {o.label}
               </button>
             ))}
           </div>
@@ -1501,6 +1508,8 @@ function openedAt(
 ): { era: string; look: BoothLook } | null {
   if (!at) return null
   const era = eras.find((e) => e.key === at.era)
-  const look = era?.looks.find((l) => l.id === at.look)
+  const look = era
+    ? (Array.isArray(era.looks) ? era.looks : [...(era.looks.uk ?? []), ...(era.looks.us ?? [])]).find((l) => l.id === at.look)
+    : null
   return era && look ? { era: era.key, look: { key: look.id, payload: { effect: look.id }, label: look.label } } : null
 }

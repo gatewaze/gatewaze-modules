@@ -19,7 +19,8 @@
  * model.
  */
 import type { Request, Response, Router } from 'express';
-import { BOOTH_ERAS } from '../lib/booth-eras.js';
+import { BOOTH_ERAS, eraLooks } from '../lib/booth-eras.js';
+import { BOOTH_PLACES, placeRail } from '../lib/booth-places.js';
 import { boothEffect, buildSamplePrompt } from '../lib/booth-effects.js';
 import type { BoothResult } from '../lib/booth-provider.js';
 
@@ -108,16 +109,19 @@ export function createBoothExamples(deps: BoothExamplesDeps) {
     const dir = `event/${eventId}/booth-theme`;
     const made: Record<string, Record<string, string>> = {};
 
-    const work = BOOTH_ERAS.flatMap((era) => era.looks.map((look) => ({ era: era.key, look })));
+    // Both boards: British and American looks are different pictures.
+    const work = BOOTH_ERAS.flatMap((era) =>
+      BOOTH_PLACES.flatMap((place) =>
+        eraLooks(era, place.id).map((look) => ({ era: era.key, look, place: place.id }))));
     job.total = work.length;
     let next = 0;
     const worker = async () => {
       while (next < work.length) {
-        const { era, look } = work[next++]!;
+        const { era, look, place } = work[next++]!;
         const effect = boothEffect(look);
         try {
           if (!effect?.style) throw new Error('unknown look');
-          const r = await runRefs(urls, buildSamplePrompt(effect, counts));
+          const r = await runRefs(urls, buildSamplePrompt(effect, counts, placeRail(era, place)));
           if (!r.ok) throw new Error(r.error);
           const name = `sample-${look}-${stamp}.jpg`;
           const { error } = await db.storage.from(storageBucket)
