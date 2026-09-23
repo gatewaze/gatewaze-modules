@@ -80,8 +80,6 @@ export interface BoothLook {
   place?: string | null
   /** The pose the booth asked for, when it asked for one. */
   pose?: string | null
-  /** Let the fingers in the photo choose the look, within this decade. */
-  fingers?: boolean
   decade?: string | null
 }
 
@@ -89,7 +87,6 @@ export interface BoothLook {
 export interface BoothPoses {
   mode: 'off' | 'hour' | 'card'
   minutes: number
-  fingers: boolean
   current: { id: string; label: string; instruction: string } | null
   next: { id: string; label: string; instruction: string } | null
   changes_at: string | null
@@ -100,8 +97,6 @@ interface Shot {
   original: string
   preview: string | null
   filterLabel: string | null
-  /** 1-5 when the booth read a hand and chose the look from it. */
-  fingers?: number | null
   busy: string | null
   error: string | null
   /** The server's kept copy of `preview`, when it kept one. */
@@ -339,15 +334,6 @@ const STYLES = `
 .bx-pose-hold{position:absolute;left:8px;right:8px;top:8px;pointer-events:none;border-radius:12px;padding:8px 10px;text-align:center;
   font-size:16px;font-weight:800;background:rgba(0,0,0,.5);animation:bx-pulse 1s ease-in-out infinite}
 @keyframes bx-pulse{0%,100%{opacity:.85}50%{opacity:1}}
-.bx-fingers{position:absolute;left:8px;right:8px;bottom:100px;border-radius:12px;padding:7px 8px;pointer-events:none;
-  background:rgba(0,0,0,.45);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
-.bx-fingers-say{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.7);text-align:center}
-.bx-fingers-row{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 10px;margin-top:4px}
-.bx-finger{display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(255,255,255,.9)}
-.bx-finger b{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-  font-size:11px;background:rgba(255,255,255,.22)}
-.bx-fingers-said{position:absolute;left:8px;right:8px;top:8px;pointer-events:none;border-radius:12px;padding:8px 10px;text-align:center;
-  font-size:14px;font-weight:700;background:rgba(0,0,0,.5)}
 
 .bx-places{position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);z-index:6;
   margin:0 auto;max-width:26rem;display:flex;gap:8px;border-radius:16px;padding:6px;
@@ -458,7 +444,6 @@ export default function BoothExperience(props: Props) {
   // Read at the moment the shutter fires, not when capture() was made.
   const poseRef = useRef<string | null>(null)
   const placeRef = useRef<string>('uk')
-  const fingersRef = useRef(false)
   const eraRef = useRef<string>('')
   // Always the current shutter, for listeners that outlive a render.
   const insertCoinRef = useRef<() => void>(() => {})
@@ -471,7 +456,6 @@ export default function BoothExperience(props: Props) {
   const poses = booth.poses ?? null
   const posing = poses && poses.mode !== 'off'
   const pose = poses?.mode === 'card' ? dealt : poses?.current ?? null
-  const fingersOn = poses?.fingers === true
   const era = eras.find((e) => e.key === eraKey) ?? eras[0]!
   /** The six looks of a decade, in the place the guest has chosen. */
   const boardOf = (e: BoothEraView) => {
@@ -748,19 +732,6 @@ export default function BoothExperience(props: Props) {
     return () => clearInterval(t)
   }, [posing])
 
-  // When the photo itself chose the look, say so: otherwise a guest who
-  // held up three fingers has no idea whether the booth noticed.
-  const saidFingers = useRef<string | null>(null)
-  useEffect(() => {
-    const n = shot?.fingers
-    const label = shot?.filterLabel
-    if (!n || !label || shot?.busy) return
-    const key = `${n}:${label}`
-    if (saidFingers.current === key) return
-    saidFingers.current = key
-    flashNotice(`You held up ${n} — ${label}`)
-  }, [shot?.fingers, shot?.filterLabel, shot?.busy, flashNotice])
-
   /** Walk in. Every visit starts with the live camera and no picture. */
   const enter = useCallback((chosen: BoothLook | null, tileIndex: number | null) => {
     if (phase !== 'board') return
@@ -885,7 +856,6 @@ export default function BoothExperience(props: Props) {
       ...look,
       place: placeRef.current,
       pose: poseRef.current,
-      fingers: fingersRef.current,
       decade: eraRef.current,
     })
   }, [interior, look, onCaptured, onFallbackCamera])
@@ -959,7 +929,6 @@ export default function BoothExperience(props: Props) {
   }
   placeRef.current = place
   poseRef.current = pose?.id ?? null
-  fingersRef.current = fingersOn
   eraRef.current = era.key
   const onPicker = phase === 'picker'
 
@@ -985,21 +954,6 @@ export default function BoothExperience(props: Props) {
           Changes in <b>{changesIn}</b> — next up: {poses!.next.label}
         </p>
       )}
-    </div>
-  ))
-
-  /** The five looks a hand can choose between, numbered. */
-  const fingerLegend = (!fingersOn ? null : (
-    <div className="bx-fingers">
-      <p className="bx-fingers-say">Hold up fingers to pick your look</p>
-      <div className="bx-fingers-row">
-        {looksHere.slice(1, 6).map((l, i) => (
-          <span key={l.id} className="bx-finger">
-            <b>{i + 1}</b>
-            {l.label}
-          </span>
-        ))}
-      </div>
     </div>
   ))
 
@@ -1212,7 +1166,6 @@ export default function BoothExperience(props: Props) {
               </div>
             )}
             {count !== null && pose && <div className="bx-pose-hold">{pose.instruction}</div>}
-            {!result && count === null && fingerLegend}
             {count !== null && <div key={`count-${count}`} className="bx-count">{count}</div>}
             {flash > 0 && <div key={`flash-${flash}`} className="bx-flash" />}
 

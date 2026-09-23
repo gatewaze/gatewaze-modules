@@ -38,15 +38,16 @@ export interface StreamSettings {
  *   day      what guests upload on the day
  *   booth    the photo booth's posters
  */
-export type ViewName = 'preload' | 'day' | 'booth'
+export type ViewName = 'preload' | 'day' | 'booth' | 'selfies'
 
 /** Every view, in the order the panel lists them and a rotation runs. */
-export const VIEW_ORDER: readonly ViewName[] = ['preload', 'day', 'booth']
+export const VIEW_ORDER: readonly ViewName[] = ['preload', 'day', 'booth', 'selfies']
 
 export const VIEW_LABEL: Record<ViewName, string> = {
   preload: 'Preload',
   day: 'The day',
   booth: 'Photo booth',
+  selfies: 'Booth selfies',
 }
 
 /**
@@ -82,6 +83,16 @@ export const DEFAULT_DAY: StreamSettings = {
 
 // The posters are finished artwork with their own titles, so they get a
 // quiet fade and three across the screen rather than a browse card.
+/**
+ * The photographs guests actually took in the booth, before the model
+ * saw them (asked 2026-09-23). They have no 3D layers -- nothing has
+ * been made of them yet -- so this view keeps to the plain effects.
+ */
+export const DEFAULT_SELFIES: StreamSettings = {
+  mode: 'wall', effect: 'fade', intervalMs: 6000, camera: 'pan',
+  columns: 3, blurTransition: true,
+}
+
 export const DEFAULT_BOOTH: StreamSettings = {
   mode: 'wall', effect: 'fade', intervalMs: 9000, camera: 'pan',
   columns: 3, blurTransition: true,
@@ -130,6 +141,7 @@ export function migrateStreams(stored: Record<string, unknown> | null | undefine
     preload: 'preload' in s ? merge(s['preload'], DEFAULT_PRELOAD) : DEFAULT_PRELOAD,
     day: 'day' in s ? merge(s['day'], DEFAULT_DAY) : foldedDay,
     booth: 'booth' in s ? merge(s['booth'], DEFAULT_BOOTH) : DEFAULT_BOOTH,
+    selfies: 'selfies' in s ? merge(s['selfies'], DEFAULT_SELFIES) : DEFAULT_SELFIES,
   }
 }
 

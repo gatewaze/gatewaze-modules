@@ -32,10 +32,10 @@ import {
   validateMintFile,
 } from '../lib/guest-limits.js';
 import { boothEffect, buildPrompt, publicEffects } from '../lib/booth-effects.js';
-import { BOOTH_POSES, boothPose, fingerLook, poseChangesAt, poseOfTheHour } from '../lib/booth-poses.js';
+import { BOOTH_POSES, boothPose, poseChangesAt, poseOfTheHour } from '../lib/booth-poses.js';
 import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js';
 import { BOOTH_PLACES, DEFAULT_PLACE, boothPlace, placeRail } from '../lib/booth-places.js';
-import { plateHasPeople, readFingers, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
@@ -435,7 +435,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (!theme) return null;
     const { data: settings } = await supabase
       .from('events_media_booth_settings')
-      .select('era, pose_mode, pose_minutes, pose_offset, fingers_pick')
+      .select('era, pose_mode, pose_minutes, pose_offset')
       .eq('event_id', eventId)
       .maybeSingle();
     const setting = isEraSetting(settings?.era) ? settings!.era : 'all';
@@ -450,7 +450,6 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const poses = {
       mode: poseMode,
       minutes: poseMinutes,
-      fingers: settings?.fingers_pick === true,
       current: current ? { id: current.id, label: current.label, instruction: current.instruction } : null,
       changes_at: poseMode === 'hour' ? poseChangesAt(now, poseMinutes).toISOString() : null,
       next: poseMode === 'hour'
@@ -842,6 +841,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       variants,
       guest_name: meta['source'] === 'guest' && typeof meta['guest_name'] === 'string' ? meta['guest_name'] : null,
       card: meta['card'] && typeof meta['card'] === 'object' ? meta['card'] : null,
+      // The photograph the guest actually took, where the booth kept one
+      // -- the projector has a view of its own for these.
+      selfie: typeof meta['selfie'] === 'string' && meta['selfie'] ? toBrowserUrl(meta['selfie']) : null,
       // 'booth' | 'day' | 'seed': the view album it is in, else its tag.
       // Older rows predate the tag and read as 'seed', which they are.
       album: view ?? tagView(meta),
@@ -1409,9 +1411,6 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // What the booth asked them to do, if anything: the prompt has to be
     // told, or the model tidies the pose away.
     const pose = boothPose(body['pose']);
-    // "Hold up one to five fingers": the photo chooses its own look from
-    // the decade the guest is standing in.
-    const wantsFingers = body['fingers'] === true;
     // Whose version of the decade (lib/booth-places.ts); British unless
     // the guest says otherwise.
     const place = boothPlace(body['place']);
@@ -1482,15 +1481,6 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
 
     try {
-      // Fingers first: what they held up decides which look is made.
-      // A hand nobody can read, or none at all, keeps the look they
-      // chose on the way in, so a photo is never wasted on a misread.
-      let fingers: number | null = null;
-      if (wantsFingers && era && effect) {
-        fingers = await readFingers(toPublicUrl(scratchPath));
-        const chosen = fingers === null ? null : boothEffect(fingerLook(fingers, eraLooks(era, place)) ?? '');
-        if (chosen && chosen.kind === 'style' && chosen.style) effect = chosen;
-      }
       const result = filter
         ? await runSwap(toPublicUrl(filter.source_path), toPublicUrl(scratchPath))
         : await runStyle(
@@ -1534,8 +1524,6 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         effect: effect ? { id: effect.id, label: effect.label } : null,
         pose: pose ? { id: pose.id, label: pose.label } : null,
         place,
-        // What the booth read in their hand, so it can say so.
-        fingers,
         media_id: kept?.mediaId ?? null,
         image_url: kept?.url ?? null,
         // Inline only for an older page, or if keeping it failed.

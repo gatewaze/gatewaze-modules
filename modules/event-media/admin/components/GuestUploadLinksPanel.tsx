@@ -251,7 +251,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   // Poses: what the booth asks people to do (migration 012).
   const [poseMode, setPoseMode] = useState<'off' | 'hour' | 'card'>('off');
   const [poseMinutes, setPoseMinutes] = useState(30);
-  const [fingersPick, setFingersPick] = useState(false);
   // How long before the event the getting-ready prompts appear.
   const [readyHours, setReadyHours] = useState(36);
   useEffect(() => {
@@ -259,15 +258,14 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     let cancelled = false;
     void supabase
       .from('events_media_booth_settings')
-      .select('era, pose_mode, pose_minutes, fingers_pick, ready_hours')
+      .select('era, pose_mode, pose_minutes, ready_hours')
       .eq('event_id', eventId)
       .maybeSingle()
-      .then(({ data }: { data: { era?: string; pose_mode?: string; pose_minutes?: number; fingers_pick?: boolean; ready_hours?: number } | null }) => {
+      .then(({ data }: { data: { era?: string; pose_mode?: string; pose_minutes?: number; ready_hours?: number } | null }) => {
         if (cancelled || !data) return;
         if (data.era) setBoothEra(data.era);
         if (data.pose_mode === 'hour' || data.pose_mode === 'card') setPoseMode(data.pose_mode);
         if (typeof data.pose_minutes === 'number') setPoseMinutes(data.pose_minutes);
-        setFingersPick(data.fingers_pick === true);
         if (typeof data.ready_hours === 'number') setReadyHours(data.ready_hours);
       });
     return () => { cancelled = true; };
@@ -747,19 +745,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
               )}
             </label>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={fingersPick}
-                onChange={(e) => {
-                  const next = e.target.checked;
-                  setFingersPick(next);
-                  void saveBooth({ fingers_pick: next }, () => setFingersPick(!next),
-                    next ? 'Guests can pick their look by holding up fingers' : 'Fingers no longer pick the look');
-                }}
-              />
-              Let guests pick their look by holding up 1–5 fingers in the photo
-            </label>
 
             {/* The morning before: prompts and a countdown, before the
                 event starts. */}

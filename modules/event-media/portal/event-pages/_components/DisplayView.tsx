@@ -82,6 +82,8 @@ interface DisplayItem {
   card?: CardCopy | null
   /** 'booth' | 'day' | 'ready' | 'seed'. Older rows read as 'seed'. */
   album?: string
+  /** The photograph the guest took, where the booth kept one. */
+  selfie?: string | null
   created_at: string
 }
 
@@ -218,6 +220,10 @@ function poolFor(all: DisplayItem[], mode: ViewName, wedflixOnly = false, needsL
   // fault. The other effects use neither, and waiting for them only kept
   // a just-posted booth picture off the wall for half a minute
   // (2026-09-22). The guest's own gallery is never gated.
+  // Booth selfies: the photographs guests took, not what was made of
+  // them. They have no layers and no browse copy, so nothing is waited
+  // for -- only a booth picture that kept its selfie qualifies.
+  if (mode === 'selfies') return all.filter((p) => p.album === 'booth' && p.selfie)
   const shown = needsLayers ? all.filter((p) => isReady(p)) : all
   if (mode === 'preload') {
     // Anything not explicitly another view's. Older rows carry no album
@@ -310,12 +316,14 @@ function wallLayoutFor(count: number, columns = 0) {
  * which fills the cell with that photo's own colours (asked 2026-09-22).
  * A wall that crops its photos to fill needs no such backing.
  */
-function WallPicture({ item, fit, style }: {
+function WallPicture({ item, fit, style, selfies }: {
   item: DisplayItem
   fit: string
   style?: React.CSSProperties
+  /** The selfies view shows what the guest took, not what was made. */
+  selfies?: boolean
 }) {
-  const src = item.variants?.medium || item.url
+  const src = (selfies && item.selfie) || item.variants?.medium || item.url
   return (
     <div className="absolute inset-0" style={style}>
       {fit === 'object-contain' && (
@@ -441,7 +449,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     : settings.stream
   const view: StreamSettings = settings[activeStream] ?? DEFAULT_SETTINGS[activeStream]
   const wedflixOnly = view.effect === 'wedflix'
-  const needsLayers = view.effect === 'wedflix' || view.effect === 'cinematic'
+  const needsLayers = activeStream !== 'selfies'
+    && (view.effect === 'wedflix' || view.effect === 'cinematic')
 
   // Read by the rotation clock, so it can skip an album with nothing to
   // show without restarting every time a photo lands or a setting moves.
@@ -560,6 +569,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // Set by the effect below; read by the key handler, which is bound once.
   const stepViewRef = useRef<(delta: number) => void>(() => {})
   const [viewToast, setViewToast] = useState<string | null>(null)
+  // Read inside callbacks that must not be rebuilt when the view changes.
+  const activeStreamRef = useRef<ViewName>('preload')
 
   const updateSettings = useCallback((patch: Partial<DisplaySettings>) => {
     setSettings((prev) => {
@@ -971,6 +982,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
    * missing thumbnails, so it needs no new infrastructure.
    */
   const displaySrc = useCallback((item: DisplayItem): string => {
+    // In the selfies view, the photograph the guest took is the picture.
+    if (activeStreamRef.current === 'selfies' && item.selfie) return item.selfie
     const dpr = Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 2)
     const w = Math.min(3840, Math.max(1280, Math.round((window.innerWidth || 1920) * dpr)))
     const h = Math.round((w * 9) / 16)
@@ -1040,7 +1053,8 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   // page while the booth's posters are up, the wedding-photos page for
   // every other view. Built from this page's own address, so it works on
   // the event's own domain and on the portal alike.
-  const qrTab: 'booth' | 'photos' = activeStream === 'booth' ? 'booth' : 'photos'
+  activeStreamRef.current = activeStream
+  const qrTab: 'booth' | 'photos' = activeStream === 'booth' || activeStream === 'selfies' ? 'booth' : 'photos'
   useEffect(() => {
     if (!code || settings.qrMode === 'hidden') { setQrDataUrl(null); return }
     const target = `${window.location.origin}${window.location.pathname}?u=${code}${qrTab === 'booth' ? '&tab=booth' : ''}`
@@ -1312,10 +1326,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
    */
   const wallFit = (view.columns ?? 0) > 0 ? 'object-contain' : 'object-cover'
   // The wall, with the 3D renderer in every cell.
-  const wallCinematic = view.mode === 'wall' && view.effect === 'cinematic'
+  const wallCinematic = view.mode === 'wall' && view.effect === 'cinematic' && activeStream !== 'selfies'
 
   const wedflixActive = view.effect === 'wedflix'
-  const cinematicActive = view.effect === 'cinematic' || wedflixActive
+  const cinematicActive = (view.effect === 'cinematic' || wedflixActive) && activeStream !== 'selfies'
   const cardCopy = (current?.card ?? null) as CardCopy | null
 
   // The browse card is for the day's own photographs. The seed selfies
@@ -1456,7 +1470,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               {wallCinematic && cell.current ? (
                 <>
                   {/* eslint-disable-next-line @next/next/no-img-element -- ambient fill */}
-                  <img src={cell.current.variants?.medium || cell.current.url} alt="" aria-hidden="true" className="bx-none bx-ambient-wall" style={{ position: 'absolute', inset: '-6%', width: '112%', height: '112%', objectFit: 'cover', filter: 'blur(38px) brightness(.45) saturate(1.2)' }} />
+                  <img src={(activeStream === 'selfies' && cell.current.selfie) || cell.current.variants?.medium || cell.current.url} alt="" aria-hidden="true" className="bx-none bx-ambient-wall" style={{ position: 'absolute', inset: '-6%', width: '112%', height: '112%', objectFit: 'cover', filter: 'blur(38px) brightness(.45) saturate(1.2)' }} />
                   <CinematicPhoto
                     src={displaySrc(cell.current)}
                     plateSrc={cell.current.variants?.plate ?? null}
@@ -1479,6 +1493,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                   key={`out-${cell.previous.id}-${cell.current?.id ?? ''}`}
                   item={cell.previous}
                   fit={wallFit}
+                  selfies={activeStream === 'selfies'}
                   style={{ animation: 'emfadeout 900ms ease forwards' }}
                 />
               )}
@@ -1487,6 +1502,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
                   key={cell.current.id}
                   item={cell.current}
                   fit={wallFit}
+                  selfies={activeStream === 'selfies'}
                   style={{ animation: slideAnimation(view.effect, cell.current.id, view.intervalMs) }}
                 />
               )}

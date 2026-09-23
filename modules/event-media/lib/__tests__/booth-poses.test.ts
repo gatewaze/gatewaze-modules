@@ -1,7 +1,7 @@
 // @ts-nocheck — vitest harness.
 
 import { describe, it, expect } from 'vitest';
-import { BOOTH_POSES, boothPose, poseOfTheHour, poseChangesAt, fingerLook, fingerChoices } from '../booth-poses.js';
+import { BOOTH_POSES, boothPose, poseOfTheHour, poseChangesAt } from '../booth-poses.js';
 import { boothEffect, buildPrompt } from '../booth-effects.js';
 import { BOOTH_ERAS } from '../booth-eras.js';
 
@@ -60,21 +60,6 @@ describe('pose of the hour', () => {
 
   it('never divides by a nonsense interval', () => {
     for (const bad of [0, -5, 0.2]) expect(poseOfTheHour(at('2026-09-25T20:00:00Z'), bad)).toBeTruthy();
-  });
-});
-
-describe('fingers choose the look', () => {
-  const looks = BOOTH_ERAS.find((e) => e.key === '1980s').looks.uk;
-
-  it('gives one look per finger, after the decade itself', () => {
-    expect(looks.length).toBeGreaterThanOrEqual(6);
-    expect(fingerLook(1, looks)).toBe(looks[1]);
-    expect(fingerLook(5, looks)).toBe(looks[5]);
-    expect(fingerChoices(looks.map((id) => ({ id })))).toHaveLength(5);
-  });
-
-  it('means "keep what they picked" for no fingers or an unreadable hand', () => {
-    for (const n of [0, 6, -1, 1.5, NaN]) expect(fingerLook(n, looks)).toBeNull();
   });
 });
 

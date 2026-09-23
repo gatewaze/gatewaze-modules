@@ -18,6 +18,9 @@ import {
   normaliseRotation,
   nextInRotation,
   dayAlbums,
+  DEFAULT_SELFIES,
+  VIEW_LABEL,
+  VIEW_ORDER,
   DAY_ONLY_AFTER,
   DEFAULT_PRELOAD,
   DEFAULT_DAY,
@@ -69,8 +72,8 @@ describe('migrateStreams', () => {
 });
 
 describe('normaliseStream', () => {
-  it('accepts the three views and the rotation', () => {
-    for (const v of ['preload', 'day', 'booth', 'mix']) expect(normaliseStream(v)).toBe(v);
+  it('accepts every view and the rotation', () => {
+    for (const v of ['preload', 'day', 'booth', 'selfies', 'mix']) expect(normaliseStream(v)).toBe(v);
   });
 
   it('turns a saved Getting ready view into The day', () => {
@@ -162,5 +165,21 @@ describe('nextInRotation', () => {
 
   it('holds a one-view rotation on that view', () => {
     expect(nextInRotation(['booth'], 'booth', all)).toBe('booth');
+  });
+});
+
+
+describe('the booth selfies view', () => {
+  it('is offered, named, and has settings of its own', () => {
+    expect(VIEW_ORDER).toContain('selfies');
+    expect(VIEW_LABEL.selfies).toBe('Booth selfies');
+    // Nothing has been made of a selfie yet, so it starts on a plain wall.
+    expect(migrateStreams({}).selfies).toEqual(DEFAULT_SELFIES);
+    expect(DEFAULT_SELFIES.effect).not.toBe('cinematic');
+    expect(DEFAULT_SELFIES.effect).not.toBe('wedflix');
+  });
+
+  it('can be part of a rotation', () => {
+    expect(normaliseRotation(['booth', 'selfies'])).toEqual(['booth', 'selfies']);
   });
 });

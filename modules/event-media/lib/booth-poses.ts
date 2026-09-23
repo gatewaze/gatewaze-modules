@@ -13,15 +13,13 @@
  * a rain-slicked door; in a 1980s booth it is a buddy-cop poster. The
  * decade supplies the world, the pose supplies the moment.
  *
- * Three ways in, all using this one list:
+ * Two ways in, both using this one list:
  *
  *   pose of the hour   every guest is asked for the same pose for a
  *                      while, so the projector fills with twenty takes
  *                      on it and the room notices
- *   pose card          the booth deals a pose at random
- *   fingers            not a pose at all -- hold up one to five fingers
- *                      and the photo itself chooses the look (see
- *                      lib/booth-eras.ts for the looks; fingerLook below)
+ *   pose card          the booth deals a pose at random each time
+ *                      someone steps in
  *
  * `instruction` is read by a guest standing in a booth, so it is short
  * enough to take in at a glance. `prompt` is read by the model and
@@ -207,22 +205,4 @@ export function poseChangesAt(now: Date | number, intervalMinutes: number): Date
   const ms = minutes * 60_000;
   const t = typeof now === 'number' ? now : now.getTime();
   return new Date((Math.floor(t / ms) + 1) * ms);
-}
-
-/**
- * Fingers held up in the photograph, and the look they choose.
- *
- * A decade offers six looks: the first is the decade itself ("put us in
- * the 1970s"), and the five after it are its particular looks -- which is
- * exactly one per finger. Nought fingers, or a hand nobody can read,
- * means the guest gets what they picked on the way in.
- */
-export function fingerLook(fingers: number, looks: readonly string[]): string | null {
-  if (!Number.isInteger(fingers) || fingers < 1 || fingers > 5) return null;
-  return looks.slice(1)[fingers - 1] ?? null;
-}
-
-/** The five looks a guest can choose between with their hand. */
-export function fingerChoices<T extends { id: string }>(looks: readonly T[]): T[] {
-  return looks.slice(1, 6);
 }

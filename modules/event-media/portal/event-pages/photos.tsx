@@ -358,7 +358,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // A look chosen before the camera opens, applied as soon as the photo
   // comes back — so the guest picks the result they want, rather than
   // discovering the options afterwards.
-  const [pendingExtra, setPendingExtra] = useState<{ pose?: string | null; fingers?: boolean; decade?: string | null } | null>(null)
+  const [pendingExtra, setPendingExtra] = useState<{ pose?: string | null; decade?: string | null; place?: string | null } | null>(null)
   const [pendingLook, setPendingLook] = useState<
     { key: string; payload: { filter_id: string } | { effect: string } } | null
   >(null)
@@ -888,7 +888,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const applyEffect = useCallback(async (
     key: string,
     payload: { filter_id: string } | { effect: string },
-    extra?: { pose?: string | null; fingers?: boolean; decade?: string | null; place?: string | null },
+    extra?: { pose?: string | null; decade?: string | null; place?: string | null },
   ) => {
     if (!code || !guest || !shot) return
     setShot((s) => (s ? { ...s, busy: key, error: null } : s))
@@ -912,7 +912,6 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
           // allowed to change the look.
           ...(extra?.pose ? { pose: extra.pose } : {}),
           ...(extra?.place ? { place: extra.place } : {}),
-          ...(extra?.fingers && extra.decade ? { fingers: true, decade: extra.decade } : {}),
         }),
       })
       const data = await res.json().catch(() => null)
@@ -933,8 +932,6 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
         busy: null,
         preview: image,
         filterLabel: data.effect?.label ?? data.filter?.label ?? null,
-        // 1-5 when the booth read a hand and changed the look to match.
-        fingers: typeof data?.fingers === 'number' && data.fingers >= 1 && data.fingers <= 5 ? data.fingers : null,
         mediaId: typeof data?.media_id === 'string' ? data.media_id : null,
       } : s))
     } catch {
@@ -1131,7 +1128,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // path as the camera app does.
   const onBoothCaptured = useCallback((dataUrl: string, look: BoothLook | null) => {
     setPendingExtra(look
-      ? { pose: look.pose ?? null, fingers: look.fingers === true, decade: look.decade ?? null, place: look.place ?? null }
+      ? { pose: look.pose ?? null, decade: look.decade ?? null, place: look.place ?? null }
       : null)
     setPendingLook(look ? { key: look.key, payload: look.payload } : null)
     setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
