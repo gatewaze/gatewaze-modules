@@ -557,6 +557,10 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
   const editTarget: ViewName = editing
   const edited: StreamSettings = settings[editTarget] ?? DEFAULT_SETTINGS[editTarget]
 
+  // Set by the effect below; read by the key handler, which is bound once.
+  const stepViewRef = useRef<(delta: number) => void>(() => {})
+  const [viewToast, setViewToast] = useState<string | null>(null)
+
   const updateSettings = useCallback((patch: Partial<DisplaySettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch }
@@ -574,6 +578,25 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       return next
     })
   }, [settingsKey, editing])
+
+  /**
+   * One view forward or back, wrapping round, and a word on screen so
+   * whoever pressed the button can see what they changed. A projector
+   * running a rotation drops out of it into the view it lands on.
+   */
+  stepViewRef.current = (delta: number) => {
+    const here = settings.stream === 'mix' ? activeStream : settings.stream
+    const i = VIEW_ORDER.indexOf(here as ViewName)
+    const next = VIEW_ORDER[((i < 0 ? 0 : i) + delta + VIEW_ORDER.length) % VIEW_ORDER.length]!
+    updateSettings({ stream: next })
+    setViewToast(VIEW_LABEL[next])
+  }
+
+  useEffect(() => {
+    if (!viewToast) return
+    const t = setTimeout(() => setViewToast(null), 1800)
+    return () => clearTimeout(t)
+  }, [viewToast])
 
   // ── Link + photo feed ─────────────────────────────────────────────
 
@@ -1188,10 +1211,22 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
       // Escape always works, including to close the panel from a field.
       // M must not fire while someone is typing a URL or a YouTube id.
       const toggle = e.key === 'Escape' || (!typing && (e.key === 'm' || e.key === 'M'))
-      if (!toggle) return
+      if (toggle) {
+        e.preventDefault()
+        setShowHint(false)
+        setMenuVisible((v) => !v)
+        return
+      }
+      // A presenter's clicker: its next and previous buttons send the
+      // arrow keys (and, on some, page up and down), so they walk
+      // through the views -- Preload, The day, Photo booth (asked
+      // 2026-09-23). Nothing else on a projector wants these keys.
+      if (typing) return
+      const forward = e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown'
+      const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp'
+      if (!forward && !back) return
       e.preventDefault()
-      setShowHint(false)
-      setMenuVisible((v) => !v)
+      stepViewRef.current(forward ? 1 : -1)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -1520,6 +1555,12 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
               })()} — next: {posesInfo.next.label}
             </p>
           )}
+        </div>
+      )}
+
+      {viewToast && (
+        <div className="absolute top-8 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-8 py-3 text-3xl font-semibold text-white backdrop-blur">
+          {viewToast}
         </div>
       )}
 
