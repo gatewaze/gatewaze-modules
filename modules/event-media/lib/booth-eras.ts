@@ -32,14 +32,14 @@ export const BOOTH_ERAS: BoothEra[] = [
     key: '1940s', label: '1940s', blurb: 'Dance halls, film noir and Technicolor',
     looks: {
       uk: ['uk-decade-1940s', 'uk-forties-dancehall', 'uk-forties-homefront', 'forties-travel-poster', 'uk-forties-ensa', 'uk-forties-tearoom'],
-      us: ['us-decade-1940s', 'us-forties-pinup', 'us-forties-silverscreen', 'us-forties-soda', 'us-forties-usostage', 'us-forties-route66'],
+      us: ['us-decade-1940s', 'us-forties-pinup', 'us-forties-silverscreen', 'us-forties-soda', 'us-forties-usostage', 'us-forties-route66', 'forties-noir', 'forties-swing', 'forties-technicolor'],
     },
   },
   {
     key: '1950s', label: '1950s', blurb: 'Diners, sock hops and silver-screen glamour',
     looks: {
       uk: ['uk-decade-1950s', 'uk-fifties-coffeebar', 'uk-fifties-teddyboys', 'uk-fifties-seaside', 'uk-fifties-ealing', 'uk-fifties-coronation'],
-      us: ['us-decade-1950s', 'us-fifties-diner', 'us-fifties-drivein-us', 'us-fifties-rocknroll-us', 'us-fifties-suburbia', 'us-fifties-hotrod'],
+      us: ['us-decade-1950s', 'us-fifties-diner', 'us-fifties-drivein-us', 'us-fifties-rocknroll-us', 'us-fifties-suburbia', 'us-fifties-hotrod', 'fifties-sockhop', 'fifties-atomic', 'fifties-hollywood'],
     },
   },
   {
@@ -52,21 +52,21 @@ export const BOOTH_ERAS: BoothEra[] = [
   {
     key: '1970s', label: '1970s', blurb: 'Disco, glam rock and roller rinks',
     looks: {
-      uk: ['uk-decade-1970s', 'seventies-glam', 'uk-seventies-punk', 'uk-seventies-northernsoul', 'uk-seventies-topofthepops', 'uk-seventies-package'],
-      us: ['us-decade-1970s', 'us-seventies-studio', 'us-seventies-van', 'us-seventies-copshow', 'us-seventies-rollerdisco', 'us-seventies-rodeo'],
+      uk: ['uk-decade-1970s', 'seventies-glam', 'uk-seventies-punk', 'uk-seventies-northernsoul', 'uk-seventies-topofthepops', 'uk-seventies-package', 'uk-seventies-terrace'],
+      us: ['us-decade-1970s', 'us-seventies-studio', 'us-seventies-van', 'us-seventies-copshow', 'us-seventies-rollerdisco', 'us-seventies-rodeo', 'seventies-studio'],
     },
   },
   {
     key: '1980s', label: '1980s', blurb: 'Big hair, neon and movie posters',
     looks: {
-      uk: ['uk-decade-1980s', 'uk-eighties-newromantic', 'uk-eighties-2tone', 'uk-eighties-indiedisco', 'uk-eighties-stadium', 'vhs-box'],
-      us: ['us-decade-1980s', 'us-eighties-mall', 'us-eighties-miami', 'us-eighties-prom', 'us-eighties-aerobics', 'us-eighties-arcade'],
+      uk: ['uk-decade-1980s', 'uk-eighties-newromantic', 'uk-eighties-2tone', 'uk-eighties-indiedisco', 'uk-eighties-stadium', 'vhs-box', 'eighties-portrait'],
+      us: ['us-decade-1980s', 'us-eighties-mall', 'us-eighties-miami', 'us-eighties-prom', 'us-eighties-aerobics', 'us-eighties-arcade', 'top-gun', 'dance-movie', 'synthwave'],
     },
   },
   {
     key: '1990s', label: '1990s', blurb: 'Sitcoms, grunge, raves and pop videos',
     looks: {
-      uk: ['uk-decade-1990s', 'uk-nineties-britpop', 'uk-nineties-club', 'uk-nineties-euro96', 'uk-nineties-schoolphoto', 'nineties-popvideo'],
+      uk: ['uk-decade-1990s', 'uk-nineties-britpop', 'uk-nineties-club', 'uk-nineties-euro96', 'uk-nineties-schoolphoto', 'nineties-popvideo', 'nineties-rave'],
       us: ['us-decade-1990s', 'us-nineties-sitcom-us', 'us-nineties-seattle', 'us-nineties-hiphop', 'us-nineties-yearbook-us', 'us-nineties-camp'],
     },
   },
@@ -74,21 +74,21 @@ export const BOOTH_ERAS: BoothEra[] = [
     key: '2000s', label: '2000s', blurb: 'Digicams, pop stars and red carpets',
     looks: {
       uk: ['uk-decade-2000s', 'uk-noughties-indie', 'uk-noughties-festival', 'uk-noughties-night-out', 'uk-noughties-msn', 'noughties-popstar'],
-      us: ['us-decade-2000s', 'us-noughties-mtv', 'us-noughties-teenpop', 'us-noughties-redcarpet-us', 'us-noughties-teenmovie', 'us-noughties-webcam-us'],
+      us: ['us-decade-2000s', 'us-noughties-mtv', 'us-noughties-teenpop', 'us-noughties-redcarpet-us', 'us-noughties-teenmovie', 'us-noughties-webcam-us', 'noughties-club'],
     },
   },
   {
     key: '2010s', label: '2010s', blurb: 'Festivals, filters and blockbusters',
     looks: {
       uk: ['uk-decade-2010s', 'tens-hipster', 'tens-festival', 'uk-tens-pubroast', 'uk-tens-staycation', 'uk-tens-perioddrama'],
-      us: ['us-decade-2010s', 'us-tens-coachella', 'us-tens-brooklyn', 'us-tens-superhero', 'us-tens-bigsur', 'us-tens-brunch'],
+      us: ['us-decade-2010s', 'us-tens-coachella', 'us-tens-brooklyn', 'us-tens-superhero', 'us-tens-bigsur', 'us-tens-brunch', 'tens-dystopia', 'tens-rustic'],
     },
   },
   {
     key: '2020s', label: '2020s', blurb: 'Portrait mode, neon cities and film revival',
     looks: {
       uk: ['uk-decade-2020s', 'uk-twenties-citystreet', 'twenties-film-camera', 'twenties-prestige-drama', 'twenties-streetwear', 'twenties-garden-party'],
-      us: ['us-decade-2020s', 'us-twenties-rooftop', 'us-twenties-film', 'us-twenties-prestige', 'us-twenties-street', 'us-twenties-desert'],
+      us: ['us-decade-2020s', 'us-twenties-rooftop', 'us-twenties-film', 'us-twenties-prestige', 'us-twenties-street', 'us-twenties-desert', 'twenties-neon-city'],
     },
   },
 ];
