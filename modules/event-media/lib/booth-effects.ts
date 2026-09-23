@@ -59,6 +59,25 @@ const KEEP =
   'Keep the same people with their exact same faces, facial features, skin tone, eyeglasses and ' +
   'identity. Do not beautify them. Photorealistic.';
 
+/**
+ * Two faces, two identities.
+ *
+ * With more than one person in the frame the model reliably keeps one
+ * likeness and lets the other drift, usually the smaller, softer-lit or
+ * older face -- a mother came back a stranger, and younger (reported
+ * 2026-09-23). Each face gets a fraction of the attention and of the
+ * pixels, and the period hair and make-up the look asks for is applied
+ * over the very region identity lives in. So: say that every face is
+ * equally the subject, and that age is part of a likeness.
+ */
+const EVERY_FACE =
+  'EVERY person in the photograph is equally the subject: give each face the same care, and do ' +
+  'not let one likeness slip while another is kept. Each keeps their own age, face shape, jawline, ' +
+  'nose, eyes, eyebrows, lines and wrinkles, hair colour and hairline: an older person stays ' +
+  'visibly the same age, nobody is made younger, thinner, smoother or more symmetrical, and no ' +
+  'two faces are blended towards each other. Style the clothes, the hair and the scene as the ' +
+  'look asks; leave the faces themselves alone.';
+
 /** Posters and covers: see the note above the era looks. */
 const POSTER_FACES =
   'Frame the people close, from about the chest up, so their faces are large and clear and facing ' +
@@ -934,7 +953,7 @@ export function buildPrompt(effect: BoothEffect, pose?: string | null, place?: s
   // rather than looked up, so the decades and the effects stay apart.
   const where = place ? ` ${place}` : '';
   return `${SAME_PEOPLE_FIRST}${keepPose} Now restyle the photo as ${effect.style}${where} ` +
-    `${KEEP} ${body} ${NO_NAMES}${keepPose} ${SAME_PEOPLE_LAST}`;
+    `${KEEP} ${EVERY_FACE} ${body} ${NO_NAMES}${keepPose} ${SAME_PEOPLE_LAST}`;
 }
 
 /**
@@ -962,7 +981,7 @@ export function buildSamplePrompt(
     `${n === 1 ? 'that person' : 'these people together'}, and no one else. ` +
     `Make it ${effect.style}${place ? ` ${place}` : ''} Frame them from about the waist up, facing the camera, close enough that ` +
     `every face is large and clear. Keep each person's exact face, features, skin tone, eyeglasses and ` +
-    `identity from their reference photos. Do not beautify them. Photorealistic. ${body} ${NO_NAMES} ` +
+    `identity from their reference photos. Do not beautify them. Photorealistic. ${EVERY_FACE} ${body} ${NO_NAMES} ` +
     `Reminder: ${count} in the picture, each exactly as in their references.`;
 }
 
