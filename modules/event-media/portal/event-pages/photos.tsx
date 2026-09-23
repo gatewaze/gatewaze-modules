@@ -888,7 +888,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const applyEffect = useCallback(async (
     key: string,
     payload: { filter_id: string } | { effect: string },
-    extra?: { pose?: string | null; fingers?: boolean; decade?: string | null },
+    extra?: { pose?: string | null; fingers?: boolean; decade?: string | null; place?: string | null },
   ) => {
     if (!code || !guest || !shot) return
     setShot((s) => (s ? { ...s, busy: key, error: null } : s))
@@ -911,6 +911,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
           // What the booth asked them to do, and whether their hand is
           // allowed to change the look.
           ...(extra?.pose ? { pose: extra.pose } : {}),
+          ...(extra?.place ? { place: extra.place } : {}),
           ...(extra?.fingers && extra.decade ? { fingers: true, decade: extra.decade } : {}),
         }),
       })
@@ -1129,7 +1130,9 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // live camera in its window, and goes through the same look-then-apply
   // path as the camera app does.
   const onBoothCaptured = useCallback((dataUrl: string, look: BoothLook | null) => {
-    setPendingExtra(look ? { pose: look.pose ?? null, fingers: look.fingers === true, decade: look.decade ?? null } : null)
+    setPendingExtra(look
+      ? { pose: look.pose ?? null, fingers: look.fingers === true, decade: look.decade ?? null, place: look.place ?? null }
+      : null)
     setPendingLook(look ? { key: look.key, payload: look.payload } : null)
     setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
   }, [])

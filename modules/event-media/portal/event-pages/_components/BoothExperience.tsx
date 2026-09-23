@@ -61,12 +61,16 @@ export interface BoothView {
   picker: Painted | null
   eras: BoothEraView[]
   poses?: BoothPoses | null
+  /** Britain or America (lib/booth-places.ts). */
+  places?: { options: Array<{ id: string; label: string; blurb: string }>; default: string } | null
 }
 
 export interface BoothLook {
   key: string
   payload: { filter_id: string } | { effect: string }
   label: string
+  /** Whose version of the decade: 'uk' or 'us'. */
+  place?: string | null
   /** The pose the booth asked for, when it asked for one. */
   pose?: string | null
   /** Let the fingers in the photo choose the look, within this decade. */
@@ -330,6 +334,16 @@ const STYLES = `
 .bx-fingers-said{position:absolute;left:8px;right:8px;top:8px;pointer-events:none;border-radius:12px;padding:8px 10px;text-align:center;
   font-size:14px;font-weight:700;background:rgba(0,0,0,.5)}
 
+.bx-places{position:absolute;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);z-index:6;
+  margin:0 auto;max-width:26rem;display:flex;gap:8px;border-radius:16px;padding:6px;
+  background:rgba(10,8,20,.6);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.bx-place{flex:1;border-radius:12px;padding:8px 6px;text-align:center;color:rgba(255,255,255,.75);
+  display:flex;flex-direction:column;gap:1px;transition:background 160ms ease,color 160ms ease}
+.bx-place b{font-size:14px;font-weight:800}
+.bx-place span{font-size:10px;opacity:.7;line-height:1.2}
+.bx-place-on{background:rgba(255,255,255,.18);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.28)}
+
 /* A sideways phone: short and wide. More columns across the extra width,
    so a decade or a look is still a comfortable tap and fewer of them are
    below the fold (asked 2026-09-22). */
@@ -395,6 +409,15 @@ export default function BoothExperience(props: Props) {
   // The pose this sitting is doing. In 'hour' mode it is whatever the
   // clock says; in 'card' mode the booth deals one when they walk in.
   const [dealt, setDealt] = useState<{ id: string; label: string; instruction: string } | null>(null)
+  // Britain or America. Chosen at the bottom of the decade page and kept
+  // for next time (asked 2026-09-23).
+  const [place, setPlace] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(`${historyKey}:place`)
+      if (saved) return saved
+    } catch { /* private mode */ }
+    return booth.places?.default ?? 'uk'
+  })
   // Ticks once a second so the countdown to the next pose stays honest.
   const [now, setNow] = useState(() => Date.now())
   const [cam, setCam] = useState<CamState>('off')
@@ -426,6 +449,7 @@ export default function BoothExperience(props: Props) {
   const recordedRef = useRef<string | null>(null)
   // Read at the moment the shutter fires, not when capture() was made.
   const poseRef = useRef<string | null>(null)
+  const placeRef = useRef<string>('uk')
   const fingersRef = useRef(false)
   const eraRef = useRef<string>('')
   // Always the current shutter, for listeners that outlive a render.
@@ -827,6 +851,7 @@ export default function BoothExperience(props: Props) {
     ctx.drawImage(v, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height)
     onCaptured(canvas.toDataURL('image/jpeg', 0.9), look && {
       ...look,
+      place: placeRef.current,
       pose: poseRef.current,
       fingers: fingersRef.current,
       decade: eraRef.current,
@@ -904,6 +929,7 @@ export default function BoothExperience(props: Props) {
     const l = era.looks.find((x) => x.id === id)
     return { key: id, payload: { effect: id }, label: l?.label ?? effects.find((e) => e.id === id)?.label ?? id }
   }
+  placeRef.current = place
   poseRef.current = pose?.id ?? null
   fingersRef.current = fingersOn
   eraRef.current = era.key
@@ -1072,6 +1098,27 @@ export default function BoothExperience(props: Props) {
               (k, i) => enter(lookOf(k), i),
               hasMore,
             )}
+
+        {onPicker && (booth.places?.options.length ?? 0) > 1 && (
+          <div className="bx-places">
+            {booth.places!.options.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                className={`bx-place${place === o.id ? ' bx-place-on' : ''}`}
+                aria-pressed={place === o.id}
+                onClick={() => {
+                  setPlace(o.id)
+                  try { localStorage.setItem(`${historyKey}:place`, o.id) } catch { /* private mode */ }
+                  flashNotice(`${o.label} decades`)
+                }}
+              >
+                <b>{o.label}</b>
+                <span>{o.blurb}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {hasMore && phase === 'board' && era.board && !landscape && (
           <button

@@ -130,3 +130,54 @@ describe('the morning before', () => {
     expect(readyPrompt('nope')).toBeNull();
   });
 });
+
+import { BOOTH_PLACES, DEFAULT_PLACE, boothPlace, placeRail } from '../booth-places.js';
+import { BOOTH_ERAS as ERAS } from '../booth-eras.js';
+
+describe('Britain or America', () => {
+  it('offers two, and defaults to British', () => {
+    expect(BOOTH_PLACES.map((p) => p.id)).toEqual(['uk', 'us']);
+    expect(DEFAULT_PLACE).toBe('uk');
+    expect(boothPlace('us')).toBe('us');
+    // Anything else is the default rather than an error a guest would see.
+    for (const bad of ['UK', 'france', '', null, undefined, 7, {}]) expect(boothPlace(bad)).toBe('uk');
+  });
+
+  it('has a rail for every decade in both places, and they differ', () => {
+    for (const era of ERAS) {
+      const uk = placeRail(era.key, 'uk');
+      const us = placeRail(era.key, 'us');
+      expect(uk.length).toBeGreaterThan(80);
+      expect(us.length).toBeGreaterThan(80);
+      expect(uk).not.toBe(us);
+      // Hair is what gives a decade and a country away.
+      expect(uk.toLowerCase()).toContain('hair');
+      expect(us.toLowerCase()).toContain('hair');
+    }
+  });
+
+  it('says nothing at all for a look outside the decades', () => {
+    expect(placeRail(null, 'uk')).toBe('');
+    expect(placeRail('1930s', 'uk')).toBe('');
+  });
+
+  it('keeps the American sixties out of the British one, and the other way about', () => {
+    const uk = placeRail('1960s', 'uk').toLowerCase();
+    const us = placeRail('1960s', 'us').toLowerCase();
+    expect(uk).toContain('sassoon');
+    expect(uk).toContain('never the american sixties');
+    expect(us).toContain('flipped-out bouffant');
+    expect(uk).not.toContain('palm springs');
+  });
+});
+
+describe('a place in the prompt', () => {
+  it('follows the look and is absent when no place is given', () => {
+    const effect = boothEffect('sixties-beat');
+    const rail = placeRail('1960s', 'uk');
+    expect(buildPrompt(effect, null, rail)).toContain('Sassoon');
+    expect(buildPrompt(effect)).not.toContain('Sassoon');
+    // The look itself no longer names a country: that is the rail's job.
+    expect(effect.style).not.toMatch(/British|London|American/);
+  });
+});

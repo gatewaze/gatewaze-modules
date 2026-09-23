@@ -56,7 +56,12 @@ export function readyPrompt(id: unknown): ReadyPrompt | null {
  */
 export const READY_OPENS_MS = 36 * 60 * 60 * 1000;
 
-export function readyWindow(eventStart: string | null | undefined, now: number): {
+export function readyWindow(
+  eventStart: string | null | undefined,
+  now: number,
+  /** Hours before the event it opens; 0 turns it off. */
+  hours?: number | null,
+): {
   active: boolean;
   starts_at: string | null;
   /** Milliseconds until the event; null when there is no start time. */
@@ -64,9 +69,12 @@ export function readyWindow(eventStart: string | null | undefined, now: number):
 } {
   const start = eventStart ? Date.parse(eventStart) : NaN;
   if (!Number.isFinite(start)) return { active: false, starts_at: null, until: null };
+  const window = Number.isFinite(hours) && hours !== null && hours !== undefined
+    ? Math.max(0, Math.min(336, hours)) * 60 * 60 * 1000
+    : READY_OPENS_MS;
   const until = start - now;
   return {
-    active: until > 0 && until <= READY_OPENS_MS,
+    active: window > 0 && until > 0 && until <= window,
     starts_at: new Date(start).toISOString(),
     until,
   };
