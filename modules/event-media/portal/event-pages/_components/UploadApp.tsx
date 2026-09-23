@@ -352,7 +352,7 @@ export default function UploadApp(props: Props) {
               <div className="ua-ready">
                 <p className="ua-ready-kicker">Getting ready</p>
                 <p className="ua-ready-count">{ready.countdown}</p>
-                <p className="ua-ready-say">Share what you get up to with everyone coming today.</p>
+                <p className="ua-ready-say">Show everyone how getting ready is going — the outfit, the shoes, the first drink.</p>
                 <div className="ua-ready-row">
                   <button type="button" className="ua-ready-btn" onClick={() => selfieRef.current?.click()}>
                     <svg width="20" height="20" fill="none" viewBox="0 0 24 24" strokeWidth={1.9} stroke="currentColor" aria-hidden="true">
