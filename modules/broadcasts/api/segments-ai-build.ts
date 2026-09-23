@@ -153,6 +153,7 @@ function buildSystemPrompt(eventNames: string[], catalog: Catalog): string {
       '- For membership / subscription targeting, emit a condition of the given "type", set the operator, and merge in the params for the chosen entity from these module sources (prefer the NEWSLETTER entry when the user names a newsletter — its list resolves live). Do NOT guess an id that is not listed — add a warning instead:',
       sourceLines,
     ] : []),
+    '- For "already sent / opened / clicked <a broadcast or newsletter>" (e.g. "exclude everyone we already sent the AGNTCon broadcast", "people who opened the last newsletter"), use the email_engagement source: set source_id to the listed broadcast/newsletter entity id and operator to was_sent/not_sent/opened/not_opened/clicked/not_clicked. "exclude … already sent" → not_sent. Only use an id present in the listed entities.',
     '- Use match="all" for AND, match="any" for OR. Nest with type:"group" when mixing.',
     '- When a request cannot be fully expressed, still produce the closest approximation AND add a clear note to the warnings array.',
     '- explanation: a short plain-language readback of exactly who this targets.',

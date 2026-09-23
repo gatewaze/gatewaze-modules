@@ -54,6 +54,9 @@ const segmentsModule: GatewazeModule = {
     // 015 make the send-testing exclusion opt-outable so deliberate test sends
     // work (audiences referencing the test domain/marker skip the exclusion).
     'migrations/015_test_recipient_optin.sql',
+    // 016 email_engagement condition source: include/exclude by what a person
+    // was sent / opened / clicked for a specific broadcast or newsletter edition.
+    'migrations/016_email_engagement_condition.sql',
   ],
 
   publicApiScopes: [
