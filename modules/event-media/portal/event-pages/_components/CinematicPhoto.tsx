@@ -117,8 +117,15 @@ const MOVES: Move[] = [
   { z0: 1, z1: 1, x0: -0.6, y0: 0.8, x1: 0.8, y1: -0.6 },
 ]
 
-/** Pan + zoom adds a slow push-in on top, inside the Ken Burns range. */
-const ZOOM_IN = { z0: 1.0, z1: 1.06 }
+/**
+ * Pan + zoom adds a slow push-in on top of the pan.
+ *
+ * It was 1.00 to 1.06, which is a 6% move over eight seconds: on a
+ * projector, near enough invisible, and the setting looked broken
+ * (2026-09-23). A push from slightly wide to slightly in reads as a
+ * camera move without fighting the parallax the pan is there to show.
+ */
+const ZOOM_IN = { z0: 1.0, z1: 1.14 }
 
 /** Apply the camera setting to a move. */
 function moveWith(m: Move, camera: 'pan' | 'panzoom'): Move {
@@ -374,6 +381,11 @@ export default function CinematicPhoto({
   const blurRef = useRef(blurTransition)
   const fillRef = useRef(fill)
   cameraRef.current = camera
+  useEffect(() => {
+    for (const layer of [curRef.current, prevRef.current]) {
+      if (layer) layer.move = moveWith(moveFor(layer.src), camera)
+    }
+  }, [camera])
   blurRef.current = blurTransition
   fillRef.current = fill
   durationRef.current = durationMs
@@ -474,6 +486,9 @@ export default function CinematicPhoto({
       const k = Math.max(0, Math.min(1, t))
       const m = layer.move
       const zoom = lerp(m.z0, m.z1, k)
+      // The camera move, readable from outside: a canvas gives nothing
+      // away, and this is how the Pan + zoom setting is checked.
+      if (alpha > 0.5) g.canvas.dataset['zoom'] = zoom.toFixed(3)
       // Normalised travel, mapped to each axis's own room by `place`.
       const panX = lerp(m.x0, m.x1, k)
       const panY = lerp(m.y0, m.y1, k)

@@ -156,6 +156,11 @@ const STYLES = `
 .ua-vslide img,.ua-vslide video{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;user-select:none;-webkit-user-drag:none}
 .ua-view-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;
   background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center}
+.ua-by{position:absolute;left:0;right:0;bottom:0;padding:14px 6px 4px;font-size:10px;font-weight:700;
+  color:#fff;text-align:left;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  background:linear-gradient(180deg,rgba(0,0,0,0),rgba(0,0,0,.72))}
+.ua-view-by{position:absolute;left:0;right:0;bottom:46px;text-align:center;font-size:15px;font-weight:700;
+  color:#fff;text-shadow:0 2px 10px rgba(0,0,0,.8)}
 .ua-view-count{position:absolute;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 16px);text-align:center;
   font-size:13px;color:rgba(255,255,255,.7)}
 .ua-view-close{position:absolute;top:calc(env(safe-area-inset-top,0px) + 12px);right:12px;width:42px;height:42px;border-radius:50%;
@@ -245,7 +250,7 @@ export default function UploadApp(props: Props) {
   const viewList = viewing
     ? viewing.list === 'mine'
       ? tiles.map((t) => ({ id: t.key, src: t.full ?? t.src, isVideo: t.isVideo }))
-      : everyone.map((it) => ({ id: it.id, src: it.variants?.medium || it.url, isVideo: it.kind === 'video' }))
+      : everyone.map((it) => ({ id: it.id, src: it.variants?.medium || it.url, isVideo: it.kind === 'video', by: it.guest_name ?? null }))
     : []
   const viewIndex = viewing ? Math.max(0, viewList.findIndex((v) => v.id === viewing.id)) : 0
 
@@ -473,6 +478,9 @@ export default function UploadApp(props: Props) {
                             ? <video src={it.url} muted playsInline preload="metadata" />
                             // eslint-disable-next-line @next/next/no-img-element -- gallery thumbnail
                             : <img src={it.variants?.thumb || it.url} alt="" loading="lazy" />}
+                          {/* Whose photo this is: a wedding is a room of
+                              people who half know each other. */}
+                          {it.guest_name && <span className="ua-by">{it.guest_name}</span>}
                         </button>
                       ))}
                     </div>
@@ -525,6 +533,7 @@ export default function UploadApp(props: Props) {
               <svg width="22" height="22" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d={CHEVRON_R} /></svg>
             </button>
           )}
+          {viewList[viewIndex]?.by && <p className="ua-view-by">{viewList[viewIndex].by}</p>}
           <p className="ua-view-count">{viewIndex + 1} / {viewList.length}</p>
         </div>
       )}
