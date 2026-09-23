@@ -734,6 +734,137 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
     id: 'us-twenties-desert', label: 'Desert party', blurb: 'Long shadows and warm dust', kind: 'style',
     style: 'a 2020s American desert gathering photograph: sand, long shadows and a low sun, linen and sunglasses, warm dusty colour. ' + DECADE_FRAMING,
   },
+
+  // ── Britain ────────────────────────────────────────────────────
+  // The British board. The looks it used to borrow were American in
+  // all but name -- drive-ins, proms, sock hops, yearbooks (noticed
+  // 2026-09-23) -- so these are the things that actually happened here.
+  {
+    id: 'uk-forties-dancehall', label: 'Palais dance hall', blurb: 'Sprung floor, dance band, uniforms', kind: 'style',
+    style: 'a 1940s British dance-hall photograph: a Palais ballroom with a dance band on a bandstand behind, service uniforms and tea dresses, a sprung wooden floor, warm period colour with slight grain. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-forties-homefront', label: 'Home front', blurb: 'Front step, bunting, a street party', kind: 'style',
+    style: 'a 1940s British home-front photograph: a terraced front step and a street party with paper bunting, utility clothing, headscarves and a knitted cardigan, pale English daylight, faded period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-forties-ensa', label: 'Concert party', blurb: 'A village hall stage and footlights', kind: 'style',
+    style: 'a 1940s British concert-party photograph: a village hall stage with footlights and a painted backdrop, performers in evening dress and uniform, warm stage light, period black-and-white with a soft glow. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-fifties-coffeebar', label: 'Coffee bar', blurb: 'Espresso machine, skiffle, a booth', kind: 'style',
+    style: 'a 1950s British coffee bar photograph: a chrome espresso machine, a skiffle group with a tea-chest bass, formica tables and a wooden booth, steamy windows, warm period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-fifties-teddyboys', label: 'Teddy boys', blurb: 'Drape jackets, quiffs, a street corner', kind: 'style',
+    style: 'a 1950s British Teddy boy photograph: long drape jackets with velvet collars, brothel creepers, quiffs and a pencil skirt, a lamp-lit street corner of terraced houses, high-contrast period film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-fifties-seaside', label: 'Seaside holiday', blurb: 'Deckchairs, a pier and a windbreak', kind: 'style',
+    style: 'a 1950s British seaside holiday photograph: deckchairs, a windbreak and a pier behind, knitted swimwear and a knotted handkerchief, a pebble beach under bright cloudy light, faded period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-fifties-ealing', label: 'British comedy', blurb: 'A black-and-white film still', kind: 'style',
+    style: 'a 1950s British comedy film still: a village street or a corner shop, macs, flat caps and headscarves, gentle mischief in the framing, crisp black-and-white with soft grey tones. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-sixties-kitchensink', label: 'Kitchen sink', blurb: 'Northern terrace, back-to-backs', kind: 'style',
+    style: 'a 1960s British kitchen-sink drama still: a northern terraced street of back-to-backs with washing lines and chimney pots, a duffel coat and a headscarf, grainy high-contrast black-and-white. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-sixties-boutique', label: 'Carnaby boutique', blurb: 'Rails, mirrors and pop colour', kind: 'style',
+    style: 'a 1960s British boutique photograph: a narrow King\'s Road shop with clothes rails, patterned wallpaper and a psychedelic mirror, mini dresses and slim suits, bright pop colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-seventies-punk', label: 'Punk 77', blurb: 'Safety pins, King\'s Road, a stencil wall', kind: 'style',
+    style: 'a 1977 British punk photograph: a stencilled brick wall, torn tartan, safety pins, studs and spiked hair, harsh flash on a night street, grainy high-contrast colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-seventies-northernsoul', label: 'Northern soul', blurb: 'Talcum floor, an all-nighter', kind: 'style',
+    style: 'a 1970s British northern soul all-nighter photograph: a dance floor dusted with talc, high-waisted baggy trousers and vests, mid-spin motion under a single spotlight, grainy warm film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-seventies-topofthepops', label: 'Pop show', blurb: 'Studio lights and a glitter stage', kind: 'style',
+    style: 'a 1970s British television pop show still: a glitter-curtain stage with coloured studio lights, platform boots, satin and glam make-up, flat television lighting, saturated period video colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-seventies-package', label: 'Package holiday', blurb: 'Costa balcony, sangria, sunburn', kind: 'style',
+    style: 'a 1970s British package-holiday photograph: a whitewashed Spanish balcony with a sangria jug, sunburn, flares and a bucket hat, harsh Mediterranean sun, faded warm film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-seventies-terrace', label: 'Match day', blurb: 'Scarves, a terrace, a rosette', kind: 'style',
+    style: 'a 1970s British football terrace photograph: crowded terracing with scarves held overhead, bobble hats, a rosette and a parka, floodlights and breath in cold air, grainy period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-eighties-newromantic', label: 'New Romantic', blurb: 'Frills, eyeliner and a club', kind: 'style',
+    style: 'a 1980s British New Romantic club photograph: ruffled shirts, sashes and heavy eyeliner on everyone, a dim club with coloured gels and dry ice, flash-lit saturated colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-eighties-2tone', label: 'Two tone', blurb: 'Pork pie hats and a checkerboard', kind: 'style',
+    style: 'a 1980s British ska photograph: a black-and-white checkerboard backdrop, pork pie hats, tonic suits and loafers, mid-skank motion, crisp high-contrast monochrome with a spot of colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-eighties-indiedisco', label: 'Indie disco', blurb: 'Sticky floor, fringes, a student bar', kind: 'style',
+    style: 'a 1980s British indie disco photograph: a student bar with a sticky floor and fly posters, anoraks, striped tops and long fringes, harsh flash in a dark room. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-eighties-stadium', label: 'Stadium charity concert', blurb: 'Denim, a crowd, a big stage', kind: 'style',
+    style: 'a 1980s British stadium concert photograph: a vast daylight crowd and a distant stage, denim jackets, headbands and sunglasses, hazy summer light, grainy period colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-nineties-britpop', label: 'Britpop', blurb: 'Anoraks, a union of guitars', kind: 'style',
+    style: 'a 1990s British indie band photograph: a pub back room or a brick alley, anoraks, bowl cuts and tracksuit tops, guitars and amps behind, cool grey British daylight, grainy film. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-nineties-euro96', label: 'Football summer', blurb: 'Shirts, a pub and a big screen', kind: 'style',
+    style: 'a 1990s British football summer photograph: a packed pub with a big screen and flags, replica shirts, arms in the air mid-celebration, warm indoor flash and beer-soaked tables. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-nineties-schoolphoto', label: 'School photo', blurb: 'Mottled blue and a jumper', kind: 'style',
+    style: 'a 1990s British school photograph: a mottled blue studio backdrop, a knitted school jumper and shirt collar, hard flash, slightly soft focus, faded photo-lab colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-nineties-club', label: 'Club night', blurb: 'Lasers, whistles, a warehouse', kind: 'style',
+    style: 'a 1990s British club night photograph: a warehouse with lasers and dry ice, bucket hats, vests and glow sticks, arms in the air, long-exposure light trails and grain. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-noughties-indie', label: 'Indie band', blurb: 'Skinny jeans and a sweaty venue', kind: 'style',
+    style: 'a 2000s British indie band photograph: a small sweaty venue with a low stage, skinny jeans, waistcoats and side fringes, harsh flash and red stage light, digital grain. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-noughties-festival', label: 'Festival mud', blurb: 'Wellies, a poncho, a tent', kind: 'style',
+    style: 'a 2000s British festival photograph: a muddy field of tents with a distant main stage, wellies, a rain poncho and a plastic pint cup, flat grey daylight, digital colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-noughties-night-out', label: 'Saturday night', blurb: 'Pavement, taxis, going-out tops', kind: 'style',
+    style: 'a 2000s British night-out photograph: a wet high-street pavement with taxis and neon bar signs, going-out tops, pointed shoes and straightened hair, harsh compact-camera flash. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-noughties-msn', label: 'Webcam', blurb: 'Bedroom, low-res, a mirror flash', kind: 'style',
+    style: 'a 2000s British bedroom webcam photograph: posters and fairy lights, a low-resolution grainy webcam look, a hoodie and a side fringe, or a mirror shot with a hard flash. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-tens-pubroast', label: 'Sunday roast', blurb: 'Pub table, gravy, a fireplace', kind: 'style',
+    style: 'a 2010s British pub photograph: a wooden table with a roast dinner and a fireplace behind, knitwear and rolled sleeves, warm low light, natural phone-camera colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-tens-staycation', label: 'Seaside staycation', blurb: 'Beach huts, chips, a cagoule', kind: 'style',
+    style: 'a 2010s British seaside photograph: pastel beach huts and a pebble beach, a cagoule, chips and a windswept look, bright overcast light, crisp digital colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-tens-perioddrama', label: 'Period drama', blurb: 'A country house and good manners', kind: 'style',
+    style: 'a still from a 2010s British television period drama: a country house drawing room or gravel drive, restrained Edwardian-styled clothing, soft window light, muted film grading. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-twenties-citystreet', label: 'City street', blurb: 'Glass, brick and British light', kind: 'style',
+    style: 'a 2020s British city street photograph: glass and brick behind, tailored trousers, a knitted vest and chunky trainers, soft overcast British daylight, clean modern colour. ' + DECADE_FRAMING,
+  },
+  {
+    id: 'uk-fifties-coronation', label: 'Street party', blurb: 'Trestle tables, bunting, best frocks', kind: 'style',
+    style: 'a 1950s British coronation street party photograph: trestle tables down a terraced street with paper ' +
+      'bunting and union-jack paper hats, best frocks, blazers and knitted tank tops, sandwiches and lemonade, ' +
+      'pale English daylight, faded period colour. ' + DECADE_FRAMING,
+  },
 ];
 
 /**
