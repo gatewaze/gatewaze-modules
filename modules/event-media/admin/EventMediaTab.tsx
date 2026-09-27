@@ -59,6 +59,7 @@ import {
   mediaKind,
   guestName,
   uploaderKey,
+  compareTaken,
   isGuestUpload,
   formatFileSize,
   mergeSubsetOrder,
@@ -77,7 +78,7 @@ interface EventMediaTabProps {
 
 type TypeFilter = 'all' | 'photos' | 'videos';
 type StatusFilter = 'all' | 'pending' | 'approved' | 'guest';
-type SortOption = 'newest' | 'oldest' | 'name_asc' | 'name_desc' | 'custom';
+type SortOption = 'taken_desc' | 'taken_asc' | 'newest' | 'oldest' | 'name_asc' | 'name_desc' | 'custom';
 
 type DeleteTarget = { kind: 'single'; item: HostMediaItem } | { kind: 'bulk'; ids: string[] };
 
@@ -110,7 +111,7 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
   // Whose photos to show: an uploader key from lib/organizer.ts.
   const [uploaderFilter, setUploaderFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<SortOption>('newest');
+  const [sort, setSort] = useState<SortOption>('taken_desc');
   const [dragMode, setDragMode] = useState(false);
   const [selectedAlbum, setSelectedAlbum] = useState<string | null>(null);
   const selectedSponsor = searchParams.get('sponsorId');
@@ -300,10 +301,12 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
     if (sort === 'custom') return filtered;
     return [...filtered].sort((a, b) => {
       switch (sort) {
+        case 'taken_asc': return -compareTaken(a, b);
+        case 'newest': return b.created_at.localeCompare(a.created_at);
         case 'oldest': return a.created_at.localeCompare(b.created_at);
         case 'name_asc': return a.filename.localeCompare(b.filename);
         case 'name_desc': return b.filename.localeCompare(a.filename);
-        default: return b.created_at.localeCompare(a.created_at);
+        default: return compareTaken(a, b);
       }
     });
   }, [customSorted, search, typeFilter, statusFilter, uploaderFilter, sponsorMedia, sort]);
@@ -583,8 +586,10 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
               className={selectClass}
               aria-label="Sort"
             >
-              <option value="newest">Newest first</option>
-              <option value="oldest">Oldest first</option>
+              <option value="taken_desc">Taken (newest first)</option>
+              <option value="taken_asc">Taken (oldest first)</option>
+              <option value="newest">Uploaded (newest first)</option>
+              <option value="oldest">Uploaded (oldest first)</option>
               <option value="name_asc">Name (A–Z)</option>
               <option value="name_desc">Name (Z–A)</option>
               <option value="custom">Custom order</option>
