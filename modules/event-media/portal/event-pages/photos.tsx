@@ -26,6 +26,7 @@ import DisplayView from './_components/DisplayView'
 import GuestPicker from './_components/GuestPicker'
 import UploadApp, { type UploadTile } from './_components/UploadApp'
 import BoothExperience, { type BoothLook, type BoothView } from './_components/BoothExperience'
+import { takenAtOf } from './_components/_lib/taken-at'
 
 // Same-origin ALWAYS: the portal proxies /api/public/* to the api
 // service (next.config rewrites). NEXT_PUBLIC_API_URL is unreliable in
@@ -131,6 +132,8 @@ type QueueStatus = 'waiting' | 'uploading' | 'processing' | 'done' | 'failed'
 interface QueueItem {
   key: string
   file: File
+  /** When the photograph was taken, read from its own EXIF. */
+  takenAt?: string | null
   /** Which of the morning's asks this answers (lib/ready-prompts.ts). */
   prompt?: string | null
   /** Booth output — goes in its own album, not the day's photos. */
@@ -730,6 +733,10 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
                 captured: q.key.startsWith('cam-'),
                 booth: Boolean(q.booth),
                 prompt: q.prompt ?? null,
+                // Decides the album: a photograph taken while getting
+                // ready belongs under Getting ready even if it is
+                // uploaded days later.
+                taken_at: q.takenAt ?? null,
               })),
             }),
           })
@@ -801,6 +808,13 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       progress: 0,
     }))
     setQueueSafe((prev) => [...prev, ...fresh])
+    // The EXIF read is a slice of each file, so it is quick; the upload
+    // does not wait for it, it simply picks it up when it gets there.
+    void Promise.all(fresh.map(async (item) => {
+      const takenAt = await takenAtOf(item.file)
+      if (!takenAt) return
+      setQueueSafe((prev) => prev.map((q) => (q.key === item.key ? { ...q, takenAt } : q)))
+    })).finally(() => { void pumpQueue() })
     void pumpQueue()
   }, [setQueueSafe, pumpQueue])
 

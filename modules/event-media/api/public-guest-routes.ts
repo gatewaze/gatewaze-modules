@@ -37,7 +37,7 @@ import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js
 import { BOOTH_PLACES, DEFAULT_PLACE, boothPlace, placeRail } from '../lib/booth-places.js';
 import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
-import { albumForUpload, resolveViews, tagView, type View } from '../lib/view-albums.js';
+import { albumForUpload, boothAlbum, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
 import { BOOTH_ERAS, eraAllLooks, eraLooks, erasFor, isEraSetting } from '../lib/booth-eras.js';
 import eventMediaModule from '../index.js';
@@ -1023,6 +1023,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         captured: v.file.captured,
         booth: v.file.booth,
         prompt: v.file.prompt ?? null,
+        taken_at: v.file.taken_at ?? null,
         member_id: who.guest?.id ?? null,
         exp: nowSeconds + TICKET_TTL_SECONDS,
       };
@@ -1074,7 +1075,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // Which stream this belongs to: the booth's posters on their own,
         // and a guest's photo under Getting ready until the event starts,
         // The day after. The guest never chooses.
-        album: albumForUpload({ booth: Boolean(p.booth), eventStart, now: Date.now() }),
+        album: albumForUpload({
+          booth: Boolean(p.booth),
+          eventStart,
+          now: Date.now(),
+          takenAt: typeof p.taken_at === 'string' ? p.taken_at : null,
+        }),
+        // Kept so an organiser can see why it landed where it did.
+        ...(typeof p.taken_at === 'string' && p.taken_at ? { taken_at: p.taken_at } : {}),
         // What the morning asked them for, recorded so a caption can be
         // put under it later.
         ...(readyPrompt(p.prompt)
@@ -1389,7 +1397,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   async function faceFilter(req: Request, res: Response): Promise<void> {
     const ctx = await resolveLink(req, res, 'facefilter', GUEST_RATE_LIMITS.mintPerIp);
     if (!ctx) return;
-    const { link } = ctx;
+    const { link, event } = ctx;
 
     if (!link.allow_face_filter || (!styleConfigured() && !swapConfigured())) {
       sendError(res, 404, 'not_available', 'the photo booth is not enabled for this link');
@@ -1517,6 +1525,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         selfieType: mimeType,
         pose: pose ? { id: pose.id, label: pose.label } : null,
         place,
+        eventStart: event.event_start ?? null,
       });
       const wantsUrl = body['return'] === 'url';
       res.status(200).json({
@@ -1559,6 +1568,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
      */
     selfie?: Uint8Array | Buffer | null;
     selfieType?: string | null;
+    /** When the event starts, to tell a booth picture made there from one made at home. */
+    eventStart?: string | null;
   }): Promise<{ mediaId: string; url: string } | null> {
     const { link } = opts;
     const mediaId = newMediaId();
@@ -1602,7 +1613,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         member_id: opts.memberId,
         client_id: opts.clientId,
         captured: true,
-        album: 'booth',
+        // The booth's own album while the event is on; a separate one
+        // for pictures made elsewhere, days later, at somebody's kitchen
+        // table (lib/view-albums.ts).
+        album: boothAlbum({ eventStart: opts.eventStart ?? null, now: Date.now() }),
         look: opts.look,
         look_id: opts.lookId,
         // What the booth asked them to do, when it asked for anything.

@@ -168,6 +168,8 @@ export interface MintFileInput {
   booth: boolean;
   /** Which of the morning's asks it answers, if any. */
   prompt?: string | null;
+  /** When the photograph was taken, from its EXIF (local time). */
+  taken_at?: string | null;
 }
 
 export type MintFileValidation =
@@ -206,5 +208,18 @@ export function validateMintFile(
   // Checked against the list there, so nothing a guest types reaches the
   // row; an unknown one is simply dropped.
   const prompt = readyPrompt(r['prompt'])?.id ?? null;
-  return { ok: true, file: { filename, mime_type: mimeType, bytes, captured, booth, prompt }, kind };
+  // The phone reads this out of the picture's own EXIF. It decides only
+  // which album the guest's own photo lands in, but a date from a device
+  // is still a date from a device: anything unparseable, older than ten
+  // years or in the future is dropped rather than trusted.
+  const takenAt = (() => {
+    const raw = typeof r['taken_at'] === 'string' ? r['taken_at'].slice(0, 32) : '';
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(raw)) return null;
+    const t = Date.parse(raw);
+    if (!Number.isFinite(t)) return null;
+    const now = Date.now();
+    if (t > now + 24 * 3600_000 || t < now - 10 * 365 * 24 * 3600_000) return null;
+    return raw;
+  })();
+  return { ok: true, file: { filename, mime_type: mimeType, bytes, captured, booth, prompt, taken_at: takenAt }, kind };
 }
