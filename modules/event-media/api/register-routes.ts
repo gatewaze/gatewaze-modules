@@ -237,6 +237,15 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     logger,
   }));
 
+  // Turning a photograph that came in on its side.
+  const { createRotateMedia, mountRotateMedia } = await import('./rotate-media.js');
+  mountRotateMedia(adminRouter, createRotateMedia({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    storageBucket: STORAGE_BUCKET,
+    logger,
+  }));
+
   app.use('/api/admin', adminRouter);
 
   void context;
