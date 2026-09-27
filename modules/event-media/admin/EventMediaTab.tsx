@@ -58,6 +58,7 @@ import {
   untagMediaSponsor,
   mediaKind,
   guestName,
+  uploaderKey,
   isGuestUpload,
   formatFileSize,
   mergeSubsetOrder,
@@ -106,6 +107,8 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
 
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  // Whose photos to show: an uploader key from lib/organizer.ts.
+  const [uploaderFilter, setUploaderFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortOption>('newest');
   const [dragMode, setDragMode] = useState(false);
@@ -262,6 +265,21 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
     });
   }, [media, albumOrder]);
 
+  /** Everyone who uploaded something, and how much, commonest first. */
+  const uploaders = useMemo(() => {
+    const seen = new Map<string, { label: string; count: number }>();
+    for (const m of media) {
+      const key = uploaderKey(m);
+      if (!key) continue;
+      const row = seen.get(key);
+      if (row) row.count += 1;
+      else seen.set(key, { label: guestName(m) ?? 'Someone', count: 1 });
+    }
+    return [...seen.entries()]
+      .map(([key, v]) => ({ key, ...v }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  }, [media]);
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = customSorted.filter((m) => {
@@ -271,6 +289,7 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
       if (statusFilter === 'pending' && m.is_approved) return false;
       if (statusFilter === 'approved' && !m.is_approved) return false;
       if (statusFilter === 'guest' && !isGuestUpload(m)) return false;
+      if (uploaderFilter !== 'all' && uploaderKey(m) !== uploaderFilter) return false;
       if (sponsorMedia && !sponsorMedia.has(m.id)) return false;
       if (q) {
         const hay = `${m.filename} ${m.caption ?? ''} ${m.alt_text ?? ''} ${guestName(m) ?? ''}`.toLowerCase();
@@ -287,7 +306,7 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
         default: return b.created_at.localeCompare(a.created_at);
       }
     });
-  }, [customSorted, search, typeFilter, statusFilter, sponsorMedia, sort]);
+  }, [customSorted, search, typeFilter, statusFilter, uploaderFilter, sponsorMedia, sort]);
 
   const stats = useMemo(() => ({
     photos: media.filter((m) => mediaKind(m) === 'photo').length,
@@ -298,7 +317,8 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
 
   const selectedList = useMemo(() => media.filter((m) => selectedIds.has(m.id)), [media, selectedIds]);
   const selectionHasPending = selectedList.some((m) => !m.is_approved);
-  const filtersActive = typeFilter !== 'all' || statusFilter !== 'all' || !!selectedSponsor || search.trim() !== '';
+  const filtersActive = typeFilter !== 'all' || statusFilter !== 'all' || uploaderFilter !== 'all'
+    || !!selectedSponsor || search.trim() !== '';
 
   // Selection only ever refers to items still in view.
   useEffect(() => {
@@ -534,6 +554,19 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
               <option value="approved">Approved</option>
               <option value="guest">Guest uploads</option>
             </select>
+            {uploaders.length > 0 && (
+              <select
+                value={uploaderFilter}
+                onChange={(e) => setUploaderFilter(e.target.value)}
+                className={selectClass}
+                aria-label="Uploaded by"
+              >
+                <option value="all">Anyone</option>
+                {uploaders.map((u) => (
+                  <option key={u.key} value={u.key}>{u.label} ({u.count})</option>
+                ))}
+              </select>
+            )}
             {sponsors.length > 0 && (
               <select value={selectedSponsor ?? ''} onChange={(e) => setSponsorFilter(e.target.value || null)} className={selectClass} aria-label="Sponsor filter">
                 <option value="">All sponsors</option>
