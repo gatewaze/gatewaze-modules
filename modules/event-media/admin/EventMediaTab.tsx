@@ -733,6 +733,7 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
           albums={albums}
           albumCounts={albumCounts}
           onClose={() => setShowAlbums(false)}
+          mediaIdsIn={(albumId) => albumItems.filter((i) => i.album_id === albumId).map((i) => i.media_id)}
           onChanged={() => { void reloadAlbums(); }}
           onDeleted={(id) => { if (selectedAlbum === id) setSelectedAlbum(null); }}
         />

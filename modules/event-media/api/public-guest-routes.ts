@@ -813,30 +813,36 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * Never allowed to fail the page: a settings table that cannot be read
    * shows every album, which is where this started.
    */
-  async function hiddenViews(eventId: string): Promise<Set<View>> {
-    const out = new Set<View>();
+  async function albumSettings(eventId: string): Promise<{ hidden: Set<View>; enhanced: Set<View> }> {
+    const hidden = new Set<View>();
+    const enhanced = new Set<View>();
     try {
-      const { data: off, error } = await supabase
+      const { data: rows, error } = await supabase
         .from('event_media_album_settings')
-        .select('album_id')
-        .eq('event_id', eventId)
-        .eq('show_on_portal', false);
+        .select('album_id, show_on_portal, enhance')
+        .eq('event_id', eventId);
       if (error) throw new Error(error.message);
-      if (!off || off.length === 0) return out;
-      const ids = new Set((off as Array<{ album_id: string }>).map((a) => a.album_id));
+      if (!rows || rows.length === 0) return { hidden, enhanced };
       const { data: albums } = await supabase
         .from('event_media_view_albums')
         .select('album_id, view')
         .eq('event_id', eventId);
+      const viewOf = new Map<string, View>();
       for (const a of (albums ?? []) as Array<{ album_id: string; view: string }>) {
-        if (ids.has(a.album_id) && isView(a.view)) out.add(a.view);
+        if (isView(a.view)) viewOf.set(a.album_id, a.view);
+      }
+      for (const r of rows as Array<{ album_id: string; show_on_portal: boolean; enhance?: boolean }>) {
+        const view = viewOf.get(r.album_id);
+        if (!view) continue;
+        if (r.show_on_portal === false) hidden.add(view);
+        if (r.enhance === true) enhanced.add(view);
       }
     } catch (err) {
-      logger.warn('album settings unavailable; showing every album', {
+      logger.warn('album settings unavailable; showing every album as it is', {
         eventId, error: err instanceof Error ? err.message : String(err),
       });
     }
-    return out;
+    return { hidden, enhanced };
   }
 
   function mapFeedItem(r: FeedRow, view?: View) {
@@ -844,6 +850,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const variants: Record<string, string> = {};
     if (r.variants && typeof r.variants === 'object') {
       for (const [k, v] of Object.entries(r.variants)) {
+        // The enhanced copy is never handed out here. It is shown only
+        // where an organiser has turned enhancement on for the album,
+        // and that is decided by the gallery, which puts it in itself --
+        // otherwise turning the album back off would leave a working URL
+        // to the enhanced copy sitting in the payload.
+        if (k === 'enhanced') continue;
         if (typeof v === 'string' && v) variants[k] = toBrowserUrl(v);
       }
     }
@@ -1036,7 +1048,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Albums an organiser has taken off the portal (migration 016). Their
     // photographs go with them, or hiding an album would hide only its
     // heading.
-    const hidden = await hiddenViews(event.id);
+    const { hidden, enhanced } = await albumSettings(event.id);
     if (wanted && hidden.has(wanted)) { sendError(res, 404, 'album_not_found', 'unknown album'); return; }
     const offered = GALLERY_ORDER.filter((v) => !hidden.has(v));
 
@@ -1117,7 +1129,22 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       },
       albums,
       total,
-      items: page.map((r) => mapFeedItem(r)),
+      // An album with enhancement on shows the enhanced copy of each
+      // photograph that has one; every other album, and every
+      // photograph without one, is untouched (asked 2026-09-27).
+      items: page.map((r) => {
+        const item = mapFeedItem(r);
+        const view = tagView(r.metadata);
+        const better = (r.variants ?? {}) as Record<string, unknown>;
+        if (!enhanced.has(view) || typeof better['enhanced'] !== 'string') return item;
+        const path = better['enhanced'] as string;
+        return {
+          ...item,
+          url: toBrowserUrl(path),
+          enhanced: true,
+          variants: { ...item.variants, thumb: toRenderUrl(path, 350), medium: toRenderUrl(path, 800) },
+        };
+      }),
       next_offset: offset + page.length < total ? offset + page.length : null,
     });
   }

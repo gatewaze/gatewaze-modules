@@ -1506,7 +1506,7 @@ describe('eventGallery', () => {
   it('leaves out an album that has been taken off the portal', async () => {
     const off = {
       ...TABLES,
-      event_media_album_settings: { data: [{ album_id: ALBUM.ready }], error: null },
+      event_media_album_settings: { data: [{ album_id: ALBUM.ready, show_on_portal: false }], error: null },
     };
     const res = await gallery({}, { tables: off });
     expect(res.statusCode).toBe(200);
@@ -1519,6 +1519,29 @@ describe('eventGallery', () => {
     const res = await gallery({}, { tables: { ...TABLES, event_media_album_settings: { data: [], error: null } } });
     expect(res.body.albums).toHaveLength(2);
     expect(res.body.total).toBe(3);
+  });
+
+  // Enhancement is per album: an album with it on shows the enhanced
+  // copy of a photograph that has one, and nothing else changes.
+  it('shows the enhanced copy only where the album asks for it', async () => {
+    const better = `event/${EVENT_ID}/22222222-2222-4222-8222-222222222222/enhanced-x.jpg`;
+    const rows = ROWS.map((r) => (r.metadata.album === 'ready' ? { ...r, variants: { enhanced: better } } : r));
+    const on = { ...TABLES, event_media_album_settings: { data: [{ album_id: ALBUM.ready, show_on_portal: true, enhance: true }], error: null } };
+
+    const res = await gallery({ album: 'ready' }, { mediaRows: rows, tables: on });
+    expect(res.body.items[0].enhanced).toBe(true);
+    expect(res.body.items[0].url).toContain('enhanced-x.jpg');
+    expect(res.body.items[0].variants.thumb).toContain('enhanced-x.jpg');
+
+    // The same photographs with enhancement off are served as they were,
+    // and the enhanced copy is not in the payload at all -- otherwise
+    // turning the album back off would leave a working URL to it.
+    const off = { ...TABLES, event_media_album_settings: { data: [], error: null } };
+    const plain = await gallery({ album: 'ready' }, { mediaRows: rows, tables: off });
+    expect(plain.body.items[0].enhanced).toBeUndefined();
+    expect(plain.body.items[0].url).not.toContain('enhanced-x.jpg');
+    expect(plain.body.items[0].variants.enhanced).toBeUndefined();
+    expect(JSON.stringify(plain.body)).not.toContain('enhanced-x.jpg');
   });
 
   it('never hands out an upload code', async () => {
@@ -1591,5 +1614,27 @@ describe('when a booth picture was taken', () => {
     const { supabase } = await post(withTime);
     const upd = supabase.state.updated.find((u) => u.table === 'host_media').fields;
     expect(upd.metadata.taken_at).toBe('2026-09-25T21:14:07');
+  });
+});
+
+// The enhanced copy belongs to the album view, which decides whether to
+// show it. No other feed hands it out.
+describe('the enhanced copy stays out of the guest feed', () => {
+  it('is not in listMedia, whatever the row carries', async () => {
+    const row = {
+      id: '11111111-2222-3333-4444-555555555555',
+      storage_path: `event/${EVENT_ID}/x/img.jpg`,
+      mime_type: 'image/jpeg', bytes: 100, width: null, height: null,
+      variants: { enhanced: `event/${EVENT_ID}/x/enhanced-y.jpg`, plate: `event/${EVENT_ID}/x/plate.jpg` },
+      metadata: { source: 'guest', album: 'day' },
+      created_at: '2026-09-25T18:00:00.000Z',
+    };
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, mediaRows: [row] });
+    const res = mockRes();
+    await createGuestRoutes(deps).listMedia(req(), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items[0].variants.plate).toContain('plate.jpg');
+    expect(res.body.items[0].variants.enhanced).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('enhanced-y.jpg');
   });
 });
