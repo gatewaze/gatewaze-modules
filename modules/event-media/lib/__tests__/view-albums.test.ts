@@ -108,3 +108,39 @@ describe('albumForUpload', () => {
     }
   });
 });
+
+import { boothAlbum } from '../view-albums.js';
+
+describe('the night before, and the booth away from the event', () => {
+  const START = '2026-09-25T13:30:00Z';
+  const at = (iso: string) => Date.parse(iso);
+  const upload = (takenAt: string | null, now = at('2026-09-27T10:00:00Z')) =>
+    albumForUpload({ booth: false, eventStart: START, now, takenAt });
+
+  it('files a photograph by when it was taken, whenever it is uploaded', () => {
+    // All of these are uploaded two days late, from a camera roll.
+    expect(upload('2026-09-25T19:40:00Z')).toBe('day');        // at the party
+    expect(upload('2026-09-25T09:14:00Z')).toBe('ready');      // that morning
+    expect(upload('2026-09-24T20:30:00Z')).toBe('night');      // the evening before
+    expect(upload('2026-09-24T09:00:00Z')).toBe('night');      // the day before
+  });
+
+  it('leaves anything older with the day, to be moved by hand', () => {
+    expect(upload('2026-09-01T12:00:00Z')).toBe('day');
+    expect(upload(null)).toBe('day');
+  });
+
+  it('keeps a booth picture made at the event, and separates one made at home', () => {
+    const booth = (now: string) => boothAlbum({ eventStart: START, now: at(now) });
+    expect(booth('2026-09-25T14:00:00Z')).toBe('booth');   // during
+    expect(booth('2026-09-25T23:30:00Z')).toBe('booth');   // late on
+    expect(booth('2026-09-25T06:00:00Z')).toBe('booth');   // getting ready
+    expect(booth('2026-09-27T10:00:00Z')).toBe('elsewhere'); // two days later, at home
+    expect(booth('2026-09-20T10:00:00Z')).toBe('elsewhere'); // a week early
+  });
+
+  it('keeps every booth picture when the event has no start time', () => {
+    expect(boothAlbum({ eventStart: null, now: Date.now() })).toBe('booth');
+    expect(albumForUpload({ booth: true, eventStart: null, now: Date.now() })).toBe('booth');
+  });
+});

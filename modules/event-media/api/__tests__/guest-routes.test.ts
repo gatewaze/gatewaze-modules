@@ -1323,3 +1323,43 @@ describe('poses in the booth', () => {
     expect(provider.runStyle.mock.calls[0][1]).toMatch(/Set this in 1970s Britain/);
   });
 });
+
+describe('an upload is filed by when it was taken', () => {
+  const EVENT_WITH_START = { ...EVENT_ROW, event_start: '2026-09-25T13:30:00+00:00' };
+  const mintOne = async (file) => {
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_WITH_START });
+    const res = mockRes();
+    await createGuestRoutes(deps).mintUploads(req({ body: { client_id: CLIENT_ID, guest_name: 'Auntie Carol', files: [file] } }), res);
+    return res;
+  };
+  const complete = async (ticket) => {
+    const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_WITH_START, existingMedia: null });
+    stubHead({ ok: true, headers: { get: (k) => ({ 'content-length': '1000', 'content-type': 'image/jpeg' })[k] ?? null } });
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticket] } }), mockRes());
+    return supabase.state.inserted[0];
+  };
+  const photo = (over = {}) => ({ filename: 'a.jpg', mime_type: 'image/jpeg', bytes: 1000, ...over });
+
+  it('puts a photograph taken that morning under Getting ready, however late it arrives', async () => {
+    const res = await mintOne(photo({ taken_at: '2026-09-25T09:14:07' }));
+    const row = await complete(res.body.items[0].ticket);
+    expect(row.metadata.album).toBe('ready');
+    expect(row.metadata.taken_at).toBe('2026-09-25T09:14:07');
+  });
+
+  it('puts one taken during the party under The day', async () => {
+    const res = await mintOne(photo({ taken_at: '2026-09-25T19:40:00' }));
+    expect((await complete(res.body.items[0].ticket)).metadata.album).toBe('day');
+  });
+
+  // A photograph with no EXIF, or a date not worth believing, falls back
+  // to the clock -- which after the event means The day.
+  it('falls back to the clock when the picture does not say', async () => {
+    for (const taken of [undefined, '', 'yesterday', '1994-06-01T10:00:00', '2099-01-01T10:00:00']) {
+      const res = await mintOne(photo(taken === undefined ? {} : { taken_at: taken }));
+      const row = await complete(res.body.items[0].ticket);
+      expect(row.metadata.album).toBe('day');
+      expect(row.metadata.taken_at).toBeUndefined();
+    }
+  });
+});

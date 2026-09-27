@@ -17,11 +17,23 @@
  * ready outrank Preload, which is the stand-in stream.
  */
 
-export type View = 'seed' | 'ready' | 'day' | 'booth'
+export type View = 'seed' | 'night' | 'ready' | 'day' | 'booth' | 'elsewhere'
 
-export const VIEWS: readonly View[] = ['seed', 'ready', 'day', 'booth']
+export const VIEWS: readonly View[] = ['seed', 'night', 'ready', 'day', 'booth', 'elsewhere']
 
-const RANK: Record<View, number> = { booth: 0, day: 1, ready: 2, seed: 3 }
+const RANK: Record<View, number> = { booth: 0, elsewhere: 1, day: 2, ready: 3, night: 4, seed: 5 }
+
+/**
+ * The evening before an event, and the morning of it.
+ *
+ * Measured back from the start rather than from a calendar day, because
+ * a wedding that starts at half past one in the afternoon and one that
+ * starts at seven in the evening have different mornings. Getting ready
+ * is the twelve hours before it; the night before is the twelve hours
+ * before that, which for a lunchtime start is the previous evening.
+ */
+const READY_HOURS = 12
+const NIGHT_HOURS = 36
 
 /**
  * Where a new upload lands.
@@ -31,10 +43,47 @@ const RANK: Record<View, number> = { booth: 0, day: 1, ready: 2, seed: 3 }
  * event starts and The day from then on. An event with no usable start
  * time has no before, so everything is The day.
  */
-export function albumForUpload(opts: { booth: boolean; eventStart: string | null | undefined; now: number }): View {
-  if (opts.booth) return 'booth'
+export function albumForUpload(opts: {
+  booth: boolean
+  eventStart: string | null | undefined
+  now: number
+  /**
+   * When the photograph was taken, from its own EXIF. Someone emptying
+   * their camera roll on the Sunday should still find their morning
+   * photographs under Getting ready (asked 2026-09-27), so this decides
+   * when it is known and the clock only stands in when it is not.
+   */
+  takenAt?: string | null
+}): View {
+  if (opts.booth) return boothAlbum({ eventStart: opts.eventStart, now: opts.now })
   const start = opts.eventStart ? Date.parse(opts.eventStart) : NaN
-  return Number.isFinite(start) && opts.now < start ? 'ready' : 'day'
+  if (!Number.isFinite(start)) return 'day'
+  const taken = opts.takenAt ? Date.parse(opts.takenAt) : NaN
+  const when = Number.isFinite(taken) ? taken : opts.now
+  if (when >= start) return 'day'
+  if (when >= start - READY_HOURS * 3600_000) return 'ready'
+  if (when >= start - NIGHT_HOURS * 3600_000) return 'night'
+  // Older than the night before: an upload from the camera roll that
+  // has nothing to do with the run-up. It joins the day's photographs,
+  // where it can be moved by hand if it does not belong.
+  return 'day'
+}
+
+/**
+ * Where a booth picture lands.
+ *
+ * Guests kept using the booth at home afterwards, with their own
+ * families, and those pictures were landing in the wedding's own album
+ * (asked 2026-09-27). A booth picture is made at the moment the shutter
+ * goes, so the clock is the whole story: made while the event was on, it
+ * is the event's; made days later at a kitchen table, it is not.
+ */
+export function boothAlbum(opts: { eventStart: string | null | undefined; now: number }): View {
+  const start = opts.eventStart ? Date.parse(opts.eventStart) : NaN
+  if (!Number.isFinite(start)) return 'booth'
+  const from = start - READY_HOURS * 3600_000
+  const until = start + 14 * 3600_000
+  return opts.now >= from && opts.now <= until ? 'booth' : 'elsewhere'
 }
 
 export function isView(v: unknown): v is View {

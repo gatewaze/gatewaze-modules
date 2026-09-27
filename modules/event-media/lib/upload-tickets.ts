@@ -32,6 +32,8 @@ export interface UploadTicketPayload {
   booth?: boolean;
   /** Which of the morning's asks this photo answers (ready-prompts.ts). */
   prompt?: string | null;
+  /** When it was taken, from its EXIF; picks the album. */
+  taken_at?: string | null;
   /** The invitation guest who uploaded, when the event has a guest list. */
   member_id?: string | null;
   exp: number; // unix seconds
