@@ -1033,54 +1033,63 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const offset = Math.max(0, Math.min(Number(req.query['offset'] ?? 0) || 0, GALLERY_MAX));
     const wanted = isView(req.query['album']) ? (req.query['album'] as View) : null;
 
-    let query = supabase
-      .from('host_media')
-      .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
-      .eq('host_kind', 'event')
-      .eq('host_id', event.id)
-      .eq('access_level', 'public')
-      .eq('is_approved', true)
-      .or('metadata->>posted.is.null,metadata->>posted.neq.false')
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(GALLERY_MAX);
+    // Albums an organiser has taken off the portal (migration 016). Their
+    // photographs go with them, or hiding an album would hide only its
+    // heading.
+    const hidden = await hiddenViews(event.id);
+    if (wanted && hidden.has(wanted)) { sendError(res, 404, 'album_not_found', 'unknown album'); return; }
+    const offered = GALLERY_ORDER.filter((v) => !hidden.has(v));
 
-    // As the guest feed does: a blocked guest's photographs are nobody's
-    // to see. The ids are this event's own block rows, UUID-checked.
+    // Which album a photograph is in is read from its own tag rather
+    // than from album membership. Membership is what the projector
+    // resolves, and resolving it means reading every photograph of the
+    // event on every request -- which is what made this page take nine
+    // seconds to answer (reported 2026-09-27). The two agree: the tag is
+    // written when the photograph lands and the album it joins is chosen
+    // from it.
     const blocked = [...(await blockedFor(event.id))];
-    if (blocked.length > 0) {
-      query = query.or(`metadata->>member_id.is.null,metadata->>member_id.not.in.(${blocked.join(',')})`);
-    }
+    const base = () => {
+      let q = supabase
+        .from('host_media')
+        .eq('host_kind', 'event')
+        .eq('host_id', event.id)
+        .eq('access_level', 'public')
+        .eq('is_approved', true)
+        .or('metadata->>posted.is.null,metadata->>posted.neq.false')
+        // Photos an operator has hidden stay out, as they do everywhere.
+        .or('metadata->>hidden.is.null,metadata->>hidden.neq.true');
+      if (blocked.length > 0) {
+        q = q.or(`metadata->>member_id.is.null,metadata->>member_id.not.in.(${blocked.join(',')})`);
+      }
+      return q;
+    };
+    // Every value below comes from the View allowlist, never from the
+    // request: `wanted` is isView-checked and `offered` is a constant.
+    const inAlbum = (q: { eq: (c: string, v: string) => unknown; in: (c: string, v: string[]) => unknown }) => (
+      wanted ? q.eq('metadata->>album', wanted) : q.in('metadata->>album', [...offered])
+    );
 
-    const { data, error } = await query;
+    const counts = new Map<View, number>();
+    const [pageResult] = await Promise.all([
+      inAlbum(base().select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(offset, offset + limit - 1),
+      // One count per album, each a HEAD request that returns no rows.
+      ...offered.map(async (v) => {
+        const { count } = await base()
+          .select('id', { count: 'exact', head: true })
+          .eq('metadata->>album', v);
+        if (count) counts.set(v, count);
+      }),
+    ]);
+    const { data, error } = pageResult as { data: FeedRow[] | null; error: { message: string } | null };
     if (error) {
       logger.error('event gallery failed', { eventId: event.id, error: error.message });
       sendError(res, 500, 'list_failed', 'could not list media');
       return;
     }
 
-    const all = ((data ?? []) as FeedRow[]).filter(
-      (r) => ((r.metadata ?? {}) as Record<string, unknown>)['hidden'] !== true,
-    );
-    const views = await viewsFor(event.id, all);
-
-    // Albums an organiser has taken off the portal: their photographs go
-    // with them, or hiding the album would only hide the heading
-    // ("Photo booth elsewhere" is the one this was asked for). An album
-    // with no setting row is shown, so an event that never set one is
-    // unaffected.
-    const hidden = await hiddenViews(event.id);
-    const rows = hidden.size === 0
-      ? all
-      : all.filter((r) => !hidden.has(views.get(r.id) ?? tagView(r.metadata)));
-
-    // The albums to choose between, in the order the projector runs
-    // through them, and only those with something in them.
-    const counts = new Map<View, number>();
-    for (const r of rows) {
-      const v = views.get(r.id) ?? tagView(r.metadata);
-      counts.set(v, (counts.get(v) ?? 0) + 1);
-    }
     const { data: named } = await supabase
       .from('event_media_view_albums')
       .select('view, album_id, host_media_albums(name, sort_order)')
@@ -1089,14 +1098,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     for (const a of (named ?? []) as Array<{ view: string; host_media_albums: { name?: string } | null }>) {
       if (a.host_media_albums?.name) nameOf.set(a.view, a.host_media_albums.name);
     }
-    const albums = GALLERY_ORDER
+    const albums = offered
       .filter((v) => (counts.get(v) ?? 0) > 0)
       .map((v) => ({ album: v, name: nameOf.get(v) ?? GALLERY_FALLBACK_NAMES[v], count: counts.get(v) ?? 0 }));
 
-    const chosen = wanted
-      ? rows.filter((r) => (views.get(r.id) ?? tagView(r.metadata)) === wanted)
-      : rows;
-    const page = chosen.slice(offset, offset + limit);
+    const page = (data ?? []) as FeedRow[];
+    const total = wanted
+      ? (counts.get(wanted) ?? 0)
+      : [...counts.values()].reduce((n, c) => n + c, 0);
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({
@@ -1106,9 +1115,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         starts_at: event.event_start ?? null,
       },
       albums,
-      total: chosen.length,
-      items: page.map((r) => mapFeedItem(r, views.get(r.id))),
-      next_offset: offset + page.length < chosen.length ? offset + page.length : null,
+      total,
+      items: page.map((r) => mapFeedItem(r)),
+      next_offset: offset + page.length < total ? offset + page.length : null,
     });
   }
 

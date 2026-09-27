@@ -84,12 +84,32 @@ function makeSupabase(config) {
         }
         return Promise.resolve({ error: null });
       },
-      select: () => b,
-      eq: (col, val) => { if (table === 'events_media_guest_claims' && col === 'member_id') claimMember = val; return b; },
+      // The gallery reads a page with .range() and counts with a head
+      // select; both are emulated well enough to be worth asserting on,
+      // including the album filter and the hidden-row exclusion the real
+      // query does in SQL.
+      select: (_cols, opts) => { b._head = Boolean(opts && opts.head); return b; },
+      range: (from, to) => Promise.resolve({ data: b._rows().slice(from, to + 1), error: config.mediaListError ?? null }),
+      _rows: () => (config.mediaRows ?? []).filter((r) => {
+        const album = (r.metadata || {}).album;
+        if ((r.metadata || {}).hidden === true) return false;
+        if (b._albumEq !== undefined) return album === b._albumEq;
+        if (b._albumIn !== undefined) return b._albumIn.includes(album);
+        return true;
+      }),
+      eq: (col, val) => {
+        if (table === 'events_media_guest_claims' && col === 'member_id') claimMember = val;
+        if (col === 'metadata->>album') b._albumEq = val;
+        return b;
+      },
       gt: () => b,
       gte: () => b,
       like: () => b,
-      in: (col, vals) => { (state.inCalls ??= []).push({ table, col, vals }); return b; },
+      in: (col, vals) => {
+        (state.inCalls ??= []).push({ table, col, vals });
+        if (col === 'metadata->>album') b._albumIn = vals;
+        return b;
+      },
       or: () => b,
       contains: () => b,
       order: () => b,
@@ -113,6 +133,7 @@ function makeSupabase(config) {
         return Promise.resolve({ data: null, error: null });
       },
       then: (resolve) => {
+        if (table === 'host_media' && b._head) return resolve({ count: b._rows().length, error: null });
         if (table === 'events_media_guest_claims') return resolve({ data: [...state.claims].map(([member_id, client_id]) => ({ member_id, client_id })), error: null });
         if (config.tables && table in config.tables) return resolve(config.tables[table]);
         if (table !== 'host_media') return resolve({ data: [], error: null });
