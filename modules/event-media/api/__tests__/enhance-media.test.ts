@@ -123,7 +123,7 @@ describe('enhancing an album', () => {
     const many = Array.from({ length: 30 }, (_, i) => `1111111${i % 10}-2222-4333-8444-555555555555`);
     const { routes, state } = setup();
     const res = await call(routes, { ids: many });
-    expect(res.body.results.length).toBeLessThanOrEqual(6);
-    expect(state.asked.length).toBeLessThanOrEqual(6);
+    expect(res.body.results.length).toBeLessThanOrEqual(3);
+    expect(state.asked.length).toBeLessThanOrEqual(3);
   });
 });

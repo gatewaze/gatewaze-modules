@@ -13,7 +13,7 @@ const env = (import.meta as unknown as { env: Record<string, string | undefined>
 const apiUrl = env.VITE_API_URL ?? '';
 
 /** What one call will take; the server caps it at the same number. */
-export const ENHANCE_BATCH = 6;
+export const ENHANCE_BATCH = 3;
 
 export interface EnhanceProgress {
   done: number;
