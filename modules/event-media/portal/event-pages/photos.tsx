@@ -23,6 +23,7 @@ import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
+import AlbumGallery from './_components/AlbumGallery'
 import GuestPicker from './_components/GuestPicker'
 import UploadApp, { type UploadTile } from './_components/UploadApp'
 import BoothExperience, { type BoothLook, type BoothView } from './_components/BoothExperience'
@@ -277,6 +278,12 @@ export default function GuestPhotosPage(props: Props) {
 
 function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const searchParams = useSearchParams()
+  // Whether this visit ever arrived with an upload code on the URL. A ref
+  // rather than state: it is read during render and must not reset when
+  // the query string changes under a history push.
+  const sawCodeRef = useRef(false)
+  const urlCodeNow = searchParams.get('u')
+  if (urlCodeNow && /^[a-z0-9]{6,16}$/.test(urlCodeNow)) sawCodeRef.current = true
 
   const codeKey = `event_media_upload_code:${eventIdentifier}`
   const guestKey = `event_media_guest:${eventIdentifier}`
@@ -1384,6 +1391,18 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // nav-visibility-gated and event-media has no nav entry.
   if (searchParams.get('display') === '1' && code) {
     return <DisplayView code={code} />
+  }
+
+  // Nobody scanned anything: the albums, and nothing asked of them.
+  //
+  // The upload app and the booth belong to a visit that arrived with a
+  // code on the URL (asked 2026-09-27). A stored code from a previous
+  // visit is not enough -- it used to be, which is why opening /photos
+  // asked who you were and then showed an empty screen. Once a code HAS
+  // been seen in this visit it stays seen, so the booth's own history
+  // pushes cannot drop a guest out of the app mid-photograph.
+  if (!sawCodeRef.current) {
+    return <AlbumGallery eventIdentifier={eventIdentifier} darkMode={darkMode} primaryColor={primaryColor} />
   }
 
   if (loading) {
