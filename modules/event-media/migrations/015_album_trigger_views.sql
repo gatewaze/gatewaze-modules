@@ -78,3 +78,15 @@ BEGIN
     END;
   END LOOP;
 END $$;
+
+-- And put back a grant 014 widened by accident.
+--
+-- 006 and 007 both kept event_media_view_album() to the service role:
+-- it makes an album row for whatever event id it is handed, with no
+-- check that the caller administers that event. 014 granted it to
+-- `authenticated` as well, which let any signed-in user create albums on
+-- anybody's event. Nothing calls it as the caller -- the module's own
+-- routes use the service client, and the trigger is SECURITY DEFINER --
+-- so this takes nothing away.
+REVOKE ALL ON FUNCTION public.event_media_view_album(uuid, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.event_media_view_album(uuid, text) TO service_role;
