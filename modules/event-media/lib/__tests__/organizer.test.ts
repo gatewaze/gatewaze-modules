@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeSubsetOrder, mediaKind, guestName, isGuestUpload, formatDuration, formatFileSize, takenKey, hasTakenAt, compareTaken } from '../organizer.js';
+import { mergeSubsetOrder, mediaKind, guestName, isGuestUpload, formatDuration, formatFileSize, takenKey, hasTakenAt, compareTaken, takenAtLabel } from '../organizer.js';
 
 describe('mergeSubsetOrder', () => {
   it('reorders the subset inside the slots it already occupies', () => {
@@ -149,5 +149,20 @@ describe('undated photographs lead the list', () => {
     // Reversed, the undated ones fall to the bottom.
     const asc = [...list].sort((a, b) => -compareTaken(a, b)).map((r) => r.metadata?.taken_at ?? 'undated');
     expect(asc[asc.length - 1]).toBe('undated');
+  });
+});
+
+describe('the capture time an organiser reads', () => {
+  const row = (metadata) => ({ mime_type: 'image/jpeg', metadata });
+
+  it('shows the camera\'s own clock, day first', () => {
+    expect(takenAtLabel(row({ taken_at: '2026-09-25T09:14:03' }))).toBe('25/09/2026, 09:14:03');
+    expect(takenAtLabel(row({ taken_at: '2026-09-24 21:05:00' }))).toBe('24/09/2026, 21:05:00');
+  });
+
+  it('says nothing for a photograph that never carried one', () => {
+    for (const meta of [null, {}, { taken_at: '' }, { taken_at: 'yesterday' }, { taken_at: 42 }]) {
+      expect(takenAtLabel(row(meta))).toBeNull();
+    }
   });
 });

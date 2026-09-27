@@ -37,6 +37,22 @@ export function takenKey(item: Pick<MediaLike, 'metadata'> & { created_at: strin
 }
 
 /**
+ * The capture time to show an organiser, in the camera's own clock.
+ *
+ * Deliberately not put through a Date: EXIF carries no zone, and the
+ * time written on it is the local time where the photograph was taken.
+ * Reading it as if it were the reader's zone would shift a wedding
+ * photograph by an hour for anyone abroad. Null when the photograph
+ * never carried one -- which is worth saying out loud in the panel,
+ * since it is why the photograph sorts where it does.
+ */
+export function takenAtLabel(item: Pick<MediaLike, 'metadata'>): string | null {
+  const meta = (item.metadata ?? {}) as Record<string, unknown>;
+  const m = TAKEN_AT.exec(typeof meta['taken_at'] === 'string' ? meta['taken_at'] : '');
+  return m ? `${m[3]}/${m[2]}/${m[1]}, ${m[4]}:${m[5]}:${m[6]}` : null;
+}
+
+/**
  * Newest first, with the undated photographs at the top.
  *
  * A photograph with no capture time is the one an organiser has to place

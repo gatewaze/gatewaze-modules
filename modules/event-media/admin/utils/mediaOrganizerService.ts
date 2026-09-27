@@ -28,6 +28,7 @@ export {
   uploaderKey,
   takenKey,
   hasTakenAt,
+  takenAtLabel,
   compareTaken,
   isGuestUpload,
   formatFileSize,
