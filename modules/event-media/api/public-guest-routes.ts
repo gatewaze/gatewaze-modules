@@ -1048,9 +1048,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // written when the photograph lands and the album it joins is chosen
     // from it.
     const blocked = [...(await blockedFor(event.id))];
-    const base = () => {
+    // The select comes first: PostgREST's builder has no filters on it
+    // until it does (a page of this shipped 500ing on 2026-09-27).
+    const base = (columns: string, opts?: { count: 'exact'; head: true }) => {
       let q = supabase
         .from('host_media')
+        .select(columns, opts as never)
         .eq('host_kind', 'event')
         .eq('host_id', event.id)
         .eq('access_level', 'public')
@@ -1071,15 +1074,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const counts = new Map<View, number>();
     const [pageResult] = await Promise.all([
-      inAlbum(base().select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
+      inAlbum(base('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
         .range(offset, offset + limit - 1),
-      // One count per album, each a HEAD request that returns no rows.
+      // One count per album, each a head request that returns no rows.
       ...offered.map(async (v) => {
-        const { count } = await base()
-          .select('id', { count: 'exact', head: true })
-          .eq('metadata->>album', v);
+        const { count } = await base('id', { count: 'exact', head: true }).eq('metadata->>album', v);
         if (count) counts.set(v, count);
       }),
     ]);

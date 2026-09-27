@@ -88,8 +88,15 @@ function makeSupabase(config) {
       // select; both are emulated well enough to be worth asserting on,
       // including the album filter and the hidden-row exclusion the real
       // query does in SQL.
-      select: (_cols, opts) => { b._head = Boolean(opts && opts.head); return b; },
-      range: (from, to) => Promise.resolve({ data: b._rows().slice(from, to + 1), error: config.mediaListError ?? null }),
+      select: (_cols, opts) => { b._selected = true; b._head = Boolean(opts && opts.head); return b; },
+      // PostgREST hands back a filter builder only once select() has been
+      // called; a filter before it is a TypeError in production, so it is
+      // one here too (a page shipped 500ing on 2026-09-27 because this
+      // mock was happy to take .from(...).eq(...)).
+      _needSelect: (name) => {
+        if (!b._selected) throw new TypeError(`supabase.from(...).${name} is not a function`);
+      },
+      range: (from, to) => (b._needSelect('range'), Promise.resolve({ data: b._rows().slice(from, to + 1), error: config.mediaListError ?? null })),
       _rows: () => (config.mediaRows ?? []).filter((r) => {
         const album = (r.metadata || {}).album;
         if ((r.metadata || {}).hidden === true) return false;
@@ -98,6 +105,7 @@ function makeSupabase(config) {
         return true;
       }),
       eq: (col, val) => {
+        b._needSelect('eq');
         if (table === 'events_media_guest_claims' && col === 'member_id') claimMember = val;
         if (col === 'metadata->>album') b._albumEq = val;
         return b;
