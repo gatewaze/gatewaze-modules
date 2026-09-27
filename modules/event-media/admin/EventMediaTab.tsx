@@ -760,6 +760,8 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
           chips={chipsFor(visible[viewerIndex]!.id)}
           onNavigate={(i) => { const next = visible[i]; if (next) setViewerId(next.id); }}
           onClose={() => setViewerId(null)}
+          eventId={eventId}
+          onRefresh={loadAll}
           onPatch={patchOne}
           onDelete={(item) => setDeleteTarget({ kind: 'single', item })}
           onItemChange={(row) => setMedia((prev) => prev.map((m) => (m.id === row.id ? row : m)))}

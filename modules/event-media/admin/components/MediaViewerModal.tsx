@@ -8,7 +8,10 @@ import {
   TrashIcon,
   CheckCircleIcon,
   StarIcon,
+  ArrowUturnLeftIcon,
+  ArrowUturnRightIcon,
 } from '@heroicons/react/24/outline';
+import { rotateMedia } from '../utils/rotateMedia';
 import { Button, Modal } from '@/components/ui';
 import {
   type HostMediaItem,
@@ -30,14 +33,19 @@ interface MediaViewerModalProps {
   onDelete: (item: HostMediaItem) => void;
   /** An edit made inside the viewer (the Wedflix card), for the organiser's list. */
   onItemChange?: (item: HostMediaItem) => void;
+  /** The event these photos belong to, for turning one on its side. */
+  eventId?: string;
+  /** Re-read the list; a turned photo has new files and new URLs. */
+  onRefresh?: () => Promise<void> | void;
 }
 
-export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onPatch, onDelete, onItemChange }: MediaViewerModalProps) {
+export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onPatch, onDelete, onItemChange, eventId, onRefresh }: MediaViewerModalProps) {
   const item = items[index];
   const [caption, setCaption] = useState('');
   const [altText, setAltText] = useState('');
   const [saving, setSaving] = useState(false);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [turning, setTurning] = useState(false);
 
   useEffect(() => {
     if (!item) return;
@@ -45,6 +53,28 @@ export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onP
     setAltText(item.alt_text ?? '');
     setImgSrc(item.medium_url ?? item.cdn_url);
   }, [item]);
+
+  /**
+   * Turn the photograph, and its 3D layers with it, then show the
+   * result. The old files go once the row points at the new ones, so a
+   * failure part-way through leaves the photograph as it was.
+   */
+  const rotate = async (quarters: 1 | 2 | 3) => {
+    if (!item || !eventId || turning) return;
+    setTurning(true);
+    try {
+      await rotateMedia(eventId, item as never, quarters);
+      // The turned photo has new file names -- so new thumbnail and
+      // preview URLs too, all of them built on the server. Re-read the
+      // list rather than guessing at them here; the old files are gone.
+      await onRefresh?.();
+      toast.success('Turned');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not turn that photo');
+    } finally {
+      setTurning(false);
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -109,6 +139,16 @@ export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onP
             <Button variant="outline" onClick={() => onPatch(item, { is_featured: !item.is_featured })}>
               <StarIcon className="h-4 w-4" /> {item.is_featured ? 'Unfeature' : 'Feature'}
             </Button>
+            {kind === 'photo' && eventId && (
+              <>
+                <Button variant="outline" disabled={turning} title="Rotate left" onClick={() => void rotate(3)}>
+                  <ArrowUturnLeftIcon className="h-4 w-4" /> {turning ? 'Turning…' : 'Rotate left'}
+                </Button>
+                <Button variant="outline" disabled={turning} title="Rotate right" onClick={() => void rotate(1)}>
+                  <ArrowUturnRightIcon className="h-4 w-4" /> Rotate right
+                </Button>
+              </>
+            )}
             <Button
               variant="outline"
               onClick={async () => {
