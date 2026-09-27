@@ -34,6 +34,13 @@ import { takenAtOf } from './_components/_lib/taken-at'
 // a phone can't resolve (found live on autodb 2026-09-19).
 const API_BASE = ''
 const MINT_BATCH = 20
+/**
+ * How long an upload waits on the EXIF read before going without it.
+ * Reading it is a slice of the file's first 128KB, so this is a ceiling
+ * for a phone that has the file somewhere slow (iCloud, a memory card),
+ * not a delay anyone should notice.
+ */
+const EXIF_WAIT_MS = 4000
 const CONCURRENCY = 3
 const GALLERY_PAGE = 50
 // Everyone's photos refresh while the guest is looking at them.
@@ -134,6 +141,13 @@ interface QueueItem {
   file: File
   /** When the photograph was taken, read from its own EXIF. */
   takenAt?: string | null
+  /**
+   * True until the EXIF read has been tried. The upload waits for it:
+   * takenAt decides the album, and the mint request used to win the race
+   * -- 686 photographs were filed by the clock with no capture time
+   * recorded at all (found 2026-09-27).
+   */
+  exifPending?: boolean
   /** Which of the morning's asks this answers (lib/ready-prompts.ts). */
   prompt?: string | null
   /** Booth output — goes in its own album, not the day's photos. */
@@ -712,7 +726,9 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     pumpingRef.current = true
     try {
       for (;;) {
-        const batch = queueRef.current.filter((q) => q.status === 'waiting').slice(0, MINT_BATCH)
+        const batch = queueRef.current
+          .filter((q) => q.status === 'waiting' && !q.exifPending)
+          .slice(0, MINT_BATCH)
         if (batch.length === 0) break
         if (!code || !guest) break
 
@@ -805,16 +821,26 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       onMediaId,
       preview: booth ? undefined : (() => { try { return URL.createObjectURL(file) } catch { return undefined } })(),
       status: 'waiting',
+      exifPending: true,
       progress: 0,
     }))
     setQueueSafe((prev) => [...prev, ...fresh])
-    // The EXIF read is a slice of each file, so it is quick; the upload
-    // does not wait for it, it simply picks it up when it gets there.
-    void Promise.all(fresh.map(async (item) => {
-      const takenAt = await takenAtOf(item.file)
-      if (!takenAt) return
-      setQueueSafe((prev) => prev.map((q) => (q.key === item.key ? { ...q, takenAt } : q)))
-    })).finally(() => { void pumpQueue() })
+    // Each photograph waits for its own capture time and no longer: the
+    // read is a 128KB slice of the file, and a file that will not give
+    // one up goes anyway, filed by the clock as before.
+    for (const item of fresh) {
+      void (async () => {
+        const takenAt = await Promise.race([
+          takenAtOf(item.file).catch(() => null),
+          new Promise<null>((resolve) => { setTimeout(() => resolve(null), EXIF_WAIT_MS) }),
+        ])
+        setQueueSafe((prev) => prev.map((q) => (
+          q.key === item.key ? { ...q, takenAt, exifPending: false } : q
+        )))
+        void pumpQueue()
+      })()
+    }
+    // Anything already waiting can go now.
     void pumpQueue()
   }, [setQueueSafe, pumpQueue])
 
