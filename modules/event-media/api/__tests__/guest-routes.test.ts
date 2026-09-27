@@ -420,13 +420,17 @@ describe('listMedia', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.items).toHaveLength(2);
     expect(res.body.items[0].url).toBe(`https://supabase.public.example/storage/v1/object/public/media/${ROW.storage_path}`);
-    expect(res.body.items[0].variants.thumb).toContain('/variants/thumb.jpg');
+    // A thumb stored on the row is ignored: every size is made on the
+    // fly from the original, so a rotated photograph cannot show an
+    // upright thumbnail.
+    expect(res.body.items[0].variants.thumb).toContain('width=350');
+    expect(res.body.items[0].variants.thumb).toContain(ROW.storage_path);
     expect(res.body.items[0].guest_name).toBe('Auntie Carol');
     expect(res.body.items[1].guest_name).toBeNull();
     expect(res.body.items[0].kind).toBe('photo');
   });
 
-  it('fills missing variants with render-endpoint URLs for photos only', async () => {
+  it('sizes photos on the fly, and never a video', async () => {
     const bare = { ...ROW, id: '33333333-2222-3333-4444-555555555555', variants: null };
     const vid = { ...ROW, id: '44444444-2222-3333-4444-555555555555', variants: null, mime_type: 'video/mp4' };
     const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, mediaRows: [bare, vid] });
@@ -713,8 +717,8 @@ describe('completeUploads', () => {
     expect(row.is_approved).toBe(true);
     expect(row.uploaded_by).toBeNull();
     expect(row.metadata.upload_link_id).toBe(LINK_ID);
-    expect(supabase.state.invoked[0].name).toBe('media-process-image');
-    expect(supabase.state.invoked[0].opts.body.table).toBe('host_media');
+    // No thumbnail function: sizes are made on the fly from the original.
+    expect(supabase.state.invoked.map((i) => i.name)).not.toContain('media-process-image');
     expect(supabase.state.rpcCalls[0]).toEqual({ name: 'events_media_upload_links_increment', args: { p_link_id: LINK_ID, p_n: 1 } });
   });
 
@@ -925,7 +929,7 @@ describe('booth pictures are kept, and posted only when the guest chooses', () =
     expect(upd.metadata.posted).toBe(true);
     expect(upd.metadata.look).toBe('1970s');
     expect(Date.parse(upd.created_at)).toBeGreaterThanOrEqual(before);
-    expect(supabase.state.invoked[0].name).toBe('media-process-image');
+    expect(supabase.state.invoked.map((i) => i.name)).not.toContain('media-process-image');
   });
 
   it('refuses a picture that is not this device\'s, identically', async () => {

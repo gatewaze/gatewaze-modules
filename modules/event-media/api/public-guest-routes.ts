@@ -743,25 +743,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
   /**
    * What every photo bound for the projector gets once it exists: its 3D
-   * layers and browse copy, and its thumbnails. Fire-and-forget.
+   * layers. Fire-and-forget.
+   *
+   * No thumbnails are made. Sizes come off the CDN on the fly instead
+   * (asked 2026-09-27): the same original, asked for at the width the
+   * page wants, cached at the edge by that width. Stored copies cost
+   * storage and an edge function that could not decode a multi-megapixel
+   * photograph anyway -- and they went stale the moment a photograph was
+   * rotated, since each one had to be turned alongside it.
    */
   function processNewImage(mediaId: string, storagePath: string): void {
     void generateLayers(mediaId, storagePath);
-    // invoke() resolves { data, error } on a non-2xx rather than
-    // rejecting, so the error envelope must be checked or edge-fn
-    // failures are invisible (evidence review 2026-09-19, F4).
-    void supabase.functions
-      .invoke('media-process-image', { body: { mediaId, table: 'host_media' } })
-      .then(({ error }: { error: { message?: string } | null }) => {
-        if (error) {
-          logger.warn('media-process-image returned an error', { mediaId, error: error.message ?? String(error) });
-        }
-      })
-      .catch((err: unknown) => {
-        logger.warn('media-process-image invoke failed', {
-          mediaId, error: err instanceof Error ? err.message : String(err),
-        });
-      });
   }
 
   /**
@@ -822,14 +814,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         if (typeof v === 'string' && v) variants[k] = toBrowserUrl(v);
       }
     }
-    // Fill missing variants with on-the-fly render URLs: the magick-wasm
-    // edge fn cannot decode multi-MP photos inside the edge memory
-    // ceiling (WORKER_RESOURCE_LIMIT, live 2026-09-20), but this
-    // project's imgproxy transformation endpoint resizes anything —
-    // so every photo gets a thumb/medium regardless of the fn's fate.
+    // Sizes are always made on the fly from the original, never read
+    // from the row: one file per photograph, resized at the edge and
+    // cached there by width. A thumb or medium a row still carries from
+    // when they were stored is ignored -- it is the wrong way up for a
+    // photograph that has since been turned.
     if (r.mime_type.startsWith('image/')) {
-      if (!variants['thumb']) variants['thumb'] = toRenderUrl(r.storage_path, 350);
-      if (!variants['medium']) variants['medium'] = toRenderUrl(r.storage_path, 800);
+      variants['thumb'] = toRenderUrl(r.storage_path, 350);
+      variants['medium'] = toRenderUrl(r.storage_path, 800);
     }
     return {
       id: r.id,
