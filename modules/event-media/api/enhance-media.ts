@@ -43,9 +43,25 @@ export interface EnhanceMediaDeps {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** How many photographs one call will do. Each is a model call. */
-const BATCH_MAX = 6;
+const BATCH_MAX = 3;
 /** Bigger than any photograph a phone takes; a guard, not a target. */
-const MAX_SOURCE_BYTES = 40 * 1024 * 1024;
+const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
+/**
+ * The longest edge of an enhanced copy.
+ *
+ * The api pod has 512MB for everything it does, and decoding a
+ * twelve-megapixel photograph at full size uses a good part of it --
+ * enough that two at once killed the pod and took the site down for a
+ * minute (2026-09-27). Asking sharp to resize in the same pipeline lets
+ * libjpeg decode at a fraction of full size, which is what keeps this
+ * inside the ceiling.
+ *
+ * The enhanced copy is a copy for looking at: the portal shows it at
+ * 800px and the original is kept untouched at whatever size it arrived.
+ */
+const MAX_EDGE = 2560;
+/** Bigger than this is not a photograph anyone took; refuse to decode it. */
+const MAX_PIXELS = 80e6;
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: code, message });
@@ -60,10 +76,21 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
    * missing native module must not take the whole route file down with
    * it (a module dep in a route path 404s every route beside it).
    */
+  let sharpReady: unknown = null;
   async function loadSharp(): Promise<((input: Buffer) => unknown) | null> {
     try {
+      if (sharpReady) return sharpReady as never;
       const mod = await import('sharp');
-      return (mod.default ?? mod) as never;
+      const lib = (mod.default ?? mod) as unknown as {
+        cache: (v: boolean) => void; concurrency: (n: number) => void;
+      };
+      // One thread and no cache. The default pool is one thread per core
+      // and a cache measured in hundreds of megabytes, which is fine for
+      // an image server and not fine inside an api pod with 512MB that
+      // is also serving the projector.
+      try { lib.cache(false); lib.concurrency(1); } catch { /* older build */ }
+      sharpReady = lib;
+      return lib as never;
     } catch (err) {
       logger.error('enhance: sharp unavailable', { error: err instanceof Error ? err.message : String(err) });
       return null;
@@ -139,8 +166,15 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
       // Every step here is arithmetic on pixels that already exist:
       // a gain and an offset, a per-channel gain for warmth, a colour
       // strength, and an unsharp mask. Nothing is drawn.
-      let img = (sharpFn as (b: Buffer, o?: unknown) => never)(source, { failOn: 'none' })
+      let img = (sharpFn as (b: Buffer, o?: unknown) => never)(source, {
+        failOn: 'none',
+        limitInputPixels: MAX_PIXELS,
+        sequentialRead: true,
+      })
         .rotate() // honour EXIF orientation before touching the pixels
+        // First, and in the same pipeline: this is what lets the decode
+        // happen at a fraction of full size rather than all at once.
+        .resize({ width: MAX_EDGE, height: MAX_EDGE, fit: 'inside', withoutEnlargement: true })
         .linear(ops.linear.multiplier, ops.linear.offset)
         .modulate({ saturation: ops.modulate.saturation });
       if (ops.tint.red !== 1 || ops.tint.blue !== 1) {
@@ -220,11 +254,18 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
       return;
     }
 
-    // In parallel: the time is the model's, not ours, and six at once is
-    // well inside what one organiser pressing a button should cost.
-    const results = await Promise.all(ids.map((id) => enhanceOne(eventId, id, force).catch((err) => ({
-      id, status: 'failed' as const, reason: err instanceof Error ? err.message : String(err),
-    }))));
+    // One at a time. Doing these together is what killed the pod: two
+    // photographs being decoded at once is more memory than the api has
+    // (2026-09-27). A batch of three costs the organiser a few seconds
+    // and the site nothing.
+    const results: Array<Awaited<ReturnType<typeof enhanceOne>>> = [];
+    for (const id of ids) {
+      try {
+        results.push(await enhanceOne(eventId, id, force));
+      } catch (err) {
+        results.push({ id, status: 'failed', reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
     logger.info('enhance batch', {
       eventId,
       enhanced: results.filter((r) => r.status === 'enhanced').length,
