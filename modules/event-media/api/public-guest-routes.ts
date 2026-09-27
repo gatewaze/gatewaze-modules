@@ -981,12 +981,20 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: shown } = await supabase
       .from('events_media_upload_links')
-      .select('id')
+      .select('id, expires_at')
       .eq('event_id', event.id)
       .eq('show_gallery', true)
       .eq('is_active', true)
-      .limit(1);
-    if (!shown || shown.length === 0) { sendError(res, 404, 'event_not_found', 'unknown event'); return; }
+      .limit(20);
+    // "Active" means what it means everywhere else (resolveLink): still
+    // switched on AND not past its expiry. An organiser who sets a link
+    // to expire at the end of the day expects the gallery to close with
+    // it, rather than to have to switch it off by hand as well. Checked
+    // here rather than in a filter so no timestamp is interpolated.
+    const live = (shown ?? []).some((l: { expires_at: string | null }) => (
+      !l.expires_at || new Date(l.expires_at).getTime() > Date.now()
+    ));
+    if (!live) { sendError(res, 404, 'event_not_found', 'unknown event'); return; }
 
     const limit = Math.max(1, Math.min(Number(req.query['limit'] ?? 60) || 60, 200));
     const offset = Math.max(0, Math.min(Number(req.query['offset'] ?? 0) || 0, GALLERY_MAX));

@@ -1386,7 +1386,7 @@ describe('eventGallery', () => {
     photo('44444444-4444-4444-8444-444444444444', 'day', { hidden: true }),
   ];
   const TABLES = {
-    events_media_upload_links: { data: [{ id: LINK_ID }], error: null },
+    events_media_upload_links: { data: [{ id: LINK_ID, expires_at: null }], error: null },
     event_media_view_albums: {
       data: [
         { album_id: ALBUM.day, view: 'day', host_media_albums: { name: 'The day' } },
@@ -1445,6 +1445,19 @@ describe('eventGallery', () => {
     const res = await gallery({}, { tables: { ...TABLES, events_media_upload_links: { data: [], error: null } } });
     expect(res.statusCode).toBe(404);
     expect(res.body.error).toBe('event_not_found');
+  });
+
+  // Expiry closes the gallery too: setting a link to run out at the end
+  // of the day should not leave the photos up for ever because nobody
+  // also switched it off.
+  it('closes with the link that opened it', async () => {
+    const expired = { data: [{ id: LINK_ID, expires_at: '2020-01-01T00:00:00.000Z' }], error: null };
+    const gone = await gallery({}, { tables: { ...TABLES, events_media_upload_links: expired } });
+    expect(gone.statusCode).toBe(404);
+    // One live link among expired ones is enough.
+    const mixed = { data: [{ id: LINK_ID, expires_at: '2020-01-01T00:00:00.000Z' }, { id: LINK_ID, expires_at: null }], error: null };
+    const open = await gallery({}, { tables: { ...TABLES, events_media_upload_links: mixed } });
+    expect(open.statusCode).toBe(200);
   });
 
   it('refuses an identifier that is not one, and an unknown event', async () => {
