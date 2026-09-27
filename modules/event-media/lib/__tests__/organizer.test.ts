@@ -39,3 +39,32 @@ describe('media helpers', () => {
     expect(formatFileSize(0)).toBe('0 B');
   });
 });
+
+import { uploaderKey } from '../organizer.js';
+
+describe('uploaderKey', () => {
+  const row = (metadata: Record<string, unknown>) => ({ metadata });
+
+  it('groups by the invitation guest, not the name they typed', () => {
+    const a = row({ source: 'guest', member_id: 'm-1', guest_name: 'Dan Baker' });
+    const b = row({ source: 'guest', member_id: 'm-1', guest_name: 'dan' });
+    expect(uploaderKey(a)).toBe(uploaderKey(b));
+    // Two guests who share a name are still two people.
+    const c = row({ source: 'guest', member_id: 'm-2', guest_name: 'Dan Baker' });
+    expect(uploaderKey(c)).not.toBe(uploaderKey(a));
+  });
+
+  it('falls back to the name, however it was spelled', () => {
+    const a = row({ source: 'guest', guest_name: 'Auntie Carol' });
+    const b = row({ source: 'guest', guest_name: '  auntie carol ' });
+    expect(uploaderKey(a)).toBe(uploaderKey(b));
+    expect(uploaderKey(a)).toBe('name:auntie carol');
+  });
+
+  it('has nobody to name for an organiser upload or a nameless guest', () => {
+    expect(uploaderKey(row({ source: 'admin', guest_name: 'Dan' }))).toBeNull();
+    expect(uploaderKey(row({ source: 'guest' }))).toBeNull();
+    expect(uploaderKey(row({ source: 'guest', guest_name: '   ' }))).toBeNull();
+    expect(uploaderKey({ metadata: null as unknown as Record<string, unknown> })).toBeNull();
+  });
+});

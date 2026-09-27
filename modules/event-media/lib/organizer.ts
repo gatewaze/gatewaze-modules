@@ -26,6 +26,22 @@ export function guestName(item: Pick<MediaLike, 'metadata'>): string | null {
     : null;
 }
 
+/**
+ * Who uploaded this, as something to group by.
+ *
+ * The invitation guest's id where there is one, because two guests can
+ * share a name and a typed name can be spelled two ways; the folded name
+ * otherwise, so photos from a guest who typed their name still gather
+ * together. Null for anything an organiser uploaded.
+ */
+export function uploaderKey(item: Pick<MediaLike, 'metadata'>): string | null {
+  const meta = (item.metadata ?? {}) as Record<string, unknown>;
+  if (meta['source'] !== 'guest') return null;
+  if (typeof meta['member_id'] === 'string' && meta['member_id']) return `member:${meta['member_id']}`;
+  const name = typeof meta['guest_name'] === 'string' ? meta['guest_name'].trim().toLowerCase() : '';
+  return name ? `name:${name}` : null;
+}
+
 export function isGuestUpload(item: Pick<MediaLike, 'metadata'>): boolean {
   return ((item.metadata ?? {}) as Record<string, unknown>)['source'] === 'guest';
 }

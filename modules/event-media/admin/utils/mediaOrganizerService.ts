@@ -25,6 +25,7 @@ export {
   type MediaKind,
   mediaKind,
   guestName,
+  uploaderKey,
   isGuestUpload,
   formatFileSize,
   formatDuration,
