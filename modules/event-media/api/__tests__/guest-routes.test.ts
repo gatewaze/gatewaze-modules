@@ -1367,3 +1367,112 @@ describe('an upload is filed by when it was taken', () => {
     }
   });
 });
+
+// The page anyone reaches without an upload code.
+describe('eventGallery', () => {
+  const ALBUM = { day: 'aaaa1111-0000-4000-8000-000000000001', ready: 'aaaa1111-0000-4000-8000-000000000002' };
+  const photo = (id, album, extra = {}) => ({
+    id,
+    storage_path: `event/${EVENT_ID}/${id}/img.jpg`,
+    mime_type: 'image/jpeg',
+    bytes: 100, width: null, height: null, variants: null,
+    metadata: { source: 'guest', guest_name: 'Auntie Carol', album, ...extra },
+    created_at: '2026-09-25T18:00:00.000Z',
+  });
+  const ROWS = [
+    photo('11111111-1111-4111-8111-111111111111', 'day'),
+    photo('22222222-2222-4222-8222-222222222222', 'ready'),
+    photo('33333333-3333-4333-8333-333333333333', 'ready'),
+    photo('44444444-4444-4444-8444-444444444444', 'day', { hidden: true }),
+  ];
+  const TABLES = {
+    events_media_upload_links: { data: [{ id: LINK_ID, expires_at: null }], error: null },
+    event_media_view_albums: {
+      data: [
+        { album_id: ALBUM.day, view: 'day', host_media_albums: { name: 'The day' } },
+        { album_id: ALBUM.ready, view: 'ready', host_media_albums: { name: 'Getting ready' } },
+      ],
+      error: null,
+    },
+    host_media_album_items: { data: [], error: null },
+  };
+  const gallery = async (query = {}, over = {}) => {
+    const { deps } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES, ...over });
+    const res = mockRes();
+    await createGuestRoutes(deps).eventGallery({ params: { identifier: 'dan-sarah' }, query, ip: '203.0.113.9', headers: {} }, res);
+    return res;
+  };
+
+  it('shows the albums with something in them, and the photos', async () => {
+    const res = await gallery();
+    expect(res.statusCode).toBe(200);
+    expect(res.body.event.name).toBe('Dan & Sarah');
+    // In the order the day ran, hidden photos counted in neither.
+    expect(res.body.albums).toEqual([
+      { album: 'ready', name: 'Getting ready', count: 2 },
+      { album: 'day', name: 'The day', count: 1 },
+    ]);
+    expect(res.body.items).toHaveLength(3);
+    expect(res.body.total).toBe(3);
+    expect(res.body.next_offset).toBeNull();
+    // Every size is a CDN URL, as everywhere else.
+    expect(res.body.items[0].variants.thumb).toContain('width=350');
+  });
+
+  it('shows one album when asked for one', async () => {
+    const res = await gallery({ album: 'ready' });
+    expect(res.body.items.map((i) => i.album)).toEqual(['ready', 'ready']);
+    expect(res.body.total).toBe(2);
+    // The album list still describes the whole event.
+    expect(res.body.albums).toHaveLength(2);
+  });
+
+  it('ignores an album nobody has heard of', async () => {
+    const res = await gallery({ album: 'nonsense' });
+    expect(res.body.total).toBe(3);
+  });
+
+  it('pages through', async () => {
+    const first = await gallery({ limit: 2 });
+    expect(first.body.items).toHaveLength(2);
+    expect(first.body.next_offset).toBe(2);
+    const second = await gallery({ limit: 2, offset: 2 });
+    expect(second.body.items).toHaveLength(1);
+    expect(second.body.next_offset).toBeNull();
+  });
+
+  it('is not there when the organiser shows guests no gallery', async () => {
+    const res = await gallery({}, { tables: { ...TABLES, events_media_upload_links: { data: [], error: null } } });
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBe('event_not_found');
+  });
+
+  // Expiry closes the gallery too: setting a link to run out at the end
+  // of the day should not leave the photos up for ever because nobody
+  // also switched it off.
+  it('closes with the link that opened it', async () => {
+    const expired = { data: [{ id: LINK_ID, expires_at: '2020-01-01T00:00:00.000Z' }], error: null };
+    const gone = await gallery({}, { tables: { ...TABLES, events_media_upload_links: expired } });
+    expect(gone.statusCode).toBe(404);
+    // One live link among expired ones is enough.
+    const mixed = { data: [{ id: LINK_ID, expires_at: '2020-01-01T00:00:00.000Z' }, { id: LINK_ID, expires_at: null }], error: null };
+    const open = await gallery({}, { tables: { ...TABLES, events_media_upload_links: mixed } });
+    expect(open.statusCode).toBe(200);
+  });
+
+  it('refuses an identifier that is not one, and an unknown event', async () => {
+    const { deps } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES });
+    for (const identifier of ['../../etc', 'a,b', 'x)or(1', '', 'a'.repeat(200)]) {
+      const res = mockRes();
+      await createGuestRoutes(deps).eventGallery({ params: { identifier }, query: {}, ip: '1.2.3.4', headers: {} }, res);
+      expect(res.statusCode).toBe(404);
+    }
+    const missing = await gallery({}, { event: null });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('never hands out an upload code', async () => {
+    const res = await gallery();
+    expect(JSON.stringify(res.body)).not.toContain(CODE);
+  });
+});

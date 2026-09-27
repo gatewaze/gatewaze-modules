@@ -37,7 +37,7 @@ import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js
 import { BOOTH_PLACES, DEFAULT_PLACE, boothPlace, placeRail } from '../lib/booth-places.js';
 import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
-import { albumForUpload, boothAlbum, resolveViews, tagView, type View } from '../lib/view-albums.js';
+import { albumForUpload, boothAlbum, isView, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
 import { BOOTH_ERAS, eraAllLooks, eraLooks, erasFor, isEraSetting } from '../lib/booth-eras.js';
 import eventMediaModule from '../index.js';
@@ -941,6 +941,135 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   // ────────────────────────────────────────────────────────────────────
+  // GET /public/event-media/events/:identifier/gallery
+  // ────────────────────────────────────────────────────────────────────
+  /**
+   * The event's photographs as an album, for anyone who opens the page.
+   *
+   * The guest app is reached with an upload code on the URL; somebody who
+   * just opens /photos has none, and used to be asked who they were and
+   * shown nothing (reported 2026-09-27). They get the gallery instead,
+   * with the albums to move between -- the shape the old portal had.
+   *
+   * Keyed by the event, not by a link: handing a link code to a page that
+   * needs no code would hand out the right to upload with it. The
+   * organiser's own switch still decides whether there is a gallery at
+   * all -- at least one active link must have show_gallery -- so an event
+   * that never showed guests a gallery does not start now.
+   *
+   * One query for the event's photographs rather than a page at a time,
+   * because the album counts have to be true and the albums are resolved
+   * in this process; a wedding's few hundred are nothing, and GALLERY_MAX
+   * is the ceiling.
+   */
+  async function eventGallery(req: Request, res: Response): Promise<void> {
+    if (!(await checkRate(res, guestRateKey('gallery:ip', clientIp(req)), GUEST_RATE_LIMITS.mediaListPerIp))) return;
+
+    const raw = req.params['identifier'];
+    // Slug or short code, and nothing else: no comma, dot or bracket can
+    // reach a PostgREST filter from here.
+    const ident = typeof raw === 'string' && /^[a-z0-9][a-z0-9-]{0,80}$/i.test(raw) ? raw : null;
+    if (!ident) { sendError(res, 404, 'event_not_found', 'unknown event'); return; }
+
+    const EVENT_COLS = 'id, event_id, event_slug, event_title, event_start';
+    let { data: event } = await supabase.from('events').select(EVENT_COLS).eq('event_slug', ident).maybeSingle();
+    // Separate lookups rather than one `or` filter built from the URL.
+    if (!event) ({ data: event } = await supabase.from('events').select(EVENT_COLS).eq('event_id', ident).maybeSingle());
+    // A portal that hands over the row's own id rather than its slug.
+    if (!event && UUID_RE.test(ident)) ({ data: event } = await supabase.from('events').select(EVENT_COLS).eq('id', ident).maybeSingle());
+    if (!event) { sendError(res, 404, 'event_not_found', 'unknown event'); return; }
+
+    const { data: shown } = await supabase
+      .from('events_media_upload_links')
+      .select('id, expires_at')
+      .eq('event_id', event.id)
+      .eq('show_gallery', true)
+      .eq('is_active', true)
+      .limit(20);
+    // "Active" means what it means everywhere else (resolveLink): still
+    // switched on AND not past its expiry. An organiser who sets a link
+    // to expire at the end of the day expects the gallery to close with
+    // it, rather than to have to switch it off by hand as well. Checked
+    // here rather than in a filter so no timestamp is interpolated.
+    const live = (shown ?? []).some((l: { expires_at: string | null }) => (
+      !l.expires_at || new Date(l.expires_at).getTime() > Date.now()
+    ));
+    if (!live) { sendError(res, 404, 'event_not_found', 'unknown event'); return; }
+
+    const limit = Math.max(1, Math.min(Number(req.query['limit'] ?? 60) || 60, 200));
+    const offset = Math.max(0, Math.min(Number(req.query['offset'] ?? 0) || 0, GALLERY_MAX));
+    const wanted = isView(req.query['album']) ? (req.query['album'] as View) : null;
+
+    let query = supabase
+      .from('host_media')
+      .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
+      .eq('host_kind', 'event')
+      .eq('host_id', event.id)
+      .eq('access_level', 'public')
+      .eq('is_approved', true)
+      .or('metadata->>posted.is.null,metadata->>posted.neq.false')
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(GALLERY_MAX);
+
+    // As the guest feed does: a blocked guest's photographs are nobody's
+    // to see. The ids are this event's own block rows, UUID-checked.
+    const blocked = [...(await blockedFor(event.id))];
+    if (blocked.length > 0) {
+      query = query.or(`metadata->>member_id.is.null,metadata->>member_id.not.in.(${blocked.join(',')})`);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      logger.error('event gallery failed', { eventId: event.id, error: error.message });
+      sendError(res, 500, 'list_failed', 'could not list media');
+      return;
+    }
+
+    const rows = ((data ?? []) as FeedRow[]).filter(
+      (r) => ((r.metadata ?? {}) as Record<string, unknown>)['hidden'] !== true,
+    );
+    const views = await viewsFor(event.id, rows);
+
+    // The albums to choose between, in the order the projector runs
+    // through them, and only those with something in them.
+    const counts = new Map<View, number>();
+    for (const r of rows) {
+      const v = views.get(r.id) ?? tagView(r.metadata);
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    const { data: named } = await supabase
+      .from('event_media_view_albums')
+      .select('view, album_id, host_media_albums(name, sort_order)')
+      .eq('event_id', event.id);
+    const nameOf = new Map<string, string>();
+    for (const a of (named ?? []) as Array<{ view: string; host_media_albums: { name?: string } | null }>) {
+      if (a.host_media_albums?.name) nameOf.set(a.view, a.host_media_albums.name);
+    }
+    const albums = GALLERY_ORDER
+      .filter((v) => (counts.get(v) ?? 0) > 0)
+      .map((v) => ({ album: v, name: nameOf.get(v) ?? GALLERY_FALLBACK_NAMES[v], count: counts.get(v) ?? 0 }));
+
+    const chosen = wanted
+      ? rows.filter((r) => (views.get(r.id) ?? tagView(r.metadata)) === wanted)
+      : rows;
+    const page = chosen.slice(offset, offset + limit);
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({
+      event: {
+        id: event.id,
+        name: event.event_title ?? null,
+        starts_at: event.event_start ?? null,
+      },
+      albums,
+      total: chosen.length,
+      items: page.map((r) => mapFeedItem(r, views.get(r.id))),
+      next_offset: offset + page.length < chosen.length ? offset + page.length : null,
+    });
+  }
+
+  // ────────────────────────────────────────────────────────────────────
   // POST /public/event-media/links/:code/uploads   (mint)
   // ────────────────────────────────────────────────────────────────────
   async function mintUploads(req: Request, res: Response): Promise<void> {
@@ -1789,6 +1918,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   return {
     getLink: guarded(getLink),
     listMedia: guarded(listMedia),
+    eventGallery: guarded(eventGallery),
     mintUploads: guarded(mintUploads),
     completeUploads: guarded(completeUploads),
     listMine: guarded(listMine),
@@ -1802,9 +1932,25 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   };
 }
 
+/** The most photographs one gallery request will consider. */
+const GALLERY_MAX = 2000;
+/** The albums in the order the day ran, which is how they are offered. */
+const GALLERY_ORDER: readonly View[] = ['night', 'ready', 'day', 'booth', 'elsewhere', 'seed'];
+/** Names for an event whose albums were never given one. */
+const GALLERY_FALLBACK_NAMES: Record<View, string> = {
+  seed: 'Preload',
+  night: 'The night before',
+  ready: 'Getting ready',
+  day: 'The day',
+  booth: 'Photo booth',
+  elsewhere: 'Photo booth elsewhere',
+};
+
 export function mountGuestRoutes(router: Router, routes: ReturnType<typeof createGuestRoutes>): void {
   router.get('/public/event-media/links/:code', routes.getLink);
   router.get('/public/event-media/links/:code/media', routes.listMedia);
+  // No code: the album view for anyone who opens the page.
+  router.get('/public/event-media/events/:identifier/gallery', routes.eventGallery);
   router.get('/public/event-media/links/:code/guests', routes.searchGuests);
   router.post('/public/event-media/links/:code/guests/claim', routes.claimGuest);
   router.post('/public/event-media/links/:code/guests/release', routes.releaseGuest);
