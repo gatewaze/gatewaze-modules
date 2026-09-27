@@ -42,6 +42,19 @@ const MINT_BATCH = 20
  * not a delay anyone should notice.
  */
 const EXIF_WAIT_MS = 4000
+
+/**
+ * Now, as a camera would write it: local time, no zone. A booth picture
+ * is a canvas capture with no EXIF to read, so the phone's own clock is
+ * the only record of when the shutter went -- and the row's own date is
+ * no use, because posting a kept picture rewrites it (asked 2026-09-27).
+ */
+function shutterNow(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    + `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 const CONCURRENCY = 3
 const GALLERY_PAGE = 50
 // Everyone's photos refresh while the guest is looking at them.
@@ -332,6 +345,8 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     error: string | null
     /** The kept copy of `preview` on the server, if it was kept. */
     mediaId?: string | null
+    /** When the shutter went, by this phone's clock. */
+    takenAt?: string | null
   } | null>(null)
   // Can this browser hand a FILE to the share sheet? On iOS that sheet
   // is what puts "Save Image" in front of a guest; long-pressing the
@@ -924,7 +939,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     if (!hasBooth) { enqueueFiles(files, true); return }
     const dataUrl = await toDataUrl(file)
     if (!dataUrl) { enqueueFiles(files, true); return }
-    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
+    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null, takenAt: shutterNow() })
   }, [link, enqueueFiles, toDataUrl])
 
   /**
@@ -959,6 +974,8 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
           // allowed to change the look.
           ...(extra?.pose ? { pose: extra.pose } : {}),
           ...(extra?.place ? { place: extra.place } : {}),
+          // When the shutter went, not when the look was chosen.
+          taken_at: shot.takenAt ?? shutterNow(),
         }),
       })
       const data = await res.json().catch(() => null)
@@ -1167,7 +1184,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     // If the photo cannot be read (an unusual format, say), fall back to
     // a plain upload rather than dropping the guest's picture.
     if (!dataUrl) { setPendingLook(null); enqueueFiles(files, true); return }
-    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
+    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null, takenAt: shutterNow() })
   }, [toDataUrl, enqueueFiles])
 
   // The illustrated booth hands back a picture it took itself, from the
@@ -1178,7 +1195,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
       ? { pose: look.pose ?? null, decade: look.decade ?? null, place: look.place ?? null }
       : null)
     setPendingLook(look ? { key: look.key, payload: look.payload } : null)
-    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null })
+    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null, takenAt: shutterNow() })
   }, [])
 
   const onBoothFallback = useCallback((look: BoothLook | null) => {

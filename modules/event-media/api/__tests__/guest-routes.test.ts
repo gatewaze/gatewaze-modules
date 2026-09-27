@@ -84,12 +84,32 @@ function makeSupabase(config) {
         }
         return Promise.resolve({ error: null });
       },
-      select: () => b,
-      eq: (col, val) => { if (table === 'events_media_guest_claims' && col === 'member_id') claimMember = val; return b; },
+      // The gallery reads a page with .range() and counts with a head
+      // select; both are emulated well enough to be worth asserting on,
+      // including the album filter and the hidden-row exclusion the real
+      // query does in SQL.
+      select: (_cols, opts) => { b._head = Boolean(opts && opts.head); return b; },
+      range: (from, to) => Promise.resolve({ data: b._rows().slice(from, to + 1), error: config.mediaListError ?? null }),
+      _rows: () => (config.mediaRows ?? []).filter((r) => {
+        const album = (r.metadata || {}).album;
+        if ((r.metadata || {}).hidden === true) return false;
+        if (b._albumEq !== undefined) return album === b._albumEq;
+        if (b._albumIn !== undefined) return b._albumIn.includes(album);
+        return true;
+      }),
+      eq: (col, val) => {
+        if (table === 'events_media_guest_claims' && col === 'member_id') claimMember = val;
+        if (col === 'metadata->>album') b._albumEq = val;
+        return b;
+      },
       gt: () => b,
       gte: () => b,
       like: () => b,
-      in: (col, vals) => { (state.inCalls ??= []).push({ table, col, vals }); return b; },
+      in: (col, vals) => {
+        (state.inCalls ??= []).push({ table, col, vals });
+        if (col === 'metadata->>album') b._albumIn = vals;
+        return b;
+      },
       or: () => b,
       contains: () => b,
       order: () => b,
@@ -113,6 +133,7 @@ function makeSupabase(config) {
         return Promise.resolve({ data: null, error: null });
       },
       then: (resolve) => {
+        if (table === 'host_media' && b._head) return resolve({ count: b._rows().length, error: null });
         if (table === 'events_media_guest_claims') return resolve({ data: [...state.claims].map(([member_id, client_id]) => ({ member_id, client_id })), error: null });
         if (config.tables && table in config.tables) return resolve(config.tables[table]);
         if (table !== 'host_media') return resolve({ data: [], error: null });
@@ -1471,8 +1492,96 @@ describe('eventGallery', () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  // An organiser can take an album off the portal: the pictures people
+  // made at home afterwards belong in the Media tab, not on the wedding's
+  // own page.
+  it('leaves out an album that has been taken off the portal', async () => {
+    const off = {
+      ...TABLES,
+      event_media_album_settings: { data: [{ album_id: ALBUM.ready }], error: null },
+    };
+    const res = await gallery({}, { tables: off });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.albums.map((a) => a.album)).toEqual(['day']);
+    expect(res.body.items.every((i) => i.album !== 'ready')).toBe(true);
+    expect(res.body.total).toBe(1);
+  });
+
+  it('shows every album when none has been taken off', async () => {
+    const res = await gallery({}, { tables: { ...TABLES, event_media_album_settings: { data: [], error: null } } });
+    expect(res.body.albums).toHaveLength(2);
+    expect(res.body.total).toBe(3);
+  });
+
   it('never hands out an upload code', async () => {
     const res = await gallery();
     expect(JSON.stringify(res.body)).not.toContain(CODE);
+  });
+});
+
+// A booth picture is a canvas capture: no EXIF, and posting rewrites the
+// row's own date, so the moment it was made has to be kept deliberately.
+describe('when a booth picture was taken', () => {
+  const PHOTO = 'data:image/jpeg;base64,' + Buffer.from('selfie').toString('base64');
+  const BOOTH_LINK = { ...ACTIVE_LINK, allow_face_filter: true };
+  const KEPT = {
+    id: '55555555-2222-4333-8444-555555555555',
+    host_kind: 'event', host_id: EVENT_ID, storage_path: `event/${EVENT_ID}/x/booth.jpg`,
+    created_at: '2026-09-25T21:14:07.000Z',
+    metadata: { source: 'guest', album: 'booth', posted: false, client_id: CLIENT_ID, look: '1970s' },
+  };
+
+  beforeEach(() => {
+    process.env.BOOTH_PROVIDER = 'fal';
+    process.env.FAL_API_KEY = 'test-placeholder';
+    provider.runStyle.mockResolvedValue({ ok: true, image: new Uint8Array([1, 2, 3, 4]), contentType: 'image/jpeg' });
+  });
+  afterEach(() => {
+    delete process.env.BOOTH_PROVIDER;
+    delete process.env.FAL_API_KEY;
+  });
+
+  const post = async (row) => {
+    const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW, existingMedia: row });
+    const res = mockRes();
+    await createGuestRoutes(deps).postBooth(req({ body: { client_id: CLIENT_ID, media_id: row.id } }), res);
+    return { res, supabase };
+  };
+
+  it("records the phone's clock at the shutter", async () => {
+    const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW });
+    await createGuestRoutes(deps).faceFilter(req({ body: {
+      client_id: CLIENT_ID, image: PHOTO, effect: 'decade-1970s', return: 'url',
+      taken_at: '2026-09-25T21:14:07',
+    } }), mockRes());
+    const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');
+    expect(row.metadata.taken_at).toBe('2026-09-25T21:14:07');
+  });
+
+  it('drops a shutter time that is not one', async () => {
+    for (const bad of ['tuesday', '2099-01-01T00:00:00', 12, null]) {
+      const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW });
+      await createGuestRoutes(deps).faceFilter(req({ body: {
+        client_id: CLIENT_ID, image: PHOTO, effect: 'decade-1970s', return: 'url', taken_at: bad,
+      } }), mockRes());
+      const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');
+      expect(row.metadata.taken_at).toBeUndefined();
+    }
+  });
+
+  it('keeps the moment it was made when the guest posts it later', async () => {
+    const { res, supabase } = await post(KEPT);
+    expect(res.statusCode).toBe(200);
+    const upd = supabase.state.updated.find((u) => u.table === 'host_media').fields;
+    // Dated now for the projector, but remembering when it was made.
+    expect(Date.parse(upd.created_at)).toBeGreaterThan(Date.parse(KEPT.created_at));
+    expect(upd.metadata.taken_at).toBe(KEPT.created_at);
+  });
+
+  it('does not overwrite a capture time it already has', async () => {
+    const withTime = { ...KEPT, created_at: '2026-09-26T09:00:00.000Z', metadata: { ...KEPT.metadata, taken_at: '2026-09-25T21:14:07' } };
+    const { supabase } = await post(withTime);
+    const upd = supabase.state.updated.find((u) => u.table === 'host_media').fields;
+    expect(upd.metadata.taken_at).toBe('2026-09-25T21:14:07');
   });
 });

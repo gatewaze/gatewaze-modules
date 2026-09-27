@@ -25,6 +25,7 @@ import {
   MAX_FILES_PER_MINT,
   buildGuestStoragePath,
   cleanGuestName,
+  cleanTakenAt,
   guestRateKey,
   newMediaId,
   paramAsShortCode,
@@ -806,6 +807,38 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
   }
 
+  /**
+   * The views an organiser has taken off the portal (migration 016).
+   *
+   * Never allowed to fail the page: a settings table that cannot be read
+   * shows every album, which is where this started.
+   */
+  async function hiddenViews(eventId: string): Promise<Set<View>> {
+    const out = new Set<View>();
+    try {
+      const { data: off, error } = await supabase
+        .from('event_media_album_settings')
+        .select('album_id')
+        .eq('event_id', eventId)
+        .eq('show_on_portal', false);
+      if (error) throw new Error(error.message);
+      if (!off || off.length === 0) return out;
+      const ids = new Set((off as Array<{ album_id: string }>).map((a) => a.album_id));
+      const { data: albums } = await supabase
+        .from('event_media_view_albums')
+        .select('album_id, view')
+        .eq('event_id', eventId);
+      for (const a of (albums ?? []) as Array<{ album_id: string; view: string }>) {
+        if (ids.has(a.album_id) && isView(a.view)) out.add(a.view);
+      }
+    } catch (err) {
+      logger.warn('album settings unavailable; showing every album', {
+        eventId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return out;
+  }
+
   function mapFeedItem(r: FeedRow, view?: View) {
     const meta = (r.metadata ?? {}) as Record<string, unknown>;
     const variants: Record<string, string> = {};
@@ -1000,44 +1033,63 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const offset = Math.max(0, Math.min(Number(req.query['offset'] ?? 0) || 0, GALLERY_MAX));
     const wanted = isView(req.query['album']) ? (req.query['album'] as View) : null;
 
-    let query = supabase
-      .from('host_media')
-      .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
-      .eq('host_kind', 'event')
-      .eq('host_id', event.id)
-      .eq('access_level', 'public')
-      .eq('is_approved', true)
-      .or('metadata->>posted.is.null,metadata->>posted.neq.false')
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(GALLERY_MAX);
+    // Albums an organiser has taken off the portal (migration 016). Their
+    // photographs go with them, or hiding an album would hide only its
+    // heading.
+    const hidden = await hiddenViews(event.id);
+    if (wanted && hidden.has(wanted)) { sendError(res, 404, 'album_not_found', 'unknown album'); return; }
+    const offered = GALLERY_ORDER.filter((v) => !hidden.has(v));
 
-    // As the guest feed does: a blocked guest's photographs are nobody's
-    // to see. The ids are this event's own block rows, UUID-checked.
+    // Which album a photograph is in is read from its own tag rather
+    // than from album membership. Membership is what the projector
+    // resolves, and resolving it means reading every photograph of the
+    // event on every request -- which is what made this page take nine
+    // seconds to answer (reported 2026-09-27). The two agree: the tag is
+    // written when the photograph lands and the album it joins is chosen
+    // from it.
     const blocked = [...(await blockedFor(event.id))];
-    if (blocked.length > 0) {
-      query = query.or(`metadata->>member_id.is.null,metadata->>member_id.not.in.(${blocked.join(',')})`);
-    }
+    const base = () => {
+      let q = supabase
+        .from('host_media')
+        .eq('host_kind', 'event')
+        .eq('host_id', event.id)
+        .eq('access_level', 'public')
+        .eq('is_approved', true)
+        .or('metadata->>posted.is.null,metadata->>posted.neq.false')
+        // Photos an operator has hidden stay out, as they do everywhere.
+        .or('metadata->>hidden.is.null,metadata->>hidden.neq.true');
+      if (blocked.length > 0) {
+        q = q.or(`metadata->>member_id.is.null,metadata->>member_id.not.in.(${blocked.join(',')})`);
+      }
+      return q;
+    };
+    // Every value below comes from the View allowlist, never from the
+    // request: `wanted` is isView-checked and `offered` is a constant.
+    const inAlbum = (q: { eq: (c: string, v: string) => unknown; in: (c: string, v: string[]) => unknown }) => (
+      wanted ? q.eq('metadata->>album', wanted) : q.in('metadata->>album', [...offered])
+    );
 
-    const { data, error } = await query;
+    const counts = new Map<View, number>();
+    const [pageResult] = await Promise.all([
+      inAlbum(base().select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(offset, offset + limit - 1),
+      // One count per album, each a HEAD request that returns no rows.
+      ...offered.map(async (v) => {
+        const { count } = await base()
+          .select('id', { count: 'exact', head: true })
+          .eq('metadata->>album', v);
+        if (count) counts.set(v, count);
+      }),
+    ]);
+    const { data, error } = pageResult as { data: FeedRow[] | null; error: { message: string } | null };
     if (error) {
       logger.error('event gallery failed', { eventId: event.id, error: error.message });
       sendError(res, 500, 'list_failed', 'could not list media');
       return;
     }
 
-    const rows = ((data ?? []) as FeedRow[]).filter(
-      (r) => ((r.metadata ?? {}) as Record<string, unknown>)['hidden'] !== true,
-    );
-    const views = await viewsFor(event.id, rows);
-
-    // The albums to choose between, in the order the projector runs
-    // through them, and only those with something in them.
-    const counts = new Map<View, number>();
-    for (const r of rows) {
-      const v = views.get(r.id) ?? tagView(r.metadata);
-      counts.set(v, (counts.get(v) ?? 0) + 1);
-    }
     const { data: named } = await supabase
       .from('event_media_view_albums')
       .select('view, album_id, host_media_albums(name, sort_order)')
@@ -1046,14 +1098,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     for (const a of (named ?? []) as Array<{ view: string; host_media_albums: { name?: string } | null }>) {
       if (a.host_media_albums?.name) nameOf.set(a.view, a.host_media_albums.name);
     }
-    const albums = GALLERY_ORDER
+    const albums = offered
       .filter((v) => (counts.get(v) ?? 0) > 0)
       .map((v) => ({ album: v, name: nameOf.get(v) ?? GALLERY_FALLBACK_NAMES[v], count: counts.get(v) ?? 0 }));
 
-    const chosen = wanted
-      ? rows.filter((r) => (views.get(r.id) ?? tagView(r.metadata)) === wanted)
-      : rows;
-    const page = chosen.slice(offset, offset + limit);
+    const page = (data ?? []) as FeedRow[];
+    const total = wanted
+      ? (counts.get(wanted) ?? 0)
+      : [...counts.values()].reduce((n, c) => n + c, 0);
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({
@@ -1063,9 +1115,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         starts_at: event.event_start ?? null,
       },
       albums,
-      total: chosen.length,
-      items: page.map((r) => mapFeedItem(r, views.get(r.id))),
-      next_offset: offset + page.length < chosen.length ? offset + page.length : null,
+      total,
+      items: page.map((r) => mapFeedItem(r)),
+      next_offset: offset + page.length < total ? offset + page.length : null,
     });
   }
 
@@ -1647,6 +1699,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         pose: pose ? { id: pose.id, label: pose.label } : null,
         place,
         eventStart: event.event_start ?? null,
+        // The phone's own clock at the shutter, checked like any other
+        // date a device offers.
+        takenAt: cleanTakenAt(body['taken_at']),
       });
       const wantsUrl = body['return'] === 'url';
       res.status(200).json({
@@ -1691,6 +1746,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     selfieType?: string | null;
     /** When the event starts, to tell a booth picture made there from one made at home. */
     eventStart?: string | null;
+    /**
+     * When the picture was made, by the phone's own clock. A booth
+     * picture is a canvas capture and carries no EXIF, so without this
+     * there is nothing to sort it by but the row's date -- and posting
+     * rewrites that (asked 2026-09-27).
+     */
+    takenAt?: string | null;
   }): Promise<{ mediaId: string; url: string } | null> {
     const { link } = opts;
     const mediaId = newMediaId();
@@ -1743,6 +1805,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // What the booth asked them to do, when it asked for anything.
         ...(opts.pose ? { pose: opts.pose.id, pose_label: opts.pose.label } : {}),
         ...(opts.place ? { place: opts.place } : {}),
+        // When the shutter went, which is not when this picture is posted.
+        ...(opts.takenAt ? { taken_at: opts.takenAt } : {}),
         // What the guest actually took, for the organiser to look at.
         ...(selfiePath ? { selfie: selfiePath } : {}),
         // Off the projector and out of the gallery until the guest posts it.
@@ -1781,7 +1845,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: row, error } = await supabase
       .from('host_media')
-      .select('id, storage_path, metadata, host_id, host_kind')
+      .select('id, storage_path, metadata, host_id, host_kind, created_at')
       .eq('id', mediaId)
       .maybeSingle();
     if (error) {
@@ -1812,10 +1876,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
 
     // Posting is when it arrives: the projector takes new photos by time,
-    // so the picture is dated now, not when it was made.
+    // so the picture is dated now, not when it was made. The moment it
+    // WAS made is kept as its capture time, or the Media tab would sort
+    // a picture taken at nine and posted at midnight as a midnight one
+    // (asked 2026-09-27). The booth normally puts the phone's own clock
+    // there; this is for pictures made before it did, and it is an
+    // instant with a zone on it rather than a camera's local reading.
+    const posted = { ...meta, posted: true } as Record<string, unknown>;
+    if (!posted['taken_at'] && typeof row.created_at === 'string') posted['taken_at'] = row.created_at;
     const { error: updErr } = await supabase
       .from('host_media')
-      .update({ metadata: { ...meta, posted: true }, created_at: new Date().toISOString() })
+      .update({ metadata: posted, created_at: new Date().toISOString() })
       .eq('id', mediaId);
     if (updErr) {
       logger.error('booth post failed', { error: updErr.message });

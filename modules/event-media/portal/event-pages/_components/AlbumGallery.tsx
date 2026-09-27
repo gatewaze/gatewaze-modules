@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const API_BASE = ''
-const PAGE = 60
+const PAGE = 24
 
 interface GalleryItem {
   id: string
@@ -144,14 +144,17 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
             return (
               <button
                 key={c.album ?? 'all'}
-                onClick={() => { setChosen(c.album); setItems([]); }}
-                className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm ${
-                  on
-                    ? 'bg-white text-gray-900 font-medium shadow'
-                    : darkMode ? 'bg-white/10 text-white/80' : 'bg-black/5 text-gray-700'
-                }`}
+                onClick={() => setChosen(c.album)}
+                // The colours are written here rather than as classes:
+                // the chosen chip came out white on white in the portal
+                // build (reported 2026-09-27), and a chip nobody can read
+                // is worse than one that does not match the theme.
+                style={on
+                  ? { background: '#ffffff', color: '#111827', fontWeight: 600 }
+                  : { background: darkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.06)', color: darkMode ? 'rgba(255,255,255,0.85)' : '#374151' }}
+                className="shrink-0 rounded-full px-3.5 py-1.5 text-sm"
               >
-                {c.name} <span className="opacity-60">{c.count}</span>
+                {c.name} <span style={{ opacity: 0.6 }}>{c.count}</span>
               </button>
             )
           })}

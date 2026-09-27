@@ -18,6 +18,7 @@ import {
   mediaKind,
   guestName,
   formatFileSize,
+  takenAtLabel,
   formatDuration,
 } from '../utils/mediaOrganizerService';
 import type { TileChips } from './MediaGrid';
@@ -237,6 +238,18 @@ export function MediaViewerModal({ items, index, chips, onNavigate, onClose, onP
             <dd>{formatFileSize(item.bytes)}</dd>
             {item.width && item.height ? (<><dt className="text-[var(--gray-a10)]">Dimensions</dt><dd>{item.width} × {item.height}</dd></>) : null}
             {item.duration ? (<><dt className="text-[var(--gray-a10)]">Duration</dt><dd>{formatDuration(item.duration)}</dd></>) : null}
+            {kind === 'photo' && (
+              <>
+                <dt className="text-[var(--gray-a10)]">Taken</dt>
+                <dd>
+                  {takenAtLabel(item) ?? (
+                    <span className="text-[var(--gray-a10)]">
+                      not recorded — this photo carries no capture time
+                    </span>
+                  )}
+                </dd>
+              </>
+            )}
             <dt className="text-[var(--gray-a10)]">Uploaded</dt>
             <dd>{new Date(item.created_at).toLocaleString()}{guest ? ` by ${guest}` : ''}</dd>
             <dt className="text-[var(--gray-a10)]">File</dt>
