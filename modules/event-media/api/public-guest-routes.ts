@@ -850,6 +850,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const variants: Record<string, string> = {};
     if (r.variants && typeof r.variants === 'object') {
       for (const [k, v] of Object.entries(r.variants)) {
+        // The enhanced copy is never handed out here. It is shown only
+        // where an organiser has turned enhancement on for the album,
+        // and that is decided by the gallery, which puts it in itself --
+        // otherwise turning the album back off would leave a working URL
+        // to the enhanced copy sitting in the payload.
+        if (k === 'enhanced') continue;
         if (typeof v === 'string' && v) variants[k] = toBrowserUrl(v);
       }
     }

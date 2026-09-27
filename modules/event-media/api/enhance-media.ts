@@ -75,7 +75,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
    * throws -- one photograph that cannot be improved must not stop the
    * batch behind it.
    */
-  async function enhanceOne(eventId: string, mediaId: string): Promise<{
+  async function enhanceOne(eventId: string, mediaId: string, force = false): Promise<{
     id: string;
     status: 'enhanced' | 'unchanged' | 'skipped' | 'failed';
     note?: string;
@@ -97,6 +97,22 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
       return { id: mediaId, status: 'skipped', reason: 'unsupported_layout' };
     }
 
+    // Already looked at: no second model call, and no second copy. This
+    // is what makes running the album again cheap -- and what stops a
+    // caller spending at a paid endpoint by sending the same ids over
+    // and over. An organiser who wants it done again asks for that.
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    const seen = meta['enhance'] && typeof meta['enhance'] === 'object'
+      ? (meta['enhance'] as Record<string, unknown>) : null;
+    if (seen && !force) {
+      return {
+        id: mediaId,
+        status: seen['needed'] === true ? 'enhanced' : 'unchanged',
+        note: typeof seen['note'] === 'string' ? seen['note'] : undefined,
+        reason: 'already_done',
+      };
+    }
+
     const answer = await runVerdict(publicUrl(path));
     if (!answer.ok) return { id: mediaId, status: 'failed', reason: answer.error };
     const verdict = answer.verdict as Parameters<typeof worthEnhancing>[0];
@@ -104,7 +120,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
       // Worth recording: an organiser can see it was considered, and a
       // second pass over the album does not ask about it again.
       await db.from('host_media').update({
-        metadata: { ...(row.metadata ?? {}), enhance: { at: new Date().toISOString(), needed: false, note: verdict.note } },
+        metadata: { ...meta, enhance: { at: new Date().toISOString(), needed: false, note: verdict.note } },
       }).eq('id', mediaId);
       return { id: mediaId, status: 'unchanged', note: verdict.note };
     }
@@ -150,7 +166,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     const { error: updErr } = await db.from('host_media').update({
       variants: { ...had, enhanced: enhancedPath },
       metadata: {
-        ...(row.metadata ?? {}),
+        ...meta,
         enhance: {
           at: at.toISOString(),
           needed: true,
@@ -192,8 +208,13 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
 
     const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
     const ids = Array.isArray(body['ids'])
-      ? (body['ids'] as unknown[]).filter((v): v is string => typeof v === 'string' && UUID_RE.test(v)).slice(0, BATCH_MAX)
+      // Deduplicated: the same id twice in one call is one photograph,
+      // and would otherwise be one model call each.
+      ? [...new Set((body['ids'] as unknown[]).filter((v): v is string => typeof v === 'string' && UUID_RE.test(v)))]
+        .slice(0, BATCH_MAX)
       : [];
+    // Doing one again is a deliberate act, never the default.
+    const force = body['force'] === true;
     if (ids.length === 0) {
       sendError(res, 400, 'invalid_request', `ids must hold 1-${BATCH_MAX} media UUIDs`);
       return;
@@ -201,7 +222,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
 
     // In parallel: the time is the model's, not ours, and six at once is
     // well inside what one organiser pressing a button should cost.
-    const results = await Promise.all(ids.map((id) => enhanceOne(eventId, id).catch((err) => ({
+    const results = await Promise.all(ids.map((id) => enhanceOne(eventId, id, force).catch((err) => ({
       id, status: 'failed' as const, reason: err instanceof Error ? err.message : String(err),
     }))));
     logger.info('enhance batch', {

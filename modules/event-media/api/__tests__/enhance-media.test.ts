@@ -88,6 +88,28 @@ describe('enhancing an album', () => {
     }
   });
 
+  // Asking again costs a model call, so a photograph already looked at
+  // is not looked at again unless somebody asks for that.
+  it('does not pay to ask about the same photograph twice', async () => {
+    const done = { ...PHOTO, metadata: { album: 'day', enhance: { at: '2026-09-27T10:00:00Z', needed: false, note: 'Fine as it is.' } } };
+    const { routes, state } = setup({ row: done });
+    const res = await call(routes, { ids: [MEDIA] });
+    expect(state.asked).toEqual([]);
+    expect(res.body.results[0]).toEqual({ id: MEDIA, status: 'unchanged', note: 'Fine as it is.', reason: 'already_done' });
+
+    // Unless an organiser deliberately asks for it again.
+    const again = setup({ row: done });
+    await call(again.routes, { ids: [MEDIA], force: true });
+    expect(again.state.asked).toHaveLength(1);
+  });
+
+  it('counts the same id sent twice as one photograph', async () => {
+    const { routes, state } = setup();
+    const res = await call(routes, { ids: [MEDIA, MEDIA, MEDIA] });
+    expect(state.asked).toHaveLength(1);
+    expect(res.body.results).toHaveLength(1);
+  });
+
   it('refuses a stranger, and nonsense', async () => {
     expect((await call(setup({ allowed: null }).routes, { ids: [MEDIA] })).statusCode).toBe(401);
     expect((await call(setup({ allowed: false }).routes, { ids: [MEDIA] })).statusCode).toBe(403);

@@ -1533,11 +1533,15 @@ describe('eventGallery', () => {
     expect(res.body.items[0].url).toContain('enhanced-x.jpg');
     expect(res.body.items[0].variants.thumb).toContain('enhanced-x.jpg');
 
-    // The same photographs with enhancement off are served as they were.
+    // The same photographs with enhancement off are served as they were,
+    // and the enhanced copy is not in the payload at all -- otherwise
+    // turning the album back off would leave a working URL to it.
     const off = { ...TABLES, event_media_album_settings: { data: [], error: null } };
     const plain = await gallery({ album: 'ready' }, { mediaRows: rows, tables: off });
     expect(plain.body.items[0].enhanced).toBeUndefined();
     expect(plain.body.items[0].url).not.toContain('enhanced-x.jpg');
+    expect(plain.body.items[0].variants.enhanced).toBeUndefined();
+    expect(JSON.stringify(plain.body)).not.toContain('enhanced-x.jpg');
   });
 
   it('never hands out an upload code', async () => {
@@ -1610,5 +1614,27 @@ describe('when a booth picture was taken', () => {
     const { supabase } = await post(withTime);
     const upd = supabase.state.updated.find((u) => u.table === 'host_media').fields;
     expect(upd.metadata.taken_at).toBe('2026-09-25T21:14:07');
+  });
+});
+
+// The enhanced copy belongs to the album view, which decides whether to
+// show it. No other feed hands it out.
+describe('the enhanced copy stays out of the guest feed', () => {
+  it('is not in listMedia, whatever the row carries', async () => {
+    const row = {
+      id: '11111111-2222-3333-4444-555555555555',
+      storage_path: `event/${EVENT_ID}/x/img.jpg`,
+      mime_type: 'image/jpeg', bytes: 100, width: null, height: null,
+      variants: { enhanced: `event/${EVENT_ID}/x/enhanced-y.jpg`, plate: `event/${EVENT_ID}/x/plate.jpg` },
+      metadata: { source: 'guest', album: 'day' },
+      created_at: '2026-09-25T18:00:00.000Z',
+    };
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, mediaRows: [row] });
+    const res = mockRes();
+    await createGuestRoutes(deps).listMedia(req(), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items[0].variants.plate).toContain('plate.jpg');
+    expect(res.body.items[0].variants.enhanced).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('enhanced-y.jpg');
   });
 });
