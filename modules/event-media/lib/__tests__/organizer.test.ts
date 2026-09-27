@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeSubsetOrder, mediaKind, guestName, isGuestUpload, formatDuration, formatFileSize, takenKey, hasTakenAt, compareTaken, takenAtLabel } from '../organizer.js';
+import { mergeSubsetOrder, mediaKind, guestName, isGuestUpload, formatDuration, formatFileSize, takenKey, compareTaken, takenAtLabel } from '../organizer.js';
 
 describe('mergeSubsetOrder', () => {
   it('reorders the subset inside the slots it already occupies', () => {
@@ -79,7 +79,6 @@ describe('sorting by when a photograph was taken', () => {
     // Written with a space rather than a T, as some cameras do.
     expect(takenKey(row({ taken_at: '2026-09-24 21:05:00' }, '2026-09-27T08:00:00Z')))
       .toBe('2026-09-24T21:05:00');
-    expect(hasTakenAt(row({ taken_at: '2026-09-25T09:14:03' }, 'x'))).toBe(true);
   });
 
   it('falls back to the upload time, so those photos still sort sensibly', () => {
@@ -87,7 +86,6 @@ describe('sorting by when a photograph was taken', () => {
     for (const meta of [null, {}, { taken_at: 'yesterday' }, { taken_at: 42 }]) {
       const key = takenKey(row(meta, '2026-09-26T12:30:45Z'));
       expect(key).toMatch(/^2026-09-2[56]T\d{2}:\d{2}:45$/);
-      expect(hasTakenAt(row(meta, 'x'))).toBe(false);
     }
     // Two photos with no capture time keep their upload order, whatever
     // zone the organiser's browser is in.
@@ -109,27 +107,26 @@ describe('sorting by when a photograph was taken', () => {
   });
 });
 
-describe('undated photographs lead the list', () => {
+describe('one list, ordered by when each photograph was taken', () => {
   const row = (metadata: Record<string, unknown> | null, created_at: string) =>
     ({ mime_type: 'image/jpeg', metadata, created_at });
-
-  it('puts a photograph with no capture time above every dated one', () => {
-    const undated = row(null, '2026-09-20T09:00:00Z');       // uploaded first
-    const dated = row({ taken_at: '2026-09-25T20:00:00' }, '2026-09-25T20:05:00Z');
-    expect(compareTaken(undated, dated)).toBeLessThan(0);
-    expect(compareTaken(dated, undated)).toBeGreaterThan(0);
-  });
-
-  it('orders the undated ones among themselves by upload, newest first', () => {
-    const older = row(null, '2026-09-26T12:00:00Z');
-    const newer = row(null, '2026-09-26T13:00:00Z');
-    expect(compareTaken(newer, older)).toBeLessThan(0);
-  });
 
   it('orders the dated ones by capture time, newest first', () => {
     const morning = row({ taken_at: '2026-09-25T08:30:00' }, '2026-09-27T09:00:00Z');
     const evening = row({ taken_at: '2026-09-25T20:00:00' }, '2026-09-25T20:05:00Z');
     expect(compareTaken(evening, morning)).toBeLessThan(0);
+  });
+
+  // A photograph with no capture time takes its place by when it was
+  // uploaded rather than gathering at an end of the list.
+  it('sits an undated photograph among the dated ones by upload time', () => {
+    const early = row({ taken_at: '2026-09-25T08:00:00' }, '2026-09-25T08:05:00Z');
+    const undated = row(null, '2026-09-25T14:00:00Z');
+    const late = row({ taken_at: '2026-09-25T20:00:00' }, '2026-09-25T20:05:00Z');
+    const order = [early, late, undated].sort(compareTaken);
+    expect(order[0]).toBe(late);
+    expect(order[1]).toBe(undated);
+    expect(order[2]).toBe(early);
   });
 
   it('sorts a whole list the way the Media tab does', () => {
@@ -142,13 +139,13 @@ describe('undated photographs lead the list', () => {
     const keys = [...list].sort(compareTaken).map((r) => r.metadata?.taken_at ?? `up:${r.created_at}`);
     expect(keys).toEqual([
       'up:2026-09-26T10:00:00Z',
-      'up:2026-09-24T10:00:00Z',
       '2026-09-25T20:00:00',
       '2026-09-25T08:30:00',
+      'up:2026-09-24T10:00:00Z',
     ]);
-    // Reversed, the undated ones fall to the bottom.
-    const asc = [...list].sort((a, b) => -compareTaken(a, b)).map((r) => r.metadata?.taken_at ?? 'undated');
-    expect(asc[asc.length - 1]).toBe('undated');
+    // Reversed is the other option in the dropdown.
+    expect([...list].sort((a, b) => -compareTaken(a, b)).map((r) => r.metadata?.taken_at ?? 'undated')[0])
+      .toBe('undated');
   });
 });
 

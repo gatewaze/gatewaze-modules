@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
 import { Button, Modal, Input, ConfirmModal } from '@/components/ui';
 import { createAlbum, updateAlbum, deleteAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
-import { HOST_KIND, type HostMediaAlbum } from '../utils/mediaOrganizerService';
+import { HOST_KIND, type HostMediaAlbum, loadHiddenAlbums, setAlbumOnPortal } from '../utils/mediaOrganizerService';
 
 interface AlbumManagementModalProps {
   eventId: string;
@@ -20,6 +20,34 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, onClose, on
   const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<HostMediaAlbum | null>(null);
+  // Albums taken off the portal's album view. Absent = shown, so this
+  // holds only the exceptions.
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [toggling, setToggling] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadHiddenAlbums(eventId).then((ids) => { if (!cancelled) setHidden(ids); });
+    return () => { cancelled = true; };
+  }, [eventId]);
+
+  const togglePortal = useCallback(async (album: HostMediaAlbum) => {
+    const show = hidden.has(album.id);
+    setToggling(album.id);
+    try {
+      await setAlbumOnPortal(eventId, album.id, show);
+      setHidden((prev) => {
+        const next = new Set(prev);
+        if (show) next.delete(album.id); else next.add(album.id);
+        return next;
+      });
+      toast.success(show ? `"${album.name}" is on the portal` : `"${album.name}" is hidden from the portal`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not change that');
+    } finally {
+      setToggling(null);
+    }
+  }, [eventId, hidden]);
 
   const openForm = (album: HostMediaAlbum | 'new') => {
     setEditing(album);
@@ -140,8 +168,22 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, onClose, on
                     <span className="shrink-0 text-xs text-[var(--gray-a9)]">({albumCounts.get(album.id) ?? 0} items)</span>
                   </div>
                   {album.description && <p className="mt-1 text-sm text-[var(--gray-a10)]">{album.description}</p>}
+                  {hidden.has(album.id) && (
+                    <p className="mt-1 text-xs text-[var(--gray-a9)]">Not shown on the portal</p>
+                  )}
                 </div>
                 <div className="flex shrink-0 gap-1">
+                  <button
+                    type="button"
+                    title={hidden.has(album.id) ? 'Hidden from the portal — click to show it' : 'Shown on the portal — click to hide it'}
+                    disabled={toggling === album.id}
+                    onClick={() => void togglePortal(album)}
+                    className={`rounded p-1 hover:bg-[var(--gray-a3)] disabled:opacity-30 ${
+                      hidden.has(album.id) ? 'text-[var(--gray-a8)]' : 'text-[var(--accent-11)]'
+                    }`}
+                  >
+                    {hidden.has(album.id) ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+                  </button>
                   <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--gray-a3)] disabled:opacity-30">
                     <ChevronUpIcon className="h-4 w-4" />
                   </button>

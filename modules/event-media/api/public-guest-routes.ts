@@ -25,6 +25,7 @@ import {
   MAX_FILES_PER_MINT,
   buildGuestStoragePath,
   cleanGuestName,
+  cleanTakenAt,
   guestRateKey,
   newMediaId,
   paramAsShortCode,
@@ -806,6 +807,38 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
   }
 
+  /**
+   * The views an organiser has taken off the portal (migration 016).
+   *
+   * Never allowed to fail the page: a settings table that cannot be read
+   * shows every album, which is where this started.
+   */
+  async function hiddenViews(eventId: string): Promise<Set<View>> {
+    const out = new Set<View>();
+    try {
+      const { data: off, error } = await supabase
+        .from('event_media_album_settings')
+        .select('album_id')
+        .eq('event_id', eventId)
+        .eq('show_on_portal', false);
+      if (error) throw new Error(error.message);
+      if (!off || off.length === 0) return out;
+      const ids = new Set((off as Array<{ album_id: string }>).map((a) => a.album_id));
+      const { data: albums } = await supabase
+        .from('event_media_view_albums')
+        .select('album_id, view')
+        .eq('event_id', eventId);
+      for (const a of (albums ?? []) as Array<{ album_id: string; view: string }>) {
+        if (ids.has(a.album_id) && isView(a.view)) out.add(a.view);
+      }
+    } catch (err) {
+      logger.warn('album settings unavailable; showing every album', {
+        eventId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return out;
+  }
+
   function mapFeedItem(r: FeedRow, view?: View) {
     const meta = (r.metadata ?? {}) as Record<string, unknown>;
     const variants: Record<string, string> = {};
@@ -1026,10 +1059,20 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       return;
     }
 
-    const rows = ((data ?? []) as FeedRow[]).filter(
+    const all = ((data ?? []) as FeedRow[]).filter(
       (r) => ((r.metadata ?? {}) as Record<string, unknown>)['hidden'] !== true,
     );
-    const views = await viewsFor(event.id, rows);
+    const views = await viewsFor(event.id, all);
+
+    // Albums an organiser has taken off the portal: their photographs go
+    // with them, or hiding the album would only hide the heading
+    // ("Photo booth elsewhere" is the one this was asked for). An album
+    // with no setting row is shown, so an event that never set one is
+    // unaffected.
+    const hidden = await hiddenViews(event.id);
+    const rows = hidden.size === 0
+      ? all
+      : all.filter((r) => !hidden.has(views.get(r.id) ?? tagView(r.metadata)));
 
     // The albums to choose between, in the order the projector runs
     // through them, and only those with something in them.
@@ -1647,6 +1690,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         pose: pose ? { id: pose.id, label: pose.label } : null,
         place,
         eventStart: event.event_start ?? null,
+        // The phone's own clock at the shutter, checked like any other
+        // date a device offers.
+        takenAt: cleanTakenAt(body['taken_at']),
       });
       const wantsUrl = body['return'] === 'url';
       res.status(200).json({
@@ -1691,6 +1737,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     selfieType?: string | null;
     /** When the event starts, to tell a booth picture made there from one made at home. */
     eventStart?: string | null;
+    /**
+     * When the picture was made, by the phone's own clock. A booth
+     * picture is a canvas capture and carries no EXIF, so without this
+     * there is nothing to sort it by but the row's date -- and posting
+     * rewrites that (asked 2026-09-27).
+     */
+    takenAt?: string | null;
   }): Promise<{ mediaId: string; url: string } | null> {
     const { link } = opts;
     const mediaId = newMediaId();
@@ -1743,6 +1796,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // What the booth asked them to do, when it asked for anything.
         ...(opts.pose ? { pose: opts.pose.id, pose_label: opts.pose.label } : {}),
         ...(opts.place ? { place: opts.place } : {}),
+        // When the shutter went, which is not when this picture is posted.
+        ...(opts.takenAt ? { taken_at: opts.takenAt } : {}),
         // What the guest actually took, for the organiser to look at.
         ...(selfiePath ? { selfie: selfiePath } : {}),
         // Off the projector and out of the gallery until the guest posts it.
@@ -1781,7 +1836,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: row, error } = await supabase
       .from('host_media')
-      .select('id, storage_path, metadata, host_id, host_kind')
+      .select('id, storage_path, metadata, host_id, host_kind, created_at')
       .eq('id', mediaId)
       .maybeSingle();
     if (error) {
@@ -1812,10 +1867,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
 
     // Posting is when it arrives: the projector takes new photos by time,
-    // so the picture is dated now, not when it was made.
+    // so the picture is dated now, not when it was made. The moment it
+    // WAS made is kept as its capture time, or the Media tab would sort
+    // a picture taken at nine and posted at midnight as a midnight one
+    // (asked 2026-09-27). The booth normally puts the phone's own clock
+    // there; this is for pictures made before it did, and it is an
+    // instant with a zone on it rather than a camera's local reading.
+    const posted = { ...meta, posted: true } as Record<string, unknown>;
+    if (!posted['taken_at'] && typeof row.created_at === 'string') posted['taken_at'] = row.created_at;
     const { error: updErr } = await supabase
       .from('host_media')
-      .update({ metadata: { ...meta, posted: true }, created_at: new Date().toISOString() })
+      .update({ metadata: posted, created_at: new Date().toISOString() })
       .eq('id', mediaId);
     if (updErr) {
       logger.error('booth post failed', { error: updErr.message });

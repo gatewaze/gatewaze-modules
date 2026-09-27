@@ -43,8 +43,8 @@ export function takenKey(item: Pick<MediaLike, 'metadata'> & { created_at: strin
  * time written on it is the local time where the photograph was taken.
  * Reading it as if it were the reader's zone would shift a wedding
  * photograph by an hour for anyone abroad. Null when the photograph
- * never carried one -- which is worth saying out loud in the panel,
- * since it is why the photograph sorts where it does.
+ * never carried one -- worth saying out loud in the panel, because the
+ * list then has nothing to go on but when it was uploaded.
  */
 export function takenAtLabel(item: Pick<MediaLike, 'metadata'>): string | null {
   const meta = (item.metadata ?? {}) as Record<string, unknown>;
@@ -53,28 +53,19 @@ export function takenAtLabel(item: Pick<MediaLike, 'metadata'>): string | null {
 }
 
 /**
- * Newest first, with the undated photographs at the top.
+ * Newest first, by when each photograph was taken.
  *
- * A photograph with no capture time is the one an organiser has to place
- * by hand -- nothing can be worked out about it -- so it belongs where it
- * will be seen rather than buried among hundreds that sorted themselves
- * (asked 2026-09-27). Those are ordered by when they were uploaded,
- * newest first, like everything else. Ascending order is this reversed,
- * which puts them at the bottom.
+ * takenKey falls back to the upload time for a photograph that carries
+ * no capture time, so the two sort together in one list rather than the
+ * undated ones gathering at an end of it (asked 2026-09-27). For most of
+ * them the upload time is the better guess anyway: a photograph sent
+ * from a phone minutes after it was taken lands within minutes of it.
  */
 export function compareTaken(
   a: Pick<MediaLike, 'metadata'> & { created_at: string },
   b: Pick<MediaLike, 'metadata'> & { created_at: string },
 ): number {
-  const aHas = hasTakenAt(a);
-  if (aHas !== hasTakenAt(b)) return aHas ? 1 : -1;
   return takenKey(b).localeCompare(takenKey(a));
-}
-
-/** True when the capture time came from the photograph itself. */
-export function hasTakenAt(item: Pick<MediaLike, 'metadata'>): boolean {
-  const meta = (item.metadata ?? {}) as Record<string, unknown>;
-  return typeof meta['taken_at'] === 'string' && TAKEN_AT.test(meta['taken_at']);
 }
 
 export type MediaKind = 'photo' | 'video' | 'audio' | 'other';
