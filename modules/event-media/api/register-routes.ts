@@ -246,6 +246,18 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     logger,
   }));
 
+  // Improving a photograph without redrawing it.
+  const { createEnhanceMedia, mountEnhanceMedia } = await import('./enhance-media.js');
+  const { runEnhanceVerdict } = await import('../lib/booth-provider.js');
+  mountEnhanceMedia(adminRouter, createEnhanceMedia({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    storageBucket: STORAGE_BUCKET,
+    publicUrl: (path) => `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
+    runVerdict: runEnhanceVerdict,
+    logger,
+  }));
+
   app.use('/api/admin', adminRouter);
 
   void context;

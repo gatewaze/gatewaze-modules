@@ -30,6 +30,7 @@
  */
 
 import { faceSwapConfigured, faceSwapStatus, runFaceSwap } from './face-swap.js';
+import { ENHANCE_PROMPT, parseVerdict, type EnhanceVerdict } from './enhance.js';
 import { CARD_GENRES as SHARED_CARD_GENRES, cardIsSuitable } from './card-copy.js';
 
 export type BoothResult =
@@ -347,6 +348,22 @@ async function askVision(imageUrl: string, prompt: string): Promise<{ ok: true; 
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * What one photograph needs to look its best, as the model sees it.
+ *
+ * Nothing is drawn: the answer is a handful of numbers that lib/enhance.ts
+ * turns into arithmetic on the pixels. A model that will not answer, or
+ * answers with something unreadable, means the photograph is left alone.
+ */
+export async function runEnhanceVerdict(imageUrl: string): Promise<
+  { ok: true; verdict: EnhanceVerdict } | { ok: false; error: string }
+> {
+  const answer = await askVision(imageUrl, ENHANCE_PROMPT);
+  if (!answer.ok) return answer;
+  const verdict = parseVerdict(answer.text);
+  return verdict ? { ok: true, verdict } : { ok: false, error: 'unreadable' };
 }
 
 /** Read a yes/no answer; null when it is neither. */

@@ -69,23 +69,42 @@ export async function loadAlbums(eventId: string): Promise<HostMediaAlbum[]> {
  * Read and written straight from the browser under RLS, as the sponsor
  * tags are: the policy is can_admin_host_media('event', …).
  */
-export async function loadHiddenAlbums(eventId: string): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from('event_media_album_settings')
-    .select('album_id')
-    .eq('event_id', eventId)
-    .eq('show_on_portal', false);
-  // A settings table that cannot be read must not fail the whole tab;
-  // every album simply reads as shown, which is the default anyway.
-  if (error) return new Set();
-  return new Set((data ?? []).map((r: { album_id: string }) => r.album_id));
+export interface AlbumSetting {
+  /** Shown in the portal's album view. Absent row = shown. */
+  show_on_portal: boolean;
+  /** Portal shows the enhanced copy of each photograph that has one. */
+  enhance: boolean;
 }
 
-export async function setAlbumOnPortal(eventId: string, albumId: string, show: boolean): Promise<void> {
+export async function loadAlbumSettings(eventId: string): Promise<Map<string, AlbumSetting>> {
+  const { data, error } = await supabase
+    .from('event_media_album_settings')
+    .select('album_id, show_on_portal, enhance')
+    .eq('event_id', eventId);
+  // A settings table that cannot be read must not fail the whole tab;
+  // every album simply reads as its default, which is what it was.
+  if (error) return new Map();
+  return new Map((data ?? []).map((r: { album_id: string; show_on_portal: boolean; enhance: boolean }) => (
+    [r.album_id, { show_on_portal: r.show_on_portal !== false, enhance: r.enhance === true }]
+  )));
+}
+
+export async function saveAlbumSetting(
+  eventId: string,
+  albumId: string,
+  patch: Partial<AlbumSetting>,
+  current: AlbumSetting,
+): Promise<void> {
   const { error } = await supabase
     .from('event_media_album_settings')
     .upsert(
-      { album_id: albumId, event_id: eventId, show_on_portal: show, updated_at: new Date().toISOString() },
+      {
+        album_id: albumId,
+        event_id: eventId,
+        show_on_portal: patch.show_on_portal ?? current.show_on_portal,
+        enhance: patch.enhance ?? current.enhance,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: 'album_id' },
     );
   if (error) throw new Error(error.message);
