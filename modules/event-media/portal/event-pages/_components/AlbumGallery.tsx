@@ -18,6 +18,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const API_BASE = ''
+
+/** The same object asked for at a width, which the CDN resizes. */
+function sized(url: string, width: number): string {
+  return url.includes('?') ? url : `${url}?width=${width}&quality=80`
+}
 const PAGE = 24
 
 interface GalleryItem {
@@ -27,6 +32,8 @@ interface GalleryItem {
   variants?: Record<string, string> | null
   album?: string | null
   guest_name: string | null
+  /** The photograph the guest actually took, where the booth kept one. */
+  selfie?: string | null
 }
 
 interface AlbumChoice {
@@ -50,6 +57,9 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [lightbox, setLightbox] = useState<number | null>(null)
+  // X-ray: the selfies people actually took, rather than what the booth
+  // made of them (asked 2026-09-27).
+  const [xray, setXray] = useState(false)
 
   const subText = darkMode ? 'text-white/70' : 'text-gray-600'
 
@@ -130,6 +140,19 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
   }, [lightbox, items.length])
 
   const open = lightbox === null ? null : items[lightbox] ?? null
+  // Only the booth's own albums have selfies behind their pictures.
+  const boothAlbum = chosen === 'booth' || chosen === 'elsewhere'
+  const someSelfies = boothAlbum && items.some((i) => i.selfie)
+  /**
+   * What to show for one item. Under x-ray that is the selfie -- and the
+   * booth picture where there is no selfie, for the ones made before the
+   * booth started keeping them, rather than a hole in the grid.
+   */
+  const faceOf = (item: GalleryItem, width: number): string => (
+    xray && item.selfie
+      ? sized(item.selfie, width)
+      : (width <= 400 ? item.variants?.thumb : item.variants?.medium) || item.url
+  )
   const chips = useMemo(() => [
     { album: null as string | null, name: 'Everything', count: albums.reduce((n, a) => n + a.count, 0) },
     ...albums.map((a) => ({ album: a.album as string | null, name: a.name, count: a.count })),
@@ -161,6 +184,18 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
         </div>
       )}
 
+      {someSelfies && (
+        <label className={`mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm ${subText}`}>
+          <input
+            type="checkbox"
+            checked={xray}
+            onChange={(e) => setXray(e.target.checked)}
+            className="h-4 w-4"
+          />
+          X-ray: show the selfies people actually took
+        </label>
+      )}
+
       {loading && items.length === 0 && <p className={`text-sm ${subText}`}>Loading the photos…</p>}
       {failed && (
         <p className={`text-sm ${subText}`}>
@@ -186,7 +221,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
             ) : (
               // eslint-disable-next-line @next/next/no-img-element -- module gallery grid
               <img
-                src={item.variants?.thumb || item.url}
+                src={faceOf(item, 350)}
                 alt={item.guest_name ? `Photo by ${item.guest_name}` : 'Event photo'}
                 loading="lazy"
                 className="w-full h-full object-cover"
@@ -221,7 +256,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
             ) : (
               // eslint-disable-next-line @next/next/no-img-element -- lightbox shows the CDN copy directly
               <img
-                src={open.variants?.medium || open.url}
+                src={faceOf(open, 1200)}
                 alt={open.guest_name ? `Photo by ${open.guest_name}` : 'Event photo'}
                 className="max-h-[85vh] max-w-full object-contain"
               />
