@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ENHANCE_PROMPT, opsFor, parseVerdict, worthEnhancing } from '../enhance.js';
+import { ENHANCE_PROMPT, applyOps, opsFor, parseVerdict, worthEnhancing } from '../enhance.js';
 
 const verdict = (over = {}) => ({
   needs: true, exposure: 0, contrast: 0, warmth: 0, saturation: 0, sharpen: 0, note: '', ...over,
@@ -83,5 +83,75 @@ describe('what the photograph is actually put through', () => {
   it('never leaves brightness to be applied twice', () => {
     // modulate carries colour only; exposure lives in the linear offset.
     expect(opsFor(verdict({ exposure: 100 })).modulate.brightness).toBe(1);
+  });
+});
+
+describe('the adjustments on real pixels', () => {
+  /** A flat grey image, as RGBA. */
+  const grey = (w: number, h: number, v = 128) => {
+    const d = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < d.length; i += 4) { d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = 255; }
+    return d;
+  };
+
+  it('leaves a photograph alone when nothing was asked for', () => {
+    const d = grey(4, 4, 120);
+    applyOps(d, 4, 4, opsFor(verdict()));
+    expect([...d.slice(0, 3)]).toEqual([120, 120, 120]);
+  });
+
+  it('lifts a dark photograph', () => {
+    const d = grey(4, 4, 80);
+    applyOps(d, 4, 4, opsFor(verdict({ exposure: 50 })));
+    expect(d[0]).toBeGreaterThan(80);
+    expect(d[0]).toBeLessThan(110);
+  });
+
+  it('leaves mid grey where it is when adding contrast', () => {
+    const d = grey(4, 4, 128);
+    applyOps(d, 4, 4, opsFor(verdict({ contrast: 100 })));
+    expect(d[0]).toBeGreaterThanOrEqual(127);
+    expect(d[0]).toBeLessThanOrEqual(129);
+  });
+
+  it('warms by lifting red and dropping blue, and never the other way', () => {
+    const d = grey(4, 4, 120);
+    applyOps(d, 4, 4, opsFor(verdict({ warmth: 100 })));
+    expect(d[0]).toBeGreaterThan(d[1]!);
+    expect(d[2]).toBeLessThan(d[1]!);
+  });
+
+  it('keeps grey grey however much colour is asked for', () => {
+    const d = grey(4, 4, 120);
+    applyOps(d, 4, 4, opsFor(verdict({ saturation: 100 })));
+    expect(d[0]).toBe(d[1]);
+    expect(d[1]).toBe(d[2]);
+  });
+
+  it('leaves the alpha channel alone', () => {
+    const d = grey(4, 4, 90);
+    applyOps(d, 4, 4, opsFor(verdict({ exposure: 60, contrast: 40, saturation: 30, sharpen: 50 })));
+    for (let i = 3; i < d.length; i += 4) expect(d[i]).toBe(255);
+  });
+
+  it('sharpens an edge without touching a flat field', () => {
+    // Left half dark, right half light: sharpening should deepen the step.
+    const w = 9, h = 9;
+    const d = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const v = x < 4 ? 80 : 180;
+        const o = (y * w + x) * 4;
+        d[o] = v; d[o + 1] = v; d[o + 2] = v; d[o + 3] = 255;
+      }
+    }
+    const before = { dark: d[(4 * w + 3) * 4]!, light: d[(4 * w + 4) * 4]! };
+    applyOps(d, w, h, opsFor(verdict({ sharpen: 100 })));
+    expect(d[(4 * w + 3) * 4]).toBeLessThan(before.dark);
+    expect(d[(4 * w + 4) * 4]).toBeGreaterThan(before.light);
+
+    const flat = grey(9, 9, 120);
+    applyOps(flat, 9, 9, opsFor(verdict({ sharpen: 100 })));
+    expect(flat[(4 * 9 + 4) * 4]).toBe(120);
   });
 });
