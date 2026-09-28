@@ -17,11 +17,13 @@
  * ready outrank Preload, which is the stand-in stream.
  */
 
-export type View = 'seed' | 'night' | 'ready' | 'day' | 'booth' | 'elsewhere'
+export type View = 'seed' | 'night' | 'ready' | 'day' | 'evening' | 'booth' | 'elsewhere'
 
-export const VIEWS: readonly View[] = ['seed', 'night', 'ready', 'day', 'booth', 'elsewhere']
+export const VIEWS: readonly View[] = ['seed', 'night', 'ready', 'day', 'evening', 'booth', 'elsewhere']
 
-const RANK: Record<View, number> = { booth: 0, elsewhere: 1, day: 2, ready: 3, night: 4, seed: 5 }
+const RANK: Record<View, number> = {
+  booth: 0, elsewhere: 1, evening: 2, day: 3, ready: 4, night: 5, seed: 6,
+}
 
 /**
  * The evening before an event, and the morning of it.
@@ -34,6 +36,42 @@ const RANK: Record<View, number> = { booth: 0, elsewhere: 1, day: 2, ready: 3, n
  */
 const READY_HOURS = 12
 const NIGHT_HOURS = 36
+
+/**
+ * When the evening reception starts, as a wall clock on the day of the
+ * event: half past six (asked 2026-09-28).
+ *
+ * A wall clock rather than an offset from the start, because that is what
+ * an evening is -- a wedding that starts at half past one and one that
+ * starts at four both have their evening reception at the same time of
+ * day. Read in the same clock as everything else here: EXIF carries the
+ * camera's own local time with no zone on it, and an event's start is
+ * stored the same way, so the two compare directly.
+ */
+const EVENING_FROM_HOUR = 18
+const EVENING_FROM_MINUTE = 30
+/**
+ * And when it stops being the evening: the same ceiling a booth picture
+ * gets, fourteen hours after the start. A photograph taken at seven the
+ * following evening belongs to The day's catch-all, not to the party.
+ */
+const EVENING_UNTIL_HOURS = 14
+
+/**
+ * A time, read as the clock it was written on.
+ *
+ * EXIF has no timezone in it: "2026-09-25T18:30:00" is what the camera's
+ * own clock said, and an event's start is stored the same way. Read
+ * without saying so, a zone-less time means something different on every
+ * machine -- the api pod runs in UTC and a laptop in London does not, and
+ * the same photograph would land in a different album depending on which
+ * one filed it. So a time with no zone on it is read as the clock it was
+ * written on, which is the only reading that is the same everywhere.
+ */
+function atClock(value: string): number {
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value.trim())
+  return Date.parse(zoned ? value : `${value.trim()}Z`)
+}
 
 /**
  * Where a new upload lands.
@@ -56,11 +94,13 @@ export function albumForUpload(opts: {
   takenAt?: string | null
 }): View {
   if (opts.booth) return boothAlbum({ eventStart: opts.eventStart, now: opts.now })
-  const start = opts.eventStart ? Date.parse(opts.eventStart) : NaN
+  const start = opts.eventStart ? atClock(opts.eventStart) : NaN
   if (!Number.isFinite(start)) return 'day'
-  const taken = opts.takenAt ? Date.parse(opts.takenAt) : NaN
+  const taken = opts.takenAt ? atClock(opts.takenAt) : NaN
   const when = Number.isFinite(taken) ? taken : opts.now
-  if (when >= start) return 'day'
+  if (when >= start) return when >= eveningFrom(start) && when <= start + EVENING_UNTIL_HOURS * 3600_000
+    ? 'evening'
+    : 'day'
   if (when >= start - READY_HOURS * 3600_000) return 'ready'
   if (when >= start - NIGHT_HOURS * 3600_000) return 'night'
   // Older than the night before: an upload from the camera roll that
@@ -78,8 +118,24 @@ export function albumForUpload(opts: {
  * goes, so the clock is the whole story: made while the event was on, it
  * is the event's; made days later at a kitchen table, it is not.
  */
+/**
+ * Half past six on the day the event starts, as a time.
+ *
+ * An event that begins after that hour -- an evening do -- has no
+ * separate evening: the whole of it is the day, so the boundary is its
+ * own start and nothing lands before it.
+ */
+export function eveningFrom(start: number): number {
+  const d = new Date(start)
+  const at = Date.UTC(
+    d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
+    EVENING_FROM_HOUR, EVENING_FROM_MINUTE, 0, 0,
+  )
+  return Math.max(at, start)
+}
+
 export function boothAlbum(opts: { eventStart: string | null | undefined; now: number }): View {
-  const start = opts.eventStart ? Date.parse(opts.eventStart) : NaN
+  const start = opts.eventStart ? atClock(opts.eventStart) : NaN
   if (!Number.isFinite(start)) return 'booth'
   const from = start - READY_HOURS * 3600_000
   const until = start + 14 * 3600_000

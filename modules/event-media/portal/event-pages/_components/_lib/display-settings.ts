@@ -62,8 +62,11 @@ export const DAY_ONLY_AFTER = 20
 /** Which albums The day view draws from, given every photo loaded. */
 export function dayAlbums(all: ReadonlyArray<{ album?: string | null }>, threshold: number = DAY_ONLY_AFTER): Set<string> {
   let own = 0
-  for (const p of all) if (p.album === 'day') own++
-  return own >= threshold ? new Set(['day']) : new Set(['day', 'ready'])
+  // The evening reception is its own album but the same evening: the
+  // projector's The day view shows both, or the party would vanish off
+  // the screen at half past six.
+  for (const p of all) if (p.album === 'day' || p.album === 'evening') own++
+  return own >= threshold ? new Set(['day', 'evening']) : new Set(['day', 'evening', 'ready'])
 }
 
 /** What "in turn" rotated through before it could be chosen. */

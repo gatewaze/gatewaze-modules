@@ -1386,8 +1386,13 @@ describe('an upload is filed by when it was taken', () => {
     expect(row.metadata.taken_at).toBe('2026-09-25T09:14:07');
   });
 
-  it('puts one taken during the party under The day', async () => {
+  it('puts one taken during the party under the evening reception', async () => {
     const res = await mintOne(photo({ taken_at: '2026-09-25T19:40:00' }));
+    expect((await complete(res.body.items[0].ticket)).metadata.album).toBe('evening');
+  });
+
+  it('puts one taken during the afternoon under The day', async () => {
+    const res = await mintOne(photo({ taken_at: '2026-09-25T15:10:00' }));
     expect((await complete(res.body.items[0].ticket)).metadata.album).toBe('day');
   });
 
