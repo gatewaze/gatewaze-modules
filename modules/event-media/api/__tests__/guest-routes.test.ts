@@ -114,6 +114,7 @@ function makeSupabase(config) {
       gt: () => b,
       gte: () => b,
       like: () => b,
+      not: (col) => { if (col === 'metadata->>look_id') b._boothCount = true; return b; },
       in: (col, vals) => {
         (state.inCalls ??= []).push({ table, col, vals });
         if (col === 'metadata->>album') b._albumIn = vals;
@@ -147,7 +148,11 @@ function makeSupabase(config) {
         return Promise.resolve({ data: null, error: null });
       },
       then: (resolve) => {
-        if (table === 'host_media' && b._head) return resolve({ count: b._rows().length, error: null });
+        if (table === 'host_media' && b._head) {
+          // The booth quota counts what it has made for one guest.
+          if (b._boothCount) return resolve({ count: config.boothCount ?? 0, error: null });
+          return resolve({ count: b._rows().length, error: null });
+        }
         if (table === 'events_media_guest_claims') return resolve({ data: [...state.claims].map(([member_id, client_id]) => ({ member_id, client_id })), error: null });
         if (config.tables && table in config.tables) return resolve(config.tables[table]);
         if (table !== 'host_media') return resolve({ data: [], error: null });
@@ -1729,5 +1734,65 @@ describe('the selfies behind the booth pictures', () => {
     expect(both.body.items[0].selfie).toContain('enhanced-selfie.jpg');
     expect(both.body.items[0].selfie_original).toContain('selfie.jpg');
     expect(both.body.items[0].selfie_enhanced).toBe(true);
+  });
+});
+
+// The organiser's own budget: the booth costs money per picture, and a QR
+// code does not stop existing when the party does.
+describe('the booth closes, and a guest has a share', () => {
+  const PHOTO_IN = 'data:image/jpeg;base64,' + Buffer.from('selfie').toString('base64');
+  const BOOTH_LINK = { ...ACTIVE_LINK, allow_face_filter: true };
+
+  beforeEach(() => {
+    process.env.BOOTH_PROVIDER = 'fal';
+    process.env.FAL_API_KEY = 'test-placeholder';
+    // Cleared, so "nothing was spent" means nothing was spent HERE.
+    provider.runStyle.mockClear();
+    provider.runStyle.mockResolvedValue({ ok: true, image: new Uint8Array([1, 2, 3, 4]), contentType: 'image/jpeg' });
+  });
+  afterEach(() => {
+    delete process.env.BOOTH_PROVIDER;
+    delete process.env.FAL_API_KEY;
+  });
+
+  const generate = async (boothSetting, boothCount = 0) => {
+    const { deps, supabase } = makeDeps({
+      link: BOOTH_LINK,
+      event: { ...EVENT_ROW, event_start: '2020-01-01T13:30:00Z' },
+      boothSetting,
+      boothCount,
+    });
+    const res = mockRes();
+    await createGuestRoutes(deps).faceFilter(req({ body: {
+      client_id: CLIENT_ID, image: PHOTO_IN, effect: 'decade-1970s', return: 'url',
+    } }), res);
+    return { res, supabase };
+  };
+
+  it('makes pictures while nothing is set', async () => {
+    const { res } = await generate(null);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses once the booth has closed', async () => {
+    // The event was in 2020 and the booth shut a day later.
+    const { res, supabase } = await generate({ booth_closes_hours: 24 });
+    expect(res.statusCode).toBe(403);
+    expect(res.body.error).toBe('booth_closed');
+    // Nothing was spent at the provider.
+    expect(provider.runStyle).not.toHaveBeenCalled();
+    expect(supabase.state.inserted).toEqual([]);
+  });
+
+  it('refuses a guest who has had their share', async () => {
+    const { res } = await generate({ booth_max_per_guest: 5 }, 5);
+    expect(res.statusCode).toBe(403);
+    expect(res.body.error).toBe('booth_quota');
+    expect(provider.runStyle).not.toHaveBeenCalled();
+  });
+
+  it('lets a guest with goes left through', async () => {
+    const { res } = await generate({ booth_max_per_guest: 5 }, 4);
+    expect(res.statusCode).toBe(200);
   });
 });

@@ -38,6 +38,7 @@ import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js
 import { BOOTH_PLACES, DEFAULT_PLACE, boothPlace, placeRail } from '../lib/booth-places.js';
 import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
+import { mayGenerate, readLimits, boothClosesAt } from '../lib/booth-limits.js';
 import { albumForUpload, boothAlbum, isView, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
 import { BOOTH_ERAS, eraAllLooks, eraLooks, erasFor, isEraSetting } from '../lib/booth-eras.js';
@@ -430,16 +431,18 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   async function boothFor(
     eventId: string,
     effects: Array<{ id: string; label: string; blurb: string }>,
+    eventStart?: string | null,
   ) {
     const offered = new Set(effects.map((e) => e.id));
     const theme = await boothThemeFor(eventId, offered);
     if (!theme) return null;
     const { data: settings } = await supabase
       .from('events_media_booth_settings')
-      .select('era, pose_mode, pose_minutes, pose_offset')
+      .select('era, pose_mode, pose_minutes, pose_offset, booth_closes_hours, booth_max_per_guest')
       .eq('event_id', eventId)
       .maybeSingle();
     const setting = isEraSetting(settings?.era) ? settings!.era : 'all';
+    const limits = readLimits(settings);
     // Poses (migration 012). Everything a booth or a projector needs to
     // work out for itself which pose is being asked for right now.
     const poseMode = settings?.pose_mode === 'hour' || settings?.pose_mode === 'card' ? settings.pose_mode : 'off';
@@ -501,6 +504,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // Britain or America: the same decades, each country's version
       // (lib/booth-places.ts).
       places: { options: BOOTH_PLACES, default: DEFAULT_PLACE },
+      // When the booth shuts, and how many goes a guest gets, so the app
+      // can say so rather than let somebody take a selfie and then be
+      // refused (migration 020). Null for either means no limit.
+      closes_at: (() => {
+        const at = boothClosesAt(limits, eventStart ?? null);
+        return at === null ? null : new Date(at).toISOString();
+      })(),
+      max_per_guest: limits.maxPerGuest,
     };
   }
 
@@ -532,7 +543,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
 
     const boothEffects = link.allow_face_filter && styleConfigured() ? publicEffects() : [];
-    const booth = await boothFor(link.event_id, boothEffects);
+    const booth = await boothFor(link.event_id, boothEffects, event.event_start ?? null);
 
     res.status(200).json({
       // The projector reloads itself when this changes, so a screen left
@@ -849,6 +860,49 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       });
     }
     return { hidden, enhanced, xray };
+  }
+
+  /** The event's booth settings row, or null. Never fails a request. */
+  async function boothSettingsFor(eventId: string): Promise<Record<string, unknown> | null> {
+    try {
+      const { data } = await supabase
+        .from('events_media_booth_settings')
+        .select('booth_closes_hours, booth_max_per_guest')
+        .eq('event_id', eventId)
+        .maybeSingle();
+      return (data ?? null) as Record<string, unknown> | null;
+    } catch {
+      // A settings row that cannot be read means no limits, which is
+      // where every event starts.
+      return null;
+    }
+  }
+
+  /**
+   * How many pictures the booth has made for this guest.
+   *
+   * Counts what it kept, posted or not: a guest who makes ten and posts
+   * one has still been made ten, and it is the making that costs. By the
+   * invitation's guest where there is one, so a guest who runs out cannot
+   * start again by clearing their browser; by the device otherwise, which
+   * is the most that can be known about them.
+   */
+  async function boothMadeFor(eventId: string, clientId: string, memberId: unknown): Promise<number> {
+    const by = typeof memberId === 'string' && UUID_RE.test(memberId)
+      ? { column: 'metadata->>member_id', value: memberId }
+      : { column: 'metadata->>client_id', value: clientId };
+    const { count, error } = await supabase
+      .from('host_media')
+      .select('id', { count: 'exact', head: true })
+      .eq('host_kind', 'event')
+      .eq('host_id', eventId)
+      .not('metadata->>look_id', 'is', null)
+      .eq(by.column, by.value);
+    if (error) {
+      logger.warn('booth quota count failed; letting it through', { eventId, error: error.message });
+      return 0;
+    }
+    return count ?? 0;
   }
 
   function mapFeedItem(r: FeedRow, view?: View) {
@@ -1727,6 +1781,20 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (!(await checkRate(res, guestRateKey('facefilter', clientId), GUEST_RATE_LIMITS.faceFilterPerClient))) return;
     if (!(await checkRate(res, guestRateKey('facefilter_burst', link.short_code), GUEST_RATE_LIMITS.faceFilterPerLinkBurst))) return;
     if (!(await checkRate(res, guestRateKey('facefilter_link', link.short_code), GUEST_RATE_LIMITS.faceFilterPerLinkHourly))) return;
+
+    // And the organiser's own budget: how long the booth stays open, and
+    // how many pictures one guest may have made (migration 020). The
+    // rate limits above protect the service from a burst; these protect
+    // whoever is paying from the total.
+    const limits = readLimits(await boothSettingsFor(link.event_id));
+    if (limits.closesHours !== null || limits.maxPerGuest !== null) {
+      const made = limits.maxPerGuest === null ? 0 : await boothMadeFor(link.event_id, clientId, body['member_id']);
+      const verdict = mayGenerate({ limits, eventStart: event.event_start ?? null, now: Date.now(), made });
+      if (!verdict.ok) {
+        sendError(res, 403, verdict.code, verdict.message);
+        return;
+      }
+    }
 
     let filter: { id: string; label: string; source_path: string } | null = null;
     if (filterId) {

@@ -253,20 +253,29 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   const [poseMinutes, setPoseMinutes] = useState(30);
   // How long before the event the getting-ready prompts appear.
   const [readyHours, setReadyHours] = useState(36);
+  // The organiser's budget for the booth: every picture costs money at a
+  // GPU endpoint, and a QR code outlives the party. 0 means no limit.
+  const [closesHours, setClosesHours] = useState(0);
+  const [maxPerGuest, setMaxPerGuest] = useState(0);
   useEffect(() => {
     if (!expanded) return;
     let cancelled = false;
     void supabase
       .from('events_media_booth_settings')
-      .select('era, pose_mode, pose_minutes, ready_hours')
+      .select('era, pose_mode, pose_minutes, ready_hours, booth_closes_hours, booth_max_per_guest')
       .eq('event_id', eventId)
       .maybeSingle()
-      .then(({ data }: { data: { era?: string; pose_mode?: string; pose_minutes?: number; ready_hours?: number } | null }) => {
+      .then(({ data }: { data: {
+        era?: string; pose_mode?: string; pose_minutes?: number; ready_hours?: number;
+        booth_closes_hours?: number | null; booth_max_per_guest?: number | null;
+      } | null }) => {
         if (cancelled || !data) return;
         if (data.era) setBoothEra(data.era);
         if (data.pose_mode === 'hour' || data.pose_mode === 'card') setPoseMode(data.pose_mode);
         if (typeof data.pose_minutes === 'number') setPoseMinutes(data.pose_minutes);
         if (typeof data.ready_hours === 'number') setReadyHours(data.ready_hours);
+        setClosesHours(typeof data.booth_closes_hours === 'number' ? data.booth_closes_hours : 0);
+        setMaxPerGuest(typeof data.booth_max_per_guest === 'number' ? data.booth_max_per_guest : 0);
       });
     return () => { cancelled = true; };
   }, [expanded, eventId]);
@@ -767,6 +776,50 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                 ))}
               </select>
             </label>
+            {/* What the booth costs is bounded by these two, not by
+                hoping guests stop (migration 020). */}
+            <label className="flex items-center gap-2 text-sm">
+              The booth closes
+              <select
+                value={String(closesHours)}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  const prev = closesHours;
+                  setClosesHours(next);
+                  void saveBooth({ booth_closes_hours: next === 0 ? null : next }, () => setClosesHours(prev),
+                    next === 0 ? 'The booth stays open' : `The booth closes ${next} hours after the event starts`);
+                }}
+                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="0">Never</option>
+                {[6, 12, 24, 48, 72, 168, 336, 720].map((h) => (
+                  <option key={h} value={h}>
+                    {h < 48 ? `${h} hours` : `${Math.round(h / 24)} days`} after the event starts
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex items-center gap-2 text-sm">
+              Each guest may have
+              <select
+                value={String(maxPerGuest)}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  const prev = maxPerGuest;
+                  setMaxPerGuest(next);
+                  void saveBooth({ booth_max_per_guest: next === 0 ? null : next }, () => setMaxPerGuest(prev),
+                    next === 0 ? 'Guests may have as many as they like' : `Each guest may have ${next} photos made`);
+                }}
+                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="0">As many as they like</option>
+                {[5, 10, 15, 20, 30, 50, 100].map((n) => (
+                  <option key={n} value={n}>{n} photos made</option>
+                ))}
+              </select>
+            </label>
+
             {provider && !provider.configured ? (
               <p className="text-xs text-gray-500 mb-2">
                 Not available — {provider.reason}. Set BOOTH_PROVIDER=fal and FAL_API_KEY to
