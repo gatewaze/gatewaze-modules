@@ -1,24 +1,30 @@
 // @ts-nocheck — depends on @supabase/supabase-js + express which require
 // pnpm install at the modules workspace level.
 /**
- * Enhancing an album's photographs.
+ * What an album's photographs need, and recording what was done.
  *
- *   POST /admin/events/:eventId/media/enhance   { ids: [...] }
+ *   POST /admin/events/:eventId/media/enhance    { ids }   what they need
+ *   POST /admin/events/:eventId/media/enhanced   { … }     what was done
  *
  * A model looks at each photograph and says what it needs -- more light,
- * more contrast, a warmer cast, a little sharpening. The change itself is
- * arithmetic on the pixels (lib/enhance.ts decides how much, sharp does
- * it), so nothing is drawn and nobody's face can come back as somebody
- * else's. It is an enhancement, not a regeneration (asked 2026-09-27).
+ * more contrast, a warmer cast, a little sharpening -- and lib/enhance.ts
+ * turns that into bounded adjustments. Nothing is drawn: the adjustments
+ * are arithmetic on pixels that already exist, so no face can come back
+ * as somebody else's. It is an enhancement, not a regeneration.
  *
- * The original is never written to. The enhanced copy goes beside it as
- * variants.enhanced, and the portal shows it only for albums an organiser
- * has turned enhancement on for.
+ * THE API NEVER DECODES A PHOTOGRAPH. It did, and it cost the site two
+ * outages (2026-09-27 and 2026-09-28): this pod has 512MB for everything
+ * it does -- the projector's feed, the booth, the portal -- and a twelve-
+ * megapixel JPEG decoded beside all that is enough to have the pod killed
+ * and every visitor served a 503. Tuning it down was not enough, twice.
  *
- * A batch at a time, because each photograph costs a model call of a few
- * seconds and a request that took ten minutes would be lost to every
- * proxy between here and the browser. The Media tab walks the album a
- * batch at a time and shows how far it has got.
+ * So the work happens where there is memory for it and nobody else is
+ * affected: the organiser's own browser, on a canvas, exactly as turning
+ * a photograph on its side already does (admin/utils/rotateMedia.ts).
+ * The model is asked from here because it fetches the photograph by URL
+ * itself -- that costs this process a request, not an image -- and the
+ * browser sends back what it made, which this route records after the
+ * same checks a rotation gets.
  */
 import type { Request, Response, Router } from 'express';
 import { opsFor, worthEnhancing } from '../lib/enhance.js';
@@ -44,24 +50,10 @@ export interface EnhanceMediaDeps {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** How many photographs one call will do. Each is a model call. */
 const BATCH_MAX = 3;
-/** Bigger than any photograph a phone takes; a guard, not a target. */
-const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
-/**
- * The longest edge of an enhanced copy.
- *
- * The api pod has 512MB for everything it does, and decoding a
- * twelve-megapixel photograph at full size uses a good part of it --
- * enough that two at once killed the pod and took the site down for a
- * minute (2026-09-27). Asking sharp to resize in the same pipeline lets
- * libjpeg decode at a fraction of full size, which is what keeps this
- * inside the ceiling.
- *
- * The enhanced copy is a copy for looking at: the portal shows it at
- * 800px and the original is kept untouched at whatever size it arrived.
- */
-const MAX_EDGE = 2560;
-/** Bigger than this is not a photograph anyone took; refuse to decode it. */
-const MAX_PIXELS = 80e6;
+/** A storage path we are prepared to write into a row. */
+const PATH_RE = /^[A-Za-z0-9][A-Za-z0-9/_.-]{0,300}\.(jpg|jpeg)$/;
+/** An enhanced copy far larger than this is not one. */
+const MAX_COPY_BYTES = 25 * 1024 * 1024;
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: code, message });
@@ -71,42 +63,18 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
   const { canAdminEvent, serviceClient: db, storageBucket, publicUrl, runVerdict, logger } = deps;
 
   /**
-   * sharp is in the api image but is not this module's own dependency,
-   * so it is loaded when it is needed rather than at import time: a
-   * missing native module must not take the whole route file down with
-   * it (a module dep in a route path 404s every route beside it).
+   * One photograph: ask the model what it needs and write that down.
+   * Returns what an organiser's browser should do about it, or nothing
+   * where there is nothing to do. Never throws.
    */
-  let sharpReady: unknown = null;
-  async function loadSharp(): Promise<((input: Buffer) => unknown) | null> {
-    try {
-      if (sharpReady) return sharpReady as never;
-      const mod = await import('sharp');
-      const lib = (mod.default ?? mod) as unknown as {
-        cache: (v: boolean) => void; concurrency: (n: number) => void;
-      };
-      // One thread and no cache. The default pool is one thread per core
-      // and a cache measured in hundreds of megabytes, which is fine for
-      // an image server and not fine inside an api pod with 512MB that
-      // is also serving the projector.
-      try { lib.cache(false); lib.concurrency(1); } catch { /* older build */ }
-      sharpReady = lib;
-      return lib as never;
-    } catch (err) {
-      logger.error('enhance: sharp unavailable', { error: err instanceof Error ? err.message : String(err) });
-      return null;
-    }
-  }
-
-  /**
-   * One photograph: ask, adjust, store. Returns what happened, never
-   * throws -- one photograph that cannot be improved must not stop the
-   * batch behind it.
-   */
-  async function enhanceOne(eventId: string, mediaId: string, force = false): Promise<{
+  async function askAbout(eventId: string, mediaId: string, force = false): Promise<{
     id: string;
-    status: 'enhanced' | 'unchanged' | 'skipped' | 'failed';
+    status: 'needs' | 'unchanged' | 'skipped' | 'failed';
     note?: string;
     reason?: string;
+    /** Where the photograph is, and what to do to it, for the browser. */
+    source?: string;
+    ops?: ReturnType<typeof opsFor>;
   }> {
     const { data: row, error } = await db
       .from('host_media')
@@ -124,17 +92,16 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
       return { id: mediaId, status: 'skipped', reason: 'unsupported_layout' };
     }
 
-    // Already looked at: no second model call, and no second copy. This
-    // is what makes running the album again cheap -- and what stops a
-    // caller spending at a paid endpoint by sending the same ids over
-    // and over. An organiser who wants it done again asks for that.
+    // Already looked at: no second model call. This is what makes running
+    // an album again cheap, and what stops a caller spending at a paid
+    // endpoint by sending the same ids over and over.
     const meta = (row.metadata ?? {}) as Record<string, unknown>;
     const seen = meta['enhance'] && typeof meta['enhance'] === 'object'
       ? (meta['enhance'] as Record<string, unknown>) : null;
     if (seen && !force) {
       return {
         id: mediaId,
-        status: seen['needed'] === true ? 'enhanced' : 'unchanged',
+        status: seen['needed'] === true ? 'unchanged' : 'unchanged',
         note: typeof seen['note'] === 'string' ? seen['note'] : undefined,
         reason: 'already_done',
       };
@@ -144,69 +111,23 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     if (!answer.ok) return { id: mediaId, status: 'failed', reason: answer.error };
     const verdict = answer.verdict as Parameters<typeof worthEnhancing>[0];
     if (!worthEnhancing(verdict)) {
-      // Worth recording: an organiser can see it was considered, and a
-      // second pass over the album does not ask about it again.
       await db.from('host_media').update({
         metadata: { ...meta, enhance: { at: new Date().toISOString(), needed: false, note: verdict.note } },
       }).eq('id', mediaId);
       return { id: mediaId, status: 'unchanged', note: verdict.note };
     }
 
-    const sharpFn = await loadSharp();
-    if (!sharpFn) return { id: mediaId, status: 'failed', reason: 'no_image_library' };
-
-    const { data: blob, error: dlErr } = await db.storage.from(storageBucket).download(path);
-    if (dlErr || !blob) return { id: mediaId, status: 'failed', reason: 'download_failed' };
-    const source = Buffer.from(await blob.arrayBuffer());
-    if (source.length > MAX_SOURCE_BYTES) return { id: mediaId, status: 'skipped', reason: 'too_large' };
-
+    // What the browser should do, and what it should do it to. Recorded
+    // now so a run that is interrupted half way is not paid for twice --
+    // the record says what was decided even if nothing has been made yet.
     const ops = opsFor(verdict);
-    let out: Buffer;
-    try {
-      // Every step here is arithmetic on pixels that already exist:
-      // a gain and an offset, a per-channel gain for warmth, a colour
-      // strength, and an unsharp mask. Nothing is drawn.
-      let img = (sharpFn as (b: Buffer, o?: unknown) => never)(source, {
-        failOn: 'none',
-        limitInputPixels: MAX_PIXELS,
-        sequentialRead: true,
-      })
-        .rotate() // honour EXIF orientation before touching the pixels
-        // First, and in the same pipeline: this is what lets the decode
-        // happen at a fraction of full size rather than all at once.
-        .resize({ width: MAX_EDGE, height: MAX_EDGE, fit: 'inside', withoutEnlargement: true })
-        .linear(ops.linear.multiplier, ops.linear.offset)
-        .modulate({ saturation: ops.modulate.saturation });
-      if (ops.tint.red !== 1 || ops.tint.blue !== 1) {
-        img = img.linear([ops.tint.red, 1, ops.tint.blue], [0, 0, 0]);
-      }
-      if (ops.sharpenSigma > 0) img = img.sharpen({ sigma: ops.sharpenSigma });
-      out = await img.jpeg({ quality: 92, mozjpeg: true }).toBuffer();
-    } catch (err) {
-      return { id: mediaId, status: 'failed', reason: err instanceof Error ? err.message : 'convert_failed' };
-    }
-
-    // A new name each time, because a CDN caches by name and an album
-    // enhanced twice would go on serving the first attempt.
-    const dir = path.slice(0, path.lastIndexOf('/'));
-    const at = new Date();
-    const enhancedPath = `${dir}/enhanced-${at.getTime().toString(36)}.jpg`;
-    const { error: upErr } = await db.storage.from(storageBucket)
-      .upload(enhancedPath, out, { contentType: 'image/jpeg', upsert: false });
-    if (upErr) return { id: mediaId, status: 'failed', reason: 'upload_failed' };
-
-    const had = (row.variants ?? {}) as Record<string, unknown>;
-    const previous = typeof had['enhanced'] === 'string' ? (had['enhanced'] as string) : null;
-    const { error: updErr } = await db.from('host_media').update({
-      variants: { ...had, enhanced: enhancedPath },
+    await db.from('host_media').update({
       metadata: {
         ...meta,
         enhance: {
-          at: at.toISOString(),
+          at: new Date().toISOString(),
           needed: true,
           note: verdict.note,
-          // What was actually done, so a result anyone dislikes can be
-          // understood rather than guessed at.
           applied: {
             exposure: verdict.exposure, contrast: verdict.contrast,
             warmth: verdict.warmth, saturation: verdict.saturation, sharpen: verdict.sharpen,
@@ -214,15 +135,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
         },
       },
     }).eq('id', mediaId);
-    if (updErr) {
-      await db.storage.from(storageBucket).remove([enhancedPath]).catch(() => {});
-      return { id: mediaId, status: 'failed', reason: 'update_failed' };
-    }
-    // The copy this one replaces is nobody's now. Best effort.
-    if (previous && previous !== enhancedPath && previous.startsWith(`event/${eventId}/`)) {
-      try { await db.storage.from(storageBucket).remove([previous]); } catch { /* swept later */ }
-    }
-    return { id: mediaId, status: 'enhanced', note: verdict.note };
+    return { id: mediaId, status: 'needs', note: verdict.note, source: publicUrl(path), ops };
   }
 
   async function enhance(req: Request, res: Response): Promise<void> {
@@ -254,30 +167,108 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
       return;
     }
 
-    // One at a time. Doing these together is what killed the pod: two
-    // photographs being decoded at once is more memory than the api has
-    // (2026-09-27). A batch of three costs the organiser a few seconds
-    // and the site nothing.
-    const results: Array<Awaited<ReturnType<typeof enhanceOne>>> = [];
-    for (const id of ids) {
-      try {
-        results.push(await enhanceOne(eventId, id, force));
-      } catch (err) {
-        results.push({ id, status: 'failed', reason: err instanceof Error ? err.message : String(err) });
-      }
-    }
-    logger.info('enhance batch', {
+    // These are model calls, not image work: nothing here decodes a
+    // photograph, so they can go together.
+    const results = await Promise.all(ids.map((id) => askAbout(eventId, id, force).catch((err) => ({
+      id, status: 'failed' as const, reason: err instanceof Error ? err.message : String(err),
+    }))));
+    logger.info('enhance: asked about a batch', {
       eventId,
-      enhanced: results.filter((r) => r.status === 'enhanced').length,
+      needs: results.filter((r) => r.status === 'needs').length,
       unchanged: results.filter((r) => r.status === 'unchanged').length,
       failed: results.filter((r) => r.status === 'failed').length,
     });
     res.status(200).json({ results });
   }
 
-  return { enhance, enhanceOne };
+  /**
+   * Record an enhanced copy the organiser's browser has just made and
+   * uploaded. Takes little on trust: the row must be this event's photo,
+   * the file must sit beside the photograph it belongs to, and it must
+   * actually be in storage. The same rules as recording a rotation.
+   */
+  async function enhanced(req: Request, res: Response): Promise<void> {
+    const eventId = req.params['eventId'];
+    if (typeof eventId !== 'string' || !UUID_RE.test(eventId)) {
+      sendError(res, 400, 'invalid_request', 'eventId must be a UUID');
+      return;
+    }
+    let allowed: boolean | null;
+    try {
+      allowed = await canAdminEvent(req, eventId);
+    } catch {
+      allowed = false;
+    }
+    if (allowed === null) { sendError(res, 401, 'unauthenticated', 'session required'); return; }
+    if (!allowed) { sendError(res, 403, 'forbidden', 'not authorised for this event'); return; }
+
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const mediaId = typeof body['media_id'] === 'string' ? body['media_id'] : '';
+    const path = typeof body['storage_path'] === 'string' ? body['storage_path'] : '';
+    const bytes = Number(body['bytes']);
+    if (!UUID_RE.test(mediaId) || !PATH_RE.test(path)
+      || !Number.isInteger(bytes) || bytes < 1 || bytes > MAX_COPY_BYTES) {
+      sendError(res, 400, 'invalid_request', 'media_id, storage_path and bytes are required');
+      return;
+    }
+
+    const { data: row, error } = await db
+      .from('host_media')
+      .select('id, host_kind, host_id, storage_path, mime_type, variants, metadata')
+      .eq('id', mediaId)
+      .maybeSingle();
+    if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
+      sendError(res, 404, 'not_found', 'no such photo on this event');
+      return;
+    }
+    if (typeof row.mime_type !== 'string' || !row.mime_type.startsWith('image/')) {
+      sendError(res, 400, 'not_a_photo', 'only a photo can be enhanced');
+      return;
+    }
+    // Beside the photograph it is a copy of, and nowhere else.
+    const current = typeof row.storage_path === 'string' ? row.storage_path : '';
+    const dir = current.slice(0, current.lastIndexOf('/'));
+    if (!dir.startsWith(`event/${eventId}/`) || !path.startsWith(`${dir}/`) || path.includes('..')) {
+      sendError(res, 400, 'invalid_request', 'that path is not beside the photo it belongs to');
+      return;
+    }
+
+    // It must exist: a row pointing at nothing is a broken picture.
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    const { data: found } = await db.storage.from(storageBucket).list(dir, { search: name, limit: 100 });
+    if (!found || !found.some((f: { name: string }) => f.name === name)) {
+      sendError(res, 400, 'not_uploaded', 'that copy is not in storage yet');
+      return;
+    }
+
+    const had = (row.variants ?? {}) as Record<string, unknown>;
+    const previous = typeof had['enhanced'] === 'string' ? (had['enhanced'] as string) : null;
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    const record = meta['enhance'] && typeof meta['enhance'] === 'object'
+      ? (meta['enhance'] as Record<string, unknown>) : {};
+    const { error: updErr } = await db
+      .from('host_media')
+      .update({
+        variants: { ...had, enhanced: path },
+        metadata: { ...meta, enhance: { ...record, made_at: new Date().toISOString(), bytes } },
+      })
+      .eq('id', mediaId);
+    if (updErr) {
+      logger.error('enhance record failed', { mediaId, error: updErr.message });
+      sendError(res, 500, 'update_failed', 'could not record that copy');
+      return;
+    }
+    // The copy this one replaces is nobody's now. Best effort.
+    if (previous && previous !== path && previous.startsWith(`event/${eventId}/`)) {
+      try { await db.storage.from(storageBucket).remove([previous]); } catch { /* swept later */ }
+    }
+    res.status(200).json({ id: mediaId, enhanced: path });
+  }
+
+  return { enhance, enhanced, askAbout };
 }
 
 export function mountEnhanceMedia(router: Router, routes: ReturnType<typeof createEnhanceMedia>): void {
   router.post('/events/:eventId/media/enhance', routes.enhance);
+  router.post('/events/:eventId/media/enhanced', routes.enhanced);
 }

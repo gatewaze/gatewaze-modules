@@ -160,3 +160,74 @@ export function opsFor(v: EnhanceVerdict): EnhanceOps {
     sharpenSigma: v.sharpen >= WORTH_DOING ? Number((0.5 + (v.sharpen / 100) * 1.0).toFixed(2)) : 0,
   };
 }
+
+/**
+ * The adjustments, applied to real pixels.
+ *
+ * In place, over RGBA as a canvas hands it out. Deliberately the whole of
+ * the image work: a gain and an offset (contrast and exposure), a gain on
+ * red and blue (warmth), a pull towards or away from the pixel's own
+ * brightness (colour), and an unsharp mask. Every one of them is a sum of
+ * numbers that were already in the photograph. Nothing is invented, which
+ * is what makes this an enhancement rather than a regeneration.
+ *
+ * Runs in the organiser's browser. It used to run on the server, which
+ * cost the site two outages: an api pod with 512MB cannot decode a
+ * twelve-megapixel photograph while it is also serving a wedding.
+ */
+export function applyOps(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  ops: EnhanceOps,
+): void {
+  const { multiplier: m, offset: b } = ops.linear;
+  const sat = ops.modulate.saturation;
+  const { red, blue } = ops.tint;
+
+  for (let i = 0; i < data.length; i += 4) {
+    let r = data[i]! * m * red + b;
+    let g = data[i + 1]! * m + b;
+    let bl = data[i + 2]! * m * blue + b;
+    if (sat !== 1) {
+      // Rec. 601 luma: the brightness the eye reads, so pulling colour
+      // towards or away from it does not change how light a pixel looks.
+      const luma = 0.299 * r + 0.587 * g + 0.114 * bl;
+      r = luma + (r - luma) * sat;
+      g = luma + (g - luma) * sat;
+      bl = luma + (bl - luma) * sat;
+    }
+    data[i] = r;
+    data[i + 1] = g;
+    data[i + 2] = bl;
+  }
+
+  if (ops.sharpenSigma > 0) unsharp(data, width, height, ops.sharpenSigma);
+}
+
+/**
+ * An unsharp mask: the picture, plus a fraction of what a slight blur
+ * leaves out. Gentle by construction -- sigma is capped at 1.5 by
+ * opsFor, and an over-sharpened face looks worse than a soft one.
+ */
+function unsharp(data: Uint8ClampedArray, width: number, height: number, sigma: number): void {
+  const amount = Math.min(1, sigma / 1.5) * 0.6;
+  if (amount <= 0 || width < 3 || height < 3) return;
+  // A copy to read from, so each pixel sees its neighbours as they were.
+  const src = new Uint8ClampedArray(data);
+  const at = (x: number, y: number, c: number) => src[(y * width + x) * 4 + c]!;
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const o = (y * width + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        // A 3x3 box blur is enough: the radius is a pixel either way.
+        const blur = (
+          at(x - 1, y - 1, c) + at(x, y - 1, c) + at(x + 1, y - 1, c)
+          + at(x - 1, y, c) + at(x, y, c) + at(x + 1, y, c)
+          + at(x - 1, y + 1, c) + at(x, y + 1, c) + at(x + 1, y + 1, c)
+        ) / 9;
+        data[o + c] = src[o + c]! + (src[o + c]! - blur) * amount;
+      }
+    }
+  }
+}

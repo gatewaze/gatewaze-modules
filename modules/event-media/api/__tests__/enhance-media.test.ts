@@ -18,6 +18,7 @@ const PHOTO = {
 };
 
 const FINE = { needs: false, exposure: 0, contrast: 0, warmth: 0, saturation: 0, sharpen: 0, note: 'Nicely exposed.' };
+const DARK = { needs: true, exposure: 40, contrast: 10, warmth: 0, saturation: 0, sharpen: 20, note: 'A little dark.' };
 
 function setup(over = {}) {
   const state = { updated: [], asked: [] };
@@ -27,7 +28,7 @@ function setup(over = {}) {
       update: (fields) => { state.updated.push(fields); return { eq: () => Promise.resolve({ error: null }) }; },
     }),
     storage: { from: () => ({
-      download: () => Promise.resolve({ data: null, error: { message: 'no' } }),
+      list: (_dir, opts) => Promise.resolve({ data: over.missing ? [] : [{ name: opts.search }], error: null }),
       upload: () => Promise.resolve({ error: null }),
       remove: () => Promise.resolve({ error: null }),
     }) },
@@ -64,6 +65,23 @@ describe('enhancing an album', () => {
     // And nothing was written to the photograph itself.
     expect(state.updated[0].variants).toBeUndefined();
     expect(state.updated[0].storage_path).toBeUndefined();
+  });
+
+  // The api never decodes a photograph: it says what is needed and the
+  // organiser's browser does the work (two outages taught us this).
+  it('hands the browser what to do, and never touches the picture', async () => {
+    const { routes, state } = setup({ verdict: { ok: true, verdict: DARK } });
+    const res = await call(routes, { ids: [MEDIA] });
+    const r = res.body.results[0];
+    expect(r.status).toBe('needs');
+    expect(r.source).toBe(`https://cdn.example/event/${EVENT}/${MEDIA}/photo.jpg`);
+    // Bounded adjustments, not the model's own numbers.
+    expect(r.ops.linear.multiplier).toBeCloseTo(1.02, 2);
+    expect(r.ops.sharpenSigma).toBeGreaterThan(0);
+    // What was decided is written down before anything is made, so an
+    // interrupted run is not paid for twice.
+    expect(state.updated[0].metadata.enhance.needed).toBe(true);
+    expect(state.updated[0].variants).toBeUndefined();
   });
 
   it('says so when the model cannot be asked', async () => {
@@ -125,5 +143,53 @@ describe('enhancing an album', () => {
     const res = await call(routes, { ids: many });
     expect(res.body.results.length).toBeLessThanOrEqual(3);
     expect(state.asked.length).toBeLessThanOrEqual(3);
+  });
+});
+
+// Recording a copy the browser made, with the same care a rotation gets.
+describe('recording an enhanced copy', () => {
+  const GOOD = { media_id: MEDIA, storage_path: `event/${EVENT}/${MEDIA}/enhanced-abc.jpg`, bytes: 400000 };
+  const record = async (over, body = GOOD, params = { eventId: EVENT }) => {
+    const { routes, state } = setup(over);
+    const res = mockRes();
+    await routes.enhanced({ params, body }, res);
+    return { res, state };
+  };
+
+  it('points the row at the copy', async () => {
+    const { res, state } = await record({});
+    expect(res.statusCode).toBe(200);
+    expect(state.updated[0].variants.enhanced).toBe(GOOD.storage_path);
+    // The photograph itself is untouched.
+    expect(state.updated[0].storage_path).toBeUndefined();
+  });
+
+  it('refuses a path that is not beside the photograph', async () => {
+    for (const storage_path of [
+      `event/${EVENT}/11111111-1111-4111-8111-111111111111/enhanced.jpg`,
+      'event/00000000-0000-4000-8000-000000000000/x/enhanced.jpg',
+      `event/${EVENT}/${MEDIA}/../../escape.jpg`,
+      `event/${EVENT}/${MEDIA}/enhanced.exe`,
+    ]) {
+      const { res, state } = await record({}, { ...GOOD, storage_path });
+      expect(res.statusCode).toBe(400);
+      expect(state.updated).toEqual([]);
+    }
+  });
+
+  it('refuses a copy that is not in storage', async () => {
+    const { res } = await record({ missing: true });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('not_uploaded');
+  });
+
+  it('refuses a stranger, a video, and nonsense', async () => {
+    expect((await record({ allowed: null })).res.statusCode).toBe(401);
+    expect((await record({ allowed: false })).res.statusCode).toBe(403);
+    expect((await record({ row: { ...PHOTO, mime_type: 'video/mp4' } })).res.statusCode).toBe(400);
+    expect((await record({ row: null })).res.statusCode).toBe(404);
+    for (const body of [{}, { ...GOOD, bytes: 0 }, { ...GOOD, bytes: 99e9 }, { ...GOOD, media_id: 'nope' }]) {
+      expect((await record({}, body)).res.statusCode).toBe(400);
+    }
   });
 });
