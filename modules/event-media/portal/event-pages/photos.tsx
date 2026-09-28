@@ -28,6 +28,7 @@ import GuestPicker from './_components/GuestPicker'
 import UploadApp, { type UploadTile } from './_components/UploadApp'
 import BoothExperience, { type BoothLook, type BoothView } from './_components/BoothExperience'
 import { takenAtOf } from './_components/_lib/taken-at'
+import { uploadCodeOf } from './_components/_lib/visit-code'
 
 // Same-origin ALWAYS: the portal proxies /api/public/* to the api
 // service (next.config rewrites). NEXT_PUBLIC_API_URL is unreliable in
@@ -291,12 +292,12 @@ export default function GuestPhotosPage(props: Props) {
 
 function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const searchParams = useSearchParams()
-  // Whether this visit ever arrived with an upload code on the URL. A ref
-  // rather than state: it is read during render and must not reset when
-  // the query string changes under a history push.
-  const sawCodeRef = useRef(false)
-  const urlCodeNow = searchParams.get('u')
-  if (urlCodeNow && /^[a-z0-9]{6,16}$/.test(urlCodeNow)) sawCodeRef.current = true
+  // The upload code on the address, and nothing else. Read fresh on
+  // every render rather than latched: a latch outlived the address that
+  // set it, so a guest who arrived with ?u= and then followed any link
+  // back to /photos stayed in the app at an address that no longer had
+  // a code. See _components/_lib/visit-code.ts.
+  const urlCode = uploadCodeOf(searchParams.toString())
 
   const codeKey = `event_media_upload_code:${eventIdentifier}`
   const guestKey = `event_media_guest:${eventIdentifier}`
@@ -463,10 +464,12 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // ── Code + guest bootstrap ────────────────────────────────────────
 
   useEffect(() => {
-    const fromUrl = searchParams.get('u')
+    // The same reading of the address the render uses, so the state and
+    // the screen can never disagree about what counts as a code.
+    const fromUrl = uploadCodeOf(searchParams.toString())
     let candidate: string | null = null
     try {
-      if (fromUrl && /^[a-z0-9]{6,16}$/.test(fromUrl)) {
+      if (fromUrl) {
         localStorage.setItem(codeKey, fromUrl)
         candidate = fromUrl
       } else {
@@ -1402,23 +1405,15 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   const subText = darkMode ? 'text-gray-300' : 'text-gray-600'
   const cardBg = darkMode ? 'bg-white/10' : 'bg-white'
 
-  // Projector mode: ?display=1 swaps the whole tab for the full-bleed
-  // display view (renders position:fixed above the event chrome). This
-  // is the reachable home for the projector — module portal pages are
-  // nav-visibility-gated and event-media has no nav entry.
-  if (searchParams.get('display') === '1' && code) {
-    return <DisplayView code={code} />
-  }
-
   // Nobody scanned anything: the albums, and nothing asked of them.
   //
-  // The upload app and the booth belong to a visit that arrived with a
-  // code on the URL (asked 2026-09-27). A stored code from a previous
-  // visit is not enough -- it used to be, which is why opening /photos
-  // asked who you were and then showed an empty screen. Once a code HAS
-  // been seen in this visit it stays seen, so the booth's own history
-  // pushes cannot drop a guest out of the app mid-photograph.
-  if (!sawCodeRef.current) {
+  // The upload app, the booth and the projector all belong to a visit
+  // that arrived with a code on the address (asked 2026-09-27). A code
+  // this phone stored on a previous visit is not enough -- it used to
+  // be, which is why opening /photos asked who you were and then showed
+  // an empty screen. First of the early returns, so nothing else on the
+  // page can let a visitor past it on a stored code.
+  if (!urlCode) {
     return (
       <AlbumGallery
         eventIdentifier={eventIdentifier}
@@ -1430,14 +1425,23 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     )
   }
 
+  // Projector mode: ?display=1 swaps the whole tab for the full-bleed
+  // display view (renders position:fixed above the event chrome). This
+  // is the reachable home for the projector — module portal pages are
+  // nav-visibility-gated and event-media has no nav entry. The address
+  // the organiser is given carries the code as well, so this is only
+  // reached from ?u=<code>&display=1.
+  if (searchParams.get('display') === '1' && code) {
+    return <DisplayView code={code} />
+  }
+
   if (loading) {
-    // With an upload code on the way in, keep covering until the screen is
-    // ready. The URL, not the `code` state: state is only filled in after
-    // the first render, and the first render is the one the server sends
-    // -- it is the render that has to cover the event page.
-    const urlCode = searchParams.get('u')
-    if (code || (urlCode && /^[a-z0-9]{6,16}$/.test(urlCode))) return <PhotosCover />
-    return <div className={`p-8 text-center ${subText}`}>Loading…</div>
+    // There is a code on the address, so keep covering the event page
+    // until the screen is ready. The address, not the `code` state:
+    // state is only filled in after the first render, and the first
+    // render is the one the server sends -- it is the render that has
+    // to do the covering.
+    return <PhotosCover />
   }
 
   const canUpload = Boolean(code && link)
