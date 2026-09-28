@@ -14,7 +14,7 @@
  * else's.
  */
 import { supabase } from '@/lib/supabase';
-import { applyOps, type EnhanceOps } from '../../lib/enhance';
+import { applyOps, liftFor, meanLuma, type EnhanceOps } from '../../lib/enhance';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -78,7 +78,15 @@ async function improve(source: string, ops: EnhanceOps): Promise<Blob> {
   if (!ctx) throw new Error('no canvas');
   ctx.drawImage(img, 0, 0, w, h);
   const frame = ctx.getImageData(0, 0, w, h);
-  applyOps(frame.data, w, h, ops);
+  // The model judges what kind of correction a photograph wants and is a
+  // poor judge of how much -- it answered "a touch of sharpening" to
+  // photographs taken in a very dark room. The pixels are not a matter of
+  // opinion, so the lift has a floor measured from the photograph itself.
+  const lifted: EnhanceOps = {
+    ...ops,
+    linear: { ...ops.linear, offset: liftFor(meanLuma(frame.data), ops.linear.offset) },
+  };
+  applyOps(frame.data, w, h, lifted);
   ctx.putImageData(frame, 0, 0);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) throw new Error('could not encode the improved photo');
@@ -97,6 +105,8 @@ export async function enhanceMedia(
   onProgress: (p: EnhanceProgress) => void,
   keepGoing: () => boolean = () => true,
   bucket = 'media',
+  /** Look again at photographs already looked at, and remake the copies. */
+  force = false,
 ): Promise<EnhanceProgress> {
   const progress: EnhanceProgress = { done: 0, total: ids.length, enhanced: 0, unchanged: 0, failed: 0 };
 
@@ -105,7 +115,7 @@ export async function enhanceMedia(
     const batch = ids.slice(i, i + ENHANCE_BATCH);
     const resp = await authedFetch(`/api/admin/events/${eventId}/media/enhance`, {
       method: 'POST',
-      body: JSON.stringify({ ids: batch }),
+      body: JSON.stringify({ ids: batch, force }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => null);
@@ -132,7 +142,7 @@ export async function enhanceMedia(
         if (up.error) throw new Error(up.error.message);
         const rec = await authedFetch(`/api/admin/events/${eventId}/media/enhanced`, {
           method: 'POST',
-          body: JSON.stringify({ media_id: r.id, storage_path: path, bytes: blob.size }),
+          body: JSON.stringify({ media_id: r.id, storage_path: path, bytes: blob.size, of: r.of ?? 'photo' }),
         });
         if (!rec.ok) throw new Error('could not record the improved photo');
         progress.enhanced += 1;

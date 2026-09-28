@@ -336,8 +336,8 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
         <div className="mb-3 flex justify-end">
           <button
             onClick={() => void copyLink(chosen, null)}
-            title={chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
-            aria-label={chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
+            title={copied ? 'Link copied' : chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
+            aria-label={copied ? 'Link copied' : chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
             className={`rounded-full p-2 ${subText}`}
             style={{ background: darkMode ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.05)' }}
           >
@@ -449,8 +449,8 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
               )}
               <button
                 onClick={() => void copyLink(chosen, open)}
-                title="Copy a link to this photo"
-                aria-label="Copy a link to this photo"
+                title={copied ? 'Link copied' : 'Copy a link to this photo'}
+                aria-label={copied ? 'Link copied' : 'Copy a link to this photo'}
                 style={{ background: 'rgba(255,255,255,0.16)', color: '#ffffff' }}
                 className="rounded-full p-2"
               >
@@ -478,14 +478,6 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
           )}
           <button className="absolute right-4 top-4 text-3xl text-white" onClick={closeLightbox} aria-label="Close">
             ×
-          </button>
-          {/* The link to this one photograph. */}
-          <button
-            onClick={(e) => { e.stopPropagation(); void copyLink(chosen, open) }}
-            style={{ background: 'rgba(255,255,255,0.14)', color: '#fff' }}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-4 py-2 text-sm"
-          >
-            {copied ? 'Link copied' : 'Copy link to this photo'}
           </button>
         </div>
       )}

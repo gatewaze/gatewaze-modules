@@ -66,14 +66,14 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
    * at is left alone by the server, so this can be run again after more
    * photographs arrive without paying for the ones already done.
    */
-  const runEnhance = useCallback(async (album: HostMediaAlbum) => {
+  const runEnhance = useCallback(async (album: HostMediaAlbum, force = false) => {
     const ids = mediaIdsIn ? mediaIdsIn(album.id) : [];
     if (ids.length === 0) { toast.error('There are no photos in that album yet'); return; }
     stopRef.current = false;
     setRunning(album.id);
     setProgress({ done: 0, total: ids.length, enhanced: 0, unchanged: 0, failed: 0 });
     try {
-      const done = await enhanceMedia(eventId, ids, setProgress, () => !stopRef.current);
+      const done = await enhanceMedia(eventId, ids, setProgress, () => !stopRef.current, 'media', force);
       toast.success(`${done.enhanced} improved, ${done.unchanged} already good${done.failed ? `, ${done.failed} could not be done` : ''}`);
       onChanged();
     } catch (err) {
@@ -274,6 +274,16 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                       className="rounded px-2 py-1 text-xs text-[var(--gray-a10)] hover:bg-[var(--gray-a3)] disabled:opacity-30"
                     >
                       {running === album.id ? 'Stop' : 'Improve'}
+                    </button>
+                  )}
+                  {mediaIdsIn && running === null && (
+                    <button
+                      type="button"
+                      title="Look at every photo again and remake the improved copies, even the ones already done"
+                      onClick={() => void runEnhance(album, true)}
+                      className="rounded px-2 py-1 text-xs text-[var(--gray-a10)] hover:bg-[var(--gray-a3)]"
+                    >
+                      Redo
                     </button>
                   )}
                   <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--gray-a3)] disabled:opacity-30">

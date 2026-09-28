@@ -70,6 +70,9 @@ export const ENHANCE_PROMPT = [
   'Answer with JSON only, no prose, no code fence, in exactly this shape:',
   '{"needs":true,"exposure":0,"contrast":0,"warmth":0,"saturation":0,"sharpen":0,"note":"one short sentence"}',
   'Each number is between -100 and 100 (sharpen between 0 and 100), where 0 means leave it alone.',
+  'Use the whole scale. 10 is a nudge nobody will see and is almost never the right answer;',
+  '40 is a clear correction; 80 rescues a badly underexposed photograph. If the room was dark',
+  'and the faces are muddy, the exposure you want is 50 to 80, not 5.',
   'Positive exposure brightens, positive contrast adds punch, positive warmth is warmer,',
   'positive saturation is more colourful. Ask for what the photograph actually needs: too',
   'timid is as wrong as too much. The result must still look like the photograph that was',
@@ -239,4 +242,46 @@ function unsharp(data: Uint8ClampedArray, width: number, height: number, sigma: 
       }
     }
   }
+}
+
+/**
+ * How dark a photograph is, as the average brightness of its pixels.
+ * 0 is black, 255 is white; a well-lit photograph of people sits around
+ * 110-140 and the booth's room came out nearer 50.
+ */
+export function meanLuma(data: Uint8ClampedArray): number {
+  if (data.length < 4) return 128;
+  let total = 0;
+  let n = 0;
+  // Every eighth pixel is plenty for an average and eight times quicker.
+  for (let i = 0; i < data.length; i += 32) {
+    total += 0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!;
+    n += 1;
+  }
+  return n > 0 ? total / n : 128;
+}
+
+/** What a photograph of people wants to average out at. */
+const TARGET_LUMA = 118;
+/** The most this backstop will add on its own, in levels out of 255. */
+const MAX_LIFT = 55;
+
+/**
+ * The lift a genuinely dark photograph needs, whatever the model said.
+ *
+ * The model is a good judge of what KIND of correction a photograph
+ * wants and a poor judge of how much: asked about photographs taken in a
+ * very dark room it kept answering "a touch of sharpening", which is
+ * invisible and not worth paying for (reported 2026-09-28). The pixels
+ * are not a matter of opinion -- if the average brightness is 50, the
+ * photograph is dark -- so this sets a floor under the model's answer.
+ *
+ * Only ever a floor, and only upwards: a photograph the model wanted
+ * darkened is left to the model, and a photograph that is already bright
+ * gets nothing from here.
+ */
+export function liftFor(mean: number, asked: number): number {
+  if (!Number.isFinite(mean) || mean >= TARGET_LUMA) return asked;
+  const needed = Math.min(MAX_LIFT, TARGET_LUMA - mean);
+  return Math.max(asked, needed);
 }
