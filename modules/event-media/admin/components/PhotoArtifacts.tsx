@@ -28,7 +28,7 @@ import { CARD_GENRES, CARD_KINDS, CARD_LIMITS } from '../../lib/card-copy.js';
 
 const VIEW_NAMES: Record<string, string> = {
   seed: 'Preload', preload: 'Preload', night: 'The night before', ready: 'Getting ready',
-  day: 'The day', booth: 'Photo booth', elsewhere: 'Photo booth elsewhere',
+  day: 'The day', evening: 'Evening reception', booth: 'Photo booth', elsewhere: 'Photo booth elsewhere',
 };
 
 interface Card {

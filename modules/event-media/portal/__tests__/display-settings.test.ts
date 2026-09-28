@@ -112,12 +112,14 @@ describe('Getting ready is part of the day', () => {
     ...Array.from({ length: ready }, () => ({ album: 'ready' })),
   ];
   it('shows Getting ready alongside the day until the day has its own', () => {
-    expect([...dayAlbums(photos(0, 5))].sort()).toEqual(['day', 'ready']);
-    expect([...dayAlbums(photos(DAY_ONLY_AFTER - 1, 5))].sort()).toEqual(['day', 'ready']);
+    // The evening reception rides with The day throughout: it is the
+    // same evening, and the projector should not go dark at half six.
+    expect([...dayAlbums(photos(0, 5))].sort()).toEqual(['day', 'evening', 'ready']);
+    expect([...dayAlbums(photos(DAY_ONLY_AFTER - 1, 5))].sort()).toEqual(['day', 'evening', 'ready']);
   });
   it('shows the day alone from the twentieth photo of its own', () => {
     expect(DAY_ONLY_AFTER).toBe(20);
-    expect([...dayAlbums(photos(20, 50))]).toEqual(['day']);
+    expect([...dayAlbums(photos(20, 50))].sort()).toEqual(['day', 'evening']);
   });
   it('has no separate setting any more', () => {
     expect('ready' in migrateStreams({ ready: { effect: 'blur' } })).toBe(false);

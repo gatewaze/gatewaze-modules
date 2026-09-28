@@ -97,7 +97,8 @@ describe('albumForUpload', () => {
   it('is Getting ready before the start and The day from it', () => {
     expect(albumForUpload({ booth: false, eventStart: START, now: at('2026-09-25T09:00:00Z') })).toBe('ready');
     expect(albumForUpload({ booth: false, eventStart: START, now: at(START) })).toBe('day');
-    expect(albumForUpload({ booth: false, eventStart: START, now: at('2026-09-25T20:00:00Z') })).toBe('day');
+    // Half past six is where the day hands over to the evening.
+    expect(albumForUpload({ booth: false, eventStart: START, now: at('2026-09-25T20:00:00Z') })).toBe('evening');
   });
   it('puts the booth in the booth whatever the time', () => {
     expect(albumForUpload({ booth: true, eventStart: START, now: at('2026-09-25T09:00:00Z') })).toBe('booth');
@@ -119,7 +120,7 @@ describe('the night before, and the booth away from the event', () => {
 
   it('files a photograph by when it was taken, whenever it is uploaded', () => {
     // All of these are uploaded two days late, from a camera roll.
-    expect(upload('2026-09-25T19:40:00Z')).toBe('day');        // at the party
+    expect(upload('2026-09-25T19:40:00Z')).toBe('evening');    // at the party
     expect(upload('2026-09-25T09:14:00Z')).toBe('ready');      // that morning
     expect(upload('2026-09-24T20:30:00Z')).toBe('night');      // the evening before
     expect(upload('2026-09-24T09:00:00Z')).toBe('night');      // the day before
@@ -142,5 +143,47 @@ describe('the night before, and the booth away from the event', () => {
   it('keeps every booth picture when the event has no start time', () => {
     expect(boothAlbum({ eventStart: null, now: Date.now() })).toBe('booth');
     expect(albumForUpload({ booth: true, eventStart: null, now: Date.now() })).toBe('booth');
+  });
+});
+
+describe('the evening reception', () => {
+  const START = '2026-09-25T13:30:00Z';
+  const upload = (takenAt: string) => albumForUpload({ booth: false, eventStart: START, now: Date.parse('2026-09-27T10:00:00Z'), takenAt });
+
+  it('hands over at half past six', () => {
+    expect(upload('2026-09-25T18:29:59')).toBe('day');
+    expect(upload('2026-09-25T18:30:00')).toBe('evening');
+    expect(upload('2026-09-25T23:59:00')).toBe('evening');
+    // Into the small hours is still the party.
+    expect(upload('2026-09-26T02:00:00')).toBe('evening');
+  });
+
+  it('stops being the evening the next morning', () => {
+    // Fourteen hours after the start, the same ceiling a booth picture
+    // gets: a photograph the following evening is not this party.
+    expect(upload('2026-09-26T04:00:00')).toBe('day');
+    expect(upload('2026-09-26T19:00:00')).toBe('day');
+  });
+
+  it('leaves the morning and the night before where they were', () => {
+    expect(upload('2026-09-25T09:14:00')).toBe('ready');
+    expect(upload('2026-09-24T20:30:00')).toBe('night');
+  });
+
+  // An evening do has no separate evening: it is all one party.
+  it('has no evening for an event that starts after it', () => {
+    const late = (takenAt: string) => albumForUpload({
+      booth: false, eventStart: '2026-09-25T19:00:00Z', now: Date.parse('2026-09-26T10:00:00Z'), takenAt,
+    });
+    expect(late('2026-09-25T19:30:00')).toBe('evening');
+    // ...and nothing lands before the start, as ever.
+    expect(late('2026-09-25T18:45:00')).toBe('ready');
+  });
+
+  it('is what a photograph in two albums resolves to, over the day', () => {
+    const albums = [{ album_id: 'a1', view: 'day' }, { album_id: 'a2', view: 'evening' }];
+    const items = [{ album_id: 'a2', media_id: 'm1' }];
+    const views = resolveViews(albums, items, new Map([['m1', 'day' as const]]));
+    expect(views.get('m1')).toBe('evening');
   });
 });

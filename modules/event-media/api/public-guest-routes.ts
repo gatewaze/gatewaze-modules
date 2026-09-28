@@ -2087,13 +2087,14 @@ function slugify(name: string): string {
 /** The most photographs one gallery request will consider. */
 const GALLERY_MAX = 2000;
 /** The albums in the order the day ran, which is how they are offered. */
-const GALLERY_ORDER: readonly View[] = ['night', 'ready', 'day', 'booth', 'elsewhere', 'seed'];
+const GALLERY_ORDER: readonly View[] = ['night', 'ready', 'day', 'evening', 'booth', 'elsewhere', 'seed'];
 /** Names for an event whose albums were never given one. */
 const GALLERY_FALLBACK_NAMES: Record<View, string> = {
   seed: 'Preload',
   night: 'The night before',
   ready: 'Getting ready',
   day: 'The day',
+  evening: 'Evening reception',
   booth: 'Photo booth',
   elsewhere: 'Photo booth elsewhere',
 };
