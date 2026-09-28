@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { faceOf as pickFace } from './_lib/gallery-face'
 import { dragOffset, swipeVerdict, TAP_SLOP_PX } from './_lib/swipe'
+import { albumAddress, pageBaseFrom } from './_lib/album-address'
 
 const API_BASE = ''
 
@@ -92,11 +93,21 @@ interface Props {
   primaryColor?: string
   /** ?album= on the way in: the album a shared link names. */
   initialAlbum?: string | null
+  /**
+   * The album named by the address itself -- the "getting-ready" of
+   * /photos/getting-ready -- as opposed to one named by a query. Kept
+   * apart from initialAlbum because the page's own address is this
+   * minus that segment, and everything written back to the bar is built
+   * from it.
+   */
+  pathAlbum?: string | null
   /** ?photo= on the way in: the photograph a shared link names. */
   initialPhoto?: string | null
 }
 
-export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, initialPhoto }: Props) {
+export default function AlbumGallery({
+  eventIdentifier, darkMode, initialAlbum, initialPhoto, pathAlbum,
+}: Props) {
   const [albums, setAlbums] = useState<AlbumChoice[]>([])
   const [chosen, setChosen] = useState<string | null>(initialAlbum ?? null)
   const [items, setItems] = useState<GalleryItem[]>([])
@@ -253,22 +264,30 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
    * sharing is copying it -- and the copy button hands over the same
    * thing for anyone who would rather press a button (asked 2026-09-27).
    */
+  /**
+   * The page's own address, worked out once when it loads and never
+   * again: whatever the address was, minus the album segment if it had
+   * one. Reading it back out of the bar each time is what appended a
+   * second copy of the album to /photos/photo-booth -- on the way in the
+   * album list has not arrived, so there was nothing to recognise and
+   * strip (reported 2026-09-28).
+   */
+  const pageBase = useRef<string | null>(null)
+  if (pageBase.current === null && typeof window !== 'undefined') {
+    pageBase.current = pageBaseFrom(window.location.pathname, pathAlbum)
+  }
+
   const linkFor = useCallback((album: string | null, photo: GalleryItem | null): string => {
     if (typeof window === 'undefined') return ''
     const url = new URL(window.location.href)
     url.search = ''
     const slug = photo?.album_slug ?? album
     // The album is part of the address -- /photos/getting-ready -- with
-    // the query kept for the one photograph. An address that already
-    // names an album has that part replaced rather than added to.
-    const known = new Set(albums.map((a) => a.slug))
-    const parts = url.pathname.split('/').filter(Boolean)
-    if (parts.length > 0 && known.has(parts[parts.length - 1]!)) parts.pop()
-    if (slug) parts.push(slug)
-    url.pathname = `/${parts.join('/')}`
+    // the query kept for the one photograph.
+    url.pathname = albumAddress(pageBase.current ?? '/', slug)
     if (photo) url.searchParams.set('photo', photo.id)
     return url.toString()
-  }, [albums])
+  }, [pathAlbum])
 
   useEffect(() => {
     if (typeof window === 'undefined') return

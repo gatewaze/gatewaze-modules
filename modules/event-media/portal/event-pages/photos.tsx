@@ -1438,6 +1438,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode, subPath }: 
         // The address first -- /photos/getting-ready -- then the query,
         // which is what a link written before the paths existed carries.
         initialAlbum={subPath?.[0] ?? searchParams.get('album')}
+        pathAlbum={subPath?.[0] ?? null}
         initialPhoto={searchParams.get('photo')}
       />
     )
