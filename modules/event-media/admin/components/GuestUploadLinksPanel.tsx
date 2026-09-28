@@ -70,6 +70,10 @@ async function authedFetch(path: string, init?: RequestInit): Promise<Response> 
 
 const DEFAULT_FORM = {
   label: '',
+  // 'guest' is the QR everyone scans; 'photographer' is one professional
+  // delivering into their own album (migration 021).
+  role: 'guest',
+  credit_name: '',
   require_name: true,
   allow_video: true,
   auto_approve: true,
@@ -607,7 +611,15 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                   the photographer delivers through (migration 021). */}
               <select
                 value={form.role}
-                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                onChange={(e) => setForm({
+                  ...form,
+                  role: e.target.value,
+                  // A photographer is not asked who they are -- the link
+                  // says -- and their delivery is not a gallery.
+                  ...(e.target.value === 'photographer'
+                    ? { require_name: false, show_gallery: false, allow_face_filter: false }
+                    : {}),
+                })}
                 className="w-full rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1.5 text-sm"
               >
                 <option value="guest">For guests — the QR on the tables</option>
