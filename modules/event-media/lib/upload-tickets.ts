@@ -30,6 +30,12 @@ export interface UploadTicketPayload {
   captured: boolean;
   /** Booth output rather than a plain photo; picks the album. */
   booth?: boolean;
+  /**
+   * Delivered through a photographer's link. Set by the server from the
+   * link, never by the uploader: it puts the file in the photographer's
+   * album and credits it to them.
+   */
+  photographer?: boolean;
   /** Which of the morning's asks this photo answers (ready-prompts.ts). */
   prompt?: string | null;
   /** When it was taken, from its EXIF; picks the album. */

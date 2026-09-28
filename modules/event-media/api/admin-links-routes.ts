@@ -57,10 +57,19 @@ export const LINK_WRITE_FIELDS = [
   'max_video_bytes',
   'logo_url',
   'allow_face_filter',
+  // A photographer's link: its own album, its own credit, originals kept
+  // (migration 021). Still an allowlist -- role is checked below against
+  // the two it may be, never written through from the body as given.
+  'role',
+  'credit_name',
+  'credit_member_id',
 ] as const;
 
 const LINK_SELECT =
-  'id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, uploads_count, created_by, created_at, updated_at';
+  'id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, role, credit_name, credit_member_id, uploads_count, created_by, created_at, updated_at';
+
+/** The only two kinds of link there are. */
+const LINK_ROLES = ['guest', 'photographer'] as const;
 
 const FILTER_SELECT = 'id, event_id, label, source_path, is_active, sort_order, created_at';
 
@@ -99,6 +108,19 @@ function pickLinkFields(body: unknown): Record<string, unknown> {
         if (Number.isInteger(n) && n > 0 && n <= 5 * 1024 * 1024 * 1024) out[key] = n;
         break;
       }
+      case 'role':
+        // One of two, and nothing else: a role is not free text.
+        if (typeof value === 'string' && (LINK_ROLES as readonly string[]).includes(value)) out[key] = value;
+        break;
+      case 'credit_name':
+        if (value === null) out[key] = null;
+        // eslint-disable-next-line no-control-regex
+        else if (typeof value === 'string') out[key] = value.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 120) || null;
+        break;
+      case 'credit_member_id':
+        if (value === null) out[key] = null;
+        else if (typeof value === 'string' && UUID_RE.test(value)) out[key] = value;
+        break;
       default:
         if (typeof value === 'boolean') out[key] = value;
     }

@@ -21,7 +21,7 @@ vi.mock('../../lib/booth-provider.js', async (importOriginal) => {
     plateHasPeople: vi.fn(async () => null),
   };
 });
-import { mintTicket, TICKET_TTL_SECONDS } from '../../lib/upload-tickets.js';
+import { mintTicket, verifyTicket, TICKET_TTL_SECONDS } from '../../lib/upload-tickets.js';
 
 const SECRET = 'guest-routes-test-secret';
 const EVENT_ID = '99999999-8888-7777-6666-555555555555';
@@ -1794,5 +1794,68 @@ describe('the booth closes, and a guest has a share', () => {
   it('lets a guest with goes left through', async () => {
     const { res } = await generate({ booth_max_per_guest: 5 }, 4);
     expect(res.statusCode).toBe(200);
+  });
+});
+
+// The professional photographs: thousands of them, weeks later, from one
+// person. Not guest uploads, and not filed by the hour they were taken.
+describe('a photographer\'s link', () => {
+  const PRO_LINK = {
+    ...ACTIVE_LINK, role: 'photographer', credit_name: 'Hartley & Rose Photography',
+    require_name: false, max_photo_bytes: 100 * 1024 * 1024,
+  };
+  const mintThrough = async (link, files) => {
+    const { deps, supabase } = makeDeps({ link, event: EVENT_ROW });
+    const res = mockRes();
+    await createGuestRoutes(deps).mintUploads(req({ body: { client_id: CLIENT_ID, files } }), res);
+    return { res, supabase };
+  };
+  const file = (over = {}) => ({ filename: 'DSC_4821.jpg', mime_type: 'image/jpeg', bytes: 12 * 1024 * 1024, ...over });
+
+  it('credits the photographer without anybody typing a name', async () => {
+    const { res } = await mintThrough(PRO_LINK, [file()]);
+    expect(res.statusCode).toBe(200);
+    const read = verifyTicket(res.body.items[0].ticket, Math.floor(Date.now() / 1000), SECRET);
+    expect(read.ok).toBe(true);
+    expect(read.ok && read.payload.guest_name).toBe('Hartley & Rose Photography');
+    expect(read.ok && read.payload.photographer).toBe(true);
+  });
+
+  it('is not something an uploader can claim for themselves', async () => {
+    // The same request through the guests' own link.
+    const { res } = await mintThrough(
+      { ...ACTIVE_LINK, require_name: false },
+      [file({ photographer: true })],
+    );
+    const read = verifyTicket(res.body.items[0].ticket, Math.floor(Date.now() / 1000), SECRET);
+    expect(read.ok && read.payload.photographer).toBe(false);
+  });
+
+  it('says which kind of link it is', async () => {
+    const { deps } = makeDeps({ link: PRO_LINK, event: EVENT_ROW });
+    const res = mockRes();
+    await createGuestRoutes(deps).getLink(req(), res);
+    expect(res.body.settings.role).toBe('photographer');
+    expect(res.body.settings.credit).toBe('Hartley & Rose Photography');
+  });
+
+  it('puts what it receives in the photographer\'s album, whatever the hour', async () => {
+    const { deps, supabase } = makeDeps({ link: PRO_LINK, event: EVENT_ROW, existingMedia: null });
+    stubHead({ ok: true, headers: { get: (k) => ({ 'content-length': '1000', 'content-type': 'image/jpeg' })[k] ?? null } });
+    const ticket = mintTicket({
+      media_id: '11111111-2222-3333-4444-555555555555',
+      code: CODE, event_id: EVENT_ID,
+      storage_path: `event/${EVENT_ID}/11111111-2222-3333-4444-555555555555/DSC_4821.jpg`,
+      mime_type: 'image/jpeg', max_bytes: 1000 * 2,
+      guest_name: 'Hartley & Rose Photography', client_id: CLIENT_ID, captured: false,
+      photographer: true, taken_at: '2026-09-25T09:14:00',
+      exp: Math.floor(Date.now() / 1000) + TICKET_TTL_SECONDS,
+    }, SECRET);
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticket] } }), mockRes());
+    const row = supabase.state.inserted[0];
+    // Taken in the morning, and still the photographer's.
+    expect(row.metadata.album).toBe('photographer');
+    expect(row.metadata.photographer).toBe(true);
+    expect(row.metadata.guest_name).toBe('Hartley & Rose Photography');
   });
 });

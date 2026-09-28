@@ -603,6 +603,32 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
 
           {showCreate ? (
             <div className="rounded-md border border-gray-200 dark:border-gray-700 p-3 space-y-2">
+              {/* Two kinds of link: the QR everyone scans, and the one
+                  the photographer delivers through (migration 021). */}
+              <select
+                value={form.role}
+                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                className="w-full rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1.5 text-sm"
+              >
+                <option value="guest">For guests — the QR on the tables</option>
+                <option value="photographer">For the photographer — their own album, originals kept</option>
+              </select>
+              {form.role === 'photographer' && (
+                <>
+                  <input
+                    type="text"
+                    value={form.credit_name}
+                    onChange={(e) => setForm({ ...form, credit_name: e.target.value })}
+                    placeholder="Credit these photos to, e.g. Hartley &amp; Rose Photography"
+                    maxLength={120}
+                    className="w-full rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1.5 text-sm"
+                  />
+                  <p className="text-xs text-gray-500">
+                    A person or a company. Everything sent through this link is filed under this name,
+                    in a Photographer album that stays off the portal until you turn it on.
+                  </p>
+                </>
+              )}
               <input
                 type="text"
                 value={form.label}

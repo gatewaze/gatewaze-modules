@@ -117,6 +117,13 @@ export const GUEST_RATE_LIMITS = {
   // Name search runs as guests type, and a whole venue shares one IP.
   guestSearchPerIp: { max: 600, windowMs: 60_000 },
   mintPerClient: { max: 20, windowMs: 60_000 },
+  /**
+   * A photographer's link, which is given to one professional delivering
+   * thousands of files in a sitting. Twenty files a call, so this is
+   * about 12,000 an hour -- enough to deliver a wedding in an evening
+   * without a guest's phone ever seeing this budget.
+   */
+  mintPerPhotographer: { max: 600, windowMs: 60_000 },
   mintPerIp: { max: 120, windowMs: 60_000 },
   completePerClient: { max: 20, windowMs: 60_000 },
   completePerIp: { max: 120, windowMs: 60_000 },
@@ -125,6 +132,8 @@ export const GUEST_RATE_LIMITS = {
   // NOTE this caps COMPLETE CALLS; each call carries ≤20 tickets, so the
   // true file ceiling is 20× this (240 calls/hr ≈ ≤4,800 files/hr).
   completePerLinkHourly: { max: 240, windowMs: 3_600_000 },
+  /** The same allowance, for a link given to one professional. */
+  completePerPhotographerHourly: { max: 1200, windowMs: 3_600_000 },
   // Booth effects call a paid GPU endpoint, so they are capped far
   // harder than anything else. The per-guest allowance has to cover
   // actually trying the booth — there are eight or so effects and the
