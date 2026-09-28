@@ -1286,6 +1286,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         starts_at: event.event_start ?? null,
       },
       albums,
+      // The same albums as a sidebar wants them: a label and the path
+      // that opens it, under the page's own address. The portal knows
+      // nothing about albums -- it asks, and puts what it is given under
+      // the page it belongs to (asked 2026-09-28).
+      nav: albums.map((a) => ({ label: a.name, path: a.slug, count: a.count })),
       total,
       items: page.map(forFeed),
       focus,

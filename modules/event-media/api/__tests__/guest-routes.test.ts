@@ -1589,6 +1589,15 @@ describe('eventGallery', () => {
     expect(JSON.stringify(plain.body)).not.toContain('enhanced-x.jpg');
   });
 
+  // The sidebar asks the same endpoint what to list under the page.
+  it('answers what a sidebar should list under the page', async () => {
+    const res = await gallery();
+    expect(res.body.nav).toEqual([
+      { label: 'Getting ready', path: 'getting-ready', count: 2 },
+      { label: 'The day', path: 'the-day', count: 1 },
+    ]);
+  });
+
   it('never hands out an upload code', async () => {
     const res = await gallery();
     expect(JSON.stringify(res.body)).not.toContain(CODE);

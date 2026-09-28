@@ -258,10 +258,17 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
     const url = new URL(window.location.href)
     url.search = ''
     const slug = photo?.album_slug ?? album
-    if (slug) url.searchParams.set('album', slug)
+    // The album is part of the address -- /photos/getting-ready -- with
+    // the query kept for the one photograph. An address that already
+    // names an album has that part replaced rather than added to.
+    const known = new Set(albums.map((a) => a.slug))
+    const parts = url.pathname.split('/').filter(Boolean)
+    if (parts.length > 0 && known.has(parts[parts.length - 1]!)) parts.pop()
+    if (slug) parts.push(slug)
+    url.pathname = `/${parts.join('/')}`
     if (photo) url.searchParams.set('photo', photo.id)
     return url.toString()
-  }, [])
+  }, [albums])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
