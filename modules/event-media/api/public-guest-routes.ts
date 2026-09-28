@@ -171,7 +171,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: link, error } = await supabase
       .from('events_media_upload_links')
-      .select('id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter')
+      .select('id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, role, credit_name, credit_member_id')
       .eq('short_code', code)
       .maybeSingle();
     if (error) {
@@ -589,6 +589,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // Guests pick their name from the invitation list rather than
         // typing one.
         guest_list: Boolean(await guestListFor(link.event_id)),
+        // A photographer's link opens a different page: a delivery, not
+        // a party. The credit is the organiser's, so the page shows who
+        // it will say rather than asking for a name.
+        role: link.role === 'photographer' ? 'photographer' : 'guest',
+        credit: link.role === 'photographer' ? (link.credit_name ?? null) : null,
       },
       face_filters: faceFilters,
       // Style effects need no per-event setup, so they turn on with the
@@ -1291,15 +1296,35 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       sendError(res, 400, 'invalid_request', 'client_id must be a UUID');
       return;
     }
-    if (!(await checkRate(res, guestRateKey('mint', clientId), GUEST_RATE_LIMITS.mintPerClient))) return;
+    // A guest with a phone and a photographer with eight thousand files
+    // are not the same caller. The photographer's link is given to one
+    // professional, so their ceiling is their own.
+    if (!(await checkRate(
+      res,
+      guestRateKey('mint', clientId),
+      link.role === 'photographer' ? GUEST_RATE_LIMITS.mintPerPhotographer : GUEST_RATE_LIMITS.mintPerClient,
+    ))) return;
+
+    // A photographer's link is one professional with one job, not the QR
+
+    // on the tables: everything it receives is theirs, credited to
+
+    // whoever the organiser named, and kept at the size it arrived.
+
+    const asPhotographer = link.role === 'photographer';
+
 
     const who = await identify(link.event_id, body['member_id'], clientId);
     if (!who.ok) {
       sendError(res, who.status, who.code, who.message);
       return;
     }
-    // The invitation's own name, never what the phone says, when there is one.
-    const guestName = who.guest ? who.guest.name : cleanGuestName(body['guest_name']);
+    // The invitation's own name, never what the phone says, when there is
+    // one -- and for a photographer, the credit the organiser set, which
+    // is the whole point of their link.
+    const guestName = asPhotographer
+      ? (cleanGuestName(link.credit_name) ?? 'Photographer')
+      : who.guest ? who.guest.name : cleanGuestName(body['guest_name']);
     if (link.require_name && !guestName) {
       sendError(res, 400, 'name_required', 'please tell us your name first');
       return;
@@ -1344,6 +1369,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         client_id: clientId,
         captured: v.file.captured,
         booth: v.file.booth,
+        // From the link, never from the request: an uploader cannot put
+        // their own photographs in the photographer's album by asking.
+        photographer: asPhotographer,
         prompt: v.file.prompt ?? null,
         taken_at: v.file.taken_at ?? null,
         member_id: who.guest?.id ?? null,
@@ -1389,6 +1417,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       is_approved: autoApprove,
       metadata: {
         source: 'guest',
+        // Delivered by the photographer rather than taken by a guest.
+        // 'source' stays 'guest' because it means "came through a link",
+        // and everything that reads it -- the credit, the uploader
+        // filter, who may delete it -- wants that meaning.
+        ...(p.photographer ? { photographer: true } : {}),
         upload_link_id: null, // filled by caller (link.id)
         guest_name: p.guest_name || null,
         member_id: p.member_id ?? null,
@@ -1398,6 +1431,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // and a guest's photo under Getting ready until the event starts,
         // The day after. The guest never chooses.
         album: albumForUpload({
+          photographer: p.photographer === true,
           booth: Boolean(p.booth),
           eventStart,
           now: Date.now(),
@@ -1456,7 +1490,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (!(await checkRate(
       res,
       guestRateKey('complete_link', link.short_code),
-      GUEST_RATE_LIMITS.completePerLinkHourly,
+      // A photographer's link is one professional delivering thousands
+      // in a sitting, not a leaked QR.
+      link.role === 'photographer'
+        ? GUEST_RATE_LIMITS.completePerPhotographerHourly
+        : GUEST_RATE_LIMITS.completePerLinkHourly,
     ))) return;
 
     const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
@@ -2177,7 +2215,7 @@ function slugify(name: string): string {
 /** The most photographs one gallery request will consider. */
 const GALLERY_MAX = 2000;
 /** The albums in the order the day ran, which is how they are offered. */
-const GALLERY_ORDER: readonly View[] = ['night', 'ready', 'day', 'evening', 'booth', 'elsewhere', 'seed'];
+const GALLERY_ORDER: readonly View[] = ['night', 'ready', 'day', 'evening', 'photographer', 'booth', 'elsewhere', 'seed'];
 /** Names for an event whose albums were never given one. */
 const GALLERY_FALLBACK_NAMES: Record<View, string> = {
   seed: 'Preload',
@@ -2185,6 +2223,7 @@ const GALLERY_FALLBACK_NAMES: Record<View, string> = {
   ready: 'Getting ready',
   day: 'The day',
   evening: 'Evening reception',
+  photographer: 'Photographer',
   booth: 'Photo booth',
   elsewhere: 'Photo booth elsewhere',
 };

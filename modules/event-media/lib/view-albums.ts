@@ -17,12 +17,15 @@
  * ready outrank Preload, which is the stand-in stream.
  */
 
-export type View = 'seed' | 'night' | 'ready' | 'day' | 'evening' | 'booth' | 'elsewhere'
+export type View =
+  | 'seed' | 'night' | 'ready' | 'day' | 'evening' | 'booth' | 'elsewhere' | 'photographer'
 
-export const VIEWS: readonly View[] = ['seed', 'night', 'ready', 'day', 'evening', 'booth', 'elsewhere']
+export const VIEWS: readonly View[] = [
+  'seed', 'night', 'ready', 'day', 'evening', 'booth', 'elsewhere', 'photographer',
+]
 
 const RANK: Record<View, number> = {
-  booth: 0, elsewhere: 1, evening: 2, day: 3, ready: 4, night: 5, seed: 6,
+  photographer: 0, booth: 1, elsewhere: 2, evening: 3, day: 4, ready: 5, night: 6, seed: 7,
 }
 
 /**
@@ -83,6 +86,12 @@ function atClock(value: string): number {
  */
 export function albumForUpload(opts: {
   booth: boolean
+  /**
+   * Delivered by the photographer rather than taken by a guest. Their
+   * album is not decided by the hour: a professional's photographs are
+   * theirs wherever in the day they were taken.
+   */
+  photographer?: boolean
   eventStart: string | null | undefined
   now: number
   /**
@@ -93,6 +102,7 @@ export function albumForUpload(opts: {
    */
   takenAt?: string | null
 }): View {
+  if (opts.photographer) return 'photographer'
   if (opts.booth) return boothAlbum({ eventStart: opts.eventStart, now: opts.now })
   const start = opts.eventStart ? atClock(opts.eventStart) : NaN
   if (!Number.isFinite(start)) return 'day'

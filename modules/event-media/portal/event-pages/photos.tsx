@@ -24,6 +24,7 @@ import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
 import AlbumGallery from './_components/AlbumGallery'
+import PhotographerUpload from './_components/PhotographerUpload'
 import GuestPicker from './_components/GuestPicker'
 import UploadApp, { type UploadTile } from './_components/UploadApp'
 import BoothExperience, { type BoothLook, type BoothView } from './_components/BoothExperience'
@@ -1421,6 +1422,20 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
         primaryColor={primaryColor}
         initialAlbum={searchParams.get('album')}
         initialPhoto={searchParams.get('photo')}
+      />
+    )
+  }
+
+  // A photographer's link opens a delivery, not a party: no booth, no
+  // gallery, nobody to be. Ahead of everything else a link can mean.
+  if (link?.settings?.role === 'photographer' && code) {
+    return (
+      <PhotographerUpload
+        code={code}
+        credit={link.settings.credit ?? null}
+        allowVideo={Boolean(link.settings.allow_video)}
+        eventName={link.event?.name ?? null}
+        darkMode={darkMode}
       />
     )
   }
