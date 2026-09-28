@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { faceOf as pickFace } from './_lib/gallery-face'
+import { dragOffset, swipeVerdict, TAP_SLOP_PX } from './_lib/swipe'
 
 const API_BASE = ''
 
@@ -112,6 +113,12 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
   const [showEnhanced, setShowEnhanced] = useState(true)
   const [openEnhanced, setOpenEnhanced] = useState<boolean | null>(null)
   const [openXray, setOpenXray] = useState<boolean | null>(null)
+  // Dragging one photograph aside to bring in the next, on a phone. The
+  // picture follows the finger rather than a swipe being detected after
+  // the fact (asked 2026-09-28).
+  const [drag, setDrag] = useState(0)
+  const dragFrom = useRef<{ x: number; y: number; at: number } | null>(null)
+  const dragging = useRef(false)
   // A photograph a link named, shown before the page it sits on has
   // loaded -- page forty of The day is still one link.
   const [focus, setFocus] = useState<GalleryItem | null>(null)
@@ -247,6 +254,9 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
     setLightbox(null)
     setOpenEnhanced(null)
     setOpenXray(null)
+    setDrag(0)
+    dragFrom.current = null
+    dragging.current = false
   }, [])
 
   // A photograph opens showing what the grid shows; the switches under
@@ -254,6 +264,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
   const openAt = useCallback((i: number) => {
     setOpenEnhanced(null)
     setOpenXray(null)
+    setDrag(0)
     setLightbox(i)
   }, [])
   // Only the booth's own albums have selfies behind their pictures.
@@ -397,10 +408,51 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/90 p-4"
           onClick={closeLightbox}
         >
-          <div className="relative max-h-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="relative max-h-full max-w-4xl"
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={(e) => {
+              if (focus || e.touches.length !== 1) return
+              const t = e.touches[0]!
+              dragFrom.current = { x: t.clientX, y: t.clientY, at: Date.now() }
+              dragging.current = false
+            }}
+            onTouchMove={(e) => {
+              const from = dragFrom.current
+              if (!from || e.touches.length !== 1) return
+              const t = e.touches[0]!
+              const dx = t.clientX - from.x
+              const dy = t.clientY - from.y
+              // A finger that has gone further down than across is
+              // scrolling, not turning a page: let it go.
+              if (!dragging.current) {
+                if (Math.abs(dx) < TAP_SLOP_PX && Math.abs(dy) < TAP_SLOP_PX) return
+                if (Math.abs(dy) > Math.abs(dx)) { dragFrom.current = null; return }
+                dragging.current = true
+              }
+              setDrag(dragOffset(dx, { atStart: lightbox === 0, atEnd: lightbox === items.length - 1 }))
+            }}
+            onTouchEnd={() => {
+              const from = dragFrom.current
+              dragFrom.current = null
+              if (!from || !dragging.current) { setDrag(0); return }
+              dragging.current = false
+              const verdict = swipeVerdict({ dx: drag, ms: Date.now() - from.at, width: window.innerWidth })
+              setDrag(0)
+              if (verdict === 'next' && lightbox !== null && lightbox < items.length - 1) openAt(lightbox + 1)
+              if (verdict === 'previous' && lightbox !== null && lightbox > 0) openAt(lightbox - 1)
+            }}
+            style={{
+              transform: `translateX(${drag}px)`,
+              // While a finger is down the picture follows it exactly;
+              // when it lifts, the picture settles.
+              transition: drag === 0 ? 'transform 220ms ease-out' : 'none',
+              touchAction: 'pan-y',
+            }}
+          >
             {open.kind === 'video' ? (
               <video src={open.url} controls autoPlay playsInline className="max-h-[85vh] max-w-full" />
             ) : (
@@ -409,6 +461,29 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
                 src={faceOf(open, 1200, { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced })}
                 alt={open.guest_name ? `Photo by ${open.guest_name}` : 'Event photo'}
                 className="max-h-[85vh] max-w-full object-contain"
+                draggable={false}
+              />
+            )}
+            {/* The one on either side, waiting just off screen, so the
+                drag brings a photograph in rather than a black gap. */}
+            {lightbox !== null && !focus && items[lightbox - 1] && (
+              // eslint-disable-next-line @next/next/no-img-element -- the neighbour, off screen
+              <img
+                src={faceOf(items[lightbox - 1]!, 1200, { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced })}
+                alt=""
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 my-auto max-h-[85vh] max-w-full object-contain"
+                style={{ right: '100%', marginRight: 24 }}
+              />
+            )}
+            {lightbox !== null && !focus && items[lightbox + 1] && (
+              // eslint-disable-next-line @next/next/no-img-element -- the neighbour, off screen
+              <img
+                src={faceOf(items[lightbox + 1]!, 1200, { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced })}
+                alt=""
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 my-auto max-h-[85vh] max-w-full object-contain"
+                style={{ left: '100%', marginLeft: 24 }}
               />
             )}
             {open.selfie && (
