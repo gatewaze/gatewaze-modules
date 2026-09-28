@@ -1624,6 +1624,17 @@ describe('when a booth picture was taken', () => {
     return { res, supabase };
   };
 
+  it('records how dark the room was, and refuses a number that is not one', async () => {
+    for (const [light, kept] of [[38, 38], [0, 0], [255, 255], [-5, undefined], [900, undefined], ['dark', undefined]]) {
+      const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW });
+      await createGuestRoutes(deps).faceFilter(req({ body: {
+        client_id: CLIENT_ID, image: PHOTO, effect: 'decade-1970s', return: 'url', light,
+      } }), mockRes());
+      const row = supabase.state.inserted.find((r) => r.metadata?.album === 'booth');
+      expect(row.metadata.light).toBe(kept);
+    }
+  });
+
   it("records the phone's clock at the shutter", async () => {
     const { deps, supabase } = makeDeps({ link: BOOTH_LINK, event: EVENT_ROW });
     await createGuestRoutes(deps).faceFilter(req({ body: {

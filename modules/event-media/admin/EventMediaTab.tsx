@@ -59,6 +59,7 @@ import {
   mediaKind,
   guestName,
   uploaderKey,
+  boothLightReport,
   compareTaken,
   isGuestUpload,
   formatFileSize,
@@ -311,6 +312,13 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
     });
   }, [customSorted, search, typeFilter, statusFilter, uploaderFilter, sponsorMedia, sort]);
 
+  // The booth's own light, lately. A lamp in the corner does more for
+
+  // the pictures than anything the software can (asked 2026-09-28).
+
+  const boothLight = useMemo(() => boothLightReport(media), [media]);
+
+
   const stats = useMemo(() => ({
     photos: media.filter((m) => mediaKind(m) === 'photo').length,
     videos: media.filter((m) => mediaKind(m) === 'video').length,
@@ -512,6 +520,11 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
         </Card>
       ) : (
         <div className="space-y-4">
+          {boothLight.message && (
+            <div className="rounded-lg border border-[var(--amber-a6)] bg-[var(--amber-a2)] px-4 py-3 text-sm">
+              {boothLight.message}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             {statCards.map(({ label, value, Icon }) => (
               <Card key={label} className="p-4">

@@ -349,6 +349,8 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
     mediaId?: string | null
     /** When the shutter went, by this phone's clock. */
     takenAt?: string | null
+    /** How bright the middle of the frame was, 0-255. */
+    light?: number | null
   } | null>(null)
   // Can this browser hand a FILE to the share sheet? On iOS that sheet
   // is what puts "Save Image" in front of a guest; long-pressing the
@@ -980,6 +982,10 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
           ...(extra?.place ? { place: extra.place } : {}),
           // When the shutter went, not when the look was chosen.
           taken_at: shot.takenAt ?? shutterNow(),
+          // How dark it was in front of the booth, so an organiser can
+          // be told the room needs a lamp -- which is worth more than
+          // any of the software (asked 2026-09-28).
+          ...(typeof shot.light === 'number' ? { light: Math.round(shot.light) } : {}),
         }),
       })
       const data = await res.json().catch(() => null)
@@ -1194,12 +1200,15 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // The illustrated booth hands back a picture it took itself, from the
   // live camera in its window, and goes through the same look-then-apply
   // path as the camera app does.
-  const onBoothCaptured = useCallback((dataUrl: string, look: BoothLook | null) => {
+  const onBoothCaptured = useCallback((dataUrl: string, look: BoothLook | null, light?: number | null) => {
     setPendingExtra(look
       ? { pose: look.pose ?? null, decade: look.decade ?? null, place: look.place ?? null }
       : null)
     setPendingLook(look ? { key: look.key, payload: look.payload } : null)
-    setShot({ original: dataUrl, preview: null, filterLabel: null, busy: null, error: null, takenAt: shutterNow() })
+    setShot({
+      original: dataUrl, preview: null, filterLabel: null, busy: null, error: null,
+      takenAt: shutterNow(), light: typeof light === 'number' ? light : null,
+    })
   }, [])
 
   const onBoothFallback = useCallback((look: BoothLook | null) => {

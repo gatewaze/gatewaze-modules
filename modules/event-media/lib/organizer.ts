@@ -132,3 +132,37 @@ export function mergeSubsetOrder(fullIds: string[], reorderedSubset: string[]): 
   let next = 0;
   return fullIds.map((id) => (subset.has(id) ? reorderedSubset[next++]! : id));
 }
+
+/**
+ * How the booth's own light has been lately.
+ *
+ * Every booth picture now records how bright the middle of the camera's
+ * view was when it was taken (0-255). A run of dark ones is worth saying
+ * out loud in the Media tab, because the fix is a lamp in the corner and
+ * that helps more than anything the software does (asked 2026-09-28).
+ */
+export function boothLightReport(
+  items: ReadonlyArray<Pick<MediaLike, 'metadata'> & { created_at: string }>,
+  recent = 30,
+): { looked: number; dark: number; message: string | null } {
+  const lights = items
+    .filter((i) => {
+      const meta = (i.metadata ?? {}) as Record<string, unknown>;
+      return typeof meta['light'] === 'number';
+    })
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, recent)
+    .map((i) => ((i.metadata ?? {}) as Record<string, number>)['light']!);
+
+  // Below seventy is about a stop under; the booth's own threshold.
+  const dark = lights.filter((v) => v < 70).length;
+  if (lights.length < 5 || dark * 2 < lights.length) {
+    return { looked: lights.length, dark, message: null };
+  }
+  return {
+    looked: lights.length,
+    dark,
+    message: `${dark} of the last ${lights.length} booth photos were taken in the dark. `
+      + 'A lamp near the booth would do more for them than anything else.',
+  };
+}

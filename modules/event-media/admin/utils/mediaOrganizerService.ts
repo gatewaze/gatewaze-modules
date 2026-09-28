@@ -26,6 +26,7 @@ export {
   mediaKind,
   guestName,
   uploaderKey,
+  boothLightReport,
   takenKey,
   takenAtLabel,
   compareTaken,
