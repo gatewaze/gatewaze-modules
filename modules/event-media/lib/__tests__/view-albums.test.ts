@@ -187,3 +187,41 @@ describe('the evening reception', () => {
     expect(views.get('m1')).toBe('evening');
   });
 });
+
+describe('an event that starts its evening at a different time', () => {
+  const START = '2026-09-25T13:30:00Z';
+  const upload = (takenAt: string, eveningFromMinutes?: number | null) => albumForUpload({
+    booth: false, eventStart: START, now: Date.parse('2026-09-27T10:00:00Z'), takenAt, eveningFromMinutes,
+  });
+
+  it('keeps half past six when nothing is set', () => {
+    expect(upload('2026-09-25T17:30:00')).toBe('day');
+    expect(upload('2026-09-25T18:30:00')).toBe('evening');
+  });
+
+  it('moves the line where the organiser puts it', () => {
+    // A reception that starts at five.
+    expect(upload('2026-09-25T17:30:00', 17 * 60)).toBe('evening');
+    expect(upload('2026-09-25T16:59:00', 17 * 60)).toBe('day');
+    // ...or at eight.
+    expect(upload('2026-09-25T19:30:00', 20 * 60)).toBe('day');
+    expect(upload('2026-09-25T20:30:00', 20 * 60)).toBe('evening');
+  });
+
+  it('ignores a time that is not one', () => {
+    for (const bad of [-1, 1440, NaN, null, undefined]) {
+      expect(upload('2026-09-25T18:30:00', bad as number)).toBe('evening');
+      expect(upload('2026-09-25T17:30:00', bad as number)).toBe('day');
+    }
+  });
+
+  it('never puts the evening before the event starts', () => {
+    // A reception "starting" at nine in the morning is the whole day.
+    expect(albumForUpload({
+      booth: false, eventStart: START, now: 0, takenAt: '2026-09-25T09:00:00', eveningFromMinutes: 9 * 60,
+    })).toBe('ready');
+    expect(albumForUpload({
+      booth: false, eventStart: START, now: 0, takenAt: '2026-09-25T14:00:00', eveningFromMinutes: 9 * 60,
+    })).toBe('evening');
+  });
+});

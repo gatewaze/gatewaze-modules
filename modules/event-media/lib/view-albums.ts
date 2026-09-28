@@ -51,8 +51,7 @@ const NIGHT_HOURS = 36
  * camera's own local time with no zone on it, and an event's start is
  * stored the same way, so the two compare directly.
  */
-const EVENING_FROM_HOUR = 18
-const EVENING_FROM_MINUTE = 30
+export const EVENING_FROM_DEFAULT = 18 * 60 + 30
 /**
  * And when it stops being the evening: the same ceiling a booth picture
  * gets, fourteen hours after the start. A photograph taken at seven the
@@ -101,6 +100,12 @@ export function albumForUpload(opts: {
    * when it is known and the clock only stands in when it is not.
    */
   takenAt?: string | null
+  /**
+   * When the evening reception starts, minutes past midnight. An event
+   * whose reception begins at five does not want half past six (asked
+   * 2026-09-28). Absent means half past six.
+   */
+  eveningFromMinutes?: number | null
 }): View {
   if (opts.photographer) return 'photographer'
   if (opts.booth) return boothAlbum({ eventStart: opts.eventStart, now: opts.now })
@@ -108,7 +113,8 @@ export function albumForUpload(opts: {
   if (!Number.isFinite(start)) return 'day'
   const taken = opts.takenAt ? atClock(opts.takenAt) : NaN
   const when = Number.isFinite(taken) ? taken : opts.now
-  if (when >= start) return when >= eveningFrom(start) && when <= start + EVENING_UNTIL_HOURS * 3600_000
+  if (when >= start) return when >= eveningFrom(start, opts.eveningFromMinutes)
+    && when <= start + EVENING_UNTIL_HOURS * 3600_000
     ? 'evening'
     : 'day'
   if (when >= start - READY_HOURS * 3600_000) return 'ready'
@@ -135,11 +141,14 @@ export function albumForUpload(opts: {
  * separate evening: the whole of it is the day, so the boundary is its
  * own start and nothing lands before it.
  */
-export function eveningFrom(start: number): number {
+export function eveningFrom(start: number, fromMinutes?: number | null): number {
+  const mins = Number.isFinite(fromMinutes) && (fromMinutes as number) >= 0 && (fromMinutes as number) < 1440
+    ? Math.floor(fromMinutes as number)
+    : EVENING_FROM_DEFAULT
   const d = new Date(start)
   const at = Date.UTC(
     d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
-    EVENING_FROM_HOUR, EVENING_FROM_MINUTE, 0, 0,
+    Math.floor(mins / 60), mins % 60, 0, 0,
   )
   return Math.max(at, start)
 }
