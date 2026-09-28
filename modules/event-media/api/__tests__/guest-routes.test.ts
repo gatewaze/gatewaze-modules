@@ -1444,8 +1444,8 @@ describe('eventGallery', () => {
     expect(res.body.event.name).toBe('Dan & Sarah');
     // In the order the day ran, hidden photos counted in neither.
     expect(res.body.albums).toEqual([
-      { album: 'ready', slug: 'getting-ready', name: 'Getting ready', count: 2 },
-      { album: 'day', slug: 'the-day', name: 'The day', count: 1 },
+      { album: 'ready', slug: 'getting-ready', name: 'Getting ready', count: 2, enhanced: false },
+      { album: 'day', slug: 'the-day', name: 'The day', count: 1, enhanced: false },
     ]);
     expect(res.body.items).toHaveLength(3);
     expect(res.body.total).toBe(3);
@@ -1560,6 +1560,12 @@ describe('eventGallery', () => {
     expect(res.body.items[0].enhanced).toBe(true);
     expect(res.body.items[0].url).toContain('enhanced-x.jpg');
     expect(res.body.items[0].variants.thumb).toContain('enhanced-x.jpg');
+    // The album says so, and both copies come back, so the difference can
+    // be seen by switching rather than by asking again.
+    expect(res.body.albums.find((a) => a.album === 'ready').enhanced).toBe(true);
+    expect(res.body.items[0].original.url).toContain('img.jpg');
+    expect(res.body.items[0].original.url).not.toContain('enhanced-x.jpg');
+    expect(res.body.items[0].original.thumb).toContain('width=350');
 
     // The same photographs with enhancement off are served as they were,
     // and the enhanced copy is not in the payload at all -- otherwise
@@ -1567,6 +1573,7 @@ describe('eventGallery', () => {
     const off = { ...TABLES, event_media_album_settings: { data: [], error: null } };
     const plain = await gallery({ album: 'ready' }, { mediaRows: rows, tables: off });
     expect(plain.body.items[0].enhanced).toBeUndefined();
+    expect(plain.body.items[0].original).toBeUndefined();
     expect(plain.body.items[0].url).not.toContain('enhanced-x.jpg');
     expect(plain.body.items[0].variants.enhanced).toBeUndefined();
     expect(JSON.stringify(plain.body)).not.toContain('enhanced-x.jpg');

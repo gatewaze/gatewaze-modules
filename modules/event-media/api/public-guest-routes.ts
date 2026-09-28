@@ -1125,7 +1125,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const albums = offered
       .filter((v) => (counts.get(v) ?? 0) > 0)
-      .map((v) => ({ album: v, slug: slugFor(v), name: nameFor(v), count: counts.get(v) ?? 0 }));
+      .map((v) => ({
+        album: v, slug: slugFor(v), name: nameFor(v), count: counts.get(v) ?? 0,
+        // Whether this album is showing the enhanced copies, so the page
+        // can offer the before-and-after only where there is one.
+        enhanced: enhanced.has(v),
+      }));
 
     /**
      * One row as the gallery serves it. An album with enhancement on
@@ -1146,6 +1151,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         url: toBrowserUrl(path),
         enhanced: true,
         variants: { ...withSlug.variants, thumb: toRenderUrl(path, 350), medium: toRenderUrl(path, 800) },
+        // The photograph as it was taken, so the difference can be seen
+        // by switching rather than by asking again (asked 2026-09-28).
+        original: {
+          url: withSlug.url,
+          thumb: withSlug.variants['thumb'],
+          medium: withSlug.variants['medium'],
+        },
       };
     };
 

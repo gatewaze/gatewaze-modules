@@ -16,13 +16,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { faceOf as pickFace } from './_lib/gallery-face'
 
 const API_BASE = ''
 
-/** The same object asked for at a width, which the CDN resizes. */
-function sized(url: string, width: number): string {
-  return url.includes('?') ? url : `${url}?width=${width}&quality=80`
-}
 const PAGE = 24
 
 interface GalleryItem {
@@ -36,6 +33,10 @@ interface GalleryItem {
   selfie?: string | null
   /** The album this belongs to, as a link writes it. */
   album_slug?: string | null
+  /** url and variants are the enhanced copy of this photograph. */
+  enhanced?: boolean
+  /** The photograph as it was taken, where an enhanced one is shown. */
+  original?: { url: string; thumb?: string; medium?: string } | null
 }
 
 interface AlbumChoice {
@@ -44,6 +45,8 @@ interface AlbumChoice {
   slug: string
   name: string
   count: number
+  /** This album is showing the enhanced copies of its photographs. */
+  enhanced?: boolean
 }
 
 interface Props {
@@ -68,6 +71,13 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
   // X-ray: the selfies people actually took, rather than what the booth
   // made of them (asked 2026-09-27).
   const [xray, setXray] = useState(false)
+  // Enhanced copies are what an album with enhancement on shows; the
+  // checkbox is how you see what was done (asked 2026-09-28). Both this
+  // and x-ray can be switched per photograph while one is open, without
+  // changing what the grid behind is showing.
+  const [showEnhanced, setShowEnhanced] = useState(true)
+  const [openEnhanced, setOpenEnhanced] = useState<boolean | null>(null)
+  const [openXray, setOpenXray] = useState<boolean | null>(null)
   // A photograph a link named, shown before the page it sits on has
   // loaded -- page forty of The day is still one link.
   const [focus, setFocus] = useState<GalleryItem | null>(null)
@@ -198,20 +208,38 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
     }
   }, [linkFor])
 
-  const closeLightbox = useCallback(() => { setFocus(null); setLightbox(null) }, [])
+  const closeLightbox = useCallback(() => {
+    setFocus(null)
+    setLightbox(null)
+    setOpenEnhanced(null)
+    setOpenXray(null)
+  }, [])
+
+  // A photograph opens showing what the grid shows; the switches under
+  // it are for this photograph only and go when it closes.
+  const openAt = useCallback((i: number) => {
+    setOpenEnhanced(null)
+    setOpenXray(null)
+    setLightbox(i)
+  }, [])
   // Only the booth's own albums have selfies behind their pictures.
-  const boothAlbum = chosen === 'booth' || chosen === 'elsewhere'
+  const boothAlbum = items.some((i) => i.selfie) || chosen === 'photo-booth' || chosen === 'photo-booth-elsewhere'
+  // Only where an album is actually showing enhanced copies is there a
+  // difference to look at.
+  const albumIsEnhanced = albums.some((a) => (chosen === null || a.slug === chosen || a.album === chosen) && a.enhanced)
+    && items.some((i) => i.enhanced)
   const someSelfies = boothAlbum && items.some((i) => i.selfie)
   /**
    * What to show for one item. Under x-ray that is the selfie -- and the
    * booth picture where there is no selfie, for the ones made before the
    * booth started keeping them, rather than a hole in the grid.
    */
-  const faceOf = (item: GalleryItem, width: number): string => (
-    xray && item.selfie
-      ? sized(item.selfie, width)
-      : (width <= 400 ? item.variants?.thumb : item.variants?.medium) || item.url
+  const faceOf = (item: GalleryItem, width: number, over?: { xray?: boolean; enhanced?: boolean }) => pickFace(
+    item,
+    width,
+    { xray: over?.xray ?? xray, enhanced: over?.enhanced ?? showEnhanced },
   )
+
   const chips = useMemo(() => [
     { album: null as string | null, name: 'Everything', count: albums.reduce((n, a) => n + a.count, 0) },
     // Chosen by slug, which is what a link carries.
@@ -242,6 +270,18 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
             )
           })}
         </div>
+      )}
+
+      {albumIsEnhanced && (
+        <label className={`mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm ${subText}`}>
+          <input
+            type="checkbox"
+            checked={showEnhanced}
+            onChange={(e) => setShowEnhanced(e.target.checked)}
+            className="h-4 w-4"
+          />
+          Enhanced: show the improved copies
+        </label>
       )}
 
       {someSelfies && (
@@ -279,7 +319,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
         {items.map((item, i) => (
           <button
             key={item.id}
-            onClick={() => setLightbox(i)}
+            onClick={() => openAt(i)}
             className="relative aspect-square overflow-hidden rounded-lg bg-gray-200"
           >
             {item.kind === 'video' ? (
@@ -325,17 +365,45 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
             ) : (
               // eslint-disable-next-line @next/next/no-img-element -- lightbox shows the CDN copy directly
               <img
-                src={faceOf(open, 1200)}
+                src={faceOf(open, 1200, { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced })}
                 alt={open.guest_name ? `Photo by ${open.guest_name}` : 'Event photo'}
                 className="max-h-[85vh] max-w-full object-contain"
               />
             )}
             {open.guest_name && <p className="mt-2 text-center text-sm text-white/80">by {open.guest_name}</p>}
+            {(open.original || open.selfie) && (
+              <div className="mt-3 flex flex-wrap justify-center gap-2" onClick={(e) => e.stopPropagation()}>
+                {open.original && (
+                  <button
+                    onClick={() => setOpenEnhanced((v) => !(v ?? showEnhanced))}
+                    style={{
+                      background: (openEnhanced ?? showEnhanced) ? '#ffffff' : 'rgba(255,255,255,0.14)',
+                      color: (openEnhanced ?? showEnhanced) ? '#111827' : '#ffffff',
+                    }}
+                    className="rounded-full px-4 py-1.5 text-sm"
+                  >
+                    {(openEnhanced ?? showEnhanced) ? 'Enhanced' : 'As taken'}
+                  </button>
+                )}
+                {open.selfie && (
+                  <button
+                    onClick={() => setOpenXray((v) => !(v ?? xray))}
+                    style={{
+                      background: (openXray ?? xray) ? '#ffffff' : 'rgba(255,255,255,0.14)',
+                      color: (openXray ?? xray) ? '#111827' : '#ffffff',
+                    }}
+                    className="rounded-full px-4 py-1.5 text-sm"
+                  >
+                    {(openXray ?? xray) ? 'The selfie' : 'X-ray'}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           {lightbox !== null && lightbox > 0 && (
             <button
               className="absolute left-2 top-1/2 -translate-y-1/2 px-3 py-6 text-4xl text-white/80"
-              onClick={(e) => { e.stopPropagation(); setLightbox(lightbox - 1) }}
+              onClick={(e) => { e.stopPropagation(); openAt(lightbox - 1) }}
               aria-label="Previous photo"
             >
               ‹
@@ -344,7 +412,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
           {lightbox !== null && lightbox < items.length - 1 && (
             <button
               className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-6 text-4xl text-white/80"
-              onClick={(e) => { e.stopPropagation(); setLightbox(lightbox + 1) }}
+              onClick={(e) => { e.stopPropagation(); openAt(lightbox + 1) }}
               aria-label="Next photo"
             >
               ›
