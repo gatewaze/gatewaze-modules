@@ -108,6 +108,7 @@ function makeSupabase(config) {
         b._needSelect('eq');
         if (table === 'events_media_guest_claims' && col === 'member_id') claimMember = val;
         if (col === 'metadata->>album') b._albumEq = val;
+        if (col === 'id') b._idEq = val;
         return b;
       },
       gt: () => b,
@@ -135,7 +136,12 @@ function makeSupabase(config) {
       maybeSingle: () => {
         if (table === 'events_media_upload_links') return Promise.resolve({ data: config.link ?? null, error: null });
         if (table === 'events') return Promise.resolve({ data: config.event ?? null, error: null });
-        if (table === 'host_media') return Promise.resolve({ data: config.existingMedia ?? null, error: null });
+        if (table === 'host_media') {
+          // A lookup by id answers from the listed rows where it can --
+          // the gallery's "open on this photograph" reads one that way.
+          const listed = b._idEq ? (config.mediaRows ?? []).find((r) => r.id === b._idEq) : null;
+          return Promise.resolve({ data: listed ?? config.existingMedia ?? null, error: null });
+        }
         if (table === 'events_media_booth_settings') return Promise.resolve({ data: config.boothSetting ?? null, error: null });
         if (table === 'events_media_guest_claims') return Promise.resolve({ data: state.claims.has(claimMember) ? { client_id: state.claims.get(claimMember) } : null, error: null });
         return Promise.resolve({ data: null, error: null });
@@ -1438,8 +1444,8 @@ describe('eventGallery', () => {
     expect(res.body.event.name).toBe('Dan & Sarah');
     // In the order the day ran, hidden photos counted in neither.
     expect(res.body.albums).toEqual([
-      { album: 'ready', name: 'Getting ready', count: 2 },
-      { album: 'day', name: 'The day', count: 1 },
+      { album: 'ready', slug: 'getting-ready', name: 'Getting ready', count: 2 },
+      { album: 'day', slug: 'the-day', name: 'The day', count: 1 },
     ]);
     expect(res.body.items).toHaveLength(3);
     expect(res.body.total).toBe(3);
@@ -1456,9 +1462,31 @@ describe('eventGallery', () => {
     expect(res.body.albums).toHaveLength(2);
   });
 
-  it('ignores an album nobody has heard of', async () => {
-    const res = await gallery({ album: 'nonsense' });
-    expect(res.body.total).toBe(3);
+  // A link carries the album's slug; one that names no album is a broken
+  // link, and saying so beats quietly showing something else.
+  it('takes an album by its slug, or by its view name', async () => {
+    for (const album of ['getting-ready', 'ready']) {
+      const res = await gallery({ album });
+      expect(res.body.items.map((i) => i.album)).toEqual(['ready', 'ready']);
+      expect(res.body.items[0].album_slug).toBe('getting-ready');
+    }
+    expect((await gallery({ album: 'nonsense' })).statusCode).toBe(404);
+    // An album taken off the portal cannot be reached by its slug either.
+    const off = { ...TABLES, event_media_album_settings: { data: [{ album_id: ALBUM.ready, show_on_portal: false }], error: null } };
+    expect((await gallery({ album: 'getting-ready' }, { tables: off })).statusCode).toBe(404);
+  });
+
+  // A link to one photograph opens on it, wherever it sits in the album.
+  it('hands back the photograph a link names', async () => {
+    const id = ROWS[1].id;
+    const res = await gallery({ photo: id });
+    expect(res.body.focus.id).toBe(id);
+    expect(res.body.focus.album_slug).toBe('getting-ready');
+    // Nothing for an id that is not one, or is not here.
+    expect((await gallery({ photo: 'not-a-uuid' })).body.focus).toBeNull();
+    // And nothing for a photograph in an album taken off the portal.
+    const off = { ...TABLES, event_media_album_settings: { data: [{ album_id: ALBUM.ready, show_on_portal: false }], error: null } };
+    expect((await gallery({ photo: id }, { tables: off })).body.focus).toBeNull();
   });
 
   it('pages through', async () => {
