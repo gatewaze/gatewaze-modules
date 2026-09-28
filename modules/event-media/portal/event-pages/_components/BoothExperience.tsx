@@ -27,6 +27,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { coverCrop, pctStyle, polaroidSize, stageCover, stageRect, zoomToWindow } from './_lib/booth-stage'
 import {
+  type LightReading,
+  flashPlan,
+  guidanceFor,
+  hasSettled,
+  liftFor,
+  readFrame,
+} from './_lib/booth-light'
+import {
   addPicture,
   loadHistory,
   markPosted,
@@ -115,7 +123,8 @@ interface Props {
   /** True while generating, and for a beat after, so the bar can finish. */
   generating: boolean
   primaryColor: string
-  onCaptured: (dataUrl: string, look: BoothLook | null) => void
+  /** The picture, the look it was taken for, and how dark the room was. */
+  onCaptured: (dataUrl: string, look: BoothLook | null, light?: number | null) => void
   /** No live camera (blocked, or an old browser): use the camera app. */
   onFallbackCamera: (look: BoothLook | null) => void
   onAccept: () => void
@@ -164,6 +173,8 @@ const ARRIVE_MS = 550
 const COUNT_FROM = 3
 const COUNT_STEP_MS = 800
 const COIN_MS = 480 // matches bx-drop
+/** This phone has asked for the screen not to light up. */
+const FLASH_OFF_KEY = 'event_media_booth_flash_off'
 
 // The booth styles itself. It is not built from the portal's Tailwind
 // utilities: module code reaches production by snapshot and restart, and
@@ -197,6 +208,16 @@ const STYLES = `
 .bx-count{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:900;
   font-size:min(34vw,180px);text-shadow:0 4px 30px rgba(0,0,0,.6);animation:bx-count 800ms ease-out both}
 .bx-flash{position:absolute;inset:0;background:#fff;pointer-events:none;animation:bx-flash 700ms ease-out both}
+/* The screen as a light. Fixed and above the booth, ramped rather than
+   stepped, and a plain transition rather than a keyframe: the
+   reduced-motion rule below turns every animation in here off, and a
+   flash that quietly stops working is worse than one that never did. */
+.bx-panel{position:fixed;inset:0;z-index:80;pointer-events:none;opacity:0;transition:opacity 150ms ease-out}
+.bx-guidance{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);z-index:12;
+  max-width:80%;text-align:center;padding:.4rem .75rem;border-radius:999px;
+  background:rgba(0,0,0,.55);color:#fff;font-size:.78rem;line-height:1.3}
+.bx-guidance-no{display:block;margin:.25rem auto 0;color:#fff;opacity:.75;
+  font-size:.72rem;text-decoration:underline;text-underline-offset:2px}
 .bx-dev{position:absolute;left:0;right:0;bottom:0;padding:16px}
 .bx-status{font-size:14px;font-weight:600;text-align:center;margin-bottom:8px;text-shadow:0 1px 8px rgba(0,0,0,.8);
   animation:bx-rise 420ms ease-out both}
@@ -450,6 +471,14 @@ export default function BoothExperience(props: Props) {
 
   const rootRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  /**
+   * How dark it is in front of the booth, watched while the camera is
+   * live. A ref because the shutter reads it and must not wait for a
+   * render; the state below is only for the line shown to the guest.
+   */
+  const lightRef = useRef<LightReading | null>(null)
+  /** Cleared when the guest walks out, so a panel cannot be left up. */
+  const shootingRef = useRef(false)
   const trackRef = useRef<HTMLDivElement | null>(null)
   const recordedRef = useRef<string | null>(null)
   // Read at the moment the shutter fires, not when capture() was made.
@@ -783,6 +812,8 @@ export default function BoothExperience(props: Props) {
    * they will already have saved or put on the big screen.
    */
   const leave = useCallback(() => {
+    shootingRef.current = false
+    setPanel(null)
     if (busy || count !== null) return
     setPhase('to-outside')
     onDiscard()
@@ -849,6 +880,73 @@ export default function BoothExperience(props: Props) {
 
   useEffect(() => { onBack?.(stepBack) }, [onBack, stepBack])
 
+  /**
+   * How dark it is in front of the booth, watched while the camera is
+   * live. A ref because the shutter reads it and must not wait for a
+   * render; the state is only for the line shown to the guest.
+   */
+  /**
+   * Whether this phone wants the screen lit at all.
+   *
+   * A bright panel in a dark room is worth being able to say no to, and
+   * prefers-reduced-motion is the wrong proxy for it -- that setting is
+   * about movement, and honouring it here would just hand those guests a
+   * dark photograph. So: an answer of their own, remembered.
+   */
+  const [flashAllowed, setFlashAllowed] = useState(true)
+  useEffect(() => {
+    try { setFlashAllowed(localStorage.getItem(FLASH_OFF_KEY) !== '1') } catch { /* no memory, no matter */ }
+  }, [])
+  const allowFlash = useCallback((yes: boolean) => {
+    setFlashAllowed(yes)
+    try {
+      if (yes) localStorage.removeItem(FLASH_OFF_KEY)
+      else localStorage.setItem(FLASH_OFF_KEY, '1')
+    } catch { /* it still applies for this sitting */ }
+  }, [])
+  const [guidance, setGuidance] = useState<string | null>(null)
+  const [panel, setPanel] = useState<{ colour: string; alpha: number } | null>(null)
+  const sampleCanvas = useRef<HTMLCanvasElement | null>(null)
+
+  /** One look at the live camera, small and cheap. */
+  const sample = useCallback((): LightReading | null => {
+    const v = videoRef.current
+    if (!v || !v.videoWidth) return null
+    try {
+      let canvas = sampleCanvas.current
+      if (!canvas) {
+        canvas = document.createElement('canvas')
+        canvas.width = 32
+        canvas.height = 32
+        sampleCanvas.current = canvas
+      }
+      // Kept on the CPU: a GPU readback on every sample stalls the frame.
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      if (!ctx) return null
+      ctx.drawImage(v, 0, 0, 32, 32)
+      const reading = readFrame(ctx.getImageData(0, 0, 32, 32).data, 32, 32)
+      lightRef.current = reading
+      return reading
+    } catch {
+      // A camera that will not be read is not a reason to stop: the
+      // booth simply behaves as it did before any of this.
+      return null
+    }
+  }, [])
+
+  // While the camera is live and nothing has been taken yet. Two or
+  // three times a second is plenty to notice a room, and invisible.
+  useEffect(() => {
+    if (cam !== 'live' || shot) return
+    const tick = () => {
+      const reading = sample()
+      if (reading) setGuidance(guidanceFor(reading, false))
+    }
+    tick()
+    const iv = setInterval(tick, 400)
+    return () => clearInterval(iv)
+  }, [cam, shot, sample])
+
   const capture = useCallback(() => {
     const v = videoRef.current
     if (!v || !v.videoWidth) { onFallbackCamera(look); return }
@@ -864,12 +962,31 @@ export default function BoothExperience(props: Props) {
     ctx.translate(canvas.width, 0)
     ctx.scale(-1, 1)
     ctx.drawImage(v, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height)
+    // Lifted here, before the encode, and that placement is the whole
+    // value of it: a JPEG quantises a near-black frame's facial texture
+    // to nothing, and nothing afterwards brings it back.
+    try {
+      const reading = lightRef.current
+      const lift = reading ? liftFor(reading) : { multiplier: 1, offset: 0 }
+      if (lift.multiplier !== 1 || lift.offset !== 0) {
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        const d = frame.data
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = d[i]! * lift.multiplier + lift.offset
+          d[i + 1] = d[i + 1]! * lift.multiplier + lift.offset
+          d[i + 2] = d[i + 2]! * lift.multiplier + lift.offset
+        }
+        ctx.putImageData(frame, 0, 0)
+      }
+    } catch {
+      // The picture as it came out of the camera is a fine fallback.
+    }
     onCaptured(canvas.toDataURL('image/jpeg', 0.9), look && {
       ...look,
       place: placeRef.current,
       pose: poseRef.current,
       decade: eraRef.current,
-    })
+    }, lightRef.current?.centre ?? null)
   }, [interior, look, onCaptured, onFallbackCamera])
 
   /** The shutter, and the coin slot, which does the same thing. */
@@ -886,11 +1003,50 @@ export default function BoothExperience(props: Props) {
       for (let i = 1; i < COUNT_FROM; i++) later(() => setCount(COUNT_FROM - i), i * COUNT_STEP_MS)
       later(() => {
         setCount(null)
-        setFlash((f) => f + 1)
-        capture()
+        const plan = flashPlan(lightRef.current ?? { centre: 255, whole: 255 })
+        if (!plan.on || !flashAllowed) {
+          setFlash((f) => f + 1)
+          capture()
+          return
+        }
+        // Light the screen and WAIT. The camera meters the new light and
+        // turns itself down, which is the point: the same brightness at a
+        // lower gain is a frame with detail in it rather than grain. Grab
+        // it too early and the picture is of the dark room; grab it half
+        // way and it is neither -- part-adapted, with the white balance
+        // between the room and the screen.
+        setPanel({ colour: plan.colour, alpha: plan.alpha })
+        shootingRef.current = true
+        const started = Date.now()
+        const seen: number[] = []
+        const settleThenShoot = () => {
+          // Walked out mid-countdown: no picture, and no panel left up.
+          if (!shootingRef.current) { setPanel(null); return }
+          const waited = Date.now() - started
+          const reading = sample()
+          if (reading) seen.push(reading.centre)
+          const ready = waited >= plan.minHoldMs
+            && (hasSettled(seen, plan.settleDelta) || waited >= plan.maxHoldMs)
+          if (!ready) {
+            // Once per camera frame, which is the only clock that means
+            // anything here; a timer for the browsers without it.
+            const v = videoRef.current as (HTMLVideoElement & {
+              requestVideoFrameCallback?: (cb: () => void) => number
+            }) | null
+            if (v?.requestVideoFrameCallback) v.requestVideoFrameCallback(() => settleThenShoot())
+            else later(settleThenShoot, 60)
+            return
+          }
+          shootingRef.current = false
+          setFlash((f) => f + 1)
+          capture()
+          if (reading) setGuidance(guidanceFor(reading, true))
+          setPanel(null)
+        }
+        settleThenShoot()
       }, COUNT_FROM * COUNT_STEP_MS)
     }, COIN_MS)
-  }, [count, shot, cam, look, later, capture, onFallbackCamera])
+  }, [count, shot, cam, look, later, capture, sample, flashAllowed, onFallbackCamera])
   insertCoinRef.current = insertCoin
 
   const accept = useCallback(() => {
@@ -1056,6 +1212,13 @@ export default function BoothExperience(props: Props) {
 
   return (
     <div ref={rootRef} className="bx-root" data-event-media-overlay="" role="dialog" aria-modal="true" aria-label="Photo booth">
+      {/* The screen, used as a light. Only while the shutter is waiting
+          for the camera to meter it, and only when the room needs it. */}
+      <div
+        className="bx-panel"
+        aria-hidden="true"
+        style={panel ? { background: panel.colour, opacity: panel.alpha } : undefined}
+      />
       <style>{STYLES}</style>
 
       {/* ── Outside: the era picker, or an era's board of looks ──── */}
@@ -1180,6 +1343,18 @@ export default function BoothExperience(props: Props) {
             {count !== null && pose && <div className="bx-pose-hold">{pose.instruction}</div>}
             {count !== null && <div key={`count-${count}`} className="bx-count">{count}</div>}
             {flash > 0 && <div key={`flash-${flash}`} className="bx-flash" />}
+            {guidance && cam === 'live' && !shot && (
+              <div className="bx-guidance">
+                {flashAllowed ? guidance : 'It is dark in here.'}
+                <button
+                  type="button"
+                  className="bx-guidance-no"
+                  onClick={(e) => { e.stopPropagation(); allowFlash(!flashAllowed) }}
+                >
+                  {flashAllowed ? 'No bright screen' : 'Use the screen'}
+                </button>
+              </div>
+            )}
 
             {(busy || generating) && (
               <div className="bx-dev" aria-live="polite">

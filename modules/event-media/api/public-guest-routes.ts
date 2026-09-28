@@ -1903,6 +1903,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // The phone's own clock at the shutter, checked like any other
         // date a device offers.
         takenAt: cleanTakenAt(body['taken_at']),
+        // A brightness a phone measured: a number in range, or nothing.
+        light: (() => {
+          const n = Number(body['light']);
+          return Number.isFinite(n) && n >= 0 && n <= 255 ? Math.round(n) : null;
+        })(),
       });
       const wantsUrl = body['return'] === 'url';
       res.status(200).json({
@@ -1947,6 +1952,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     selfieType?: string | null;
     /** When the event starts, to tell a booth picture made there from one made at home. */
     eventStart?: string | null;
+    /** How bright the middle of the camera's view was, 0-255. */
+    light?: number | null;
     /**
      * When the picture was made, by the phone's own clock. A booth
      * picture is a canvas capture and carries no EXIF, so without this
@@ -2008,6 +2015,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         ...(opts.place ? { place: opts.place } : {}),
         // When the shutter went, which is not when this picture is posted.
         ...(opts.takenAt ? { taken_at: opts.takenAt } : {}),
+        // How dark it was in front of the booth when this was taken, so
+        // an organiser can be told the room needs a lamp -- which helps
+        // more than anything the software can do (asked 2026-09-28).
+        ...(typeof opts.light === 'number' ? { light: opts.light } : {}),
         // What the guest actually took, for the organiser to look at.
         ...(selfiePath ? { selfie: selfiePath } : {}),
         // Off the projector and out of the gallery until the guest posts it.

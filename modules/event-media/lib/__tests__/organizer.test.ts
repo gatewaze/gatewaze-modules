@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeSubsetOrder, mediaKind, guestName, isGuestUpload, formatDuration, formatFileSize, takenKey, compareTaken, takenAtLabel } from '../organizer.js';
+import { mergeSubsetOrder, mediaKind, guestName, isGuestUpload, formatDuration, formatFileSize, takenKey, compareTaken, takenAtLabel , boothLightReport } from '../organizer.js';
 
 describe('mergeSubsetOrder', () => {
   it('reorders the subset inside the slots it already occupies', () => {
@@ -161,5 +161,41 @@ describe('the capture time an organiser reads', () => {
     for (const meta of [null, {}, { taken_at: '' }, { taken_at: 'yesterday' }, { taken_at: 42 }]) {
       expect(takenAtLabel(row(meta))).toBeNull();
     }
+  });
+});
+
+describe('telling an organiser the booth is too dark', () => {
+  const shot = (light: number | null, created_at: string) => ({
+    mime_type: 'image/jpeg',
+    metadata: light === null ? { album: 'booth' } : { album: 'booth', light },
+    created_at,
+  });
+  const many = (light: number, n: number) =>
+    Array.from({ length: n }, (_, i) => shot(light, `2026-09-25T2${i % 10}:00:00Z`));
+
+  it('says nothing until there is something to say', () => {
+    expect(boothLightReport([]).message).toBeNull();
+    expect(boothLightReport(many(20, 4)).message).toBeNull();
+    expect(boothLightReport(many(140, 30)).message).toBeNull();
+  });
+
+  it('speaks up when most of them are dark', () => {
+    const report = boothLightReport(many(30, 20));
+    expect(report.looked).toBe(20);
+    expect(report.dark).toBe(20);
+    expect(report.message).toMatch(/20 of the last 20/);
+    expect(report.message).toMatch(/lamp/);
+  });
+
+  it('ignores pictures that carry no reading at all', () => {
+    const mixed = [...many(30, 10), ...Array.from({ length: 50 }, (_, i) => shot(null, `2026-09-25T19:${i}0:00Z`))];
+    expect(boothLightReport(mixed).looked).toBe(10);
+  });
+
+  it('looks only at the recent ones', () => {
+    // Dark all evening, then somebody switched a light on.
+    const then = many(20, 30).map((s, i) => ({ ...s, created_at: `2026-09-25T20:${String(i).padStart(2, '0')}:00Z` }));
+    const now = many(150, 30).map((s, i) => ({ ...s, created_at: `2026-09-25T22:${String(i).padStart(2, '0')}:00Z` }));
+    expect(boothLightReport([...then, ...now]).message).toBeNull();
   });
 });
