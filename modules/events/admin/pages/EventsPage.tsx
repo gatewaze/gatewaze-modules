@@ -27,6 +27,7 @@ import {
   EyeIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
+import { supabase } from '@/lib/supabase';
 import { EventService, EventIdGenerator, type Event as EventRecord } from '@/utils/eventService';
 
 import { Button } from '@/components/ui/Button';
@@ -84,7 +85,16 @@ function useDistinctValues(column: string) {
   useEffect(() => {
     let cancelled = false;
     const apiBase = import.meta.env.VITE_API_URL ?? '';
-    fetch(`${apiBase}/api/admin/events/distinct/${encodeURIComponent(column)}`)
+    // /api/admin/* is JWT-gated — without the bearer token this 401s and the
+    // filter dropdown silently renders with no options.
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        const token = data.session?.access_token;
+        return fetch(`${apiBase}/api/admin/events/distinct/${encodeURIComponent(column)}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+      })
       .then((r) => r.json())
       .then((body) => {
         if (cancelled) return;

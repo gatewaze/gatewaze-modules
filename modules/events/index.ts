@@ -8,7 +8,7 @@ const eventsModule: GatewazeModule = {
   group: 'events',
   name: 'Events',
   description: 'Core events management - create, manage, and run events with registrations, attendance tracking, and check-in',
-  version: '1.3.0',
+  version: '1.3.1',
   features: [
     'events',
     'events.registrations',
