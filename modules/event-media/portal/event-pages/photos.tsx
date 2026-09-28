@@ -107,6 +107,12 @@ const BOOTH_KEYFRAMES = `
 
 interface Props {
   eventIdentifier: string
+  /**
+   * What the address asked for after the page's own name: the album in
+   * /photos/getting-ready (asked 2026-09-28). Given as the portal found
+   * it; the gallery decides what it means and 404s what it cannot match.
+   */
+  subPath?: string[]
   primaryColor: string
   brandName: string
   darkMode?: boolean
@@ -291,7 +297,7 @@ export default function GuestPhotosPage(props: Props) {
   )
 }
 
-function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
+function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode, subPath }: Props) {
   const searchParams = useSearchParams()
   // The upload code on the address, and nothing else. Read fresh on
   // every render rather than latched: a latch outlived the address that
@@ -1429,7 +1435,9 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
         eventIdentifier={eventIdentifier}
         darkMode={darkMode}
         primaryColor={primaryColor}
-        initialAlbum={searchParams.get('album')}
+        // The address first -- /photos/getting-ready -- then the query,
+        // which is what a link written before the paths existed carries.
+        initialAlbum={subPath?.[0] ?? searchParams.get('album')}
         initialPhoto={searchParams.get('photo')}
       />
     )
