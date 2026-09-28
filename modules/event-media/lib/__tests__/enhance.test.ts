@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ENHANCE_PROMPT, applyOps, opsFor, parseVerdict, worthEnhancing } from '../enhance.js';
+import { ENHANCE_PROMPT, applyOps, liftFor, meanLuma, opsFor, parseVerdict, worthEnhancing } from '../enhance.js';
 
 const verdict = (over = {}) => ({
   needs: true, exposure: 0, contrast: 0, warmth: 0, saturation: 0, sharpen: 0, note: '', ...over,
@@ -156,5 +156,47 @@ describe('the adjustments on real pixels', () => {
     const flat = grey(9, 9, 120);
     applyOps(flat, 9, 9, opsFor(verdict({ sharpen: 100 })));
     expect(flat[(4 * 9 + 4) * 4]).toBe(120);
+  });
+});
+
+describe('a floor under a timid model', () => {
+  const flat = (v: number) => {
+    const d = new Uint8ClampedArray(64 * 4);
+    for (let i = 0; i < d.length; i += 4) { d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = 255; }
+    return d;
+  };
+
+  it('measures how dark a photograph is', () => {
+    expect(meanLuma(flat(0))).toBeCloseTo(0, 0);
+    expect(meanLuma(flat(128))).toBeCloseTo(128, 0);
+    expect(meanLuma(flat(255))).toBeCloseTo(255, 0);
+    expect(meanLuma(new Uint8ClampedArray(0))).toBe(128);
+  });
+
+  // The booth's room averaged about 50. A model that answers "a touch of
+  // sharpening" to that is wrong, and the pixels are not a matter of
+  // opinion.
+  it('lifts a dark photograph past what the model asked for', () => {
+    expect(liftFor(50, 3)).toBeGreaterThan(50);
+    expect(liftFor(90, 0)).toBeCloseTo(28, 0);
+  });
+
+  it('never darkens, and never argues with a bolder answer', () => {
+    // Already bright: nothing from here.
+    expect(liftFor(140, 0)).toBe(0);
+    expect(liftFor(118, 0)).toBe(0);
+    // The model asked for more than the floor: the model wins.
+    expect(liftFor(50, 80)).toBe(80);
+    // A photograph the model wanted darker is left to the model.
+    expect(liftFor(200, -30)).toBe(-30);
+  });
+
+  it('has a ceiling of its own', () => {
+    expect(liftFor(0, 0)).toBeLessThanOrEqual(55);
+  });
+
+  it('asks the model to use the whole scale', () => {
+    expect(ENHANCE_PROMPT).toMatch(/10 is a nudge nobody will see/);
+    expect(ENHANCE_PROMPT).toMatch(/50 to 80, not 5/);
   });
 });
