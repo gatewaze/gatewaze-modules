@@ -1043,14 +1043,34 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const limit = Math.max(1, Math.min(Number(req.query['limit'] ?? 60) || 60, 200));
     const offset = Math.max(0, Math.min(Number(req.query['offset'] ?? 0) || 0, GALLERY_MAX));
-    const wanted = isView(req.query['album']) ? (req.query['album'] as View) : null;
+    const askedFor = typeof req.query['album'] === 'string' ? req.query['album'] : '';
+    const focusId = typeof req.query['photo'] === 'string' && UUID_RE.test(req.query['photo'])
+      ? req.query['photo'] : null;
 
     // Albums an organiser has taken off the portal (migration 016). Their
     // photographs go with them, or hiding an album would hide only its
     // heading.
     const { hidden, enhanced } = await albumSettings(event.id);
-    if (wanted && hidden.has(wanted)) { sendError(res, 404, 'album_not_found', 'unknown album'); return; }
     const offered = GALLERY_ORDER.filter((v) => !hidden.has(v));
+
+    // The album's own names, and the slugs a link is written with.
+    const { data: named } = await supabase
+      .from('event_media_view_albums')
+      .select('view, album_id, host_media_albums(name, sort_order)')
+      .eq('event_id', event.id);
+    const nameOf = new Map<string, string>();
+    for (const a of (named ?? []) as Array<{ view: string; host_media_albums: { name?: string } | null }>) {
+      if (a.host_media_albums?.name) nameOf.set(a.view, a.host_media_albums.name);
+    }
+    const nameFor = (v: View) => nameOf.get(v) ?? GALLERY_FALLBACK_NAMES[v];
+    const slugFor = (v: View) => slugify(nameFor(v));
+
+    // An album can be asked for by its slug -- which is what a shared
+    // link carries, /photos?album=getting-ready -- or by the view name
+    // the projector uses. Neither reaches a query: both are matched
+    // against this event's own albums and the result is a View or null.
+    const wanted = offered.find((v) => slugFor(v) === askedFor || v === askedFor) ?? null;
+    if (askedFor && !wanted) { sendError(res, 404, 'album_not_found', 'unknown album'); return; }
 
     // Which album a photograph is in is read from its own tag rather
     // than from album membership. Membership is what the projector
@@ -1103,17 +1123,44 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       return;
     }
 
-    const { data: named } = await supabase
-      .from('event_media_view_albums')
-      .select('view, album_id, host_media_albums(name, sort_order)')
-      .eq('event_id', event.id);
-    const nameOf = new Map<string, string>();
-    for (const a of (named ?? []) as Array<{ view: string; host_media_albums: { name?: string } | null }>) {
-      if (a.host_media_albums?.name) nameOf.set(a.view, a.host_media_albums.name);
-    }
     const albums = offered
       .filter((v) => (counts.get(v) ?? 0) > 0)
-      .map((v) => ({ album: v, name: nameOf.get(v) ?? GALLERY_FALLBACK_NAMES[v], count: counts.get(v) ?? 0 }));
+      .map((v) => ({ album: v, slug: slugFor(v), name: nameFor(v), count: counts.get(v) ?? 0 }));
+
+    /**
+     * One row as the gallery serves it. An album with enhancement on
+     * shows the enhanced copy of each photograph that has one; every
+     * other album, and every photograph without one, is untouched
+     * (asked 2026-09-27). The album's slug rides along so a link to the
+     * photograph can carry the album it belongs to.
+     */
+    const forFeed = (r: FeedRow) => {
+      const item = mapFeedItem(r);
+      const view = tagView(r.metadata);
+      const withSlug = { ...item, album_slug: slugFor(view) };
+      const better = (r.variants ?? {}) as Record<string, unknown>;
+      if (!enhanced.has(view) || typeof better['enhanced'] !== 'string') return withSlug;
+      const path = better['enhanced'] as string;
+      return {
+        ...withSlug,
+        url: toBrowserUrl(path),
+        enhanced: true,
+        variants: { ...withSlug.variants, thumb: toRenderUrl(path, 350), medium: toRenderUrl(path, 800) },
+      };
+    };
+
+    // A link to one photograph opens on that photograph, wherever it
+    // sits in the album -- page forty of The day is still one link.
+    let focus: ReturnType<typeof forFeed> | null = null;
+    if (focusId) {
+      const { data: one } = await base('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
+        .eq('id', focusId)
+        .maybeSingle();
+      // The same rules as the list: a photograph in an album that is not
+      // on the portal is not reachable by knowing its id either.
+      const row = (one ?? null) as FeedRow | null;
+      if (row && offered.includes(tagView(row.metadata))) focus = forFeed(row);
+    }
 
     const page = (data ?? []) as FeedRow[];
     const total = wanted
@@ -1129,22 +1176,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       },
       albums,
       total,
-      // An album with enhancement on shows the enhanced copy of each
-      // photograph that has one; every other album, and every
-      // photograph without one, is untouched (asked 2026-09-27).
-      items: page.map((r) => {
-        const item = mapFeedItem(r);
-        const view = tagView(r.metadata);
-        const better = (r.variants ?? {}) as Record<string, unknown>;
-        if (!enhanced.has(view) || typeof better['enhanced'] !== 'string') return item;
-        const path = better['enhanced'] as string;
-        return {
-          ...item,
-          url: toBrowserUrl(path),
-          enhanced: true,
-          variants: { ...item.variants, thumb: toRenderUrl(path, 350), medium: toRenderUrl(path, 800) },
-        };
-      }),
+      items: page.map(forFeed),
+      focus,
       next_offset: offset + page.length < total ? offset + page.length : null,
     });
   }
@@ -2029,6 +2062,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     claimGuest: guarded(claimGuest),
     releaseGuest: guarded(releaseGuest),
   };
+}
+
+/** An album's name as it appears in a link: "Getting ready" -> getting-ready. */
+function slugify(name: string): string {
+  return name.toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
 }
 
 /** The most photographs one gallery request will consider. */

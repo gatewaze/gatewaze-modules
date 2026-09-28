@@ -34,10 +34,14 @@ interface GalleryItem {
   guest_name: string | null
   /** The photograph the guest actually took, where the booth kept one. */
   selfie?: string | null
+  /** The album this belongs to, as a link writes it. */
+  album_slug?: string | null
 }
 
 interface AlbumChoice {
   album: string
+  /** What a link carries: "Getting ready" -> getting-ready. */
+  slug: string
   name: string
   count: number
 }
@@ -46,11 +50,15 @@ interface Props {
   eventIdentifier: string
   darkMode?: boolean
   primaryColor?: string
+  /** ?album= on the way in: the album a shared link names. */
+  initialAlbum?: string | null
+  /** ?photo= on the way in: the photograph a shared link names. */
+  initialPhoto?: string | null
 }
 
-export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
+export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, initialPhoto }: Props) {
   const [albums, setAlbums] = useState<AlbumChoice[]>([])
-  const [chosen, setChosen] = useState<string | null>(null)
+  const [chosen, setChosen] = useState<string | null>(initialAlbum ?? null)
   const [items, setItems] = useState<GalleryItem[]>([])
   const [total, setTotal] = useState(0)
   const [nextOffset, setNextOffset] = useState<number | null>(null)
@@ -60,6 +68,11 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
   // X-ray: the selfies people actually took, rather than what the booth
   // made of them (asked 2026-09-27).
   const [xray, setXray] = useState(false)
+  // A photograph a link named, shown before the page it sits on has
+  // loaded -- page forty of The day is still one link.
+  const [focus, setFocus] = useState<GalleryItem | null>(null)
+  const [copied, setCopied] = useState(false)
+  const wantedPhoto = useRef<string | null>(initialPhoto ?? null)
 
   const subText = darkMode ? 'text-white/70' : 'text-gray-600'
 
@@ -68,6 +81,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
   const load = useCallback(async (album: string | null, offset: number) => {
     const qs = new URLSearchParams({ limit: String(PAGE), offset: String(offset) })
     if (album) qs.set('album', album)
+    if (offset === 0 && wantedPhoto.current) qs.set('photo', wantedPhoto.current)
     const res = await fetch(`${API_BASE}/api/public/event-media/events/${encodeURIComponent(eventIdentifier)}/gallery?${qs}`)
     if (!res.ok) throw new Error(`gallery ${res.status}`)
     return res.json() as Promise<{
@@ -75,6 +89,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
       items: GalleryItem[]
       total: number
       next_offset: number | null
+      focus?: GalleryItem | null
     }>
   }, [eventIdentifier])
 
@@ -90,6 +105,12 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
         setItems(data.items ?? [])
         setTotal(data.total ?? 0)
         setNextOffset(data.next_offset ?? null)
+        if (data.focus) {
+          setFocus(data.focus)
+          // Only on the way in: choosing another album afterwards should
+          // not reopen the photograph the link named.
+          wantedPhoto.current = null
+        }
       })
       .catch(() => { if (!cancelled) setFailed(true) })
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -129,17 +150,55 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
 
   // Arrow keys and Escape while a photograph is full screen.
   useEffect(() => {
-    if (lightbox === null) return
+    if (lightbox === null && focus === null) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setLightbox(null)
+      if (e.key === 'Escape') { setFocus(null); setLightbox(null) }
       if (e.key === 'ArrowRight') setLightbox((i) => (i === null ? null : Math.min(i + 1, items.length - 1)))
       if (e.key === 'ArrowLeft') setLightbox((i) => (i === null ? null : Math.max(i - 1, 0)))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [lightbox, items.length])
+  }, [lightbox, focus, items.length])
 
-  const open = lightbox === null ? null : items[lightbox] ?? null
+  // Arrow keys move through the grid once a link's photograph is closed.
+
+  const open = focus ?? (lightbox === null ? null : items[lightbox] ?? null)
+
+  /**
+   * The address bar always holds the link for what is on screen, so
+   * sharing is copying it -- and the copy button hands over the same
+   * thing for anyone who would rather press a button (asked 2026-09-27).
+   */
+  const linkFor = useCallback((album: string | null, photo: GalleryItem | null): string => {
+    if (typeof window === 'undefined') return ''
+    const url = new URL(window.location.href)
+    url.search = ''
+    const slug = photo?.album_slug ?? album
+    if (slug) url.searchParams.set('album', slug)
+    if (photo) url.searchParams.set('photo', photo.id)
+    return url.toString()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const next = linkFor(chosen, open)
+    if (next && next !== window.location.href) window.history.replaceState(null, '', next)
+  }, [chosen, open, linkFor])
+
+  const copyLink = useCallback(async (album: string | null, photo: GalleryItem | null) => {
+    const link = linkFor(album, photo)
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Some phones refuse the clipboard outside a trusted gesture;
+      // the address bar holds the same link either way.
+      window.prompt('Copy this link', link)
+    }
+  }, [linkFor])
+
+  const closeLightbox = useCallback(() => { setFocus(null); setLightbox(null) }, [])
   // Only the booth's own albums have selfies behind their pictures.
   const boothAlbum = chosen === 'booth' || chosen === 'elsewhere'
   const someSelfies = boothAlbum && items.some((i) => i.selfie)
@@ -155,7 +214,8 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
   )
   const chips = useMemo(() => [
     { album: null as string | null, name: 'Everything', count: albums.reduce((n, a) => n + a.count, 0) },
-    ...albums.map((a) => ({ album: a.album as string | null, name: a.name, count: a.count })),
+    // Chosen by slug, which is what a link carries.
+    ...albums.map((a) => ({ album: a.slug as string | null, name: a.name, count: a.count })),
   ], [albums])
 
   return (
@@ -194,6 +254,15 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
           />
           X-ray: show the selfies people actually took
         </label>
+      )}
+
+      {items.length > 0 && (
+        <button
+          onClick={() => void copyLink(chosen, null)}
+          className={`mb-3 text-sm underline underline-offset-2 ${subText}`}
+        >
+          {copied ? 'Link copied' : chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
+        </button>
       )}
 
       {loading && items.length === 0 && <p className={`text-sm ${subText}`}>Loading the photos…</p>}
@@ -248,7 +317,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
       {open && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
-          onClick={() => setLightbox(null)}
+          onClick={closeLightbox}
         >
           <div className="max-h-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
             {open.kind === 'video' ? (
@@ -281,8 +350,16 @@ export default function AlbumGallery({ eventIdentifier, darkMode }: Props) {
               ›
             </button>
           )}
-          <button className="absolute right-4 top-4 text-3xl text-white" onClick={() => setLightbox(null)} aria-label="Close">
+          <button className="absolute right-4 top-4 text-3xl text-white" onClick={closeLightbox} aria-label="Close">
             ×
+          </button>
+          {/* The link to this one photograph. */}
+          <button
+            onClick={(e) => { e.stopPropagation(); void copyLink(chosen, open) }}
+            style={{ background: 'rgba(255,255,255,0.14)', color: '#fff' }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-4 py-2 text-sm"
+          >
+            {copied ? 'Link copied' : 'Copy link to this photo'}
           </button>
         </div>
       )}

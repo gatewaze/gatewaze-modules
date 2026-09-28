@@ -1419,7 +1419,15 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode }: Props) {
   // been seen in this visit it stays seen, so the booth's own history
   // pushes cannot drop a guest out of the app mid-photograph.
   if (!sawCodeRef.current) {
-    return <AlbumGallery eventIdentifier={eventIdentifier} darkMode={darkMode} primaryColor={primaryColor} />
+    return (
+      <AlbumGallery
+        eventIdentifier={eventIdentifier}
+        darkMode={darkMode}
+        primaryColor={primaryColor}
+        initialAlbum={searchParams.get('album')}
+        initialPhoto={searchParams.get('photo')}
+      />
+    )
   }
 
   if (loading) {
