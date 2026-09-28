@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon } from '@heroicons/react/24/outline';
 import { Button, Modal, Input, ConfirmModal } from '@/components/ui';
 import { createAlbum, updateAlbum, deleteAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
 import {
@@ -38,7 +38,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
   const stopRef = useRef(false);
 
   const settingFor = useCallback((id: string): AlbumSetting => (
-    settings.get(id) ?? { show_on_portal: true, enhance: false }
+    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false }
   ), [settings]);
 
   useEffect(() => {
@@ -205,6 +205,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                   <p className="mt-1 text-xs text-[var(--gray-a9)]">
                     {settingFor(album.id).show_on_portal ? 'Shown on the portal' : 'Not shown on the portal'}
                     {settingFor(album.id).enhance ? ' · enhanced' : ''}
+                    {settingFor(album.id).xray ? ' · selfies shown' : ''}
                     {running === album.id && progress
                       ? ` · improving ${progress.done} of ${progress.total}…`
                       : ''}
@@ -244,6 +245,25 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                     }`}
                   >
                     <SparklesIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title={settingFor(album.id).xray
+                      ? 'Guests can see the selfies behind these pictures — click to hide them'
+                      : 'Let guests see the selfies behind these pictures'}
+                    disabled={toggling === album.id}
+                    onClick={() => void change(
+                      album,
+                      { xray: !settingFor(album.id).xray },
+                      settingFor(album.id).xray
+                        ? `The selfies behind "${album.name}" are hidden`
+                        : `Guests can see the selfies behind "${album.name}"`,
+                    )}
+                    className={`rounded p-1 hover:bg-[var(--gray-a3)] disabled:opacity-30 ${
+                      settingFor(album.id).xray ? 'text-[var(--accent-11)]' : 'text-[var(--gray-a8)]'
+                    }`}
+                  >
+                    <ViewfinderCircleIcon className="h-4 w-4" />
                   </button>
                   {mediaIdsIn && (
                     <button

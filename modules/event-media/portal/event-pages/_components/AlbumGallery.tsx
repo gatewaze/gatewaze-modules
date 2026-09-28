@@ -20,6 +20,35 @@ import { faceOf as pickFace } from './_lib/gallery-face'
 
 const API_BASE = ''
 
+/** A link, for copying one. */
+function LinkIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.2 10.8a4.5 4.5 0 0 0-6.4 0l-2.7 2.7a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10.8 13.2a4.5 4.5 0 0 0 6.4 0l2.7-2.7a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2" />
+    </svg>
+  )
+}
+
+/** A sparkle, for the enhanced copy. */
+function SparkIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.5l1.6 4.4 4.4 1.6-4.4 1.6L12 15.5l-1.6-4.4L6 9.5l4.4-1.6L12 3.5Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8L18 15Z" />
+    </svg>
+  )
+}
+
+/** A tick, for a moment after a link is copied. */
+function TickIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.5l5 5 10-11" />
+    </svg>
+  )
+}
+
 const PAGE = 24
 
 interface GalleryItem {
@@ -37,6 +66,9 @@ interface GalleryItem {
   enhanced?: boolean
   /** The photograph as it was taken, where an enhanced one is shown. */
   original?: { url: string; thumb?: string; medium?: string } | null
+  /** The selfie as it was taken, where an enhanced one is shown. */
+  selfie_original?: string | null
+  selfie_enhanced?: boolean
 }
 
 interface AlbumChoice {
@@ -47,6 +79,8 @@ interface AlbumChoice {
   count: number
   /** This album is showing the enhanced copies of its photographs. */
   enhanced?: boolean
+  /** The selfies behind this album's booth pictures may be shown. */
+  xray?: boolean
 }
 
 interface Props {
@@ -223,19 +257,21 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
     setLightbox(i)
   }, [])
   // Only the booth's own albums have selfies behind their pictures.
-  const boothAlbum = items.some((i) => i.selfie) || chosen === 'photo-booth' || chosen === 'photo-booth-elsewhere'
+  // The server sends a selfie only for an album whose organiser has
+  // turned x-ray on, so having one is the permission.
+  const boothAlbum = items.some((i) => i.selfie)
   // Only where an album is actually showing enhanced copies is there a
   // difference to look at.
   const albumIsEnhanced = albums.some((a) => (chosen === null || a.slug === chosen || a.album === chosen) && a.enhanced)
     && items.some((i) => i.enhanced)
-  const someSelfies = boothAlbum && items.some((i) => i.selfie)
+  const someSelfies = boothAlbum
   /**
    * What to show for one item. Under x-ray that is the selfie -- and the
    * booth picture where there is no selfie, for the ones made before the
    * booth started keeping them, rather than a hole in the grid.
    */
   const faceOf = (item: GalleryItem, width: number, over?: { xray?: boolean; enhanced?: boolean }) => pickFace(
-    item,
+    { ...item, selfieOriginal: item.selfie_original ?? null },
     width,
     { xray: over?.xray ?? xray, enhanced: over?.enhanced ?? showEnhanced },
   )
@@ -297,12 +333,17 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
       )}
 
       {items.length > 0 && (
-        <button
-          onClick={() => void copyLink(chosen, null)}
-          className={`mb-3 text-sm underline underline-offset-2 ${subText}`}
-        >
-          {copied ? 'Link copied' : chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
-        </button>
+        <div className="mb-3 flex justify-end">
+          <button
+            onClick={() => void copyLink(chosen, null)}
+            title={chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
+            aria-label={chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
+            className={`rounded-full p-2 ${subText}`}
+            style={{ background: darkMode ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.05)' }}
+          >
+            {copied ? <TickIcon className="h-4 w-4" /> : <LinkIcon className="h-4 w-4" />}
+          </button>
+        </div>
       )}
 
       {loading && items.length === 0 && <p className={`text-sm ${subText}`}>Loading the photos…</p>}
@@ -359,7 +400,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
           onClick={closeLightbox}
         >
-          <div className="max-h-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
+          <div className="relative max-h-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
             {open.kind === 'video' ? (
               <video src={open.url} controls autoPlay playsInline className="max-h-[85vh] max-w-full" />
             ) : (
@@ -370,35 +411,52 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
                 className="max-h-[85vh] max-w-full object-contain"
               />
             )}
-            {open.guest_name && <p className="mt-2 text-center text-sm text-white/80">by {open.guest_name}</p>}
-            {(open.original || open.selfie) && (
-              <div className="mt-3 flex flex-wrap justify-center gap-2" onClick={(e) => e.stopPropagation()}>
-                {open.original && (
-                  <button
-                    onClick={() => setOpenEnhanced((v) => !(v ?? showEnhanced))}
-                    style={{
-                      background: (openEnhanced ?? showEnhanced) ? '#ffffff' : 'rgba(255,255,255,0.14)',
-                      color: (openEnhanced ?? showEnhanced) ? '#111827' : '#ffffff',
-                    }}
-                    className="rounded-full px-4 py-1.5 text-sm"
-                  >
-                    {(openEnhanced ?? showEnhanced) ? 'Enhanced' : 'As taken'}
-                  </button>
-                )}
-                {open.selfie && (
-                  <button
-                    onClick={() => setOpenXray((v) => !(v ?? xray))}
-                    style={{
-                      background: (openXray ?? xray) ? '#ffffff' : 'rgba(255,255,255,0.14)',
-                      color: (openXray ?? xray) ? '#111827' : '#ffffff',
-                    }}
-                    className="rounded-full px-4 py-1.5 text-sm"
-                  >
-                    {(openXray ?? xray) ? 'The selfie' : 'X-ray'}
-                  </button>
-                )}
-              </div>
+            {open.selfie && (
+              // The other half of a booth picture: what the booth made,
+              // and what it started with. Whichever is not on screen sits
+              // in the corner, and tapping it swaps the two over (asked
+              // 2026-09-28) -- the x-ray switch, as a picture.
+              <button
+                onClick={() => setOpenXray((v) => !(v ?? xray))}
+                title={(openXray ?? xray) ? 'Show what the booth made of it' : 'Show the selfie behind it'}
+                aria-label={(openXray ?? xray) ? 'Show what the booth made of it' : 'Show the selfie behind it'}
+                className="absolute bottom-3 right-3 h-20 w-20 overflow-hidden rounded-lg border-2 border-white/80 shadow-lg sm:h-24 sm:w-24"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element -- the other version, small */}
+                <img
+                  src={faceOf(open, 350, { xray: !(openXray ?? xray), enhanced: openEnhanced ?? showEnhanced })}
+                  alt={(openXray ?? xray) ? 'What the booth made of it' : 'The selfie behind it'}
+                  className="h-full w-full object-cover"
+                />
+              </button>
             )}
+            {open.guest_name && <p className="mt-2 text-center text-sm text-white/80">by {open.guest_name}</p>}
+            <div className="mt-2 flex items-center justify-end gap-2">
+              {open.original && (
+                <button
+                  onClick={() => setOpenEnhanced((v) => !(v ?? showEnhanced))}
+                  title={(openEnhanced ?? showEnhanced) ? 'Showing the improved copy' : 'Showing it as it was taken'}
+                  aria-label={(openEnhanced ?? showEnhanced) ? 'Show it as it was taken' : 'Show the improved copy'}
+                  aria-pressed={openEnhanced ?? showEnhanced}
+                  style={{
+                    background: (openEnhanced ?? showEnhanced) ? '#ffffff' : 'rgba(255,255,255,0.16)',
+                    color: (openEnhanced ?? showEnhanced) ? '#111827' : '#ffffff',
+                  }}
+                  className="rounded-full p-2"
+                >
+                  <SparkIcon className="h-4 w-4" />
+                </button>
+              )}
+              <button
+                onClick={() => void copyLink(chosen, open)}
+                title="Copy a link to this photo"
+                aria-label="Copy a link to this photo"
+                style={{ background: 'rgba(255,255,255,0.16)', color: '#ffffff' }}
+                className="rounded-full p-2"
+              >
+                {copied ? <TickIcon className="h-4 w-4" /> : <LinkIcon className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
           {lightbox !== null && lightbox > 0 && (
             <button

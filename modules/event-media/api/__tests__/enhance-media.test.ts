@@ -76,12 +76,29 @@ describe('enhancing an album', () => {
     expect(r.status).toBe('needs');
     expect(r.source).toBe(`https://cdn.example/event/${EVENT}/${MEDIA}/photo.jpg`);
     // Bounded adjustments, not the model's own numbers.
-    expect(r.ops.linear.multiplier).toBeCloseTo(1.02, 2);
+    expect(r.ops.linear.multiplier).toBeCloseTo(1.03, 2);
+    expect(r.of).toBe('photo');
     expect(r.ops.sharpenSigma).toBeGreaterThan(0);
     // What was decided is written down before anything is made, so an
     // interrupted run is not paid for twice.
     expect(state.updated[0].metadata.enhance.needed).toBe(true);
     expect(state.updated[0].variants).toBeUndefined();
+  });
+
+  // A booth picture's own photograph is the selfie behind it: the poster
+  // was made under imagined light, the selfie in a very dark room.
+  it('looks at the selfie behind a booth picture, not the poster', async () => {
+    const booth = {
+      ...PHOTO,
+      storage_path: `event/${EVENT}/${MEDIA}/booth.jpg`,
+      metadata: { album: 'booth', selfie: `event/${EVENT}/${MEDIA}/selfie.jpg` },
+    };
+    const { routes, state } = setup({ row: booth, verdict: { ok: true, verdict: DARK } });
+    const res = await call(routes, { ids: [MEDIA] });
+    expect(state.asked).toEqual([`https://cdn.example/event/${EVENT}/${MEDIA}/selfie.jpg`]);
+    expect(res.body.results[0].of).toBe('selfie');
+    expect(res.body.results[0].source).toContain('selfie.jpg');
+    expect(state.updated[0].metadata.enhance.of).toBe('selfie');
   });
 
   it('says so when the model cannot be asked', async () => {
@@ -162,6 +179,15 @@ describe('recording an enhanced copy', () => {
     expect(state.updated[0].variants.enhanced).toBe(GOOD.storage_path);
     // The photograph itself is untouched.
     expect(state.updated[0].storage_path).toBeUndefined();
+  });
+
+  // Kept apart, so a selfie can never be served as the photograph.
+  it('keeps an enhanced selfie under its own key', async () => {
+    const { res, state } = await record({}, { ...GOOD, of: 'selfie' });
+    expect(res.statusCode).toBe(200);
+    expect(state.updated[0].variants.enhanced_selfie).toBe(GOOD.storage_path);
+    expect(state.updated[0].variants.enhanced).toBeUndefined();
+    expect(res.body.of).toBe('selfie');
   });
 
   it('refuses a path that is not beside the photograph', async () => {

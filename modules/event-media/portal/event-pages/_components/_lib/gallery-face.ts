@@ -20,6 +20,8 @@ export interface FaceItem {
   enhanced?: boolean
   /** The photograph as it was taken, where an enhanced one is shown. */
   original?: { url: string; thumb?: string; medium?: string } | null
+  /** The selfie as it was taken, where an enhanced one is being shown. */
+  selfieOriginal?: string | null
 }
 
 export interface FaceChoice {
@@ -38,9 +40,12 @@ export function sized(url: string, width: number): string {
 const SMALL = 400
 
 export function faceOf(item: FaceItem, width: number, choice: FaceChoice = {}): string {
-  // Nothing else applies to a selfie: it is what was there before the
-  // booth, and there is no enhanced copy of it.
-  if (choice.xray && item.selfie) return sized(item.selfie, width)
+  // A selfie has an enhanced copy of its own -- the booth's room was
+  // very dark -- so the same switch applies to it.
+  if (choice.xray && item.selfie) {
+    const which = choice.enhanced === false && item.selfieOriginal ? item.selfieOriginal : item.selfie
+    return sized(which, width)
+  }
 
   const small = width <= SMALL
   if (choice.enhanced === false && item.original) {
