@@ -75,6 +75,8 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     /** Where the photograph is, and what to do to it, for the browser. */
     source?: string;
     ops?: ReturnType<typeof opsFor>;
+    /** Which of the two this is of: the photograph, or a booth selfie. */
+    of?: 'photo' | 'selfie';
   }> {
     const { data: row, error } = await db
       .from('host_media')
@@ -87,7 +89,13 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     if (typeof row.mime_type !== 'string' || !row.mime_type.startsWith('image/')) {
       return { id: mediaId, status: 'skipped', reason: 'not_a_photo' };
     }
-    const path = typeof row.storage_path === 'string' ? row.storage_path : '';
+    // A booth picture's own photograph is the selfie behind it: the
+    // poster was made under whatever light the model imagined, and it is
+    // the selfie that was taken in a very dark room (asked 2026-09-28).
+    // The poster is left exactly as the booth made it.
+    const meta0 = (row.metadata ?? {}) as Record<string, unknown>;
+    const selfie = typeof meta0['selfie'] === 'string' ? meta0['selfie'] : null;
+    const path = selfie ?? (typeof row.storage_path === 'string' ? row.storage_path : '');
     if (!path.startsWith(`event/${eventId}/`)) {
       return { id: mediaId, status: 'skipped', reason: 'unsupported_layout' };
     }
@@ -95,7 +103,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     // Already looked at: no second model call. This is what makes running
     // an album again cheap, and what stops a caller spending at a paid
     // endpoint by sending the same ids over and over.
-    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    const meta = meta0;
     const seen = meta['enhance'] && typeof meta['enhance'] === 'object'
       ? (meta['enhance'] as Record<string, unknown>) : null;
     if (seen && !force) {
@@ -128,6 +136,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
           at: new Date().toISOString(),
           needed: true,
           note: verdict.note,
+          of: selfie ? 'selfie' : 'photo',
           applied: {
             exposure: verdict.exposure, contrast: verdict.contrast,
             warmth: verdict.warmth, saturation: verdict.saturation, sharpen: verdict.sharpen,
@@ -135,7 +144,10 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
         },
       },
     }).eq('id', mediaId);
-    return { id: mediaId, status: 'needs', note: verdict.note, source: publicUrl(path), ops };
+    return {
+      id: mediaId, status: 'needs', note: verdict.note,
+      source: publicUrl(path), ops, of: selfie ? 'selfie' : 'photo',
+    };
   }
 
   async function enhance(req: Request, res: Response): Promise<void> {
@@ -206,6 +218,10 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     const mediaId = typeof body['media_id'] === 'string' ? body['media_id'] : '';
     const path = typeof body['storage_path'] === 'string' ? body['storage_path'] : '';
     const bytes = Number(body['bytes']);
+    // A booth picture's enhanced copy is of its selfie, and is kept apart
+    // from an enhanced photograph so neither can be shown as the other.
+    const of = body['of'] === 'selfie' ? 'selfie' : 'photo';
+    const key = of === 'selfie' ? 'enhanced_selfie' : 'enhanced';
     if (!UUID_RE.test(mediaId) || !PATH_RE.test(path)
       || !Number.isInteger(bytes) || bytes < 1 || bytes > MAX_COPY_BYTES) {
       sendError(res, 400, 'invalid_request', 'media_id, storage_path and bytes are required');
@@ -242,15 +258,15 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     }
 
     const had = (row.variants ?? {}) as Record<string, unknown>;
-    const previous = typeof had['enhanced'] === 'string' ? (had['enhanced'] as string) : null;
+    const previous = typeof had[key] === 'string' ? (had[key] as string) : null;
     const meta = (row.metadata ?? {}) as Record<string, unknown>;
     const record = meta['enhance'] && typeof meta['enhance'] === 'object'
       ? (meta['enhance'] as Record<string, unknown>) : {};
     const { error: updErr } = await db
       .from('host_media')
       .update({
-        variants: { ...had, enhanced: path },
-        metadata: { ...meta, enhance: { ...record, made_at: new Date().toISOString(), bytes } },
+        variants: { ...had, [key]: path },
+        metadata: { ...meta, enhance: { ...record, made_at: new Date().toISOString(), bytes, of } },
       })
       .eq('id', mediaId);
     if (updErr) {
@@ -262,7 +278,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     if (previous && previous !== path && previous.startsWith(`event/${eventId}/`)) {
       try { await db.storage.from(storageBucket).remove([previous]); } catch { /* swept later */ }
     }
-    res.status(200).json({ id: mediaId, enhanced: path });
+    res.status(200).json({ id: mediaId, of, enhanced: path });
   }
 
   return { enhance, enhanced, askAbout };

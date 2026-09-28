@@ -12,6 +12,11 @@ const improved = {
   original: { url: 'https://cdn/photo.jpg', thumb: 'https://cdn/photo.jpg?width=350', medium: 'https://cdn/photo.jpg?width=800' },
 };
 const booth = { ...improved, selfie: 'https://cdn/selfie.jpg' };
+const boothEnhanced = {
+  ...improved,
+  selfie: 'https://cdn/enhanced-selfie.jpg',
+  selfieOriginal: 'https://cdn/selfie.jpg',
+};
 
 describe('which picture a tile shows', () => {
   it('shows the right size for the space it is in', () => {
@@ -41,6 +46,15 @@ describe('which picture a tile shows', () => {
     }
     // And nothing changes for a booth picture with no selfie kept.
     expect(faceOf(improved, 1200, { xray: true })).toContain('enhanced.jpg');
+  });
+
+  // The booth's room was very dark, so a selfie has an enhanced copy of
+  // its own and the same switch applies to it.
+  it('switches the selfie between its two copies as well', () => {
+    expect(faceOf(boothEnhanced, 1200, { xray: true })).toContain('enhanced-selfie.jpg');
+    expect(faceOf(boothEnhanced, 1200, { xray: true, enhanced: false })).toContain('/selfie.jpg');
+    // A selfie with only one copy is that copy, whatever is asked.
+    expect(faceOf(booth, 1200, { xray: true, enhanced: false })).toContain('/selfie.jpg');
   });
 
   it('asks the CDN for a size without doubling a query it already has', () => {

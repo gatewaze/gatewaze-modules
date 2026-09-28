@@ -813,16 +813,19 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * Never allowed to fail the page: a settings table that cannot be read
    * shows every album, which is where this started.
    */
-  async function albumSettings(eventId: string): Promise<{ hidden: Set<View>; enhanced: Set<View> }> {
+  async function albumSettings(eventId: string): Promise<{
+    hidden: Set<View>; enhanced: Set<View>; xray: Set<View>;
+  }> {
     const hidden = new Set<View>();
     const enhanced = new Set<View>();
+    const xray = new Set<View>();
     try {
       const { data: rows, error } = await supabase
         .from('event_media_album_settings')
-        .select('album_id, show_on_portal, enhance')
+        .select('album_id, show_on_portal, enhance, xray')
         .eq('event_id', eventId);
       if (error) throw new Error(error.message);
-      if (!rows || rows.length === 0) return { hidden, enhanced };
+      if (!rows || rows.length === 0) return { hidden, enhanced, xray };
       const { data: albums } = await supabase
         .from('event_media_view_albums')
         .select('album_id, view')
@@ -831,18 +834,21 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       for (const a of (albums ?? []) as Array<{ album_id: string; view: string }>) {
         if (isView(a.view)) viewOf.set(a.album_id, a.view);
       }
-      for (const r of rows as Array<{ album_id: string; show_on_portal: boolean; enhance?: boolean }>) {
+      for (const r of rows as Array<{
+        album_id: string; show_on_portal: boolean; enhance?: boolean; xray?: boolean;
+      }>) {
         const view = viewOf.get(r.album_id);
         if (!view) continue;
         if (r.show_on_portal === false) hidden.add(view);
         if (r.enhance === true) enhanced.add(view);
+        if (r.xray === true) xray.add(view);
       }
     } catch (err) {
       logger.warn('album settings unavailable; showing every album as it is', {
         eventId, error: err instanceof Error ? err.message : String(err),
       });
     }
-    return { hidden, enhanced };
+    return { hidden, enhanced, xray };
   }
 
   function mapFeedItem(r: FeedRow, view?: View) {
@@ -850,12 +856,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const variants: Record<string, string> = {};
     if (r.variants && typeof r.variants === 'object') {
       for (const [k, v] of Object.entries(r.variants)) {
-        // The enhanced copy is never handed out here. It is shown only
-        // where an organiser has turned enhancement on for the album,
-        // and that is decided by the gallery, which puts it in itself --
-        // otherwise turning the album back off would leave a working URL
-        // to the enhanced copy sitting in the payload.
-        if (k === 'enhanced') continue;
+        // No enhanced copy is handed out here, of the photograph or of
+        // the selfie behind it. They are shown only where an organiser
+        // has turned enhancement on for the album, and that is decided
+        // by the gallery, which puts them in itself -- otherwise turning
+        // the album back off would leave a working URL to them sitting
+        // in the payload.
+        if (k === 'enhanced' || k === 'enhanced_selfie') continue;
         if (typeof v === 'string' && v) variants[k] = toBrowserUrl(v);
       }
     }
@@ -1050,7 +1057,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Albums an organiser has taken off the portal (migration 016). Their
     // photographs go with them, or hiding an album would hide only its
     // heading.
-    const { hidden, enhanced } = await albumSettings(event.id);
+    const { hidden, enhanced, xray } = await albumSettings(event.id);
     const offered = GALLERY_ORDER.filter((v) => !hidden.has(v));
 
     // The album's own names, and the slugs a link is written with.
@@ -1130,6 +1137,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // Whether this album is showing the enhanced copies, so the page
         // can offer the before-and-after only where there is one.
         enhanced: enhanced.has(v),
+        // Whether the selfies behind this album's pictures may be shown.
+        xray: xray.has(v),
       }));
 
     /**
@@ -1142,8 +1151,21 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const forFeed = (r: FeedRow) => {
       const item = mapFeedItem(r);
       const view = tagView(r.metadata);
-      const withSlug = { ...item, album_slug: slugFor(view) };
       const better = (r.variants ?? {}) as Record<string, unknown>;
+      const withSlug = { ...item, album_slug: slugFor(view) } as Record<string, unknown>;
+      // A selfie is not what anybody posed for. It leaves here only for
+      // an album whose organiser has turned x-ray on (asked 2026-09-28).
+      if (!xray.has(view)) delete withSlug['selfie'];
+      // A booth picture's enhanced copy is of the selfie behind it: the
+      // poster was made under imagined light, the selfie in a very dark
+      // room (asked 2026-09-28). Shown in place of the selfie, and only
+      // where the album asks for enhanced copies.
+      if (xray.has(view) && enhanced.has(view)
+        && typeof better['enhanced_selfie'] === 'string' && withSlug['selfie']) {
+        withSlug['selfie'] = toBrowserUrl(better['enhanced_selfie'] as string);
+        withSlug['selfie_original'] = item.selfie;
+        withSlug['selfie_enhanced'] = true;
+      }
       if (!enhanced.has(view) || typeof better['enhanced'] !== 'string') return withSlug;
       const path = better['enhanced'] as string;
       return {

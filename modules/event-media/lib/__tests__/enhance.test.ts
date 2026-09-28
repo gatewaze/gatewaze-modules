@@ -53,22 +53,25 @@ describe('what the photograph is actually put through', () => {
   // still has to land within them.
   it('keeps the strongest possible answer gentle', () => {
     const most = opsFor(verdict({ exposure: 100, contrast: 100, warmth: 100, saturation: 100, sharpen: 100 }));
-    expect(most.linear.multiplier).toBeCloseTo(1.2, 3);
-    expect(most.modulate.saturation).toBeCloseTo(1.2, 3);
+    expect(most.linear.multiplier).toBeCloseTo(1.3, 3);
+    expect(most.modulate.saturation).toBeCloseTo(1.25, 3);
     expect(most.tint.red).toBeCloseTo(1.06, 3);
     expect(most.tint.blue).toBeCloseTo(0.94, 3);
-    expect(most.sharpenSigma).toBeLessThanOrEqual(1.5);
+    expect(most.sharpenSigma).toBeLessThanOrEqual(2);
+    // Two thirds of a stop at the very most: a lift, never a relight.
+    expect(most.linear.offset).toBeLessThanOrEqual(60);
 
     const least = opsFor(verdict({ exposure: -100, contrast: -100, warmth: -100, saturation: -100 }));
-    expect(least.linear.multiplier).toBeCloseTo(0.8, 3);
-    expect(least.modulate.saturation).toBeCloseTo(0.8, 3);
+    expect(least.linear.multiplier).toBeCloseTo(0.7, 3);
+    expect(least.modulate.saturation).toBeCloseTo(0.75, 3);
     expect(least.tint.red).toBeCloseTo(0.94, 3);
   });
 
   it('lifts a dark photograph without touching its contrast', () => {
     const ops = opsFor(verdict({ exposure: 50 }));
     expect(ops.linear.multiplier).toBe(1);
-    expect(ops.linear.offset).toBeCloseTo(14, 1);
+    // Enough to see: a dark room was the reason for this feature.
+    expect(ops.linear.offset).toBeCloseTo(27.5, 1);
   });
 
   it('pivots contrast around mid grey, so mid tones stay put', () => {

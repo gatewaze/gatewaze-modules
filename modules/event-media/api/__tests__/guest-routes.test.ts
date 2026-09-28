@@ -1449,8 +1449,8 @@ describe('eventGallery', () => {
     expect(res.body.event.name).toBe('Dan & Sarah');
     // In the order the day ran, hidden photos counted in neither.
     expect(res.body.albums).toEqual([
-      { album: 'ready', slug: 'getting-ready', name: 'Getting ready', count: 2, enhanced: false },
-      { album: 'day', slug: 'the-day', name: 'The day', count: 1, enhanced: false },
+      { album: 'ready', slug: 'getting-ready', name: 'Getting ready', count: 2, enhanced: false, xray: false },
+      { album: 'day', slug: 'the-day', name: 'The day', count: 1, enhanced: false, xray: false },
     ]);
     expect(res.body.items).toHaveLength(3);
     expect(res.body.total).toBe(3);
@@ -1676,5 +1676,58 @@ describe('the enhanced copy stays out of the guest feed', () => {
     expect(res.body.items[0].variants.plate).toContain('plate.jpg');
     expect(res.body.items[0].variants.enhanced).toBeUndefined();
     expect(JSON.stringify(res.body)).not.toContain('enhanced-y.jpg');
+  });
+});
+
+// A selfie is not what anybody posed for: it leaves the server only for
+// an album whose organiser has turned x-ray on.
+describe('the selfies behind the booth pictures', () => {
+  const ALBUM_BOOTH = 'aaaa1111-0000-4000-8000-000000000003';
+  const boothRow = {
+    id: '66666666-6666-4666-8666-666666666666',
+    storage_path: `event/${EVENT_ID}/x/booth.jpg`,
+    mime_type: 'image/jpeg', bytes: 100, width: null, height: null,
+    variants: { enhanced_selfie: `event/${EVENT_ID}/x/enhanced-selfie.jpg` },
+    metadata: { source: 'guest', album: 'booth', selfie: `event/${EVENT_ID}/x/selfie.jpg`, look: '1970s' },
+    created_at: '2026-09-25T21:00:00.000Z',
+  };
+  const TABLES_B = {
+    events_media_upload_links: { data: [{ id: LINK_ID, expires_at: null }], error: null },
+    event_media_view_albums: {
+      data: [{ album_id: ALBUM_BOOTH, view: 'booth', host_media_albums: { name: 'Photo booth' } }],
+      error: null,
+    },
+    host_media_album_items: { data: [], error: null },
+  };
+  const gallery = async (settings) => {
+    const { deps } = makeDeps({
+      event: EVENT_ROW, mediaRows: [boothRow],
+      tables: { ...TABLES_B, event_media_album_settings: { data: settings, error: null } },
+    });
+    const res = mockRes();
+    await createGuestRoutes(deps).eventGallery({ params: { identifier: 'dan-sarah' }, query: {}, ip: '203.0.113.9', headers: {} }, res);
+    return res;
+  };
+
+  it('keeps them to itself unless x-ray is turned on', async () => {
+    const off = await gallery([]);
+    expect(off.body.albums[0].xray).toBe(false);
+    expect(off.body.items[0].selfie).toBeUndefined();
+    expect(JSON.stringify(off.body)).not.toContain('selfie.jpg');
+  });
+
+  it('hands them over when it is', async () => {
+    const on = await gallery([{ album_id: ALBUM_BOOTH, show_on_portal: true, xray: true }]);
+    expect(on.body.albums[0].xray).toBe(true);
+    expect(on.body.items[0].selfie).toContain('selfie.jpg');
+    // Not the enhanced one: this album is not showing enhanced copies.
+    expect(on.body.items[0].selfie).not.toContain('enhanced-selfie.jpg');
+  });
+
+  it('shows the enhanced selfie only when both are on', async () => {
+    const both = await gallery([{ album_id: ALBUM_BOOTH, show_on_portal: true, xray: true, enhance: true }]);
+    expect(both.body.items[0].selfie).toContain('enhanced-selfie.jpg');
+    expect(both.body.items[0].selfie_original).toContain('selfie.jpg');
+    expect(both.body.items[0].selfie_enhanced).toBe(true);
   });
 });

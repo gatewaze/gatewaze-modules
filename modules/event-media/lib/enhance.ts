@@ -65,12 +65,15 @@ export const ENHANCE_PROMPT = [
   'Judge only the exposure, contrast, colour temperature, colour strength and sharpness.',
   'Do not comment on the people, the composition or the subject.',
   'A photograph that is already good needs nothing: say so rather than inventing work.',
+  'Many of these were taken in a dark room, and a photograph that is genuinely dark needs',
+  'real light -- say so plainly rather than asking for a token amount that will not be seen.',
   'Answer with JSON only, no prose, no code fence, in exactly this shape:',
   '{"needs":true,"exposure":0,"contrast":0,"warmth":0,"saturation":0,"sharpen":0,"note":"one short sentence"}',
   'Each number is between -100 and 100 (sharpen between 0 and 100), where 0 means leave it alone.',
   'Positive exposure brightens, positive contrast adds punch, positive warmth is warmer,',
-  'positive saturation is more colourful. Be conservative: these are real photographs of real',
-  'people and the result must still look like the photograph that was taken.',
+  'positive saturation is more colourful. Ask for what the photograph actually needs: too',
+  'timid is as wrong as too much. The result must still look like the photograph that was',
+  'taken -- these are real people -- but it should look like it on a good day.',
 ].join(' ');
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
@@ -131,16 +134,22 @@ export function worthEnhancing(v: EnhanceVerdict): boolean {
  * The verdict as things sharp can do, with the ceilings that keep this
  * an enhancement.
  *
- * The strongest thing the model can ask for is about a third of a stop
- * of exposure, a fifth more contrast, a gentle warm or cool shift, a
- * fifth more colour and a light unsharp mask. Asked for more, it gets
- * this. Nobody looking at the result should be able to say what was
- * done to it -- only that it looks like the evening did.
+ * The strongest thing the model can ask for is about two thirds of a
+ * stop of exposure, a third more contrast, a gentle warm or cool shift,
+ * a quarter more colour and a light unsharp mask. Asked for more, it
+ * gets this.
+ *
+ * These were a third of a stop and a fifth of contrast, which turned out
+ * to be invisible: the photo booth's room was very dark, and an
+ * adjustment nobody can see is not worth making or paying for (reported
+ * 2026-09-28). The ceilings are what keep this an enhancement, so they
+ * are still here -- a photograph is lifted, not relit, and nobody should
+ * be able to say what was done to it beyond "that came out well".
  */
 export function opsFor(v: EnhanceVerdict): EnhanceOps {
   // Contrast pivots around mid grey: out = (in - 128) * m + 128 + e.
-  const multiplier = 1 + (v.contrast / 100) * 0.20;
-  const exposureOffset = (v.exposure / 100) * 28;
+  const multiplier = 1 + (v.contrast / 100) * 0.30;
+  const exposureOffset = (v.exposure / 100) * 55;
   const offset = 128 - 128 * multiplier + exposureOffset;
   return {
     linear: { multiplier: Number(multiplier.toFixed(4)), offset: Number(offset.toFixed(2)) },
@@ -148,7 +157,7 @@ export function opsFor(v: EnhanceVerdict): EnhanceOps {
       // Brightness is left to the linear offset above; modulate carries
       // the colour. Both at once double-counts and blows highlights.
       brightness: 1,
-      saturation: Number((1 + (v.saturation / 100) * 0.20).toFixed(4)),
+      saturation: Number((1 + (v.saturation / 100) * 0.25).toFixed(4)),
     },
     tint: {
       red: Number((1 + (v.warmth / 100) * 0.06).toFixed(4)),
@@ -157,7 +166,7 @@ export function opsFor(v: EnhanceVerdict): EnhanceOps {
     // A photograph that is genuinely soft cannot be rescued by
     // sharpening, and an over-sharpened face looks worse than a soft
     // one, so this stays gentle.
-    sharpenSigma: v.sharpen >= WORTH_DOING ? Number((0.5 + (v.sharpen / 100) * 1.0).toFixed(2)) : 0,
+    sharpenSigma: v.sharpen >= WORTH_DOING ? Number((0.6 + (v.sharpen / 100) * 1.4).toFixed(2)) : 0,
   };
 }
 
@@ -211,7 +220,7 @@ export function applyOps(
  * opsFor, and an over-sharpened face looks worse than a soft one.
  */
 function unsharp(data: Uint8ClampedArray, width: number, height: number, sigma: number): void {
-  const amount = Math.min(1, sigma / 1.5) * 0.6;
+  const amount = Math.min(1, sigma / 2) * 0.8;
   if (amount <= 0 || width < 3 || height < 3) return;
   // A copy to read from, so each pixel sees its neighbours as they were.
   const src = new Uint8ClampedArray(data);
