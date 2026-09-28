@@ -51,6 +51,8 @@ function TickIcon({ className }: { className?: string }) {
 }
 
 const PAGE = 24
+/** How long a photograph takes to leave once it has been let go. */
+const LEAVE_MS = 200
 
 interface GalleryItem {
   id: string
@@ -117,6 +119,14 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
   // picture follows the finger rather than a swipe being detected after
   // the fact (asked 2026-09-28).
   const [drag, setDrag] = useState(0)
+  /**
+   * The photograph on its way out. Letting go used to snap the picture
+   * back to the middle and change what it showed in the same breath,
+   * which reads as a bounce rather than a page turning (reported
+   * 2026-09-28): it now carries on the way the finger went, and the next
+   * one takes its place once it has gone.
+   */
+  const [leaving, setLeaving] = useState<0 | -1 | 1>(0)
   const dragFrom = useRef<{ x: number; y: number; at: number } | null>(null)
   const dragging = useRef(false)
   // A photograph a link named, shown before the page it sits on has
@@ -288,6 +298,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
     setOpenEnhanced(null)
     setOpenXray(null)
     setDrag(0)
+    setLeaving(0)
     setLightbox(i)
   }, [])
   // Only the booth's own albums have selfies behind their pictures.
@@ -318,8 +329,11 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
+      {/* All of them on screen at once: a row that scrolls sideways hides
+          half the albums behind an edge nobody notices (reported
+          2026-09-28). Wrapping costs a line of height and nothing else. */}
       {chips.length > 1 && (
-        <div className="flex gap-2 overflow-x-auto pb-3 -mx-1 px-1">
+        <div className="mb-1 flex flex-wrap gap-2 pb-2">
           {chips.map((c) => {
             const on = c.album === chosen
             return (
@@ -342,32 +356,39 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
         </div>
       )}
 
-      {albumIsEnhanced && (
-        <label className={`mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm ${subText}`}>
-          <input
-            type="checkbox"
-            checked={showEnhanced}
-            onChange={(e) => setShowEnhanced(e.target.checked)}
-            className="h-4 w-4"
-          />
-          Enhanced: show the improved copies
-        </label>
-      )}
-
-      {someSelfies && (
-        <label className={`mb-3 flex w-fit cursor-pointer items-center gap-2 text-sm ${subText}`}>
-          <input
-            type="checkbox"
-            checked={xray}
-            onChange={(e) => setXray(e.target.checked)}
-            className="h-4 w-4"
-          />
-          X-ray: show the selfies people actually took
-        </label>
-      )}
-
       {items.length > 0 && (
-        <div className="mb-3 flex justify-end">
+        <div className="mb-3 flex items-center justify-end gap-2">
+          {/* What you can change about what you are looking at, beside
+              the link -- not a column of worded checkboxes under the
+              albums (asked 2026-09-28). */}
+          {albumIsEnhanced && (
+            <button
+              onClick={() => setShowEnhanced((v) => !v)}
+              title={showEnhanced ? 'Showing the improved copies' : 'Showing the photos as they were taken'}
+              aria-label={showEnhanced ? 'Show the photos as they were taken' : 'Show the improved copies'}
+              aria-pressed={showEnhanced}
+              className="rounded-full p-2"
+              style={showEnhanced
+                ? { background: '#ffffff', color: '#111827' }
+                : { background: darkMode ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.05)', color: darkMode ? 'rgba(255,255,255,0.85)' : '#374151' }}
+            >
+              <SparkIcon className="h-4 w-4" />
+            </button>
+          )}
+          {someSelfies && (
+            <button
+              onClick={() => setXray((v) => !v)}
+              title={xray ? 'Showing the selfies people took' : 'Showing what the booth made of them'}
+              aria-label={xray ? 'Show what the booth made' : 'Show the selfies people took'}
+              aria-pressed={xray}
+              className="rounded-full p-2"
+              style={xray
+                ? { background: '#ffffff', color: '#111827' }
+                : { background: darkMode ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.05)', color: darkMode ? 'rgba(255,255,255,0.85)' : '#374151' }}
+            >
+              <XrayIcon className="h-4 w-4" />
+            </button>
+          )}
           <button
             onClick={() => void copyLink(chosen, null)}
             title={copied ? 'Link copied' : chosen ? 'Copy a link to this album' : 'Copy a link to these photos'}
@@ -464,15 +485,29 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
               if (!from || !dragging.current) { setDrag(0); return }
               dragging.current = false
               const verdict = swipeVerdict({ dx: drag, ms: Date.now() - from.at, width: window.innerWidth })
-              setDrag(0)
-              if (verdict === 'next' && lightbox !== null && lightbox < items.length - 1) openAt(lightbox + 1)
-              if (verdict === 'previous' && lightbox !== null && lightbox > 0) openAt(lightbox - 1)
+              const goes = (verdict === 'next' && lightbox !== null && lightbox < items.length - 1)
+                || (verdict === 'previous' && lightbox !== null && lightbox > 0)
+              if (!goes || lightbox === null) { setDrag(0); return }
+              // Off the way the finger went, then the next one arrives in
+              // its place. Changing the picture while it springs back is
+              // what made this feel like a bounce rather than a turn.
+              const way = verdict === 'next' ? -1 : 1
+              setLeaving(way)
+              setDrag(way * window.innerWidth)
+              window.setTimeout(() => {
+                openAt(verdict === 'next' ? lightbox + 1 : lightbox - 1)
+                setLeaving(0)
+              }, LEAVE_MS)
             }}
             style={{
               transform: `translateX(${drag}px)`,
-              // While a finger is down the picture follows it exactly;
-              // when it lifts, the picture settles.
-              transition: drag === 0 ? 'transform 220ms ease-out' : 'none',
+              // While a finger is down the picture follows it exactly. On
+              // release it either settles back or carries on out, and
+              // both of those are animated; only the drag itself is not.
+              transition: dragFrom.current && drag !== 0
+                ? 'none'
+                : `transform ${leaving ? LEAVE_MS : 220}ms ease-out`,
+              opacity: leaving ? 0.15 : 1,
               touchAction: 'pan-y',
             }}
           >

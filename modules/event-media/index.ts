@@ -7,7 +7,7 @@ const eventMediaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Media',
   description: 'Photo and video galleries, media uploads, and album management for events',
-  version: '1.93.0',
+  version: '1.94.0',
   features: [
     'event-media',
     'event-media.upload',
@@ -38,6 +38,7 @@ const eventMediaModule: GatewazeModule = {
     'migrations/019_album_xray.sql',
     'migrations/020_booth_limits.sql',
     'migrations/021_photographer_links.sql',
+    'migrations/022_evening_from.sql',
   ],
 
   apiRoutes: async (app: unknown, context?: unknown) => {

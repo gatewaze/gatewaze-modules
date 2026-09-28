@@ -867,6 +867,24 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     return { hidden, enhanced, xray };
   }
 
+  /**
+   * When this event's evening reception starts, in minutes past
+   * midnight, or null for the usual half past six (migration 022).
+   */
+  async function eveningFromFor(eventId: string): Promise<number | null> {
+    try {
+      const { data } = await supabase
+        .from('events_media_booth_settings')
+        .select('evening_from_minutes')
+        .eq('event_id', eventId)
+        .maybeSingle();
+      const v = Number(data?.evening_from_minutes);
+      return Number.isFinite(v) && v >= 0 && v < 1440 ? Math.floor(v) : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** The event's booth settings row, or null. Never fails a request. */
   async function boothSettingsFor(eventId: string): Promise<Record<string, unknown> | null> {
     try {
@@ -1403,6 +1421,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     actualBytes: number,
     autoApprove: boolean,
     eventStart: string | null,
+    eveningFromMinutes: number | null,
   ): Record<string, unknown> {
     return {
       id: p.media_id,
@@ -1436,6 +1455,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
           eventStart,
           now: Date.now(),
           takenAt: typeof p.taken_at === 'string' ? p.taken_at : null,
+          eveningFromMinutes,
         }),
         // Kept so an organiser can see why it landed where it did.
         ...(typeof p.taken_at === 'string' && p.taken_at ? { taken_at: p.taken_at } : {}),
@@ -1565,7 +1585,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         continue;
       }
 
-      const row = buildInsertRow(p, head.bytes || 0, link.auto_approve, event.event_start ?? null);
+      const row = buildInsertRow(
+        p, head.bytes || 0, link.auto_approve, event.event_start ?? null,
+        await eveningFromFor(link.event_id),
+      );
       (row['metadata'] as Record<string, unknown>)['upload_link_id'] = link.id;
 
       const { data: inserted, error: insErr } = await supabase

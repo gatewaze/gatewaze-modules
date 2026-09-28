@@ -261,17 +261,21 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   // GPU endpoint, and a QR code outlives the party. 0 means no limit.
   const [closesHours, setClosesHours] = useState(0);
   const [maxPerGuest, setMaxPerGuest] = useState(0);
+  // When the evening reception starts, in minutes past midnight. Photos
+  // taken from then go to their own album (migration 022).
+  const [eveningFrom, setEveningFrom] = useState(18 * 60 + 30);
   useEffect(() => {
     if (!expanded) return;
     let cancelled = false;
     void supabase
       .from('events_media_booth_settings')
-      .select('era, pose_mode, pose_minutes, ready_hours, booth_closes_hours, booth_max_per_guest')
+      .select('era, pose_mode, pose_minutes, ready_hours, booth_closes_hours, booth_max_per_guest, evening_from_minutes')
       .eq('event_id', eventId)
       .maybeSingle()
       .then(({ data }: { data: {
         era?: string; pose_mode?: string; pose_minutes?: number; ready_hours?: number;
         booth_closes_hours?: number | null; booth_max_per_guest?: number | null;
+        evening_from_minutes?: number | null;
       } | null }) => {
         if (cancelled || !data) return;
         if (data.era) setBoothEra(data.era);
@@ -280,6 +284,7 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
         if (typeof data.ready_hours === 'number') setReadyHours(data.ready_hours);
         setClosesHours(typeof data.booth_closes_hours === 'number' ? data.booth_closes_hours : 0);
         setMaxPerGuest(typeof data.booth_max_per_guest === 'number' ? data.booth_max_per_guest : 0);
+        setEveningFrom(typeof data.evening_from_minutes === 'number' ? data.evening_from_minutes : 18 * 60 + 30);
       });
     return () => { cancelled = true; };
   }, [expanded, eventId]);
@@ -814,6 +819,29 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                 ))}
               </select>
             </label>
+            {/* Which photographs are the evening's. Not every reception
+                starts at half past six. */}
+            <label className="flex items-center gap-2 text-sm">
+              The evening reception starts at
+              <input
+                type="time"
+                value={`${String(Math.floor(eveningFrom / 60)).padStart(2, '0')}:${String(eveningFrom % 60).padStart(2, '0')}`}
+                onChange={(e) => {
+                  const [h, m] = e.target.value.split(':').map(Number);
+                  if (!Number.isFinite(h) || !Number.isFinite(m)) return;
+                  const next = h * 60 + m;
+                  const prev = eveningFrom;
+                  setEveningFrom(next);
+                  void saveBooth({ evening_from_minutes: next }, () => setEveningFrom(prev),
+                    `Photos from ${e.target.value} are the evening reception's`);
+                }}
+                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
+              />
+            </label>
+            <p className="text-xs text-gray-500">
+              Photos already filed stay where they are — this decides where new ones go.
+            </p>
+
             {/* What the booth costs is bounded by these two, not by
                 hoping guests stop (migration 020). */}
             <label className="flex items-center gap-2 text-sm">
