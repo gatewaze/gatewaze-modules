@@ -181,13 +181,26 @@ describe('recording an enhanced copy', () => {
     expect(state.updated[0].storage_path).toBeUndefined();
   });
 
-  // Kept apart, so a selfie can never be served as the photograph.
-  it('keeps an enhanced selfie under its own key', async () => {
+  // Kept apart, so a selfie can never be served as the photograph -- and
+  // decided here rather than taken from the browser, which is how 135
+  // enhanced selfies ended up in the photograph's slot.
+  it('files a booth picture\'s copy as the selfie, whatever the browser says', async () => {
+    const booth = { ...PHOTO, metadata: { album: 'booth', selfie: `event/${EVENT}/${MEDIA}/selfie.jpg` } };
+    for (const claimed of [{ of: 'photo' }, {}, { of: 'nonsense' }]) {
+      const { res, state } = await record({ row: booth }, { ...GOOD, ...claimed });
+      expect(res.statusCode).toBe(200);
+      expect(state.updated[0].variants.enhanced_selfie).toBe(GOOD.storage_path);
+      expect(state.updated[0].variants.enhanced).toBeUndefined();
+      expect(res.body.of).toBe('selfie');
+    }
+  });
+
+  it('files a photograph\'s copy as the photograph, whatever the browser says', async () => {
     const { res, state } = await record({}, { ...GOOD, of: 'selfie' });
     expect(res.statusCode).toBe(200);
-    expect(state.updated[0].variants.enhanced_selfie).toBe(GOOD.storage_path);
-    expect(state.updated[0].variants.enhanced).toBeUndefined();
-    expect(res.body.of).toBe('selfie');
+    expect(state.updated[0].variants.enhanced).toBe(GOOD.storage_path);
+    expect(state.updated[0].variants.enhanced_selfie).toBeUndefined();
+    expect(res.body.of).toBe('photo');
   });
 
   it('refuses a path that is not beside the photograph', async () => {

@@ -218,10 +218,14 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     const mediaId = typeof body['media_id'] === 'string' ? body['media_id'] : '';
     const path = typeof body['storage_path'] === 'string' ? body['storage_path'] : '';
     const bytes = Number(body['bytes']);
-    // A booth picture's enhanced copy is of its selfie, and is kept apart
-    // from an enhanced photograph so neither can be shown as the other.
-    const of = body['of'] === 'selfie' ? 'selfie' : 'photo';
-    const key = of === 'selfie' ? 'enhanced_selfie' : 'enhanced';
+    // What the copy is OF is decided here, from the row, exactly as the
+    // asking half decides what to look at -- never from the browser.
+    // Taking the browser's word for it put 135 enhanced selfies into the
+    // photograph's slot, because a page that had not been reloaded since
+    // the morning did not know to say (found 2026-09-28): the booth's
+    // posters were replaced on screen by enhanced selfies.
+    let of: 'photo' | 'selfie' = 'photo';
+    let key: 'enhanced' | 'enhanced_selfie' = 'enhanced';
     if (!UUID_RE.test(mediaId) || !PATH_RE.test(path)
       || !Number.isInteger(bytes) || bytes < 1 || bytes > MAX_COPY_BYTES) {
       sendError(res, 400, 'invalid_request', 'media_id, storage_path and bytes are required');
@@ -258,8 +262,12 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     }
 
     const had = (row.variants ?? {}) as Record<string, unknown>;
-    const previous = typeof had[key] === 'string' ? (had[key] as string) : null;
     const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    if (typeof meta['selfie'] === 'string' && meta['selfie']) {
+      of = 'selfie';
+      key = 'enhanced_selfie';
+    }
+    const previous = typeof had[key] === 'string' ? (had[key] as string) : null;
     const record = meta['enhance'] && typeof meta['enhance'] === 'object'
       ? (meta['enhance'] as Record<string, unknown>) : {};
     const { error: updErr } = await db
