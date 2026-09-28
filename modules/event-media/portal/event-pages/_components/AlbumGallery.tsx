@@ -157,7 +157,14 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
         setTotal(data.total ?? 0)
         setNextOffset(data.next_offset ?? null)
         if (data.focus) {
-          setFocus(data.focus)
+          // If the link's photograph is on this page, it becomes the one
+          // being looked at rather than a thing shown over the top: then
+          // it drags, it has neighbours, and the arrows move from it. A
+          // photograph further in than the first page stays a focus until
+          // the page it sits on has loaded.
+          const here = (data.items ?? []).findIndex((i) => i.id === data.focus!.id)
+          if (here >= 0) setLightbox(here)
+          else setFocus(data.focus)
           // Only on the way in: choosing another album afterwards should
           // not reopen the photograph the link named.
           wantedPhoto.current = null
@@ -214,6 +221,22 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
   // Arrow keys move through the grid once a link's photograph is closed.
 
   const open = focus ?? (lightbox === null ? null : items[lightbox] ?? null)
+
+  // The one on either side, fetched while this one is being looked at,
+  // so a drag brings in a photograph rather than a gap. Fetched, not
+  // rendered: on a desktop the picture is narrower than the window and
+  // anything parked beside it is simply visible (reported 2026-09-28).
+  useEffect(() => {
+    if (lightbox === null || typeof window === 'undefined') return
+    for (const at of [lightbox - 1, lightbox + 1]) {
+      const item = items[at]
+      if (!item) continue
+      const img = new window.Image()
+      img.src = faceOf(item, 1200, { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced })
+    }
+    // faceOf reads the switches, and both are in the deps below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightbox, items, openXray, xray, openEnhanced, showEnhanced])
 
   /**
    * The address bar always holds the link for what is on screen, so
@@ -415,7 +438,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
             className="relative max-h-full max-w-4xl"
             onClick={(e) => e.stopPropagation()}
             onTouchStart={(e) => {
-              if (focus || e.touches.length !== 1) return
+              if (lightbox === null || e.touches.length !== 1) return
               const t = e.touches[0]!
               dragFrom.current = { x: t.clientX, y: t.clientY, at: Date.now() }
               dragging.current = false
@@ -466,7 +489,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
             )}
             {/* The one on either side, waiting just off screen, so the
                 drag brings a photograph in rather than a black gap. */}
-            {lightbox !== null && !focus && items[lightbox - 1] && (
+            {drag !== 0 && lightbox !== null && items[lightbox - 1] && (
               // eslint-disable-next-line @next/next/no-img-element -- the neighbour, off screen
               <img
                 src={faceOf(items[lightbox - 1]!, 1200, { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced })}
@@ -476,7 +499,7 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
                 style={{ right: '100%', marginRight: 24 }}
               />
             )}
-            {lightbox !== null && !focus && items[lightbox + 1] && (
+            {drag !== 0 && lightbox !== null && items[lightbox + 1] && (
               // eslint-disable-next-line @next/next/no-img-element -- the neighbour, off screen
               <img
                 src={faceOf(items[lightbox + 1]!, 1200, { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced })}
@@ -533,9 +556,14 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
               </button>
             </div>
           </div>
+          {/* On a desktop there is no finger to drag with, so the arrows
+              are the whole of the navigation: round, dark enough to see
+              against a photograph, and a target rather than a character
+              at the edge of the screen (reported 2026-09-28). */}
           {lightbox !== null && lightbox > 0 && (
             <button
-              className="absolute left-2 top-1/2 -translate-y-1/2 px-3 py-6 text-4xl text-white/80"
+              className="absolute left-3 top-1/2 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full text-2xl text-white sm:left-6 sm:h-14 sm:w-14"
+              style={{ background: 'rgba(0,0,0,0.55)' }}
               onClick={(e) => { e.stopPropagation(); openAt(lightbox - 1) }}
               aria-label="Previous photo"
             >
@@ -544,7 +572,8 @@ export default function AlbumGallery({ eventIdentifier, darkMode, initialAlbum, 
           )}
           {lightbox !== null && lightbox < items.length - 1 && (
             <button
-              className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-6 text-4xl text-white/80"
+              className="absolute right-3 top-1/2 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full text-2xl text-white sm:right-6 sm:h-14 sm:w-14"
+              style={{ background: 'rgba(0,0,0,0.55)' }}
               onClick={(e) => { e.stopPropagation(); openAt(lightbox + 1) }}
               aria-label="Next photo"
             >
