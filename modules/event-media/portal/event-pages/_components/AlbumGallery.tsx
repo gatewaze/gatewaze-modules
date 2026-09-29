@@ -42,6 +42,17 @@ function SparkIcon({ className }: { className?: string }) {
   )
 }
 
+/** A half-filled frame, for swapping to the other version of a booth photo. */
+function XrayIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className={className} aria-hidden="true">
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <path d="M12 4.5v15" />
+      <path d="M12 4.5h6a2.5 2.5 0 0 1 2.5 2.5v10a2.5 2.5 0 0 1-2.5 2.5h-6Z" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 /** A tick, for a moment after a link is copied. */
 function TickIcon({ className }: { className?: string }) {
   return (

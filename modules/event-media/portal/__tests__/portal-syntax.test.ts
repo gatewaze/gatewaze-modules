@@ -159,3 +159,75 @@ describe('hook dependencies are declared before the hook', () => {
     });
   }
 });
+
+/**
+ * Every component a page renders has to actually exist somewhere.
+ *
+ * Live incident 2026-09-29: AlbumGallery rendered `<XrayIcon />`, which
+ * was never written. `<SparkIcon>`, `<LinkIcon>` and `<TickIcon>` beside
+ * it all were, so the file read as finished. The parse gate passed (the
+ * JSX is well-formed), both hook gates passed, and the module's tsconfig
+ * covers only `lib/**` and `api/**`, so no typechecker ever looked at
+ * the file. It reached production, where the button is only rendered for
+ * an album with x-ray on — so four of the five albums worked and the
+ * photo booth threw `ReferenceError: XrayIcon is not defined` into the
+ * portal's error boundary.
+ *
+ * Deliberately crude: it asks only whether the name is bound ANYWHERE in
+ * the file, at any scope, or imported. That cannot catch a name used out
+ * of scope, but it does catch a name that does not exist — which is the
+ * fault that ships.
+ */
+describe('every component rendered is defined', () => {
+  // Bound by the runtime or by the JSX transform, not by a declaration.
+  const AMBIENT = new Set(['React', 'Fragment']);
+
+  for (const file of files.filter((f) => f.endsWith('.tsx'))) {
+    const rel = file.slice(PORTAL.length + 1);
+    it(`renders nothing undefined in ${rel}`, () => {
+      const source = readFileSync(file, 'utf8');
+      const sf = ts.createSourceFile(file, source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TSX);
+
+      const bound = new Set<string>(AMBIENT);
+      const rendered: Array<{ name: string; line: number }> = [];
+
+      const walk = (node: ts.Node): void => {
+        // Anything that introduces a name, at any scope. A plain
+        // identifier binding is all we need; a destructuring pattern
+        // binds through BindingElements, which this visits in turn.
+        if (
+          (ts.isVariableDeclaration(node) ||
+            ts.isFunctionDeclaration(node) ||
+            ts.isClassDeclaration(node) ||
+            ts.isParameter(node) ||
+            ts.isImportClause(node) ||
+            ts.isImportSpecifier(node) ||
+            ts.isNamespaceImport(node) ||
+            ts.isBindingElement(node)) &&
+          node.name &&
+          ts.isIdentifier(node.name)
+        ) {
+          bound.add(node.name.text);
+        }
+
+        if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+          // `Foo.Bar` only needs `Foo`; a lowercase tag is an HTML element.
+          let tag: ts.Node = node.tagName;
+          while (ts.isPropertyAccessExpression(tag)) tag = tag.expression;
+          if (ts.isIdentifier(tag) && /^[A-Z]/.test(tag.text)) {
+            const at = sf.getLineAndCharacterOfPosition(tag.getStart(sf));
+            rendered.push({ name: tag.text, line: at.line + 1 });
+          }
+        }
+
+        ts.forEachChild(node, walk);
+      };
+      walk(sf);
+
+      const offenders = rendered
+        .filter((r) => !bound.has(r.name))
+        .map((r) => `${rel}:${r.line} renders <${r.name}>, which is never defined or imported`);
+      expect(offenders).toEqual([]);
+    });
+  }
+});
