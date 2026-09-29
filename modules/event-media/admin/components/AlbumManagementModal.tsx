@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon, SunIcon } from '@heroicons/react/24/outline';
 import { Button, Modal, Input, ConfirmModal } from '@/components/ui';
 import { createAlbum, updateAlbum, deleteAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
 import {
@@ -11,6 +11,7 @@ import {
   saveAlbumSetting,
 } from '../utils/mediaOrganizerService';
 import { enhanceMedia, type EnhanceProgress } from '../utils/enhanceMedia';
+import { aiEnhanceMedia, type AiEnhanceProgress } from '../utils/aiEnhanceMedia';
 
 interface AlbumManagementModalProps {
   eventId: string;
@@ -35,10 +36,11 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
   const [toggling, setToggling] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [progress, setProgress] = useState<EnhanceProgress | null>(null);
+  const [aiProgress, setAiProgress] = useState<AiEnhanceProgress | null>(null);
   const stopRef = useRef(false);
 
   const settingFor = useCallback((id: string): AlbumSetting => (
-    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false }
+    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false, enhance_source: 'standard' as const }
   ), [settings]);
 
   useEffect(() => {
@@ -80,6 +82,29 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
       toast.error(err instanceof Error ? err.message : 'The enhancement stopped');
     } finally {
       setRunning(null);
+    }
+  }, [eventId, mediaIdsIn, onChanged]);
+
+  /**
+   * Walk the album, relighting it with the model. Paid per photograph,
+   * so one already relit is left alone unless Redo is used, and the
+   * count is said out loud before anything is spent.
+   */
+  const runAiEnhance = useCallback(async (album: HostMediaAlbum, force = false) => {
+    const ids = mediaIdsIn ? mediaIdsIn(album.id) : [];
+    if (ids.length === 0) { toast.error('There are no photos in that album yet'); return; }
+    stopRef.current = false;
+    setRunning(album.id);
+    setAiProgress({ done: 0, total: ids.length, relit: 0, skipped: 0, failed: 0 });
+    try {
+      const done = await aiEnhanceMedia(eventId, ids, setAiProgress, () => !stopRef.current, 'media', force);
+      toast.success(`${done.relit} relit, ${done.skipped} already done${done.failed ? `, ${done.failed} could not be done` : ''}`);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'The relighting stopped');
+    } finally {
+      setRunning(null);
+      setAiProgress(null);
     }
   }, [eventId, mediaIdsIn, onChanged]);
 
@@ -204,11 +229,15 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                   {album.description && <p className="mt-1 text-sm text-[var(--gray-a10)]">{album.description}</p>}
                   <p className="mt-1 text-xs text-[var(--gray-a9)]">
                     {settingFor(album.id).show_on_portal ? 'Shown on the portal' : 'Not shown on the portal'}
-                    {settingFor(album.id).enhance ? ' · enhanced' : ''}
-                    {settingFor(album.id).xray ? ' · selfies shown' : ''}
-                    {running === album.id && progress
-                      ? ` · improving ${progress.done} of ${progress.total}…`
+                    {settingFor(album.id).enhance
+                      ? (settingFor(album.id).enhance_source === 'ai' ? ' · relit' : ' · enhanced')
                       : ''}
+                    {settingFor(album.id).xray ? ' · selfies shown' : ''}
+                    {running === album.id && aiProgress
+                      ? ` · relighting ${aiProgress.done} of ${aiProgress.total}…`
+                      : running === album.id && progress
+                        ? ` · improving ${progress.done} of ${progress.total}…`
+                        : ''}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1">
@@ -286,6 +315,37 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                       Redo
                     </button>
                   )}
+                  {mediaIdsIn && running === null && (
+                    <button
+                      type="button"
+                      title="Relight every photo in this album with the model. Costs a few pence per photo, and it redraws them — the originals are kept."
+                      onClick={() => void runAiEnhance(album)}
+                      className="rounded px-2 py-1 text-xs text-[var(--gray-a10)] hover:bg-[var(--gray-a3)]"
+                    >
+                      Relight
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={toggling === album.id || !settingFor(album.id).enhance}
+                    title={!settingFor(album.id).enhance
+                      ? 'Turn improved copies on first'
+                      : settingFor(album.id).enhance_source === 'ai'
+                        ? 'Showing the model\'s relit copies — click to show the arithmetic ones'
+                        : 'Showing the arithmetic copies — click to show the model\'s relit ones where they exist'}
+                    onClick={() => void change(
+                      album,
+                      { enhance_source: settingFor(album.id).enhance_source === 'ai' ? 'standard' : 'ai' },
+                      settingFor(album.id).enhance_source === 'ai'
+                        ? `"${album.name}" shows the arithmetic copies`
+                        : `"${album.name}" shows the relit copies where there are any`,
+                    )}
+                    className={`rounded p-1 hover:bg-[var(--gray-a3)] disabled:opacity-30 ${
+                      settingFor(album.id).enhance_source === 'ai' ? 'text-[var(--accent-11)]' : 'text-[var(--gray-a8)]'
+                    }`}
+                  >
+                    <SunIcon className="h-4 w-4" />
+                  </button>
                   <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--gray-a3)] disabled:opacity-30">
                     <ChevronUpIcon className="h-4 w-4" />
                   </button>

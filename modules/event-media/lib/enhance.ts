@@ -401,3 +401,67 @@ export function withMeasuredTone(ops: EnhanceOps, mean: number, dark: number): E
     },
   };
 }
+
+/** The average of each colour channel, for judging a cast. */
+export interface ChannelMeans { r: number; g: number; b: number }
+
+/** Where each channel sits on average. Sampled as `meanLuma` samples. */
+export function channelMeans(data: Uint8ClampedArray): ChannelMeans {
+  if (data.length < 4) return { r: 128, g: 128, b: 128 };
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < data.length; i += 32) {
+    r += data[i]!;
+    g += data[i + 1]!;
+    b += data[i + 2]!;
+    n += 1;
+  }
+  return n > 0 ? { r: r / n, g: g / n, b: b / n } : { r: 128, g: 128, b: 128 };
+}
+
+/**
+ * How far back towards the original's colour a generated copy is pulled.
+ * Not all of the way: the model is entitled to change the light, and
+ * some of the warmth it adds belongs to the relighting rather than to
+ * the cast.
+ */
+const WHITE_BALANCE_PULL = 0.8;
+/** The most this will scale a channel, either way. */
+const TINT_LIMIT = { lo: 0.75, hi: 1.35 };
+
+/**
+ * The tint that puts a generated copy back on the original's colour.
+ *
+ * ControlLight warms every photograph it touches: measured over the
+ * wedding's night-before album on 2026-09-29, red rose against green on
+ * all seven, by 0.035 to 0.162, and the copies read as too warm
+ * (reported the same day). The drift is not the same on each, so a fixed
+ * cooling tint would overcorrect some and miss others.
+ *
+ * Ratios to green are used rather than absolute channel means, so a
+ * photograph the model legitimately brightened is not dragged back down:
+ * this moves the COLOUR towards the original and leaves the light alone.
+ */
+export function neutraliseFor(original: ChannelMeans, copy: ChannelMeans): { red: number; blue: number } {
+  const safe = (v: number) => (Number.isFinite(v) && v > 0.5 ? v : 1);
+  const oRed = safe(original.r) / safe(original.g);
+  const oBlue = safe(original.b) / safe(original.g);
+  const cRed = safe(copy.r) / safe(copy.g);
+  const cBlue = safe(copy.b) / safe(copy.g);
+  const pull = (want: number, have: number) => {
+    const full = want / have;
+    const part = 1 + WHITE_BALANCE_PULL * (full - 1);
+    return Number(Math.max(TINT_LIMIT.lo, Math.min(TINT_LIMIT.hi, part)).toFixed(4));
+  };
+  return { red: pull(oRed, cRed), blue: pull(oBlue, cBlue) };
+}
+
+/** Those gains as something `applyOps` can run: colour only, no light. */
+export function neutraliseOps(original: ChannelMeans, copy: ChannelMeans): EnhanceOps {
+  const tint = neutraliseFor(original, copy);
+  return {
+    linear: { multiplier: 1, offset: 0 },
+    modulate: { brightness: 1, saturation: 1 },
+    tint,
+    sharpenSigma: 0,
+  };
+}

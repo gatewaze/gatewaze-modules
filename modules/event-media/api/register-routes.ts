@@ -258,6 +258,17 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     logger,
   }));
 
+  // Relighting a photograph with a model: the other half of "improve",
+  // kept apart because it can invent what the standard one cannot.
+  const { createAiEnhanceMedia, mountAiEnhanceMedia } = await import('./ai-enhance-media.js');
+  mountAiEnhanceMedia(adminRouter, createAiEnhanceMedia({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    storageBucket: STORAGE_BUCKET,
+    publicUrl: (path) => `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
+    logger,
+  }));
+
   app.use('/api/admin', adminRouter);
 
   void context;
