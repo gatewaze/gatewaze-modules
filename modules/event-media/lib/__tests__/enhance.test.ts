@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ENHANCE_PROMPT, applyOps, exposureFor, meanLuma, opsFor, parseVerdict, withMeasuredExposure, worthEnhancing } from '../enhance.js';
+import { ENHANCE_PROMPT, applyOps, darkPoint, exposureFor, meanLuma, multiplierFor, opsFor, parseVerdict, withMeasuredTone, worthEnhancing } from '../enhance.js';
 
 const verdict = (over = {}) => ({
   needs: true, exposure: 0, contrast: 0, warmth: 0, saturation: 0, sharpen: 0, note: '', ...over,
@@ -196,8 +196,9 @@ describe('a floor under a timid model', () => {
   // lifted to the offset and the photograph went milky.
   it('keeps the contrast pivot when it corrects the exposure', () => {
     const ops = opsFor({ contrast: 50, exposure: 20, saturation: 0, warmth: 0, sharpen: 0, verdict: 'yes' });
-    const fixed = withMeasuredExposure(ops, 60);
-    expect(fixed.linear.multiplier).toBe(ops.linear.multiplier);
+    const fixed = withMeasuredTone(ops, 60, 40);
+    // The contrast may be raised to protect the shadows, never lowered.
+    expect(fixed.linear.multiplier).toBeGreaterThanOrEqual(ops.linear.multiplier);
     // Black stays near black rather than being lifted onto the offset.
     const black = new Uint8ClampedArray([0, 0, 0, 255]);
     applyOps(black, 1, 1, fixed);
@@ -218,6 +219,63 @@ describe('a floor under a timid model', () => {
   it('has a ceiling of its own', () => {
     expect(exposureFor(0, 1, 0)).toBeLessThanOrEqual(55);
     expect(exposureFor(255, 1, 0)).toBeGreaterThanOrEqual(-55);
+  });
+});
+
+/**
+ * Lifting exposure adds a constant, so it moves black as far as it moves
+ * everything else. Measured on the wedding's dark photographs: shadows
+ * that sat at 8 came out at 38, which is not black, and that is what the
+ * milky look actually was.
+ */
+describe('putting the shadows back', () => {
+  /** An image with a real black point and a real highlight. */
+  const scene = (dark: number, light: number) => {
+    const d = new Uint8ClampedArray(64 * 4);
+    for (let i = 0; i < d.length; i += 4) {
+      const v = i < d.length / 2 ? dark : light;
+      d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = 255;
+    }
+    return d;
+  };
+
+  it('finds where a photograph\'s shadows sit', () => {
+    expect(darkPoint(scene(10, 200))).toBeLessThanOrEqual(11);
+    expect(darkPoint(new Uint8ClampedArray(0))).toBe(0);
+  });
+
+  it('raises contrast enough to hold the black point down', () => {
+    const dark = 8;
+    const exposure = 38;
+    const m = multiplierFor(dark, exposure, 1.03);
+    expect(m).toBeGreaterThan(1.03);
+    // Black lands near where it started rather than 38 levels above it.
+    const landed = dark * m + (128 - 128 * m) + exposure;
+    expect(landed).toBeLessThan(dark + 14);
+  });
+
+  it('leaves contrast alone when nothing was lifted', () => {
+    expect(multiplierFor(8, 0, 1.1)).toBe(1.1);
+    expect(multiplierFor(8, -10, 1.1)).toBe(1.1);
+  });
+
+  it('never lowers the contrast the model asked for, and keeps a ceiling', () => {
+    expect(multiplierFor(8, 40, 1.25)).toBeGreaterThanOrEqual(1.25);
+    expect(multiplierFor(2, 55, 1.0)).toBeLessThanOrEqual(1.30);
+    // A photograph with no shadows to protect is left to the model.
+    expect(multiplierFor(140, 40, 1.05)).toBe(1.05);
+  });
+
+  it('holds black down on a real dark scene, end to end', () => {
+    const data = scene(8, 190);
+    const ops = withMeasuredTone(
+      opsFor({ contrast: 10, exposure: 40, saturation: 0, warmth: 0, sharpen: 0, verdict: 'yes' }),
+      meanLuma(data),
+      darkPoint(data),
+    );
+    applyOps(data, 8, 8, ops);
+    // Without the contrast correction this shadow came out in the high 30s.
+    expect(data[0]!).toBeLessThan(28);
   });
 
   it('asks the model to use the whole scale', () => {

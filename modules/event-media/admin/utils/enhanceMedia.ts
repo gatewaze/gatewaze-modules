@@ -14,7 +14,7 @@
  * else's.
  */
 import { supabase } from '@/lib/supabase';
-import { applyOps, meanLuma, withMeasuredExposure, type EnhanceOps } from '../../lib/enhance';
+import { applyOps, darkPoint, meanLuma, withMeasuredTone, type EnhanceOps } from '../../lib/enhance';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -82,7 +82,7 @@ async function improve(source: string, ops: EnhanceOps): Promise<Blob> {
   // poor judge of how much -- it answered "a touch of sharpening" to
   // photographs taken in a very dark room. The pixels are not a matter of
   // opinion, so the exposure is corrected against what they measure.
-  const lifted: EnhanceOps = withMeasuredExposure(ops, meanLuma(frame.data));
+  const lifted: EnhanceOps = withMeasuredTone(ops, meanLuma(frame.data), darkPoint(frame.data));
   applyOps(frame.data, w, h, lifted);
   ctx.putImageData(frame, 0, 0);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));

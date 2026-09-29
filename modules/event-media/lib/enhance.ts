@@ -320,19 +320,84 @@ export function exposureFor(mean: number, multiplier: number, asked: number): nu
 }
 
 /**
- * The model's ops, with the exposure corrected against the real pixels.
+ * How dark this photograph's shadows are: roughly its fifth percentile.
+ *
+ * Sampled the same way as `meanLuma`, through a 256-bin histogram, so it
+ * costs one more pass over every eighth pixel and no sorting.
+ */
+export function darkPoint(data: Uint8ClampedArray): number {
+  if (data.length < 4) return 0;
+  const bins = new Uint32Array(256);
+  let n = 0;
+  for (let i = 0; i < data.length; i += 32) {
+    const luma = 0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!;
+    bins[Math.max(0, Math.min(255, Math.round(luma)))]! += 1;
+    n += 1;
+  }
+  if (n === 0) return 0;
+  const want = n * 0.05;
+  let seen = 0;
+  for (let v = 0; v < 256; v += 1) {
+    seen += bins[v]!;
+    if (seen >= want) return v;
+  }
+  return 0;
+}
+
+/** The most the shadows may rise, in levels out of 255. */
+const DARK_DRIFT = 12;
+/** The contrast ceiling, matching the strongest answer `opsFor` can build. */
+const MAX_MULTIPLIER = 1.30;
+
+/**
+ * The contrast needed to put the shadows back after an exposure lift.
+ *
+ * Lifting exposure is adding a constant, so it moves black as far as it
+ * moves everything else: a photograph whose shadows sat at 8 comes out
+ * with them at 38, which is not black any more, and the copy looks
+ * milky. Contrast pivots around mid grey, so raising it pulls the
+ * shadows back down while leaving the mid tones where the exposure
+ * correction put them.
+ *
+ * Measured on the wedding's dark photographs on 2026-09-29: at the
+ * contrast the model asked for, black landed at 38-46; solving for it
+ * brings it back to the mid twenties against an original 8-13.
+ *
+ * Only ever raises the model's answer, and only when something was
+ * actually lifted -- a photograph that needed no exposure keeps the
+ * contrast it was given.
+ */
+export function multiplierFor(dark: number, exposure: number, asked: number): number {
+  if (!Number.isFinite(dark) || exposure <= 0) return asked;
+  // No shadows to protect: everything here is above mid grey anyway.
+  if (dark >= 128) return asked;
+  // Solve dark * m + (128 - 128m) + exposure = dark + DARK_DRIFT for m.
+  const needed = (dark + DARK_DRIFT - 128 - exposure) / (dark - 128);
+  return Number(Math.max(asked, Math.min(MAX_MULTIPLIER, needed)).toFixed(4));
+}
+
+/**
+ * The model's ops, with the tone corrected against the real pixels.
  *
  * The pivot arithmetic lives here and nowhere else, so a caller cannot
  * pull the offset apart wrongly -- which is how the milky copies of
  * 2026-09-29 happened.
+ *
+ * Exposure is settled twice because the two corrections are coupled:
+ * raising the multiplier to protect the shadows also darkens the mid
+ * tones, so the exposure that was right against the model's contrast is
+ * a little short against the corrected one.
  */
-export function withMeasuredExposure(ops: EnhanceOps, mean: number): EnhanceOps {
-  const m = ops.linear.multiplier;
-  const pivot = 128 - 128 * m;
-  const asked = ops.linear.offset - pivot;
+export function withMeasuredTone(ops: EnhanceOps, mean: number, dark: number): EnhanceOps {
+  const asked = ops.linear.offset - (128 - 128 * ops.linear.multiplier);
+  const first = exposureFor(mean, ops.linear.multiplier, asked);
+  const m = multiplierFor(dark, first, ops.linear.multiplier);
   const exposure = exposureFor(mean, m, asked);
   return {
     ...ops,
-    linear: { multiplier: m, offset: Number((pivot + exposure).toFixed(2)) },
+    linear: {
+      multiplier: m,
+      offset: Number((128 - 128 * m + exposure).toFixed(2)),
+    },
   };
 }
