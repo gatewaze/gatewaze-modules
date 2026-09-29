@@ -20,7 +20,7 @@
  * name.
  */
 import { supabase } from '@/lib/supabase';
-import { applyOps, channelMeans, neutraliseOps } from '../../lib/enhance';
+import { applyOps, channelMeans, meanLuma, neutraliseOps, relightLost } from '../../lib/enhance';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -39,6 +39,8 @@ export interface AiEnhanceProgress {
   relit: number;
   skipped: number;
   failed: number;
+  /** Came back, but not as the photograph any more. */
+  refused: number;
 }
 
 interface Relit {
@@ -71,7 +73,9 @@ function load(src: string): Promise<HTMLImageElement> {
 }
 
 /** What one image measures, at a size that costs nothing to read. */
-async function measure(src: string): Promise<ReturnType<typeof channelMeans>> {
+async function measure(src: string): Promise<{
+  channels: ReturnType<typeof channelMeans>; luma: number;
+}> {
   const img = await load(src);
   const scale = Math.min(1, 320 / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(1, Math.round(img.naturalWidth * scale));
@@ -82,8 +86,12 @@ async function measure(src: string): Promise<ReturnType<typeof channelMeans>> {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('no canvas');
   ctx.drawImage(img, 0, 0, w, h);
-  return channelMeans(ctx.getImageData(0, 0, w, h).data);
+  const data = ctx.getImageData(0, 0, w, h).data;
+  return { channels: channelMeans(data), luma: meanLuma(data) };
 }
+
+/** The model answered, and the answer was not the photograph. */
+class Refused extends Error {}
 
 /**
  * The draft with the model's warm cast taken back out, as a JPEG.
@@ -102,7 +110,14 @@ async function correct(source: string, draft: string): Promise<Blob> {
   if (!ctx) throw new Error('no canvas');
   ctx.drawImage(img, 0, 0, w, h);
   const frame = ctx.getImageData(0, 0, w, h);
-  applyOps(frame.data, w, h, neutraliseOps(was, channelMeans(frame.data)));
+  // The model usually returns something usable and occasionally does
+  // not: over the wedding's 301 copies it returned one entirely black
+  // frame and halved the light in four good photographs. A valid JPEG
+  // of a plausible size is not enough to go on.
+  if (relightLost(was.luma, meanLuma(frame.data))) {
+    throw new Refused('the relit copy is not the photograph any more');
+  }
+  applyOps(frame.data, w, h, neutraliseOps(was.channels, channelMeans(frame.data)));
   ctx.putImageData(frame, 0, 0);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) throw new Error('could not encode the relit photo');
@@ -124,7 +139,7 @@ export async function aiEnhanceMedia(
   /** Relight ones already relit, and remake the copies. */
   force = false,
 ): Promise<AiEnhanceProgress> {
-  const progress: AiEnhanceProgress = { done: 0, total: ids.length, relit: 0, skipped: 0, failed: 0 };
+  const progress: AiEnhanceProgress = { done: 0, total: ids.length, relit: 0, skipped: 0, failed: 0, refused: 0 };
 
   for (let i = 0; i < ids.length; i += AI_ENHANCE_BATCH) {
     if (!keepGoing()) break;
@@ -162,9 +177,20 @@ export async function aiEnhanceMedia(
         });
         if (!rec.ok) throw new Error('could not record the relit photo');
         progress.relit += 1;
-      } catch {
-        // One photograph that will not relight must not stop the album.
-        progress.failed += 1;
+      } catch (err) {
+        // A refusal is not a failure to retry: the model answered, and
+        // the answer was not usable. Tell the server so the draft is
+        // swept and a later run knows not to pay for it again.
+        if (err instanceof Refused) {
+          progress.refused += 1;
+          await authedFetch(`/api/admin/events/${eventId}/media/ai-enhanced`, {
+            method: 'POST',
+            body: JSON.stringify({ media_id: r.id, refused: true }),
+          }).catch(() => undefined);
+        } else {
+          // One photograph that will not relight must not stop the album.
+          progress.failed += 1;
+        }
       }
       progress.done += 1;
       onProgress({ ...progress });
