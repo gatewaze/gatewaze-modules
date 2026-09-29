@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ENHANCE_PROMPT, applyOps, channelMeans, darkPoint, exposureFor, meanLuma, multiplierFor, neutraliseFor, neutraliseOps, opsFor, parseVerdict, withMeasuredTone, worthEnhancing } from '../enhance.js';
+import { ENHANCE_PROMPT, applyOps, channelMeans, darkPoint, exposureFor, meanLuma, multiplierFor, neutraliseFor, neutraliseOps, opsFor, parseVerdict, relightLost, withMeasuredTone, worthEnhancing } from '../enhance.js';
 
 const verdict = (over = {}) => ({
   needs: true, exposure: 0, contrast: 0, warmth: 0, saturation: 0, sharpen: 0, note: '', ...over,
@@ -348,5 +348,51 @@ describe('taking the model\'s warm cast back out', () => {
     const d = flat(120, 120, 120);
     applyOps(d, 8, 8, ops);
     expect(d[1]).toBe(120);
+  });
+});
+
+/**
+ * Over the wedding's 301 relit copies on 2026-09-29, ControlLight
+ * returned one entirely black frame and pulled four well-lit
+ * photographs past half their light. All five were stored and recorded:
+ * the bytes were a valid JPEG of a plausible size, and nothing looked
+ * at what was in them.
+ */
+describe('refusing a relight that lost the photograph', () => {
+  it('refuses a frame with nothing in it', () => {
+    expect(relightLost(143, 0)).toBe(true);
+    expect(relightLost(143, 5)).toBe(true);
+  });
+
+  it('refuses a lit photograph that lost most of its light', () => {
+    // The four real ones: 155->71, 141->69, 143->72, 130->68.
+    expect(relightLost(155.3, 71.5)).toBe(true);
+    expect(relightLost(141.1, 69.4)).toBe(true);
+    expect(relightLost(143.2, 72.3)).toBe(true);
+    expect(relightLost(130.1, 68.3)).toBe(true);
+  });
+
+  // The booth's room was very dark and lifting it is the whole point:
+  // 37 of the wedding's selfies came back half again brighter or more.
+  it('never refuses a copy for being brighter', () => {
+    expect(relightLost(19.6, 43.7)).toBe(false);
+    expect(relightLost(27.8, 74.8)).toBe(false);
+    expect(relightLost(36.4, 72.9)).toBe(false);
+  });
+
+  it('leaves a moody photograph alone', () => {
+    // Darkening a photograph somewhat is a look, not a loss.
+    expect(relightLost(116, 85)).toBe(false);
+    expect(relightLost(78, 71)).toBe(false);
+  });
+
+  // A photograph that had almost no light cannot lose most of it.
+  it('does not judge a dark photograph by the same rule', () => {
+    expect(relightLost(30, 14)).toBe(false);
+  });
+
+  it('refuses a measurement it cannot read', () => {
+    expect(relightLost(Number.NaN, 100)).toBe(true);
+    expect(relightLost(100, Number.NaN)).toBe(true);
   });
 });

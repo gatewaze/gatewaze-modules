@@ -465,3 +465,33 @@ export function neutraliseOps(original: ChannelMeans, copy: ChannelMeans): Enhan
     sharpenSigma: 0,
   };
 }
+
+/** Below this a relit copy has nothing in it at all. */
+const MIN_USABLE_LUMA = 12;
+/** A photograph with this much light in it had something to lose. */
+const LIT_ENOUGH = 60;
+/** How much of that light a relit copy has to keep. */
+const KEEP_AT_LEAST = 0.55;
+
+/**
+ * Whether a relit copy has stopped being the photograph.
+ *
+ * ControlLight usually returns something usable and occasionally does
+ * not. Over the wedding's 301 relit copies on 2026-09-29 it returned one
+ * frame that was entirely black, and pulled four well-lit photographs
+ * (means of 130 to 155) down past half their light. Nothing in the
+ * pipeline noticed: the bytes were a valid JPEG of a plausible size, so
+ * the black frame was stored and recorded like any other.
+ *
+ * Asymmetric on purpose. A copy that is BRIGHTER than the original is
+ * never refused -- the booth's selfies were taken in a very dark room
+ * and 37 of them were lifted by half again or more, which is the whole
+ * reason for running this. What is refused is a copy that has lost the
+ * photograph: black, or a photograph that had light and no longer does.
+ */
+export function relightLost(originalMean: number, copyMean: number): boolean {
+  if (!Number.isFinite(originalMean) || !Number.isFinite(copyMean)) return true;
+  if (copyMean < MIN_USABLE_LUMA) return true;
+  if (copyMean >= originalMean) return false;
+  return originalMean >= LIT_ENOUGH && copyMean / originalMean < KEEP_AT_LEAST;
+}

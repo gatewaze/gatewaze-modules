@@ -193,6 +193,34 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
   }
 
   /**
+   * The browser judged a relit copy unusable. Sweep the draft and record
+   * the refusal, so the album can be run again without paying for the
+   * same answer twice.
+   */
+  async function refuse(eventId: string, mediaId: string): Promise<void> {
+    const { data: row } = await db
+      .from('host_media')
+      .select('id, host_kind, host_id, metadata')
+      .eq('id', mediaId)
+      .maybeSingle();
+    if (!row || row.host_kind !== 'event' || row.host_id !== eventId) return;
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    const record = meta['ai_enhance'] && typeof meta['ai_enhance'] === 'object'
+      ? (meta['ai_enhance'] as Record<string, unknown>) : {};
+    const draft = typeof record['draft'] === 'string' ? record['draft'] : null;
+    const { draft: _dropped, ...kept } = record;
+    await db.from('host_media').update({
+      metadata: {
+        ...meta,
+        ai_enhance: { ...kept, refused_at: new Date().toISOString(), refused: true },
+      },
+    }).eq('id', mediaId);
+    if (draft && draft.startsWith(`event/${eventId}/`)) {
+      try { await db.storage.from(storageBucket).remove([draft]); } catch { /* swept later */ }
+    }
+  }
+
+  /**
    * Record the corrected copy the browser has just uploaded, and sweep
    * the draft away. Takes the same care as recording a rotation, and
    * decides what the copy is OF from the row rather than the browser --
@@ -205,6 +233,19 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
 
     const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
     const mediaId = typeof body['media_id'] === 'string' ? body['media_id'] : '';
+    // The browser looked at what came back and would not have it. Sweep
+    // the draft, write that down, and do not set a variant -- a later
+    // run then knows this one was answered and refused, rather than
+    // paying for the same answer again.
+    if (body['refused'] === true) {
+      if (!UUID_RE.test(mediaId)) {
+        sendError(res, 400, 'invalid_request', 'media_id is required');
+        return;
+      }
+      await refuse(eventId as string, mediaId);
+      res.status(200).json({ id: mediaId, refused: true });
+      return;
+    }
     const path = typeof body['storage_path'] === 'string' ? body['storage_path'] : '';
     const bytes = Number(body['bytes']);
     if (!UUID_RE.test(mediaId) || !PATH_RE.test(path)
