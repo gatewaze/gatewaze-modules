@@ -21,7 +21,7 @@
  */
 import { supabase } from '@/lib/supabase';
 import { applyOps, channelMeans, meanLuma, neutraliseOps, relightLost } from '../../lib/enhance';
-import { gradeFor, profileOf } from '../../lib/grade';
+import { applyGrade, gradeFor, profileOf } from '../../lib/grade';
 import { cropped, laidOver, marginsFor, shapeFor, type Frame, type FrameMode } from './reframeMedia';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
@@ -171,7 +171,7 @@ async function correct(
   // professional photographs' 0.174 -- two and a half times, which is
   // what "over-saturated" turned out to mean. The same house finish the
   // standard path uses brings them back.
-  applyOps(shaped.data, shaped.w, shaped.h, gradeFor(profileOf(shaped.data)));
+  applyGrade(shaped.data, shaped.w, shaped.h, gradeFor(profileOf(shaped.data, shaped.w, shaped.h)));
   canvas.width = shaped.w;
   canvas.height = shaped.h;
   const outImg = ctx.createImageData(shaped.w, shaped.h);

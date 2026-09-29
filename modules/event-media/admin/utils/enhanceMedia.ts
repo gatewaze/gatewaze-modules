@@ -15,7 +15,7 @@
  */
 import { supabase } from '@/lib/supabase';
 import { applyOps, darkPoint, meanLuma, withMeasuredTone, type EnhanceOps } from '../../lib/enhance';
-import { gradeFor, profileOf } from '../../lib/grade';
+import { applyGrade, gradeFor, profileOf } from '../../lib/grade';
 import { cropped, shapeFor, type Frame, type FrameMode } from './reframeMedia';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
@@ -96,7 +96,7 @@ async function improve(source: string, ops: EnhanceOps, frameMode: FrameMode = '
   // Then the house finish, so two hundred photographs corrected one at a
   // time still look like one album. It measures what it is given, so it
   // does less where the correction above already did the work.
-  applyOps(frame.data, frame.w, frame.h, gradeFor(profileOf(frame.data)));
+  applyGrade(frame.data, frame.w, frame.h, gradeFor(profileOf(frame.data, frame.w, frame.h)));
   canvas.width = frame.w;
   canvas.height = frame.h;
   const outImg = ctx.createImageData(frame.w, frame.h);
