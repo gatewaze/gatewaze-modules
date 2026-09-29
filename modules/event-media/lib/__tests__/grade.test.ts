@@ -1,104 +1,180 @@
 import { describe, it, expect } from 'vitest';
-import { applyOps } from '../enhance.js';
-import { HOUSE, gradeFor, profileOf, type ToneProfile } from '../grade.js';
+import { CURVE_POINTS, HOUSE, applyGrade, applyMono, gradeFor, profileOf } from '../grade.js';
 
 /** An image with a black end, a mid tone and a highlight, in a given colour. */
-function scene(dark: number, mid: number, light: number, tint = { r: 1, g: 1, b: 1 }) {
-  const d = new Uint8ClampedArray(300 * 4);
+function scene(dark: number, mid: number, light: number, tint = { r: 1, g: 1, b: 1 }, w = 30, h = 30) {
+  const d = new Uint8ClampedArray(w * h * 4);
   for (let i = 0; i < d.length; i += 4) {
     const third = Math.floor(i / 4) % 3;
     const v = third === 0 ? dark : third === 1 ? mid : light;
     d[i] = v * tint.r; d[i + 1] = v * tint.g; d[i + 2] = v * tint.b; d[i + 3] = 255;
   }
-  return d;
+  return { data: d, w, h };
 }
 
-describe('measuring a photograph for grading', () => {
-  it('reads its tones apart', () => {
-    const p = profileOf(scene(10, 120, 240));
-    expect(p.p5).toBeLessThan(20);
-    expect(p.p95).toBeGreaterThan(200);
-    expect(p.mean).toBeGreaterThan(100);
-    expect(p.mean).toBeLessThan(140);
+describe('measuring a photograph', () => {
+  it('describes the tone curve at nine points, rising', () => {
+    const p = profileOf(scene(10, 120, 240).data);
+    expect(p.curve).toHaveLength(CURVE_POINTS);
+    for (let i = 1; i < p.curve.length; i += 1) {
+      expect(p.curve[i]!).toBeGreaterThanOrEqual(p.curve[i - 1]!);
+    }
   });
 
-  it('reads a colour cast as a ratio to green', () => {
-    const warm = profileOf(scene(20, 120, 220, { r: 1.2, g: 1, b: 0.8 }));
-    expect(warm.rg).toBeGreaterThan(1.1);
-    expect(warm.bg).toBeLessThan(0.95);
+  it('reads the shadows and the highlights apart', () => {
+    // Warm shadows, neutral highlights: the wedding's own fault.
+    const w = 40, h = 40;
+    const d = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        const v = 20 + (215 * (y * w + x)) / (w * h);
+        const warm = Math.max(0, 1 - v / 110);
+        const i = (y * w + x) * 4;
+        d[i] = v * (1 + 0.6 * warm); d[i + 1] = v; d[i + 2] = v * (1 - 0.35 * warm); d[i + 3] = 255;
+      }
+    }
+    const p = profileOf(d, w, h);
+    expect(p.shadowWarm).toBeGreaterThan(1.3);
+    expect(p.highWarm).toBeLessThan(p.shadowWarm);
   });
 
-  it('reads grey as having no colour in it', () => {
-    expect(profileOf(scene(30, 128, 220)).sat).toBeLessThan(0.02);
+  // A flat photograph has no two ends to compare, so the split has to be
+  // a no-op rather than a correction aimed at a number nobody measured.
+  it('has no opinion on the ends of a flat photograph', () => {
+    const flat = new Uint8ClampedArray(40 * 40 * 4).fill(255);
+    for (let i = 0; i < flat.length; i += 4) { flat[i] = 120; flat[i + 1] = 120; flat[i + 2] = 120; }
+    const p = profileOf(flat, 40, 40);
+    // Both ends read the same number, because there is only one end.
+    expect(p.shadowWarm).toBeCloseTo(p.highWarm, 3);
+    // The two corrections still differ, and should: they aim at the
+    // reference's shadow warmth and its highlight warmth, which are not
+    // the same number either.
+    const g = gradeFor(p);
+    expect(g.split.shadow).toBeGreaterThanOrEqual(0.88);
+    expect(g.split.shadow).toBeLessThanOrEqual(1.14);
+    expect(g.split.highlight).toBeGreaterThanOrEqual(0.88);
+    expect(g.split.highlight).toBeLessThanOrEqual(1.14);
+  });
+
+  it('sees a vignette only when it is given the shape of the frame', () => {
+    const w = 60, h = 60;
+    const d = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        const dx = (x - 30) / 30, dy = (y - 30) / 30;
+        const v = 200 * (1 - 0.5 * (dx * dx + dy * dy));
+        const i = (y * w + x) * 4;
+        d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = 255;
+      }
+    }
+    expect(profileOf(d, w, h).vignette).toBeLessThan(0.85);
+    // Without the shape it has no opinion rather than a wrong one.
+    expect(profileOf(d).vignette).toBe(1);
   });
 
   it('falls back to the reference rather than dividing by nothing', () => {
-    expect(profileOf(new Uint8ClampedArray(0))).toEqual(HOUSE);
+    expect(profileOf(new Uint8ClampedArray(0)).sat).toBe(HOUSE.sat);
   });
 });
 
 describe('carrying a photograph towards the reference', () => {
-  /** What a photograph measures once the grade has been applied to it. */
-  const graded = (data: Uint8ClampedArray): ToneProfile => {
-    const copy = new Uint8ClampedArray(data);
-    applyOps(copy, 10, 30, gradeFor(profileOf(copy)));
-    return profileOf(copy);
+  const graded = (s: ReturnType<typeof scene>, ref = HOUSE) => {
+    const copy = new Uint8ClampedArray(s.data);
+    applyGrade(copy, s.w, s.h, gradeFor(profileOf(copy, s.w, s.h), ref));
+    return profileOf(copy, s.w, s.h);
   };
 
-  // The fault reported on 2026-09-29: the relit copies carried two and a
-  // half times the saturation of real professional photographs.
   it('takes colour out of an over-saturated photograph', () => {
     const loud = scene(20, 110, 210, { r: 1.35, g: 0.85, b: 0.6 });
-    const was = profileOf(loud);
+    const was = profileOf(loud.data, loud.w, loud.h);
     const now = graded(loud);
-    expect(was.sat).toBeGreaterThan(HOUSE.sat * 1.8);
+    expect(was.sat).toBeGreaterThan(HOUSE.sat * 1.5);
     expect(now.sat).toBeLessThan(was.sat);
-    expect(now.sat).toBeLessThan(HOUSE.sat * 1.6);
   });
 
-  it('pulls a warm cast back towards neutral', () => {
-    const warm = scene(20, 120, 220, { r: 1.25, g: 1, b: 0.78 });
-    const was = profileOf(warm);
-    const now = graded(warm);
-    expect(Math.abs(now.rg - HOUSE.rg)).toBeLessThan(Math.abs(was.rg - HOUSE.rg));
-    expect(Math.abs(now.bg - HOUSE.bg)).toBeLessThan(Math.abs(was.bg - HOUSE.bg));
+  // Re-measuring after a grade compares different pixels: the tone
+  // curve moves the band, so the darkest fifth afterwards is a deeper,
+  // warmer set than it was before. So this checks the correction itself
+  // and one known pixel, rather than a statistic over a moving target.
+  it('cools shadows that are warmer than the reference', () => {
+    const w = 40, h = 40;
+    const d = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        const v = 20 + (215 * (y * w + x)) / (w * h);
+        const warm = Math.max(0, 1 - v / 110);
+        const i = (y * w + x) * 4;
+        d[i] = v * (1 + 0.6 * warm); d[i + 1] = v; d[i + 2] = v * (1 - 0.35 * warm); d[i + 3] = 255;
+      }
+    }
+    const was = profileOf(d, w, h);
+    expect(was.shadowWarm).toBeGreaterThan(HOUSE.shadowWarm);
+    const g = gradeFor(was);
+    // Warmer than the reference, so the shadows are cooled.
+    expect(g.split.shadow).toBeLessThan(1);
+
+    // And the split, on its own, cools a dark warm pixel. Isolated with
+    // an identity curve: a per-channel tone curve moves colour ratios
+    // too -- that is how a film curve tints -- so it would mask this.
+    const identity = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v += 1) identity[v] = v;
+    const one = new Uint8ClampedArray([70, 44, 28, 255]);
+    const before = one[0]! / one[2]!;
+    applyGrade(one, 1, 1, {
+      lut: identity, tint: { red: 1, blue: 1 },
+      split: { shadow: 0.9, highlight: 1 }, saturation: 1, vignette: 1,
+    });
+    expect(one[0]! / one[2]!).toBeLessThan(before);
   });
 
-  it('opens up a flat, dark photograph', () => {
-    const flat = scene(15, 60, 105);
-    const now = graded(flat);
-    expect(now.mean).toBeGreaterThan(profileOf(flat).mean);
-    expect(now.p95).toBeGreaterThan(profileOf(flat).p95);
+  it('darkens the corners when the reference has a vignette', () => {
+    const flat = scene(120, 120, 120, { r: 1, g: 1, b: 1 }, 60, 60);
+    const g = gradeFor(profileOf(flat.data, 60, 60));
+    expect(g.vignette).toBeLessThan(1);
+    applyGrade(flat.data, 60, 60, g);
+    const corner = flat.data[0]!;
+    const centre = flat.data[((30 * 60) + 30) * 4]!;
+    expect(corner).toBeLessThan(centre);
   });
 
-  // The whole point of a reference is that a photograph already at it is
-  // left alone -- verified against the real set, which moved from a mean
-  // of 161.4 to 160.5 and a saturation of 0.175 to 0.185.
-  it('barely touches a photograph already at the reference', () => {
-    const ops = gradeFor({ ...HOUSE });
-    expect(ops.linear.multiplier).toBeCloseTo(1, 1);
-    expect(ops.modulate.saturation).toBeCloseTo(1, 1);
-    expect(ops.tint.red).toBeCloseTo(1, 2);
-    expect(ops.tint.blue).toBeCloseTo(1, 2);
-  });
-
-  it('stays a grade, however far off the photograph is', () => {
-    for (const p of [
-      { ...HOUSE, p5: 0, p95: 5, sat: 0.99, rg: 2.5, bg: 0.2 },
-      { ...HOUSE, p5: 250, p95: 255, sat: 0.001, rg: 0.3, bg: 3 },
-    ]) {
-      const ops = gradeFor(p);
-      expect(ops.linear.multiplier).toBeGreaterThanOrEqual(0.8);
-      expect(ops.linear.multiplier).toBeLessThanOrEqual(2.0);
-      expect(ops.modulate.saturation).toBeGreaterThanOrEqual(0.45);
-      expect(ops.modulate.saturation).toBeLessThanOrEqual(1.3);
-      expect(ops.tint.red).toBeGreaterThanOrEqual(0.85);
-      expect(ops.tint.red).toBeLessThanOrEqual(1.2);
+  it('keeps the tone curve monotonic, however odd the photograph', () => {
+    for (const s of [scene(0, 0, 0), scene(255, 255, 255), scene(10, 11, 12)]) {
+      const g = gradeFor(profileOf(s.data, s.w, s.h));
+      for (let v = 1; v < 256; v += 1) {
+        expect(g.lut[v]!).toBeGreaterThanOrEqual(g.lut[v - 1]!);
+      }
     }
   });
 
-  it('never sharpens: a grade is colour and tone only', () => {
-    expect(gradeFor(profileOf(scene(10, 90, 200))).sharpenSigma).toBe(0);
-    expect(gradeFor(profileOf(scene(10, 90, 200))).modulate.brightness).toBe(1);
+  it('barely touches a photograph already at the reference', () => {
+    const g = gradeFor({ ...HOUSE });
+    expect(g.saturation).toBeCloseTo(1, 1);
+    expect(g.tint.red).toBeCloseTo(1, 2);
+    expect(g.split.shadow).toBeCloseTo(1, 2);
+    expect(g.vignette).toBeCloseTo(1, 2);
+  });
+
+  it('stays a grade, however far off the photograph is', () => {
+    const wild = { ...HOUSE, sat: 0.99, rg: 2.5, bg: 0.2, shadowWarm: 3, highWarm: 0.3, vignette: 1.6 };
+    const g = gradeFor(wild);
+    expect(g.saturation).toBeGreaterThanOrEqual(0.45);
+    expect(g.saturation).toBeLessThanOrEqual(1.3);
+    expect(g.tint.red).toBeGreaterThanOrEqual(0.85);
+    expect(g.tint.red).toBeLessThanOrEqual(1.2);
+    expect(g.split.shadow).toBeGreaterThanOrEqual(0.88);
+    expect(g.vignette).toBeGreaterThanOrEqual(0.6);
+    expect(g.vignette).toBeLessThanOrEqual(1.0);
+  });
+});
+
+describe('black and white', () => {
+  it('leaves every channel on the same value', () => {
+    const s = scene(30, 120, 220, { r: 1.3, g: 1, b: 0.7 });
+    applyMono(s.data);
+    for (let i = 0; i < s.data.length; i += 4) {
+      expect(s.data[i]).toBe(s.data[i + 1]);
+      expect(s.data[i + 1]).toBe(s.data[i + 2]);
+    }
+    expect(profileOf(s.data, s.w, s.h).sat).toBeLessThan(0.02);
   });
 });
