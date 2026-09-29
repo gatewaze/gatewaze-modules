@@ -13,7 +13,7 @@
  * 2026-09-29 across a wedding's own albums:
  *
  *     set               mean   p5    p50    p95    sat   R/G   B/G
- *     photographer      107   11.2    88   226   0.273  1.065 0.901
+ *     photographer      101   15.7    93   205   0.273  1.079 0.926
  *     guests' own       100   17.6   105   195   0.329  1.185 0.885
  *     relit by a model   92    4.8    87   201   0.433  1.191 0.843
  *
@@ -47,24 +47,33 @@ export interface ToneProfile {
 /**
  * The look every photograph is carried towards.
  *
- * Measured from thirteen panels cut out of twelve professional
- * photographs of this wedding, on 2026-09-29. Not a preference: it is
- * what the photographs a couple actually pays for measure, and the point
- * of a reference is that it is somebody else's.
+ * Measured on 2026-09-29 over 93 photographs by the wedding's own
+ * photographer: thirteen panels from what he delivered, and eighty
+ * sampled from his published portfolio. Not a preference -- it is what
+ * the photographs a couple actually pays for measure, and the point of a
+ * reference is that it is somebody else's.
+ *
+ * The two samples were taken independently and agree:
+ *
+ *     set                  n   mean   p5    p50   p95   sat   R/G   B/G
+ *     his portfolio       80   99.6  16.0   93   203  0.262 1.082 0.934
+ *     what he delivered   13  107.2  11.2   88   226  0.273 1.065 0.901
+ *     the guests' own     14  100.0  17.6  105   195  0.329 1.185 0.885
+ *
+ * Saturation lands on the same number from both directions, which is the
+ * one that mattered: the guests' photographs carry a quarter more colour
+ * than his and the model's relit copies carry half again.
  *
  * MEASURE THE PANELS, NOT THE POSTS. The first version of this profiled
- * the uploads whole, and they are Instagram posts -- a photograph set on
- * a white ground, up to 42% of the frame. White is bright and colourless,
- * so it read as mean 156 / p95 255 / saturation 0.174, and the grade
- * built from it made everything too pale. The panels themselves measure
- * mean 107 / p95 226 / saturation 0.273: the look is MOODIER than the
- * guests' own photographs, not brighter -- deeper blacks, lower mid
- * tones, highlights held back from clipping, and only somewhat less
- * colour. Caught by Dan, who knew the uploads were montages.
+ * the delivered files whole, and they are Instagram posts -- a photograph
+ * set on a white ground, up to 42% of the frame. White is bright and
+ * colourless, so it read as mean 156 / p95 255 / saturation 0.174 and the
+ * grade built from it bleached everything. Caught by Dan, who knew the
+ * uploads were montages.
  */
 export const HOUSE: ToneProfile = {
-  mean: 107.2, p5: 11.2, p50: 87.6, p95: 226.4,
-  sat: 0.273, rg: 1.065, bg: 0.901,
+  mean: 100.7, p5: 15.7, p50: 92.7, p95: 204.7,
+  sat: 0.273, rg: 1.079, bg: 0.926,
 };
 
 /**
