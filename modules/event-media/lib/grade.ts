@@ -9,19 +9,20 @@
  *
  * This is the other half. It measures a photograph and carries it
  * towards a reference: a look taken from real professional photographs
- * of this kind of event rather than from anybody's opinion. What it
- * mostly does in practice is take colour OUT. Measured on 2026-09-29
- * across a wedding's own albums:
+ * of this kind of event rather than from anybody's opinion. Measured on
+ * 2026-09-29 across a wedding's own albums:
  *
  *     set               mean   p5    p50    p95    sat   R/G   B/G
- *     photographer      156   13.9   161   255   0.174  1.046 0.946
+ *     photographer      107   11.2    88   226   0.273  1.065 0.901
  *     guests' own       100   17.6   105   195   0.329  1.185 0.885
  *     relit by a model   92    4.8    87   201   0.433  1.191 0.843
  *
- * The professional photographs are brighter, wider in tonal range, and
- * carry HALF the saturation. The relit copies carry two and a half times
- * it, which is what "the AI ones are over-saturated" turned out to mean
- * (reported 2026-09-29).
+ * The professional photographs are not brighter. They are MOODIER: the
+ * mid tones sit lower, the blacks go deeper, the highlights stop short
+ * of clipping, and the colour is a little quieter and much more neutral.
+ * The relit copies carry half again the saturation and a strong warm
+ * cast, which is what "the AI ones are over-saturated" turned out to
+ * mean (reported 2026-09-29).
  *
  * Pure arithmetic, as the rest of the enhancement is: a gain, an offset,
  * a colour pull and a tint. Nothing is drawn.
@@ -46,25 +47,34 @@ export interface ToneProfile {
 /**
  * The look every photograph is carried towards.
  *
- * Measured from twelve professional photographs of this wedding, at 400px
- * wide, on 2026-09-29. Not a preference: it is what the photographs a
- * couple actually pays for measure, and the point of a reference is that
- * it is somebody else's.
+ * Measured from thirteen panels cut out of twelve professional
+ * photographs of this wedding, on 2026-09-29. Not a preference: it is
+ * what the photographs a couple actually pays for measure, and the point
+ * of a reference is that it is somebody else's.
+ *
+ * MEASURE THE PANELS, NOT THE POSTS. The first version of this profiled
+ * the uploads whole, and they are Instagram posts -- a photograph set on
+ * a white ground, up to 42% of the frame. White is bright and colourless,
+ * so it read as mean 156 / p95 255 / saturation 0.174, and the grade
+ * built from it made everything too pale. The panels themselves measure
+ * mean 107 / p95 226 / saturation 0.273: the look is MOODIER than the
+ * guests' own photographs, not brighter -- deeper blacks, lower mid
+ * tones, highlights held back from clipping, and only somewhat less
+ * colour. Caught by Dan, who knew the uploads were montages.
  */
 export const HOUSE: ToneProfile = {
-  mean: 156.2, p5: 13.9, p50: 160.8, p95: 255,
-  sat: 0.174, rg: 1.046, bg: 0.946,
+  mean: 107.2, p5: 11.2, p50: 87.6, p95: 226.4,
+  sat: 0.273, rg: 1.065, bg: 0.901,
 };
 
 /**
  * How far towards the reference a photograph is carried.
  *
- * Tone is pulled least. The reference photographs are bright tipi
- * interiors with a white dress in them and their p95 is a clipped 255;
- * a dim corner of a marquee at eleven at night is not that photograph
- * and should not be forced to become it. Colour is pulled hardest --
- * an orange cast is not a mood, it is a fault, and it is the one
- * people notice.
+ * Tone is pulled least: a photograph was taken in the room it was taken
+ * in, and the reference is a set of somebody else's compositions rather
+ * than a target every frame has to hit. Colour is pulled hardest -- an
+ * orange cast is not a mood, it is a fault, and it is the one people
+ * notice.
  */
 const TONE_PULL = 0.7;
 const SAT_PULL = 0.8;
@@ -127,11 +137,12 @@ export function profileOf(data: Uint8ClampedArray): ToneProfile {
  * offset together. Saturation and colour balance are pulled towards the
  * reference's by ratio.
  *
- * A photograph already close to the reference gets almost nothing --
- * measured on the wedding, one well-exposed daytime photograph moved
- * from 0.217 saturation to 0.201, while a booth selfie at 0.717 came
- * back to 0.331. That is the point: the finish is consistent because
- * what it does is whatever each photograph needs to get there.
+ * A photograph already close to the reference gets almost nothing. Run
+ * over the reference panels themselves it moves them from a mean of
+ * 107.2 to 104.1 and a saturation of 0.272 to 0.264; run over the relit
+ * copies it takes 0.434 saturation down to 0.283. That is the point: the
+ * finish is consistent because what it does is whatever each photograph
+ * needs in order to get there.
  */
 export function gradeFor(p: ToneProfile, ref: ToneProfile = HOUSE): EnhanceOps {
   const lo = p.p5 + (ref.p5 - p.p5) * TONE_PULL;
