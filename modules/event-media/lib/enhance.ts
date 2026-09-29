@@ -261,27 +261,78 @@ export function meanLuma(data: Uint8ClampedArray): number {
   return n > 0 ? total / n : 128;
 }
 
-/** What a photograph of people wants to average out at. */
+/** Roughly where a well-lit photograph of people sits. */
 const TARGET_LUMA = 118;
-/** The most this backstop will add on its own, in levels out of 255. */
+/** Above this a photograph of people reads as washed out. */
+const CEILING_LUMA = 145;
+/** The most this backstop will move the exposure, in levels out of 255. */
 const MAX_LIFT = 55;
+/**
+ * How much of the way to the target a dark photograph is carried.
+ *
+ * Not all of it, deliberately. A candlelit room is meant to look like a
+ * candlelit room, and pulling every photograph onto the same number is
+ * not enhancement, it is flattening -- measured on the wedding on
+ * 2026-09-29, twelve enhanced evening photographs all landed between
+ * 119 and 122 while the untouched albums ranged from 78 to 135. The
+ * photographs stopped differing from each other.
+ */
+const PULL = 0.6;
 
 /**
- * The lift a genuinely dark photograph needs, whatever the model said.
+ * Where the linear op will leave the average brightness.
+ *
+ * `applyOps` computes `in * m + offset`, and `opsFor` builds that offset
+ * as `128 - 128 * m + e` so the contrast multiplier pivots around mid
+ * grey. So the exposure the model actually asked for is `e`, and the
+ * photograph lands at `(mean - 128) * m + 128 + e`.
+ */
+function landsAt(mean: number, multiplier: number, exposure: number): number {
+  return (mean - 128) * multiplier + 128 + exposure;
+}
+
+/**
+ * The exposure a photograph should end up with, measured from its pixels.
  *
  * The model is a good judge of what KIND of correction a photograph
  * wants and a poor judge of how much: asked about photographs taken in a
  * very dark room it kept answering "a touch of sharpening", which is
  * invisible and not worth paying for (reported 2026-09-28). The pixels
- * are not a matter of opinion -- if the average brightness is 50, the
- * photograph is dark -- so this sets a floor under the model's answer.
+ * are not a matter of opinion, so this adjusts the model's answer
+ * towards what the photograph measures.
  *
- * Only ever a floor, and only upwards: a photograph the model wanted
- * darkened is left to the model, and a photograph that is already bright
- * gets nothing from here.
+ * It works in exposure units, on top of the contrast pivot -- the
+ * version before this returned a whole `offset` and so threw the
+ * `128 - 128 * m` pivot term away, turning `(in - 128) * m + 128 + e`
+ * into `in * m + 55`. That lifts black to 55 and is what made the
+ * enhanced copies look milky (reported 2026-09-29).
  */
-export function liftFor(mean: number, asked: number): number {
-  if (!Number.isFinite(mean) || mean >= TARGET_LUMA) return asked;
-  const needed = Math.min(MAX_LIFT, TARGET_LUMA - mean);
-  return Math.max(asked, needed);
+export function exposureFor(mean: number, multiplier: number, asked: number): number {
+  if (!Number.isFinite(mean) || !Number.isFinite(multiplier)) return asked;
+  const at = landsAt(mean, multiplier, asked);
+  // Part of the way up for a dark photograph, all of the way down for one
+  // that would come out washed out: too bright is a fault, too moody is a
+  // choice.
+  const wanted = at < TARGET_LUMA ? asked + (TARGET_LUMA - at) * PULL
+    : at > CEILING_LUMA ? asked - (at - CEILING_LUMA)
+    : asked;
+  return Number(Math.max(-MAX_LIFT, Math.min(MAX_LIFT, wanted)).toFixed(2));
+}
+
+/**
+ * The model's ops, with the exposure corrected against the real pixels.
+ *
+ * The pivot arithmetic lives here and nowhere else, so a caller cannot
+ * pull the offset apart wrongly -- which is how the milky copies of
+ * 2026-09-29 happened.
+ */
+export function withMeasuredExposure(ops: EnhanceOps, mean: number): EnhanceOps {
+  const m = ops.linear.multiplier;
+  const pivot = 128 - 128 * m;
+  const asked = ops.linear.offset - pivot;
+  const exposure = exposureFor(mean, m, asked);
+  return {
+    ...ops,
+    linear: { multiplier: m, offset: Number((pivot + exposure).toFixed(2)) },
+  };
 }

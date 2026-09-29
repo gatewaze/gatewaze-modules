@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ENHANCE_PROMPT, applyOps, liftFor, meanLuma, opsFor, parseVerdict, worthEnhancing } from '../enhance.js';
+import { ENHANCE_PROMPT, applyOps, exposureFor, meanLuma, opsFor, parseVerdict, withMeasuredExposure, worthEnhancing } from '../enhance.js';
 
 const verdict = (over = {}) => ({
   needs: true, exposure: 0, contrast: 0, warmth: 0, saturation: 0, sharpen: 0, note: '', ...over,
@@ -177,22 +177,47 @@ describe('a floor under a timid model', () => {
   // sharpening" to that is wrong, and the pixels are not a matter of
   // opinion.
   it('lifts a dark photograph past what the model asked for', () => {
-    expect(liftFor(50, 3)).toBeGreaterThan(50);
-    expect(liftFor(90, 0)).toBeCloseTo(28, 0);
+    expect(exposureFor(50, 1, 3)).toBeGreaterThan(3);
+    expect(exposureFor(90, 1, 0)).toBeGreaterThan(0);
   });
 
-  it('never darkens, and never argues with a bolder answer', () => {
-    // Already bright: nothing from here.
-    expect(liftFor(140, 0)).toBe(0);
-    expect(liftFor(118, 0)).toBe(0);
-    // The model asked for more than the floor: the model wins.
-    expect(liftFor(50, 80)).toBe(80);
-    // A photograph the model wanted darker is left to the model.
-    expect(liftFor(200, -30)).toBe(-30);
+  // The fault reported on 2026-09-29: every enhanced photograph came out
+  // at the same brightness, so a candlelit room looked like a lit one.
+  it('leaves a darker photograph darker than a brighter one', () => {
+    const dark = 60 + exposureFor(60, 1, 0);
+    const dim = 95 + exposureFor(95, 1, 0);
+    expect(dark).toBeLessThan(dim);
+    // And neither is dragged onto the target itself.
+    expect(dark).toBeLessThan(118);
+  });
+
+  // The other half of that fault: the lift used to replace the whole
+  // offset, discarding the `128 - 128 * m` contrast pivot, so black was
+  // lifted to the offset and the photograph went milky.
+  it('keeps the contrast pivot when it corrects the exposure', () => {
+    const ops = opsFor({ contrast: 50, exposure: 20, saturation: 0, warmth: 0, sharpen: 0, verdict: 'yes' });
+    const fixed = withMeasuredExposure(ops, 60);
+    expect(fixed.linear.multiplier).toBe(ops.linear.multiplier);
+    // Black stays near black rather than being lifted onto the offset.
+    const black = new Uint8ClampedArray([0, 0, 0, 255]);
+    applyOps(black, 1, 1, fixed);
+    expect(black[0]!).toBeLessThan(30);
+  });
+
+  it('pulls back a photograph that would come out washed out', () => {
+    // Already bright, and the model asked for a big lift on top.
+    const at = 150 + exposureFor(150, 1, 40);
+    expect(at).toBeLessThanOrEqual(146);
+  });
+
+  it('never darkens a photograph that is merely moody', () => {
+    // Below the ceiling and above nothing: the model's answer stands.
+    expect(exposureFor(125, 1, 0)).toBe(0);
   });
 
   it('has a ceiling of its own', () => {
-    expect(liftFor(0, 0)).toBeLessThanOrEqual(55);
+    expect(exposureFor(0, 1, 0)).toBeLessThanOrEqual(55);
+    expect(exposureFor(255, 1, 0)).toBeGreaterThanOrEqual(-55);
   });
 
   it('asks the model to use the whole scale', () => {

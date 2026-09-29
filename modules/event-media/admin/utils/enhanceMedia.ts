@@ -14,7 +14,7 @@
  * else's.
  */
 import { supabase } from '@/lib/supabase';
-import { applyOps, liftFor, meanLuma, type EnhanceOps } from '../../lib/enhance';
+import { applyOps, meanLuma, withMeasuredExposure, type EnhanceOps } from '../../lib/enhance';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -81,11 +81,8 @@ async function improve(source: string, ops: EnhanceOps): Promise<Blob> {
   // The model judges what kind of correction a photograph wants and is a
   // poor judge of how much -- it answered "a touch of sharpening" to
   // photographs taken in a very dark room. The pixels are not a matter of
-  // opinion, so the lift has a floor measured from the photograph itself.
-  const lifted: EnhanceOps = {
-    ...ops,
-    linear: { ...ops.linear, offset: liftFor(meanLuma(frame.data), ops.linear.offset) },
-  };
+  // opinion, so the exposure is corrected against what they measure.
+  const lifted: EnhanceOps = withMeasuredExposure(ops, meanLuma(frame.data));
   applyOps(frame.data, w, h, lifted);
   ctx.putImageData(frame, 0, 0);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
