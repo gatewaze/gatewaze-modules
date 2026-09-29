@@ -5,6 +5,7 @@
  *
  *   POST /admin/events/:eventId/media/ai-enhance    { ids }  relight them
  *   POST /admin/events/:eventId/media/ai-enhanced   { … }    record one
+ *   POST /admin/events/:eventId/media/expand        { … }    draw outside it
  *
  * The sibling of enhance-media.ts, and deliberately a separate thing.
  * That one is arithmetic on existing pixels and cannot invent; this one
@@ -27,6 +28,7 @@
  */
 import type { Request, Response, Router } from 'express';
 import { aiEnhanceConfigured, runAiEnhance, strengthFor } from '../lib/ai-enhance.js';
+import { expandConfigured, marginsFrom, runExpand } from '../lib/ai-expand.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -319,10 +321,79 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
     res.status(200).json({ id: mediaId, of, enhanced_ai: path });
   }
 
-  return { aiEnhance, aiEnhanced, relight };
+  /**
+   * Draw what lies outside one photograph, and leave it as a draft.
+   *
+   * The margins come from the browser because it is the only thing that
+   * has decoded the photograph; they are checked here rather than
+   * trusted. Nothing here decodes anything -- the model is given a URL
+   * and the answer is copied into storage as bytes.
+   *
+   * The browser lays the original back over the draft before keeping
+   * it, so nothing the model drew can end up inside the frame.
+   */
+  async function expand(req: Request, res: Response): Promise<void> {
+    const eventId = req.params['eventId'];
+    if (!(await guard(req, res, eventId))) return;
+    if (!expandConfigured()) {
+      sendError(res, 503, 'not_configured', 'no image provider is configured for this site');
+      return;
+    }
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const mediaId = typeof body['media_id'] === 'string' ? body['media_id'] : '';
+    const margins = marginsFrom(body['margins']);
+    if (!UUID_RE.test(mediaId) || !margins) {
+      sendError(res, 400, 'invalid_request', 'media_id and margins are required');
+      return;
+    }
+
+    const { data: row, error } = await db
+      .from('host_media')
+      .select('id, host_kind, host_id, storage_path, mime_type, metadata')
+      .eq('id', mediaId)
+      .maybeSingle();
+    if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
+      sendError(res, 404, 'not_found', 'no such photo on this event');
+      return;
+    }
+    if (typeof row.mime_type !== 'string' || !row.mime_type.startsWith('image/')) {
+      sendError(res, 400, 'not_a_photo', 'only a photo can be reframed');
+      return;
+    }
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    const selfie = typeof meta['selfie'] === 'string' ? meta['selfie'] : null;
+    const path = selfie ?? (typeof row.storage_path === 'string' ? row.storage_path : '');
+    if (!path.startsWith(`event/${eventId}/`)) {
+      sendError(res, 400, 'invalid_request', 'unsupported layout');
+      return;
+    }
+
+    const made = await runExpand(publicUrl(path), margins);
+    if (!made.ok) {
+      sendError(res, 502, made.error, made.detail ?? 'the provider could not reframe that photo');
+      return;
+    }
+    const folder = path.slice(0, path.lastIndexOf('/'));
+    const draftPath = `${folder}/frame-draft-${Date.now().toString(36)}.jpg`;
+    const up = await db.storage.from(storageBucket).upload(draftPath, made.image, {
+      contentType: 'image/jpeg', upsert: false,
+    });
+    if (up.error) {
+      logger.error('expand: could not store the draft', { mediaId, error: up.error.message });
+      sendError(res, 500, 'draft_upload_failed', 'could not store that draft');
+      return;
+    }
+    res.status(200).json({
+      id: mediaId, source: publicUrl(path), draft: publicUrl(draftPath),
+      draft_path: draftPath, margins,
+    });
+  }
+
+  return { aiEnhance, aiEnhanced, relight, expand };
 }
 
 export function mountAiEnhanceMedia(router: Router, routes: ReturnType<typeof createAiEnhanceMedia>): void {
   router.post('/events/:eventId/media/ai-enhance', routes.aiEnhance);
   router.post('/events/:eventId/media/ai-enhanced', routes.aiEnhanced);
+  router.post('/events/:eventId/media/expand', routes.expand);
 }

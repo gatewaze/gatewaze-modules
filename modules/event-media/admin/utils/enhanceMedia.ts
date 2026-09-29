@@ -16,6 +16,7 @@
 import { supabase } from '@/lib/supabase';
 import { applyOps, darkPoint, meanLuma, withMeasuredTone, type EnhanceOps } from '../../lib/enhance';
 import { gradeFor, profileOf } from '../../lib/grade';
+import { cropped, shapeFor, type Frame, type FrameMode } from './reframeMedia';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -67,7 +68,7 @@ function load(src: string): Promise<HTMLImageElement> {
 }
 
 /** The photograph, improved, as a JPEG. */
-async function improve(source: string, ops: EnhanceOps): Promise<Blob> {
+async function improve(source: string, ops: EnhanceOps, frameMode: FrameMode = 'as-shot'): Promise<Blob> {
   const img = await load(source);
   const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(1, Math.round(img.naturalWidth * scale));
@@ -78,18 +79,29 @@ async function improve(source: string, ops: EnhanceOps): Promise<Blob> {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('no canvas');
   ctx.drawImage(img, 0, 0, w, h);
-  const frame = ctx.getImageData(0, 0, w, h);
+  let frame: Frame = ctx.getImageData(0, 0, w, h);
+  // Into the shape a camera would have given it, first: the grade should
+  // measure the photograph that is actually going to be shown. 'expand'
+  // needs a model and a relight pass, so on this path it crops instead.
+  if (frameMode !== 'as-shot') {
+    const want = shapeFor(frame.w, frame.h);
+    if (want) frame = cropped(frame, want);
+  }
   // The model judges what kind of correction a photograph wants and is a
   // poor judge of how much -- it answered "a touch of sharpening" to
   // photographs taken in a very dark room. The pixels are not a matter of
   // opinion, so the exposure is corrected against what they measure.
   const lifted: EnhanceOps = withMeasuredTone(ops, meanLuma(frame.data), darkPoint(frame.data));
-  applyOps(frame.data, w, h, lifted);
+  applyOps(frame.data, frame.w, frame.h, lifted);
   // Then the house finish, so two hundred photographs corrected one at a
   // time still look like one album. It measures what it is given, so it
   // does less where the correction above already did the work.
-  applyOps(frame.data, w, h, gradeFor(profileOf(frame.data)));
-  ctx.putImageData(frame, 0, 0);
+  applyOps(frame.data, frame.w, frame.h, gradeFor(profileOf(frame.data)));
+  canvas.width = frame.w;
+  canvas.height = frame.h;
+  const outImg = ctx.createImageData(frame.w, frame.h);
+  outImg.data.set(frame.data);
+  ctx.putImageData(outImg, 0, 0);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) throw new Error('could not encode the improved photo');
   return blob;
@@ -109,6 +121,8 @@ export async function enhanceMedia(
   bucket = 'media',
   /** Look again at photographs already looked at, and remake the copies. */
   force = false,
+  /** The shape this album's copies are delivered in. */
+  frameMode: FrameMode = 'as-shot',
 ): Promise<EnhanceProgress> {
   const progress: EnhanceProgress = { done: 0, total: ids.length, enhanced: 0, unchanged: 0, failed: 0 };
 
@@ -134,7 +148,7 @@ export async function enhanceMedia(
         continue;
       }
       try {
-        const blob = await improve(r.source, r.ops);
+        const blob = await improve(r.source, r.ops, frameMode);
         // Beside the photograph, under a new name each time: a CDN caches
         // by name and would go on serving the copy this replaces.
         const dir = new URL(r.source).pathname.replace(/^.*\/public\/[^/]+\//, '');
