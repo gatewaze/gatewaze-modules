@@ -15,6 +15,7 @@
  */
 import { supabase } from '@/lib/supabase';
 import { applyOps, darkPoint, meanLuma, withMeasuredTone, type EnhanceOps } from '../../lib/enhance';
+import { gradeFor, profileOf } from '../../lib/grade';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -84,6 +85,10 @@ async function improve(source: string, ops: EnhanceOps): Promise<Blob> {
   // opinion, so the exposure is corrected against what they measure.
   const lifted: EnhanceOps = withMeasuredTone(ops, meanLuma(frame.data), darkPoint(frame.data));
   applyOps(frame.data, w, h, lifted);
+  // Then the house finish, so two hundred photographs corrected one at a
+  // time still look like one album. It measures what it is given, so it
+  // does less where the correction above already did the work.
+  applyOps(frame.data, w, h, gradeFor(profileOf(frame.data)));
   ctx.putImageData(frame, 0, 0);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) throw new Error('could not encode the improved photo');

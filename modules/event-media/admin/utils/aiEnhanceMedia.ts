@@ -21,6 +21,7 @@
  */
 import { supabase } from '@/lib/supabase';
 import { applyOps, channelMeans, meanLuma, neutraliseOps, relightLost } from '../../lib/enhance';
+import { gradeFor, profileOf } from '../../lib/grade';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -118,6 +119,11 @@ async function correct(source: string, draft: string): Promise<Blob> {
     throw new Refused('the relit copy is not the photograph any more');
   }
   applyOps(frame.data, w, h, neutraliseOps(was.channels, channelMeans(frame.data)));
+  // The model's copies measured 0.434 saturation against real
+  // professional photographs' 0.174 -- two and a half times, which is
+  // what "over-saturated" turned out to mean. The same house finish the
+  // standard path uses brings them back.
+  applyOps(frame.data, w, h, gradeFor(profileOf(frame.data)));
   ctx.putImageData(frame, 0, 0);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) throw new Error('could not encode the relit photo');
