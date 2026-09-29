@@ -22,6 +22,7 @@
 import { supabase } from '@/lib/supabase';
 import { applyOps, channelMeans, meanLuma, neutraliseOps, relightLost } from '../../lib/enhance';
 import { gradeFor, profileOf } from '../../lib/grade';
+import { cropped, laidOver, marginsFor, shapeFor, type Frame, type FrameMode } from './reframeMedia';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -97,7 +98,42 @@ class Refused extends Error {}
 /**
  * The draft with the model's warm cast taken back out, as a JPEG.
  */
-async function correct(source: string, draft: string): Promise<Blob> {
+/**
+ * Ask the model to draw what lies outside the frame, then lay the
+ * original back over it. Returns the frame unchanged if anything at all
+ * goes wrong -- a reframe is a nicety, and losing the photograph to one
+ * would not be.
+ */
+async function reframed(
+  frame: Frame, mediaId: string, eventId: string, ratio: number,
+): Promise<Frame> {
+  const m = marginsFor(frame.w, frame.h, ratio);
+  if (!m) return frame;
+  try {
+    const resp = await authedFetch(`/api/admin/events/${eventId}/media/expand`, {
+      method: 'POST',
+      body: JSON.stringify({
+        media_id: mediaId,
+        margins: { left: m.left, right: m.right, top: m.top, bottom: m.bottom },
+      }),
+    });
+    if (!resp.ok) return frame;
+    const { draft } = (await resp.json()) as { draft?: string };
+    if (!draft) return frame;
+    const drawn = await load(draft);
+    // Everything the model drew is outside the photograph, and the
+    // photograph goes back on top of it. Nothing it invented can land
+    // inside the original frame.
+    return laidOver(frame, drawn, m.canvas, m.at);
+  } catch {
+    return frame;
+  }
+}
+
+async function correct(
+  source: string, draft: string,
+  mediaId: string, eventId: string, frameMode: FrameMode = 'as-shot',
+): Promise<Blob> {
   // The original is measured small; the draft is worked on full size.
   const was = await measure(source);
   const img = await load(draft);
@@ -119,12 +155,28 @@ async function correct(source: string, draft: string): Promise<Blob> {
     throw new Refused('the relit copy is not the photograph any more');
   }
   applyOps(frame.data, w, h, neutraliseOps(was.channels, channelMeans(frame.data)));
+  // Into the shape a camera would have given it. 'expand' asks the model
+  // for what lies outside and lays the original back over it; 'classic'
+  // simply takes the difference off.
+  let shaped: Frame = { data: frame.data, w, h };
+  if (frameMode !== 'as-shot') {
+    const want = shapeFor(shaped.w, shaped.h);
+    if (want) {
+      shaped = frameMode === 'expand'
+        ? await reframed(shaped, mediaId, eventId, want)
+        : cropped(shaped, want);
+    }
+  }
   // The model's copies measured 0.434 saturation against real
   // professional photographs' 0.174 -- two and a half times, which is
   // what "over-saturated" turned out to mean. The same house finish the
   // standard path uses brings them back.
-  applyOps(frame.data, w, h, gradeFor(profileOf(frame.data)));
-  ctx.putImageData(frame, 0, 0);
+  applyOps(shaped.data, shaped.w, shaped.h, gradeFor(profileOf(shaped.data)));
+  canvas.width = shaped.w;
+  canvas.height = shaped.h;
+  const outImg = ctx.createImageData(shaped.w, shaped.h);
+  outImg.data.set(shaped.data);
+  ctx.putImageData(outImg, 0, 0);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) throw new Error('could not encode the relit photo');
   return blob;
@@ -144,6 +196,8 @@ export async function aiEnhanceMedia(
   bucket = 'media',
   /** Relight ones already relit, and remake the copies. */
   force = false,
+  /** The shape this album's copies are delivered in. */
+  frameMode: FrameMode = 'as-shot',
 ): Promise<AiEnhanceProgress> {
   const progress: AiEnhanceProgress = { done: 0, total: ids.length, relit: 0, skipped: 0, failed: 0, refused: 0 };
 
@@ -169,7 +223,7 @@ export async function aiEnhanceMedia(
         continue;
       }
       try {
-        const blob = await correct(r.source, r.draft);
+        const blob = await correct(r.source, r.draft, r.id, eventId, frameMode);
         // Beside the photograph, under a new name each time: a CDN caches
         // by name and would go on serving the copy this replaces.
         const dir = new URL(r.source).pathname.replace(/^.*\/public\/[^/]+\//, '');

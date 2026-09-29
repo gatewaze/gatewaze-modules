@@ -82,25 +82,32 @@ export interface AlbumSetting {
    * one, or the model's. Both are kept; this only chooses.
    */
   enhance_source: 'standard' | 'ai';
+  /**
+   * The shape this album's improved copies are delivered in: as the
+   * phone gave it, cropped to 3:2/2:3, or expanded to it by a model.
+   */
+  frame: 'as-shot' | 'classic' | 'expand';
 }
 
 export async function loadAlbumSettings(eventId: string): Promise<Map<string, AlbumSetting>> {
   const { data, error } = await supabase
     .from('event_media_album_settings')
-    .select('album_id, show_on_portal, enhance, xray, enhance_source')
+    .select('album_id, show_on_portal, enhance, xray, enhance_source, frame')
     .eq('event_id', eventId);
   // A settings table that cannot be read must not fail the whole tab;
   // every album simply reads as its default, which is what it was.
   if (error) return new Map();
   return new Map((data ?? []).map((r: {
     album_id: string; show_on_portal: boolean; enhance: boolean; xray: boolean;
-    enhance_source?: string | null;
+    enhance_source?: string | null; frame?: string | null;
   }) => (
     [r.album_id, {
       show_on_portal: r.show_on_portal !== false,
       enhance: r.enhance === true,
       xray: r.xray === true,
       enhance_source: r.enhance_source === 'ai' ? 'ai' as const : 'standard' as const,
+      frame: r.frame === 'classic' ? 'classic' as const
+        : r.frame === 'expand' ? 'expand' as const : 'as-shot' as const,
     }]
   )));
 }
@@ -121,6 +128,7 @@ export async function saveAlbumSetting(
         enhance: patch.enhance ?? current.enhance,
         xray: patch.xray ?? current.xray,
         enhance_source: patch.enhance_source ?? current.enhance_source,
+        frame: patch.frame ?? current.frame,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'album_id' },

@@ -763,7 +763,15 @@ describe('completeUploads', () => {
   });
 
   // Guests upload the same way all day; the event's start decides.
+  //
+  // The clock is pinned because these uploads carry no EXIF time, so the
+  // album is decided by when they arrive -- and "an hour ago" run after
+  // half past six in the evening is the evening album, not the day's.
+  // This failed at 23:38 local and would have failed in CI for every run
+  // after 18:30 UTC.
   it('files uploads before the event starts under Getting ready', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-25T13:00:00Z'));
     const albumFor = async (eventStart, overrides = {}) => {
       const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: { ...EVENT_ROW, event_start: eventStart }, existingMedia: null });
       stubHeadResponse(headOk());
@@ -778,6 +786,7 @@ describe('completeUploads', () => {
     expect(await albumFor(null)).toBe('day');
     // The booth's posters go to the booth, before the start or not.
     expect(await albumFor(inAnHour, { booth: true })).toBe('booth');
+    vi.useRealTimers();
   });
 
   it('stamps is_approved=false when the link does not auto-approve', async () => {

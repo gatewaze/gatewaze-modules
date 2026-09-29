@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon, SunIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon, SunIcon, ScissorsIcon } from '@heroicons/react/24/outline';
 import { Button, Modal, Input, ConfirmModal } from '@/components/ui';
 import { createAlbum, updateAlbum, deleteAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
 import {
@@ -40,7 +40,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
   const stopRef = useRef(false);
 
   const settingFor = useCallback((id: string): AlbumSetting => (
-    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false, enhance_source: 'standard' as const }
+    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false, enhance_source: 'standard' as const, frame: 'as-shot' as const }
   ), [settings]);
 
   useEffect(() => {
@@ -75,7 +75,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
     setRunning(album.id);
     setProgress({ done: 0, total: ids.length, enhanced: 0, unchanged: 0, failed: 0 });
     try {
-      const done = await enhanceMedia(eventId, ids, setProgress, () => !stopRef.current, 'media', force);
+      const done = await enhanceMedia(eventId, ids, setProgress, () => !stopRef.current, 'media', force, settingFor(album.id).frame);
       toast.success(`${done.enhanced} improved, ${done.unchanged} already good${done.failed ? `, ${done.failed} could not be done` : ''}`);
       onChanged();
     } catch (err) {
@@ -97,7 +97,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
     setRunning(album.id);
     setAiProgress({ done: 0, total: ids.length, relit: 0, skipped: 0, failed: 0 });
     try {
-      const done = await aiEnhanceMedia(eventId, ids, setAiProgress, () => !stopRef.current, 'media', force);
+      const done = await aiEnhanceMedia(eventId, ids, setAiProgress, () => !stopRef.current, 'media', force, settingFor(album.id).frame);
       toast.success(`${done.relit} relit, ${done.skipped} already done${done.failed ? `, ${done.failed} could not be done` : ''}`);
       onChanged();
     } catch (err) {
@@ -106,7 +106,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
       setRunning(null);
       setAiProgress(null);
     }
-  }, [eventId, mediaIdsIn, onChanged]);
+  }, [eventId, mediaIdsIn, onChanged, settingFor]);
 
   const openForm = (album: HostMediaAlbum | 'new') => {
     setEditing(album);
@@ -233,6 +233,8 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                       ? (settingFor(album.id).enhance_source === 'ai' ? ' · relit' : ' · enhanced')
                       : ''}
                     {settingFor(album.id).xray ? ' · selfies shown' : ''}
+                    {settingFor(album.id).frame === 'classic' ? ' · 3:2'
+                      : settingFor(album.id).frame === 'expand' ? ' · 3:2 expanded' : ''}
                     {running === album.id && aiProgress
                       ? ` · relighting ${aiProgress.done} of ${aiProgress.total}…`
                       : running === album.id && progress
@@ -345,6 +347,31 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                     }`}
                   >
                     <SunIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={toggling === album.id}
+                    title={settingFor(album.id).frame === 'as-shot'
+                      ? 'Delivered as the phone framed it — click to crop to 3:2'
+                      : settingFor(album.id).frame === 'classic'
+                        ? 'Cropped to 3:2 — click to expand to it instead, which costs a few pence a photo'
+                        : 'Expanded to 3:2 by a model drawing outside the frame — click to leave the shape alone'}
+                    onClick={() => {
+                      const now = settingFor(album.id).frame;
+                      const next = now === 'as-shot' ? 'classic' : now === 'classic' ? 'expand' : 'as-shot';
+                      void change(
+                        album,
+                        { frame: next },
+                        next === 'as-shot' ? `"${album.name}" keeps the shape it was taken in`
+                          : next === 'classic' ? `"${album.name}" is cropped to 3:2`
+                            : `"${album.name}" is expanded to 3:2`,
+                      );
+                    }}
+                    className={`rounded p-1 hover:bg-[var(--gray-a3)] disabled:opacity-30 ${
+                      settingFor(album.id).frame === 'as-shot' ? 'text-[var(--gray-a8)]' : 'text-[var(--accent-11)]'
+                    }`}
+                  >
+                    <ScissorsIcon className="h-4 w-4" />
                   </button>
                   <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--gray-a3)] disabled:opacity-30">
                     <ChevronUpIcon className="h-4 w-4" />
