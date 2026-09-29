@@ -99,3 +99,65 @@ describe('admin files would build', () => {
     });
   }
 });
+
+/**
+ * Every component an admin page renders has to exist somewhere.
+ *
+ * The same gate the portal carries, for the same reason. On 2026-09-29
+ * AlbumGallery rendered `<XrayIcon />`, which was never written: the JSX
+ * was well-formed so nothing caught it, and it reached production, where
+ * it threw `ReferenceError: XrayIcon is not defined` into the error
+ * boundary for the one album that rendered that button.
+ *
+ * Admin is the same blind spot -- outside this module's tsconfig, built
+ * at container start -- and worse in one way: Vite does not typecheck, so
+ * an undefined name is not a build failure here, it is a blank Media tab
+ * for whoever opens it.
+ *
+ * Deliberately scope-blind: it asks only whether the name is bound
+ * ANYWHERE in the file or imported. That misses a name used out of scope
+ * and catches a name that does not exist, which is the one that ships.
+ */
+describe('every component rendered is defined', () => {
+  const AMBIENT = new Set(['React', 'Fragment']);
+
+  for (const file of files.filter((f) => f.endsWith('.tsx'))) {
+    const rel = file.slice(ADMIN.length + 1);
+    it(`renders nothing undefined in ${rel}`, () => {
+      const sf = ts.createSourceFile(
+        file, readFileSync(file, 'utf8'), ts.ScriptTarget.ESNext, true, ts.ScriptKind.TSX,
+      );
+      const bound = new Set<string>(AMBIENT);
+      const rendered: Array<{ name: string; line: number }> = [];
+
+      const walkNode = (node: ts.Node): void => {
+        if (
+          (ts.isVariableDeclaration(node) || ts.isFunctionDeclaration(node)
+            || ts.isClassDeclaration(node) || ts.isParameter(node)
+            || ts.isImportClause(node) || ts.isImportSpecifier(node)
+            || ts.isNamespaceImport(node) || ts.isBindingElement(node))
+          && node.name && ts.isIdentifier(node.name)
+        ) {
+          bound.add(node.name.text);
+        }
+        if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+          let tag: ts.Node = node.tagName;
+          while (ts.isPropertyAccessExpression(tag)) tag = tag.expression;
+          if (ts.isIdentifier(tag) && /^[A-Z]/.test(tag.text)) {
+            rendered.push({
+              name: tag.text,
+              line: sf.getLineAndCharacterOfPosition(tag.getStart(sf)).line + 1,
+            });
+          }
+        }
+        ts.forEachChild(node, walkNode);
+      };
+      walkNode(sf);
+
+      const offenders = rendered
+        .filter((r) => !bound.has(r.name))
+        .map((r) => `${rel}:${r.line} renders <${r.name}>, which is never defined or imported`);
+      expect(offenders).toEqual([]);
+    });
+  }
+});
