@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ENHANCE_PROMPT, applyOps, darkPoint, exposureFor, meanLuma, multiplierFor, opsFor, parseVerdict, withMeasuredTone, worthEnhancing } from '../enhance.js';
+import { ENHANCE_PROMPT, applyOps, channelMeans, darkPoint, exposureFor, meanLuma, multiplierFor, neutraliseFor, neutraliseOps, opsFor, parseVerdict, withMeasuredTone, worthEnhancing } from '../enhance.js';
 
 const verdict = (over = {}) => ({
   needs: true, exposure: 0, contrast: 0, warmth: 0, saturation: 0, sharpen: 0, note: '', ...over,
@@ -281,5 +281,72 @@ describe('putting the shadows back', () => {
   it('asks the model to use the whole scale', () => {
     expect(ENHANCE_PROMPT).toMatch(/10 is a nudge nobody will see/);
     expect(ENHANCE_PROMPT).toMatch(/50 to 80, not 5/);
+  });
+});
+
+/**
+ * ControlLight warms every photograph it touches. Measured over the
+ * night-before album on 2026-09-29: red rose against green on all seven,
+ * by 0.035 to 0.162, and the copies read as too warm (reported the same
+ * day). The drift differs per photograph, so it is measured rather than
+ * corrected by a fixed amount.
+ */
+describe('taking the model\'s warm cast back out', () => {
+  const flat = (r: number, g: number, b: number) => {
+    const d = new Uint8ClampedArray(64 * 4);
+    for (let i = 0; i < d.length; i += 4) { d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255; }
+    return d;
+  };
+
+  it('reads where each channel sits', () => {
+    const m = channelMeans(flat(120, 100, 80));
+    expect(m.r).toBeCloseTo(120, 0);
+    expect(m.g).toBeCloseTo(100, 0);
+    expect(m.b).toBeCloseTo(80, 0);
+    expect(channelMeans(new Uint8ClampedArray(0))).toEqual({ r: 128, g: 128, b: 128 });
+  });
+
+  it('cools a copy the model warmed, and lifts the blue it took', () => {
+    // The real shape: R/G 1.163 -> 1.326, B/G 0.860 -> 0.755.
+    const was = channelMeans(flat(116, 100, 86));
+    const now = channelMeans(flat(133, 100, 76));
+    const { red, blue } = neutraliseFor(was, now);
+    expect(red).toBeLessThan(1);
+    expect(blue).toBeGreaterThan(1);
+  });
+
+  it('lands the copy near the original\'s own colour', () => {
+    const was = channelMeans(flat(116, 100, 86));
+    const now = channelMeans(flat(133, 100, 76));
+    const { red } = neutraliseFor(was, now);
+    // 80% of the way back, by design: the model is entitled to some of
+    // the warmth it added as part of the relighting.
+    const landed = (133 * red) / 100;
+    expect(landed).toBeGreaterThan(1.16);
+    expect(landed).toBeLessThan(1.22);
+  });
+
+  it('does nothing to a copy that did not drift', () => {
+    const same = channelMeans(flat(116, 100, 86));
+    expect(neutraliseFor(same, same)).toEqual({ red: 1, blue: 1 });
+  });
+
+  it('never runs away on a strange measurement', () => {
+    const odd = neutraliseFor(channelMeans(flat(255, 1, 255)), channelMeans(flat(1, 255, 1)));
+    expect(odd.red).toBeLessThanOrEqual(1.35);
+    expect(odd.red).toBeGreaterThanOrEqual(0.75);
+    expect(odd.blue).toBeLessThanOrEqual(1.35);
+    expect(odd.blue).toBeGreaterThanOrEqual(0.75);
+  });
+
+  it('touches the colour and leaves the light alone', () => {
+    const ops = neutraliseOps(channelMeans(flat(116, 100, 86)), channelMeans(flat(133, 100, 76)));
+    expect(ops.linear).toEqual({ multiplier: 1, offset: 0 });
+    expect(ops.modulate.saturation).toBe(1);
+    expect(ops.sharpenSigma).toBe(0);
+    // Green is the reference, so a grey-green pixel keeps its value.
+    const d = flat(120, 120, 120);
+    applyOps(d, 8, 8, ops);
+    expect(d[1]).toBe(120);
   });
 });

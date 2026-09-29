@@ -77,23 +77,30 @@ export interface AlbumSetting {
   enhance: boolean;
   /** Portal may show the selfies behind this album's booth pictures. */
   xray: boolean;
+  /**
+   * Which improved copy to show where `enhance` is on: the arithmetic
+   * one, or the model's. Both are kept; this only chooses.
+   */
+  enhance_source: 'standard' | 'ai';
 }
 
 export async function loadAlbumSettings(eventId: string): Promise<Map<string, AlbumSetting>> {
   const { data, error } = await supabase
     .from('event_media_album_settings')
-    .select('album_id, show_on_portal, enhance, xray')
+    .select('album_id, show_on_portal, enhance, xray, enhance_source')
     .eq('event_id', eventId);
   // A settings table that cannot be read must not fail the whole tab;
   // every album simply reads as its default, which is what it was.
   if (error) return new Map();
   return new Map((data ?? []).map((r: {
     album_id: string; show_on_portal: boolean; enhance: boolean; xray: boolean;
+    enhance_source?: string | null;
   }) => (
     [r.album_id, {
       show_on_portal: r.show_on_portal !== false,
       enhance: r.enhance === true,
       xray: r.xray === true,
+      enhance_source: r.enhance_source === 'ai' ? 'ai' as const : 'standard' as const,
     }]
   )));
 }
@@ -113,6 +120,7 @@ export async function saveAlbumSetting(
         show_on_portal: patch.show_on_portal ?? current.show_on_portal,
         enhance: patch.enhance ?? current.enhance,
         xray: patch.xray ?? current.xray,
+        enhance_source: patch.enhance_source ?? current.enhance_source,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'album_id' },

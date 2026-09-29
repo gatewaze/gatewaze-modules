@@ -830,18 +830,20 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * shows every album, which is where this started.
    */
   async function albumSettings(eventId: string): Promise<{
-    hidden: Set<View>; enhanced: Set<View>; xray: Set<View>;
+    hidden: Set<View>; enhanced: Set<View>; xray: Set<View>; relit: Set<View>;
   }> {
     const hidden = new Set<View>();
     const enhanced = new Set<View>();
     const xray = new Set<View>();
+    // Albums asking for the model's copy rather than the arithmetic one.
+    const relit = new Set<View>();
     try {
       const { data: rows, error } = await supabase
         .from('event_media_album_settings')
-        .select('album_id, show_on_portal, enhance, xray')
+        .select('album_id, show_on_portal, enhance, xray, enhance_source')
         .eq('event_id', eventId);
       if (error) throw new Error(error.message);
-      if (!rows || rows.length === 0) return { hidden, enhanced, xray };
+      if (!rows || rows.length === 0) return { hidden, enhanced, xray, relit };
       const { data: albums } = await supabase
         .from('event_media_view_albums')
         .select('album_id, view')
@@ -852,19 +854,21 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       }
       for (const r of rows as Array<{
         album_id: string; show_on_portal: boolean; enhance?: boolean; xray?: boolean;
+        enhance_source?: string | null;
       }>) {
         const view = viewOf.get(r.album_id);
         if (!view) continue;
         if (r.show_on_portal === false) hidden.add(view);
         if (r.enhance === true) enhanced.add(view);
         if (r.xray === true) xray.add(view);
+        if (r.enhance_source === 'ai') relit.add(view);
       }
     } catch (err) {
       logger.warn('album settings unavailable; showing every album as it is', {
         eventId, error: err instanceof Error ? err.message : String(err),
       });
     }
-    return { hidden, enhanced, xray };
+    return { hidden, enhanced, xray, relit };
   }
 
   /**
@@ -939,7 +943,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // by the gallery, which puts them in itself -- otherwise turning
         // the album back off would leave a working URL to them sitting
         // in the payload.
-        if (k === 'enhanced' || k === 'enhanced_selfie') continue;
+        // A draft is a working file the browser has not corrected yet;
+        // it never leaves here at all.
+        if (k === 'enhanced' || k === 'enhanced_selfie'
+          || k === 'enhanced_ai' || k === 'enhanced_ai_selfie') continue;
         if (typeof v === 'string' && v) variants[k] = toBrowserUrl(v);
       }
     }
@@ -1134,7 +1141,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Albums an organiser has taken off the portal (migration 016). Their
     // photographs go with them, or hiding an album would hide only its
     // heading.
-    const { hidden, enhanced, xray } = await albumSettings(event.id);
+    const { hidden, enhanced, xray, relit } = await albumSettings(event.id);
     const offered = GALLERY_ORDER.filter((v) => !hidden.has(v));
 
     // The album's own names, and the slugs a link is written with.
@@ -1237,14 +1244,22 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // poster was made under imagined light, the selfie in a very dark
       // room (asked 2026-09-28). Shown in place of the selfie, and only
       // where the album asks for enhanced copies.
-      if (xray.has(view) && enhanced.has(view)
-        && typeof better['enhanced_selfie'] === 'string' && withSlug['selfie']) {
-        withSlug['selfie'] = toBrowserUrl(better['enhanced_selfie'] as string);
+      // Which improved copy this album asked for. An album set to the
+      // model's copy that has not been relit yet falls back to the
+      // arithmetic one, so choosing it early shows what is there rather
+      // than nothing.
+      const pick = (plain: string, ai: string): string | null => {
+        if (relit.has(view) && typeof better[ai] === 'string') return better[ai] as string;
+        return typeof better[plain] === 'string' ? (better[plain] as string) : null;
+      };
+      const betterSelfie = pick('enhanced_selfie', 'enhanced_ai_selfie');
+      if (xray.has(view) && enhanced.has(view) && betterSelfie && withSlug['selfie']) {
+        withSlug['selfie'] = toBrowserUrl(betterSelfie);
         withSlug['selfie_original'] = item.selfie;
         withSlug['selfie_enhanced'] = true;
       }
-      if (!enhanced.has(view) || typeof better['enhanced'] !== 'string') return withSlug;
-      const path = better['enhanced'] as string;
+      const path = enhanced.has(view) ? pick('enhanced', 'enhanced_ai') : null;
+      if (!path) return withSlug;
       return {
         ...withSlug,
         url: toBrowserUrl(path),

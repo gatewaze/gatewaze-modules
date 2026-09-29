@@ -1589,6 +1589,55 @@ describe('eventGallery', () => {
     expect(JSON.stringify(plain.body)).not.toContain('enhanced-x.jpg');
   });
 
+  // The two ways to improve a photograph are different in kind: one is
+  // arithmetic on the pixels, the other redraws them. An album says
+  // which it wants, and both copies are kept either way.
+  it('shows the relit copy only where the album asked for that one', async () => {
+    const plainPath = `event/${EVENT_ID}/22222222-2222-4222-8222-222222222222/enhanced-x.jpg`;
+    const aiPath = `event/${EVENT_ID}/22222222-2222-4222-8222-222222222222/ai-y.jpg`;
+    const rows = ROWS.map((r) => (r.metadata.album === 'ready'
+      ? { ...r, variants: { enhanced: plainPath, enhanced_ai: aiPath } }
+      : r));
+    const setting = (source) => ({
+      ...TABLES,
+      event_media_album_settings: {
+        data: [{ album_id: ALBUM.ready, show_on_portal: true, enhance: true, enhance_source: source }],
+        error: null,
+      },
+    });
+
+    const ai = await gallery({ album: 'ready' }, { mediaRows: rows, tables: setting('ai') });
+    expect(ai.body.items[0].url).toContain('ai-y.jpg');
+    expect(ai.body.items[0].variants.thumb).toContain('ai-y.jpg');
+
+    const standard = await gallery({ album: 'ready' }, { mediaRows: rows, tables: setting('standard') });
+    expect(standard.body.items[0].url).toContain('enhanced-x.jpg');
+    // The one it is not showing is not in the payload either way.
+    expect(JSON.stringify(standard.body)).not.toContain('ai-y.jpg');
+    expect(JSON.stringify(ai.body)).not.toContain('enhanced-x.jpg');
+  });
+
+  // Choosing the model's copy before the album has been relit should
+  // show what is there, not nothing.
+  it('falls back to the arithmetic copy when nothing has been relit', async () => {
+    const plainPath = `event/${EVENT_ID}/22222222-2222-4222-8222-222222222222/enhanced-x.jpg`;
+    const rows = ROWS.map((r) => (r.metadata.album === 'ready'
+      ? { ...r, variants: { enhanced: plainPath } }
+      : r));
+    const res = await gallery({ album: 'ready' }, {
+      mediaRows: rows,
+      tables: {
+        ...TABLES,
+        event_media_album_settings: {
+          data: [{ album_id: ALBUM.ready, show_on_portal: true, enhance: true, enhance_source: 'ai' }],
+          error: null,
+        },
+      },
+    });
+    expect(res.body.items[0].enhanced).toBe(true);
+    expect(res.body.items[0].url).toContain('enhanced-x.jpg');
+  });
+
   // The sidebar asks the same endpoint what to list under the page.
   it('answers what a sidebar should list under the page', async () => {
     const res = await gallery();
