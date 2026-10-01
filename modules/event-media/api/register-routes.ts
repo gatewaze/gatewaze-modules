@@ -269,6 +269,19 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     logger,
   }));
 
+  // What a photograph needs before a lens can be put in front of it.
+  const { createFocusMedia, mountFocusMedia } = await import('./focus-media.js');
+  const { runDepth, runCutout } = await import('../lib/booth-provider.js');
+  mountFocusMedia(adminRouter, createFocusMedia({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    storageBucket: STORAGE_BUCKET,
+    publicUrl: (path) => `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
+    runDepth,
+    runCutout,
+    logger,
+  }));
+
   app.use('/api/admin', adminRouter);
 
   void context;

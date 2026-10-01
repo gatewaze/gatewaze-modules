@@ -17,6 +17,8 @@ import { supabase } from '@/lib/supabase';
 import { applyOps, darkPoint, meanLuma, withMeasuredTone, type EnhanceOps } from '../../lib/enhance';
 import { applyGrade, gradeFor, profileOf } from '../../lib/grade';
 import { cropped, shapeFor, type Frame, type FrameMode } from './reframeMedia';
+import { denoise } from '../../lib/denoise';
+import { applyFocus, blurField, focalPlane, radiusFor, type Aperture } from '../../lib/focus';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const apiUrl = env.VITE_API_URL ?? '';
@@ -68,7 +70,13 @@ function load(src: string): Promise<HTMLImageElement> {
 }
 
 /** The photograph, improved, as a JPEG. */
-async function improve(source: string, ops: EnhanceOps, frameMode: FrameMode = 'as-shot'): Promise<Blob> {
+/** The two measurements a lens needs, if this album wants one. */
+interface Lens { depth: string; cutout: string }
+
+async function improve(
+  source: string, ops: EnhanceOps, frameMode: FrameMode = 'as-shot',
+  lens: Lens | null = null, aperture: Aperture = 'gentle',
+): Promise<Blob> {
   const img = await load(source);
   const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(1, Math.round(img.naturalWidth * scale));
@@ -97,6 +105,36 @@ async function improve(source: string, ops: EnhanceOps, frameMode: FrameMode = '
   // time still look like one album. It measures what it is given, so it
   // does less where the correction above already did the work.
   applyGrade(frame.data, frame.w, frame.h, gradeFor(profileOf(frame.data, frame.w, frame.h)));
+  // Colour speckle out. Always: it carries no detail, a dark marquee is
+  // full of it, and stretching contrast on a noisy file makes it worse.
+  denoise(frame.data, frame.w, frame.h, 1);
+
+  // And a lens, where the album asked for one and the measurements are
+  // there. A photograph with no subject in it is left alone.
+  if (lens) {
+    try {
+      const [d, c] = await Promise.all([load(lens.depth), load(lens.cutout)]);
+      const read = (img: HTMLImageElement) => {
+        const cv = document.createElement('canvas');
+        cv.width = frame.w; cv.height = frame.h;
+        const cx = cv.getContext('2d', { willReadFrequently: true })!;
+        cx.drawImage(img, 0, 0, frame.w, frame.h);
+        return cx.getImageData(0, 0, frame.w, frame.h).data;
+      };
+      const depth = read(d);
+      const mask = read(c);
+      const plane = focalPlane(depth, mask);
+      if (plane >= 0) {
+        applyFocus(
+          frame.data, frame.w, frame.h,
+          blurField(depth, mask, plane, frame.w, frame.h),
+          radiusFor(frame.w, aperture),
+        );
+      }
+    } catch {
+      // A lens is a nicety. Losing the photograph to one would not be.
+    }
+  }
   canvas.width = frame.w;
   canvas.height = frame.h;
   const outImg = ctx.createImageData(frame.w, frame.h);
@@ -123,6 +161,8 @@ export async function enhanceMedia(
   force = false,
   /** The shape this album's copies are delivered in. */
   frameMode: FrameMode = 'as-shot',
+  /** The depth of field this album asked for. */
+  focus: 'off' | Aperture = 'off',
 ): Promise<EnhanceProgress> {
   const progress: EnhanceProgress = { done: 0, total: ids.length, enhanced: 0, unchanged: 0, failed: 0 };
 
@@ -148,7 +188,18 @@ export async function enhanceMedia(
         continue;
       }
       try {
-        const blob = await improve(r.source, r.ops, frameMode);
+        // Depth and a cutout belong to the photograph, so they are
+        // measured once and cached; asking again costs nothing.
+        let lens: Lens | null = null;
+        if (focus !== 'off') {
+          const got = await authedFetch(`/api/admin/events/${eventId}/media/depth`, {
+            method: 'POST',
+            body: JSON.stringify({ ids: [r.id] }),
+          }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+          const m = got?.results?.[0];
+          if (m?.status === 'ready' && m.depth && m.cutout) lens = { depth: m.depth, cutout: m.cutout };
+        }
+        const blob = await improve(r.source, r.ops, frameMode, lens, focus === 'off' ? 'gentle' : focus);
         // Beside the photograph, under a new name each time: a CDN caches
         // by name and would go on serving the copy this replaces.
         const dir = new URL(r.source).pathname.replace(/^.*\/public\/[^/]+\//, '');

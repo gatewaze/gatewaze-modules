@@ -87,19 +87,21 @@ export interface AlbumSetting {
    * phone gave it, cropped to 3:2/2:3, or expanded to it by a model.
    */
   frame: 'as-shot' | 'classic' | 'expand';
+  /** Depth of field put in front of this album's improved copies. */
+  focus: 'off' | 'gentle' | 'medium' | 'strong';
 }
 
 export async function loadAlbumSettings(eventId: string): Promise<Map<string, AlbumSetting>> {
   const { data, error } = await supabase
     .from('event_media_album_settings')
-    .select('album_id, show_on_portal, enhance, xray, enhance_source, frame')
+    .select('album_id, show_on_portal, enhance, xray, enhance_source, frame, focus')
     .eq('event_id', eventId);
   // A settings table that cannot be read must not fail the whole tab;
   // every album simply reads as its default, which is what it was.
   if (error) return new Map();
   return new Map((data ?? []).map((r: {
     album_id: string; show_on_portal: boolean; enhance: boolean; xray: boolean;
-    enhance_source?: string | null; frame?: string | null;
+    enhance_source?: string | null; frame?: string | null; focus?: string | null;
   }) => (
     [r.album_id, {
       show_on_portal: r.show_on_portal !== false,
@@ -108,6 +110,9 @@ export async function loadAlbumSettings(eventId: string): Promise<Map<string, Al
       enhance_source: r.enhance_source === 'ai' ? 'ai' as const : 'standard' as const,
       frame: r.frame === 'classic' ? 'classic' as const
         : r.frame === 'expand' ? 'expand' as const : 'as-shot' as const,
+      focus: r.focus === 'gentle' ? 'gentle' as const
+        : r.focus === 'medium' ? 'medium' as const
+          : r.focus === 'strong' ? 'strong' as const : 'off' as const,
     }]
   )));
 }
@@ -129,6 +134,7 @@ export async function saveAlbumSetting(
         xray: patch.xray ?? current.xray,
         enhance_source: patch.enhance_source ?? current.enhance_source,
         frame: patch.frame ?? current.frame,
+        focus: patch.focus ?? current.focus,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'album_id' },
