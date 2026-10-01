@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon, SunIcon, ScissorsIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon, SunIcon, ScissorsIcon, CameraIcon } from '@heroicons/react/24/outline';
 import { Button, Modal, Input, ConfirmModal } from '@/components/ui';
 import { createAlbum, updateAlbum, deleteAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
 import {
@@ -40,7 +40,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
   const stopRef = useRef(false);
 
   const settingFor = useCallback((id: string): AlbumSetting => (
-    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false, enhance_source: 'standard' as const, frame: 'as-shot' as const }
+    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false, enhance_source: 'standard' as const, frame: 'as-shot' as const, focus: 'off' as const }
   ), [settings]);
 
   useEffect(() => {
@@ -75,7 +75,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
     setRunning(album.id);
     setProgress({ done: 0, total: ids.length, enhanced: 0, unchanged: 0, failed: 0 });
     try {
-      const done = await enhanceMedia(eventId, ids, setProgress, () => !stopRef.current, 'media', force, settingFor(album.id).frame);
+      const done = await enhanceMedia(eventId, ids, setProgress, () => !stopRef.current, 'media', force, settingFor(album.id).frame, settingFor(album.id).focus);
       toast.success(`${done.enhanced} improved, ${done.unchanged} already good${done.failed ? `, ${done.failed} could not be done` : ''}`);
       onChanged();
     } catch (err) {
@@ -97,7 +97,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
     setRunning(album.id);
     setAiProgress({ done: 0, total: ids.length, relit: 0, skipped: 0, failed: 0 });
     try {
-      const done = await aiEnhanceMedia(eventId, ids, setAiProgress, () => !stopRef.current, 'media', force, settingFor(album.id).frame);
+      const done = await aiEnhanceMedia(eventId, ids, setAiProgress, () => !stopRef.current, 'media', force, settingFor(album.id).frame, settingFor(album.id).focus);
       toast.success(`${done.relit} relit, ${done.skipped} already done${done.failed ? `, ${done.failed} could not be done` : ''}`);
       onChanged();
     } catch (err) {
@@ -235,6 +235,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                     {settingFor(album.id).xray ? ' · selfies shown' : ''}
                     {settingFor(album.id).frame === 'classic' ? ' · 3:2'
                       : settingFor(album.id).frame === 'expand' ? ' · 3:2 expanded' : ''}
+                    {settingFor(album.id).focus !== 'off' ? ` · ${settingFor(album.id).focus} focus` : ''}
                     {running === album.id && aiProgress
                       ? ` · relighting ${aiProgress.done} of ${aiProgress.total}…`
                       : running === album.id && progress
@@ -372,6 +373,30 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                     }`}
                   >
                     <ScissorsIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={toggling === album.id}
+                    title={settingFor(album.id).focus === 'off'
+                      ? 'Everything sharp, as the phone saw it — click for a little depth of field'
+                      : `Depth of field: ${settingFor(album.id).focus} — click to change it`}
+                    onClick={() => {
+                      const order = ['off', 'gentle', 'medium', 'strong'] as const;
+                      const now = settingFor(album.id).focus;
+                      const next = order[(order.indexOf(now) + 1) % order.length]!;
+                      void change(
+                        album,
+                        { focus: next },
+                        next === 'off'
+                          ? `"${album.name}" keeps everything sharp`
+                          : `"${album.name}" has ${next} depth of field`,
+                      );
+                    }}
+                    className={`rounded p-1 hover:bg-[var(--gray-a3)] disabled:opacity-30 ${
+                      settingFor(album.id).focus === 'off' ? 'text-[var(--gray-a8)]' : 'text-[var(--accent-11)]'
+                    }`}
+                  >
+                    <CameraIcon className="h-4 w-4" />
                   </button>
                   <button type="button" title="Move up" disabled={i === 0} onClick={() => move(i, -1)} className="rounded p-1 text-[var(--gray-a10)] hover:bg-[var(--gray-a3)] disabled:opacity-30">
                     <ChevronUpIcon className="h-4 w-4" />
