@@ -547,11 +547,14 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
 
       if (createError) throw createError;
 
-      // Copy blocks
+      // Copy blocks — only the LIVE ones. Soft-deleted blocks (deleted_at set)
+      // are hidden from the editor, so a duplicate must not resurrect them as
+      // active content (it did: a copy showed blocks the source had removed).
       const { data: blocks, error: blocksError } = await supabase
         .from('newsletters_edition_blocks')
         .select('*')
-        .eq('edition_id', edition.id);
+        .eq('edition_id', edition.id)
+        .is('deleted_at', null);
 
       if (blocksError) throw blocksError;
 
@@ -570,11 +573,12 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
 
         if (blockError) throw blockError;
 
-        // Copy bricks
+        // Copy bricks — live ones only, same reason as the blocks above.
         const { data: bricks, error: bricksError } = await supabase
           .from('newsletters_edition_bricks')
           .select('*')
-          .eq('block_id', block.id);
+          .eq('block_id', block.id)
+          .is('deleted_at', null);
 
         if (bricksError) throw bricksError;
 
