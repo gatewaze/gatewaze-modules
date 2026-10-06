@@ -1,5 +1,5 @@
 import {
-  DocumentDuplicateIcon, PencilSquareIcon, ArrowRightIcon,
+  DocumentDuplicateIcon, PencilSquareIcon, ArrowRightIcon, ChevronUpIcon, ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import { Badge } from '@/components/ui';
 import { RowActions } from '@/components/shared/table/RowActions';
@@ -30,6 +30,7 @@ export interface NewsletterCardData {
   accent_color: string | null;
   from_email: string | null;
   setup_complete: boolean;
+  sort_order: number;
   edition_count: number;
   subscriber_count: number;
   avgOpenRate: number | null;   // 0..1 across recent sent editions
@@ -96,9 +97,13 @@ interface Props {
   onViewAllEditions: () => void;
   onEditEdition: (id: string) => void;
   onDuplicateEdition: (ed: DashboardEdition) => void;
+  /** Reorder controls (super_admin). undefined at an edge disables that arrow. */
+  canReorder?: boolean;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }
 
-export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEditEdition, onDuplicateEdition }: Props) {
+export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEditEdition, onDuplicateEdition, canReorder, onMoveUp, onMoveDown }: Props) {
   const accent = data.accent_color || 'var(--accent-9)';
 
   return (
@@ -125,6 +130,19 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
             {data.content_category && <Badge variant="soft" color="blue" size="1">{data.content_category}</Badge>}
             {data.from_email && <span className="max-w-[220px] truncate text-xs text-[var(--gray-10)]">{data.from_email}</span>}
             {!data.setup_complete && <Badge variant="soft" color="orange" size="1">Setup needed</Badge>}
+            {canReorder && (
+              // publication order — also the order on the portal
+              <div className="ml-1 flex items-center opacity-40 group-hover/card:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                <button type="button" onClick={onMoveUp} disabled={!onMoveUp} title="Move up"
+                  className="rounded p-0.5 text-[var(--gray-10)] hover:text-[var(--gray-12)] hover:bg-[var(--gray-a3)] disabled:opacity-30 disabled:hover:bg-transparent">
+                  <ChevronUpIcon className="size-4" />
+                </button>
+                <button type="button" onClick={onMoveDown} disabled={!onMoveDown} title="Move down"
+                  className="rounded p-0.5 text-[var(--gray-10)] hover:text-[var(--gray-12)] hover:bg-[var(--gray-a3)] disabled:opacity-30 disabled:hover:bg-transparent">
+                  <ChevronDownIcon className="size-4" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
         {data.description && (
@@ -169,10 +187,10 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
                   <span className="w-12 shrink-0 text-xs tabular-nums text-[var(--gray-10)]">{fmtShortDate(ed.edition_date)}</span>
                   <span className="flex-1 min-w-0 truncate text-sm text-[var(--gray-12)]">{ed.title || <span className="italic text-[var(--gray-9)]">Untitled</span>}</span>
                   <span className="shrink-0"><EditionStatus ed={ed} /></span>
-                  <div className="hidden md:flex shrink-0 items-center gap-4 w-44 justify-end text-xs tabular-nums">
-                    <span className="text-[var(--gray-11)]">{ed.hasData ? fmtNum(ed.sent) : '—'}<span className="ml-1 text-[10px] text-[var(--gray-9)]">sent</span></span>
-                    <span className="text-[var(--gray-12)] font-medium">{ed.hasData ? pct(ed.opens / ed.delivered) : '—'}<span className="ml-1 text-[10px] font-normal text-[var(--gray-9)]">open</span></span>
-                    <span className="text-[var(--gray-11)]">{ed.hasData ? pct(ed.clicks / ed.delivered) : '—'}<span className="ml-1 text-[10px] text-[var(--gray-9)]">click</span></span>
+                  <div className="hidden md:flex shrink-0 items-center gap-3 text-xs tabular-nums whitespace-nowrap">
+                    <span className="w-24 text-right text-[var(--gray-11)]">{ed.hasData ? fmtNum(ed.sent) : '—'}<span className="ml-1 text-[10px] text-[var(--gray-9)]">sent</span></span>
+                    <span className="w-20 text-right text-[var(--gray-12)] font-medium">{ed.hasData ? pct(ed.opens / ed.delivered) : '—'}<span className="ml-1 text-[10px] font-normal text-[var(--gray-9)]">open</span></span>
+                    <span className="w-16 text-right text-[var(--gray-11)]">{ed.hasData ? pct(ed.clicks / ed.delivered) : '—'}<span className="ml-1 text-[10px] text-[var(--gray-9)]">click</span></span>
                   </div>
                   <span className="shrink-0" onClick={(e) => e.stopPropagation()}>
                     <RowActions

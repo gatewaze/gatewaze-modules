@@ -53,6 +53,7 @@ export default function NewsletterListPage() {
       const { data: collections, error } = await supabase
         .from('newsletters_template_collections')
         .select('*')
+        .order('sort_order')
         .order('name');
       if (error) throw error;
       const cols = collections || [];
@@ -139,6 +140,7 @@ export default function NewsletterListPage() {
           accent_color: (col.accent_color as string) ?? null,
           from_email: (col.from_email as string) ?? null,
           setup_complete: Boolean(col.setup_complete),
+          sort_order: Number(col.sort_order ?? 0),
           edition_count: editionCount,
           subscriber_count: subscriberCount,
           avgOpenRate: sumDelivered > 0 ? sumOpens / sumDelivered : null,
@@ -162,6 +164,30 @@ export default function NewsletterListPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Reorder publications (super_admin). Swap the two neighbours in the current
+  // visual order, then renumber every card to its position (×10) — writing only
+  // the rows whose value actually changes — so ties from the default 0 can't
+  // make a move a no-op. Dashboard and portal both order by sort_order.
+  const handleMove = async (index: number, dir: -1 | 1) => {
+    const j = index + dir;
+    if (j < 0 || j >= cards.length) return;
+    const next = cards.slice();
+    [next[index], next[j]] = [next[j], next[index]];
+    try {
+      const writes = next
+        .map((c, k) => ({ id: c.id, want: (k + 1) * 10, have: c.sort_order }))
+        .filter((w) => w.want !== w.have)
+        .map((w) => supabase.from('newsletters_template_collections').update({ sort_order: w.want }).eq('id', w.id));
+      const results = await Promise.all(writes);
+      const failed = results.find((r) => r.error);
+      if (failed?.error) throw failed.error;
+      setCards(next.map((c, k) => ({ ...c, sort_order: (k + 1) * 10 })));
+    } catch (err) {
+      console.error('Error reordering publications:', err);
+      toast.error('Failed to reorder publications');
+    }
+  };
 
   const handleDuplicate = async (ed: DashboardEdition) => {
     try {
@@ -223,10 +249,13 @@ export default function NewsletterListPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {cards.map((c) => (
+            {cards.map((c, i) => (
               <NewsletterDashboardCard
                 key={c.id}
                 data={c}
+                onMoveUp={canCreatePublication && i > 0 ? () => handleMove(i, -1) : undefined}
+                onMoveDown={canCreatePublication && i < cards.length - 1 ? () => handleMove(i, 1) : undefined}
+                canReorder={canCreatePublication}
                 onOpen={() => navigate(`/newsletters/${c.slug}`)}
                 onViewAllEditions={() => navigate(`/newsletters/${c.slug}/editions`)}
                 onEditEdition={(id) => navigate(`/newsletters/${c.slug}/editions/${id}`)}
