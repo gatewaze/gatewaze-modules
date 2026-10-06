@@ -16,9 +16,13 @@ import {
 } from '../components/NewsletterDashboardCard';
 import { duplicateEdition } from '../lib/duplicateEdition';
 
-// How many recent editions to pull per newsletter for metrics + the sparkline;
-// only the latest 3 are shown in the list.
+// How many recent editions to pull per newsletter for the list; only the
+// latest 3 are shown.
 const RECENT_EDITIONS = 8;
+// How many of the most recently *sent* editions feed the metrics + sparklines.
+// Sourced from newsletter_sends, not the edition list, so drafts and
+// published-but-unsent editions can't shorten or distort the trend.
+const SPARK_EDITIONS = 8;
 
 interface EngagementRow {
   edition_id: string;
@@ -61,7 +65,7 @@ export default function NewsletterListPage() {
       // Per-newsletter: recent editions, total count, subscriber count — in parallel.
       const perCol = await Promise.all(cols.map(async (col: Record<string, unknown>) => {
         const colId = col.id as string;
-        const [editionsRes, countRes] = await Promise.all([
+        const [editionsRes, countRes, sendsRes] = await Promise.all([
           supabase
             .from('newsletters_editions')
             .select('id, title, edition_date, status, publish_state, collection_id, preheader, content_category, metadata')
@@ -72,7 +76,23 @@ export default function NewsletterListPage() {
             .from('newsletters_editions')
             .select('id', { count: 'exact', head: true })
             .eq('collection_id', colId),
+          // The editions that actually went out, newest first. An edition can
+          // have more than one send (a resend, a cancelled attempt), so fetch a
+          // little extra and dedupe below.
+          supabase
+            .from('newsletter_sends')
+            .select('edition_id, completed_at')
+            .eq('collection_id', colId)
+            .eq('status', 'sent')
+            .order('completed_at', { ascending: false })
+            .limit(SPARK_EDITIONS * 2),
         ]);
+
+        const sentIds: string[] = [];
+        for (const r of (sendsRes.data || []) as Array<{ edition_id: string | null }>) {
+          if (r.edition_id && !sentIds.includes(r.edition_id)) sentIds.push(r.edition_id);
+          if (sentIds.length >= SPARK_EDITIONS) break;
+        }
 
         let subscriberCount = 0;
         if (col.list_id) {
@@ -89,13 +109,18 @@ export default function NewsletterListPage() {
         return {
           col,
           editions: (editionsRes.data || []) as Array<Record<string, unknown>>,
+          sentIds,
           editionCount: countRes.count || 0,
           subscriberCount,
         };
       }));
 
-      // One batched engagement lookup for every edition we're about to show.
-      const allIds = perCol.flatMap((p) => p.editions.map((e) => e.id as string));
+      // One batched engagement lookup for every edition we're about to show or
+      // chart.
+      const allIds = Array.from(new Set(perCol.flatMap((p) => [
+        ...p.editions.map((e) => e.id as string),
+        ...p.sentIds,
+      ])));
       const engById = new Map<string, EngagementRow>();
       for (let i = 0; i < allIds.length; i += 25) {
         const chunk = allIds.slice(i, i + 25);
@@ -103,7 +128,7 @@ export default function NewsletterListPage() {
         for (const r of (eng || []) as EngagementRow[]) engById.set(r.edition_id, r);
       }
 
-      const built: NewsletterCardData[] = perCol.map(({ col, editions, editionCount, subscriberCount }) => {
+      const built: NewsletterCardData[] = perCol.map(({ col, editions, sentIds, editionCount, subscriberCount }) => {
         const eds: DashboardEdition[] = editions.map((e) => {
           const g = engById.get(e.id as string);
           const sent = Number(g?.sent ?? 0);
@@ -126,7 +151,17 @@ export default function NewsletterListPage() {
           };
         });
 
-        const sentEds = eds.filter((e) => e.delivered > 0);
+        // Metrics + trend come from the sent editions (newest first), not the
+        // list above, which can be mostly drafts.
+        const sentEds = sentIds
+          .map((id) => engById.get(id))
+          .filter((g): g is EngagementRow => !!g && Number(g.delivered) > 0)
+          .map((g) => ({
+            sent: Number(g.sent),
+            delivered: Number(g.delivered),
+            opens: Number(g.unique_opens),
+            clicks: Number(g.unique_clicks),
+          }));
         const sumDelivered = sentEds.reduce((a, e) => a + e.delivered, 0);
         const sumOpens = sentEds.reduce((a, e) => a + e.opens, 0);
         const sumClicks = sentEds.reduce((a, e) => a + e.clicks, 0);
@@ -145,7 +180,7 @@ export default function NewsletterListPage() {
           subscriber_count: subscriberCount,
           avgOpenRate: sumDelivered > 0 ? sumOpens / sumDelivered : null,
           avgClickRate: sumDelivered > 0 ? sumClicks / sumDelivered : null,
-          totalSent: eds.reduce((a, e) => a + e.sent, 0),
+          totalSent: sentEds.reduce((a, e) => a + e.sent, 0),
           // trend series, oldest → newest, sent editions only
           sparkSent: sentEds.slice().reverse().map((e) => e.sent),
           sparkOpen: sentEds.slice().reverse().map((e) => e.opens / e.delivered),
