@@ -94,7 +94,7 @@ export default function SlackInvitationsPage() {
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [sorting, setSorting] = useState<SortingState>([{ id: 'created_at', desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'updated_at', desc: true }]);
   const [globalFilter, setGlobalFilter] = useState('');
 
   const apiConfig = getApiConfig();
