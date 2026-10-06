@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { PlusIcon, EnvelopeIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, EnvelopeIcon, ChevronDownIcon, DocumentPlusIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Button, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
+import { RowActions } from '@/components/shared/table/RowActions';
 import { supabase } from '@/lib/supabase';
+import { useAdminScope } from '@/hooks/usePermissions';
 import NewsletterSetupWizard from '../components/NewsletterSetupWizard';
+import { PickPublicationModal } from '../components/PickPublicationModal';
 import {
   NewsletterDashboardCard,
   type NewsletterCardData,
@@ -30,6 +33,20 @@ export default function NewsletterListPage() {
   const [cards, setCards] = useState<NewsletterCardData[]>([]);
   const [loading, setLoading] = useState(true);
   const [showWizard, setShowWizard] = useState(false);
+  const [showPickPublication, setShowPickPublication] = useState(false);
+
+  // Only super_admins create publications (and edit their settings); admins
+  // create editions. The Create button adapts: a menu for super_admins, a
+  // straight-to-edition action for everyone else.
+  const { isSuperAdmin: canCreatePublication } = useAdminScope();
+
+  const goToNewEdition = (pub: { id: string; slug: string }) =>
+    navigate(`/newsletters/${pub.slug}/editions/new?collection=${pub.id}`);
+
+  const handleCreateEdition = () => {
+    if (cards.length === 1) { goToNewEdition(cards[0]); return; } // nothing to pick
+    setShowPickPublication(true);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -162,9 +179,23 @@ export default function NewsletterListPage() {
       <WorkspaceLayout
         title="Newsletters"
         actions={
-          <Button variant="solid" onClick={() => setShowWizard(true)}>
-            <PlusIcon className="h-4 w-4 mr-1" /> Create Newsletter
-          </Button>
+          canCreatePublication ? (
+            <RowActions
+              trigger={
+                <Button variant="solid">
+                  <PlusIcon className="h-4 w-4 mr-1" /> Create <ChevronDownIcon className="h-3.5 w-3.5 ml-1" />
+                </Button>
+              }
+              actions={[
+                { label: 'Create new publication', icon: <EnvelopeIcon className="size-4" />, onClick: () => setShowWizard(true) },
+                { label: 'Create edition', icon: <DocumentPlusIcon className="size-4" />, onClick: handleCreateEdition, disabled: cards.length === 0 },
+              ]}
+            />
+          ) : (
+            <Button variant="solid" onClick={handleCreateEdition} disabled={cards.length === 0}>
+              <PlusIcon className="h-4 w-4 mr-1" /> Create
+            </Button>
+          )
         }
       >
         {loading ? (
@@ -175,12 +206,20 @@ export default function NewsletterListPage() {
           <div className="text-center py-16">
             <EnvelopeIcon className="h-16 w-16 text-[var(--gray-8)] mx-auto mb-4" />
             <h2 className="text-xl font-semibold text-[var(--gray-12)] mb-2">No newsletters yet</h2>
-            <p className="text-[var(--gray-11)] mb-6 max-w-md mx-auto">
-              Create your first newsletter to start building and sending email campaigns to your subscribers.
-            </p>
-            <Button variant="solid" onClick={() => setShowWizard(true)}>
-              <PlusIcon className="h-4 w-4 mr-1" /> Create Your First Newsletter
-            </Button>
+            {canCreatePublication ? (
+              <>
+                <p className="text-[var(--gray-11)] mb-6 max-w-md mx-auto">
+                  Create your first publication to start building and sending editions to your subscribers.
+                </p>
+                <Button variant="solid" onClick={() => setShowWizard(true)}>
+                  <PlusIcon className="h-4 w-4 mr-1" /> Create your first publication
+                </Button>
+              </>
+            ) : (
+              <p className="text-[var(--gray-11)] max-w-md mx-auto">
+                A super admin needs to create a publication before editions can be added.
+              </p>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -202,6 +241,18 @@ export default function NewsletterListPage() {
         isOpen={showWizard}
         onClose={() => { setShowWizard(false); load(); }}
       />
+
+      {showPickPublication && (
+        <PickPublicationModal
+          isOpen
+          onClose={() => setShowPickPublication(false)}
+          publications={cards.map((c) => ({
+            id: c.id, name: c.name, slug: c.slug,
+            content_category: c.content_category, accent_color: c.accent_color, edition_count: c.edition_count,
+          }))}
+          onPick={(pub) => { setShowPickPublication(false); goToNewEdition(pub); }}
+        />
+      )}
     </Page>
   );
 }

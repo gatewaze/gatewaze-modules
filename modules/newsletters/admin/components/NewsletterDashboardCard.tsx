@@ -122,8 +122,13 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
             <h3 className="shrink-0 truncate max-w-[60%] text-lg font-semibold text-[var(--gray-12)] group-hover/card:text-[var(--accent-11)] transition-colors">
               {data.name}
             </h3>
-            {data.content_category && <Badge variant="soft" color="blue" size="1">{data.content_category}</Badge>}
-            {data.from_email && <span className="min-w-0 truncate text-xs text-[var(--gray-10)]">{data.from_email}</span>}
+            {(data.content_category || data.from_email) && (
+              // thin divider, then category · from-address on the same line
+              <div className="min-w-0 flex items-center gap-2 border-l border-[var(--gray-a5)] pl-2.5">
+                {data.content_category && <Badge variant="soft" color="blue" size="1">{data.content_category}</Badge>}
+                {data.from_email && <span className="min-w-0 truncate text-xs text-[var(--gray-10)]">{data.from_email}</span>}
+              </div>
+            )}
           </div>
           {!data.setup_complete && <Badge variant="soft" color="orange" size="1">Setup needed</Badge>}
         </div>

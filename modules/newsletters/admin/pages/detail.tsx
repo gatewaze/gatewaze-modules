@@ -14,6 +14,7 @@ import type { Tab } from '@/components/ui/Tabs';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { supabase } from '@/lib/supabase';
 import { useHasModule } from '@/hooks/useModuleFeature';
+import { useAdminScope } from '@/hooks/usePermissions';
 import { NewsletterDetailsForm } from '../components/NewsletterDetailsForm';
 import { DeleteNewsletterCard } from '../components/DeleteNewsletterCard';
 import { GitPublishingSettings } from '../components/GitPublishingSettings';
@@ -52,7 +53,15 @@ export default function NewsletterDetailPage() {
   // "Sending" / "scheduled" notification. Empty unless something is in flight.
   const [activeSends, setActiveSends] = useState<Array<{ status: string; scheduled_at: string | null }>>([]);
 
-  const validTabs: NewsletterTab[] = ['details', 'template', 'editions', ...(hasBulkEmailing ? ['replies' as NewsletterTab, 'stats' as NewsletterTab] : [])];
+  // Publication settings (Settings + Template) are super_admin-only; admins
+  // work within editions. A non-super-admin hitting /details or /template by
+  // URL falls back to the default tab because those ids aren't valid for them.
+  const { isSuperAdmin } = useAdminScope();
+  const validTabs: NewsletterTab[] = [
+    ...(isSuperAdmin ? ['details' as NewsletterTab, 'template' as NewsletterTab] : []),
+    'editions',
+    ...(hasBulkEmailing ? ['replies' as NewsletterTab, 'stats' as NewsletterTab] : []),
+  ];
   const defaultTab: NewsletterTab = 'editions';
   const activeTab: NewsletterTab = validTabs.includes(tabFromUrl as NewsletterTab) ? (tabFromUrl as NewsletterTab) : defaultTab;
 
@@ -145,8 +154,10 @@ export default function NewsletterDetailPage() {
   const ic = 'size-4';
 
   const tabs: Tab[] = [
-    { id: 'details', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
-    { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
+    ...(isSuperAdmin ? [
+      { id: 'details', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
+      { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
+    ] : []),
     { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
     ...(hasBulkEmailing ? [
       { id: 'replies', label: 'Replies', icon: <ChatBubbleLeftRightIcon className={ic} /> },
@@ -201,7 +212,7 @@ export default function NewsletterDetailPage() {
         }
       >
       {/* Tab Content */}
-      {activeTab === 'details' && (
+      {activeTab === 'details' && isSuperAdmin && (
         <div className="py-2 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           <div className="space-y-6">
             <NewsletterDetailsForm newsletter={newsletter} onSave={loadNewsletter} />
@@ -214,7 +225,7 @@ export default function NewsletterDetailPage() {
         </div>
       )}
 
-      {activeTab === 'template' && (
+      {activeTab === 'template' && isSuperAdmin && (
         <div className="py-2">
           <TemplateTabContent newsletterId={newsletter.id} newsletterSlug={newsletter.slug} />
         </div>
