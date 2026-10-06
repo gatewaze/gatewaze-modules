@@ -35,7 +35,10 @@ export interface NewsletterCardData {
   avgOpenRate: number | null;   // 0..1 across recent sent editions
   avgClickRate: number | null;
   totalSent: number;
-  sparkline: number[];          // open rates 0..1, oldest → newest
+  // tiny trend series, oldest → newest, from recent sent editions
+  sparkSent: number[];          // audience reached per send
+  sparkOpen: number[];          // open rate 0..1 per edition
+  sparkClick: number[];         // click rate 0..1 per edition
   latestEditions: DashboardEdition[];
 }
 
@@ -113,15 +116,14 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
 
       {/* header */}
       <div className="px-5 pt-5 pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="truncate text-lg font-semibold text-[var(--gray-12)] group-hover/card:text-[var(--accent-11)] transition-colors">
+        {/* name, then category + from-address inline to its right — one row */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 flex items-center gap-2.5">
+            <h3 className="shrink-0 truncate max-w-[60%] text-lg font-semibold text-[var(--gray-12)] group-hover/card:text-[var(--accent-11)] transition-colors">
               {data.name}
             </h3>
-            <div className="mt-1 flex items-center gap-2 flex-wrap">
-              {data.content_category && <Badge variant="soft" color="blue" size="1">{data.content_category}</Badge>}
-              {data.from_email && <span className="text-xs text-[var(--gray-10)] truncate">{data.from_email}</span>}
-            </div>
+            {data.content_category && <Badge variant="soft" color="blue" size="1">{data.content_category}</Badge>}
+            {data.from_email && <span className="min-w-0 truncate text-xs text-[var(--gray-10)]">{data.from_email}</span>}
           </div>
           {!data.setup_complete && <Badge variant="soft" color="orange" size="1">Setup needed</Badge>}
         </div>
@@ -132,10 +134,10 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
 
       {/* metric strip — hairline dividers via a tinted gap */}
       <div className="mx-5 grid grid-cols-2 sm:grid-cols-4 gap-px rounded-lg bg-[var(--gray-a4)] overflow-hidden ring-1 ring-[var(--gray-a4)]">
-        <Metric label="Subscribers" value={fmtNum(data.subscriber_count)} accent={accent} />
+        <Metric label="Subscribers" value={fmtNum(data.subscriber_count)} spark={data.sparkSent} accent={accent} />
         <Metric label="Editions" value={fmtNum(data.edition_count)} accent={accent} />
-        <Metric label="Open rate" value={pct(data.avgOpenRate)} spark={data.sparkline} accent={accent} />
-        <Metric label="Click rate" value={pct(data.avgClickRate)} accent={accent} />
+        <Metric label="Open rate" value={pct(data.avgOpenRate)} spark={data.sparkOpen} accent={accent} />
+        <Metric label="Click rate" value={pct(data.avgClickRate)} spark={data.sparkClick} accent={accent} />
       </div>
 
       {/* latest editions */}
