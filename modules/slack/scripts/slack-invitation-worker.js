@@ -19,7 +19,6 @@ export function seedSessionFromEnv(env = process.env) {
   const b64 = env.SLACK_SESSION_SECRET_B64;
   const target = env.SLACK_SESSION_PATH;
   if (!b64 || !target) return false;
-  if (fs.existsSync(target)) return false;
 
   let raw;
   try {
@@ -36,8 +35,14 @@ export function seedSessionFromEnv(env = process.env) {
   }
 
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  // 'wx' refuses to clobber a file that appeared since the existence check.
-  fs.writeFileSync(target, raw, { mode: 0o600, flag: 'wx' });
+  // 'wx' creates the file only if it does not exist, so the check and the
+  // write are one operation: an existing file (refreshed cookies) wins.
+  try {
+    fs.writeFileSync(target, raw, { mode: 0o600, flag: 'wx' });
+  } catch (e) {
+    if (e && e.code === 'EEXIST') return false;
+    throw e;
+  }
   console.log(`🔑 Seeded Slack session file from SLACK_SESSION_SECRET_B64 -> ${target}`);
   return true;
 }
