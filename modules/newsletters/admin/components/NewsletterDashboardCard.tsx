@@ -53,7 +53,7 @@ function fmtShortDate(s: string): string {
 // A tiny open-rate trend line. Single series, no axes — a texture, not a chart.
 function Sparkline({ values, color }: { values: number[]; color: string }) {
   if (!values || values.length < 2) return null;
-  const w = 76, h = 22, pad = 3;
+  const w = 96, h = 20, pad = 3;
   const max = Math.max(...values);
   const min = Math.min(...values);
   const range = max - min || 1;
@@ -73,13 +73,15 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
 }
 
 function Metric({ label, value, spark, accent }: { label: string; value: string; spark?: number[]; accent: string }) {
+  // Value on its own line; the trend line sits underneath so it never has to
+  // share horizontal room with a wide number (it was clipping beside large counts).
   return (
     <div className="bg-[var(--color-panel-solid)] px-4 py-3">
       <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-10)]">{label}</div>
-      <div className="mt-1 flex items-end justify-between gap-2">
-        <span className="text-xl font-semibold tabular-nums text-[var(--gray-12)]">{value}</span>
-        {spark && spark.length >= 2 && <Sparkline values={spark} color={accent} />}
-      </div>
+      <div className="mt-1 text-xl font-semibold tabular-nums text-[var(--gray-12)] whitespace-nowrap">{value}</div>
+      {spark && spark.length >= 2 && (
+        <div className="mt-1.5 overflow-hidden"><Sparkline values={spark} color={accent} /></div>
+      )}
     </div>
   );
 }
