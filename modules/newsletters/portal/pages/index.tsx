@@ -104,6 +104,8 @@ export default function NewsletterListingPage() {
           .from('newsletters_template_collections')
           .select('id, name, slug, description, accent_color, content_category, require_login')
           .eq('setup_complete', true)
+          // explicit order set in the admin dashboard, name as the tiebreak
+          .order('sort_order')
           .order('name')
 
         if (!newsletters || newsletters.length === 0) {

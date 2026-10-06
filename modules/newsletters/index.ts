@@ -358,6 +358,8 @@ const newslettersModule: GatewazeModule = {
     // whose snapshot is >7d old, so a late open/click still updates the cache
     // (young editions already re-snapshot every 2h for their first 30 days).
     'migrations/086_snapshot_weekly_catchup.sql',
+    // 087 explicit publication ordering (sort_order) for the dashboard + portal.
+    'migrations/087_collection_sort_order.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
