@@ -116,21 +116,16 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
 
       {/* header */}
       <div className="px-5 pt-5 pb-3">
-        {/* name, then category + from-address inline to its right — one row */}
+        {/* one row: name on the left; category + from-address right-aligned */}
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 flex items-center gap-2.5">
-            <h3 className="shrink-0 truncate max-w-[60%] text-lg font-semibold text-[var(--gray-12)] group-hover/card:text-[var(--accent-11)] transition-colors">
-              {data.name}
-            </h3>
-            {(data.content_category || data.from_email) && (
-              // thin divider, then category · from-address on the same line
-              <div className="min-w-0 flex items-center gap-2 border-l border-[var(--gray-a5)] pl-2.5">
-                {data.content_category && <Badge variant="soft" color="blue" size="1">{data.content_category}</Badge>}
-                {data.from_email && <span className="min-w-0 truncate text-xs text-[var(--gray-10)]">{data.from_email}</span>}
-              </div>
-            )}
+          <h3 className="min-w-0 truncate text-lg font-semibold text-[var(--gray-12)] group-hover/card:text-[var(--accent-11)] transition-colors">
+            {data.name}
+          </h3>
+          <div className="shrink-0 flex items-center gap-2.5">
+            {data.content_category && <Badge variant="soft" color="blue" size="1">{data.content_category}</Badge>}
+            {data.from_email && <span className="max-w-[220px] truncate text-xs text-[var(--gray-10)]">{data.from_email}</span>}
+            {!data.setup_complete && <Badge variant="soft" color="orange" size="1">Setup needed</Badge>}
           </div>
-          {!data.setup_complete && <Badge variant="soft" color="orange" size="1">Setup needed</Badge>}
         </div>
         {data.description && (
           <p className="mt-2 text-sm text-[var(--gray-10)] line-clamp-1">{data.description}</p>
