@@ -7,7 +7,7 @@ const slackIntegrationModule: GatewazeModule = {
   visibility: 'public',
   name: 'Slack',
   description: 'Send notifications, manage channels, and automate workflows via Slack',
-  version: '1.0.2',
+  version: '1.0.1',
   features: [
     'slack',
     'slack.notifications',

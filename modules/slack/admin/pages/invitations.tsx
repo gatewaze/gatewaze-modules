@@ -108,13 +108,9 @@ export default function SlackInvitationsPage() {
       // Fetch invitations from Supabase
       const { supabase } = await import('@/lib/supabase');
 
-      // Most recent activity first: a re-queued or retried row keeps its
-      // original created_at, so ordering by that hides an active run behind
-      // older rows once the queue is large.
       const { data: invitationsData, error: invitationsError } = await supabase
         .from('integrations_slack_invitation_queue')
         .select('*')
-        .order('updated_at', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(200);
 
@@ -194,14 +190,6 @@ export default function SlackInvitationsPage() {
     }),
     columnHelper.accessor('invited_at', {
       header: 'Completed',
-      cell: (info) => (
-        <span className="text-sm text-[var(--gray-11)]">
-          {formatDate(info.getValue())}
-        </span>
-      ),
-    }),
-    columnHelper.accessor('updated_at', {
-      header: 'Updated',
       cell: (info) => (
         <span className="text-sm text-[var(--gray-11)]">
           {formatDate(info.getValue())}
