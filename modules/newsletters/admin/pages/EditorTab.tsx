@@ -40,6 +40,7 @@ import {
 import { DataTable } from '@/components/shared/table/DataTable';
 import { RowActions } from '@/components/shared/table/RowActions';
 import { supabase } from '@/lib/supabase';
+import { duplicateEdition } from '../lib/duplicateEdition';
 import { exportEditionHtml } from '../components/puck/email-blocks/export-edition-html';
 import { buildEmailRegistry } from '../components/puck/email-blocks/declarative/registry';
 
@@ -520,83 +521,7 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
 
   const handleDuplicate = async (edition: Edition) => {
     try {
-      // Create a copy of the edition. The source row's title is the .title
-      // field on the Edition shape — there is no `subject` column on
-      // newsletters_editions (newsletter_sends.subject is a different field).
-      // The previous reference to edition.subject was always undefined so
-      // title fell to null, which the NOT NULL constraint rejected and the
-      // duplicate silently failed with a 23502 + toast "Failed to
-      // duplicate edition". collection_id MUST be carried over too — without
-      // it the new row is orphaned and never appears under any newsletter.
-      const sourceTitle = (edition.title || 'Untitled').trim();
-      const { data: newEdition, error: createError } = await supabase
-        .from('newsletters_editions')
-        .insert({
-          title: `${sourceTitle} (Copy)`,
-          edition_date: new Date().toISOString().split('T')[0],
-          status: 'draft',
-          collection_id: edition.collection_id,
-          // preheader / content_category / metadata carry over so the
-          // duplicate is a true copy, not a stripped-down shell.
-          preheader: (edition as { preheader?: string | null }).preheader ?? null,
-          content_category: (edition as { content_category?: string | null }).content_category ?? null,
-          metadata: (edition as { metadata?: Record<string, unknown> }).metadata ?? {},
-        })
-        .select()
-        .single();
-
-      if (createError) throw createError;
-
-      // Copy blocks — only the LIVE ones. Soft-deleted blocks (deleted_at set)
-      // are hidden from the editor, so a duplicate must not resurrect them as
-      // active content (it did: a copy showed blocks the source had removed).
-      const { data: blocks, error: blocksError } = await supabase
-        .from('newsletters_edition_blocks')
-        .select('*')
-        .eq('edition_id', edition.id)
-        .is('deleted_at', null);
-
-      if (blocksError) throw blocksError;
-
-      for (const block of blocks || []) {
-        const { data: newBlock, error: blockError } = await supabase
-          .from('newsletters_edition_blocks')
-          .insert({
-            edition_id: newEdition.id,
-            templates_block_def_id: block.templates_block_def_id,
-            block_type: block.block_type,
-            content: block.content,
-            sort_order: block.sort_order || block.block_order,
-          })
-          .select()
-          .single();
-
-        if (blockError) throw blockError;
-
-        // Copy bricks — live ones only, same reason as the blocks above.
-        const { data: bricks, error: bricksError } = await supabase
-          .from('newsletters_edition_bricks')
-          .select('*')
-          .eq('block_id', block.id)
-          .is('deleted_at', null);
-
-        if (bricksError) throw bricksError;
-
-        for (const brick of bricks || []) {
-          const { error: brickError } = await supabase
-            .from('newsletters_edition_bricks')
-            .insert({
-              block_id: newBlock.id,
-              templates_brick_def_id: brick.templates_brick_def_id,
-              brick_type: brick.brick_type,
-              content: brick.content,
-              sort_order: brick.sort_order || brick.brick_order,
-            });
-
-          if (brickError) throw brickError;
-        }
-      }
-
+      await duplicateEdition(edition);
       toast.success('Edition duplicated successfully');
       loadEditions();
     } catch (error) {
