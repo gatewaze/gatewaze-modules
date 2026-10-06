@@ -99,24 +99,30 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
   const accent = data.accent_color || 'var(--accent-9)';
 
   return (
+    // The whole card opens the newsletter. The edition rows, their three-dot
+    // menu, and "View all" stop propagation so they keep their own actions.
     <div
-      className="group/card relative flex flex-col rounded-xl border border-[var(--gray-a4)] bg-[var(--color-panel-solid)] overflow-hidden transition-shadow hover:shadow-[0_1px_3px_rgba(0,0,0,0.06),0_8px_24px_-12px_rgba(0,0,0,0.18)]"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) onOpen(); }}
+      className="group/card relative flex flex-col rounded-xl border border-[var(--gray-a4)] bg-[var(--color-panel-solid)] overflow-hidden cursor-pointer transition-shadow hover:shadow-[0_1px_3px_rgba(0,0,0,0.06),0_8px_24px_-12px_rgba(0,0,0,0.18)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-8)]"
     >
-      {/* accent spine */}
-      <span className="absolute inset-y-0 left-0 w-1" style={{ background: accent }} aria-hidden="true" />
+      {/* accent bar along the top edge */}
+      <span className="absolute inset-x-0 top-0 h-1" style={{ background: accent }} aria-hidden="true" />
 
       {/* header */}
-      <div className="pl-5 pr-4 pt-4 pb-3">
+      <div className="px-5 pt-5 pb-3">
         <div className="flex items-start justify-between gap-3">
-          <button type="button" onClick={onOpen} className="min-w-0 text-left">
-            <h3 className="truncate text-lg font-semibold text-[var(--gray-12)] hover:text-[var(--accent-11)] transition-colors">
+          <div className="min-w-0">
+            <h3 className="truncate text-lg font-semibold text-[var(--gray-12)] group-hover/card:text-[var(--accent-11)] transition-colors">
               {data.name}
             </h3>
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               {data.content_category && <Badge variant="soft" color="blue" size="1">{data.content_category}</Badge>}
               {data.from_email && <span className="text-xs text-[var(--gray-10)] truncate">{data.from_email}</span>}
             </div>
-          </button>
+          </div>
           {!data.setup_complete && <Badge variant="soft" color="orange" size="1">Setup needed</Badge>}
         </div>
         {data.description && (
@@ -138,7 +144,7 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
           <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-10)]">Latest editions</span>
           <button
             type="button"
-            onClick={onViewAllEditions}
+            onClick={(e) => { e.stopPropagation(); onViewAllEditions(); }}
             className="inline-flex items-center gap-1 text-xs text-[var(--accent-11)] hover:underline"
           >
             View all {data.edition_count} <ArrowRightIcon className="size-3" />
@@ -154,8 +160,8 @@ export function NewsletterDashboardCard({ data, onOpen, onViewAllEditions, onEdi
                 <div
                   role="button"
                   tabIndex={0}
-                  onClick={() => onEditEdition(ed.id)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') onEditEdition(ed.id); }}
+                  onClick={(e) => { e.stopPropagation(); onEditEdition(ed.id); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onEditEdition(ed.id); } }}
                   className="flex items-center gap-3 rounded-lg px-2 py-2 cursor-pointer hover:bg-[var(--gray-a3)] transition-colors"
                 >
                   <span className="w-12 shrink-0 text-xs tabular-nums text-[var(--gray-10)]">{fmtShortDate(ed.edition_date)}</span>
