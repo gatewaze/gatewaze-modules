@@ -181,7 +181,7 @@ export default function NewsletterListPage() {
             </Button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 2xl:grid-cols-2 gap-5">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {cards.map((c) => (
               <NewsletterDashboardCard
                 key={c.id}
