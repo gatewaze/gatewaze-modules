@@ -127,8 +127,10 @@ export default function NewsletterListPage() {
           avgOpenRate: sumDelivered > 0 ? sumOpens / sumDelivered : null,
           avgClickRate: sumDelivered > 0 ? sumClicks / sumDelivered : null,
           totalSent: eds.reduce((a, e) => a + e.sent, 0),
-          // oldest → newest, sent editions only
-          sparkline: sentEds.slice().reverse().map((e) => e.opens / e.delivered),
+          // trend series, oldest → newest, sent editions only
+          sparkSent: sentEds.slice().reverse().map((e) => e.sent),
+          sparkOpen: sentEds.slice().reverse().map((e) => e.opens / e.delivered),
+          sparkClick: sentEds.slice().reverse().map((e) => e.clicks / e.delivered),
           latestEditions: eds.slice(0, 3),
         };
       });
