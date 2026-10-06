@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { PlusIcon, EnvelopeIcon, ChevronDownIcon, DocumentPlusIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, EnvelopeIcon, DocumentPlusIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Button, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
@@ -183,12 +183,12 @@ export default function NewsletterListPage() {
             <RowActions
               trigger={
                 <Button variant="solid">
-                  <PlusIcon className="h-4 w-4 mr-1" /> Create <ChevronDownIcon className="h-3.5 w-3.5 ml-1" />
+                  <PlusIcon className="h-4 w-4 mr-1" /> Create
                 </Button>
               }
               actions={[
-                { label: 'Create new publication', icon: <EnvelopeIcon className="size-4" />, onClick: () => setShowWizard(true) },
-                { label: 'Create edition', icon: <DocumentPlusIcon className="size-4" />, onClick: handleCreateEdition, disabled: cards.length === 0 },
+                { label: 'New publication', icon: <EnvelopeIcon className="size-4" />, onClick: () => setShowWizard(true) },
+                { label: 'New edition', icon: <DocumentPlusIcon className="size-4" />, onClick: handleCreateEdition, disabled: cards.length === 0 },
               ]}
             />
           ) : (
