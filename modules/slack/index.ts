@@ -7,7 +7,7 @@ const slackIntegrationModule: GatewazeModule = {
   visibility: 'public',
   name: 'Slack',
   description: 'Send notifications, manage channels, and automate workflows via Slack',
-  version: '1.0.4',
+  version: '1.1.0',
   features: [
     'slack',
     'slack.notifications',
@@ -18,6 +18,7 @@ const slackIntegrationModule: GatewazeModule = {
   migrations: [
     'migrations/001_slack_tables.sql',
     'migrations/002_slack_invitation_rpcs.sql',
+    'migrations/003_portal_self_service.sql',
   ],
 
   edgeFunctions: [
@@ -32,6 +33,25 @@ const slackIntegrationModule: GatewazeModule = {
   ],
   adminNavItems: [
     { path: '/slack/invitations', label: 'Slack', icon: 'MessageSquare', requiredFeature: 'slack', order: 18 },
+  ],
+
+  // Portal: a public "Slack" page where a signed-in visitor requests their own
+  // invitation (the address is resolved server-side from their session, never
+  // taken from the form). Copy comes from the SLACK_WORKSPACE_* / SLACK_COMMUNITY_*
+  // config keys below via the anon-readable integrations_slack_public_info RPC.
+  portalNav: {
+    label: 'Slack',
+    path: '/slack',
+    icon: 'msg',
+    order: 40,
+  },
+  portalShell: {
+    rail: { label: 'Slack', full: 'Slack community', icon: 'msg', order: 40, visibility: 'public' },
+    nav: [],
+    publicNav: [],
+  },
+  portalRoutes: [
+    { path: '/slack', component: () => import('./portal/pages/index') },
   ],
 
   // Injects a "Slack" section into the people-detail dashboard: send an invite to
@@ -63,6 +83,31 @@ const slackIntegrationModule: GatewazeModule = {
       type: 'string',
       required: false,
       description: 'Default Slack channel for notifications',
+    },
+    // Public page copy (read by anyone through integrations_slack_public_info).
+    SLACK_WORKSPACE_NAME: {
+      key: 'SLACK_WORKSPACE_NAME',
+      type: 'string',
+      required: false,
+      description: 'Workspace name shown on the portal Slack page (e.g. "AAIF Community")',
+    },
+    SLACK_WORKSPACE_URL: {
+      key: 'SLACK_WORKSPACE_URL',
+      type: 'string',
+      required: false,
+      description: 'Workspace URL for the "Open Slack" link (e.g. https://example.slack.com)',
+    },
+    SLACK_COMMUNITY_DESCRIPTION: {
+      key: 'SLACK_COMMUNITY_DESCRIPTION',
+      type: 'string',
+      required: false,
+      description: 'One or two sentences about the community Slack, shown on the portal page',
+    },
+    SLACK_HIGHLIGHT_CHANNELS: {
+      key: 'SLACK_HIGHLIGHT_CHANNELS',
+      type: 'string',
+      required: false,
+      description: 'Comma-separated channel names to highlight on the portal page (e.g. general, introduce-yourself, job-posts)',
     },
   },
 
