@@ -14,7 +14,7 @@ import { PersonLocationMap } from '@/components/charts/PersonLocationMap';
 // Cross-module reuse: the visual Segments Builder (controlled value/onChange).
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
-import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
+import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList, type BroadcastTemplate } from '../lib/broadcastService';
 import { BroadcastContentEditor } from '../components/BroadcastContentEditor';
 import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
 
@@ -612,6 +612,16 @@ function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSendin
       toast.error(err instanceof Error ? err.message : 'Failed to link event');
     }
   }
+  // Email shell. Saving the content re-renders with the new shell (Send saves
+  // first), so switching here never ships stale HTML.
+  async function changeTemplate(value: BroadcastTemplate) {
+    try {
+      const fresh = await updateBroadcast(b.id, { template: value } as Partial<Broadcast>);
+      onSaved(fresh);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to change template');
+    }
+  }
 
   return (
     // Inline in the normal content column (NOT full-bleed): the editor panel
@@ -629,6 +639,11 @@ function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSendin
                 {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
               </option>
             ))}
+          </select>
+          <label className="text-sm font-medium text-[var(--gray-12)] shrink-0 ml-2">Template</label>
+          <select className={inputCls} value={b.template ?? 'plain'} onChange={(e) => changeTemplate(e.target.value as BroadcastTemplate)} disabled={!editable} title="Plain reads like a message typed in Gmail: no column, the reader's own font and colours. Classic is the branded 600px column.">
+            <option value="plain">Plain email</option>
+            <option value="classic">Classic column</option>
           </select>
         </div>
         <BroadcastNameEditor b={b} editable={editable} onSaved={onSaved} />

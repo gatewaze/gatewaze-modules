@@ -18,6 +18,7 @@
 
 import { Heading } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { getEmailShell } from '../shell-context.js';
 
 interface HeadingProps extends Record<string, unknown> {
   text: string;
@@ -53,6 +54,28 @@ const HEADING_STYLES: Record<
   h3: { fontSize: 20, fontWeight: 600 },
 };
 
+function HeadingBody({ text, level, align }: Pick<HeadingProps, 'text' | 'level' | 'align'>) {
+  // Plain shell: a bare heading element at the client's default size and
+  // colour, left-aligned like typed text.
+  if (getEmailShell() === 'plain') {
+    const Tag = level;
+    return <Tag style={{ margin: '0 0 16px' }}>{text}</Tag>;
+  }
+  return (
+    <Heading
+      as={level}
+      style={{
+        textAlign: align,
+        margin: '0 0 16px',
+        lineHeight: 1.25,
+        ...HEADING_STYLES[level],
+      }}
+    >
+      {text}
+    </Heading>
+  );
+}
+
 export const HeadingBlock: EmailBlockEntry<HeadingProps> = {
   componentId: 'heading',
   label: 'Heading',
@@ -67,19 +90,7 @@ export const HeadingBlock: EmailBlockEntry<HeadingProps> = {
     level: 'h2',
     align: 'left',
   },
-  Component: ({ text, level, align }) => (
-    <Heading
-      as={level}
-      style={{
-        textAlign: align,
-        margin: '0 0 16px',
-        lineHeight: 1.25,
-        ...HEADING_STYLES[level],
-      }}
-    >
-      {text}
-    </Heading>
-  ),
+  Component: ({ text, level, align }) => <HeadingBody text={text} level={level} align={align} />,
   // Substack + Beehiiv: simple semantic heading, no inline styles —
   // both platforms strip styling aggressively and apply their own
   // typography. No table wrapper, no MSO ghost.

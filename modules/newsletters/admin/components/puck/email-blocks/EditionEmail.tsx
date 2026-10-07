@@ -41,6 +41,8 @@ import { renderTemplate } from '../../../../../sites/lib/canvas-render/mustache-
 import { extractSpacing, wrapWithSpacing } from './spacing-wrapper.js';
 import { parseTemplate } from './declarative/parse-template.js';
 import { DeclarativeBlock } from './declarative/render.js';
+import { setEmailShell } from './shell-context.js';
+import { isPlainShell } from '../../../../lib/plain-email/wrapper.js';
 
 /** UTF-8-safe base64 for the gate sentinel config. Runs in the Node worker
  *  (Buffer) and the browser editor (btoa) — both produce/consume base64 the
@@ -135,6 +137,14 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
 
   const sorted = [...edition.blocks].sort((a, z) => a.sort_order - z.sort_order);
 
+  // The built-in plain-email wrapper opts out of the standard shell: no
+  // Container, no font stack, no colours, and colour-scheme metas so the
+  // reader's client renders it like a hand-written message in light or dark.
+  const plain = isPlainShell(wrapperTemplate);
+  // Blocks read this as they render (see shell-context.ts); the whole tree
+  // renders synchronously after this point.
+  setEmailShell(plain ? 'plain' : 'default');
+
   // Legacy editions are 100% Mustache — imported email templates that already
   // carry their own 650px self-centering layout. For those we use a
   // transparent full-width wrapper and 10px inter-block spacers so the output
@@ -201,7 +211,9 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
       })()
     : blockEls;
 
-  const body = allMustache ? (
+  const body = plain ? (
+    <Body style={{ margin: 0, padding: 0 }}>{composed}</Body>
+  ) : allMustache ? (
     <Body style={{ margin: 0, padding: 0, backgroundColor: '#ffffff', fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif" }}>
       <Container style={{ width: '100%', maxWidth: '100%', margin: 0, padding: '10px' }}>
         {composed.flatMap((el, i) =>
@@ -219,6 +231,8 @@ export function EditionEmail(props: EditionEmailProps): ReactElement {
     <Html lang="en">
       <Head>
         <meta httpEquiv="Content-Type" content="text/html; charset=UTF-8" />
+        {plain && <meta name="color-scheme" content="light dark" />}
+        {plain && <meta name="supported-color-schemes" content="light dark" />}
         {edition.subject && <title>{edition.subject}</title>}
       </Head>
       {edition.preheader && <Preview>{edition.preheader}</Preview>}

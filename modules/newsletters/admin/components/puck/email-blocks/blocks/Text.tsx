@@ -15,11 +15,36 @@
 
 import { Section } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { getEmailShell } from '../shell-context.js';
 import { RichText } from './_richtext.js';
 import { COLUMN } from './_shared.js';
 
 interface TextProps extends Record<string, unknown> {
   body: string;
+}
+
+function TextBody({ body }: { body: string }) {
+  // Plain shell: no column, no typography — the reader's client decides.
+  if (getEmailShell() === 'plain') {
+    return <RichText value={body} style={{ margin: '0 0 16px' }} />;
+  }
+  return (
+    <Section style={COLUMN}>
+      <RichText
+        value={body}
+        style={{
+          fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif",
+          fontSize: '13px',
+          lineHeight: 1.5,
+          color: '#111111',
+          margin: '0 0 16px',
+          // No per-block padding — keeps the text block consistent with the
+          // other email blocks (uniform body inset belongs on the shell, not
+          // here).
+        }}
+      />
+    </Section>
+  );
 }
 
 export const TextBlock: EmailBlockEntry<TextProps> = {
@@ -36,23 +61,7 @@ export const TextBlock: EmailBlockEntry<TextProps> = {
   defaultProps: {
     body: '',
   },
-  Component: ({ body }) => (
-    <Section style={COLUMN}>
-      <RichText
-        value={body}
-        style={{
-          fontFamily: "Arial, 'Helvetica Neue', Helvetica, sans-serif",
-          fontSize: '13px',
-          lineHeight: 1.5,
-          color: '#111111',
-          margin: '0 0 16px',
-          // No per-block padding — keeps the text block consistent with the
-          // other email blocks (uniform body inset belongs on the shell, not
-          // here).
-        }}
-      />
-    </Section>
-  ),
+  Component: ({ body }) => <TextBody body={body} />,
   formats: {
     substack: ({ body }) => <RichText value={body} />,
     beehiiv: ({ body }) => <RichText value={body} />,

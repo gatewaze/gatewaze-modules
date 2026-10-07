@@ -20,6 +20,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode, type CSSProperties } from 'react';
+import { builtinWrapperFor, isPlainShell } from '../../../lib/plain-email/wrapper.js';
+import { setEmailShell } from './email-blocks/shell-context.js';
 import {
   type Config,
   ActionBar,
@@ -165,6 +167,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   const [resolvedWrapper, setResolvedWrapper] = useState<string | null>(wrapperTemplate ?? null);
   useEffect(() => {
     if (wrapperTemplate !== undefined) { setResolvedWrapper(wrapperTemplate); return; }
+    // A built-in wrapper named in the publication's metadata needs no fetch.
+    const builtin = builtinWrapperFor(collectionMetadata);
+    if (builtin) { setResolvedWrapper(builtin); return; }
     if (!collectionId) { setResolvedWrapper(null); return; }
     let cancelled = false;
     void supabase
@@ -179,7 +184,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         setResolvedWrapper((data?.html as string | undefined) ?? null);
       });
     return () => { cancelled = true; };
-  }, [wrapperTemplate, collectionId]);
+  }, [wrapperTemplate, collectionId, collectionMetadata]);
 
   // Per-edition registry: the static code blocks + this newsletter's
   // declarative (git-authored) blocks. Superset of the static registry, so
@@ -1395,6 +1400,11 @@ function NewsletterCanvasRoot(props: RootProps) {
       : d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
   })();
 
+  // Blocks read the shell as they render (shell-context.ts). Set before the
+  // children render so the canvas shows plain blocks exactly as the send
+  // will — no column, no typography of their own.
+  const plainShell = isPlainShell(wrapperTemplate);
+  setEmailShell(plainShell ? 'plain' : 'default');
   const wrappedBody = wrapperTemplate
     ? (() => {
         try {
@@ -1434,7 +1444,7 @@ function NewsletterCanvasRoot(props: RootProps) {
         rendering — logo swap included. No styling lives here; this is purely
         the trigger. Templates with no dark rules are unaffected.
       */}
-      <div ref={wrapperRef} className="gw-email-card" {...(mode === 'dark' ? { 'data-ogsc': '' } : {})}>
+      <div ref={wrapperRef} className="gw-email-card" {...(mode === 'dark' ? { 'data-ogsc': '' } : {})} {...(plainShell ? { 'data-shell': 'plain' } : {})}>
         {wrappedBody}
       </div>
     </>
@@ -1472,6 +1482,14 @@ const BASE_CANVAS_CSS = `
      cap the top-level tables to the card width so the template REDUCES to
      fit instead of overflowing and being clipped by the card's
      overflow:hidden. Scoped to the card so Puck's own chrome is untouched. */
+  /* Plain shell: no card, no column — the message fills the frame like a
+     mail client's reading pane. */
+  .gw-email-card[data-shell="plain"] {
+    max-width: none;
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
   .gw-email-card table {
     max-width: 100%;
   }
