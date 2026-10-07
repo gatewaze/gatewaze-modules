@@ -164,6 +164,7 @@ const broadcastsModule: GatewazeModule = {
     // 026 broadcast folders (nested tree) + broadcasts.folder_id + a first-class
     // duplicate_broadcast RPC (copies content, no sends/metrics).
     'migrations/026_broadcast_folders.sql',
+    'migrations/027_broadcast_template.sql',
   ],
 
   adminRoutes: [

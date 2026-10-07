@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { builtinWrapperFor } from '../../../lib/plain-email/wrapper.js';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   Cog6ToothIcon,
@@ -272,17 +273,24 @@ export default function EditionEditorPage() {
       // key='default', is_current=true) for this newsletter's library. Single
       // source of truth for header/footer chrome across editor preview, email
       // send, and git publish.
-      try {
-        const { data: wr } = await supabase
-          .from('templates_wrappers')
-          .select('html')
-          .eq('library_id', cId)
-          .eq('key', 'default')
-          .eq('is_current', true)
-          .maybeSingle();
-        collInfo.wrapperTemplate = (wr?.html as string | undefined) ?? null;
-      } catch {
-        collInfo.wrapperTemplate = null;
+      // A built-in wrapper chosen in the publication's metadata takes
+      // precedence over the repo's wrappers/default.html (lib/plain-email).
+      const builtin = builtinWrapperFor(data.metadata as Record<string, unknown> | null);
+      if (builtin) {
+        collInfo.wrapperTemplate = builtin;
+      } else {
+        try {
+          const { data: wr } = await supabase
+            .from('templates_wrappers')
+            .select('html')
+            .eq('library_id', cId)
+            .eq('key', 'default')
+            .eq('is_current', true)
+            .maybeSingle();
+          collInfo.wrapperTemplate = (wr?.html as string | undefined) ?? null;
+        } catch {
+          collInfo.wrapperTemplate = null;
+        }
       }
 
       setCollection(collInfo);

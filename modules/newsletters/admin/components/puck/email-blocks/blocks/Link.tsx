@@ -6,6 +6,7 @@
 
 import { Link } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { getEmailShell } from '../shell-context.js';
 
 interface LinkProps extends Record<string, unknown> {
   href: string;
@@ -18,6 +19,21 @@ const UNDERLINE_OPTIONS = [
   { label: 'Underline', value: 'underline' as const },
   { label: 'No underline', value: 'none' as const },
 ];
+
+const DEFAULT_LINK_COLOR = '#1a1a2e';
+
+function LinkBody({ href, text, color, underline }: Pick<LinkProps, 'href' | 'text' | 'color' | 'underline'>) {
+  // Plain shell: the stock colour means "not chosen" and the client's own
+  // link colour applies (which also follows dark mode); a colour the
+  // operator picked still wins.
+  const plain = getEmailShell() === 'plain';
+  const style = plain && color === DEFAULT_LINK_COLOR ? { textDecoration: underline } : { color, textDecoration: underline };
+  return (
+    <Link href={href} style={style}>
+      {text}
+    </Link>
+  );
+}
 
 export const LinkBlock: EmailBlockEntry<LinkProps> = {
   componentId: 'link',
@@ -32,12 +48,8 @@ export const LinkBlock: EmailBlockEntry<LinkProps> = {
   defaultProps: {
     href: 'https://example.com',
     text: 'Read more',
-    color: '#1a1a2e',
+    color: DEFAULT_LINK_COLOR,
     underline: 'underline',
   },
-  Component: ({ href, text, color, underline }) => (
-    <Link href={href} style={{ color, textDecoration: underline }}>
-      {text}
-    </Link>
-  ),
+  Component: ({ href, text, color, underline }) => <LinkBody href={href} text={text} color={color} underline={underline} />,
 };

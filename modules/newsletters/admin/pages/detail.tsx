@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { BuiltInWrapperCard } from '../components/BuiltInWrapperCard';
 import { useParams, useNavigate } from 'react-router';
 import {
   Cog6ToothIcon,
@@ -349,6 +350,8 @@ function TemplateTabContent({ newsletterId, newsletterSlug }: { newsletterId: st
 
   return (
     <div className="space-y-8">
+      <BuiltInWrapperCard newsletterId={newsletterId} onChanged={reload} />
+
       {/* Source section — provenance of this newsletter's templates. The
           git repo is configured on the Settings tab (Git & Publishing);
           this view shows the connected source read-only, plus a one-off

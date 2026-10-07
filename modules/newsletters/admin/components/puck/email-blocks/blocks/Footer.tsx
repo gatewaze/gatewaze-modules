@@ -9,6 +9,7 @@
 
 import { Section, Text } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { getEmailShell } from '../shell-context.js';
 
 interface FooterProps extends Record<string, unknown> {
   footer_text: string;
@@ -33,23 +34,22 @@ function safeHref(value: unknown): string {
   return SAFE_HREF.test(trimmed) ? value : '#';
 }
 
-export const FooterBlock: EmailBlockEntry<FooterProps> = {
-  componentId: 'footer',
-  label: 'Footer',
-  category: 'Navigation',
-  fields: {
-    footer_text: { type: 'textarea', label: 'Footer text' },
-    unsubscribe_text: { type: 'text', label: 'Unsubscribe link text (optional)' },
-    // contentEditable disabled — safeHref() does `value.trim()` which
-    // needs a raw string. URL fields aren't useful inline-editable anyway.
-    unsubscribe_link: { type: 'text', label: 'Unsubscribe URL (optional)', contentEditable: false },
-  },
-  defaultProps: {
-    footer_text: 'You are receiving this email because you subscribed.',
-    unsubscribe_text: 'Unsubscribe',
-    unsubscribe_link: '{{unsubscribe_url}}',
-  },
-  Component: ({ footer_text, unsubscribe_text, unsubscribe_link }) => (
+function FooterBody({ footer_text, unsubscribe_text, unsubscribe_link }: Pick<FooterProps, 'footer_text' | 'unsubscribe_text' | 'unsubscribe_link'>) {
+  // Plain shell: left-aligned text, no panel, no colours — people do not
+  // centre things in the emails they write.
+  if (getEmailShell() === 'plain') {
+    return (
+      <div style={{ margin: '24px 0 0' }}>
+        <p style={{ margin: 0 }}>{footer_text}</p>
+        {unsubscribe_text ? (
+          <p style={{ margin: '8px 0 0' }}>
+            <a href={safeHref(unsubscribe_link)}>{unsubscribe_text}</a>
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+  return (
     <Section
       style={{
         padding: '20px 40px',
@@ -68,7 +68,26 @@ export const FooterBlock: EmailBlockEntry<FooterProps> = {
         </Text>
       ) : null}
     </Section>
-  ),
+  );
+}
+
+export const FooterBlock: EmailBlockEntry<FooterProps> = {
+  componentId: 'footer',
+  label: 'Footer',
+  category: 'Navigation',
+  fields: {
+    footer_text: { type: 'textarea', label: 'Footer text' },
+    unsubscribe_text: { type: 'text', label: 'Unsubscribe link text (optional)' },
+    // contentEditable disabled — safeHref() does `value.trim()` which
+    // needs a raw string. URL fields aren't useful inline-editable anyway.
+    unsubscribe_link: { type: 'text', label: 'Unsubscribe URL (optional)', contentEditable: false },
+  },
+  defaultProps: {
+    footer_text: 'You are receiving this email because you subscribed.',
+    unsubscribe_text: 'Unsubscribe',
+    unsubscribe_link: '{{unsubscribe_url}}',
+  },
+  Component: ({ footer_text, unsubscribe_text, unsubscribe_link }) => <FooterBody footer_text={footer_text} unsubscribe_text={unsubscribe_text} unsubscribe_link={unsubscribe_link} />,
   formats: {
     substack: ({ footer_text, unsubscribe_text, unsubscribe_link }) => (
       <>
