@@ -62,6 +62,7 @@ const templatesModule: GatewazeModule = {
     // module and only offered in a builder when that module is enabled (per
     // spec-broadcasts-blocks §4.2). Git ingestion wiring follows separately.
     'migrations/027_block_def_ownership.sql',
+    'migrations/028_sources_token_column_privileges.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under

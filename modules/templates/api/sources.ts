@@ -65,6 +65,14 @@ export interface SourcesRoutesDeps {
     error: (msg: string, meta?: Record<string, unknown>) => void;
   };
   getUserId: (req: Request) => string | null;
+  /**
+   * Whether the caller may administer a library. Evaluated as the CALLER
+   * (a Supabase client carrying the request's bearer token), so the
+   * templates RLS dispatch (templates.can_read_host → the host module's
+   * can_admin_* function) is the single source of truth — the service-role
+   * client these routes otherwise use bypasses it. Fails closed.
+   */
+  canAdminLibrary: (req: Request, libraryId: string) => Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,12 +219,25 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
   // -------------------------------------------------------------------------
   // POST /sources
   // -------------------------------------------------------------------------
+  /** 403 unless the caller administers the library; true when allowed. */
+  async function requireLibrary(req: Request, res: Response, libraryId: string): Promise<boolean> {
+    let ok = false;
+    try {
+      ok = await deps.canAdminLibrary(req, libraryId);
+    } catch (err) {
+      deps.logger.warn('templates.library_access_check_failed', { library_id: libraryId, error: err instanceof Error ? err.message : String(err) });
+    }
+    if (!ok) sendError(res, 403, 'forbidden', 'you do not administer this library');
+    return ok;
+  }
+
   async function createSource(req: Request, res: Response): Promise<void> {
     const userId = deps.getUserId(req);
     if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
 
     const v = validateCreateSourceInput(req.body);
     if (!v.ok) return sendError(res, 400, 'validation_failed', v.reason ?? 'invalid input', v.field ? { field: v.field } : undefined);
+    if (!(await requireLibrary(req, res, v.value!['library_id'] as string))) return;
     const fields = v.value!;
 
     const kind = fields['kind'] as 'git' | 'upload' | 'inline';
@@ -331,10 +352,11 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
 
     const sourceQ = await deps.supabase
       .from('templates_sources')
-      .select('id, kind, status, url, branch, manifest_path, installed_git_sha, token_secret_ref')
+      .select('library_id, id, kind, status, url, branch, manifest_path, installed_git_sha, token_secret_ref')
       .eq('id', sourceId)
-      .maybeSingle<{ id: string; kind: string; status: string; url: string | null; branch: string | null; manifest_path: string | null; installed_git_sha: string | null; token_secret_ref: string | null }>();
+      .maybeSingle<{ library_id: string; id: string; kind: string; status: string; url: string | null; branch: string | null; manifest_path: string | null; installed_git_sha: string | null; token_secret_ref: string | null }>();
     if (!sourceQ.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
+    if (!(await requireLibrary(req, res, sourceQ.data.library_id))) return;
 
     // Strip the secret from anything we send back to the client. The
     // column currently carries the plaintext token (local-dev stop-gap
@@ -400,15 +422,17 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
 
     const sourceQ = await deps.supabase
       .from('templates_sources')
-      .select('id, kind, status, inline_html, upload_blob_ref, url, branch, manifest_path, token_secret_ref, installed_git_sha')
+      .select('library_id, id, kind, status, inline_html, upload_blob_ref, url, branch, manifest_path, token_secret_ref, installed_git_sha')
       .eq('id', sourceId)
       .maybeSingle<{
+        library_id: string;
         id: string; kind: string; status: string; inline_html: string | null; upload_blob_ref: string | null;
         url: string | null; branch: string | null; manifest_path: string | null;
         token_secret_ref: string | null; installed_git_sha: string | null;
       }>();
     if (sourceQ.error) return sendError(res, 500, 'internal_error', sourceQ.error.message);
     if (!sourceQ.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
+    if (!(await requireLibrary(req, res, sourceQ.data.library_id))) return;
     if (sourceQ.data.status === 'paused') return sendError(res, 409, 'source_paused', 'source is paused; unpause first');
 
     // Git apply: re-clone HEAD, parse the working tree, and persist via the
@@ -474,6 +498,11 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     if (!sourceId || !/^[0-9a-f-]{36}$/i.test(sourceId)) {
       return sendError(res, 400, 'validation_failed', 'id must be a uuid', { field: 'id' });
     }
+    // Ownership before the write: the update below runs as the service role.
+    const owner = await deps.supabase.from('templates_sources').select('library_id').eq('id', sourceId).maybeSingle<{ library_id: string }>();
+    if (owner.error) return sendError(res, 500, 'lookup_failed', owner.error.message);
+    if (!owner.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
+    if (!(await requireLibrary(req, res, owner.data.library_id))) return;
 
     const result = await deps.supabase
       .from('templates_sources')
@@ -503,6 +532,11 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     if (!sourceId || !/^[0-9a-f-]{36}$/i.test(sourceId)) {
       return sendError(res, 400, 'validation_failed', 'id must be a uuid', { field: 'id' });
     }
+    // Ownership before the write: the update below runs as the service role.
+    const owner = await deps.supabase.from('templates_sources').select('library_id').eq('id', sourceId).maybeSingle<{ library_id: string }>();
+    if (owner.error) return sendError(res, 500, 'lookup_failed', owner.error.message);
+    if (!owner.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
+    if (!(await requireLibrary(req, res, owner.data.library_id))) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const patch: Record<string, unknown> = {};
@@ -541,6 +575,75 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
   // with source_id pointing here remain — the FK is ON DELETE SET NULL
   // so block defs aren't orphan-deleted alongside their source).
   // -------------------------------------------------------------------------
+  /**
+   * POST /sources/:id/clone { library_id, label? }
+   *
+   * Connect a repo that is already connected to another library, copying
+   * its URL, branch, path and stored credential into a NEW source for the
+   * target library, then clone + parse + apply as a fresh connect would.
+   * The credential never leaves the server: the browser only ever sees
+   * the source id it is reusing. Only git sources can be cloned.
+   */
+  async function cloneSource(req: Request, res: Response): Promise<void> {
+    const userId = deps.getUserId(req);
+    if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
+    const sourceId = String(req.params['id'] ?? '');
+    if (!/^[0-9a-f-]{36}$/i.test(sourceId)) return sendError(res, 400, 'validation_failed', 'source id must be a uuid', { field: 'id' });
+    const picked = pickFields(req.body, ['library_id', 'label'] as const);
+    const libraryId = picked['library_id'];
+    if (typeof libraryId !== 'string' || !/^[0-9a-f-]{36}$/i.test(libraryId)) {
+      return sendError(res, 400, 'validation_failed', 'library_id must be a uuid', { field: 'library_id' });
+    }
+    const labelIn = picked['label'];
+    if (labelIn !== undefined && (typeof labelIn !== 'string' || labelIn.length === 0 || labelIn.length > LABEL_MAX)) {
+      return sendError(res, 400, 'validation_failed', `label max ${LABEL_MAX} chars`, { field: 'label' });
+    }
+
+    const sourceQ = await deps.supabase
+      .from('templates_sources')
+      .select('id, library_id, kind, status, label, url, branch, manifest_path, token_secret_ref')
+      .eq('id', sourceId)
+      .maybeSingle<{ id: string; library_id: string; kind: string; status: string; label: string; url: string | null; branch: string | null; manifest_path: string | null; token_secret_ref: string | null }>();
+    if (sourceQ.error) return sendError(res, 500, 'lookup_failed', sourceQ.error.message);
+    if (!sourceQ.data) return sendError(res, 404, 'not_found', 'source not found');
+    const src = sourceQ.data;
+    if (src.kind !== 'git' || !src.url) return sendError(res, 400, 'validation_failed', 'only git sources can be reused', { field: 'id' });
+    if (src.library_id === libraryId) return sendError(res, 400, 'validation_failed', 'source already belongs to that library', { field: 'library_id' });
+    // The caller must administer BOTH ends: the library whose credential is
+    // being copied and the one receiving it.
+    if (!(await requireLibrary(req, res, src.library_id))) return;
+    if (!(await requireLibrary(req, res, libraryId))) return;
+
+    const targetQ = await deps.supabase.from('templates_libraries').select('id').eq('id', libraryId).maybeSingle<{ id: string }>();
+    if (targetQ.error) return sendError(res, 500, 'lookup_failed', targetQ.error.message);
+    if (!targetQ.data) return sendError(res, 404, 'not_found', 'target library not found');
+
+    // The stored credential is the raw token (local-dev stop-gap, see
+    // ingestGit); '<redacted>' means none was persisted.
+    const token = src.token_secret_ref && src.token_secret_ref !== '<redacted>' ? src.token_secret_ref : undefined;
+    try {
+      const result = await ingestGit(deps.supabase, {
+        library_id: libraryId,
+        label: typeof labelIn === 'string' ? labelIn : src.label,
+        url: src.url,
+        branch: src.branch ?? undefined,
+        manifest_path: src.manifest_path ?? undefined,
+        token,
+        created_by: userId,
+      });
+      if (result.apply.errors.length > 0 && result.apply.artifacts.length === 0) {
+        return sendError(res, 422, 'parse_failed', 'git source contained parse errors', { errors: result.apply.errors, source_id: result.source_id });
+      }
+      deps.logger.info('templates.source.cloned', { from: sourceId, to_library: libraryId, source_id: result.source_id });
+      res.status(201).json({ source_id: result.source_id, installed_git_sha: result.installed_git_sha, apply: result.apply });
+    } catch (err) {
+      // Never echo the error: git's stderr carries the clone URL, which
+      // embeds the token when one is used.
+      deps.logger.warn('templates.source.clone_failed', { from: sourceId, to_library: libraryId, error: err instanceof Error ? err.message : String(err) });
+      return sendError(res, 502, 'clone_failed', 'Could not clone the repository; check the source and its access token');
+    }
+  }
+
   async function deleteSource(req: Request, res: Response): Promise<void> {
     const userId = deps.getUserId(req);
     if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
@@ -554,10 +657,11 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
       .from('templates_sources')
       .delete()
       .eq('id', sourceId)
-      .select('id')
-      .maybeSingle();
+      .select('id, library_id')
+      .maybeSingle<{ id: string; library_id: string }>();
     if (result.error) return sendError(res, 500, 'internal_error', result.error.message);
     if (!result.data) return sendError(res, 404, 'not_found', `source ${sourceId} not found`);
+    if (!(await requireLibrary(req, res, result.data.library_id))) return;
     res.status(200).json({ deleted: result.data.id });
   }
 
@@ -569,6 +673,8 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
 
     const libraryId = req.params['id'];
+    if (!libraryId || !/^[0-9a-f-]{36}$/i.test(libraryId)) return sendError(res, 400, 'validation_failed', 'library id must be a uuid', { field: 'id' });
+    if (!(await requireLibrary(req, res, libraryId))) return;
     if (!libraryId || !/^[0-9a-f-]{36}$/i.test(libraryId)) {
       return sendError(res, 400, 'validation_failed', 'id must be a uuid', { field: 'id' });
     }
@@ -612,6 +718,8 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     if (!userId) return sendError(res, 401, 'unauthenticated', 'session required');
 
     const libraryId = req.params['id'];
+    if (!libraryId || !/^[0-9a-f-]{36}$/i.test(libraryId)) return sendError(res, 400, 'validation_failed', 'library id must be a uuid', { field: 'id' });
+    if (!(await requireLibrary(req, res, libraryId))) return;
     if (!libraryId || !/^[0-9a-f-]{36}$/i.test(libraryId)) {
       return sendError(res, 400, 'validation_failed', 'id must be a uuid', { field: 'id' });
     }
@@ -674,6 +782,7 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     unpauseSource,
     updateSource,
     deleteSource,
+    cloneSource,
     listBlockDefs,
     seedFromBoilerplate,
   };
@@ -683,6 +792,7 @@ export function mountSourcesRoutes(router: Router, routes: ReturnType<typeof cre
   router.post('/sources', routes.createSource);
   router.get('/sources/:id', routes.getSource);
   router.patch('/sources/:id', routes.updateSource);
+  router.post('/sources/:id/clone', routes.cloneSource);
   router.delete('/sources/:id', routes.deleteSource);
   router.post('/sources/:id/check', routes.checkSource);
   router.post('/sources/:id/apply', routes.applyEndpoint);
