@@ -4,7 +4,7 @@
  * pushed git branch, not local disk) so the pipeline survives the multi-pod runner pool — phase
  * N and N+1 may land on different pods. Shallow clones keep it cheap.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git, authedRemote } from './git.js';
@@ -67,7 +67,7 @@ export interface WsRepo {
 }
 
 /**
- * Multi-repo workspace (§7): clone each of the project's code repos into `<root>/<repoName>/`. Writable
+ * Multi-repo workspace (§7): clone each of the project's code repos into `<root>/<repoOwner>/<repoName>/`. Writable
  * repos get a fresh `branch` cut off their base branch (default branch if unset) + the commit
  * identity; read-only repos are cloned for context only. The agent's cwd is the workspace root and it
  * reads across all subdirs but changes only writable ones.
@@ -92,7 +92,9 @@ export async function makeMultiWorkspace(
         if (writable) throw new Error(`unsafe repo identity: ${r.repoOwner}/${r.repoName}`);
         continue;
       }
-      const dir = join(root, r.repoName);
+      const ownerDir = join(root, r.repoOwner);
+      await mkdir(ownerDir, { recursive: true });
+      const dir = join(ownerDir, r.repoName);
       const remote = authedRemote(r.repoOwner, r.repoName, token);
       try {
         if (writable && existing) {
