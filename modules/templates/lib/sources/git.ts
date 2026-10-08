@@ -398,6 +398,39 @@ export interface IngestGitResult {
   installed_git_sha: string;
 }
 
+/**
+ * The templates_sources row for a git source, shared by both ingestGit
+ * outcomes so they cannot drift apart again.
+ *
+ * Local-dev stop-gap: `token_secret_ref` carries the RAW token so the check
+ * / apply endpoints and the drift monitor (its own container, its own clone
+ * cache) can re-authenticate against private repos. The proper path is a
+ * secrets-store dereference (a tenant-scoped pgsodium / KMS pointer rather
+ * than the plaintext PAT) — pending. Responses MUST strip the column before
+ * sending to the client. The success path once wrote a '<redacted>'
+ * placeholder here instead, which left every private repo connected through
+ * it with no credential after the first clone: the API's cached remote URL
+ * (token embedded by buildAuthUrl) masked it until the worker's fresh clone
+ * failed with "could not read Username".
+ */
+export function gitSourceRow(
+  input: IngestGitInput,
+  outcome: { status: 'active'; installed_git_sha: string } | { status: 'error'; last_check_error: string },
+): Record<string, unknown> {
+  return {
+    library_id: input.library_id,
+    kind: 'git',
+    label: input.label,
+    url: input.url,
+    branch: input.branch ?? null,
+    manifest_path: input.manifest_path ?? null,
+    token_secret_ref: input.token ?? null,
+    auto_apply: input.auto_apply ?? false,
+    created_by: input.created_by ?? null,
+    ...outcome,
+  };
+}
+
 export async function ingestGit(
   supabase: IngestGitSupabaseClient,
   input: IngestGitInput,
@@ -431,26 +464,7 @@ export async function ingestGit(
   if (parsed.errors.length > 0) {
     const insertRes = await supabase
       .from('templates_sources')
-      .insert({
-        library_id: input.library_id,
-        kind: 'git',
-        label: input.label,
-        url: input.url,
-        branch: input.branch ?? null,
-        manifest_path: input.manifest_path ?? null,
-        // Local-dev stop-gap: store the raw token in token_secret_ref
-        // so the check / apply endpoints can re-authenticate against
-        // private repos. The proper path is a secrets-store dereference
-        // (a tenant-scoped pgsodium / KMS pointer rather than the
-        // plaintext PAT) — that's pending. For now the column carries
-        // the actual token; responses MUST strip it before sending
-        // to the client.
-        token_secret_ref: input.token ?? null,
-        auto_apply: input.auto_apply ?? false,
-        status: 'error',
-        last_check_error: `parse failed: ${parsed.errors[0]?.message ?? 'unknown'}`,
-        created_by: input.created_by ?? null,
-      })
+      .insert(gitSourceRow(input, { status: 'error', last_check_error: `parse failed: ${parsed.errors[0]?.message ?? 'unknown'}` }))
       .select('id')
       .single();
     return {
@@ -463,19 +477,7 @@ export async function ingestGit(
   // 4. Persist the source row first so applySource has a target FK.
   const insertRes = await supabase
     .from('templates_sources')
-    .insert({
-      library_id: input.library_id,
-      kind: 'git',
-      label: input.label,
-      url: input.url,
-      branch: input.branch ?? null,
-      manifest_path: input.manifest_path ?? null,
-      token_secret_ref: input.token ? '<redacted>' : null,
-      auto_apply: input.auto_apply ?? false,
-      status: 'active',
-      installed_git_sha: headSha,
-      created_by: input.created_by ?? null,
-    })
+    .insert(gitSourceRow(input, { status: 'active', installed_git_sha: headSha }))
     .select('id')
     .single();
   if (insertRes.error || !insertRes.data) {
