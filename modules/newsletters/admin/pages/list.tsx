@@ -115,20 +115,7 @@ export default function NewsletterListPage() {
         };
       }));
 
-      // One batched engagement lookup for every edition we're about to show or
-      // chart.
-      const allIds = Array.from(new Set(perCol.flatMap((p) => [
-        ...p.editions.map((e) => e.id as string),
-        ...p.sentIds,
-      ])));
-      const engById = new Map<string, EngagementRow>();
-      for (let i = 0; i < allIds.length; i += 25) {
-        const chunk = allIds.slice(i, i + 25);
-        const { data: eng } = await supabase.rpc('newsletter_edition_engagement', { p_edition_ids: chunk });
-        for (const r of (eng || []) as EngagementRow[]) engById.set(r.edition_id, r);
-      }
-
-      const built: NewsletterCardData[] = perCol.map(({ col, editions, sentIds, editionCount, subscriberCount }) => {
+      const buildCards = (engById: Map<string, EngagementRow>): NewsletterCardData[] => perCol.map(({ col, editions, sentIds, editionCount, subscriberCount }) => {
         const eds: DashboardEdition[] = editions.map((e) => {
           const g = engById.get(e.id as string);
           const sent = Number(g?.sent ?? 0);
@@ -189,7 +176,27 @@ export default function NewsletterListPage() {
         };
       });
 
-      setCards(built);
+      // Paint the cards now; the engagement numbers fill in when the lookup
+      // below resolves. Uncached editions (a send from the last few minutes, or
+      // a cron gap) make that lookup slow, and the list, counts and recent
+      // editions don't depend on it.
+      setCards(buildCards(new Map()));
+      setLoading(false);
+
+      // One batched engagement lookup for every edition we're about to show or
+      // chart.
+      const allIds = Array.from(new Set(perCol.flatMap((p) => [
+        ...p.editions.map((e) => e.id as string),
+        ...p.sentIds,
+      ])));
+      const engById = new Map<string, EngagementRow>();
+      for (let i = 0; i < allIds.length; i += 25) {
+        const chunk = allIds.slice(i, i + 25);
+        const { data: eng } = await supabase.rpc('newsletter_edition_engagement', { p_edition_ids: chunk });
+        for (const r of (eng || []) as EngagementRow[]) engById.set(r.edition_id, r);
+      }
+
+      setCards(buildCards(engById));
     } catch (err) {
       console.error('Error loading newsletters:', err);
       toast.error('Failed to load newsletters');

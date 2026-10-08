@@ -360,6 +360,8 @@ const newslettersModule: GatewazeModule = {
     'migrations/086_snapshot_weekly_catchup.sql',
     // 087 explicit publication ordering (sort_order) for the dashboard + portal.
     'migrations/087_collection_sort_order.sql',
+    // Drops 084's two-argument snapshot finder; 086's overload broke the cron (PGRST203).
+    'migrations/088_drop_snapshot_finder_overload.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
