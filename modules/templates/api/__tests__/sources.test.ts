@@ -126,6 +126,7 @@ function fakeRes(): Response & { _status?: number; _body?: unknown } {
 
 const baseDeps = (overrides: Partial<SourcesRoutesDeps> = {}): SourcesRoutesDeps => ({
   supabase: makeFakeSupabase({ queryResults: [], rpcResults: [] }).client,
+  canAdminLibrary: async () => true,
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   getUserId: () => 'user-1',
   ...overrides,
@@ -388,27 +389,31 @@ describe('createSourcesRoutes — checkSource', () => {
 describe('createSourcesRoutes — pause / unpause', () => {
   it('pauseSource flips status=paused on the row', async () => {
     const { client, calls } = makeFakeSupabase({
-      queryResults: [{ data: { id: SOURCE_ID, status: 'paused' }, error: null }],
+      // The ownership lookup runs first, then the update.
+      queryResults: [{ data: { library_id: LIBRARY_ID }, error: null }, { data: { id: SOURCE_ID, status: 'paused' }, error: null }],
       rpcResults: [],
     });
     const routes = createSourcesRoutes(baseDeps({ supabase: client }));
     const res = fakeRes();
     await routes.pauseSource(fakeReq({ params: { id: SOURCE_ID } }), res);
     expect(res._status).toBe(200);
-    expect(calls[0]?.op).toBe('update');
-    expect(calls[0]?.values).toEqual({ status: 'paused' });
+    // The ownership lookup is calls[0]; the status write follows it.
+    const write = calls.find((c) => c.op === 'update');
+    expect(write?.values).toEqual({ status: 'paused' });
   });
 
   it('unpauseSource flips status=active on the row', async () => {
     const { client, calls } = makeFakeSupabase({
-      queryResults: [{ data: { id: SOURCE_ID, status: 'active' }, error: null }],
+      // The ownership lookup runs first, then the update.
+      queryResults: [{ data: { library_id: LIBRARY_ID }, error: null }, { data: { id: SOURCE_ID, status: 'active' }, error: null }],
       rpcResults: [],
     });
     const routes = createSourcesRoutes(baseDeps({ supabase: client }));
     const res = fakeRes();
     await routes.unpauseSource(fakeReq({ params: { id: SOURCE_ID } }), res);
     expect(res._status).toBe(200);
-    expect(calls[0]?.values).toEqual({ status: 'active' });
+    const write = calls.find((c) => c.op === 'update');
+    expect(write?.values).toEqual({ status: 'active' });
   });
 });
 
@@ -508,5 +513,100 @@ describe('createSourcesRoutes — listBlockDefs (PostgREST injection guard)', ()
       fakeRes(),
     );
     expect(calls2[0]?.filters.some((f) => f.col === 'is_current')).toBe(false);
+  });
+});
+
+describe('createSourcesRoutes — cloneSource (reuse a connected repo)', () => {
+  const GIT_SOURCE = {
+    id: SOURCE_ID,
+    library_id: '99999999-9999-9999-9999-999999999999',
+    kind: 'git',
+    status: 'active',
+    label: 'Template repo',
+    url: 'https://example.invalid/owner/repo.git',
+    branch: 'main',
+    manifest_path: null,
+    token_secret_ref: 'ghp_secret',
+  };
+
+  it('returns 401 without a session', async () => {
+    const routes = createSourcesRoutes(baseDeps({ getUserId: () => null }));
+    const res = fakeRes();
+    await routes.cloneSource(fakeReq({ params: { id: SOURCE_ID }, body: { library_id: LIBRARY_ID } }), res);
+    expect(res._status).toBe(401);
+  });
+
+  it('validates the ids before touching the database', async () => {
+    const routes = createSourcesRoutes(baseDeps());
+    const res = fakeRes();
+    await routes.cloneSource(fakeReq({ params: { id: 'nope' }, body: { library_id: LIBRARY_ID } }), res);
+    expect(res._status).toBe(400);
+    const res2 = fakeRes();
+    await routes.cloneSource(fakeReq({ params: { id: SOURCE_ID }, body: { library_id: 'nope' } }), res2);
+    expect(res2._status).toBe(400);
+    expect((res2._body as { error: { details?: { field: string } } }).error.details?.field).toBe('library_id');
+  });
+
+  it('refuses an unknown source, a non-git source, and cloning into the same library', async () => {
+    const missing = createSourcesRoutes(baseDeps({ supabase: makeFakeSupabase({ queryResults: [{ data: null, error: null }], rpcResults: [] }).client }));
+    const r1 = fakeRes();
+    await missing.cloneSource(fakeReq({ params: { id: SOURCE_ID }, body: { library_id: LIBRARY_ID } }), r1);
+    expect(r1._status).toBe(404);
+
+    const upload = createSourcesRoutes(baseDeps({ supabase: makeFakeSupabase({ queryResults: [{ data: { ...GIT_SOURCE, kind: 'upload', url: null }, error: null }], rpcResults: [] }).client }));
+    const r2 = fakeRes();
+    await upload.cloneSource(fakeReq({ params: { id: SOURCE_ID }, body: { library_id: LIBRARY_ID } }), r2);
+    expect(r2._status).toBe(400);
+
+    const same = createSourcesRoutes(baseDeps({ supabase: makeFakeSupabase({ queryResults: [{ data: { ...GIT_SOURCE, library_id: LIBRARY_ID }, error: null }], rpcResults: [] }).client }));
+    const r3 = fakeRes();
+    await same.cloneSource(fakeReq({ params: { id: SOURCE_ID }, body: { library_id: LIBRARY_ID } }), r3);
+    expect(r3._status).toBe(400);
+  });
+
+  it('refuses a target library that does not exist', async () => {
+    const routes = createSourcesRoutes(baseDeps({ supabase: makeFakeSupabase({ queryResults: [{ data: GIT_SOURCE, error: null }, { data: null, error: null }], rpcResults: [] }).client }));
+    const res = fakeRes();
+    await routes.cloneSource(fakeReq({ params: { id: SOURCE_ID }, body: { library_id: LIBRARY_ID } }), res);
+    expect(res._status).toBe(404);
+  });
+
+  it('hands the copied connection to the git ingest and surfaces a clone failure as 502, never leaking the token', async () => {
+    // `.invalid` is reserved (RFC 6761), so the clone fails and the route
+    // exits through its catch path — the same shape createSource relies on.
+    const routes = createSourcesRoutes(baseDeps({ supabase: makeFakeSupabase({ queryResults: [{ data: GIT_SOURCE, error: null }, { data: { id: LIBRARY_ID }, error: null }], rpcResults: [] }).client }));
+    const res = fakeRes();
+    await routes.cloneSource(fakeReq({ params: { id: SOURCE_ID }, body: { library_id: LIBRARY_ID, label: 'Reused repo' } }), res);
+    expect(res._status).toBe(502);
+    expect(JSON.stringify(res._body)).not.toContain('ghp_secret');
+  });
+});
+
+describe('createSourcesRoutes — library authorization', () => {
+  it('createSource answers 403 when the caller does not administer the target library', async () => {
+    const routes = createSourcesRoutes(baseDeps({ canAdminLibrary: async () => false }));
+    const res = fakeRes();
+    await routes.createSource(fakeReq({ body: { library_id: LIBRARY_ID, kind: 'git', label: 'theme', url: 'https://example.invalid/owner/repo.git' } }), res);
+    expect(res._status).toBe(403);
+  });
+
+  it('cloneSource answers 403 for either end the caller does not administer, before any ingest', async () => {
+    const source = { id: SOURCE_ID, library_id: '99999999-9999-9999-9999-999999999999', kind: 'git', status: 'active', label: 'Template repo', url: 'https://example.invalid/owner/repo.git', branch: 'main', manifest_path: null, token_secret_ref: 'ghp_secret' };
+    const seen: string[] = [];
+    const routes = createSourcesRoutes(baseDeps({
+      supabase: makeFakeSupabase({ queryResults: [{ data: source, error: null }], rpcResults: [] }).client,
+      canAdminLibrary: async (_req, id) => { seen.push(id); return id !== source.library_id; },
+    }));
+    const res = fakeRes();
+    await routes.cloneSource(fakeReq({ params: { id: SOURCE_ID }, body: { library_id: LIBRARY_ID } }), res);
+    expect(res._status).toBe(403);
+    expect(seen).toEqual([source.library_id]);
+  });
+
+  it('fails closed when the authorization check itself throws', async () => {
+    const routes = createSourcesRoutes(baseDeps({ canAdminLibrary: async () => { throw new Error('db down'); } }));
+    const res = fakeRes();
+    await routes.createSource(fakeReq({ body: { library_id: LIBRARY_ID, kind: 'git', label: 'theme', url: 'https://example.invalid/owner/repo.git' } }), res);
+    expect(res._status).toBe(403);
   });
 });
