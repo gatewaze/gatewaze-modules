@@ -44,6 +44,7 @@ export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor }: Pro
   const [data, setData] = useState(undefined) // undefined = loading, null = none/signed out
   const [chosenEmail, setChosenEmail] = useState('')
   const [phase, setPhase] = useState('idle') // idle | working | error
+  const [errorText, setErrorText] = useState('')
   const [joinFlag, setJoinFlag] = useState(false)
   const autoRequested = useRef(false)
 
@@ -60,13 +61,22 @@ export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor }: Pro
 
   const request = useCallback(async (email) => {
     setPhase('working')
+    setErrorText('')
     try {
       const sb = getSupabaseClient()
+      // getSession() refreshes an expired access token before the call; a tab
+      // left open past the token lifetime otherwise sends a stale JWT.
+      const { data: sess } = await sb.auth.getSession()
+      if (!sess || !sess.session) throw new Error('Your sign-in has expired — please sign in again.')
       const { error } = await sb.rpc('integrations_request_my_slack_invitation', email ? { p_email: email } : {})
       if (error) throw error
       setPhase('idle')
       await loadStatus()
-    } catch {
+    } catch (e) {
+      // PostgREST messages are short and generic (our own RAISEs, or
+      // "permission denied" / "JWT expired"); showing them beats a dead end.
+      const msg = e && typeof e.message === 'string' ? e.message.slice(0, 160) : ''
+      setErrorText(msg)
       setPhase('error')
     }
   }, [loadStatus])
@@ -166,7 +176,10 @@ export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor }: Pro
         {phase === 'working' ? 'Sending…' : 'Send my invitation'}
       </button>
       {phase === 'error' && (
-        <p className="pub-nl-signup-msg err">Couldn&apos;t request your invitation right now — please try again.</p>
+        <p className="pub-nl-signup-msg err">
+          Couldn&apos;t request your invitation right now — please try again.
+          {errorText ? <><br /><span style={{ opacity: 0.8 }}>({errorText})</span></> : null}
+        </p>
       )}
     </form>
   )
