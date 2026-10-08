@@ -26,26 +26,29 @@ export function isPlainShell(wrapperTemplate: string | null | undefined): boolea
 
 /**
  * The wrapper itself (declarative template syntax, see parse-template.ts).
- * Only `edition.unsubscribe_url` / `edition.manage_subscriptions_url` are
- * used; on a send render they carry the per-recipient tokens, on a web or
- * canvas render they are empty and the `if` guard drops the line.
+ * Only `edition.unsubscribe_url` is used; on a send render it carries the
+ * per-recipient token, on a web or canvas render it is empty and the `if`
+ * guard drops the line. Just the one link — a "manage preferences" link
+ * beside it reads as a mailing-system footer, which is what this wrapper
+ * exists to avoid.
  *
- * Deliberately no font-family, font-size, colour or alignment anywhere: the
- * point is that nothing here overrides what the reader's client would do with
- * a hand-written message.
+ * Deliberately no font-family, font-size, colour, margin or alignment
+ * anywhere: the point is that nothing here overrides what the reader's
+ * client would do with a hand-written message. The gap above the link is
+ * line breaks, as a person would leave them.
  */
 export const PLAIN_EMAIL_WRAPPER = `${PLAIN_SHELL_DIRECTIVE}
 <!-- SCHEMA: {
   "edition": {
-    "unsubscribe_url":          {"type": "text", "label": "Unsubscribe URL"},
-    "manage_subscriptions_url": {"type": "text", "label": "Manage subscriptions URL"}
+    "unsubscribe_url": {"type": "text", "label": "Unsubscribe URL"}
   }
 } -->
 <slot name="body" />
-<div if="edition.unsubscribe_url" style="margin: 24px 0 0">
+<div if="edition.unsubscribe_url">
+  <br />
+  <br />
+  <br />
   <a href="{{edition.unsubscribe_url}}">Unsubscribe</a>
-  &middot;
-  <a href="{{edition.manage_subscriptions_url}}">Manage your email preferences</a>
 </div>
 `;
 
@@ -54,7 +57,7 @@ export const BUILTIN_WRAPPER_META_KEY = 'builtin_wrapper';
 
 /** The built-in wrappers a publication can choose instead of its repo's `wrappers/default.html`. */
 export const BUILTIN_WRAPPERS = {
-  plain: { label: 'Plain email', description: 'Reads like a message typed in Gmail: no header, no column, the reader’s own font and colours, unsubscribe as plain text.', html: PLAIN_EMAIL_WRAPPER },
+  plain: { label: 'Plain email', description: 'Reads like a message typed in Gmail: no header, no column, the reader’s own font and colours, a single unsubscribe link as plain text.', html: PLAIN_EMAIL_WRAPPER },
 } as const;
 
 export type BuiltinWrapperKey = keyof typeof BUILTIN_WRAPPERS;

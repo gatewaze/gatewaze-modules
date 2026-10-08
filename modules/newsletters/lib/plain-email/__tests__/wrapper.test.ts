@@ -13,11 +13,12 @@ describe('plain-email wrapper', () => {
     expect(PLAIN_EMAIL_WRAPPER.startsWith(PLAIN_SHELL_DIRECTIVE)).toBe(true);
     expect(PLAIN_EMAIL_WRAPPER).toContain('<slot name="body" />');
     // The reader's client decides font, size, colour and alignment.
-    expect(PLAIN_EMAIL_WRAPPER).not.toMatch(/font-family|font-size|color\s*:|text-align|background/i);
-    // Unsubscribe as plain text, guarded so web/canvas renders drop it.
-    expect(PLAIN_EMAIL_WRAPPER).toMatch(/<div if="edition\.unsubscribe_url"/);
-    expect(PLAIN_EMAIL_WRAPPER).toContain('{{edition.unsubscribe_url}}');
-    expect(PLAIN_EMAIL_WRAPPER).toContain('{{edition.manage_subscriptions_url}}');
+    expect(PLAIN_EMAIL_WRAPPER).not.toMatch(/font-family|font-size|color\s*:|text-align|background|margin/i);
+    // A single unsubscribe link as plain text, spaced off the message with
+    // line breaks, guarded so web/canvas renders drop it.
+    expect(PLAIN_EMAIL_WRAPPER).toMatch(/<div if="edition\.unsubscribe_url">\s*(<br \/>\s*){3}<a href="\{\{edition\.unsubscribe_url\}\}">Unsubscribe<\/a>/);
+    expect(PLAIN_EMAIL_WRAPPER).not.toContain('manage_subscriptions_url');
+    expect(PLAIN_EMAIL_WRAPPER).not.toMatch(/preferences/i);
   });
 
   it('recognises the directive regardless of spacing and case', () => {
