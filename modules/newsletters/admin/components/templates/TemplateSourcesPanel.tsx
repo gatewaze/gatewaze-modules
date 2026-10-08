@@ -18,6 +18,7 @@ import { RectangleGroupIcon } from '@heroicons/react/24/outline';
 import { Badge, Button } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { dedupeConnectedRepos, type ConnectedRepo, type ConnectedRepoSource } from '../../lib/connectedRepos';
+import { asEditionSkeleton } from '../../lib/editionSkeleton';
 
 /** Columns we read off `templates_sources` — keep aligned with the SELECT in `reload()`. */
 export interface TemplatesSourceRow {
@@ -60,12 +61,14 @@ async function authHeader(): Promise<Record<string, string>> {
 export function TemplateSourcesPanel({ libraryId, hostKind, uploadHref, blockHref, onChanged }: TemplateSourcesPanelProps) {
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<Array<{ id: string; key: string; name: string }>>([]);
+  /** Block keys a new edition starts with (the repo's edition.json), in order. */
+  const [newEditionKeys, setNewEditionKeys] = useState<string[]>([]);
   const [sources, setSources] = useState<TemplatesSourceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
 
   const reload = useCallback(async () => {
-    const [blocksRes, sourcesRes] = await Promise.all([
+    const [blocksRes, sourcesRes, libraryRes] = await Promise.all([
       // is_current=true: templates_apply_source soft-deletes pruned rows by
       // flipping is_current to false (it keeps a history row for the audit
       // trail); without the filter every repo update that drops a block
@@ -76,8 +79,10 @@ export function TemplateSourcesPanel({ libraryId, hostKind, uploadHref, blockHre
         .select('id, library_id, kind, label, status, url, branch, manifest_path, installed_git_sha, available_git_sha, last_checked_at, last_check_error, created_at')
         .eq('library_id', libraryId)
         .order('created_at', { ascending: false }),
+      supabase.from('templates_libraries').select('new_edition_blocks').eq('id', libraryId).maybeSingle<{ new_edition_blocks: unknown }>(),
     ]);
     setBlocks((blocksRes.data ?? []) as Array<{ id: string; key: string; name: string }>);
+    setNewEditionKeys(asEditionSkeleton(libraryRes.data?.new_edition_blocks)?.blocks.map((b) => b.key) ?? []);
     setSources((sourcesRes.data ?? []) as TemplatesSourceRow[]);
     setLoading(false);
   }, [libraryId]);
@@ -154,6 +159,15 @@ export function TemplateSourcesPanel({ libraryId, hostKind, uploadHref, blockHre
           Block templates
           {gitManaged && <Badge color="gray">Managed by git</Badge>}
         </h2>
+        {hostKind === 'newsletter' && blocks.length > 0 && (
+          <p className="text-xs text-[var(--gray-10)] mb-3">
+            {newEditionKeys.length > 0 ? (
+              <>New editions start with: <span className="text-[var(--gray-12)]">{newEditionKeys.join(' › ')}</span> (from the repo's <code>edition.json</code>).</>
+            ) : gitManaged ? (
+              <>New editions start empty. Add an <code>edition.json</code> to the repo to choose the blocks a new edition starts with, then run Update.</>
+            ) : null}
+          </p>
+        )}
         {blocks.length === 0 ? (
           <div className="text-center py-12 text-[var(--gray-9)]">
             <RectangleGroupIcon className="h-12 w-12 mx-auto mb-3 text-[var(--gray-8)]" />

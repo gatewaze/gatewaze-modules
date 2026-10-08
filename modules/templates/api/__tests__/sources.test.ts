@@ -386,6 +386,26 @@ describe('createSourcesRoutes — checkSource', () => {
   });
 });
 
+describe('createSourcesRoutes — updateSource validation', () => {
+  it.each([
+    [{ manifest_path: '../outside' }, 'manifest_path'],
+    [{ manifest_path: '/abs' }, 'manifest_path'],
+    [{ branch: 'main; rm -rf /' }, 'branch'],
+  ])('rejects %j before writing (the value feeds the clone and the on-disk walk)', async (body, field) => {
+    const { client, calls } = makeFakeSupabase({
+      // Only the ownership lookup should run.
+      queryResults: [{ data: { library_id: LIBRARY_ID }, error: null }],
+      rpcResults: [],
+    });
+    const routes = createSourcesRoutes(baseDeps({ supabase: client }));
+    const res = fakeRes();
+    await routes.updateSource(fakeReq({ params: { id: SOURCE_ID }, body }), res);
+    expect(res._status).toBe(400);
+    expect((res._body as { error: { details: { field: string } } }).error.details.field).toBe(field);
+    expect(calls.find((c) => c.op === 'update')).toBeUndefined();
+  });
+});
+
 describe('createSourcesRoutes — pause / unpause', () => {
   it('pauseSource flips status=paused on the row', async () => {
     const { client, calls } = makeFakeSupabase({

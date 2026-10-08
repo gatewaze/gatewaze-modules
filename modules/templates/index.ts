@@ -63,6 +63,8 @@ const templatesModule: GatewazeModule = {
     // spec-broadcasts-blocks §4.2). Git ingestion wiring follows separately.
     'migrations/027_block_def_ownership.sql',
     'migrations/028_sources_token_column_privileges.sql',
+    // Blocks a new edition starts with, from the template repo's edition.json.
+    'migrations/029_library_new_edition_blocks.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under
