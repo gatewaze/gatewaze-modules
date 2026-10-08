@@ -110,6 +110,9 @@ export default async function pr(job, ctx) {
 
     await recordPhaseEnd(supabase, run, 'pr', 'passed', `opened ${links.length} PR(s); watching for review`);
     await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch', pr_state: 'open' }).eq('id', run.id);
+    if (run.blast_radius === 'needs_human' || project.autonomyMode !== 'auto_merge_safe') {
+      try { await notifyGate(project, run, 'Pull request needs human review'); } catch { /* non-fatal */ }
+    }
     // Fold what this run learned into the project's memory (§9). reflect proposes to a PENDING slug;
     // an admin approves it before it reaches any future run. Best-effort, non-fatal — a dropped
     // reflect never blocks the PR. Idempotent jobId so a re-drive can't double-propose.
