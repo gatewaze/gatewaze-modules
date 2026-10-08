@@ -8,7 +8,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { walkSourceFiles, cloneOrUpdateGitSource, assertHostInEgressAllowlist, autoMarkRepoFiles } from '../git.js';
+import { walkSourceFiles, cloneOrUpdateGitSource, assertHostInEgressAllowlist, autoMarkRepoFiles, gitSourceRow } from '../git.js';
 import { parse } from '../../parser/parse.js';
 
 describe('walkSourceFiles', () => {
@@ -223,5 +223,20 @@ describe('cloneOrUpdateGitSource — input validation', () => {
     } finally {
       if (existsSync(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('gitSourceRow', () => {
+  const input = { library_id: 'lib', label: 'Repo', url: 'https://github.com/o/r.git', branch: 'main', token: 'ghp_test_value' };
+
+  it('persists the token on BOTH outcomes (the drift monitor re-clones from the row)', () => {
+    expect(gitSourceRow(input, { status: 'active', installed_git_sha: 'abc' })).toMatchObject({ token_secret_ref: 'ghp_test_value', status: 'active', installed_git_sha: 'abc' });
+    expect(gitSourceRow(input, { status: 'error', last_check_error: 'parse failed' })).toMatchObject({ token_secret_ref: 'ghp_test_value', status: 'error' });
+  });
+
+  it('stores null (never a placeholder) when no token was given', () => {
+    const row = gitSourceRow({ ...input, token: undefined }, { status: 'active', installed_git_sha: 'abc' });
+    expect(row.token_secret_ref).toBeNull();
+    expect(JSON.stringify(row)).not.toContain('redacted');
   });
 });
