@@ -362,6 +362,8 @@ const newslettersModule: GatewazeModule = {
     'migrations/087_collection_sort_order.sql',
     // Drops 084's two-argument snapshot finder; 086's overload broke the cron (PGRST203).
     'migrations/088_drop_snapshot_finder_overload.sql',
+    // Snapshot editions whose send has started, not only completed ones.
+    'migrations/089_snapshot_in_progress_sends.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
