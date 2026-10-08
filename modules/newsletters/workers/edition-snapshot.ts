@@ -21,10 +21,14 @@ interface SnapshotJobData {
  *      and upserts the snapshot rows.
  *
  * The cron is registered to fire every 5 min (modules/newsletters/index.ts
- * crons array, `newsletter-edition-snapshot`). At BATCH=50 and 5 min cadence
- * that's 600 editions/hour — well above any sane brand's edition cadence,
- * so the steady-state backlog stays empty and the system catches up quickly
- * after an outage.
+ * crons array, `newsletter-edition-snapshot`). Each run is bounded by a TIME
+ * budget (NEWSLETTERS_SNAPSHOT_BUDGET_MS, default 60s) as well as the batch
+ * size: the live engagement RPC costs 1-30s per edition, so an unbounded
+ * 50-edition run after an outage held a worker slot for 25 minutes, two
+ * overlapping runs held both slots, and 600+ jobs (the send drip included)
+ * queued behind them (2026-10-08). The finder returns newest editions first,
+ * so a budgeted run always refreshes the most-viewed ones; the remainder
+ * waits for the next tick.
  *
  * Failure of a single refresh is logged + counted; the loop continues. The
  * job throws only if the bootstrap (RPC list-fetch) fails — that surfaces a
@@ -50,9 +54,13 @@ export default async function handleEditionSnapshot(_job: Job<SnapshotJobData>) 
     return { refreshed: 0, errors: 0, message: 'no editions due' };
   }
 
+  const budgetMs = Number(process.env.NEWSLETTERS_SNAPSHOT_BUDGET_MS ?? 60_000);
+  const started = Date.now();
   let refreshed = 0;
   let errors = 0;
+  let deferred = 0;
   for (const row of rows) {
+    if (Date.now() - started > budgetMs) { deferred = rows.length - refreshed - errors; break; }
     const { error: refErr } = await supabase.rpc(
       'newsletter_refresh_edition_snapshots',
       { p_edition_id: row.edition_id },
@@ -70,7 +78,7 @@ export default async function handleEditionSnapshot(_job: Job<SnapshotJobData>) 
 
   console.log(
     `[newsletters:edition-snapshot] batch=${batch} due=${rows.length} `
-    + `refreshed=${refreshed} errors=${errors}`,
+    + `refreshed=${refreshed} errors=${errors} deferred=${deferred} ms=${Date.now() - started}`,
   );
-  return { refreshed, errors, due: rows.length };
+  return { refreshed, errors, deferred, due: rows.length };
 }
