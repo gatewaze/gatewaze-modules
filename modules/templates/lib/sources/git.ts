@@ -36,6 +36,7 @@ import { execFileSync, type ExecFileSyncOptions } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { parse } from '../parser/parse.js';
 import { applySource, type ApplyResult, type ApplySupabaseClient } from './apply.js';
+import { readEditionSkeleton, persistEditionSkeleton, unknownSkeletonKeys } from './edition-skeleton.js';
 
 // ---------------------------------------------------------------------------
 // Validation helpers
@@ -420,6 +421,10 @@ export async function ingestGit(
   const files = walkSourceFiles(repoDir, input.manifest_path);
   const concatenated = autoMarkRepoFiles(files);
   const parsed = parse(concatenated, { sourcePath: `git:${input.url}#${headSha.slice(0, 8)}` });
+  // The repo's optional edition.json (blocks a new edition starts with).
+  // A malformed file throws here, before any row is written, so the
+  // operator sees "edition.json: …" rather than a half-connected source.
+  const skeleton = readEditionSkeleton(repoDir, input.manifest_path);
 
   // 3. If parse produced errors, persist a source row with status='error' so
   //    the admin sees it in the UI, but don't apply the (broken) artifacts.
@@ -482,6 +487,21 @@ export async function ingestGit(
   //    definitions rows under this source.
   const sha = createHash('sha256').update(concatenated).digest('hex');
   const apply = await applySource(supabase, sourceId, parsed, { sourceSha: sha, dryRun: false });
+
+  // 6. The skeleton lives on the library, not the source: the consumer's
+  //    "New edition" flow reads it per library. Only after a clean apply,
+  //    so a broken template never leaves a skeleton pointing at blocks that
+  //    were not installed.
+  if (apply.errors.length === 0) {
+    await persistEditionSkeleton(supabase, input.library_id, skeleton);
+    if (skeleton) {
+      const unknown = unknownSkeletonKeys(skeleton, apply.artifacts.filter((a) => a.artifact_kind === 'block_def').map((a) => a.key));
+      if (unknown.length > 0) {
+        // eslint-disable-next-line no-console
+        console.warn(`[templates] edition.json names blocks the repo does not define (skipped at seed time): ${unknown.join(', ')}`);
+      }
+    }
+  }
 
   return { source_id: sourceId, apply, installed_git_sha: headSha };
 }

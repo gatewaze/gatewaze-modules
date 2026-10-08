@@ -33,6 +33,7 @@ import {
   autoMarkRepoFiles,
 } from '../lib/sources/git.js';
 import { getBoilerplateConfig, type HostKind } from '../lib/boilerplate/index.js';
+import { readEditionSkeleton, persistEditionSkeleton, type EditionSkeleton } from '../lib/sources/edition-skeleton.js';
 
 // ---------------------------------------------------------------------------
 // Narrow Supabase surface — extends the ingest/apply client interfaces
@@ -441,11 +442,15 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     let parsed: ReturnType<typeof parse>;
     let sha: string;
     let appliedSha: string | null = null;
+    // Git only: the repo's optional edition.json, persisted on the library
+    // after a clean apply (same as the initial connect in ingestGit).
+    let skeleton: EditionSkeleton | null = null;
     if (sourceQ.data.kind === 'git') {
       if (!sourceQ.data.url) return sendError(res, 500, 'internal_error', 'git source has no url stored');
       const persistedToken = sourceQ.data.token_secret_ref;
+      let repoDir: string;
       try {
-        const repoDir = cloneOrUpdateGitSource({
+        repoDir = cloneOrUpdateGitSource({
           url: sourceQ.data.url,
           branch: sourceQ.data.branch ?? undefined,
           token: persistedToken && persistedToken !== '<redacted>' ? persistedToken : undefined,
@@ -458,6 +463,11 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
       } catch (e) {
         const message = e instanceof Error ? e.message : 'unknown error';
         return sendError(res, 502, 'upstream_error', `git apply failed: ${message}`);
+      }
+      try {
+        skeleton = readEditionSkeleton(repoDir, sourceQ.data.manifest_path ?? undefined);
+      } catch (e) {
+        return sendError(res, 422, 'parse_failed', e instanceof Error ? e.message : 'edition.json is invalid');
       }
     } else {
       const html = sourceQ.data.inline_html;
@@ -478,6 +488,7 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     // Mark the source as up to date: installed == applied HEAD, clear the
     // available-drift pointer + any stale error.
     if (appliedSha) {
+      await persistEditionSkeleton(deps.supabase, sourceQ.data.library_id, skeleton);
       await deps.supabase
         .from('templates_sources')
         .update({ installed_git_sha: appliedSha, available_git_sha: null, last_check_error: null, last_checked_at: new Date().toISOString() })
@@ -542,8 +553,23 @@ export function createSourcesRoutes(deps: SourcesRoutesDeps) {
     const patch: Record<string, unknown> = {};
     if (typeof body['label'] === 'string') patch['label'] = body['label'];
     if (typeof body['url'] === 'string') patch['url'] = body['url'];
-    if (typeof body['branch'] === 'string' || body['branch'] === null) patch['branch'] = body['branch'];
-    if (typeof body['manifest_path'] === 'string' || body['manifest_path'] === null) patch['manifest_path'] = body['manifest_path'];
+    // Same shape rules as createSource: these three feed the clone command and
+    // the on-disk walk (walkSourceFiles / readEditionSkeleton resolve
+    // manifest_path against the clone without a containment check).
+    if (typeof body['branch'] === 'string' || body['branch'] === null) {
+      const branch = body['branch'];
+      if (branch !== null && (branch.length > BRANCH_MAX || !/^[A-Za-z0-9_./-]+$/.test(branch))) {
+        return sendError(res, 400, 'validation_failed', `branch must be a safe ref name, max ${BRANCH_MAX} chars`, { field: 'branch' });
+      }
+      patch['branch'] = branch;
+    }
+    if (typeof body['manifest_path'] === 'string' || body['manifest_path'] === null) {
+      const manifestPath = body['manifest_path'];
+      if (manifestPath !== null && (manifestPath.length > MANIFEST_PATH_MAX || manifestPath.includes('..') || manifestPath.startsWith('/'))) {
+        return sendError(res, 400, 'validation_failed', `manifest_path must be relative + path-traversal-free, max ${MANIFEST_PATH_MAX} chars`, { field: 'manifest_path' });
+      }
+      patch['manifest_path'] = manifestPath;
+    }
     if (typeof body['auto_apply'] === 'boolean') patch['auto_apply'] = body['auto_apply'];
     // Token: only update when the caller explicitly supplied it. An
     // empty string means "clear the stored token"; undefined means
