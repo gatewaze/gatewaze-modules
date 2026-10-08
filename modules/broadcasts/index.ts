@@ -165,6 +165,7 @@ const broadcastsModule: GatewazeModule = {
     // duplicate_broadcast RPC (copies content, no sends/metrics).
     'migrations/026_broadcast_folders.sql',
     'migrations/027_broadcast_template.sql',
+    'migrations/028_broadcast_template_library.sql',
   ],
 
   adminRoutes: [

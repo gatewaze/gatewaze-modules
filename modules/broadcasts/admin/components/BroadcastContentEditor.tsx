@@ -28,6 +28,8 @@ import type { BlockRenderMeta } from '../../../newsletters/admin/components/puck
 import type { NewsletterEdition, EditionBlock } from '../../../newsletters/admin/utils/types';
 import { tagHtmlLinks } from '../../lib/link-tracking.js';
 import { PLAIN_EMAIL_WRAPPER } from '../../../newsletters/lib/plain-email/wrapper.js';
+import { supabase } from '@/lib/supabase';
+import { getBroadcastTemplateLibraryId } from './BroadcastTemplateTab';
 import {
   ensureInitialBlock,
   listBlocks,
@@ -165,10 +167,29 @@ export function BroadcastContentEditor({ broadcast, editable, onSaved, onProceed
     return () => { cancelled = true; };
   }, [broadcast.id, editionDate, broadcast.content_json, broadcast.rendered_html, broadcast.subject, broadcast.preheader]);
 
-  // The shell this broadcast renders in. `classic` keeps the standard 600px
-  // column (no wrapper → EditionEmail's default Container); `plain` is the
-  // built-in plain-email wrapper that reads like a hand-written message.
-  const wrapper = broadcast.template === 'classic' ? null : PLAIN_EMAIL_WRAPPER;
+  // The shell this broadcast renders in: the built-in plain-email wrapper
+  // (default) or the shared broadcast template library's wrappers/default.html
+  // (`repo`). The repo wrapper is fetched once per template change; until it
+  // arrives (or if there is none) the broadcast renders plain.
+  const [repoWrapper, setRepoWrapper] = useState<string | null>(null);
+  useEffect(() => {
+    if (broadcast.template !== 'repo') { setRepoWrapper(null); return; }
+    let cancelled = false;
+    void (async () => {
+      const libraryId = await getBroadcastTemplateLibraryId();
+      if (!libraryId) return;
+      const { data } = await supabase
+        .from('templates_wrappers')
+        .select('html')
+        .eq('library_id', libraryId)
+        .eq('key', 'default')
+        .eq('is_current', true)
+        .maybeSingle<{ html: string }>();
+      if (!cancelled) setRepoWrapper(data?.html ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, [broadcast.template]);
+  const wrapper = broadcast.template === 'repo' ? repoWrapper : PLAIN_EMAIL_WRAPPER;
 
   /** Persist blocks + render + track. Returns the fresh broadcast (or null). */
   async function persist(): Promise<Broadcast | null> {
