@@ -58,8 +58,10 @@ describe('exportEditionHtml — plain email shell', () => {
 
   it('adds the unsubscribe line as plain text on a send render only', async () => {
     const sent = await exportEditionHtml({ edition: plainEdition, format: 'email', blockMeta: plainMeta, wrapperTemplate: PLAIN_EMAIL_WRAPPER, forSend: true });
-    expect(sent).toMatch(/<a href="\{\{unsubscribe_url\}\}"/);
-    expect(sent).toMatch(/<a href="\{\{manage_subscriptions_url\}\}"/);
+    expect(sent).toMatch(/<a href="\{\{unsubscribe_url\}\}">Unsubscribe<\/a>/);
+    // Only the one link, spaced off the message with line breaks.
+    expect(sent).not.toContain('manage_subscriptions_url');
+    expect(sent).toMatch(/(<br\s*\/?>\s*){3}<a href="\{\{unsubscribe_url\}\}"/);
     expect(sent.indexOf('Hello world.')).toBeLessThan(sent.indexOf('{{unsubscribe_url}}'));
     const web = await exportEditionHtml({ edition: plainEdition, format: 'email', blockMeta: plainMeta, wrapperTemplate: PLAIN_EMAIL_WRAPPER, forSend: false });
     expect(web).not.toContain('unsubscribe_url');
