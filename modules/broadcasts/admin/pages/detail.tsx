@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { toast } from 'sonner';
+import { useAdminScope } from '@/hooks/usePermissions';
 import { Card, Button, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { supabase } from '@/lib/supabase';
@@ -14,16 +15,20 @@ import { PersonLocationMap } from '@/components/charts/PersonLocationMap';
 // Cross-module reuse: the visual Segments Builder (controlled value/onChange).
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
-import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList, type BroadcastTemplate } from '../lib/broadcastService';
+import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
+import { BroadcastTemplateTab } from '../components/BroadcastTemplateTab';
 import { BroadcastContentEditor } from '../components/BroadcastContentEditor';
 import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
 
 const STEPS = [
-  { id: 'audience', label: '1. Audience' },
-  { id: 'content', label: '2. Content' },
-  { id: 'sending', label: '3. Sending' },
+  { id: 'audience', label: 'Audience' },
+  { id: 'content', label: 'Content' },
+  { id: 'sending', label: 'Sending' },
   { id: 'replies', label: 'Replies' },
 ];
+// Super admins also get the Template tab: the wrapper this broadcast sends
+// in, and the shared broadcast template repo.
+const SUPER_ADMIN_STEPS = [...STEPS, { id: 'template', label: 'Template' }];
 
 const inputCls = 'w-full rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm disabled:opacity-60';
 
@@ -34,7 +39,9 @@ const isValidEmail = (v: string | null | undefined): boolean => !!v && /^[^\s@]+
 export default function BroadcastDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
   const navigate = useNavigate();
-  const step = tab && STEPS.some((s) => s.id === tab) ? tab : 'audience';
+  const { isSuperAdmin } = useAdminScope();
+  const visibleSteps = isSuperAdmin ? SUPER_ADMIN_STEPS : STEPS;
+  const step = tab && visibleSteps.some((s) => s.id === tab) ? tab : 'audience';
 
   const [b, setB] = useState<Broadcast | null>(null);
   const [loading, setLoading] = useState(true);
@@ -219,7 +226,7 @@ export default function BroadcastDetailPage() {
     <Page title={`Broadcast: ${b.name}`}>
       <WorkspaceLayout
         title={`Broadcasts: ${b.name}`}
-        tabs={STEPS}
+        tabs={visibleSteps}
         activeTabId={step}
         onTabChange={goTo}
         actions={<div className="flex items-center gap-3">{headerActions}</div>}
@@ -233,6 +240,7 @@ export default function BroadcastDetailPage() {
           </div>
         )}
         {step === 'replies' && <BroadcastRepliesTab broadcastId={b.id} />}
+        {step === 'template' && isSuperAdmin && <BroadcastTemplateTab b={b} editable={editable} onSaved={setB} />}
       </WorkspaceLayout>
     </Page>
   );
@@ -580,10 +588,11 @@ function BroadcastNameEditor({ b, editable, onSaved }: { b: Broadcast; editable:
         className={`${inputCls} max-w-md`}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+        // Saves on its own (Enter or leaving the field); the header Save is for content.
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        onBlur={save}
         disabled={!editable || saving}
       />
-      <Button size="sm" onClick={save} disabled={!canSave}>Save</Button>
     </div>
   );
 }
@@ -612,16 +621,6 @@ function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSendin
       toast.error(err instanceof Error ? err.message : 'Failed to link event');
     }
   }
-  // Email shell. Saving the content re-renders with the new shell (Send saves
-  // first), so switching here never ships stale HTML.
-  async function changeTemplate(value: BroadcastTemplate) {
-    try {
-      const fresh = await updateBroadcast(b.id, { template: value } as Partial<Broadcast>);
-      onSaved(fresh);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to change template');
-    }
-  }
 
   return (
     // Inline in the normal content column (NOT full-bleed): the editor panel
@@ -639,11 +638,6 @@ function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSendin
                 {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
               </option>
             ))}
-          </select>
-          <label className="text-sm font-medium text-[var(--gray-12)] shrink-0 ml-2">Template</label>
-          <select className={inputCls} value={b.template ?? 'plain'} onChange={(e) => changeTemplate(e.target.value as BroadcastTemplate)} disabled={!editable} title="Plain reads like a message typed in Gmail: no column, the reader's own font and colours. Classic is the branded 600px column.">
-            <option value="plain">Plain email</option>
-            <option value="classic">Classic column</option>
           </select>
         </div>
         <BroadcastNameEditor b={b} editable={editable} onSaved={onSaved} />

@@ -29,7 +29,7 @@ export interface BroadcastSendInstance {
 }
 
 /** The broadcast parent — its definition, audience, and draft content. */
-export type BroadcastTemplate = 'plain' | 'classic';
+export type BroadcastTemplate = 'plain' | 'repo';
 
 export interface Broadcast {
   id: string;
@@ -58,7 +58,7 @@ export interface Broadcast {
   content_json: Record<string, unknown>;
   /** Organisational folder this broadcast lives in (null = unfiled). */
   folder_id: string | null;
-  /** Email shell: the built-in plain wrapper (default) or the classic 600px column. */
+  /** Email shell: the built-in plain wrapper (default) or the shared broadcast template repo's wrapper. */
   template: BroadcastTemplate;
   created_by: string | null;
   created_at: string;
