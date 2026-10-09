@@ -22,7 +22,7 @@ const residentialEgressModule: GatewazeModule = {
   name: 'Residential Egress',
   description:
     'Route IP-gated fetches (e.g. YouTube captions) through a residential proxy provider. Pick a provider, add your credentials, and consumers opt in per target.',
-  version: '1.0.0',
+  version: '1.1.0',
   features: ['residential-egress'],
 
   // Operator-facing settings form. The provider dropdown selects the auth
