@@ -6,7 +6,7 @@
  * each phase adds only its own pre/post logic (prompt, gating, git commit, enqueue-next).
  */
 import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { makeWorkspace, cloneBranch, cloneNewBranch } from './worktree.js';
 import { subscribeInput } from './input-channel.js';
 import { InProcessRunner } from './agent-session.js';
@@ -105,11 +105,11 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     for (const r of spec.repos ?? []) {
       try {
         const claude = await readFile(join(r.dir, 'CLAUDE.md'), 'utf8');
-        contracts += `\n\n### Repo \`${r.repoName}\` (${r.writable ? 'WRITABLE' : 'read-only'}) at ./${r.repoName}/\n${claude.slice(0, 16000)}`;
+        contracts += `\n\n### Repo \`${r.repoName}\` (${r.writable ? 'WRITABLE' : 'read-only'}) at ./${relative(spec.cwd, r.dir)}/\n${claude.slice(0, 16000)}`;
         try {
           const rulesDir = join(r.dir, '.claude', 'rules');
           for (const f of (await readdir(rulesDir)).filter((n) => n.endsWith('.md'))) {
-            contracts += `\n\n#### ${r.repoName}/.claude/rules/${f}\n` + (await readFile(join(rulesDir, f), 'utf8')).slice(0, 8000);
+            contracts += `\n\n#### ${relative(spec.cwd, r.dir)}/.claude/rules/${f}\n` + (await readFile(join(rulesDir, f), 'utf8')).slice(0, 8000);
           }
         } catch { /* no rules */ }
       } catch { /* no CLAUDE.md */ }
@@ -148,7 +148,7 @@ export async function runAgentSession(supabase, ctx, run, project, phase, spec) 
     // exists to close the resume cold-start race (SPEC #36 §3.3), not to replay ordinary chat history.
     const adminNote = await drainPendingAdminMessages(supabase, run, spec.attempt ?? 1);
 
-    const layout = (spec.repos ?? []).map((r) => `- ./${r.repoName}/  (${r.writable ? 'WRITABLE — you may change this' : 'read-only — context only'})`).join('\n');
+    const layout = (spec.repos ?? []).map((r) => `- ./${relative(spec.cwd, r.dir)}/  (${r.writable ? 'WRITABLE — you may change this' : 'read-only — context only'})`).join('\n');
     const systemAppend =
       (spec.systemAppend ? spec.systemAppend + '\n\n' : '') +
       processRulesBlock(processRules) +
@@ -327,11 +327,11 @@ export async function runInteractiveSession(supabase, ctx, run, project, spec) {
     for (const r of spec.repos ?? []) {
       try {
         const claude = await readFile(join(r.dir, 'CLAUDE.md'), 'utf8');
-        contracts += `\n\n### Repo \`${r.repoName}\` (${r.writable ? 'WRITABLE' : 'read-only'}) at ./${r.repoName}/\n${claude.slice(0, 16000)}`;
+        contracts += `\n\n### Repo \`${r.repoName}\` (${r.writable ? 'WRITABLE' : 'read-only'}) at ./${relative(spec.cwd, r.dir)}/\n${claude.slice(0, 16000)}`;
         try {
           const rulesDir = join(r.dir, '.claude', 'rules');
           for (const f of (await readdir(rulesDir)).filter((n) => n.endsWith('.md'))) {
-            contracts += `\n\n#### ${r.repoName}/.claude/rules/${f}\n` + (await readFile(join(rulesDir, f), 'utf8')).slice(0, 8000);
+            contracts += `\n\n#### ${relative(spec.cwd, r.dir)}/.claude/rules/${f}\n` + (await readFile(join(rulesDir, f), 'utf8')).slice(0, 8000);
           }
         } catch { /* no rules */ }
       } catch { /* no CLAUDE.md */ }
@@ -345,7 +345,7 @@ export async function runInteractiveSession(supabase, ctx, run, project, spec) {
     let processRules = '';
     try { processRules = await fetchProcessRules(project, project.githubToken, ctx?.logger); } catch { /* soft */ }
 
-    const layout = (spec.repos ?? []).map((r) => `- ./${r.repoName}/  (${r.writable ? 'WRITABLE — you may change this' : 'read-only — context only'})`).join('\n');
+    const layout = (spec.repos ?? []).map((r) => `- ./${relative(spec.cwd, r.dir)}/  (${r.writable ? 'WRITABLE — you may change this' : 'read-only — context only'})`).join('\n');
     const systemAppend =
       (spec.systemAppend ? spec.systemAppend + '\n\n' : '') +
       processRulesBlock(processRules) +

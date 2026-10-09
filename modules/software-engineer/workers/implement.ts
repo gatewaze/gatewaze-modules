@@ -1,3 +1,4 @@
+import { getRunCodeRepos } from '../lib/run-code-repos.js';
 // @ts-nocheck
 /**
  * implement phase (§7). Clones the project's code repos into a workspace (writable repos on a fresh
@@ -30,7 +31,7 @@ export default async function implement(job, ctx) {
   if (!project?.intakeEnabled) return blockRun(supabase, run, 'implement', 'kill_switch', 'intake disabled');
   const token = project.githubToken;
 
-  const codeRepos = (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun);
+  const codeRepos = (await getRunCodeRepos(supabase, run)).slice(0, project.maxCodeReposPerRun);
   // A resumed run (admin-routes.ts's /resume) passes an incremented attempt so this retry's row
   // doesn't clobber the FAILED attempt 1 row — both stay visible on the run detail phase badges.
   const attempt = job?.data?.attempt ?? 1;

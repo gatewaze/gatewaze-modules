@@ -4,7 +4,7 @@
  * pushed git branch, not local disk) so the pipeline survives the multi-pod runner pool — phase
  * N and N+1 may land on different pods. Shallow clones keep it cheap.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { git, authedRemote } from './git.js';
@@ -67,13 +67,13 @@ export interface WsRepo {
 }
 
 /**
- * Multi-repo workspace (§7): clone each of the project's code repos into `<root>/<repoName>/`. Writable
+ * Multi-repo workspace (§7): clone each of the project's code repos into `<root>/<repoOwner>/<repoName>/`. Writable
  * repos get a fresh `branch` cut off their base branch (default branch if unset) + the commit
  * identity; read-only repos are cloned for context only. The agent's cwd is the workspace root and it
  * reads across all subdirs but changes only writable ones.
  */
 export async function makeMultiWorkspace(
-  codeRepos: Array<{ repoOwner: string; repoName: string; writeMode: 'writable' | 'read_only'; baseBranch: string | null }>,
+  codeRepos: Array<{ repoOwner: string; repoName: string; writeMode: 'writable' | 'read_only'; baseBranch: string | null; checkoutRef?: string }>,
   token: string,
   branch: string,
   id?: CommitIdentity,
@@ -92,20 +92,27 @@ export async function makeMultiWorkspace(
         if (writable) throw new Error(`unsafe repo identity: ${r.repoOwner}/${r.repoName}`);
         continue;
       }
-      const dir = join(root, r.repoName);
+      const ownerDir = join(root, r.repoOwner);
+      await mkdir(ownerDir, { recursive: true });
+      const dir = join(ownerDir, r.repoName);
       const remote = authedRemote(r.repoOwner, r.repoName, token);
       try {
         if (writable && existing) {
           await git(['clone', '--depth', '1', '--branch', branch, remote, dir]); // the run branch already exists
           await identity(dir, id);
         } else {
-          if (r.baseBranch) await git(['clone', '--depth', '1', '--branch', r.baseBranch, remote, dir]);
+          const ref = r.baseBranch === 'main' ? r.checkoutRef ?? r.baseBranch : r.baseBranch;
+          if (ref) await git(['clone', '--depth', '1', '--branch', ref, remote, dir]);
           else await git(['clone', '--depth', '1', remote, dir]);
+          if (r.checkoutRef && r.baseBranch === 'main') {
+            const expected = r.checkoutRef.split('/').at(-1);
+            if ((await git(['-C', dir, 'rev-parse', 'HEAD'])).trim() !== expected) throw new Error('HELF preview reference changed');
+          }
           if (writable) { await git(['-C', dir, 'checkout', '-b', branch]); await identity(dir, id); }
         }
       } catch (e) {
         // A WRITABLE repo is an edit target — if it won't clone the run can't proceed, so fail.
-        if (writable) throw e;
+        if (writable || r.checkoutRef) throw e;
         // A READ-ONLY repo is reference context (e.g. a private cross-project repo the token may not
         // reach). Never let it fail the whole run — drop it, keep going without that context.
         await rm(dir, { recursive: true, force: true }).catch(() => {});

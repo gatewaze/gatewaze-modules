@@ -1,3 +1,4 @@
+import { getRunCodeRepos } from '../lib/run-code-repos.js';
 // @ts-nocheck
 /**
  * spec-refine — applies a reviewer's chat feedback to a run's spec while it is parked at the spec gate
@@ -70,7 +71,7 @@ export default async function specRefine(job, ctx) {
   await touchRun(supabase, run);
   let ws;
   try {
-    const codeRepos = (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun);
+    const codeRepos = (await getRunCodeRepos(supabase, run)).slice(0, project.maxCodeReposPerRun);
     const repos = codeRepos.map((r) => ({ ...r, writeMode: 'read_only' }));
     const commitId = await resolveCommitIdentity(supabase, project, token);
     ws = await makeMultiWorkspace(repos, token, run.branch_name || `spec/refine-${run.id.slice(0, 8)}`, commitId);
