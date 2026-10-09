@@ -52,6 +52,15 @@ describe('agent-session PreToolUse guards (issue #58 + Bash forbidden-flag)', ()
     return read.hooks[0];
   }
 
+  it('uses explicit default mode and the host callback for ordinary read permissions', async () => {
+    const runner = new InProcessRunner();
+    await runner.runPhase({cwd:dir,prompt:'read context',model:'claude-sonnet-5',credential:CRED,allowedTools:['Read','Grep']});
+    expect(capturedOptions.permissionMode).toBe('default');
+    expect(capturedOptions.allowedTools).toEqual([]);
+    const input={file_path:join(dir,'context.txt')};
+    expect(await capturedOptions.canUseTool('Read',input)).toEqual({behavior:'allow',updatedInput:input});
+  });
+
   it('denies a Bash command with --no-verify', async () => {
     const hook = await bashHook();
     const res = await hook({ tool_input: { command: 'git push --no-verify' } });
