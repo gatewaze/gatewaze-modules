@@ -586,6 +586,14 @@ export class DevEventsConferenceScraper extends BaseScraper {
         return true;
       }
 
+      // Event-hosting platforms are never promotional, whatever the title
+      // says: a Luma "AI training day" is a community event, not an ad.
+      const eventPlatforms = ['luma.com', 'lu.ma', 'meetup.com', 'ti.to', 'tito.io', 'hopin.com', 'zoom.us', 'guild.host', 'bevy.com'];
+      const host = url.hostname.toLowerCase();
+      if (eventPlatforms.some(p => host === p || host.endsWith('.' + p)) || /(^|\.)eventbrite\.[a-z.]+$/.test(host)) {
+        return false;
+      }
+
       // Check for promotional keywords in titles (case insensitive)
       const title = (event.eventTitle || '').toLowerCase();
       if (promotionalKeywords.some(keyword => title.includes(keyword))) {
@@ -595,20 +603,11 @@ export class DevEventsConferenceScraper extends BaseScraper {
         }
       }
 
-      // Event-hosting platforms are never promotional, whatever their domain
-      // shape. Without this, the short-domain heuristic below rejects every
-      // luma.com / lu.ma event (8 and 5 character hostnames).
-      const eventPlatforms = ['luma.com', 'lu.ma', 'meetup.com', 'eventbrite.', 'ti.to', 'tito.io', 'hopin.com', 'zoom.us', 'guild.host', 'bevy.com'];
-      if (eventPlatforms.some(p => url.hostname === p || url.hostname.endsWith('.' + p) || url.hostname.includes(p))) {
-        return false;
-      }
-
-      // Check for very short domain names (often promotional)
-      if (url.hostname.split('.').length === 2 && url.hostname.length < 12 &&
-          !url.hostname.includes('conf') && !url.hostname.includes('dev') &&
-          !url.hostname.includes('tech') && !url.pathname.includes('events')) {
-        return true;
-      }
+      // There used to be a "very short bare domain is promotional" rule here.
+      // On the 9 Oct 2026 run it dropped EuroRust, AIE NYC, ELC Annual and
+      // PNSQC (eurorust.eu, pnsqc.org, …) while the two sponsored
+      // masterclasses were already caught above. A short domain says nothing
+      // about whether an event is an ad, so the rule is gone.
 
     } catch (e) {
       // If URL parsing fails, it might be malformed promotional content
