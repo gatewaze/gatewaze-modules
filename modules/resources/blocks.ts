@@ -180,6 +180,12 @@ export function stripHtmlText(html: string): string {
 
 type Schema = Record<string, any>;
 
+/** localhost, *.localhost, 127.0.0.1, ::1 — the hosts http is tolerated for. */
+export function isLoopbackHost(hostname: string): boolean {
+  const h = String(hostname ?? '').toLowerCase();
+  return h === 'localhost' || h.endsWith('.localhost') || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+}
+
 function checkSchema(schema: Schema, value: unknown, path: string, issues: ValidationIssue[]): void {
   const t = schema.type;
   if (t === 'object') {
@@ -219,7 +225,17 @@ function checkSchema(schema: Schema, value: unknown, path: string, issues: Valid
     }
     if (schema.format === 'https-url') {
       let ok = false;
-      try { ok = new URL(value).protocol === 'https:'; } catch { ok = false; }
+      try {
+        const u = new URL(value);
+        // https only — except, OUTSIDE production, plain http to a
+        // *.localhost / loopback host, so local dev stacks
+        // (http://supabase.aaif.localhost storage URLs) can bake and render
+        // galleries. The NODE_ENV gate makes "never in prod" enforced, not
+        // aspirational; every other scheme (javascript:, data:, …) and
+        // non-loopback http stay rejected everywhere.
+        ok = u.protocol === 'https:' ||
+          (u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && isLoopbackHost(u.hostname));
+      } catch { ok = false; }
       if (!ok) issues.push({ path, keyword: 'format', message: 'must be a valid https:// URL' });
     }
   } else if (t === 'integer') {

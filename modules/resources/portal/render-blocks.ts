@@ -260,13 +260,31 @@ interface MediaGalleryData { heading?: string; albums: MediaGalleryAlbum[] }
 function renderMediaGalleryHtml(block: SrBlockRow): string {
   const data = block.data as unknown as MediaGalleryData
   const gid = `gw-mg-${block.id}`
+  // https only, except — outside production — plain http to a
+  // loopback/.localhost host (local dev storage URLs). Mirrors the blocks.ts
+  // https-url validator (isLoopbackHost + NODE_ENV gate) byte-for-byte; the
+  // check is duplicated rather than imported because this file is
+  // deliberately import-free (HTML-string rendering, no module deps). Change
+  // BOTH together.
+  const safeSrc = (s: unknown): s is string => {
+    if (typeof s !== 'string') return false
+    try {
+      const u = new URL(s)
+      return u.protocol === 'https:' ||
+        (u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && (
+          u.hostname === 'localhost' || u.hostname.endsWith('.localhost') ||
+          u.hostname === '127.0.0.1' || u.hostname === '[::1]' || u.hostname === '::1'
+        ))
+    } catch {
+      return false
+    }
+  }
   const albums = (Array.isArray(data.albums) ? data.albums : [])
     .map((a) => ({
       name: typeof a?.name === 'string' ? a.name : '',
       items: (Array.isArray(a?.items) ? a.items : []).filter(
         (it): it is MediaGalleryItem =>
-          !!it && typeof it.src === 'string' && it.src.startsWith('https://') &&
-          (it.thumb === undefined || (typeof it.thumb === 'string' && it.thumb.startsWith('https://'))),
+          !!it && safeSrc(it.src) && (it.thumb === undefined || safeSrc(it.thumb)),
       ),
     }))
     .filter((a) => a.name && a.items.length > 0)
