@@ -16,7 +16,7 @@
   "peerDependencies": {
     "@gatewaze/shared": "*",
     "@supabase/supabase-js": "*",
-    "isomorphic-dompurify": "*",
+    "isomorphic-dompurify": "^3.1.0",
     "next": "*",
     "react": "*"
   }
