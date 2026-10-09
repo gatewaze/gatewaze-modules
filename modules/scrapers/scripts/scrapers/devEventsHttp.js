@@ -19,6 +19,8 @@
  * stored.
  */
 
+import { fetchPage } from '../lib/scrapling-fetcher.js';
+
 export const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -81,13 +83,25 @@ export function sanitizeExternalUrl(url) {
  * MAX_RESPONSE_BYTES. Throws on policy failure, network failure or timeout;
  * returns { status, html, finalUrl } otherwise (including non-2xx so callers
  * can decide).
+ *
+ * `egress` is the scraper's residential-egress setting (see
+ * resolveResidentialEgress in ../lib/scrapling-fetcher.js). When `egress.use`
+ * is on, the request goes through the scrapling-fetcher service with
+ * `proxy: "force"`, so it leaves from the service's residential provider and
+ * carries Scrapling's browser-like TLS fingerprint. There is deliberately no
+ * fallback to a direct fetch: a scraper that asked to look residential must
+ * not quietly scrape from the cluster IP when the service is down.
  */
-export async function fetchHtml(url, { allow, timeoutMs = 30000, headers = {}, maxBytes = MAX_RESPONSE_BYTES } = {}) {
+export async function fetchHtml(url, { allow, timeoutMs = 30000, headers = {}, maxBytes = MAX_RESPONSE_BYTES, egress = null } = {}) {
   if (!Array.isArray(allow) || allow.length === 0) {
     throw new Error('fetchHtml requires a host allowlist');
   }
   const target = policeUrl(url, { allow });
   if (!target) throw new Error(`Refusing to fetch URL outside the allowlist: ${url}`);
+
+  if (egress?.use) {
+    return fetchViaEgress(target.toString(), { timeoutMs, maxBytes, jobId: egress.jobId ?? null });
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -119,6 +133,26 @@ export async function fetchHtml(url, { allow, timeoutMs = 30000, headers = {}, m
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The residential path: scrapling-fetcher `/fetch` in fast mode (plain HTTP
+ * with a stealth fingerprint, no browser) with the proxy forced on. The
+ * service applies its configured provider; credentials never reach the
+ * worker. Throws ScraplingNotConfiguredError when SCRAPLING_FETCHER_URL is
+ * unset and ScraplingTransportError on service failures.
+ */
+async function fetchViaEgress(url, { timeoutMs, maxBytes, jobId }) {
+  const result = await fetchPage(url, {
+    mode: 'fast',
+    extractNextData: false,
+    timeoutMs,
+    useResidentialEgress: true,
+    jobId,
+  });
+  const html = typeof result.html === 'string' ? result.html : '';
+  if (html.length > maxBytes) throw new Error(`Response exceeded ${maxBytes} bytes (via egress) from ${url}`);
+  return { status: Number(result.status) || 0, html, finalUrl: url, viaEgress: true };
 }
 
 async function readTextCapped(response, maxBytes, controller) {

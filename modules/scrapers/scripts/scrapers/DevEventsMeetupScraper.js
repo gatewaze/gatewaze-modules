@@ -1,5 +1,6 @@
 import { BaseScraper } from './BaseScraper.js';
 import { fetchHtml, sleep, extractListingRows, extractListingTotal, hasMoreListingPages, listingPageUrl, extractDetail, extractNextData, lumaDataFromNextData, meetupDataFromNextData, isLumaUrl, isMeetupUrl, isDevEventsUrl, DEV_EVENTS_HOSTS, LUMA_HOSTS, MEETUP_HOSTS } from './devEventsHttp.js';
+import { resolveResidentialEgress } from '../lib/scrapling-fetcher.js';
 
 /**
  * Scraper for dev.events meetups page
@@ -20,6 +21,9 @@ export class DevEventsMeetupScraper extends BaseScraper {
     console.log(`🚀 Initializing ${this.config.name} scraper (HTTP mode, no browser)...`);
     this.browser = null;
     this.page = null;
+    // Per-scraper `use_residential_egress` (config JSON) → SCRAPERS_RESIDENTIAL_EGRESS env → off.
+    this._egress = { use: resolveResidentialEgress(this.config), jobId: this.config.jobId ?? null };
+    console.log(`🛰️ Residential egress: ${this._egress.use ? 'on (via scrapling-fetcher, proxy forced)' : 'off (direct fetch from the worker)'}`);
   }
 
 
@@ -93,7 +97,7 @@ export class DevEventsMeetupScraper extends BaseScraper {
       const pageUrl = listingPageUrl(baseUrl, currentPage);
       console.log(`📄 Processing page ${currentPage}: ${pageUrl}`);
       try {
-        const { status, html } = await fetchHtml(pageUrl, { allow: DEV_EVENTS_HOSTS, timeoutMs: 45000 });
+        const { status, html } = await fetchHtml(pageUrl, { allow: DEV_EVENTS_HOSTS, timeoutMs: 45000, egress: this._egress });
         if (status >= 400) throw new Error(`HTTP ${status} for ${pageUrl}`);
         if (totalEvents === null) {
           totalEvents = extractListingTotal(html) ?? 500;
@@ -206,7 +210,7 @@ export class DevEventsMeetupScraper extends BaseScraper {
   async extractLumaEventData(lumaUrl) {
     try {
       console.log(`🔗 Detected Luma event URL, extracting rich data...`);
-      const { status, html } = await fetchHtml(lumaUrl, { allow: LUMA_HOSTS, timeoutMs: 30000 });
+      const { status, html } = await fetchHtml(lumaUrl, { allow: LUMA_HOSTS, timeoutMs: 30000, egress: this._egress });
       if (status >= 400) throw new Error(`HTTP ${status}`);
       const lumaData = lumaDataFromNextData(extractNextData(html));
       if (lumaData?.lumaEventId) {
@@ -225,7 +229,7 @@ export class DevEventsMeetupScraper extends BaseScraper {
   async extractMeetupEventData(meetupUrl) {
     try {
       console.log(`🔗 Detected Meetup.com event URL, extracting rich data...`);
-      const { status, html } = await fetchHtml(meetupUrl, { allow: MEETUP_HOSTS, timeoutMs: 30000 });
+      const { status, html } = await fetchHtml(meetupUrl, { allow: MEETUP_HOSTS, timeoutMs: 30000, egress: this._egress });
       if (status >= 400) throw new Error(`HTTP ${status}`);
       const meetupData = meetupDataFromNextData(extractNextData(html));
       if (meetupData) {
@@ -246,7 +250,7 @@ export class DevEventsMeetupScraper extends BaseScraper {
   async extractActualEventUrl(devEventsUrl) {
     try {
       console.log(`🔗 Extracting actual URL from: ${devEventsUrl}`);
-      const { status, html } = await fetchHtml(devEventsUrl, { allow: DEV_EVENTS_HOSTS, timeoutMs: 30000 });
+      const { status, html } = await fetchHtml(devEventsUrl, { allow: DEV_EVENTS_HOSTS, timeoutMs: 30000, egress: this._egress });
       if (status >= 400) {
         console.error(`❌ Error accessing event page ${devEventsUrl}: HTTP ${status}`);
         return { url: null, coverImageUrl: null, lumaData: null, meetupData: null };

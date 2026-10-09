@@ -169,6 +169,7 @@ const SCRAPER_TYPE_SPECS: ScraperTypeSpec[] = [
     configFields: [
       // Keyword filtering removed — managed centrally under Admin → Content Keywords.
       { key: 'maxPages', label: 'Max listing pages', type: 'number', default: 100, min: 1, max: 500, helpText: 'Upper bound on listing pages walked per run (30 conferences per page).' },
+      { key: 'use_residential_egress', label: 'Residential egress', type: 'boolean', default: false, helpText: 'Route every fetch through scrapling-fetcher with the residential proxy forced on. Needs a proxy provider configured on the fetcher service; the run fails rather than falling back to the cluster IP.' },
     ],
   },
   {
@@ -201,6 +202,7 @@ const SCRAPER_TYPE_SPECS: ScraperTypeSpec[] = [
     configFields: [
       // Keyword filtering removed — managed centrally under Admin → Content Keywords.
       { key: 'maxPages', label: 'Max listing pages', type: 'number', default: 50, min: 1, max: 500, helpText: 'Upper bound on listing pages walked per run (or per region).' },
+      { key: 'use_residential_egress', label: 'Residential egress', type: 'boolean', default: false, helpText: 'Route every fetch through scrapling-fetcher with the residential proxy forced on. Needs a proxy provider configured on the fetcher service; the run fails rather than falling back to the cluster IP.' },
     ],
   },
   {
