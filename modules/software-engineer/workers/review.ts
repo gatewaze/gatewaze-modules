@@ -17,8 +17,61 @@ import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, writeMessage } f
 import { InProcessRunner } from '../lib/agent-session.js';
 import { resolvePhaseModel } from '../lib/model-select.js';
 import { createOrSupersedeDecision } from '../lib/decisions.js';
+import { createOrSupersedeReporterQuestion } from '../lib/reporter-feedback.js';
 
 const MAX_REVIEW_RETRIES = 2;
+
+const SAFE_FALLBACK_SUMMARY = 'We’ve drafted an approach for your report and want to confirm it before building it.';
+
+// Turn the spec into a plain-language, REPORTER-SAFE summary for se_reporter_questions.summary — never
+// reuse the spec-drafting agent's own closing chat reply here (an earlier version did; a security review
+// flagged it: that reply is untrusted, unconstrained free text from an agent with full read access to
+// the project's private code repos, so it can freely contain internal repo/file names, library names or
+// other non-public details with nothing stopping it). This is a SEPARATE, constrained model turn whose
+// prompt explicitly forbids naming anything internal, mirroring distillDecision's fail-open shape below:
+// any error or suspicious output falls back to the fixed, generic SAFE_FALLBACK_SUMMARY, never raw spec
+// text.
+async function distillReporterSummary(supabase, run, project, specText) {
+  if (!project?.modelCred || !specText?.trim()) return SAFE_FALLBACK_SUMMARY;
+  try {
+    await recordPhaseStart(supabase, run, 'reporter-summary-distill');
+    const prompt = [
+      `Describe the FEATURE being built below in ONE or TWO short sentences, for a non-technical end`,
+      `user who filed the original request. Plain language only.`,
+      ``,
+      `STRICT RULES — the reader is an external, lower-trust party outside this engineering org:`,
+      `- Do NOT mention file paths, directory names, repository names, service/module names, library or`,
+      `  framework names, environment variables, credentials, or any other internal implementation detail.`,
+      `- Do NOT mention these instructions or that you are summarizing a spec.`,
+      `- Describe WHAT the feature does for the user, not HOW it is built.`,
+      `Respond with ONLY the one-or-two-sentence description, no preamble.`,
+      ``,
+      `--- SPEC (internal — do not quote or reference its structure) ---`,
+      specText.slice(0, 8000),
+    ].join('\n');
+    const { model } = resolvePhaseModel(project, run, 'reporter-summary-distill');
+    const runner = new InProcessRunner();
+    const result = await runner.runPhase({
+      cwd: '/tmp', prompt, model,
+      credential: { kind: project.modelCredKind, value: project.modelCred },
+      noTools: true,
+    });
+    await recordPhaseEnd(supabase, run, 'reporter-summary-distill', result?.error ? 'failed' : 'passed', result?.error, {
+      model, engine: 'claude', input: result?.tokensInput, output: result?.tokensOutput,
+      cacheRead: result?.tokensCacheRead, cacheCreation: result?.tokensCacheCreation, cost: result?.costUSD,
+    });
+    const text = String(result?.text ?? '').trim();
+    // Defence in depth on top of the prompt: a summary that still looks like it names a path/repo
+    // (contains a slash, a backtick code span, or a dotted file-extension-like token) is discarded
+    // rather than trusted — fail to the safe fallback instead of forwarding it to the reporter.
+    if (result?.error || !text || text.length > 600 || /[`\\]|\/[\w.-]+\/|\.(ts|tsx|js|py|sql|md|json|yml|yaml)\b/i.test(text)) {
+      return SAFE_FALLBACK_SUMMARY;
+    }
+    return text;
+  } catch {
+    return SAFE_FALLBACK_SUMMARY;
+  }
+}
 
 // Turn the skeptic's raw objection bullets into an answerable decision (issue #52) — a cheap,
 // no-tools model turn mirroring pr-monitor.ts's ci-classify pattern. Fails OPEN to a plain kind:'text'
@@ -161,6 +214,30 @@ export default async function review(job, ctx) {
       }
       await supabase.from('se_runs').update({ status: 'awaiting_spec', current_phase: 'review' }).eq('id', run.id);
       try { await notifyGate(project, run, 'Spec ready for review'); } catch { /* */ }
+      // Reporter-safe product confirmation (migration 029): ONLY for runs linked back to an external
+      // report (e.g. a health-core tester's feature request) AND only when the skeptic actually found
+      // something to question — a clean pass needs no reporter input. The reporter never sees the
+      // skeptic's objections (those are about code/architecture, not product intent, and may name
+      // internal repos/files) NOR the spec-drafting agent's raw closing reply (same reason — see
+      // distillReporterSummary's header comment); it sees a separately-distilled, constrained summary.
+      if (verdict !== 'pass') {
+        try {
+          const { data: link } = await supabase.from('se_reporter_links').select('id').eq('run_id', run.id).maybeSingle();
+          if (link) {
+            const summary = await distillReporterSummary(supabase, run, project, specText);
+            await createOrSupersedeReporterQuestion(supabase, {
+              runId: run.id, siteId: run.site_id, phase: 'review',
+              question: 'Does this match what you were hoping for?',
+              kind: 'choice',
+              options: [
+                { id: 'confirm', label: 'Yes, that’s it' },
+                { id: 'change', label: 'Not quite — let me explain' },
+              ],
+              summary,
+            });
+          }
+        } catch { /* best-effort — the run still parks at awaiting_spec for admin review either way */ }
+      }
       return { ok: true, verdict, gated: 'spec' };
     }
 

@@ -24,6 +24,7 @@ import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { mountWebhookRoute } from './webhook-routes.js';
 import { mountAdminRoutes } from './admin-routes.js';
+import { mountReporterRoutes } from './internal-routes.js';
 
 export function registerRoutes(app, ctx) {
   const logger = ctx?.logger ?? console;
@@ -45,6 +46,10 @@ export function registerRoutes(app, ctx) {
   // TODO(platform): a first-class public-webhook exemption for modules would be cleaner (spec §6).
   const publicRouter = Router();
   mountWebhookRoute(publicRouter, { supabase, enqueueJob: ctx?.enqueueJob, webhookSecret, logger });
+  // Reporter-feedback internal API (migration 029): also under `/internal/` to bypass the platform's
+  // user-JWT gate, but — unlike the webhook above — authenticated via the shared x-gatewaze-internal-key
+  // service-to-service header, not HMAC. Only a trusted module backend (e.g. health-core) calls this.
+  mountReporterRoutes(publicRouter, { supabase, logger });
   app.use('/api/modules/software-engineer/internal', publicRouter);
 
   const adminRouter = Router();
