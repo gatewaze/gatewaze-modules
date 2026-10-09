@@ -23,6 +23,7 @@ if (typeof globalThis.WebSocket === 'undefined') {
 import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { mountWebhookRoute } from './webhook-routes.js';
+import { mountApprovalRoutes } from './approval-routes.js';
 import { mountAdminRoutes } from './admin-routes.js';
 
 export function registerRoutes(app, ctx) {
@@ -45,6 +46,7 @@ export function registerRoutes(app, ctx) {
   // TODO(platform): a first-class public-webhook exemption for modules would be cleaner (spec §6).
   const publicRouter = Router();
   mountWebhookRoute(publicRouter, { supabase, enqueueJob: ctx?.enqueueJob, webhookSecret, logger });
+  mountApprovalRoutes(publicRouter, { supabase, getRedis, enqueueJob: ctx?.enqueueJob });
   app.use('/api/modules/software-engineer/internal', publicRouter);
 
   const adminRouter = Router();

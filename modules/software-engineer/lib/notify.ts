@@ -15,7 +15,13 @@ function approvalLink(run) {
 export async function notifyGate(project, run, event, opts = {}) {
   const tasks = [];
   let pushoverDelivered = false;
-  const link = approvalLink(run);
+  let link = approvalLink(run);
+  if (opts.approvalLink) {
+    try {
+      const u=new URL(opts.approvalLink), expected=new URL(process.env.SE_ADMIN_ORIGIN);
+      if(u.protocol==='https:' && !u.username && !u.password && u.origin===expected.origin && u.pathname==='/api/modules/software-engineer/internal/approval' && /^#[A-Za-z0-9_-]{43}$/.test(u.hash)) link=u.href;
+    } catch { /* invalid capability stays disabled */ }
+  }
   const slack = project?.slackWebhook;
   if (slack) {
     try {
