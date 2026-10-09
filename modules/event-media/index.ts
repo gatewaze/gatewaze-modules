@@ -7,7 +7,7 @@ const eventMediaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Media',
   description: 'Photo and video galleries, media uploads, and album management for events',
-  version: '1.104.0',
+  version: '1.105.0',
   features: [
     'event-media',
     'event-media.upload',
@@ -42,6 +42,8 @@ const eventMediaModule: GatewazeModule = {
     'migrations/023_album_enhance_source.sql',
     'migrations/024_album_framing.sql',
     'migrations/025_album_focus.sql',
+    'migrations/026_open_view_albums.sql',
+    'migrations/027_retire_events_media.sql',
   ],
 
   apiRoutes: async (app: unknown, context?: unknown) => {
@@ -53,8 +55,6 @@ const eventMediaModule: GatewazeModule = {
     'media-combine-chunks',
     'media-get-youtube-upload-url',
     'media-process-image',
-    'media-process-youtube-uploads',
-    'media-process-zip',
     'media-upload-youtube',
   ],
 
@@ -65,14 +65,6 @@ const eventMediaModule: GatewazeModule = {
       order: 140,
       requiredFeature: 'event-media',
       meta: { tabId: 'media', label: 'Media', icon: 'PhotoIcon' },
-    },
-  ],
-
-  workers: [
-    {
-      name: 'media:process-zip',
-      handler: './workers/process-zip.ts',
-      concurrency: 1, // Process one zip at a time to manage memory
     },
   ],
 

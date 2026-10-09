@@ -210,6 +210,60 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
 
   const video = data.youtube_id ? videoEmbed(data.youtube_id, color, title) : ''
 
+  // Photos taken at this session (conference-recap album matching): a small
+  // thumb strip under the card. Same URL policy as the media gallery —
+  // https only, with the dev-only loopback-http carve-out.
+  const stripSafe = (s: unknown): s is string => {
+    if (typeof s !== 'string') return false
+    try {
+      const u = new URL(s)
+      return u.protocol === 'https:' ||
+        (u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && (
+          u.hostname === 'localhost' || u.hostname.endsWith('.localhost') ||
+          u.hostname === '127.0.0.1' || u.hostname === '[::1]' || u.hostname === '::1'
+        ))
+    } catch { return false }
+  }
+  const photoItems = (Array.isArray((data as any).photos) ? (data as any).photos : [])
+    .filter((p: any) => !!p && stripSafe(p.src) && (p.thumb === undefined || stripSafe(p.thumb)))
+    .slice(0, 8)
+  // Clicking a thumb opens the same dependency-free lightbox the media
+  // gallery uses (overlay inside the strip container, arrow-key siblings
+  // via data-full, Esc/backdrop closes) — not a new tab.
+  const stripId = `gw-ts-${block.id}`
+  const stripOpenJs =
+    `var g=document.getElementById('${stripId}');var f=this;` +
+    "var o=g.querySelector('.gw-ts-lb');" +
+    'if(!o){o=document.createElement(\'div\');o.className=\'gw-ts-lb\';' +
+    "o.style.cssText='position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out;';" +
+    'o.tabIndex=-1;' +
+    "o.addEventListener('click',function(ev){if(ev.target===o)o.remove()});" +
+    "o.addEventListener('keydown',function(ev){" +
+    "if(ev.key==='Escape')o.remove();" +
+    "if(ev.key==='ArrowRight'&&o._next)o._next.click();" +
+    "if(ev.key==='ArrowLeft'&&o._prev)o._prev.click();" +
+    '});g.appendChild(o);}' +
+    "var img=document.createElement('img');img.src=f.getAttribute('data-full');img.alt=f.getAttribute('data-alt')||'';" +
+    "img.style.cssText='max-width:94vw;max-height:92vh;object-fit:contain;border-radius:8px;';" +
+    'o.replaceChildren(img);' +
+    'var sib=function(el,dir){var n=el;do{n=dir>0?n.nextElementSibling:n.previousElementSibling}while(n&&!n.hasAttribute(\'data-full\'));return n};' +
+    'o._next=sib(f,1);o._prev=sib(f,-1);o.focus();'
+  const stripOpenAttr = stripOpenJs.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  const photosStrip = photoItems.length > 0
+    ? `
+    <div>
+      <p style="${label('var(--ink)')}">Photos from this session</p>
+      <div id="${stripId}" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px;">${photoItems
+        .map((p: any) =>
+          `<div data-full="${escAttr(p.src)}" data-alt="${escAttr(String(p.alt ?? ''))}" role="button" tabindex="0"` +
+          ` onclick="${stripOpenAttr}" onkeydown="if(event.key==='Enter')this.click()"` +
+          ' style="flex:none; cursor:zoom-in; border-radius:8px; overflow:hidden;">' +
+          `<img src="${escAttr(p.thumb ?? p.src)}" alt="${escAttr(String(p.alt ?? ''))}" loading="lazy"` +
+          ` style="height:84px; width:auto; display:block;" /></div>`)
+        .join('')}</div>
+    </div>`
+    : ''
+
   return `
   <div id="${tid}"${topicsAttr} style="border:1px solid var(--line); border-top:3px solid ${color}; background:var(--paper); border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:14px; scroll-margin-top:96px;">
     <div style="display:flex; align-items:flex-start; gap:12px;">
@@ -232,13 +286,129 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
         </div>
       </div>
       ${video}
-    </div>
+    </div>${photosStrip}
   </div>`
 }
 
 function logBlockEvent(event: string, block: SrBlockRow, extra?: Record<string, unknown>): void {
   // structured warn logs: ids and kind only, never payloads
   console.warn(JSON.stringify({ event, block_id: block.id, block_slug: block.slug, kind: block.kind, ...extra }))
+}
+
+/** Attribute-context escape: esc() plus both quote styles. */
+function escAttr(text: string): string {
+  return esc(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+}
+
+interface MediaGalleryItem { src: string; thumb?: string; alt?: string; w?: number; h?: number }
+interface MediaGalleryAlbum { name: string; items: MediaGalleryItem[] }
+interface MediaGalleryData { heading?: string; albums: MediaGalleryAlbum[] }
+
+/**
+ * Baked photo gallery (event-portal style): album chips → lazy thumbnail
+ * grid → dependency-free lightbox. Same inline-JS facade discipline as the
+ * talk-card video embed — no framework at block level. All text is escaped;
+ * only https: URLs are emitted (schema enforces https-url, re-checked here
+ * so a hand-edited block can't smuggle a javascript: URI).
+ */
+function renderMediaGalleryHtml(block: SrBlockRow): string {
+  const data = block.data as unknown as MediaGalleryData
+  const gid = `gw-mg-${block.id}`
+  // https only, except — outside production — plain http to a
+  // loopback/.localhost host (local dev storage URLs). Mirrors the blocks.ts
+  // https-url validator (isLoopbackHost + NODE_ENV gate) byte-for-byte; the
+  // check is duplicated rather than imported because this file is
+  // deliberately import-free (HTML-string rendering, no module deps). Change
+  // BOTH together.
+  const safeSrc = (s: unknown): s is string => {
+    if (typeof s !== 'string') return false
+    try {
+      const u = new URL(s)
+      return u.protocol === 'https:' ||
+        (u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && (
+          u.hostname === 'localhost' || u.hostname.endsWith('.localhost') ||
+          u.hostname === '127.0.0.1' || u.hostname === '[::1]' || u.hostname === '::1'
+        ))
+    } catch {
+      return false
+    }
+  }
+  const albums = (Array.isArray(data.albums) ? data.albums : [])
+    .map((a) => ({
+      name: typeof a?.name === 'string' ? a.name : '',
+      items: (Array.isArray(a?.items) ? a.items : []).filter(
+        (it): it is MediaGalleryItem =>
+          !!it && safeSrc(it.src) && (it.thumb === undefined || safeSrc(it.thumb)),
+      ),
+    }))
+    .filter((a) => a.name && a.items.length > 0)
+  if (albums.length === 0) return ''
+
+  // Lightbox: walks the ACTIVE album's figures via data attributes. One
+  // overlay per block, created lazily on first open.
+  const openJs =
+    `var g=document.getElementById('${gid}');var f=this;` +
+    "var o=g.querySelector('.gw-mg-lb');" +
+    'if(!o){o=document.createElement(\'div\');o.className=\'gw-mg-lb\';' +
+    "o.style.cssText='position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out;';" +
+    'o.tabIndex=-1;' +
+    "o.addEventListener('click',function(ev){if(ev.target===o)o.remove()});" +
+    "o.addEventListener('keydown',function(ev){" +
+    "if(ev.key==='Escape')o.remove();" +
+    "if(ev.key==='ArrowRight'&&o._next)o._next.click();" +
+    "if(ev.key==='ArrowLeft'&&o._prev)o._prev.click();" +
+    '});g.appendChild(o);}' +
+    "var img=document.createElement('img');img.src=f.getAttribute('data-full');img.alt=f.getAttribute('data-alt')||'';" +
+    "img.style.cssText='max-width:94vw;max-height:92vh;object-fit:contain;border-radius:8px;';" +
+    'o.replaceChildren(img);' +
+    'var sib=function(el,dir){var n=el;do{n=dir>0?n.nextElementSibling:n.previousElementSibling}while(n&&!n.hasAttribute(\'data-full\'));return n};' +
+    'o._next=sib(f,1);o._prev=sib(f,-1);o.focus();'
+  const openAttr = openJs.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+
+  const chipJs =
+    `var g=document.getElementById('${gid}');var i=this.getAttribute('data-gw-mg-chip');` +
+    "g.querySelectorAll('[data-gw-mg-album]').forEach(function(a){a.style.display=a.getAttribute('data-gw-mg-album')===i?'':'none'});" +
+    "g.querySelectorAll('[data-gw-mg-chip]').forEach(function(c){var on=c.getAttribute('data-gw-mg-chip')===i;c.style.opacity=on?'1':'.55';c.style.borderColor=on?'var(--accent)':'var(--line)'});"
+  const chipAttr = chipJs.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+
+  const chips = albums
+    .map((a, i) =>
+      `<button type="button" data-gw-mg-chip="${i}" onclick="${chipAttr}"` +
+      ` style="border:1px solid ${i === 0 ? 'var(--accent)' : 'var(--line)'}; opacity:${i === 0 ? '1' : '.55'};` +
+      ' background:var(--paper); color:var(--ink); border-radius:999px; padding:6px 14px; font-size:13.5px;' +
+      ` cursor:pointer;">${esc(a.name)}<span style="color:var(--ink-3);"> · ${a.items.length}</span></button>`,
+    )
+    .join('')
+
+  const albumGrids = albums
+    .map((a, i) => {
+      const figures = a.items
+        .map((it) => {
+          const ratio = it.w && it.h && it.w > 0 && it.h > 0 ? ` aspect-ratio:${it.w}/${it.h};` : ''
+          return (
+            `<div data-full="${escAttr(it.src)}" data-alt="${escAttr(it.alt ?? '')}" data-gw-mg-open role="button" tabindex="0"` +
+            ` onclick="${openAttr}" onkeydown="if(event.key==='Enter')this.click()"` +
+            ` style="break-inside:avoid; margin:0 0 10px; cursor:zoom-in; border-radius:10px; overflow:hidden; background:var(--line);${ratio}">` +
+            `<img src="${escAttr(it.thumb ?? it.src)}" alt="${escAttr(it.alt ?? '')}" loading="lazy"` +
+            ' style="display:block; width:100%; height:100%; object-fit:cover;"></div>'
+          )
+        })
+        .join('')
+      return `<div data-gw-mg-album="${i}" style="columns:3 220px; column-gap:10px;${i === 0 ? '' : ' display:none;'}">${figures}</div>`
+    })
+    .join('')
+
+  const heading = typeof data.heading === 'string' && data.heading.trim()
+    ? `<p style="${label('var(--ink)')}">${esc(data.heading)}</p>`
+    : ''
+
+  return (
+    `<div id="${gid}" style="display:flex; flex-direction:column; gap:14px; margin:6px 0 10px;">` +
+    heading +
+    `<div style="display:flex; flex-wrap:wrap; gap:8px;">${chips}</div>` +
+    albumGrids +
+    '</div>'
+  )
 }
 
 /** Render one block to HTML. Unknown kinds fall back to data.html (deploy-skew safety net). */
@@ -251,6 +421,9 @@ function renderBlockHtml(block: SrBlockRow, index: number, ctx: RenderCtx): stri
     // render snapshot (youtube_id/title/speakers), so they share the facade.
     if (block.kind === 'talk' || block.kind === 'video') {
       return renderTalkCardHtml(block, index, ctx)
+    }
+    if (block.kind === 'media_gallery') {
+      return renderMediaGalleryHtml(block)
     }
     if (typeof block.data?.html === 'string') {
       logBlockEvent('resources.block.unknown_kind', block)
