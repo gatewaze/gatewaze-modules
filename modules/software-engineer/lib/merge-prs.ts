@@ -17,7 +17,7 @@ import { githubClient } from './github.js';
 import { redactToken } from './git.js';
 import { listRunPrs, upsertRunPr } from './run-state.js';
 
-export async function mergeRunPrs(supabase, run, project, { method = 'squash' } = {}) {
+export async function mergeRunPrs(supabase, run, project, { method = 'squash', expectedHeads = null } = {}) {
   const token = project?.githubToken;
   const gh = githubClient(token);
   const openPrs = (await listRunPrs(supabase, run.id)).filter((p) => p.pr_number && p.state === 'open');
@@ -33,6 +33,9 @@ export async function mergeRunPrs(supabase, run, project, { method = 'squash' } 
         results.push({ repo, pr_number: p.pr_number, outcome: 'already_merged' });
         continue;
       }
+      if (expectedHeads && expectedHeads[`${repo}#${p.pr_number}`] !== info.head?.sha) {
+        held++;results.push({repo,pr_number:p.pr_number,outcome:'held',reason:'Review head changed'});continue;
+      }
       if (info.mergeable_state !== 'clean') {
         // 'behind' just means the branch is out of date with base (strict branch protection). Self-heal:
         // update it so required checks re-run against latest base; a later merge lands it once clean.
@@ -44,7 +47,8 @@ export async function mergeRunPrs(supabase, run, project, { method = 'squash' } 
         results.push({ repo, pr_number: p.pr_number, outcome: 'held', reason: info.mergeable_state ?? 'not_clean' });
         continue;
       }
-      await gh.mergePullRequest(p.repo_owner, p.repo_name, p.pr_number, method);
+      if(expectedHeads) await gh.mergePullRequest(p.repo_owner,p.repo_name,p.pr_number,method,expectedHeads[`${repo}#${p.pr_number}`]);
+      else await gh.mergePullRequest(p.repo_owner,p.repo_name,p.pr_number,method);
       await upsertRunPr(supabase, run, p.repo_owner, p.repo_name, { state: 'merged' });
       merged++;
       results.push({ repo, pr_number: p.pr_number, outcome: 'merged' });

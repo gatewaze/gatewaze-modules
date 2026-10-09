@@ -19,3 +19,13 @@ a minute for issues recorded in its HELF feedback checkpoint. It uses this
 notification helper with the already configured worker credentials and does
 not alter project gates. Once this event-driven helper is deployed in the
 worker, retire the compatibility service to avoid duplicate notifications.
+
+## Single-use approval review
+
+The Studio compatibility notifier can mint scoped links with `mintApprovalLink` for the configured active admin/approver. Each grant binds a run, approval stage, exact review artifact or PR heads, actor, HTTPS origin and 24-hour expiry. Tokens are random 256-bit capabilities stored as hashed Redis keys. Only trusted server-side code can mint them; no public mint endpoint exists.
+
+`/api/modules/software-engineer/internal/approval#TOKEN` presents a read-only review page without account login. The fragment never enters HTTP URLs/access logs. Browser code removes it from visible history and sends it only in JSON request bodies. The page has no external assets, a fixed-script CSP, no-store and no-referrer. Untrusted artifact text uses textContent.
+
+Approval needs an explicit button, review nonce and matching Origin. Active admin/project approver rights and task revision are rechecked, then an atomic Redis compare/delete permits one action. Task transitions use CAS. Merges retain GitHub clean/protection checks and send the reviewed SHA in the merge request. Invalid, revoked, used, expired or stale grants fail closed. A link holder can approve its one step; do not forward links. Opening links does not approve.
+
+The legacy module host may supply Redis asynchronously; approval routes await that adapter. If omitted, they use the host's existing ioredis queue dependency and REDIS_URL. Credential values and tokens are not logged. Actual review was verified anonymously on Studio; the test grant was revoked without approving a run.
