@@ -370,7 +370,63 @@ const videoKind: BlockKindDef = {
   searchText: talkKind.searchText,
 };
 
+// A baked photo gallery (event-portal style: album chips → thumbnail grid →
+// lightbox). Written by pipeline modules (first consumer: conference-recap's
+// photos stage) with PUBLIC storage/CDN URLs captured at bake time. Data is
+// display-ready — the renderer adds no fetching. NOTE for bakers: non-html
+// blocks are capped at TYPED_DATA_MAX_BYTES (256KB) by validateBlock, so cap
+// total items well below the schema maxima and keep alt text short.
+const mediaGalleryKind: BlockKindDef = {
+  kind: 'media_gallery',
+  requireSlug: false,
+  jsonSchema: {
+    type: 'object',
+    required: ['albums'],
+    properties: {
+      heading: { type: 'string', maxLength: 200 },
+      albums: {
+        type: 'array',
+        maxItems: 40,
+        items: {
+          type: 'object',
+          required: ['name', 'items'],
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 120 },
+            items: {
+              type: 'array',
+              maxItems: 500,
+              items: {
+                type: 'object',
+                required: ['src'],
+                properties: {
+                  src: { type: 'string', format: 'https-url' },
+                  thumb: { type: 'string', format: 'https-url' },
+                  alt: { type: 'string', maxLength: 300 },
+                  w: { type: 'integer' },
+                  h: { type: 'integer' },
+                },
+                additionalProperties: true,
+              },
+            },
+          },
+          additionalProperties: true,
+        },
+      },
+    },
+    additionalProperties: true,
+  },
+  searchText: (data) => {
+    const albums = Array.isArray(data.albums) ? data.albums : [];
+    const parts = [
+      data.heading,
+      ...albums.map((a) => (a && typeof (a as Record<string, unknown>).name === 'string' ? (a as Record<string, unknown>).name : null)),
+    ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+    return parts.length > 0 ? normalizeSearchText(parts.join(' · ')) : null;
+  },
+};
+
 export const BLOCK_KINDS: Record<string, BlockKindDef> = {
+  media_gallery: mediaGalleryKind,
   html: htmlKind,
   talk: talkKind,
   video: videoKind,

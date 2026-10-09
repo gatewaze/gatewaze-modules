@@ -1662,6 +1662,94 @@ describe('eventGallery', () => {
   });
 });
 
+// A conference's photos arrive from Drive into albums with their own
+// names, registered in event_media_view_albums beside the projector
+// views. They are served after the views, under their own slugs, and
+// they open the gallery on their own -- an ingest-only event has no
+// upload link to switch.
+describe('eventGallery: ingested albums', () => {
+  const ALBUM = {
+    day: 'aaaa1111-0000-4000-8000-000000000001',
+    conf: 'aaaa1111-0000-4000-8000-000000000003',
+  };
+  const photo = (id, album) => ({
+    id,
+    storage_path: `event/${EVENT_ID}/${id}/img.jpg`,
+    mime_type: 'image/jpeg',
+    bytes: 100, width: null, height: null, variants: null,
+    metadata: { source: 'conference-recap-drive', album },
+    created_at: '2026-09-25T18:00:00.000Z',
+  });
+  const ROWS = [
+    photo('11111111-1111-4111-8111-111111111111', 'day'),
+    photo('55555555-5555-4555-8555-555555555555', 'conference-photos'),
+    photo('66666666-6666-4666-8666-666666666666', 'conference-photos'),
+  ];
+  const TABLES = {
+    events_media_upload_links: { data: [], error: null },
+    event_media_view_albums: {
+      data: [
+        { album_id: ALBUM.day, view: 'day', host_media_albums: { name: 'The day', sort_order: 1 } },
+        { album_id: ALBUM.conf, view: 'conference-photos', host_media_albums: { name: 'Conference photos', sort_order: 5 } },
+      ],
+      error: null,
+    },
+    host_media_album_items: { data: [], error: null },
+  };
+  const gallery = async (query = {}, over = {}) => {
+    const { deps } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES, ...over });
+    const res = mockRes();
+    await createGuestRoutes(deps).eventGallery({ params: { identifier: 'dan-sarah' }, query, ip: '203.0.113.9', headers: {} }, res);
+    return res;
+  };
+
+  it('is live with no upload link at all, and serves the album after the views', async () => {
+    const res = await gallery();
+    expect(res.statusCode).toBe(200);
+    expect(res.body.albums).toEqual([
+      { album: 'day', slug: 'the-day', name: 'The day', count: 1, enhanced: false, xray: false },
+      { album: 'conference-photos', slug: 'conference-photos', name: 'Conference photos', count: 2, enhanced: false, xray: false },
+    ]);
+    expect(res.body.total).toBe(3);
+  });
+
+  it('serves one ingested album by its slug, with the slug on each photograph', async () => {
+    const res = await gallery({ album: 'conference-photos' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.items.map((i) => i.album)).toEqual(['conference-photos', 'conference-photos']);
+    expect(res.body.items[0].album_slug).toBe('conference-photos');
+    expect(res.body.total).toBe(2);
+  });
+
+  it('applies the album settings to an ingested album exactly as to a view', async () => {
+    const off = {
+      ...TABLES,
+      event_media_album_settings: { data: [{ album_id: ALBUM.conf, show_on_portal: false }], error: null },
+    };
+    // The only portal-visible media left is in a view album, which never
+    // opens the gate on its own: the gallery is closed.
+    expect((await gallery({}, { tables: off })).statusCode).toBe(404);
+    // With a live link, the hidden ingested album stays off the page.
+    const withLink = { ...off, events_media_upload_links: { data: [{ id: LINK_ID, expires_at: null }], error: null } };
+    const res = await gallery({}, { tables: withLink });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.albums.map((a) => a.album)).toEqual(['day']);
+    expect((await gallery({ album: 'conference-photos' }, { tables: withLink })).statusCode).toBe(404);
+  });
+
+  it('stays closed for an event whose only albums are the wedding views', async () => {
+    const viewsOnly = {
+      ...TABLES,
+      event_media_view_albums: {
+        data: [{ album_id: ALBUM.day, view: 'day', host_media_albums: { name: 'The day', sort_order: 1 } }],
+        error: null,
+      },
+    };
+    expect((await gallery({}, { tables: viewsOnly })).statusCode).toBe(404);
+  });
+});
+
 // A booth picture is a canvas capture: no EXIF, and posting rewrites the
 // row's own date, so the moment it was made has to be kept deliberately.
 describe('when a booth picture was taken', () => {

@@ -13,7 +13,7 @@ Event Media adds a **Media** tab to the event detail view in the admin panel. Th
 - Uploads of photos, videos or a ZIP. ZIPs are unpacked in the browser and top-level folders can become albums.
 - Live updates as guests upload through a QR link.
 
-Sponsor tags live in `events_media_sponsor_tags` (many sponsors per item), readable and writable only by admins of the event. The module includes server-side edge functions for chunked uploads, image processing, YouTube integration (upload and retrieval), and bulk ZIP processing. Media is stored via Supabase storage and metadata is tracked in dedicated database tables.
+Sponsor tags live in `events_media_sponsor_tags` (many sponsors per item), readable and writable only by admins of the event. The module includes server-side edge functions for chunked uploads, image processing and YouTube uploads. Media is stored via Supabase storage and metadata is tracked in `host_media` and its album tables.
 
 ## Configuration
 
@@ -32,9 +32,7 @@ This module has no configurable settings.
 
 - **media-combine-chunks** -- Reassembles chunked file uploads into a single file
 - **media-get-youtube-upload-url** -- Retrieves a signed upload URL for YouTube
-- **media-process-image** -- Server-side image processing (resize, optimize)
-- **media-process-youtube-uploads** -- Handles YouTube upload workflows
-- **media-process-zip** -- Extracts and processes bulk ZIP media uploads
+- **media-process-image** -- Server-side image processing (resize, optimize) for `host_media` rows
 - **media-upload-youtube** -- Uploads video content to YouTube
 
 ## Dependencies

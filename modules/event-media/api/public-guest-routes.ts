@@ -110,6 +110,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // Strict ISO-8601 (what PostgREST emits for timestamptz). Validated
 // before any interpolation into a PostgREST filter string.
 const ISO_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+// The shape of a registered album slug (migration 026's CHECK). Slugs
+// come from the database, not the request, but they are matched against
+// request input and echoed back as paths, so only this shape is served.
+const ALBUM_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
 
 function sendError(res: Response, status: number, code: string, message: string, details?: Record<string, unknown>): void {
   const body: Record<string, unknown> = { error: code, message };
@@ -824,19 +828,67 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   /**
-   * The views an organiser has taken off the portal (migration 016).
+   * The event's registered gallery albums (migration 006, opened up by
+   * migration 026): every event_media_view_albums row, with the album's
+   * own name and sort order. The eight projector views are the slugs the
+   * weddings used; anything else is an album registered by an ingest
+   * (conference photos from Drive, the retired events_media copies).
+   *
+   * Never allowed to fail the page: with nothing registered the gallery
+   * offers the standing views under their fallback names, which is where
+   * this started.
+   */
+  async function registeredAlbums(eventId: string): Promise<Array<{
+    slug: string; albumId: string; name: string | null; sortOrder: number;
+  }>> {
+    try {
+      const { data, error } = await supabase
+        .from('event_media_view_albums')
+        .select('view, album_id, host_media_albums(name, sort_order)')
+        .eq('event_id', eventId);
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as Array<{
+        view: string; album_id: string;
+        host_media_albums: { name?: string | null; sort_order?: number | null } | null;
+      }>)
+        // The slug is interpolated nowhere, but it is matched against
+        // request input and echoed back as a path, so only the shape the
+        // CHECK constraint allows is served.
+        .filter((a) => typeof a.view === 'string' && ALBUM_SLUG_RE.test(a.view))
+        .map((a) => ({
+          slug: a.view,
+          albumId: a.album_id,
+          name: a.host_media_albums?.name ?? null,
+          sortOrder: Number.isFinite(a.host_media_albums?.sort_order)
+            ? (a.host_media_albums!.sort_order as number)
+            : 0,
+        }));
+    } catch (err) {
+      logger.warn('view albums unavailable; offering the standing views', {
+        eventId, error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * The albums an organiser has taken off the portal (migration 016),
+   * and the ones showing improved copies. Keyed by the album's gallery
+   * slug -- a projector view or a registered album's own slug -- so the
+   * settings apply to an ingested album exactly as they did to the
+   * wedding's.
    *
    * Never allowed to fail the page: a settings table that cannot be read
    * shows every album, which is where this started.
    */
-  async function albumSettings(eventId: string): Promise<{
-    hidden: Set<View>; enhanced: Set<View>; xray: Set<View>; relit: Set<View>;
+  async function albumSettings(eventId: string, slugOf: ReadonlyMap<string, string>): Promise<{
+    hidden: Set<string>; enhanced: Set<string>; xray: Set<string>; relit: Set<string>;
   }> {
-    const hidden = new Set<View>();
-    const enhanced = new Set<View>();
-    const xray = new Set<View>();
+    const hidden = new Set<string>();
+    const enhanced = new Set<string>();
+    const xray = new Set<string>();
     // Albums asking for the model's copy rather than the arithmetic one.
-    const relit = new Set<View>();
+    const relit = new Set<string>();
     try {
       const { data: rows, error } = await supabase
         .from('event_media_album_settings')
@@ -844,24 +896,16 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         .eq('event_id', eventId);
       if (error) throw new Error(error.message);
       if (!rows || rows.length === 0) return { hidden, enhanced, xray, relit };
-      const { data: albums } = await supabase
-        .from('event_media_view_albums')
-        .select('album_id, view')
-        .eq('event_id', eventId);
-      const viewOf = new Map<string, View>();
-      for (const a of (albums ?? []) as Array<{ album_id: string; view: string }>) {
-        if (isView(a.view)) viewOf.set(a.album_id, a.view);
-      }
       for (const r of rows as Array<{
         album_id: string; show_on_portal: boolean; enhance?: boolean; xray?: boolean;
         enhance_source?: string | null;
       }>) {
-        const view = viewOf.get(r.album_id);
-        if (!view) continue;
-        if (r.show_on_portal === false) hidden.add(view);
-        if (r.enhance === true) enhanced.add(view);
-        if (r.xray === true) xray.add(view);
-        if (r.enhance_source === 'ai') relit.add(view);
+        const slug = slugOf.get(r.album_id);
+        if (!slug) continue;
+        if (r.show_on_portal === false) hidden.add(slug);
+        if (r.enhance === true) enhanced.add(slug);
+        if (r.xray === true) xray.add(slug);
+        if (r.enhance_source === 'ai') relit.add(slug);
       }
     } catch (err) {
       logger.warn('album settings unavailable; showing every album as it is', {
@@ -1090,8 +1134,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * Keyed by the event, not by a link: handing a link code to a page that
    * needs no code would hand out the right to upload with it. The
    * organiser's own switch still decides whether there is a gallery at
-   * all -- at least one active link must have show_gallery -- so an event
-   * that never showed guests a gallery does not start now.
+   * all -- at least one active link must have show_gallery, or the event
+   * must have a portal-visible ingested album with an approved public
+   * photograph in it (a conference whose photos arrived from Drive has no
+   * upload link to switch) -- so an event that never showed guests a
+   * gallery does not start now.
    *
    * One query for the event's photographs rather than a page at a time,
    * because the album counts have to be true and the albums are resolved
@@ -1127,9 +1174,52 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // to expire at the end of the day expects the gallery to close with
     // it, rather than to have to switch it off by hand as well. Checked
     // here rather than in a filter so no timestamp is interpolated.
-    const live = (shown ?? []).some((l: { expires_at: string | null }) => (
+    let live = (shown ?? []).some((l: { expires_at: string | null }) => (
       !l.expires_at || new Date(l.expires_at).getTime() > Date.now()
     ));
+
+    // The event's registered albums, and the organiser's settings for
+    // them. Read before the gate because they are its second arm, and
+    // the page below needs them anyway.
+    const registered = await registeredAlbums(event.id);
+    const slugOf = new Map(registered.map((a) => [a.albumId, a.slug] as [string, string]));
+    // Albums an organiser has taken off the portal (migration 016). Their
+    // photographs go with them, or hiding an album would hide only its
+    // heading.
+    const { hidden, enhanced, xray, relit } = await albumSettings(event.id, slugOf);
+    // Registered albums that are not projector views: the ingested ones,
+    // in their own order, after the views (which keep the order the day
+    // ran). The wedding's view albums never open the gate on their own,
+    // so an event with only guest uploads behaves exactly as it did.
+    const extras = registered
+      .filter((a) => !isView(a.slug))
+      .sort((x, y) => (x.sortOrder - y.sortOrder) || (x.name ?? x.slug).localeCompare(y.name ?? y.slug));
+
+    if (!live && extras.length > 0) {
+      // Second arm of the gate: an event with no upload link showing a
+      // gallery is still live when at least one portal-visible ingested
+      // album holds an approved public photograph. Every value in the
+      // filter is a registered, shape-checked slug -- nothing of the
+      // request reaches it.
+      const slugs = extras.filter((a) => !hidden.has(a.slug)).map((a) => a.slug);
+      if (slugs.length > 0) {
+        const { count } = await supabase
+          .from('host_media')
+          .select('id', { count: 'exact', head: true })
+          .eq('host_kind', 'event')
+          .eq('host_id', event.id)
+          .eq('access_level', 'public')
+          .eq('is_approved', true)
+          .or('metadata->>hidden.is.null,metadata->>hidden.neq.true')
+          // Parity with the feed query's posted gate: unreachable today
+          // (posted:false only occurs in the booth View album, which is
+          // never in `slugs`), but keeps the gate and the feed agreeing if
+          // that ever changes.
+          .or('metadata->>posted.is.null,metadata->>posted.neq.false')
+          .in('metadata->>album', slugs);
+        live = (count ?? 0) > 0;
+      }
+    }
     if (!live) { sendError(res, 404, 'event_not_found', 'unknown event'); return; }
 
     const limit = Math.max(1, Math.min(Number(req.query['limit'] ?? 60) || 60, 200));
@@ -1138,28 +1228,37 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const focusId = typeof req.query['photo'] === 'string' && UUID_RE.test(req.query['photo'])
       ? req.query['photo'] : null;
 
-    // Albums an organiser has taken off the portal (migration 016). Their
-    // photographs go with them, or hiding an album would hide only its
-    // heading.
-    const { hidden, enhanced, xray, relit } = await albumSettings(event.id);
-    const offered = GALLERY_ORDER.filter((v) => !hidden.has(v));
+    // The views first, in the order the day ran, then the registered
+    // albums in theirs -- each less whatever the organiser has hidden.
+    const offered: string[] = [
+      ...GALLERY_ORDER.filter((v) => !hidden.has(v)),
+      ...extras.filter((a) => !hidden.has(a.slug)).map((a) => a.slug),
+    ];
 
     // The album's own names, and the slugs a link is written with.
-    const { data: named } = await supabase
-      .from('event_media_view_albums')
-      .select('view, album_id, host_media_albums(name, sort_order)')
-      .eq('event_id', event.id);
     const nameOf = new Map<string, string>();
-    for (const a of (named ?? []) as Array<{ view: string; host_media_albums: { name?: string } | null }>) {
-      if (a.host_media_albums?.name) nameOf.set(a.view, a.host_media_albums.name);
+    for (const a of registered) {
+      if (a.name) nameOf.set(a.slug, a.name);
     }
-    const nameFor = (v: View) => nameOf.get(v) ?? GALLERY_FALLBACK_NAMES[v];
-    const slugFor = (v: View) => slugify(nameFor(v));
+    const nameFor = (v: string) => nameOf.get(v) ?? GALLERY_FALLBACK_NAMES[v as View] ?? v;
+    const slugFor = (v: string) => slugify(nameFor(v));
+
+    // Which album a fetched row belongs to: its registered slug when it
+    // carries one, else its view tag as the feed has always read it.
+    const extraSlugs = new Set(extras.map((a) => a.slug));
+    const albumOf = (metadata: unknown): string => {
+      const tag = metadata && typeof metadata === 'object'
+        ? (metadata as Record<string, unknown>)['album']
+        : undefined;
+      if (typeof tag === 'string' && extraSlugs.has(tag)) return tag;
+      return tagView(metadata);
+    };
 
     // An album can be asked for by its slug -- which is what a shared
     // link carries, /photos?album=getting-ready -- or by the view name
     // the projector uses. Neither reaches a query: both are matched
-    // against this event's own albums and the result is a View or null.
+    // against this event's own albums and the result is an offered
+    // album's slug or null.
     const wanted = offered.find((v) => slugFor(v) === askedFor || v === askedFor) ?? null;
     if (askedFor && !wanted) { sendError(res, 404, 'album_not_found', 'unknown album'); return; }
 
@@ -1189,13 +1288,15 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       }
       return q;
     };
-    // Every value below comes from the View allowlist, never from the
-    // request: `wanted` is isView-checked and `offered` is a constant.
+    // Every value below is one of this event's own offered albums, never
+    // the request's: `wanted` was matched against `offered`, and
+    // `offered` is the view constants plus registered, shape-checked
+    // slugs.
     const inAlbum = (q: { eq: (c: string, v: string) => unknown; in: (c: string, v: string[]) => unknown }) => (
       wanted ? q.eq('metadata->>album', wanted) : q.in('metadata->>album', [...offered])
     );
 
-    const counts = new Map<View, number>();
+    const counts = new Map<string, number>();
     const [pageResult] = await Promise.all([
       inAlbum(base('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
         .order('created_at', { ascending: false })
@@ -1234,9 +1335,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
      */
     const forFeed = (r: FeedRow) => {
       const item = mapFeedItem(r);
-      const view = tagView(r.metadata);
+      const view = albumOf(r.metadata);
       const better = (r.variants ?? {}) as Record<string, unknown>;
-      const withSlug = { ...item, album_slug: slugFor(view) } as Record<string, unknown>;
+      const withSlug = { ...item, album: view, album_slug: slugFor(view) } as Record<string, unknown>;
       // A selfie is not what anybody posed for. It leaves here only for
       // an album whose organiser has turned x-ray on (asked 2026-09-28).
       if (!xray.has(view)) delete withSlug['selfie'];
@@ -1285,7 +1386,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // The same rules as the list: a photograph in an album that is not
       // on the portal is not reachable by knowing its id either.
       const row = (one ?? null) as FeedRow | null;
-      if (row && offered.includes(tagView(row.metadata))) focus = forFeed(row);
+      if (row && offered.includes(albumOf(row.metadata))) focus = forFeed(row);
     }
 
     const page = (data ?? []) as FeedRow[];
