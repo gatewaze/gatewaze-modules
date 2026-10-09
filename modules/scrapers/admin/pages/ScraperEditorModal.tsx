@@ -160,13 +160,15 @@ const SCRAPER_TYPE_SPECS: ScraperTypeSpec[] = [
   {
     value: 'DevEventsConferenceScraper',
     label: 'DevEvents (Conferences)',
-    description: 'Scrapes conference listings from dev.events.',
+    description: 'Scrapes conference listings from dev.events over plain HTTP (no browser), then resolves each listing to the conference\'s own site.',
     objectType: 'events',
     baseUrlLabel: 'Source URL',
     baseUrlPlaceholder: 'https://dev.events/',
+    baseUrlHelp: 'The dev.events conference listing (the homepage). Pages are walked with ?page=N.',
     requiresBaseUrl: true,
     configFields: [
       // Keyword filtering removed — managed centrally under Admin → Content Keywords.
+      { key: 'maxPages', label: 'Max listing pages', type: 'number', default: 100, min: 1, max: 500, helpText: 'Upper bound on listing pages walked per run (30 conferences per page).' },
     ],
   },
   {
@@ -190,13 +192,15 @@ const SCRAPER_TYPE_SPECS: ScraperTypeSpec[] = [
   {
     value: 'DevEventsMeetupScraper',
     label: 'DevEvents (Meetups)',
-    description: 'Scrapes meetup listings from dev.events.',
+    description: 'Scrapes meetup listings from dev.events over plain HTTP (no browser), then resolves each listing to its Luma / Meetup.com / own page.',
     objectType: 'events',
     baseUrlLabel: 'Source URL',
     baseUrlPlaceholder: 'https://dev.events/meetups',
+    baseUrlHelp: 'The dev.events meetup listing. Add "regions": ["NA","EU","AS","SA","AF","OC"] to the config JSON to walk each continent page instead.',
     requiresBaseUrl: true,
     configFields: [
       // Keyword filtering removed — managed centrally under Admin → Content Keywords.
+      { key: 'maxPages', label: 'Max listing pages', type: 'number', default: 50, min: 1, max: 500, helpText: 'Upper bound on listing pages walked per run (or per region).' },
     ],
   },
   {

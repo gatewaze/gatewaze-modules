@@ -1,4 +1,5 @@
 import { BaseScraper } from './BaseScraper.js';
+import { fetchHtml, sleep, extractListingRows, extractListingTotal, hasMoreListingPages, listingPageUrl, extractDetail, extractNextData, lumaDataFromNextData, isLumaUrl, isDevEventsUrl, DEV_EVENTS_HOSTS, LUMA_HOSTS } from './devEventsHttp.js';
 
 /**
  * Scraper for dev.events conferences page
@@ -11,6 +12,16 @@ export class DevEventsConferenceScraper extends BaseScraper {
     // Track current region being scraped
     this.currentRegion = null;
   }
+
+  /**
+   * dev.events is scraped over plain HTTP — no browser (see devEventsHttp.js).
+   */
+  async initialize() {
+    console.log(`🚀 Initializing ${this.config.name} scraper (HTTP mode, no browser)...`);
+    this.browser = null;
+    this.page = null;
+  }
+
 
   /**
    * Main scraping method
@@ -66,462 +77,123 @@ export class DevEventsConferenceScraper extends BaseScraper {
   }
 
   /**
-   * Scrape multiple pages with pagination
+   * Walk the listing pages over HTTP (`?page=N`) and process every row.
+   * dev.events is server-rendered, so no browser is involved — see
+   * devEventsHttp.js for why the browser path was dropped.
    */
   async scrapePage(baseUrl) {
     console.log(`📄 Starting pagination scraping from: ${baseUrl}`);
+    const configuredMax = parseInt(this.config?.config?.maxPages, 10);
+    const maxPages = Number.isFinite(configuredMax) && configuredMax > 0 ? configuredMax : 100;
+    let totalEvents = null;
+    let consecutiveErrors = 0;
+    const maxConsecutiveErrors = 3;
+    let currentPage = 1;
+    let hasMorePages = true;
 
-    try {
-      // Add a small delay to appear more human-like
-      console.log('⏳ Waiting before navigation...');
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Navigate to dev.events
-      console.log('🌍 Navigating to dev.events...');
-      console.log('📍 Target URL:', baseUrl);
-
-      // Set user agent and headers to avoid blocking
-      await this.page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-      await this.page.setExtraHTTPHeaders({
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache'
-      });
-
-      let navigationSuccess = false;
-      let lastError = null;
-
-      // Try up to 3 navigation attempts with different strategies
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          console.log(`🌍 Navigation attempt ${attempt}...`);
-
-          if (attempt > 1) {
-            // Add longer delay for retry attempts
-            console.log(`⏳ Waiting ${attempt * 3} seconds before retry...`);
-            await new Promise(resolve => setTimeout(resolve, attempt * 3000));
-          }
-
-          const waitStrategies = ['domcontentloaded', 'load', 'networkidle0'];
-          const timeouts = [30000, 45000, 60000];
-
-          await this.page.goto(baseUrl, {
-            waitUntil: waitStrategies[attempt - 1],
-            timeout: timeouts[attempt - 1]
-          });
-
-          console.log(`✅ Successfully navigated to dev.events (attempt ${attempt})`);
-          navigationSuccess = true;
+    while (hasMorePages && consecutiveErrors < maxConsecutiveErrors && currentPage <= maxPages) {
+      const pageUrl = listingPageUrl(baseUrl, currentPage);
+      console.log(`📄 Processing page ${currentPage}: ${pageUrl}`);
+      try {
+        const { status, html } = await fetchHtml(pageUrl, { allow: DEV_EVENTS_HOSTS, timeoutMs: 45000 });
+        if (status >= 400) throw new Error(`HTTP ${status} for ${pageUrl}`);
+        if (totalEvents === null) {
+          totalEvents = extractListingTotal(html) ?? 1000;
+          console.log(`📊 Estimated total events: ${totalEvents}`);
+        }
+        const pageEvents = this.extractEventsFromHtml(html);
+        consecutiveErrors = 0;
+        if (pageEvents.length === 0) {
+          console.log(`📭 No events found on page ${currentPage}. This is the last page.`);
           break;
-
-        } catch (navigationError) {
-          lastError = navigationError;
-          console.error(`❌ Navigation attempt ${attempt} failed:`, navigationError.message);
-
-          if (attempt === 3) {
-            // Last attempt failed, try one more time with the most minimal approach
-            try {
-              console.log('🔄 Final attempt with minimal settings...');
-              await new Promise(resolve => setTimeout(resolve, 10000)); // 10 second delay
-
-              // Create a new page if the current one is corrupted
-              const newPage = await this.browser.newPage();
-              await this.page.close();
-              this.page = newPage;
-
-              await this.page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-              await this.page.goto(baseUrl, {
-                waitUntil: 'load',
-                timeout: 60000
-              });
-
-              console.log('✅ Successfully navigated with minimal approach');
-              navigationSuccess = true;
-              break;
-            } catch (finalError) {
-              console.error('❌ Final navigation attempt failed:', finalError.message);
-            }
-          }
+        }
+        console.log(`🔍 Found ${pageEvents.length} events on page ${currentPage}`);
+        await this.processListingEvents(pageEvents);
+        hasMorePages = hasMoreListingPages(html) && this.stats.processed < totalEvents;
+        if (!hasMorePages) console.log('🏁 No more pages available.');
+        currentPage++;
+        await sleep(1000 + Math.floor(Math.random() * 1000));
+      } catch (error) {
+        consecutiveErrors++;
+        console.error(`❌ Error processing page ${currentPage}: ${error.message}`);
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          console.error(`💥 Too many consecutive errors (${consecutiveErrors}). Stopping pagination.`);
+        } else {
+          currentPage++;
+          await sleep((5 + consecutiveErrors * 2) * 1000);
         }
       }
-
-      if (!navigationSuccess) {
-        throw new Error(`Failed to navigate to ${this.config.config.baseUrl} after all attempts. Last error: ${lastError?.message}`);
-      }
-
-      await this.page.waitForSelector('#events', { timeout: 30000 });
-
-      // Get total events count for progress tracking
-      const totalEventsInfo = await this.page.evaluate(() => {
-        const totalText = document.querySelector('body').innerText;
-        const match = totalText.match(/(\d+,\d+|\d+) events/i);
-        return match ? match[1].replace(',', '') : null;
-      });
-
-      const totalEvents = totalEventsInfo ? parseInt(totalEventsInfo) : 1000;
-      console.log(`📊 Estimated total events: ${totalEvents}`);
-
-      let currentPage = 1;
-      let hasMorePages = true;
-      let consecutiveErrors = 0;
-      const maxConsecutiveErrors = 3;
-
-      // Process all available pages
-      while (hasMorePages && consecutiveErrors < maxConsecutiveErrors) {
-        console.log(`📄 Processing page ${currentPage}...`);
-
-        try {
-          // First page is already loaded, for next pages we need to navigate
-          if (currentPage > 1) {
-            console.log(`🌐 Navigating to page ${currentPage}...`);
-            let navigationSuccess = false;
-
-            // Try up to 3 times to navigate to the page
-            for (let attempt = 1; attempt <= 3; attempt++) {
-              try {
-                await this.page.goto(`${baseUrl}?page=${currentPage}`, {
-                  waitUntil: 'networkidle2',
-                  timeout: 60000
-                }).catch(err => {
-                  throw new Error(`Navigation error: ${err.message}`);
-                });
-
-                // Wait for content to be visible
-                await this.page.waitForSelector('#events', { timeout: 30000 })
-                  .catch(err => {
-                    throw new Error(`Timeout waiting for #events: ${err.message}`);
-                  });
-
-                navigationSuccess = true;
-                console.log(`✅ Successfully loaded page ${currentPage}`);
-                break;
-              } catch (navError) {
-                if (attempt < 3) {
-                  console.log(`⚠️  Navigation attempt ${attempt} failed: ${navError.message}`);
-                  console.log(`⏳ Retrying in 3 seconds...`);
-                  await new Promise(resolve => setTimeout(resolve, 3000));
-                } else {
-                  throw navError; // Let the outer try-catch handle it after all attempts fail
-                }
-              }
-            }
-
-            if (!navigationSuccess) {
-              throw new Error(`Failed to navigate to page ${currentPage} after multiple attempts`);
-            }
-          }
-
-          // Extract events from current page
-          let pageEvents = [];
-          try {
-            pageEvents = await this.extractEvents();
-            consecutiveErrors = 0; // Reset consecutive errors counter on success
-          } catch (extractError) {
-            console.error(`❌ Error extracting events: ${extractError.message}`);
-            // Try to reload the page once
-            console.log(`🔄 Attempting to reload the page and extract again...`);
-            try {
-              await this.page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              pageEvents = await this.extractEvents();
-            } catch (reloadError) {
-              console.error(`❌ Failed after reload: ${reloadError.message}`);
-              throw new Error(`Could not extract events even after page reload: ${reloadError.message}`);
-            }
-          }
-
-          if (!pageEvents || pageEvents.length === 0) {
-            console.log(`📭 No events found on page ${currentPage}. This might be the last page.`);
-            hasMorePages = false;
-            continue;
-          }
-
-          console.log(`🔍 Found ${pageEvents.length} events on page ${currentPage}`);
-
-          // Process each event
-          for (const rawEvent of pageEvents) {
-            this.stats.total++;
-
-            if (this.shouldSkipEvent(rawEvent)) {
-              continue;
-            }
-
-            // Extract actual event URL from dev.events listing page
-            const devEventsUrl = rawEvent.url;
-
-            // Preserve the original dev.events URL for ID extraction later
-            rawEvent.devEventsUrl = devEventsUrl;
-
-            const { url: actualEventUrl, coverImageUrl, lumaData } = await this.extractActualEventUrl(devEventsUrl);
-            if (!actualEventUrl) {
-              console.log(`⚠️ Could not find actual event URL for: ${rawEvent.name}`);
-              this.stats.failed++;
-              continue;
-            }
-
-            // Use the actual event URL instead of the dev.events URL
-            rawEvent.url = actualEventUrl;
-
-            // Store the cover image URL if found
-            if (coverImageUrl) {
-              rawEvent.coverImageUrl = coverImageUrl;
-            }
-
-            // Store Luma data if extracted
-            if (lumaData) {
-              rawEvent.lumaData = lumaData;
-            }
-
-            // Safety check: Skip if we still have a dev.events URL (extraction failed)
-            if (rawEvent.url && rawEvent.url.includes('dev.events')) {
-              console.log(`🚫 Skipping dev.events URL (extraction failed): ${rawEvent.name} - ${rawEvent.url}`);
-              this.stats.failed++;
-              continue;
-            }
-
-            // Validate URL if enabled
-            if (rawEvent.url && !(await this.validateUrl(rawEvent.url))) {
-              continue;
-            }
-
-            // Normalize event data
-            const normalizedEvent = this.normalizeEvent(rawEvent);
-
-            // Check if event is in the past
-            if (this.isPastEvent(normalizedEvent.eventStart, normalizedEvent.eventEnd)) {
-              console.log(`⏰ Skipping past event: ${normalizedEvent.eventTitle} (${normalizedEvent.eventStart})`);
-              this.stats.skipped++;
-              continue;
-            }
-
-            // Filter out promotional/advertising events
-            if (this.isPromotionalEvent(normalizedEvent)) {
-              console.log(`🚫 Skipping promotional event: ${normalizedEvent.eventTitle}`);
-              continue;
-            }
-
-            if (normalizedEvent.eventTitle && normalizedEvent.eventLink) {
-              this.scrapedEvents.push(normalizedEvent);
-              this.processedUrls.add(normalizedEvent.eventLink);
-              this.stats.processed++;
-            } else {
-              this.stats.failed++;
-            }
-          }
-
-          // Check for next page using multiple strategies
-          let hasNextPage = false;
-          try {
-            // Strategy 1: Check for "Show more" button
-            hasNextPage = await this.page.evaluate((nextPage) => {
-              const showMoreButton = document.querySelector('button.moreButton.button.is-small');
-              if (showMoreButton && !showMoreButton.disabled) {
-                return true;
-              }
-
-              // Strategy 2: Check for pagination element
-              const paginationElement = document.querySelector('.pagination');
-              if (paginationElement) {
-                const pageLinks = Array.from(document.querySelectorAll('.pagination-link'));
-                return pageLinks.some(link => parseInt(link.textContent.trim()) > nextPage - 1);
-              }
-
-              return false;
-            }, currentPage);
-          } catch (evalError) {
-            console.error(`❌ Error checking for next page: ${evalError.message}`);
-            hasNextPage = currentPage < 10; // Assume there are at least 10 pages if we can't check
-          }
-
-          if (!hasNextPage) {
-            console.log('🏁 No more pages available.');
-            hasMorePages = false;
-          } else {
-            // If we've loaded a lot of pages, check if we're approaching the expected total
-            if (this.stats.processed >= totalEvents) {
-              console.log(`🎯 Reached expected total of ${totalEvents} events. Stopping.`);
-              hasMorePages = false;
-            } else {
-              currentPage++;
-
-              // Add a delay between requests to be gentle to the server
-              console.log('⏳ Waiting before loading next page...');
-              await new Promise(resolve => setTimeout(resolve, 2000 + Math.floor(Math.random() * 1000))); // Add some randomness
-            }
-          }
-        } catch (error) {
-          console.error(`❌ Error processing page ${currentPage}:`, error.message);
-          consecutiveErrors++;
-
-          if (consecutiveErrors >= maxConsecutiveErrors) {
-            console.error(`💥 Too many consecutive errors (${consecutiveErrors}). Stopping pagination.`);
-          } else {
-            console.log(`🔄 Trying to continue to the next page... (error ${consecutiveErrors}/${maxConsecutiveErrors})`);
-            currentPage++;
-            console.log(`⏳ Waiting longer (${5 + consecutiveErrors * 2} seconds) after an error...`);
-            await new Promise(resolve => setTimeout(resolve, (5 + consecutiveErrors * 2) * 1000)); // Wait longer after an error
-          }
-        }
-      }
-
-      console.log(`✅ Completed scraping ${currentPage - 1} pages`);
-
-    } catch (error) {
-      console.error(`❌ Scraping error: ${error.message}`);
-      throw error;
     }
-
+    console.log(`✅ Completed scraping ${currentPage - 1} pages`);
     this.printStats();
     return this.scrapedEvents;
   }
 
   /**
-   * Extract events from current page using existing logic
+   * Resolve each listing row to its real event site, then normalise, filter
+   * and collect it. Shared by every page and region.
    */
-  async extractEvents() {
-    return await this.page.evaluate(() => {
-      const eventRows = Array.from(document.querySelectorAll('#events .row.columns.is-mobile'))
-        .filter(row => !row.classList.contains('pt-6') && !row.querySelector('nav'));
+  async processListingEvents(pageEvents) {
+    for (const rawEvent of pageEvents) {
+      this.stats.total++;
+      if (this.shouldSkipEvent(rawEvent)) continue;
 
-      return eventRows.map(row => {
-        // Extract name and URL
-        const nameElement = row.querySelector('.title.is-5 a');
-        const name = nameElement ? nameElement.textContent.trim() : '';
+      const devEventsUrl = rawEvent.url;
+      rawEvent.devEventsUrl = devEventsUrl;
+      const { url: actualEventUrl, coverImageUrl, lumaData } = await this.extractActualEventUrl(devEventsUrl);
+      if (!actualEventUrl) {
+        console.log(`⚠️ Could not find actual event URL for: ${rawEvent.name}`);
+        this.stats.failed++;
+        continue;
+      }
+      rawEvent.url = actualEventUrl;
+      if (coverImageUrl) rawEvent.coverImageUrl = coverImageUrl;
+      if (lumaData) rawEvent.lumaData = lumaData;
 
-        let url = '';
-        if (nameElement && nameElement.href) {
-          const hrefValue = nameElement.getAttribute('href');
-          if (hrefValue) {
-            // Check if it's already an absolute URL
-            if (hrefValue.startsWith('http://') || hrefValue.startsWith('https://')) {
-              url = hrefValue;
-            } else {
-              // It's a relative URL, prepend the base URL
-              url = 'https://dev.events' + (hrefValue.startsWith('/') ? '' : '/') + hrefValue;
-            }
-          }
-        }
+      if (isDevEventsUrl(rawEvent.url)) {
+        console.log(`🚫 Skipping dev.events URL (extraction failed): ${rawEvent.name} - ${rawEvent.url}`);
+        this.stats.failed++;
+        continue;
+      }
+      if (!(await this.validateUrl(rawEvent.url))) continue;
 
-        // Extract date
-        let dateText = '';
-        const timeElement = row.querySelector('time');
-        if (timeElement) {
-          dateText = timeElement.textContent.trim().replace(/\s+/g, ' ');
-        }
-
-        // Extract location data
-        let city = '';
-        let country = '';
-        let region = '';
-
-        const subtitleLinks = Array.from(row.querySelectorAll('.subtitle.is-6 a'));
-        const subtitleText = row.querySelector('.subtitle.is-6')?.textContent || '';
-
-        // Check if online event
-        if (subtitleText.includes('Online')) {
-          city = 'Online';
-          country = '';
-          region = 'Online';
-        } else {
-          // Extract in-person location
-          const locationLinks = subtitleLinks.filter((a, index) => {
-            const href = a.getAttribute('href') || '';
-            const linkText = a.textContent.trim();
-
-            if (!href.includes('/')) return false;
-            if (href.startsWith('/ON')) return false;
-            if (index === 0) return false; // Skip first link (topic)
-
-            if (href.match(/^\/[A-Z]{2,3}$/)) {
-              return true; // Country code pattern
-            }
-
-            if (href.includes('/') && href.split('/').length > 2) {
-              return true; // Multi-part location
-            }
-
-            if (linkText.includes(' ') || linkText.includes(',')) {
-              return true; // Location names with spaces/commas
-            }
-
-            if (linkText.length > 3 && !href.match(/^\/[a-z-]+$/i)) {
-              return true;
-            }
-
-            return false;
-          });
-
-          if (locationLinks.length > 0) {
-            city = locationLinks[0].textContent.trim();
-
-            // Country detection logic
-            if (locationLinks.length > 1) {
-              if (locationLinks.length > 2 &&
-                  (subtitleText.includes('United States') ||
-                   subtitleText.includes('Canada') ||
-                   subtitleText.includes('Australia'))) {
-                country = locationLinks[2].textContent.trim();
-
-                if (locationLinks.length > 3) {
-                  region = locationLinks[3].textContent.trim();
-                } else {
-                  const regionMatch = subtitleText.match(/United States,\s*([^,]+)$/);
-                  if (regionMatch) {
-                    region = regionMatch[1].trim();
-                  }
-                }
-              } else {
-                country = locationLinks[1].textContent.trim();
-
-                if (locationLinks.length > 2) {
-                  region = locationLinks[2].textContent.trim();
-                } else {
-                  const parts = subtitleText.split(',').map(p => p.trim());
-                  if (parts.length > 2) {
-                    region = parts[parts.length - 1];
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        // Extract venue address information
-        let venueAddress = '';
-
-        // Look for detailed venue information in the event description or subtitle
-        const descriptionEl = row.querySelector('.subtitle.is-6, .content');
-        if (descriptionEl) {
-          const fullText = descriptionEl.textContent.trim();
-
-          // Try to extract venue/address from the text
-          // Look for patterns like "at [venue name]" or venue information
-          const venuePatterns = [
-            /at\s+([^,\n]+(?:Center|Centre|Hall|Hotel|Convention|Conference|Building|Arena|Stadium|Theatre|Theater|Campus|University|College|Academy|Institute|Pavilion|Complex)[^,\n]*)/i,
-            /venue:\s*([^,\n]+)/i,
-            /location:\s*([^,\n]+)/i,
-            /address:\s*([^,\n]+)/i,
-            /held at\s+([^,\n]+)/i
-          ];
-
-          for (const pattern of venuePatterns) {
-            const match = fullText.match(pattern);
-            if (match && match[1] && match[1].trim().length > 5) {
-              venueAddress = match[1].trim();
-              // Clean up the venue name
-              venueAddress = venueAddress.replace(/\s+/g, ' ').trim();
-              break;
-            }
-          }
-        }
-
-        return { dateText, name, url, city, country, region, venueAddress };
-      });
-    });
+      const normalizedEvent = this.normalizeEvent(rawEvent);
+      if (this.isPastEvent(normalizedEvent.eventStart, normalizedEvent.eventEnd)) {
+        console.log(`⏰ Skipping past event: ${normalizedEvent.eventTitle} (${normalizedEvent.eventStart})`);
+        this.stats.skipped++;
+        continue;
+      }
+      if (this.isPromotionalEvent(normalizedEvent)) {
+        console.log(`🚫 Skipping promotional event: ${normalizedEvent.eventTitle}`);
+        continue;
+      }
+      if (normalizedEvent.eventTitle && normalizedEvent.eventLink) {
+        this.scrapedEvents.push(normalizedEvent);
+        this.processedUrls.add(normalizedEvent.eventLink);
+        this.stats.processed++;
+      } else {
+        this.stats.failed++;
+      }
+    }
   }
 
+  /**
+   * Listing rows → raw events in the shape normalizeEvent expects.
+   */
+  extractEventsFromHtml(html) {
+    const baseUrl = this.config?.config?.baseUrl || 'https://dev.events/';
+    return extractListingRows(html, { baseUrl }).map((row) => ({
+      name: row.name,
+      url: row.url,
+      dateText: row.dateText,
+      startDate: row.startDate,
+      endDate: row.endDate,
+      city: row.isOnline ? 'Online' : row.city,
+      country: row.isOnline ? '' : row.country,
+      region: row.isOnline ? 'Online' : row.region,
+      venueAddress: row.venueAddress,
+    }));
+  }
 
   /**
    * Enhanced date parsing for dev.events format - matches original implementation exactly
@@ -919,6 +591,14 @@ export class DevEventsConferenceScraper extends BaseScraper {
         }
       }
 
+      // Event-hosting platforms are never promotional, whatever their domain
+      // shape. Without this, the short-domain heuristic below rejects every
+      // luma.com / lu.ma event (8 and 5 character hostnames).
+      const eventPlatforms = ['luma.com', 'lu.ma', 'meetup.com', 'eventbrite.', 'ti.to', 'tito.io', 'hopin.com', 'zoom.us', 'guild.host', 'bevy.com'];
+      if (eventPlatforms.some(p => url.hostname === p || url.hostname.endsWith('.' + p) || url.hostname.includes(p))) {
+        return false;
+      }
+
       // Check for very short domain names (often promotional)
       if (url.hostname.split('.').length === 2 && url.hostname.length < 12 &&
           !url.hostname.includes('conf') && !url.hostname.includes('dev') &&
@@ -940,7 +620,7 @@ export class DevEventsConferenceScraper extends BaseScraper {
    * The ID is the last segment after the final hyphen: "eguzf-gg"
    */
   extractDevEventsId(url) {
-    if (!url || !url.includes('dev.events')) return null;
+    if (!isDevEventsUrl(url)) return null;
 
     try {
       const urlObj = new URL(url);
@@ -969,7 +649,11 @@ export class DevEventsConferenceScraper extends BaseScraper {
    * Normalize event data - override to use our custom cleanEventTitle
    */
   normalizeEvent(rawEvent) {
-    const { eventStart, eventEnd } = this.parseDateToISO(rawEvent.dateText || rawEvent.date);
+    // The listing's JSON-LD carries unambiguous ISO dates; the <time> text
+    // ("Oct 9-10 26") is only a fallback for rows without it.
+    const { eventStart, eventEnd } = rawEvent.startDate
+      ? { eventStart: String(rawEvent.startDate).slice(0, 10), eventEnd: String(rawEvent.endDate || rawEvent.startDate).slice(0, 10) }
+      : this.parseDateToISO(rawEvent.dateText || rawEvent.date);
     const scraperName = this.config.config?.name || 'DevEventsConferenceScraper';
 
     // Extract the dev.events ID from the original dev.events URL (stored in devEventsUrl)
@@ -1096,188 +780,51 @@ export class DevEventsConferenceScraper extends BaseScraper {
   }
 
   /**
-   * Extract rich event data from Luma event pages using __NEXT_DATA__ JSON
-   * Returns detailed event info including coordinates, timezone, location data
+   * Luma enrichment from the event page's __NEXT_DATA__ (no browser).
    */
-  async extractLumaEventData(eventPage) {
+  async extractLumaEventData(lumaUrl) {
     try {
-      const lumaData = await eventPage.evaluate(() => {
-        const nextDataScript = document.querySelector('script#__NEXT_DATA__');
-        if (!nextDataScript) return null;
-
-        try {
-          const data = JSON.parse(nextDataScript.textContent);
-          const initialData = data?.props?.pageProps?.initialData?.data;
-          const eventData = initialData?.event;
-
-          if (!eventData) return null;
-
-          return {
-            lumaEventId: eventData.api_id || initialData.api_id,
-            timezone: eventData.timezone,
-            coverUrl: eventData.cover_url,
-            latitude: eventData.coordinate?.latitude,
-            longitude: eventData.coordinate?.longitude,
-            city: eventData.geo_address_info?.city,
-            country: eventData.geo_address_info?.country,
-            countryCode: eventData.geo_address_info?.country_code,
-            region: eventData.geo_address_info?.region,
-            venueAddress: eventData.geo_address_info?.address,
-            fullAddress: eventData.geo_address_info?.full_address,
-            shortAddress: eventData.geo_address_info?.short_address,
-            locationType: eventData.location_type // 'offline' or 'online'
-          };
-        } catch (e) {
-          console.error('Failed to parse __NEXT_DATA__:', e.message);
-          return null;
-        }
-      });
-
-      if (lumaData) {
+      console.log(`🔗 Detected Luma event URL, extracting rich data...`);
+      const { status, html } = await fetchHtml(lumaUrl, { allow: LUMA_HOSTS, timeoutMs: 30000 });
+      if (status >= 400) throw new Error(`HTTP ${status}`);
+      const lumaData = lumaDataFromNextData(extractNextData(html));
+      if (lumaData?.lumaEventId) {
         console.log(`📊 Extracted Luma data: id=${lumaData.lumaEventId}, tz=${lumaData.timezone}, city=${lumaData.city}`);
       }
-
       return lumaData;
     } catch (error) {
-      console.error(`❌ Error extracting Luma event data: ${error.message}`);
+      console.warn(`⚠️ Failed to fetch Luma event data: ${error.message}`);
       return null;
     }
   }
 
   /**
-   * Extract actual event URL from dev.events listing page
+   * Fetch the dev.events detail page over HTTP and find the event's own
+   * site (iframe preview, "Visit" link, or an event-looking external link).
+   * Luma-hosted events are enriched from the Luma page's __NEXT_DATA__.
    */
   async extractActualEventUrl(devEventsUrl) {
     try {
       console.log(`🔗 Extracting actual URL from: ${devEventsUrl}`);
-
-      // Create a new page for this individual event to avoid interfering with main scraping
-      const eventPage = await this.browser.newPage();
-
-      try {
-        await eventPage.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-        await eventPage.goto(devEventsUrl, {
-          waitUntil: 'networkidle2',
-          timeout: 30000
-        });
-
-        // Wait a bit for the page to fully load
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Extract the actual event URL and cover image - check for iframe first, then "Visit" link
-        const { actualUrl, coverImageUrl } = await eventPage.evaluate(() => {
-          let coverImageUrl = null;
-
-          // Look for event images in common locations
-          const imageSelectors = [
-            'meta[property="og:image"]', // Open Graph image
-            'meta[name="twitter:image"]', // Twitter card image
-            'img[class*="event"][class*="image"]',
-            'img[class*="cover"]',
-            'img[class*="hero"]',
-            'img[class*="banner"]',
-            '.event-image img',
-            '.event-header img',
-            '.hero img',
-            'article img:first-of-type',
-            '.content img:first-of-type'
-          ];
-
-          for (const selector of imageSelectors) {
-            const element = document.querySelector(selector);
-            if (element) {
-              const src = element.getAttribute('content') || element.getAttribute('src');
-              if (src && (src.startsWith('http') || src.startsWith('//'))) {
-                coverImageUrl = src.startsWith('//') ? `https:${src}` : src;
-                break;
-              }
-            }
-          }
-
-          // Priority 1: Check for iframe with conference/event URL
-          const iframes = Array.from(document.querySelectorAll('iframe'));
-          for (const iframe of iframes) {
-            const src = iframe.getAttribute('src');
-            if (src && !src.includes('dev.events')) {
-              console.log('Found iframe URL:', src);
-              return { actualUrl: src, coverImageUrl };
-            }
-          }
-
-          // Priority 2: Look for links with "Visit" text (case insensitive)
-          const visitLinks = Array.from(document.querySelectorAll('a'))
-            .filter(link => {
-              const text = link.textContent.trim().toLowerCase();
-              return text === 'visit' || text.includes('visit');
-            });
-
-          // Priority order: exact "visit" text, then contains visit
-          for (const link of visitLinks) {
-            const href = link.getAttribute('href');
-            if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
-              // Make sure it's not a dev.events link
-              if (!href.includes('dev.events')) {
-                console.log('Found visit link URL:', href);
-                return { actualUrl: href, coverImageUrl };
-              }
-            }
-          }
-
-          // Priority 3: Look for any external links that aren't dev.events
-          const allLinks = Array.from(document.querySelectorAll('a[href]'));
-          for (const link of allLinks) {
-            const href = link.getAttribute('href');
-            if (href && (href.startsWith('http://') || href.startsWith('https://')) && !href.includes('dev.events')) {
-              // Check if this looks like an event URL
-              if (href.includes('event') || href.includes('conference') || href.includes('summit') || href.includes('tickets')) {
-                console.log('Found potential event URL:', href);
-                return { actualUrl: href, coverImageUrl };
-              }
-            }
-          }
-
-          return { actualUrl: null, coverImageUrl };
-        });
-
-        // If the actual URL is a Luma event, navigate to it to extract rich data
-        let lumaData = null;
-        if (actualUrl && (actualUrl.includes('lu.ma') || actualUrl.includes('luma.com'))) {
-          console.log(`🔗 Detected Luma event URL, extracting rich data...`);
-          try {
-            await eventPage.goto(actualUrl, {
-              waitUntil: 'networkidle2',
-              timeout: 30000
-            });
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            lumaData = await this.extractLumaEventData(eventPage);
-
-            // Use Luma cover image if we didn't find one on dev.events
-            if (!coverImageUrl && lumaData?.coverUrl) {
-              coverImageUrl = lumaData.coverUrl;
-              console.log(`🖼️ Using cover image from Luma: ${coverImageUrl}`);
-            }
-          } catch (lumaError) {
-            console.warn(`⚠️ Failed to fetch Luma event data: ${lumaError.message}`);
-          }
-        }
-
-        await eventPage.close();
-
-        if (actualUrl) {
-          console.log(`✅ Successfully extracted URL: ${actualUrl}`);
-          return { url: actualUrl, coverImageUrl, lumaData };
-        } else {
-          console.log(`❌ No actual event URL found in ${devEventsUrl}`);
-          return { url: null, coverImageUrl, lumaData: null };
-        }
-
-      } catch (pageError) {
-        console.error(`❌ Error accessing event page ${devEventsUrl}:`, pageError.message);
-        await eventPage.close().catch(() => {}); // Ignore close errors
+      const { status, html } = await fetchHtml(devEventsUrl, { allow: DEV_EVENTS_HOSTS, timeoutMs: 30000 });
+      if (status >= 400) {
+        console.error(`❌ Error accessing event page ${devEventsUrl}: HTTP ${status}`);
         return { url: null, coverImageUrl: null, lumaData: null };
       }
-
+      const detail = extractDetail(html);
+      const actualUrl = detail.actualUrl;
+      let coverImageUrl = detail.coverImageUrl;
+      let lumaData = null;
+      if (actualUrl && isLumaUrl(actualUrl)) {
+        lumaData = await this.extractLumaEventData(actualUrl);
+        if (!coverImageUrl && lumaData?.coverUrl) coverImageUrl = lumaData.coverUrl;
+      }
+      if (actualUrl) {
+        console.log(`✅ Successfully extracted URL: ${actualUrl}`);
+        return { url: actualUrl, coverImageUrl, lumaData };
+      }
+      console.log(`❌ No actual event URL found in ${devEventsUrl}`);
+      return { url: null, coverImageUrl, lumaData: null };
     } catch (error) {
       console.error(`❌ Error extracting actual URL from ${devEventsUrl}:`, error.message);
       return { url: null, coverImageUrl: null, lumaData: null };
