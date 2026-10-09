@@ -10,8 +10,9 @@
  */
 
 import { buildProxyUrl, newSessionId, type ProviderId, type ProxyCreds, type BuildOpts } from './providers.js';
+import { unsealSecret, isSealed } from './secret-envelope.js';
 
-export { buildProxyUrl, newSessionId };
+export { buildProxyUrl, newSessionId, unsealSecret, isSealed };
 export type { ProviderId, ProxyCreds, BuildOpts };
 
 export const MODULE_ID = 'residential-egress';
@@ -55,14 +56,30 @@ export function isConfigured(cfg: EgressModuleConfig | null | undefined): boolea
   return !!cfg && !!cfg.provider && cfg.provider !== 'none' && !!cfg.proxy_username && !!cfg.proxy_password;
 }
 
-/** Map the stored config to ProxyCreds (null when not configured). */
+/**
+ * Map the stored config to ProxyCreds (null when not configured).
+ *
+ * Credentials are stored SEALED (`v1:` AES-256-GCM envelope, see
+ * secret-envelope.ts) by the platform's config save route; legacy plaintext
+ * values pass through until re-saved/migrated. An unseal failure (missing or
+ * wrong GATEWAZE_SECRETS_KEY) returns null — ciphertext must never be sent
+ * to a provider as a credential — and consumers degrade to their direct path.
+ */
 export function credsFromConfig(cfg: EgressModuleConfig | null | undefined): ProxyCreds | null {
   if (!isConfigured(cfg)) return null;
   const c = cfg as EgressModuleConfig;
+  const username = unsealSecret(c.proxy_username);
+  const password = unsealSecret(c.proxy_password);
+  if (username == null || password == null) {
+    console.warn(
+      '[residential-egress] stored credentials could not be unsealed (GATEWAZE_SECRETS_KEY missing or wrong?) — egress disabled',
+    );
+    return null;
+  }
   return {
     provider: c.provider as ProviderId,
-    username: c.proxy_username as string,
-    password: c.proxy_password as string,
+    username,
+    password,
     gateway_host: c.gateway_host || undefined,
     gateway_port: c.gateway_port ? num(c.gateway_port, 0) || undefined : undefined,
     zone: c.zone || undefined,
