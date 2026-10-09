@@ -304,6 +304,10 @@ export function extractListingRows(html, { baseUrl = 'https://dev.events/' } = {
     const subtitleHtml = subtitleMatch ? subtitleMatch[1] : '';
     const subtitleText = stripTags(subtitleHtml);
     const location = parseLocationLinks(extractAnchors(subtitleHtml), subtitleText);
+    // "Angular meetup Online", "Data / Database conference in Utrecht, …",
+    // "Certification masterclass for …": the subtitle names the kind.
+    const kindMatch = subtitleText.match(/\b(meetup|conference|masterclass|workshop|hackathon|webinar|summit)\b/i);
+    const kind = kindMatch ? kindMatch[1].toLowerCase() : '';
 
     const address = ld?.location?.address || {};
     const city = location.city || (location.isOnline ? 'Online' : '') || decodeEntities(address.addressLocality || '');
@@ -324,6 +328,7 @@ export function extractListingRows(html, { baseUrl = 'https://dev.events/' } = {
       description: decodeEntities(typeof ld?.description === 'string' ? ld.description : ''),
       organizer: decodeEntities(ld?.organizer?.name || ld?.performer?.name || ''),
       topic: location.topic,
+      kind, // 'meetup' | 'conference' | 'masterclass' | … | ''
     });
   }
   return rows;
