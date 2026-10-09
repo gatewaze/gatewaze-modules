@@ -186,7 +186,9 @@ export class DevEventsConferenceScraper extends BaseScraper {
    */
   extractEventsFromHtml(html) {
     const baseUrl = this.config?.config?.baseUrl || 'https://dev.events/';
-    return extractListingRows(html, { baseUrl }).map((row) => ({
+    // Rows say what they are in the subtitle ("Data conference in …",
+    // "Angular meetup Online"); keep everything that is not a meetup.
+    return extractListingRows(html, { baseUrl }).filter((row) => row.kind !== 'meetup').map((row) => ({
       name: row.name,
       url: row.url,
       dateText: row.dateText,

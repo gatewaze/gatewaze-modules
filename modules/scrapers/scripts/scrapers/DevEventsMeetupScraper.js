@@ -189,7 +189,10 @@ export class DevEventsMeetupScraper extends BaseScraper {
    */
   extractEventsFromHtml(html) {
     const baseUrl = this.config?.config?.baseUrl || 'https://dev.events/meetups';
-    return extractListingRows(html, { baseUrl }).map((row) => ({
+    // The continent meetup pages pad thin regions with conferences (41 of
+    // 57 rows on /meetups/SA on 9 Oct 2026). Rows say what they are in the
+    // subtitle, so keep only the ones that call themselves a meetup.
+    return extractListingRows(html, { baseUrl }).filter((row) => row.kind === 'meetup').map((row) => ({
       name: row.name,
       url: row.url,
       dateText: row.dateText,
