@@ -37,8 +37,10 @@ Each scraper launches a Chromium instance, navigates to event pages with `puppet
 | `LumaCategoryScraper` | `luma.com/<category>` | Bulk-discovering calendars from a category landing page |
 | `LumaEventsScraper` | A specific Luma page | One-off ingestion from a curated list |
 | `LumaHostEnricher` | Existing event_hosts rows | Filling in LinkedIn / company data on hosts |
-| `DevEventsConferenceScraper` | dev.events conference pages | Conference listings |
-| `DevEventsMeetupScraper` | dev.events meetup pages | Meetup listings |
+| `DevEventsConferenceScraper` | dev.events conference pages | Conference listings. HTTP only, no browser (see below) |
+| `DevEventsMeetupScraper` | dev.events meetup pages | Meetup listings. HTTP only, no browser (see below) |
+
+The two dev.events types are listed here for their configuration shape but do not launch Chromium. dev.events is fully server-rendered, so they fetch the listing (`?page=N`) and each detail page over HTTP and read the per-row JSON-LD, the subtitle location links, and the detail page's `<iframe>` / "Visit" link (`scripts/scrapers/devEventsHttp.js`). Luma and Meetup.com destinations are enriched from their page's `__NEXT_DATA__`. Config: `maxPages` (listing pages per run or per region), `regions` (meetups only, continent codes such as `["NA","EU"]`), `validateUrls`, `use_residential_egress` (route every fetch through scrapling-fetcher with `proxy: "force"`; requires `scraplingFetcher.proxyProvider` on the deployment, and the run fails instead of falling back to a direct fetch).
 
 ### Fast variants (HTTP via scrapling-fetcher)
 
