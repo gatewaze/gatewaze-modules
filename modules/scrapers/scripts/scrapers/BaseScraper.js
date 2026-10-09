@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer-core';
 import fs from 'fs';
 import path from 'path';
+import { policeUrl } from './devEventsHttp.js';
 
 /**
  * Base class for all scrapers providing common functionality
@@ -181,14 +182,44 @@ export class BaseScraper {
       return true;
     }
 
+    // `fetch` has no `timeout` option; the old call passed one and so had no
+    // bound at all. One event site that accepts the connection and never
+    // answers froze a whole dev.events run for 37 minutes on 9 Oct 2026.
+    const timeoutMs = Number(this.globalConfig.urlValidation.timeout) > 0
+      ? Number(this.globalConfig.urlValidation.timeout)
+      : 10000;
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (compatible; EventsBot/1.0; +https://example.com/bot)'
+    };
+
     try {
-      const response = await fetch(url, {
+      let response = await fetch(url, {
         method: 'HEAD',
-        timeout: this.globalConfig.urlValidation.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; EventsBot/1.0; +https://example.com/bot)'
-        }
+        headers,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(timeoutMs),
       });
+
+      // Plenty of event sites refuse HEAD (405) or bot-gate it (403) while
+      // serving GET normally. Retry once with GET before calling it dead;
+      // the body is discarded.
+      if (response.status === 403 || response.status === 405 || response.status === 501) {
+        response = await fetch(url, {
+          method: 'GET',
+          headers,
+          redirect: 'follow',
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        await response.body?.cancel().catch(() => {});
+      }
+
+      // A redirect chain must not land somewhere we would never have fetched
+      // directly (private hosts, odd schemes).
+      if (response.url && !policeUrl(response.url, { schemes: ['https:', 'http:'] })) {
+        console.warn(`⚠️  URL validation failed: ${url} redirected to a disallowed target (${response.url})`);
+        this.stats.urlValidationFailed++;
+        return false;
+      }
 
       // Consider 2xx and 3xx status codes as valid
       const isValid = response.status >= 200 && response.status < 400;
