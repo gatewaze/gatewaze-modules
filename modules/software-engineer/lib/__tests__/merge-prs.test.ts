@@ -7,11 +7,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Controllable GitHub client. `prs[number].mergeable_state` drives each PR; merge/update calls are recorded.
-const hub = vi.hoisted(() => ({ prs: {} as Record<number, any>, merged: [] as number[], updated: [] as number[], mergeThrows: null as any }));
+const hub = vi.hoisted(() => ({ prs: {} as Record<number, any>, merged: [] as number[], updated: [] as number[], mergeThrows: null as any, expectedSha: null as any }));
 vi.mock('../github.js', () => ({
   githubClient: () => ({
     getPullRequest: async (_o: string, _n: string, num: number) => hub.prs[num] ?? {},
-    mergePullRequest: async (_o: string, _n: string, num: number) => {
+    mergePullRequest: async (_o: string, _n: string, num: number, _method: string, sha?: string) => {
+      hub.expectedSha=sha;
       if (hub.mergeThrows) throw new Error(hub.mergeThrows);
       hub.merged.push(num);
       return { merged: true };
@@ -20,6 +21,7 @@ vi.mock('../github.js', () => ({
   }),
 }));
 
+vi.mock('../decisions.js',()=>({createOrSupersedeDecision:vi.fn()}));
 import { mergeRunPrs } from '../merge-prs.js';
 
 // Supabase double for listRunPrs (returns `rows`) + upsertRunPr (records the patch per repo).
@@ -116,4 +118,15 @@ describe('mergeRunPrs', () => {
       { repo: 'acme/api', pr_number: 21, outcome: 'held', reason: 'unstable' },
     ]);
   });
+  it('holds an approval if the reviewed head has changed',async()=>{
+    hub.prs[10]={mergeable_state:'clean',head:{sha:'b'.repeat(40)}};
+    const result=await mergeRunPrs(mockSupabase([pr(10)]),RUN,PROJECT,{expectedHeads:{'acme/app#10':'a'.repeat(40)}});
+    expect(result.held).toBe(1);expect(hub.merged).toEqual([]);
+  });
+  it('passes the exact reviewed SHA to GitHub for conditional merge',async()=>{
+    hub.prs[10]={mergeable_state:'clean',head:{sha:'a'.repeat(40)}};
+    await mergeRunPrs(mockSupabase([pr(10)]),RUN,PROJECT,{expectedHeads:{'acme/app#10':'a'.repeat(40)}});
+    expect(hub.expectedSha).toBe('a'.repeat(40));
+  });
+
 });
