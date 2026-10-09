@@ -362,24 +362,19 @@ export function parseLocationLinks(anchors, subtitleText = '') {
 
 /**
  * From a dev.events detail page: the event's own URL (iframe preview, then a
- * "Visit" anchor, then any external link that looks event-ish) and a cover
- * image (og:image / twitter:image). Both are sanitised: http(s) only, no
- * private hosts.
+ * "Visit" anchor, then any external link that looks event-ish), sanitised to
+ * http(s) and no private hosts.
+ *
+ * `coverImageUrl` is always null here on purpose. The only image a dev.events
+ * detail page carries is its own generated social card (a Cloudinary render
+ * of the title, date and city). Handing that to the job handler makes it
+ * upload the card as the event's "screenshot" and mark the screenshot done,
+ * which stops the screenshot job from ever capturing the event's real site.
+ * Luma events still get their cover from the Luma page (lumaData.coverUrl).
  */
 export function extractDetail(html) {
-  let coverImageUrl = null;
-  const metaRe = /<meta\b([^>]*)>/gi;
+  const coverImageUrl = null;
   let m;
-  while ((m = metaRe.exec(html)) !== null) {
-    const attrs = m[1];
-    if (!/(?:property|name)\s*=\s*"(?:og:image|twitter:image)"/i.test(attrs)) continue;
-    const content = (attrs.match(/content\s*=\s*"([^"]*)"/i) || [])[1];
-    const candidate = sanitizeExternalUrl(content?.startsWith('//') ? `https:${content}` : decodeEntities(content || ''));
-    if (candidate) {
-      coverImageUrl = candidate;
-      break;
-    }
-  }
 
   const external = (candidate) => {
     const clean = sanitizeExternalUrl(candidate);
