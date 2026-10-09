@@ -353,6 +353,24 @@ const talkKind: BlockKindDef = {
       // Additive: per-theme accent color for the card chrome (hex like
       // #a78bfa). Presentation metadata, not content.
       accent: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' },
+      // Additive: photos taken AT this session (conference-recap album
+      // matching). Small strip — the full album lives in the page's Photos
+      // section, which photos_album names.
+      photos: {
+        type: 'array',
+        maxItems: 8,
+        items: {
+          type: 'object',
+          required: ['src'],
+          properties: {
+            src: { type: 'string', format: 'https-url' },
+            thumb: { type: 'string', format: 'https-url' },
+            alt: { type: 'string', maxLength: 300 },
+          },
+          additionalProperties: false,
+        },
+      },
+      photos_album: { type: 'string', maxLength: 120 },
     },
     additionalProperties: true,
   },
