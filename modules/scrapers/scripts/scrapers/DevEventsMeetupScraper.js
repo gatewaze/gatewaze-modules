@@ -1,4 +1,6 @@
 import { BaseScraper } from './BaseScraper.js';
+import { fetchHtml, sleep, extractListingRows, extractListingTotal, hasMoreListingPages, listingPageUrl, extractDetail, extractNextData, lumaDataFromNextData, meetupDataFromNextData, isLumaUrl, isMeetupUrl, isDevEventsUrl, DEV_EVENTS_HOSTS, LUMA_HOSTS, MEETUP_HOSTS } from './devEventsHttp.js';
+import { resolveResidentialEgress } from '../lib/scrapling-fetcher.js';
 
 /**
  * Scraper for dev.events meetups page
@@ -11,6 +13,19 @@ export class DevEventsMeetupScraper extends BaseScraper {
     // Track current region being scraped
     this.currentRegion = null;
   }
+
+  /**
+   * dev.events is scraped over plain HTTP — no browser (see devEventsHttp.js).
+   */
+  async initialize() {
+    console.log(`🚀 Initializing ${this.config.name} scraper (HTTP mode, no browser)...`);
+    this.browser = null;
+    this.page = null;
+    // Per-scraper `use_residential_egress` (config JSON) → SCRAPERS_RESIDENTIAL_EGRESS env → off.
+    this._egress = { use: resolveResidentialEgress(this.config), jobId: this.config.jobId ?? null };
+    console.log(`🛰️ Residential egress: ${this._egress.use ? 'on (via scrapling-fetcher, proxy forced)' : 'off (direct fetch from the worker)'}`);
+  }
+
 
   /**
    * Main scraping method
@@ -64,735 +79,203 @@ export class DevEventsMeetupScraper extends BaseScraper {
   }
 
   /**
-   * Scrape multiple pages with pagination
+   * Walk the listing pages over HTTP (`?page=N`) and process every row.
+   * dev.events is server-rendered, so no browser is involved — see
+   * devEventsHttp.js for why the browser path was dropped.
    */
   async scrapePage(baseUrl) {
     console.log(`📄 Starting pagination scraping from: ${baseUrl}`);
-
-    await this.page.goto(baseUrl, {
-      waitUntil: 'networkidle2',
-      timeout: 60000
-    });
-
-    // Wait for events to load
-    await this.page.waitForSelector('body', { timeout: 30000 });
-
-    // Get total events count for progress tracking
-    const totalEventsInfo = await this.page.evaluate(() => {
-      const totalText = document.querySelector('body').innerText;
-      const match = totalText.match(/(\d+,\d+|\d+) meetups/i) || totalText.match(/(\d+,\d+|\d+) events/i);
-      return match ? match[1].replace(',', '') : null;
-    });
-
-    const totalEvents = totalEventsInfo ? parseInt(totalEventsInfo) : 500;
-    console.log(`📊 Estimated total meetups: ${totalEvents}`);
-
-    let currentPage = 1;
-    let hasMorePages = true;
+    const configuredMax = parseInt(this.config?.config?.maxPages, 10);
+    const maxPages = Number.isFinite(configuredMax) && configuredMax > 0 ? configuredMax : 50;
+    let totalEvents = null;
     let consecutiveErrors = 0;
     const maxConsecutiveErrors = 3;
-    const maxPages = 2; // Testing limit - only process 2 pages
+    let currentPage = 1;
+    let hasMorePages = true;
 
-    // Process all available pages (limited for testing)
     while (hasMorePages && consecutiveErrors < maxConsecutiveErrors && currentPage <= maxPages) {
-      console.log(`📄 Processing page ${currentPage}... (max ${maxPages} for testing)`);
-
+      const pageUrl = listingPageUrl(baseUrl, currentPage);
+      console.log(`📄 Processing page ${currentPage}: ${pageUrl}`);
       try {
-        // First page is already loaded, for next pages we need to navigate
-        if (currentPage > 1) {
-          console.log(`🌐 Navigating to page ${currentPage}...`);
-
-          await this.page.goto(`${baseUrl}?page=${currentPage}`, {
-            waitUntil: 'networkidle2',
-            timeout: 60000
-          });
-
-          // Wait for content to be visible
-          await this.page.waitForSelector('body', { timeout: 30000 });
-          await new Promise(resolve => setTimeout(resolve, 2000));
+        const { status, html } = await fetchHtml(pageUrl, { allow: DEV_EVENTS_HOSTS, timeoutMs: 45000, egress: this._egress });
+        if (status >= 400) throw new Error(`HTTP ${status} for ${pageUrl}`);
+        if (totalEvents === null) {
+          totalEvents = extractListingTotal(html) ?? 500;
+          console.log(`📊 Estimated total meetups: ${totalEvents}`);
         }
-
-        // Extract events from current page
-        let pageEvents = [];
-        try {
-          pageEvents = await this.extractEvents();
-          consecutiveErrors = 0; // Reset consecutive errors counter on success
-        } catch (extractError) {
-          console.error(`❌ Error extracting events: ${extractError.message}`);
-          throw extractError;
+        const pageEvents = this.extractEventsFromHtml(html);
+        consecutiveErrors = 0;
+        if (pageEvents.length === 0) {
+          console.log(`📭 No events found on page ${currentPage}. This is the last page.`);
+          break;
         }
-
-        if (!pageEvents || pageEvents.length === 0) {
-          console.log(`📭 No events found on page ${currentPage}. This might be the last page.`);
-          hasMorePages = false;
-          continue;
-        }
-
         console.log(`🔍 Found ${pageEvents.length} events on page ${currentPage}`);
-
-        // Process each event on this page
-        for (const rawEvent of pageEvents) {
-          this.stats.total++;
-
-          if (this.shouldSkipEvent(rawEvent)) {
-            continue;
-          }
-
-          // Step 1: Extract the dev.events URL from the listing
-          const devEventsUrl = rawEvent.url;
-          if (!devEventsUrl || !devEventsUrl.includes('dev.events')) {
-            console.log(`⚠️ Skipping event without valid dev.events URL: ${rawEvent.name}`);
-            this.stats.failed++;
-            continue;
-          }
-
-          // Preserve the original dev.events URL for ID extraction later
-          rawEvent.devEventsUrl = devEventsUrl;
-
-          // Step 2: Visit the individual event page to get the actual "Visit" link and cover image
-          const { url: actualEventUrl, coverImageUrl, lumaData, meetupData } = await this.extractActualEventUrl(devEventsUrl);
-          if (!actualEventUrl) {
-            console.log(`⚠️ Could not find actual event URL for: ${rawEvent.name}`);
-            this.stats.failed++;
-            continue;
-          }
-
-          // Use the actual event URL instead of the dev.events URL
-          rawEvent.url = actualEventUrl;
-
-          // Store the cover image URL if found
-          if (coverImageUrl) {
-            rawEvent.coverImageUrl = coverImageUrl;
-          }
-
-          // Store Luma data if extracted
-          if (lumaData) {
-            rawEvent.lumaData = lumaData;
-          }
-
-          // Store Meetup data if extracted
-          if (meetupData) {
-            rawEvent.meetupData = meetupData;
-          }
-
-          // Safety check: Skip if we still have a dev.events URL (extraction failed)
-          if (rawEvent.url && rawEvent.url.includes('dev.events')) {
-            console.log(`🚫 Skipping dev.events URL (extraction failed): ${rawEvent.name} - ${rawEvent.url}`);
-            this.stats.failed++;
-            continue;
-          }
-
-          // Validate the actual URL if enabled
-          if (rawEvent.url && !(await this.validateUrl(rawEvent.url))) {
-            continue;
-          }
-
-          // Normalize event data
-          const normalizedEvent = this.normalizeEvent(rawEvent);
-
-          // Check if event is in the past
-          if (this.isPastEvent(normalizedEvent.eventStart, normalizedEvent.eventEnd)) {
-            console.log(`⏰ Skipping past event: ${normalizedEvent.eventTitle} (${normalizedEvent.eventStart})`);
-            this.stats.skipped++;
-            continue;
-          }
-
-          // Filter out promotional/advertising events
-          if (this.isPromotionalEvent(normalizedEvent)) {
-            console.log(`🚫 Skipping promotional event: ${normalizedEvent.eventTitle}`);
-            continue;
-          }
-
-          if (normalizedEvent.eventTitle && normalizedEvent.eventLink) {
-            this.scrapedEvents.push(normalizedEvent);
-            this.processedUrls.add(normalizedEvent.eventLink);
-            this.stats.processed++;
-          } else {
-            this.stats.failed++;
-          }
-        }
-
-        // For testing, stop after maxPages
-        if (currentPage >= maxPages) {
-          console.log(`🛑 Reached testing limit of ${maxPages} pages`);
-          hasMorePages = false;
-        } else {
-          // Check if there might be more pages (simple heuristic)
-          const hasNextPageElements = await this.page.evaluate(() => {
-            // Look for pagination indicators
-            const nextButtons = document.querySelectorAll('a, button');
-            return Array.from(nextButtons).some(el =>
-              el.textContent.toLowerCase().includes('next') ||
-              el.textContent.toLowerCase().includes('more')
-            );
-          });
-
-          if (!hasNextPageElements) {
-            console.log(`📭 No pagination indicators found, assuming last page`);
-            hasMorePages = false;
-          }
-        }
-
+        await this.processListingEvents(pageEvents);
+        hasMorePages = hasMoreListingPages(html);
+        if (!hasMorePages) console.log('🏁 No more pages available.');
         currentPage++;
-
+        await sleep(1000 + Math.floor(Math.random() * 1000));
       } catch (error) {
         consecutiveErrors++;
         console.error(`❌ Error on page ${currentPage}: ${error.message}`);
-
         if (consecutiveErrors >= maxConsecutiveErrors) {
           console.error(`❌ Too many consecutive errors (${consecutiveErrors}), stopping pagination`);
-          hasMorePages = false;
         } else {
-          console.log(`⏳ Retrying page ${currentPage} in 3 seconds...`);
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await sleep(3000);
         }
       }
     }
-
-    console.log(`✅ Completed pagination. Processed ${currentPage - 1} pages.`);
+    console.log(`✅ Completed scraping ${currentPage - 1} pages`);
+    this.printStats();
+    return this.scrapedEvents;
   }
 
   /**
-   * Extract rich event data from Luma event pages using __NEXT_DATA__ JSON
-   * Returns detailed event info including coordinates, timezone, location data
-   * Also returns the full __NEXT_DATA__ JSON for database storage
+   * Resolve each listing row to its real event site, then normalise, filter
+   * and collect it. Shared by every page and region.
    */
-  async extractLumaEventData(eventPage) {
-    try {
-      const lumaData = await eventPage.evaluate(() => {
-        const nextDataScript = document.querySelector('script#__NEXT_DATA__');
-        if (!nextDataScript) return null;
+  async processListingEvents(pageEvents) {
+    for (const rawEvent of pageEvents) {
+      this.stats.total++;
+      if (this.shouldSkipEvent(rawEvent)) continue;
 
-        try {
-          const data = JSON.parse(nextDataScript.textContent);
-
-          // Store the full __NEXT_DATA__ JSON (excluding user data for privacy)
-          // We keep props.pageProps which contains the event configuration
-          let lumaPageData = null;
-          if (data?.props?.pageProps) {
-            lumaPageData = {
-              buildId: data.buildId,
-              pageProps: {
-                ...data.props.pageProps,
-                // Remove initialUserData to avoid storing personal information
-              }
-            };
-            // Also remove initialUserData from nested props if present
-            if (data.props.initialUserData) {
-              delete lumaPageData.initialUserData;
-            }
-          }
-
-          const initialData = data?.props?.pageProps?.initialData?.data;
-          const eventData = initialData?.event;
-
-          if (!eventData) return { lumaPageData };
-
-          return {
-            lumaEventId: eventData.api_id || initialData.api_id,
-            timezone: eventData.timezone,
-            coverUrl: eventData.cover_url,
-            latitude: eventData.coordinate?.latitude,
-            longitude: eventData.coordinate?.longitude,
-            city: eventData.geo_address_info?.city,
-            country: eventData.geo_address_info?.country,
-            countryCode: eventData.geo_address_info?.country_code,
-            region: eventData.geo_address_info?.region,
-            venueAddress: eventData.geo_address_info?.address,
-            fullAddress: eventData.geo_address_info?.full_address,
-            shortAddress: eventData.geo_address_info?.short_address,
-            locationType: eventData.location_type, // 'offline' or 'online'
-            // Full page data for database storage
-            lumaPageData
-          };
-        } catch (e) {
-          console.error('Failed to parse __NEXT_DATA__:', e.message);
-          return null;
-        }
-      });
-
-      if (lumaData) {
-        console.log(`📊 Extracted Luma data: id=${lumaData.lumaEventId}, tz=${lumaData.timezone}, city=${lumaData.city}`);
-        if (lumaData.lumaPageData) {
-          console.log(`📄 Captured full Luma __NEXT_DATA__ for database storage`);
-        }
+      const devEventsUrl = rawEvent.url;
+      if (!isDevEventsUrl(devEventsUrl)) {
+        console.log(`⚠️ Skipping event without valid dev.events URL: ${rawEvent.name}`);
+        this.stats.failed++;
+        continue;
       }
+      rawEvent.devEventsUrl = devEventsUrl;
+      const { url: actualEventUrl, coverImageUrl, lumaData, meetupData } = await this.extractActualEventUrl(devEventsUrl);
+      if (!actualEventUrl) {
+        console.log(`⚠️ Could not find actual event URL for: ${rawEvent.name}`);
+        this.stats.failed++;
+        continue;
+      }
+      rawEvent.url = actualEventUrl;
+      if (coverImageUrl) rawEvent.coverImageUrl = coverImageUrl;
+      if (lumaData) rawEvent.lumaData = lumaData;
+      if (meetupData) rawEvent.meetupData = meetupData;
 
+      if (isDevEventsUrl(rawEvent.url)) {
+        console.log(`🚫 Skipping dev.events URL (extraction failed): ${rawEvent.name} - ${rawEvent.url}`);
+        this.stats.failed++;
+        continue;
+      }
+      if (!(await this.validateUrl(rawEvent.url))) continue;
+
+      const normalizedEvent = this.normalizeEvent(rawEvent);
+      if (this.isPastEvent(normalizedEvent.eventStart, normalizedEvent.eventEnd)) {
+        console.log(`⏰ Skipping past event: ${normalizedEvent.eventTitle} (${normalizedEvent.eventStart})`);
+        this.stats.skipped++;
+        continue;
+      }
+      if (this.isPromotionalEvent(normalizedEvent)) {
+        console.log(`🚫 Skipping promotional event: ${normalizedEvent.eventTitle}`);
+        continue;
+      }
+      if (normalizedEvent.eventTitle && normalizedEvent.eventLink) {
+        this.scrapedEvents.push(normalizedEvent);
+        this.processedUrls.add(normalizedEvent.eventLink);
+        this.stats.processed++;
+      } else {
+        this.stats.failed++;
+      }
+    }
+  }
+
+  /**
+   * Listing rows → raw events in the shape normalizeEvent expects.
+   */
+  extractEventsFromHtml(html) {
+    const baseUrl = this.config?.config?.baseUrl || 'https://dev.events/meetups';
+    return extractListingRows(html, { baseUrl }).map((row) => ({
+      name: row.name,
+      url: row.url,
+      dateText: row.dateText,
+      startDate: row.startDate,
+      endDate: row.endDate,
+      city: row.isOnline ? 'Online' : row.city,
+      country: row.isOnline ? '' : row.country,
+      region: row.isOnline ? 'Online' : row.region,
+      venueAddress: row.venueAddress,
+      description: row.description,
+      organizer: row.organizer,
+    }));
+  }
+
+  /**
+   * Luma enrichment from the event page's __NEXT_DATA__ (no browser).
+   */
+  async extractLumaEventData(lumaUrl) {
+    try {
+      console.log(`🔗 Detected Luma event URL, extracting rich data...`);
+      const { status, html } = await fetchHtml(lumaUrl, { allow: LUMA_HOSTS, timeoutMs: 30000, egress: this._egress });
+      if (status >= 400) throw new Error(`HTTP ${status}`);
+      const lumaData = lumaDataFromNextData(extractNextData(html));
+      if (lumaData?.lumaEventId) {
+        console.log(`📊 Extracted Luma data: id=${lumaData.lumaEventId}, tz=${lumaData.timezone}, city=${lumaData.city}`);
+      }
       return lumaData;
     } catch (error) {
-      console.error(`❌ Error extracting Luma event data: ${error.message}`);
+      console.warn(`⚠️ Failed to fetch Luma event data: ${error.message}`);
       return null;
     }
   }
 
   /**
-   * Extract rich event data from Meetup.com event pages using __NEXT_DATA__ JSON
-   * Returns the full __NEXT_DATA__ JSON for database storage
+   * Meetup.com enrichment from the event page's __NEXT_DATA__ (no browser).
    */
-  async extractMeetupEventData(eventPage) {
+  async extractMeetupEventData(meetupUrl) {
     try {
-      const meetupData = await eventPage.evaluate(() => {
-        const nextDataScript = document.querySelector('script#__NEXT_DATA__');
-        if (!nextDataScript) return null;
-
-        try {
-          const data = JSON.parse(nextDataScript.textContent);
-
-          // Store the full __NEXT_DATA__ JSON (excluding sensitive user data)
-          // We keep props.pageProps which contains the event configuration
-          let meetupPageData = null;
-          if (data?.props?.pageProps) {
-            meetupPageData = {
-              buildId: data.buildId,
-              pageProps: { ...data.props.pageProps }
-            };
-          }
-
-          // Extract useful fields for the event record
-          const eventData = data?.props?.pageProps?.event || data?.props?.pageProps;
-
-          // Try to extract location info from various possible structures
-          const venue = eventData?.venue || eventData?.event?.venue;
-          const group = eventData?.group || eventData?.event?.group;
-
-          const extractedData = {
-            meetupEventId: eventData?.id || eventData?.event?.id,
-            title: eventData?.title || eventData?.event?.title,
-            description: eventData?.description || eventData?.event?.description,
-            timezone: eventData?.timezone || group?.timezone,
-            // Venue info
-            venueName: venue?.name,
-            venueAddress: venue?.address,
-            city: venue?.city,
-            state: venue?.state,
-            country: venue?.country,
-            latitude: venue?.lat,
-            longitude: venue?.lon,
-            // Group info
-            groupName: group?.name,
-            groupUrlname: group?.urlname,
-            // Full page data for database storage
-            meetupPageData
-          };
-
-          return extractedData;
-        } catch (e) {
-          console.error('Failed to parse Meetup __NEXT_DATA__:', e.message);
-          return null;
-        }
-      });
-
+      console.log(`🔗 Detected Meetup.com event URL, extracting rich data...`);
+      const { status, html } = await fetchHtml(meetupUrl, { allow: MEETUP_HOSTS, timeoutMs: 30000, egress: this._egress });
+      if (status >= 400) throw new Error(`HTTP ${status}`);
+      const meetupData = meetupDataFromNextData(extractNextData(html));
       if (meetupData) {
         console.log(`📊 Extracted Meetup data: id=${meetupData.meetupEventId}, city=${meetupData.city}, group=${meetupData.groupName}`);
       }
-
       return meetupData;
     } catch (error) {
-      console.error(`❌ Error extracting Meetup event data: ${error.message}`);
+      console.warn(`⚠️ Failed to fetch Meetup event data: ${error.message}`);
       return null;
     }
   }
 
   /**
-   * Extract the actual event URL and cover image from a dev.events event page
-   * Returns an object with { url, coverImageUrl }
+   * Fetch the dev.events detail page over HTTP and find the event's own
+   * site (iframe preview, "Visit" link, or an event-looking external link).
+   * Luma and Meetup.com events are enriched from their page's __NEXT_DATA__.
    */
   async extractActualEventUrl(devEventsUrl) {
     try {
-      console.log(`🔗 Extracting actual URL and cover image from: ${devEventsUrl}`);
-
-      // Create a new page for this individual event to avoid interfering with main scraping
-      const eventPage = await this.browser.newPage();
-
-      try {
-        await eventPage.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-        await eventPage.goto(devEventsUrl, {
-          waitUntil: 'networkidle2',
-          timeout: 30000
-        });
-
-        // Wait a bit for the page to fully load
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Extract both the actual event URL and cover image
-        const { actualUrl, coverImageUrl } = await eventPage.evaluate(() => {
-          // First, try to extract cover image from the dev.events page
-          let coverImageUrl = null;
-
-          // Look for event images in common locations
-          const imageSelectors = [
-            'meta[property="og:image"]', // Open Graph image
-            'meta[name="twitter:image"]', // Twitter card image
-            'img[class*="event"][class*="image"]',
-            'img[class*="cover"]',
-            'img[class*="hero"]',
-            'img[class*="banner"]',
-            '.event-image img',
-            '.event-header img',
-            '.hero img',
-            'article img:first-of-type',
-            '.content img:first-of-type'
-          ];
-
-          for (const selector of imageSelectors) {
-            const element = document.querySelector(selector);
-            if (element) {
-              const src = element.getAttribute('content') || element.getAttribute('src');
-              if (src && (src.startsWith('http') || src.startsWith('//'))) {
-                coverImageUrl = src.startsWith('//') ? `https:${src}` : src;
-                console.log('Found cover image:', coverImageUrl);
-                break;
-              }
-            }
-          }
-
-          // Now extract the actual event URL
-          let actualUrl = null;
-          // Priority 1: Check for iframe with meetup or event URL
-          const iframes = Array.from(document.querySelectorAll('iframe'));
-          for (const iframe of iframes) {
-            const src = iframe.getAttribute('src');
-            if (src && (src.includes('meetup.com') || src.includes('eventbrite.com') ||
-                       src.includes('tickets.') || src.includes('register'))) {
-              console.log('Found iframe URL:', src);
-              actualUrl = src;
-              return { actualUrl, coverImageUrl };
-            }
-          }
-
-          // Priority 2: Look for links with "Visit" text (case insensitive)
-          const visitLinks = Array.from(document.querySelectorAll('a'))
-            .filter(link => {
-              const text = link.textContent.trim().toLowerCase();
-              return text === 'visit' || text.includes('visit');
-            });
-
-          // Priority order: exact "visit" text, then contains visit
-          for (const link of visitLinks) {
-            const href = link.getAttribute('href');
-            if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
-              // Make sure it's not a dev.events link
-              if (!href.includes('dev.events')) {
-                console.log('Found visit link URL:', href);
-                actualUrl = href;
-                return { actualUrl, coverImageUrl };
-              }
-            }
-          }
-
-          // Priority 3: Look for common event platform links
-          const eventPlatformLinks = Array.from(document.querySelectorAll('a[href^="http"]'))
-            .filter(link => {
-              const href = link.getAttribute('href');
-              return href && (
-                href.includes('meetup.com') ||
-                href.includes('eventbrite.com') ||
-                href.includes('tickets.') ||
-                href.includes('register') ||
-                href.includes('event')
-              ) && !href.includes('dev.events');
-            });
-
-          if (eventPlatformLinks.length > 0) {
-            actualUrl = eventPlatformLinks[0].getAttribute('href');
-            console.log('Found event platform URL:', actualUrl);
-            return { actualUrl, coverImageUrl };
-          }
-
-          // Fallback: look for external links that might be the event URL
-          const externalLinks = Array.from(document.querySelectorAll('a[href^="http"]'))
-            .filter(link => {
-              const href = link.getAttribute('href');
-              return href &&
-                     !href.includes('dev.events') &&
-                     !href.includes('twitter.com') &&
-                     !href.includes('linkedin.com') &&
-                     !href.includes('facebook.com') &&
-                     !href.includes('instagram.com');
-            });
-
-          if (externalLinks.length > 0) {
-            actualUrl = externalLinks[0].getAttribute('href');
-            console.log('Found fallback external URL:', actualUrl);
-            return { actualUrl, coverImageUrl };
-          }
-
-          return { actualUrl: null, coverImageUrl };
-        });
-
-        // If the actual URL is a Luma event, navigate to it to extract rich data
-        let lumaData = null;
-        let meetupData = null;
-
-        if (actualUrl && (actualUrl.includes('lu.ma') || actualUrl.includes('luma.com'))) {
-          console.log(`🔗 Detected Luma event URL, extracting rich data...`);
-          try {
-            await eventPage.goto(actualUrl, {
-              waitUntil: 'networkidle2',
-              timeout: 30000
-            });
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            lumaData = await this.extractLumaEventData(eventPage);
-
-            // Use Luma cover image if we didn't find one on dev.events
-            if (!coverImageUrl && lumaData?.coverUrl) {
-              coverImageUrl = lumaData.coverUrl;
-              console.log(`🖼️ Using cover image from Luma: ${coverImageUrl}`);
-            }
-          } catch (lumaError) {
-            console.warn(`⚠️ Failed to fetch Luma event data: ${lumaError.message}`);
-          }
-        }
-
-        // If the actual URL is a Meetup event, navigate to it to extract rich data
-        if (actualUrl && actualUrl.includes('meetup.com')) {
-          console.log(`🔗 Detected Meetup.com event URL, extracting rich data...`);
-          try {
-            await eventPage.goto(actualUrl, {
-              waitUntil: 'networkidle2',
-              timeout: 30000
-            });
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            meetupData = await this.extractMeetupEventData(eventPage);
-          } catch (meetupError) {
-            console.warn(`⚠️ Failed to fetch Meetup event data: ${meetupError.message}`);
-          }
-        }
-
-        await eventPage.close();
-
-        if (actualUrl) {
-          console.log(`✅ Found actual URL: ${actualUrl}`);
-          if (coverImageUrl) {
-            console.log(`✅ Found cover image: ${coverImageUrl}`);
-          }
-          return { url: actualUrl, coverImageUrl, lumaData, meetupData };
-        } else {
-          console.log(`❌ No actual URL found for: ${devEventsUrl}`);
-          if (coverImageUrl) {
-            console.log(`✅ Found cover image (but no URL): ${coverImageUrl}`);
-          }
-          return { url: null, coverImageUrl, lumaData: null, meetupData: null };
-        }
-
-      } catch (error) {
-        await eventPage.close();
-        console.error(`❌ Error extracting URL from ${devEventsUrl}: ${error.message}`);
+      console.log(`🔗 Extracting actual URL from: ${devEventsUrl}`);
+      const { status, html } = await fetchHtml(devEventsUrl, { allow: DEV_EVENTS_HOSTS, timeoutMs: 30000, egress: this._egress });
+      if (status >= 400) {
+        console.error(`❌ Error accessing event page ${devEventsUrl}: HTTP ${status}`);
         return { url: null, coverImageUrl: null, lumaData: null, meetupData: null };
       }
-
+      const detail = extractDetail(html);
+      const actualUrl = detail.actualUrl;
+      let coverImageUrl = detail.coverImageUrl;
+      let lumaData = null;
+      let meetupData = null;
+      if (actualUrl && isLumaUrl(actualUrl)) {
+        lumaData = await this.extractLumaEventData(actualUrl);
+        if (!coverImageUrl && lumaData?.coverUrl) coverImageUrl = lumaData.coverUrl;
+      } else if (actualUrl && isMeetupUrl(actualUrl)) {
+        meetupData = await this.extractMeetupEventData(actualUrl);
+      }
+      if (actualUrl) {
+        console.log(`✅ Successfully extracted URL: ${actualUrl}`);
+        return { url: actualUrl, coverImageUrl, lumaData, meetupData };
+      }
+      console.log(`❌ No actual event URL found in ${devEventsUrl}`);
+      return { url: null, coverImageUrl, lumaData: null, meetupData: null };
     } catch (error) {
-      console.error(`❌ Failed to create page for URL extraction: ${error.message}`);
+      console.error(`❌ Error extracting actual URL from ${devEventsUrl}:`, error.message);
       return { url: null, coverImageUrl: null, lumaData: null, meetupData: null };
     }
-  }
-
-  /**
-   * Extract events from meetups page using JSON-LD and CSS selectors
-   */
-  async extractEvents() {
-    return await this.page.evaluate(() => {
-      const events = [];
-
-      // First, try to extract from JSON-LD structured data
-      const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-
-      jsonLdScripts.forEach(script => {
-        try {
-          const data = JSON.parse(script.textContent);
-
-          // Handle single event or array of events
-          const eventData = Array.isArray(data) ? data : [data];
-
-          eventData.forEach(item => {
-            if (item['@type'] === 'EducationEvent' || item['@type'] === 'Event') {
-              // Extract venue address from JSON-LD
-              let venueAddress = '';
-              if (item.location) {
-                // Try to get full address
-                if (item.location.address?.streetAddress) {
-                  venueAddress = item.location.address.streetAddress;
-                  if (item.location.address.addressLocality) {
-                    venueAddress += `, ${item.location.address.addressLocality}`;
-                  }
-                } else if (item.location.name) {
-                  venueAddress = item.location.name;
-                }
-              }
-
-              const event = {
-                name: item.name,
-                url: item.url,
-                dateText: item.startDate,
-                endDate: item.endDate,
-                city: item.location?.address?.addressLocality || '',
-                country: item.location?.address?.addressCountry || '',
-                region: item.location?.address?.addressRegion || '',
-                venueAddress: venueAddress,
-                description: item.description || '',
-                organizer: item.organizer?.name || ''
-              };
-
-              events.push(event);
-            }
-          });
-        } catch (error) {
-          console.warn('Failed to parse JSON-LD:', error);
-        }
-      });
-
-      // If JSON-LD didn't yield results, fall back to CSS selectors specific to meetups
-      if (events.length === 0) {
-        const eventElements = document.querySelectorAll('#meetups [data-type="EducationEvent"], .meetup-event, #meetups .event-item');
-
-        eventElements.forEach(element => {
-          const nameEl = element.querySelector('.name, .event-name, .title') ||
-                        element.querySelector('a[href*="meetup"], a[href*="event"]');
-          const urlEl = element.querySelector('a[href*="http"]') || nameEl;
-          const dateEl = element.querySelector('.startDate, .event-date, time');
-          const locationEl = element.querySelector('.location, .event-location');
-
-          if (nameEl && urlEl) {
-            const name = nameEl.textContent?.trim() || '';
-            const url = urlEl.getAttribute('href') || '';
-            const dateText = dateEl?.textContent?.trim() || dateEl?.getAttribute('datetime') || '';
-            const locationText = locationEl?.textContent?.trim() || '';
-
-            // Extract venue address
-            let venueAddress = '';
-            const venueEl = element.querySelector('.venue, .address, .location-details');
-            if (venueEl) {
-              venueAddress = venueEl.textContent?.trim() || '';
-            }
-
-            // Parse location
-            let city = '';
-            let country = '';
-            let region = '';
-
-            if (locationText.toLowerCase().includes('online')) {
-              city = 'Online';
-              region = 'Online';
-            } else if (locationText) {
-              const parts = locationText.split(',').map(p => p.trim());
-              if (parts.length >= 1) city = parts[0];
-              if (parts.length >= 2) region = parts[1];
-              if (parts.length >= 3) country = parts[2];
-            }
-
-            events.push({
-              name,
-              url: url.startsWith('http') ? url : `https://dev.events${url}`,
-              dateText,
-              city,
-              country,
-              region,
-              venueAddress
-            });
-          }
-        });
-      }
-
-      // Additional scraping for dev.events specific structure - target meetups section specifically
-      const devEventsRows = document.querySelectorAll('#meetups .row.columns.is-mobile, .meetup-row');
-
-      devEventsRows.forEach(row => {
-        const titleEl = row.querySelector('.title a, .event-title a');
-        const subtitleEl = row.querySelector('.subtitle, .event-subtitle');
-        const timeEl = row.querySelector('time');
-
-        if (titleEl) {
-          const name = titleEl.textContent?.trim() || '';
-          const href = titleEl.getAttribute('href') || '';
-          const url = href.startsWith('http') ? href : `https://dev.events${href}`;
-          const dateText = timeEl?.textContent?.trim() || '';
-          const subtitleText = subtitleEl?.textContent || '';
-
-          // Extract venue address from description or subtitle
-          let venueAddress = '';
-          const fullText = subtitleText;
-          const venuePatterns = [
-            /at\s+([^,\n]+(?:Center|Centre|Hall|Hotel|Convention|Conference|Building|Arena|Stadium|Theatre|Theater|Campus|University|College|Academy|Institute|Pavilion|Complex)[^,\n]*)/i,
-            /venue:\s*([^,\n]+)/i,
-            /location:\s*([^,\n]+)/i,
-            /address:\s*([^,\n]+)/i,
-            /held at\s+([^,\n]+)/i
-          ];
-
-          for (const pattern of venuePatterns) {
-            const match = fullText.match(pattern);
-            if (match && match[1] && match[1].trim().length > 5) {
-              venueAddress = match[1].trim().replace(/\s+/g, ' ');
-              break;
-            }
-          }
-
-          // Extract location from subtitle
-          let city = '';
-          let country = '';
-          let region = '';
-
-          if (subtitleText.toLowerCase().includes('online')) {
-            city = 'Online';
-            region = 'Online';
-          } else {
-            // Try to extract location from links in subtitle
-            const locationLinks = Array.from(row.querySelectorAll('.subtitle a'));
-            const locationTexts = locationLinks
-              .filter(a => {
-                const href = a.getAttribute('href') || '';
-                return href.includes('/') && !href.startsWith('/#');
-              })
-              .map(a => a.textContent.trim())
-              .filter(text => text.length > 1);
-
-            if (locationTexts.length > 0) {
-              city = locationTexts[0] || '';
-              if (locationTexts.length > 1) {
-                // Try to determine country vs region
-                const lastItem = locationTexts[locationTexts.length - 1];
-                const secondLast = locationTexts[locationTexts.length - 2];
-
-                // If we have 3+ items, likely: City, State/Region, Country
-                if (locationTexts.length >= 3) {
-                  region = secondLast;
-                  country = lastItem;
-                } else {
-                  // If we have 2 items, likely: City, Country
-                  country = lastItem;
-                }
-              }
-            }
-          }
-
-          if (name && url) {
-            events.push({
-              name,
-              url,
-              dateText,
-              city,
-              country,
-              region,
-              venueAddress
-            });
-          }
-        }
-      });
-
-      // Remove duplicates based on URL
-      const uniqueEvents = [];
-      const seenUrls = new Set();
-
-      events.forEach(event => {
-        if (event.url && !seenUrls.has(event.url)) {
-          seenUrls.add(event.url);
-          uniqueEvents.push(event);
-        }
-      });
-
-      return uniqueEvents;
-    });
   }
 
   /**
@@ -805,15 +288,15 @@ export class DevEventsMeetupScraper extends BaseScraper {
 
     try {
       // Handle ISO date format (from JSON-LD)
-      if (dateStr.includes('T') || dateStr.includes('-')) {
-        const date = new Date(dateStr);
-        if (!isNaN(date.getTime())) {
-          const isoDate = date.toISOString().split('T')[0];
-          return {
-            eventStart: isoDate,
-            eventEnd: isoDate
-          };
-        }
+      // ISO input: take the calendar date as written. Round-tripping through
+      // Date/toISOString shifted it by the process timezone, and the old
+      // `includes('-')` test also sent "Oct 12-14 26" down this path.
+      if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+        const isoDate = dateStr.slice(0, 10);
+        return {
+          eventStart: isoDate,
+          eventEnd: isoDate
+        };
       }
 
       // Handle relative dates like "Next Tuesday", "This Friday"
@@ -919,6 +402,15 @@ export class DevEventsMeetupScraper extends BaseScraper {
         }
       }
 
+      // Event-hosting platforms are never promotional, whatever their domain
+      // shape. Without this, the short-domain heuristic below rejects every
+      // luma.com / lu.ma meetup (8 and 5 character hostnames), which is most
+      // of what dev.events lists.
+      const eventPlatforms = ['luma.com', 'lu.ma', 'meetup.com', 'eventbrite.', 'ti.to', 'tito.io', 'hopin.com', 'zoom.us', 'guild.host', 'bevy.com'];
+      if (eventPlatforms.some(p => url.hostname === p || url.hostname.endsWith('.' + p) || url.hostname.includes(p))) {
+        return false;
+      }
+
       // Check for very short domain names (often promotional)
       if (url.hostname.split('.').length === 2 && url.hostname.length < 12 &&
           !url.hostname.includes('conf') && !url.hostname.includes('dev') &&
@@ -940,7 +432,7 @@ export class DevEventsMeetupScraper extends BaseScraper {
    * The ID is the last segment after the final hyphen: "eguzf-gg"
    */
   extractDevEventsId(url) {
-    if (!url || !url.includes('dev.events')) return null;
+    if (!isDevEventsUrl(url)) return null;
 
     try {
       const urlObj = new URL(url);
@@ -969,7 +461,11 @@ export class DevEventsMeetupScraper extends BaseScraper {
    * Normalize meetup event data
    */
   normalizeEvent(rawEvent) {
-    const { eventStart, eventEnd } = this.parseDateToISO(rawEvent.dateText || rawEvent.date);
+    // The listing's JSON-LD carries unambiguous ISO dates; the <time> text
+    // ("Oct 9 26") is only a fallback for rows without it.
+    const { eventStart, eventEnd } = rawEvent.startDate
+      ? { eventStart: String(rawEvent.startDate).slice(0, 10), eventEnd: String(rawEvent.endDate || rawEvent.startDate).slice(0, 10) }
+      : this.parseDateToISO(rawEvent.dateText || rawEvent.date);
     const scraperName = this.config.config?.name || 'DevEventsMeetupScraper';
 
     // Extract the dev.events ID from the original dev.events URL (stored in devEventsUrl)
