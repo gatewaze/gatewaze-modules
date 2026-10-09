@@ -210,6 +210,36 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
 
   const video = data.youtube_id ? videoEmbed(data.youtube_id, color, title) : ''
 
+  // Photos taken at this session (conference-recap album matching): a small
+  // thumb strip under the card. Same URL policy as the media gallery —
+  // https only, with the dev-only loopback-http carve-out.
+  const stripSafe = (s: unknown): s is string => {
+    if (typeof s !== 'string') return false
+    try {
+      const u = new URL(s)
+      return u.protocol === 'https:' ||
+        (u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && (
+          u.hostname === 'localhost' || u.hostname.endsWith('.localhost') ||
+          u.hostname === '127.0.0.1' || u.hostname === '[::1]' || u.hostname === '::1'
+        ))
+    } catch { return false }
+  }
+  const photoItems = (Array.isArray((data as any).photos) ? (data as any).photos : [])
+    .filter((p: any) => !!p && stripSafe(p.src) && (p.thumb === undefined || stripSafe(p.thumb)))
+    .slice(0, 8)
+  const photosStrip = photoItems.length > 0
+    ? `
+    <div>
+      <p style="${label('var(--ink)')}">Photos from this session</p>
+      <div style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px;">${photoItems
+        .map((p: any) =>
+          `<a href="${escAttr(p.src)}" target="_blank" rel="noopener noreferrer" style="flex:none; ${NOLINE}">` +
+          `<img src="${escAttr(p.thumb ?? p.src)}" alt="${escAttr(String(p.alt ?? ''))}" loading="lazy"` +
+          ` style="height:84px; width:auto; border-radius:8px; display:block;" /></a>`)
+        .join('')}</div>
+    </div>`
+    : ''
+
   return `
   <div id="${tid}"${topicsAttr} style="border:1px solid var(--line); border-top:3px solid ${color}; background:var(--paper); border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:14px; scroll-margin-top:96px;">
     <div style="display:flex; align-items:flex-start; gap:12px;">
@@ -232,7 +262,7 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
         </div>
       </div>
       ${video}
-    </div>
+    </div>${photosStrip}
   </div>`
 }
 
