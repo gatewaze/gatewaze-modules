@@ -73,7 +73,7 @@ export interface WsRepo {
  * reads across all subdirs but changes only writable ones.
  */
 export async function makeMultiWorkspace(
-  codeRepos: Array<{ repoOwner: string; repoName: string; writeMode: 'writable' | 'read_only'; baseBranch: string | null }>,
+  codeRepos: Array<{ repoOwner: string; repoName: string; writeMode: 'writable' | 'read_only'; baseBranch: string | null; checkoutRef?: string }>,
   token: string,
   branch: string,
   id?: CommitIdentity,
@@ -101,13 +101,18 @@ export async function makeMultiWorkspace(
           await git(['clone', '--depth', '1', '--branch', branch, remote, dir]); // the run branch already exists
           await identity(dir, id);
         } else {
-          if (r.baseBranch) await git(['clone', '--depth', '1', '--branch', r.baseBranch, remote, dir]);
+          const ref = r.baseBranch === 'main' ? r.checkoutRef ?? r.baseBranch : r.baseBranch;
+          if (ref) await git(['clone', '--depth', '1', '--branch', ref, remote, dir]);
           else await git(['clone', '--depth', '1', remote, dir]);
+          if (r.checkoutRef && r.baseBranch === 'main') {
+            const expected = r.checkoutRef.split('/').at(-1);
+            if ((await git(['-C', dir, 'rev-parse', 'HEAD'])).trim() !== expected) throw new Error('HELF preview reference changed');
+          }
           if (writable) { await git(['-C', dir, 'checkout', '-b', branch]); await identity(dir, id); }
         }
       } catch (e) {
         // A WRITABLE repo is an edit target — if it won't clone the run can't proceed, so fail.
-        if (writable) throw e;
+        if (writable || r.checkoutRef) throw e;
         // A READ-ONLY repo is reference context (e.g. a private cross-project repo the token may not
         // reach). Never let it fail the whole run — drop it, keep going without that context.
         await rm(dir, { recursive: true, force: true }).catch(() => {});

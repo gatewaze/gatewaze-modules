@@ -1,3 +1,4 @@
+import { getRunCodeRepos } from '../lib/run-code-repos.js';
 // @ts-nocheck
 /**
  * review phase (§7). A FIXED, stateless adversarial skeptic — separate session from the author
@@ -105,7 +106,7 @@ export default async function review(job, ctx) {
   try {
     const { data: art } = await supabase.from('se_artifacts').select('content').eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
     const specText = art?.content ?? '';
-    const codeRepos = (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun).map((r) => ({ ...r, writeMode: 'read_only' }));
+    const codeRepos = (await getRunCodeRepos(supabase, run)).slice(0, project.maxCodeReposPerRun).map((r) => ({ ...r, writeMode: 'read_only' }));
     // No issue fetch at this point (review only needs the spec artifact + repos) — branch_name
     // should already be set by intake/spec before review ever runs, so this is a defensive
     // last-resort default, not the normal path. branchNameFor(run) with no title just falls

@@ -30,6 +30,9 @@ describe('multi-repository workspace isolation', () => {
       await access(join(ws.repos[0].dir, 'source'));
     } finally { await ws.cleanup(); }
   });
+  it('fails closed if a required preview reference no longer matches its recorded SHA', async () => {
+    await expect(makeMultiWorkspace([{...repo('private','modules','read_only'),checkoutRef:'staging/helf-preview/'+'a'.repeat(40)}], 'token','feature')).rejects.toThrow('HELF preview reference changed');
+  });
   it('rejects traversal before cloning writable repositories', async () => {
     await expect(makeMultiWorkspace([repo('..')], 'token', 'feature')).rejects.toThrow('unsafe repo identity');
   });

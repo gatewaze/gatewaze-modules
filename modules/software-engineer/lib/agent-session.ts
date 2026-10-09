@@ -238,8 +238,8 @@ export class InProcessRunner implements Runner {
           systemPrompt: { type: 'preset', preset: 'claude_code', append: input.systemAppend ?? '' },
           // NOT 'bypassPermissions' — that maps to --dangerously-skip-permissions, which the claude
           // binary refuses under root/sudo (the runner container runs as root). Instead we approve
-          // via canUseTool: bare allowedTools entries auto-approve, and anything else falls through
-          // to the callback below (which allows it). No dangerous flag → works as root. The Bash
+          // via the host canUseTool callback in explicit default mode. No dangerous flag → works
+          // as root without depending on SDK automatic-mode defaults. The Bash
           // PreToolUse hook still enforces the forbidden-flag guard regardless of approval mode.
           // noTools (triage etc.): a PURE model turn. `allowedTools` alone only controls
           // auto-approval, NOT availability — so hard-disable the whole built-in tool set via
@@ -247,11 +247,14 @@ export class InProcessRunner implements Runner {
           // through availability, approval denies it). maxTurns bounds the session to a single
           // response so a timed-out caller can't leave an unbounded subprocess behind.
           ...(input.noTools ? { tools: [], maxTurns: 1 } : {}),
+          permissionMode: 'default',
           canUseTool: async (_name: string, toolInput: Record<string, unknown>) =>
             input.noTools
               ? { behavior: 'deny' as const, message: 'tools are disabled for this session' }
               : { behavior: 'allow' as const, updatedInput: toolInput },
-          allowedTools: input.noTools ? [] : (input.allowedTools ?? ['Read', 'Grep', 'Glob', 'Write', 'Edit']),
+          // Route tool permission decisions through the host callback consistently.
+          // Bare auto-approval rules bypass it, including on SDK versions with automatic mode.
+          allowedTools: [],
           hooks: {
             PreToolUse: buildPreToolUseHooks(input.cwd),
           },
@@ -394,11 +397,12 @@ export class InProcessRunner implements Runner {
           // §7.5a: per-project skills as local plugins (no marketplace fetch). Absent when none.
           ...(input.plugins && input.plugins.length ? { plugins: input.plugins } : {}),
           systemPrompt: { type: 'preset', preset: 'claude_code', append: input.systemAppend ?? '' },
+          permissionMode: 'default',
           canUseTool: async (_name: string, toolInput: Record<string, unknown>) => ({
             behavior: 'allow' as const,
             updatedInput: toolInput,
           }),
-          allowedTools: input.allowedTools ?? ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
+          allowedTools: [],
           hooks: {
             PreToolUse: buildPreToolUseHooks(input.cwd),
           },

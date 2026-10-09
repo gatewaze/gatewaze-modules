@@ -1,3 +1,4 @@
+import { getRunCodeRepos } from '../lib/run-code-repos.js';
 // @ts-nocheck
 /**
  * spec phase (§7). Explores the project's code repos READ-ONLY in a workspace and drafts an
@@ -41,7 +42,7 @@ export default async function spec(job, ctx) {
   if (!project.githubToken || !project.modelCred) return blockRun(supabase, run, 'spec', 'authorization', 'project credentials missing');
   const token = project.githubToken;
 
-  const codeRepos = await getCodeRepos(supabase, run.project_id);
+  const codeRepos = await getRunCodeRepos(supabase, run);
   if (codeRepos.length === 0) return blockRun(supabase, run, 'spec', 'authorization', 'project has no code repos');
 
   await recordPhaseStart(supabase, run, 'spec', attempt);
