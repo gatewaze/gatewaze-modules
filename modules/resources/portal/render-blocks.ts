@@ -227,15 +227,39 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
   const photoItems = (Array.isArray((data as any).photos) ? (data as any).photos : [])
     .filter((p: any) => !!p && stripSafe(p.src) && (p.thumb === undefined || stripSafe(p.thumb)))
     .slice(0, 8)
+  // Clicking a thumb opens the same dependency-free lightbox the media
+  // gallery uses (overlay inside the strip container, arrow-key siblings
+  // via data-full, Esc/backdrop closes) — not a new tab.
+  const stripId = `gw-ts-${block.id}`
+  const stripOpenJs =
+    `var g=document.getElementById('${stripId}');var f=this;` +
+    "var o=g.querySelector('.gw-ts-lb');" +
+    'if(!o){o=document.createElement(\'div\');o.className=\'gw-ts-lb\';' +
+    "o.style.cssText='position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out;';" +
+    'o.tabIndex=-1;' +
+    "o.addEventListener('click',function(ev){if(ev.target===o)o.remove()});" +
+    "o.addEventListener('keydown',function(ev){" +
+    "if(ev.key==='Escape')o.remove();" +
+    "if(ev.key==='ArrowRight'&&o._next)o._next.click();" +
+    "if(ev.key==='ArrowLeft'&&o._prev)o._prev.click();" +
+    '});g.appendChild(o);}' +
+    "var img=document.createElement('img');img.src=f.getAttribute('data-full');img.alt=f.getAttribute('data-alt')||'';" +
+    "img.style.cssText='max-width:94vw;max-height:92vh;object-fit:contain;border-radius:8px;';" +
+    'o.replaceChildren(img);' +
+    'var sib=function(el,dir){var n=el;do{n=dir>0?n.nextElementSibling:n.previousElementSibling}while(n&&!n.hasAttribute(\'data-full\'));return n};' +
+    'o._next=sib(f,1);o._prev=sib(f,-1);o.focus();'
+  const stripOpenAttr = stripOpenJs.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
   const photosStrip = photoItems.length > 0
     ? `
     <div>
       <p style="${label('var(--ink)')}">Photos from this session</p>
-      <div style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px;">${photoItems
+      <div id="${stripId}" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px;">${photoItems
         .map((p: any) =>
-          `<a href="${escAttr(p.src)}" target="_blank" rel="noopener noreferrer" style="flex:none; ${NOLINE}">` +
+          `<div data-full="${escAttr(p.src)}" data-alt="${escAttr(String(p.alt ?? ''))}" role="button" tabindex="0"` +
+          ` onclick="${stripOpenAttr}" onkeydown="if(event.key==='Enter')this.click()"` +
+          ' style="flex:none; cursor:zoom-in; border-radius:8px; overflow:hidden;">' +
           `<img src="${escAttr(p.thumb ?? p.src)}" alt="${escAttr(String(p.alt ?? ''))}" loading="lazy"` +
-          ` style="height:84px; width:auto; border-radius:8px; display:block;" /></a>`)
+          ` style="height:84px; width:auto; display:block;" /></div>`)
         .join('')}</div>
     </div>`
     : ''
