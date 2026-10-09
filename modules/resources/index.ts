@@ -7,7 +7,7 @@ const structuredResourcesModule: GatewazeModule = {
   visibility: 'premium',
   name: 'Structured Resources',
   description: 'Create and manage hierarchical resource guides with configurable section templates and access control',
-  version: '1.1.0',
+  version: '1.2.0',
   features: [
     'resources',
     'resources.collections',
