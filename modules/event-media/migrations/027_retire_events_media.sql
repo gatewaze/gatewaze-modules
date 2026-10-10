@@ -164,7 +164,11 @@ BEGIN
       WHERE h.host_kind = 'event' AND h.host_id = m.event_id
         AND lower(h.name) = lower(m.name)
       ORDER BY h.created_at LIMIT 1)
-  );
+  )
+  -- Supabase enforces safeupdate on the migration role: an UPDATE with no
+  -- WHERE is rejected with 21000, so every row-wide update needs a
+  -- predicate even when it is deliberately unfiltered.
+  WHERE m.legacy_id IS NOT NULL;
 
   -- Covers point at media copied under the same id, so they carry over.
   UPDATE public.host_media_albums h
