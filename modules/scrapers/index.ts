@@ -7,7 +7,7 @@ const scrapersModule: GatewazeModule = {
   visibility: 'hidden',
   name: 'Scrapers',
   description: 'Configure and run web scraping jobs for event discovery and content aggregation',
-  version: '1.2.5',
+  version: '1.2.6',
   features: [
     'scrapers',
     'scrapers.manage',
