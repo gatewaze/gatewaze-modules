@@ -131,18 +131,21 @@ export class BaseScraper {
       });
     });
 
-    // Set realistic user agent and headers
+    // Set realistic user agent and headers.
+    //
+    // Only headers that are genuinely identical on every request belong in
+    // setExtraHTTPHeaders: it applies them to the page's stylesheet, font,
+    // image and XHR requests too, not just the navigation. This list used to
+    // carry `Sec-Fetch-Dest: document`, `Sec-Fetch-Mode: navigate`,
+    // `Sec-Fetch-Site: none` and an HTML-only `Accept`, so every subresource
+    // request claimed to be a top-level navigation. Servers refuse those or
+    // serve the wrong body, and the page renders without its CSS. The same
+    // bug in the core screenshot job was storing unstyled captures for every
+    // event (gatewaze#155); Chrome varies all of these per destination, so we
+    // must not pin them.
     await this.page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36');
     await this.page.setExtraHTTPHeaders({
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
-      'Upgrade-Insecure-Requests': '1'
+      'Accept-Language': 'en-US,en;q=0.9'
     });
 
     // Set up error logging with filtering for known non-critical errors
