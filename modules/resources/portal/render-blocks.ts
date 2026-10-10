@@ -139,7 +139,11 @@ function nameLink(name: string, url: string | undefined): string {
       ' background:rgba(var(--ui-text), 0.06); vertical-align:middle; margin-left:10px;' +
       ` opacity:.85;">${LINKEDIN_SVG}</span>`
   }
-  return `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:inherit; ${NOLINE}">${esc(name)}${icon}</a>`
+  // escAttr, not raw: the stored value is only guaranteed to be URL-PARSEABLE,
+  // and `new URL()` accepts a literal double quote in a path — it encodes one
+  // in .href but the stored string keeps it. Interpolating that unescaped
+  // breaks straight out of this attribute.
+  return `<a href="${escAttr(url)}" target="_blank" rel="noopener noreferrer" style="color:inherit; ${NOLINE}">${esc(name)}${icon}</a>`
 }
 
 interface TalkData {
