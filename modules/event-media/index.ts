@@ -7,7 +7,7 @@ const eventMediaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Media',
   description: 'Photo and video galleries, media uploads, and album management for events',
-  version: '1.105.0',
+  version: '1.106.0',
   features: [
     'event-media',
     'event-media.upload',
@@ -51,11 +51,16 @@ const eventMediaModule: GatewazeModule = {
     await registerRoutes(app as never, context as never);
   },
 
+  // media-get-youtube-upload-url and media-upload-youtube were removed here.
+  // Both authenticated nobody and one returned a live OAuth access token to
+  // its caller. Publishing returns in `videos-publisher-youtube`.
+  //
+  // Removing them from this list stops them being redeployed, but it does NOT
+  // undeploy the copies already live in a Supabase project. Those must be
+  // deleted per project with `supabase functions delete <name>`.
   edgeFunctions: [
     'media-combine-chunks',
-    'media-get-youtube-upload-url',
     'media-process-image',
-    'media-upload-youtube',
   ],
 
   adminSlots: [

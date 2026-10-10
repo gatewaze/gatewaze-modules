@@ -31,9 +31,13 @@ This module has no configurable settings.
 ### Edge Functions
 
 - **media-combine-chunks** -- Reassembles chunked file uploads into a single file
-- **media-get-youtube-upload-url** -- Retrieves a signed upload URL for YouTube
 - **media-process-image** -- Server-side image processing (resize, optimize) for `host_media` rows
-- **media-upload-youtube** -- Uploads video content to YouTube
+
+The two YouTube functions that used to be listed here, `media-get-youtube-upload-url`
+and `media-upload-youtube`, have been removed. Neither authenticated its caller,
+and the first returned a live OAuth access token for the channel in its response
+body. Video publishing is being rebuilt in the `videos-publisher-youtube` module
+as an authorised, queued job; see `spec-videos-publishing-and-platform-metrics.md`.
 
 ## Dependencies
 

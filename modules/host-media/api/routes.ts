@@ -323,56 +323,29 @@ export function createMediaRoutes(deps: RoutesDeps) {
       const mediaId = (globalThis.crypto?.randomUUID?.() ?? require('crypto').randomUUID()) as string;
 
       try {
-        // Branch: video + YouTube delegation.
-        // Instead of uploading to Storage and storing as a regular file,
-        // hand the bytes to the media-upload-youtube edge fn which uploads
-        // to YouTube via the Google API and returns the video metadata.
-        // The host_media row's storage_path points to a synthetic path
-        // (no actual storage object) and the youtube_* columns carry the
-        // playable URL. If the YouTube call fails we fall back to native
-        // storage so the user doesn't lose the bytes.
-        let storagePath: string;
-        let cdnUrl: string;
-        let youtubeMeta: {
-          video_id: string; url: string; embed_url: string; thumbnail_url: string;
-        } | null = null;
-
-        if (isVideo && consumer.enableYouTube) {
-          try {
-            const formData = new FormData();
-            formData.append('video', new Blob([file.buffer], { type: file.mimeType }), file.filename);
-            formData.append('title', file.filename.replace(/\.[^.]+$/, ''));
-            formData.append('description', caption ?? '');
-            formData.append('privacy', 'unlisted');
-            const { data: ytRes, error: ytErr } = await supabase.functions.invoke('media-upload-youtube', { body: formData });
-            if (ytErr || !ytRes?.video_id) {
-              throw new Error(`youtube upload failed: ${ytErr?.message ?? 'no video_id returned'}`);
-            }
-            youtubeMeta = ytRes as { video_id: string; url: string; embed_url: string; thumbnail_url: string };
-            // Synthesize a storage_path that records the YouTube provenance.
-            // We don't actually upload to Storage for YouTube videos.
-            storagePath = `${hostKind}/${hostId}/${mediaId}/youtube:${youtubeMeta.video_id}`;
-            cdnUrl = youtubeMeta.url;
-          } catch (ytErr) {
-            logger.warn('YouTube delegation failed; falling back to native storage', {
-              error: ytErr instanceof Error ? ytErr.message : String(ytErr),
-              filename: file.filename,
-            });
-            const out = await mediaAdapter.upload({
-              hostKind, hostId, mediaId,
-              filename: file.filename, mimeType: file.mimeType, buffer: file.buffer,
-            });
-            storagePath = out.storagePath;
-            cdnUrl = out.cdnUrl;
-          }
-        } else {
-          const out = await mediaAdapter.upload({
-            hostKind, hostId, mediaId,
-            filename: file.filename, mimeType: file.mimeType, buffer: file.buffer,
-          });
-          storagePath = out.storagePath;
-          cdnUrl = out.cdnUrl;
-        }
+        // Every upload goes to Storage, videos included.
+        //
+        // This used to hand video bytes to the `media-upload-youtube` edge
+        // function, which uploaded to the channel and returned its metadata.
+        // That function is gone, for two reasons. It authenticated nobody:
+        // module edge functions deploy with verify_jwt false (see
+        // deploy-strategies/cloud-api.ts), it had no auth check of its own and
+        // CORS `*`, so anyone with the URL could upload to the foundation's
+        // channel. And this branch had been dead at runtime regardless: it
+        // required `ytRes.video_id` while the function returned `videoId`, so
+        // it always threw "no video_id returned" and fell through to the
+        // storage fallback below.
+        //
+        // Publishing comes back properly in the `videos-publisher-youtube`
+        // module (spec-videos-publishing-and-platform-metrics), where it is an
+        // authorised, queued job that streams from a worker rather than an
+        // open endpoint that hands out an OAuth token.
+        const out = await mediaAdapter.upload({
+          hostKind, hostId, mediaId,
+          filename: file.filename, mimeType: file.mimeType, buffer: file.buffer,
+        });
+        const storagePath: string = out.storagePath;
+        const cdnUrl: string = out.cdnUrl;
 
         const insertRow: Record<string, unknown> = {
           id: mediaId,
@@ -388,18 +361,12 @@ export function createMediaRoutes(deps: RoutesDeps) {
         if (albumId && consumer.enableAlbums) insertRow['album_id'] = albumId;
         if (caption) insertRow['caption'] = caption;
 
-        if (youtubeMeta) {
-          insertRow['youtube_video_id']      = youtubeMeta.video_id;
-          insertRow['youtube_url']           = youtubeMeta.url;
-          insertRow['youtube_embed_url']     = youtubeMeta.embed_url;
-          insertRow['youtube_thumbnail_url'] = youtubeMeta.thumbnail_url;
-          insertRow['youtube_upload_status'] = 'completed';
-          insertRow['youtube_uploaded_at']   = new Date().toISOString();
-        } else if (isVideo && consumer.enableYouTube) {
-          // Fallback path — native storage, mark as failed so a retry
-          // worker can pick it up later.
-          insertRow['youtube_upload_status'] = 'failed';
-          insertRow['youtube_error_message'] = 'YouTube delegation failed at upload time; stored natively';
+        if (isVideo && consumer.enableYouTube) {
+          // 'pending', not 'failed'. Nothing was attempted, so nothing
+          // failed, and a publisher that looks for work should find these.
+          // Marking them failed is what the old fallback did, and it made
+          // every video on a YouTube-enabled host look like a broken upload.
+          insertRow['youtube_upload_status'] = 'pending';
         }
 
         const inserted = await supabase

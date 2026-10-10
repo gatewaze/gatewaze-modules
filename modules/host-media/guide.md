@@ -55,7 +55,6 @@ The default media adapter writes to Supabase Storage. Uploads pass through a mul
 | Worker | Schedule | Purpose |
 |---|---|---|
 | `host-media:used-in-rebuild` | nightly (`0 3 * * *`) | Rebuild `used_in` from scratch as a guard against trigger drift |
-| `host-media:youtube-poll` | every 5 min | Reconcile pending/failed YouTube uploads |
 | `host-media:chunked-cleanup` | hourly | Reap expired chunked-upload sessions |
 
 The `used_in` array is normally kept current by per-consumer triggers calling `host_media_sync_refs()`; the nightly rebuild is belt-and-braces.
