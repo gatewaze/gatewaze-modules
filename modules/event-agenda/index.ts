@@ -7,7 +7,7 @@ const eventAgendaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Agenda',
   description: 'Schedule and manage event agenda sessions, time slots, and tracks',
-  version: '1.1.0',
+  version: '1.2.0',
   features: [
     'event-agenda',
     'event-agenda.manage',
@@ -29,6 +29,12 @@ const eventAgendaModule: GatewazeModule = {
   ],
 
   dependencies: ['events', 'event-speakers'],
+
+  apiRoutes: async (app: unknown, ctx?: unknown) => {
+    const { registerRoutes } = await import('./api/register-routes.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- express/ctx shapes are host-provided
+    await registerRoutes(app as any, ctx as any);
+  },
 
   workers: [
     {
