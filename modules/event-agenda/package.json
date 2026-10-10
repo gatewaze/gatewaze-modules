@@ -1,6 +1,6 @@
 {
   "name": "@gatewaze-modules/event-agenda",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "license": "Apache-2.0",
   "main": "index.ts",
   "types": "index.ts",
@@ -8,7 +8,8 @@
   "exports": {
     ".": "./index.ts",
     "./lib/normalize-title": "./lib/normalize-title.ts",
-    "./lib/schedule-sources": "./lib/schedule-sources/index.ts"
+    "./lib/schedule-sources": "./lib/schedule-sources/index.ts",
+    "./api/register-routes": "./api/register-routes.ts"
   },
   "scripts": {
     "build": "tsc",
