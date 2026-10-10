@@ -7,7 +7,7 @@ const eventAgendaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Agenda',
   description: 'Schedule and manage event agenda sessions, time slots, and tracks',
-  version: '1.2.0',
+  version: '1.2.1',
   features: [
     'event-agenda',
     'event-agenda.manage',
