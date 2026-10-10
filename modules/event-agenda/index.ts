@@ -7,7 +7,7 @@ const eventAgendaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Agenda',
   description: 'Schedule and manage event agenda sessions, time slots, and tracks',
-  version: '1.2.1',
+  version: '1.3.0',
   features: [
     'event-agenda',
     'event-agenda.manage',
@@ -16,6 +16,7 @@ const eventAgendaModule: GatewazeModule = {
   migrations: [
     'migrations/001_event_agenda_tables.sql',
     'migrations/002_schedule_import.sql',
+    'migrations/003_schedule_backfill.sql',
   ],
 
   adminSlots: [
@@ -47,6 +48,14 @@ const eventAgendaModule: GatewazeModule = {
     {
       name: 'event-agenda:sweep-schedules',
       handler: './workers/sweep-schedules.ts',
+      concurrency: 1,
+    },
+    {
+      // The §6.5 backfill drain. Concurrency 1 is load-bearing, not tidy: two
+      // of these on one run would share a cursor and import the same events
+      // twice.
+      name: 'event-agenda:backfill-schedules',
+      handler: './workers/backfill-schedules.ts',
       concurrency: 1,
     },
   ],
