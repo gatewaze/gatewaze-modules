@@ -7,7 +7,7 @@ const eventAgendaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Agenda',
   description: 'Schedule and manage event agenda sessions, time slots, and tracks',
-  version: '1.0.0',
+  version: '1.1.0',
   features: [
     'event-agenda',
     'event-agenda.manage',
@@ -15,6 +15,7 @@ const eventAgendaModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_event_agenda_tables.sql',
+    'migrations/002_schedule_import.sql',
   ],
 
   adminSlots: [
