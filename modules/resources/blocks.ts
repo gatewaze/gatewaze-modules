@@ -226,6 +226,13 @@ function checkSchema(schema: Schema, value: unknown, path: string, issues: Valid
     if (schema.format === 'https-url') {
       let ok = false;
       try {
+        // Parseable is not the same as safe to interpolate. `new URL()`
+        // accepts a literal double quote in a path, and does not encode a
+        // single quote at all — so a value that parses can still carry the
+        // characters that break out of an HTML attribute. Renderers escape at
+        // the sink, but refusing to STORE such a value closes the gate for
+        // every writer of an https-url field at once.
+        if (/["'`<>\s\\]/.test(value)) throw new Error('unsafe characters');
         const u = new URL(value);
         // https only — except, OUTSIDE production, plain http to a
         // *.localhost / loopback host, so local dev stacks
