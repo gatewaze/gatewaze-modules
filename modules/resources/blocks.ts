@@ -323,6 +323,14 @@ const talkKind: BlockKindDef = {
         properties: {
           name: { type: 'string', minLength: 1, maxLength: 120 },
           company: { type: 'string', maxLength: 120 },
+          // Additive beyond the base spec schema: the job title, kept
+          // separate from `company` so a card can render "Director of
+          // Developer Relations, Snyk" without the two being one opaque
+          // string. conference-recap populates it from the event programme,
+          // which is where the conference itself split the two. Declared
+          // rather than relying on additionalProperties so the length is
+          // bounded like every other rendered field.
+          role: { type: 'string', maxLength: 120 },
           linkedin: { type: 'string', format: 'https-url' },
         },
         additionalProperties: true,
@@ -384,7 +392,7 @@ const talkKind: BlockKindDef = {
   searchText: (data) => {
     const speaker = (data.speaker ?? {}) as Record<string, unknown>;
     const parts = [
-      data.title, speaker.name, speaker.company, data.worth_noting, data.quote,
+      data.title, speaker.name, speaker.role, speaker.company, data.worth_noting, data.quote,
       ...(Array.isArray(data.topics) ? data.topics : []),
     ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
     return normalizeSearchText(parts.join(' · '));
