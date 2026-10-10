@@ -35,8 +35,12 @@
  *     <a href="..../speak/">Speak</a>          (only some events)
  *   </div>
  *
- * Action-button URLs are persisted into source_details.action_links so
- * downstream features can use them without re-scraping.
+ * That card template is gone as of October 2026: the action buttons moved onto
+ * each event's own page, into `nav.event-menu`, and the cards carry none of
+ * them (an archive card keeps a lone "Videos" link). Action links are therefore
+ * read from both surfaces and merged — see `../lib/lf-event-page.js`. They are
+ * persisted into source_details.action_links so downstream features can use
+ * them without re-scraping.
  */
 
 import { BaseScraper } from './BaseScraper.js';
@@ -45,6 +49,15 @@ import {
   ScraplingNotConfiguredError,
   resolveResidentialEgress,
 } from '../lib/scrapling-fetcher.js';
+import {
+  decodeHtmlEntities,
+  stripTags,
+  extractCardActionLinks,
+  extractNavActionLinks,
+  mergeActionLinks,
+  extractSchedHost,
+  buildScheduleSource,
+} from '../lib/lf-event-page.js';
 
 
 // Each card's <h2> link → primary event URL. The action buttons that
@@ -54,21 +67,15 @@ const TITLE_RE = /<h2[^>]*class="[^"]*event-title[^"]*"[^>]*>\s*<a[^>]*href="([^
 const DATE_RE = /<span[^>]*class="[^"]*\bdate\b[^"]*"[^>]*>([\s\S]+?)<\/span>/;
 const COUNTRY_RE = /<span[^>]*class="[^"]*\bcountry\b[^"]*"[^>]*>([\s\S]+?)<\/span>/;
 const DESC_RE = /<div[^>]*class="[^"]*\bevent-description\b[^"]*"[^>]*>([\s\S]+?)<\/div>/;
-const ANCHOR_RE = /<a[^>]*href="([^"]+)"[^>]*>([\s\S]+?)<\/a>/g;
-// Archive layout (/about/calendar/archive/?_sft_...) lists PAST events with a
-// different card template than the upcoming listing: <article id="post-N"
-// class="...callout..."> wrapping an <h5><strong><a> title. The date/country
-// spans and the per-event detail page (JSON-LD) are identical, so only the
-// card + title regexes differ. Used as a fallback when the upcoming-layout
-// CARD_BLOCK_RE matches nothing.
+// The <article id="post-N" class="...callout..."> card wrapping an
+// <h5><strong><a> title. Introduced for the archive listing
+// (/about/calendar/archive/?_sft_...), but as of October 2026 the upcoming
+// listing emits it too — CARD_BLOCK_RE above matches nothing on either page any
+// more, so this is now the path every scrape takes. The date/country spans and
+// the per-event detail page (JSON-LD) are identical either way, so only the
+// card + title regexes differ.
 const ARCHIVE_CARD_RE = /<article id="post-(\d+)"[^>]*class="[^"]*\bcallout\b[^"]*"[^>]*>([\s\S]+?)<\/article>/g;
 const ARCHIVE_TITLE_RE = /<h5[^>]*>\s*<strong>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]+?)<\/a>/;
-
-const ACTION_BUTTON_LABELS = new Set([
-  'register', 'sponsor', 'schedule', 'videos', 'speak',
-  // Less common but observed:
-  'attend', 'sponsorships', 'agenda', 'program', 'tickets',
-]);
 
 
 // ISO 3166-1 alpha-2 country code mapping for the country names LF uses.
@@ -89,29 +96,6 @@ const COUNTRY_NAME_TO_CODE = {
   'south africa': 'za', 'nigeria': 'ng', 'kenya': 'ke', 'egypt': 'eg',
   'uae': 'ae', 'united arab emirates': 'ae', 'israel': 'il', 'turkey': 'tr',
 };
-
-
-// Decode HTML entities — named, decimal (&#39;) AND hex (&#x27;). Scraped pages
-// mix all three; handling only named+decimal leaked raw hex entities into text.
-function decodeHtmlEntities(input) {
-  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', copy: '©', reg: '®', trade: '™', hellip: '…', mdash: '—', ndash: '–', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', laquo: '«', raquo: '»', deg: '°', middot: '·', bull: '•' };
-  const toChar = (code, orig) => {
-    if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return orig;
-    try { return String.fromCodePoint(code); } catch { return orig; }
-  };
-  return String(input == null ? '' : input)
-    .replace(/&#[xX]([0-9a-fA-F]+);/g, (m, h) => toChar(parseInt(h, 16), m))
-    .replace(/&#(\d+);/g, (m, d) => toChar(parseInt(d, 10), m))
-    .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (m, n) => named[n] ?? named[n.toLowerCase()] ?? m);
-}
-
-function stripTags(html) {
-  return decodeHtmlEntities(
-    html
-      .replace(/<svg[\s\S]*?<\/svg>/g, ' ')
-      .replace(/<[^>]+>/g, ' '),
-  ).replace(/\s+/g, ' ').trim();
-}
 
 
 // LF event pages are WordPress; the full event body lives in a single
@@ -298,24 +282,6 @@ function parseLocation(locText) {
 }
 
 
-function extractActionLinks(cardHtml) {
-  const links = {};
-  let m;
-  ANCHOR_RE.lastIndex = 0;
-  while ((m = ANCHOR_RE.exec(cardHtml)) !== null) {
-    const href = m[1];
-    const text = stripTags(m[2]).toLowerCase();
-    if (!text) continue;
-    if (ACTION_BUTTON_LABELS.has(text)) {
-      // First occurrence wins; subsequent matches with the same label
-      // (rare but possible) are ignored to keep the shape predictable.
-      if (!(text in links)) links[text] = href;
-    }
-  }
-  return links;
-}
-
-
 export class LinuxFoundationEventsScraper extends BaseScraper {
   constructor(config, globalConfig) {
     super(config, globalConfig);
@@ -380,6 +346,9 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
    *   - Schema.org Event JSON-LD: longer description, venue address,
    *     region, image (cover URL)
    *   - og:image (typically larger than the JSON-LD image), og:description
+   *   - nav.event-menu action links (Register / Sponsor / Schedule / …), which
+   *     the listing card no longer carries
+   *   - the sched.com programme host, when the page references one
    *
    * Best-effort: any failure (network, parse) returns {} so the listing
    * row still saves with the basic card fields. Cost-ledger row only
@@ -468,6 +437,16 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
       enrich.pageContentHtml = bodyHtml;
     }
 
+    // The action buttons LF used to put on the listing card. They now live
+    // only in this page's nav, so `schedule` is only ever captured here.
+    enrich.navActionLinks = extractNavActionLinks(html);
+
+    // Pre-resolve the sched.com programme host while we are already holding the
+    // page, so the event-agenda importer can skip its own detect() fetch
+    // (spec-event-agenda-schedule-import §5.2, §8.4). Null when the event has no
+    // sched programme — the importer then resolves the source itself.
+    enrich.schedHost = extractSchedHost(html);
+
     return enrich;
   }
 
@@ -509,7 +488,10 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
         cards.push({ postId: cardMatch[1], cardHtml: cardMatch[2], titleRe: ARCHIVE_TITLE_RE });
       }
       if (cards.length > 0) {
-        console.log(`📚 Archive layout detected: ${cards.length} past-event card(s)`);
+        // As of October 2026 the upcoming listing uses this template too, so
+        // this branch is the normal path rather than the archive-only fallback
+        // it started as. Don't call it "past events" in the log.
+        console.log(`📚 Callout layout detected: ${cards.length} card(s)`);
       }
     }
 
@@ -534,13 +516,16 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
         const descMatch = cardHtml.match(DESC_RE);
         const description = descMatch ? stripTags(descMatch[1]) : '';
 
-        const actionLinks = extractActionLinks(cardHtml);
+        const cardActionLinks = extractCardActionLinks(cardHtml);
 
         // Drill into the detail page for the rich fields the events
         // module supports (venue address, full description, large cover
         // image, region, etc). Per-page fetch goes through scrapling-
         // fetcher when configured — same path as the Luma *Fast scrapers.
         const enrich = await this._enrichFromDetailPage(eventLink);
+
+        // Card first (it owns "Videos" on archive cards), nav for the rest.
+        const actionLinks = mergeActionLinks(cardActionLinks, enrich.navActionLinks);
 
         const countryCode =
           enrich.eventCountryCode
@@ -589,12 +574,12 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
             raw_country: country,
             venue_name: enrich.venueName || null,
             is_hybrid: !!enrich.isHybrid,
-            // Every action button URL on the card, keyed by lower-cased
-            // label. CFP / sponsor / video links open + close at different
-            // times for each event — the action_links column needs to
-            // reflect what's currently on the page, not the union of
-            // every button ever observed. The downstream contract that
-            // makes this work:
+            // Every action button URL on the listing card and in the event
+            // page's nav, keyed by lower-cased label. CFP / sponsor / video
+            // links open + close at different times for each event — the
+            // action_links column needs to reflect what's currently on the
+            // page, not the union of every button ever observed. The
+            // downstream contract that makes this work:
             //   1. scraper-job-handler.js builds dbEvent.source_details
             //      as a fresh object on every save (NOT a deep-merge with
             //      the existing DB row).
@@ -605,6 +590,15 @@ export class LinuxFoundationEventsScraper extends BaseScraper {
             // buttons (e.g. `speak` after CFP closes) will silently
             // persist. Lock those two assertions before changing.
             action_links: actionLinks,
+            // The event's sched.com programme host, read off the detail page
+            // we just fetched, so the event-agenda importer does not have to
+            // fetch the LF schedule page only to resolve it
+            // (spec-event-agenda-schedule-import §5.2, §8.4). Null means "this
+            // page references no sched programme" — not "don't look", so the
+            // importer still falls back to resolving the source itself. Same
+            // full-replace semantics as action_links above: a host that
+            // disappears from the page disappears from here.
+            schedule_source: buildScheduleSource(enrich.schedHost),
           },
         };
 
