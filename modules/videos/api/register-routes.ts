@@ -5,16 +5,25 @@
  *
  * Two surfaces with deliberately different trust:
  *
- *   /api/videos/*                  public reads, no JWT, filtered to
- *                                  status='published' AND visibility='public'
- *   /api/modules/videos/editor/*   the video editor workflow, behind the
- *                                  platform's JWT prefix, with every handler
- *                                  authorising per subject as the CALLER
+ *   /api/videos/*          public reads, no JWT, filtered to
+ *                          status='published' AND visibility='public'
+ *   /api/video-editor/*    the video editor workflow: authenticates the caller
+ *                          itself, then authorises per subject
  *
- * The second one is why `userClient` exists below. The permission check must
- * run with the caller's own token so the SECURITY DEFINER predicate sees their
- * auth.uid(); running it with the service role would evaluate auth.uid() as
- * null and deny everyone.
+ * Why not /api/modules/videos/* like the other modules? Because the platform
+ * mounts its own router at /api/modules and that router applies
+ * requireSuperAdmin() to everything except /internal/* (see
+ * packages/api/src/routes/modules.ts, "Module management is super_admin
+ * only"). A module adding a sub-path under it inherits that gate, so a
+ * third-party video editor would get 403 forever. Verified by getting exactly
+ * that 403 from a real editor account before moving the mount.
+ *
+ * The consequence is that this prefix has NO platform auth in front of it, so
+ * every handler must authenticate as well as authorise. `requireUser` below
+ * is that first half, and `userClient` is the second: the permission check
+ * runs with the caller's own token so the SECURITY DEFINER predicate sees
+ * their auth.uid(). Running it with the service role would evaluate auth.uid()
+ * as null and deny everyone.
  */
 
 // supabase-js >= 2.50 auto-initialises realtime which probes for a native
@@ -90,13 +99,45 @@ export function registerRoutes(app: Express, ctx?: RegisterCtx): void {
   // to storage on a signed URL. 256kb is plenty for a 20-file mint and keeps
   // this router far below the server's global 50mb limit.
   editorRouter.use(json({ limit: '256kb' }));
+
+  /**
+   * Authenticate, before any handler authorises.
+   *
+   * This prefix has no platform JWT middleware in front of it (see the header
+   * comment), so a bare request would otherwise reach a handler and rely on
+   * the authorisation RPCs returning false for a null session. They do, but
+   * depending on that is depending on the failure mode of two other systems.
+   * Rejecting an absent or unresolvable token here makes it one decision.
+   */
+  const requireUser = async (req, res, next) => {
+    const asUser = userClient(req);
+    if (!asUser) {
+      res.status(401).json({ error: 'authorization bearer token required' });
+      return;
+    }
+    try {
+      const { data, error } = await asUser.auth.getUser();
+      if (error || !data?.user?.id) {
+        res.status(401).json({ error: 'invalid or expired session' });
+        return;
+      }
+    } catch {
+      res.status(401).json({ error: 'could not verify session' });
+      return;
+    }
+    next();
+  };
+  editorRouter.use(requireUser);
+
   mountEditorRoutes(editorRouter, {
     supabase,
     userClient,
     logger,
     ...(ctx?.enqueueJob && { enqueueJob: ctx.enqueueJob }),
   });
-  app.use('/api/modules/videos', editorRouter);
+  // Mounted BEFORE the public router would be a collision risk under
+  // /api/videos/:id, so it gets its own prefix instead.
+  app.use('/api/video-editor', editorRouter);
 
   console.log('[videos] module routes registered (public reads + editor workflow)');
 }

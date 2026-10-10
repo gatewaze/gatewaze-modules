@@ -1,7 +1,9 @@
 /**
  * Admin-side client for the videos editor surface.
  *
- * Talks to /api/modules/videos/editor/* with the operator's bearer token.
+ * Talks to /api/video-editor/* with the operator's bearer token. That prefix
+ * rather than /api/modules/videos/* because the platform super-admin-gates the
+ * whole /api/modules tree.
  *
  * The filename matters. The admin vite plugin stubs any relative import
  * matching `./api*`, `./workers*`, `./functions*`, `./mcp*`,
@@ -45,7 +47,7 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-const BASE = '/api/modules/videos/editor';
+const BASE = '/api/video-editor';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

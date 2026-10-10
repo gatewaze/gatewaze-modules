@@ -3,14 +3,19 @@
 /**
  * The video editor's API (spec §16.2, §18).
  *
- * Mounted under /api/modules/videos/editor/*, behind the platform's JWT
- * prefix. Every handler authorises as the CALLER via can_edit_videos_for()
- * before touching anything with the service role.
+ * Mounted under /api/video-editor/*. NOT under /api/modules/videos/*, because
+ * the platform applies requireSuperAdmin() to that whole prefix and a
+ * third-party editor would get 403 forever (confirmed against a real editor
+ * account before the mount moved).
  *
- * That split is the whole security model and it is worth stating plainly: the
- * JWT prefix proves only that somebody is signed in. A third-party video
- * editor is signed in. Without the per-subject check, an editor granted one
- * event could read and write every other event's videos by guessing a uuid.
+ * register-routes.ts authenticates the caller before any of these run. Each
+ * handler then authorises as the CALLER via can_edit_videos_for() before
+ * touching anything with the service role.
+ *
+ * That split is the whole security model and it is worth stating plainly:
+ * being signed in proves nothing here. A third-party video editor is signed
+ * in. Without the per-subject check, an editor granted one event could read
+ * and write every other event's videos by guessing a uuid.
  *
  * Uploads never pass through here. The mint step signs a ticket describing the
  * upload it authorised; the browser PUTs the bytes straight to storage with a
@@ -142,7 +147,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
   // ───────────────────────────────────────────────────────────────────────────
 
   /** The caller's own grants, so the UI can skip steps it cannot offer. */
-  router.get('/editor/scope', async (req: Request, res: Response) => {
+  router.get('/scope', async (req: Request, res: Response) => {
     if (await denyUnlessAnyGrant(req, res)) return;
     const uid = await callerId(req);
     const asUser = userClient(req);
@@ -168,7 +173,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
    * An editor with one event sees one event. The filter is applied here rather
    * than in the UI because the UI is not a security boundary.
    */
-  router.get('/editor/subjects', async (req: Request, res: Response) => {
+  router.get('/subjects', async (req: Request, res: Response) => {
     if (await denyUnlessAnyGrant(req, res)) return;
     const subjectType = String(req.query.type ?? '');
     if (!SUBJECT_TYPES.has(subjectType)) {
@@ -231,7 +236,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
    * FK, while events_talks.event_uuid is nullable under its scope constraint.
    * For a podcast it is the episodes.
    */
-  router.get('/editor/subjects/:subjectType/:subjectId/units', async (req: Request, res: Response) => {
+  router.get('/subjects/:subjectType/:subjectId/units', async (req: Request, res: Response) => {
     const subjectType = String(req.params.subjectType ?? '');
     const subjectId = String(req.params.subjectId ?? '');
     if (await denyUnlessSubject(req, res, subjectType, subjectId)) return;
@@ -310,7 +315,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
    * `uploading`, and the session, then signs a ticket describing exactly what
    * was authorised. The browser PUTs to the returned URL.
    */
-  router.post('/editor/uploads/mint', async (req: Request, res: Response) => {
+  router.post('/uploads/mint', async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const subjectType = String(body.subject_type ?? '');
     const subjectId = String(body.subject_id ?? '');
@@ -491,7 +496,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
    * and the mint-time claim has to be enforced somewhere. Fails closed on a
    * missing content type.
    */
-  router.post('/editor/uploads/complete', async (req: Request, res: Response) => {
+  router.post('/uploads/complete', async (req: Request, res: Response) => {
     if (await denyUnlessAnyGrant(req, res)) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const verified = verifyTicket(body.ticket);
@@ -592,7 +597,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
   // ───────────────────────────────────────────────────────────────────────────
 
   /** Every video attached to one unit, with its assets and publications. */
-  router.get('/editor/subjects/:subjectType/:subjectId/units/:unitId/videos', async (req: Request, res: Response) => {
+  router.get('/subjects/:subjectType/:subjectId/units/:unitId/videos', async (req: Request, res: Response) => {
     const subjectType = String(req.params.subjectType ?? '');
     const subjectId = String(req.params.subjectId ?? '');
     if (await denyUnlessSubject(req, res, subjectType, subjectId)) return;
@@ -639,7 +644,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
    * Deterministic, assembled from the programme's own fields. Returned rather
    * than stored, so the editor sees a fresh draft until they save an edit.
    */
-  router.get('/editor/videos/:videoId/copy', async (req: Request, res: Response) => {
+  router.get('/videos/:videoId/copy', async (req: Request, res: Response) => {
     if (await denyUnlessAnyGrant(req, res)) return;
     const videoId = String(req.params.videoId ?? '');
     if (!UUID_RE.test(videoId)) return res.status(400).json({ error: 'invalid video id' });
@@ -670,7 +675,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
    * vocabulary and defaults to private, so nothing reaches an audience by
    * accident (spec §19).
    */
-  router.post('/editor/videos/:videoId/publications', async (req: Request, res: Response) => {
+  router.post('/videos/:videoId/publications', async (req: Request, res: Response) => {
     if (await denyUnlessAnyGrant(req, res)) return;
     const videoId = String(req.params.videoId ?? '');
     if (!UUID_RE.test(videoId)) return res.status(400).json({ error: 'invalid video id' });
@@ -742,7 +747,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
   });
 
   /** Reschedule or cancel, while it is still ours to change (spec §19). */
-  router.patch('/editor/publications/:id', async (req: Request, res: Response) => {
+  router.patch('/publications/:id', async (req: Request, res: Response) => {
     if (await denyUnlessAnyGrant(req, res)) return;
     const id = String(req.params.id ?? '');
     if (!UUID_RE.test(id)) return res.status(400).json({ error: 'invalid publication id' });
@@ -790,7 +795,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
   });
 
   /** A time-limited URL to watch an unpublished master in the private bucket. */
-  router.get('/editor/assets/:assetId/playback', async (req: Request, res: Response) => {
+  router.get('/assets/:assetId/playback', async (req: Request, res: Response) => {
     if (await denyUnlessAnyGrant(req, res)) return;
     const assetId = String(req.params.assetId ?? '');
     if (!UUID_RE.test(assetId)) return res.status(400).json({ error: 'invalid asset id' });
