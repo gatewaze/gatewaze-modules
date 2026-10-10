@@ -54,7 +54,13 @@ describe('extractCardActionLinks', () => {
 
   test('the event-title link is not mistaken for an action link', () => {
     const links = extractCardActionLinks(ARCHIVE_CARD);
-    assert.ok(!Object.values(links).includes('https://events.linuxfoundation.org/agntcon-mcpcon-europe/'));
+    // Asserted on the captured KEYS rather than by looking for the event URL
+    // among the values: the card's title link points at the event root, and
+    // the only thing this card should yield is Videos. (Checking the values
+    // for that URL also trips CodeQL's url-substring rule, which reads any
+    // .includes() against a URL literal as a sanitiser, even though this is
+    // exact array membership in a test.)
+    assert.deepEqual(Object.keys(links), ['videos']);
   });
 
   test('a href="#" is never stored, even for an allowlisted label', () => {
