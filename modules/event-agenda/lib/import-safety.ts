@@ -19,7 +19,11 @@ export const DEFAULT_HOST_ALLOWLIST = [
 ];
 
 const MAX_BYTES = 4 * 1024 * 1024;
-const TIMEOUT_MS = 10_000;
+// 30s, not the 10s the spec first specified: the real sched endpoints
+// measured ~13.5s each from a container (145KB ICS, 551KB HTML), so 10s
+// aborted every import. Two requests per event per day, so the headroom
+// is cheap.
+const TIMEOUT_MS = 30_000;
 const MAX_REDIRECTS = 2;
 const UA = 'Gatewaze-ScheduleImport/1 (+https://gatewaze.org)';
 
