@@ -41,11 +41,16 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  // Parsed without a regex on purpose. `/^Bearer\s+(.+)$/` backtracks
+  // polynomially on a header of "bearer " followed by many spaces, and this
+  // value comes straight off an attacker-controlled request header.
+  const BEARER = 'bearer ';
   const extractBearer = (req: { headers?: Record<string, unknown> }): string | null => {
     const raw = req?.headers?.authorization ?? req?.headers?.Authorization;
-    if (typeof raw !== 'string') return null;
-    const m = raw.match(/^Bearer\s+(.+)$/i);
-    return m ? m[1].trim() : null;
+    if (typeof raw !== 'string' || raw.length <= BEARER.length) return null;
+    if (raw.slice(0, BEARER.length).toLowerCase() !== BEARER) return null;
+    const token = raw.slice(BEARER.length).trim();
+    return token || null;
   };
 
   const adminRouter = Router();
