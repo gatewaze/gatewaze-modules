@@ -13,6 +13,7 @@
 import { Router, type Express } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { mountAdminScheduleRoutes } from './admin-routes.js';
+import { mountAdminBackfillRoutes } from './backfill-routes.js';
 
 interface RegisterCtx {
   enqueueJob?: (
@@ -54,20 +55,31 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
   };
 
   const adminRouter = Router();
+
+  // Both route sets need a client scoped to the caller's own JWT, because the
+  // permission check must run as the caller, not as the service role. Built
+  // once and shared: the per-event routes check can_admin_event, the backfill
+  // routes check is_admin.
+  const userClient = (req) => {
+    if (!supabaseAnonKey) return null;
+    const token = extractBearer(req as never);
+    if (!token) return null;
+    return createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+  };
+
   mountAdminScheduleRoutes(adminRouter, {
     supabase,
-    // The permission check must run as the CALLER, not as the service role,
-    // or can_admin_event would be evaluated with RLS bypassed and always pass.
-    // No anon key or no token means no client, and the routes fail closed.
-    userClient: (req) => {
-      if (!supabaseAnonKey) return null;
-      const token = extractBearer(req as never);
-      if (!token) return null;
-      return createClient(supabaseUrl, supabaseAnonKey, {
-        auth: { autoRefreshToken: false, persistSession: false },
-        global: { headers: { Authorization: `Bearer ${token}` } },
-      });
-    },
+    userClient,
+    logger,
+    ...(ctx?.enqueueJob && { enqueueJob: ctx.enqueueJob }),
+  });
+
+  mountAdminBackfillRoutes(adminRouter, {
+    supabase,
+    userClient,
     logger,
     ...(ctx?.enqueueJob && { enqueueJob: ctx.enqueueJob }),
   });
