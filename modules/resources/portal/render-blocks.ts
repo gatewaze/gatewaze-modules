@@ -149,7 +149,7 @@ function nameLink(name: string, url: string | undefined): string {
 interface TalkData {
   title: string
   number?: number
-  speaker: { name: string; company?: string; linkedin?: string }
+  speaker: { name: string; role?: string; company?: string; linkedin?: string }
   speakers?: Array<{ name: string; url?: string }>
   youtube_id?: string
   url?: string
@@ -190,7 +190,14 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
   const namesHtml = speakerList
     .map((s, i) => (i === 0 ? '' : s.join === '&' ? ' &amp; ' : ', ') + nameLink(s.name, s.url))
     .join('')
-  const sub = data.speaker?.company ?? ''
+  // The sub-line under the names. `role` is additive and optional, so a card
+  // that only has a company renders exactly as it did before. When both are
+  // present they read as one line, "Director of Developer Relations, Snyk",
+  // which is how a conference programme prints it.
+  const sub = [data.speaker?.role, data.speaker?.company]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .filter((v) => v.length > 0)
+    .join(', ')
   const subHtml = esc(sub).replace(/ · /g, ' &middot; ')
   const subBlock = sub
     ? `\n      <div style="font-size:12.5px; color:var(--ink-3); line-height:1.4; margin-top:2px;">${subHtml}</div>`
