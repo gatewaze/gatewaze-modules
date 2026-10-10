@@ -65,7 +65,12 @@ function fromB64url(s: string): Buffer {
  * ticket that is not signed is not a ticket.
  */
 function signingKey(): string | null {
-  const secret = process.env.SUPABASE_JWT_SECRET ?? '';
+  // Both names, in this order, matching event-media's getTicketSecret(). It
+  // matters: neither AAIF prod nor the local stack actually sets
+  // SUPABASE_JWT_SECRET — both set JWT_SECRET — so reading only the first
+  // name makes uploads unavailable everywhere. I found that by getting a 503
+  // from mint on a real run rather than by reading the env.
+  const secret = process.env.SUPABASE_JWT_SECRET ?? process.env.JWT_SECRET ?? '';
   if (!secret) return null;
   return createHmac('sha256', secret).update(TICKET_KEY_INFO).digest('hex');
 }

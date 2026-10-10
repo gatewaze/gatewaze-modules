@@ -20,16 +20,23 @@ const payload = {
   user_id: 'cccccccc-0000-4000-8000-000000000003',
 };
 
-let saved: string | undefined;
+const NAMES = ['SUPABASE_JWT_SECRET', 'JWT_SECRET'] as const;
+let saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
-  saved = process.env.SUPABASE_JWT_SECRET;
+  saved = {};
+  for (const n of NAMES) {
+    saved[n] = process.env[n];
+    delete process.env[n];
+  }
   process.env.SUPABASE_JWT_SECRET = 'a-test-signing-secret';
 });
 
 afterEach(() => {
-  if (saved === undefined) delete process.env.SUPABASE_JWT_SECRET;
-  else process.env.SUPABASE_JWT_SECRET = saved;
+  for (const n of NAMES) {
+    if (saved[n] === undefined) delete process.env[n];
+    else process.env[n] = saved[n];
+  }
 });
 
 describe('round trip', () => {
@@ -126,14 +133,14 @@ describe('required fields', () => {
 
 describe('no secret configured', () => {
   it('cannot mint, and says so rather than producing an unsigned ticket', () => {
-    delete process.env.SUPABASE_JWT_SECRET;
+    for (const n of NAMES) delete process.env[n];
     expect(ticketsAvailable()).toBe(false);
     expect(() => mintTicket(payload)).toThrow(/SUPABASE_JWT_SECRET/);
   });
 
   it('refuses to verify rather than accepting anything', () => {
     const t = mintTicket(payload);
-    delete process.env.SUPABASE_JWT_SECRET;
+    for (const n of NAMES) delete process.env[n];
     expect(verifyTicket(t)).toEqual({ ok: false, error: 'unavailable' });
   });
 });
@@ -147,5 +154,26 @@ describe('domain separation', () => {
     const { createHmac } = require('crypto') as typeof import('crypto');
     const rootSig = createHmac('sha256', 'a-test-signing-secret').update(body).digest('base64url');
     expect(verifyTicket(`${body}.${rootSig}`)).toEqual({ ok: false, error: 'bad_signature' });
+  });
+});
+
+describe('the secret fallback the real environments depend on', () => {
+  it('uses JWT_SECRET when SUPABASE_JWT_SECRET is absent', () => {
+    // Neither AAIF prod nor the local stack sets SUPABASE_JWT_SECRET. Without
+    // this fallback, mint returns 503 and uploads are unavailable everywhere.
+    delete process.env.SUPABASE_JWT_SECRET;
+    process.env.JWT_SECRET = 'the-platform-jwt-secret';
+    expect(ticketsAvailable()).toBe(true);
+    const t = mintTicket(payload);
+    expect(verifyTicket(t).ok).toBe(true);
+  });
+
+  it('prefers SUPABASE_JWT_SECRET when both are present', () => {
+    process.env.SUPABASE_JWT_SECRET = 'preferred';
+    process.env.JWT_SECRET = 'fallback';
+    const t = mintTicket(payload);
+    // Removing the preferred one must invalidate it, proving which was used.
+    delete process.env.SUPABASE_JWT_SECRET;
+    expect(verifyTicket(t)).toEqual({ ok: false, error: 'bad_signature' });
   });
 });
