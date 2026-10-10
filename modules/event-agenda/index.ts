@@ -30,7 +30,43 @@ const eventAgendaModule: GatewazeModule = {
 
   dependencies: ['events', 'event-speakers'],
 
-  configSchema: {},
+  workers: [
+    {
+      // File stem must equal the job-name suffix: the prod worker derives the
+      // job name from the handler filename as `${moduleId}:${stem}`.
+      name: 'event-agenda:import-schedule',
+      handler: './workers/import-schedule.ts',
+      concurrency: 1,
+    },
+    {
+      name: 'event-agenda:sweep-schedules',
+      handler: './workers/sweep-schedules.ts',
+      concurrency: 1,
+    },
+  ],
+
+  crons: [
+    {
+      // 03:30 UTC. The sweep is a no-op unless auto_import_schedules is on,
+      // so registering the cron costs nothing for brands that have not opted in.
+      name: 'event-agenda:sweep-schedules',
+      queue: 'jobs',
+      schedule: { pattern: '30 3 * * *' },
+      data: { kind: 'event-agenda:sweep-schedules' },
+    },
+  ],
+
+  configSchema: {
+    auto_import_schedules: {
+      key: 'auto_import_schedules',
+      type: 'boolean',
+      required: false,
+      default: 'false',
+      label: 'Refresh conference programmes nightly',
+      description:
+        'Re-read each conference\'s published schedule every night and update its agenda. Imports are skipped when the source has not changed, and operator edits are never overwritten.',
+    },
+  },
 
   onInstall: async () => {
     console.log('[event-agenda] Module installed');
