@@ -1,0 +1,1365 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+X-WR-CALNAME:agntconmcpconeu26
+X-WR-CALDESC:Event Calendar
+METHOD:PUBLISH
+CALSCALE:GREGORIAN
+PRODID:-//Sched.com AGNTCon + MCPCon Europe 2026//EN
+X-WR-TIMEZONE:UTC
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T053000Z
+DTEND:20260917T180000Z
+SUMMARY:Cloak Room
+DESCRIPTION:\n
+CATEGORIES:REGISTRATION
+LOCATION:Cloak Room (-1 Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:534739d7b732814bcdb37356c42f8a1d
+URL:http://agntconmcpconeu26.sched.com/event/534739d7b732814bcdb37356c42f8a1d
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T053000Z
+DTEND:20260917T160000Z
+SUMMARY:Registration & Badge Pick-Up
+DESCRIPTION:\n
+CATEGORIES:REGISTRATION
+LOCATION:Onyx Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:9439645c550fcff40e77c59449459f7c
+URL:http://agntconmcpconeu26.sched.com/event/9439645c550fcff40e77c59449459f7c
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T070000Z
+DTEND:20260917T070500Z
+SUMMARY:Keynote: Welcome - Angie Jones\, Vice President\, Agentic AI Foundation
+DESCRIPTION:\n
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:a33aec1a98c9e77ac1b2d5556804a715
+URL:http://agntconmcpconeu26.sched.com/event/a33aec1a98c9e77ac1b2d5556804a715
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T070700Z
+DTEND:20260917T071700Z
+SUMMARY:Keynote: Building the Internet of Agents in the Open - Mazin Gilbert\, Executive Director of Agentic AI Foundation
+DESCRIPTION:\n
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:a96f94632eec478290d3c91a583611b2
+URL:http://agntconmcpconeu26.sched.com/event/a96f94632eec478290d3c91a583611b2
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T071800Z
+DTEND:20260917T072800Z
+SUMMARY:Keynote: MCP and the Era of Connectivity - David Soria Parra\, Co-creator of MCP\, Anthropic
+DESCRIPTION:David will discuss the need for connectivity in an era of increasing AI capabilities. Open standards like MCP are at theheart of the AI revolution and the increased ability of models to reach out into the world. We discuss the last two years of MCP and look into the future of connectivity standards in the&nbsp\;industry.\n
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:37aeff733c2487b258d861719dcf8f21
+URL:http://agntconmcpconeu26.sched.com/event/37aeff733c2487b258d861719dcf8f21
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T072900Z
+DTEND:20260917T073900Z
+SUMMARY:Keynote: Reactive Agents: Your Agent Doesn't Need to Be Always On - Clare Liguori\, MCP Core Maintainer & Senior Principal Engineer\, AWS
+DESCRIPTION:Agents spend most of their lives waiting: provisioning a cluster takes fifteen minutes\, a human replies next week\, and an alert might not fire for a month. Most runtimes hold a process open through all of it\, so a machine stays up for weeks to do a few minutes of real work.\nA reactive agent is a running process only while it has something to do. The rest of the time it could be a row in a database or a file on disk\, until something outside sends it an event.\nI'll cover what reactive agents look like in implementation\, and how MCP is evolving to enable them.\n
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:6e6f2a0798fa2937b99241a3a1e22960
+URL:http://agntconmcpconeu26.sched.com/event/6e6f2a0798fa2937b99241a3a1e22960
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T074000Z
+DTEND:20260917T075000Z
+SUMMARY:Keynote: Agents as Actors: Harnessing the Power of Agentic Infrastructure - Idit Levine\, Founder & CEO & Keith Babo\, Chief Product Officer\, Solo.io
+DESCRIPTION:Harnessed agents have become the dominant interaction and runtime pattern for agentic AI. Claude Code\, Codex\, and a fast-growing field of open source harnesses integrate models with MCP tools\, skills\, and plugins. These harnesses provide sandboxed execution\, scoped environment access\, and human-in-the-loop controls on the desktop. The industry's next shift is already underway: moving harnessed agents from the desktop onto shared infrastructure\, where security\, observability\, and governance are consistent across every agent interaction. In this talk\, we will explore how open source infrastructure can deliver secure\, scalable harnessed agents beyond the desktop.
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:42346c9d2353d44346a5dacda2c32abb
+URL:http://agntconmcpconeu26.sched.com/event/42346c9d2353d44346a5dacda2c32abb
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T075000Z
+DTEND:20260917T081500Z
+SUMMARY:Coffee Break
+DESCRIPTION:\n
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Solutions Showcase - Diamond Lounge\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:cb8ed3047f6fe6b3c91443e752f3266d
+URL:http://agntconmcpconeu26.sched.com/event/cb8ed3047f6fe6b3c91443e752f3266d
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T075000Z
+DTEND:20260917T173000Z
+SUMMARY:Solutions Showcase
+DESCRIPTION:\n
+CATEGORIES:SOLUTIONS SHOWCASE
+LOCATION:Diamond Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:cb20d84264544d57f2326bd9a95b1460
+URL:http://agntconmcpconeu26.sched.com/event/cb20d84264544d57f2326bd9a95b1460
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T075500Z
+DTEND:20260917T080500Z
+SUMMARY:Sponsor Activity - Build and Explore Agentic Infrastructure Hands-On
+DESCRIPTION:Get hands-on with agentic infrastructure through interactive labs covering agentgateway\, kagent\, Agent Substrate\, agentregistry\, and more. Explore how these open source projects help you build\, run\, and connect AI agents\, then leave with practical experience you can apply to your own agentic workloads.\n\nSponsor: Solo.io&nbsp\;Location: Solutions Showcase in Diamond Lounge (Ground Level)&nbsp\;In order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:SOLUTIONS SHOWCASE
+LOCATION:Diamond Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:e353d687cdaa6be18c0dbdeb9837b1f9
+URL:http://agntconmcpconeu26.sched.com/event/e353d687cdaa6be18c0dbdeb9837b1f9
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T075500Z
+DTEND:20260917T080500Z
+SUMMARY:Sponsor Activity - What’s Your Data Type?
+DESCRIPTION:Discover your data personality! Use our interactive filter to explore different data types and find the one that matches you best. Don’t forget to grab some pins\, stickers\, and pens!\nSponsor: Safe SoftwareLocation: Solutions Showcase in Diamond Lounge (Ground Level)&nbsp\;In order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:SOLUTIONS SHOWCASE
+LOCATION:Diamond Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:a39d5c1eb36de1bc6691ef1fd60f4670
+URL:http://agntconmcpconeu26.sched.com/event/a39d5c1eb36de1bc6691ef1fd60f4670
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T080500Z
+DTEND:20260917T081500Z
+SUMMARY:Sponsor Activity - Fuel Your Build: Stroopwafels + Live Strands Agents and MCP Demos
+DESCRIPTION:Grab a stroopwafel while AWS engineers demo Strands Agents and MCP live. See open source AI agent frameworks in action\, get your questions answered\, and pick up goodies for the commute and the commit — first come\, first served. All skill levels welcome — just stop by.\n\nSponsor: AWSLocation: Solutions Showcase in Diamond Lounge (Ground Level)&nbsp\;In order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:SOLUTIONS SHOWCASE
+LOCATION:Diamond Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:3188a9d282d6097d68fb6f1fee15d5a7
+URL:http://agntconmcpconeu26.sched.com/event/3188a9d282d6097d68fb6f1fee15d5a7
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T081500Z
+DTEND:20260917T084000Z
+SUMMARY:The Modern AI Stack: Agents\, MCP and Skills - Adewale Abati\, Independent
+DESCRIPTION:Agent harnesses. MCP. Skills. MCP Apps. If you've been watching the AI space and feeling like everyone else already understands something you don't\, this talk is for you.\n \n I've spent the last several months building with each layer of the modern AI stack\, and what I kept finding was that the concepts aren't as hard as the terminology makes them sound. Nobody had just sat down and explained what each piece actually is\, what problem it solves\, and how they fit together. So that's this talk. Technical enough to be useful\, grounded in real workflow experience\, and paced so that by the end you have a clear mental model of where AI tooling actually stands today and where you fit in it.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:ac8657991703b1b888e03ed5f2014d2f
+URL:http://agntconmcpconeu26.sched.com/event/ac8657991703b1b888e03ed5f2014d2f
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T081500Z
+DTEND:20260917T084000Z
+SUMMARY:Sponsored Session: Securing the Agentic Universe\, One Layer at a Time - Jake Moghtader\, Runlayer
+DESCRIPTION:Every enterprise is running agents that call tools\, use MCP servers\, and touch production systems\, at volumes no human review loop can keep up with. That creates exposure: prompt injection\, over-permissioned agents\, MCP sprawl\, and behavioral drift.\nAt enterprise scale\, defense in depth is the only architecture that holds. No single control catches everything. You need policies\, runtime threat detection\, and fine-grained access controls applied at every layer of the agentic stack\, paired with full-session observability and behavioral baselines so you can find signals in the noise.\n\n\n\n​In order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:66e83ddbf2f65de6602bf438113bc447
+URL:http://agntconmcpconeu26.sched.com/event/66e83ddbf2f65de6602bf438113bc447
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T081500Z
+DTEND:20260917T084000Z
+SUMMARY:From Personal Agent To Org Catalog: 13 Specialists\, One Orchestrator - Nick Veenhof\, GitLab
+DESCRIPTION:Every team at our company was building agents from scratch. Duplicated prompts. Duplicated tool configs. No shared memory. I watched five teams present their setups at a meetup in Ghent. Same patterns\, reinvented five times.\n \n So I built Paul\, an AI chief of staff with 13 specialist agents: analyst\, writer\, broadcaster\, operator\, architect\, reviewer\, and more. Each agent has a defined job family\, a cultural perspective\, and a skill library. One orchestrator delegates. A reviewer gates quality. The whole system runs on open source tooling with MCP servers for memory\, calendar\, email\, GitLab\, and smart home.\n \n The sharing layer is a platform AI catalog. Agent definitions\, flows\, and MCP server configs become organizational assets. A team publishes an agent. Another team reuses it. Skills are composable. Memory is scoped: user\, project\, or org.\n \n This talk covers the architecture\, the real failures\, and the pattern for moving from a personal experiment to an organizational capability. You leave with concrete agent definitions\, delegation patterns\, and a mental model for building a catalog your whole organization can use.
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:cbf2b2063ed4a305936e7d6672e7e7eb
+URL:http://agntconmcpconeu26.sched.com/event/cbf2b2063ed4a305936e7d6672e7e7eb
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T081500Z
+DTEND:20260917T084000Z
+SUMMARY:What Does It Take To Ship a New MCP Spec - Den Delimarsky\, Anthropic
+DESCRIPTION:An end-to-end deep dive into how a new spec goes from idea to a production\, stable release. In this session\, you will learn more about the MCP governance process\, Spec Enhancement Proposals (SEPs) and how all of this work translates into a brand-new MCP spec that then is adopted by the agentic space at large!
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:3d842d83855592f0f93f749abc5a09e8
+URL:http://agntconmcpconeu26.sched.com/event/3d842d83855592f0f93f749abc5a09e8
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T081500Z
+DTEND:20260917T095000Z
+SUMMARY:Sponsored Workshop: Total Recall: Agent Memory and Harness Engineering - Ignacio Martinez\, Oracle
+DESCRIPTION:In this hands-on workshop you'll build a working autonomous agent from the harness up\, in a notebook\, then see it live in a full working web application and leave with one that can write and run its own automations. You'll implement every surface area yourself: a set of predefined tools\, persistent memory through the Oracle AI Agent Memory package\, orchestration with LangChain and LangGraph\, and LLM access through OCI GenAI Service\, composing the full set of Oracle primitives into one harness you understand end to end.\n\nMost teams assemble that harness from a dozen disconnected services: one store for vectors\, another for state\, a separate reranker\, a bolt-on memory layer. We take the opposite approach\, on a single unified memory core. The organizing principle is optionality by default: you shouldn't have to choose your memory substrate up front. With Oracle AI Database you get file system and database memory in one place\, embedding models and rerankers running inside the database kernel\, and every retrieval strategy an AI workload needs without leaving the core.\n\nAnd consolidating onto one core is what keeps the whole thing tractable. You know the drill: a production harness has you holding all those moving parts in your head at once\, and most of your attention goes to keeping them in sync rather than improving the agent. Pull that sprawl into a single core and the cognitive load drops. You get to think about what the agent does\, not where its state lives. That's the difference between controlling your harness and renting its pieces.
+CATEGORIES:WORKSHOPS
+LOCATION:G106 + G107 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:e190753c9a27025eebdb6e7e15e006f9
+URL:http://agntconmcpconeu26.sched.com/event/e190753c9a27025eebdb6e7e15e006f9
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T085000Z
+DTEND:20260917T091500Z
+SUMMARY:Legal Implications Under EU Law When Deploying AI Agents - Mirela Takacs\, Law Office Takacs Mirela
+DESCRIPTION:This presentation highlights general rules that any engineer should keep in mind before implementing an AI agent\, around one core idea: legislation should be treated as part of the system architecture. At EU level\, the AI Act is the central regulation\, but adjacent European legislation may also be activated based on the AI agent’s actions.\n Translating legal obligations into technical requirements from the design stage makes deployment safer and more compliant. Five practical takeaways help in doing that:\n 1. compliance should not be seen as a one-time check\, but as a continuous monitoring and evaluation process\n 2. it demands interdisciplinary work from the design phase\, not a back-and-forth decision chain\n 3. the agent is a system\, not a legal person\, so the ones held accountable are the humans behind it\n 4. a clear map of what the agent does\, accesses\, and produces is what lets you navigate the law \n 5. there is no universal rule applicable: start with the AI Act\, then identify the adjacent legislation activated by the agent’s specific functions\n The goal is to design agents that are safe\, compliant and genuinely useful\, by treating law as an architectural concern\, not bureaucracy.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:42c9a055275fc191f23220c546c8a8ad
+URL:http://agntconmcpconeu26.sched.com/event/42c9a055275fc191f23220c546c8a8ad
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T085000Z
+DTEND:20260917T091500Z
+SUMMARY:Sponsored Session: Beyond the Easy 80%: Bringing Legacy\, Spatial\, and Locked-Down Data to MCP - Sanae Mendoza\, Safe Software
+DESCRIPTION:AI models are becoming a commodity. GPT-4\, Claude\, Gemini. &nbsp\;Pick one\, swap it next quarter\, and the differentiation has already moved on. What hasn't moved is context: the data an agent can actually reach. Most of today's MCP ecosystem wraps the easy 80 percent. &nbsp\;SaaS APIs\, ticketing systems\, chat platforms\, anything that already had a REST endpoint. \n\nThe other 20 percent: legacy databases running since the 1980s\, CAD/BIM/GIS formats\, real-time sensor and SCADA feeds\, regulated records that legally can't leave the building\, and hybrid environments split across cloud and on-prem by design\, &nbsp\;still have no real path to an agent. In most enterprises\, that's exactly where the decision-relevant data lives.&nbsp\;\n\nDrawing on 32 years building spatial and enterprise data integration\, this talk looks at what it actually takes to expose hard\, hybrid\, and on-prem data as MCP tools: treating data workflows as callable tools instead of one-off scripts\, separating the control plane (what an agent is allowed to call) from execution (where the data actually lives and stays)\, and building both directions\, consuming MCP tools and exposing your own\, without hardwiring to one model or vendor.&nbsp\;\n\n\n\n\n​In order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:MCPCON
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:b64de80d15aa7d2c3aa1d7a3b7bec8d5
+URL:http://agntconmcpconeu26.sched.com/event/b64de80d15aa7d2c3aa1d7a3b7bec8d5
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T085000Z
+DTEND:20260917T091500Z
+SUMMARY:Stateless: The Future of MCP Transports - Kurtis Van Gent\, Google & Shaun Smith\, Hugging Face
+DESCRIPTION:MCP is becoming stateless in one of the largest changes to the protocol since its launch. \n \n This change simplifies the deployment of robust servers\, making MCP ready for the next wave of scaled usage driven by agents and use cases like MCP Apps. \n \n This session led by members of the Transports Working Group:\n - Explores the upcoming changes - and sharing real data from Google and Hugging Face on the motivation behind them.\n - Details the latest approaches on handling serverless Elicitation\, Sampling and Sessions.\n - Introduces the application and infrastructure patterns that can take advantage of the stateless protocol.\n \n We'll also update on the latest roadmap status and expected migration timelines and approach
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:b49c7410bc17e60971fd9f784a4c358b
+URL:http://agntconmcpconeu26.sched.com/event/b49c7410bc17e60971fd9f784a4c358b
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T085000Z
+DTEND:20260917T091500Z
+SUMMARY:An Orchestra of Agents: What I Learned Running a Multi-Agent System for 5\,000+ Developers - Muhammad Ahsan Ayaz\, Scania
+DESCRIPTION:Most "AI agents" are a single LLM wrapped in a system prompt. They look great in demos and collapse the moment real users show up. I know because I built one for my 5\,000+ member developer community\, and the first version broke in ways I didn't see coming.\n In this talk\, I'll walk through the multi-agent system I run in production: a tree of 12 specialist agents built on Google's ADK\, coordinating through sequential pipelines\, parallel fan-out\, and LLM-driven dynamic routing\, each armed with MCP tools to act on the real world. We'll cover the orchestration primitives\, then climb into the real architecture: how onboarding chains three agents in sequence\, how external knowledge fans out across GitHub\, Dev.to\, and StackOverflow in parallel\, and how the root agent delegates per message.\n Then the fun part: the bugs. The drain-loop that cancelled a ParallelAgent mid-flight. The recency drift that surfaced 2020 articles in 2026. The callback layer I had to build for PII sanitization\, caching\, and observability \; none of which made it into the tutorial.\n You'll leave with a mental model for each pattern\, production patterns that kept it running\, and war stories that'll save you a week.
+CATEGORIES:MULTI-AGENT & DISTRIBUTED SYSTEMS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:80826fbc5cc99019699571a6395ab758
+URL:http://agntconmcpconeu26.sched.com/event/80826fbc5cc99019699571a6395ab758
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T092500Z
+DTEND:20260917T095000Z
+SUMMARY:When NOT To Use an Agent: Choosing Between Workflows\, Services\, and Agent Systems - Jigyasa Grover\, Uber & Rishabh Misra\, Atlassian
+DESCRIPTION:LLM-powered “agents” are quickly becoming the default architectural pattern for AI-enabled systems.\n \n Need automation? Agent.\n Need integration? Agent.\n Need reasoning? Agent.\n \n But agents are not an upgrade\; they are a trade-off. They introduce non-determinism\, larger attack surfaces\, evaluation complexity\, and operational unpredictability.\n \n In this session\, we’ll examine three common architectural patterns for LLM-enabled systems:\n - Deterministic workflows (state machines\, orchestrated pipelines)\n - Service-oriented architectures with LLM augmentation\n - Fully agentic orchestration with dynamic tool use\n \n Rather than comparing features\, we’ll analyze these patterns across real engineering constraints:\n - Failure isolation and blast radius\n - Latency and cost predictability\n - Observability and debugging complexity\n - Security boundaries and permission scoping\n - Evaluation and regression testing strategy\n - Operational burden over time\n \n This talk offers a practical decision framework grounded in system design principles. You’ll leave with a mental model and checklist to evaluate whether an agent is justified\, or whether a simpler architecture will deliver more predictable\, resilient outcomes.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:59ef4419bf81f6a3064248ecb37c5f5f
+URL:http://agntconmcpconeu26.sched.com/event/59ef4419bf81f6a3064248ecb37c5f5f
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T092500Z
+DTEND:20260917T095000Z
+SUMMARY:Sponsored Session: Agents\, Infrastructure\, and the Future of AI-native Applications - Kevin Cochrane\, Vultr
+DESCRIPTION:Every application ever built needs to be rebuilt - with agentic AI at the core. &nbsp\;\n\nMoving from cloud-native to ai-native means a new architecture for unlocking enterprise data to safely and securely deliver personalized experiences and services at scale.\n\nDelivering business outcomes requires delivering those experiences to employees and customers globally\, wherever they live and work.\n\nTo build the Agentic Enterprise\, enterprises need to rethink their infrastructure strategy\, own their data\, and own their AI stack.\n\nIn this session\, we’ll explore a new infrastructure approach to unlock enterprise AI - and how agents can help.\n\n\n\nIn order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:69d5bcf297160718f519164863ae7dc0
+URL:http://agntconmcpconeu26.sched.com/event/69d5bcf297160718f519164863ae7dc0
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T092500Z
+DTEND:20260917T095000Z
+SUMMARY:CHAP\, an Open Protocol for Auditable Human-Agent Collaboration - Dr Arsalan Shahid\, Brightbeam AI
+DESCRIPTION:\n \n The next phase of agents is not one human supervising one model. It is multi-human\, multi-agent work across teams\, tools\, and trust boundaries. The decisive moments are not model outputs\; they are human approvals\, edits\, overrides\, escalations\, and handoffs\, and the rationale behind them. Today those moments leak into chat logs\, tickets\, and application code\, where they cannot be replayed or audited.\n \n CHAP\, the Collaborative Human-Agent Protocol\, gives this shared workspace a protocol layer. A small Core (workspaces\, participants\, tasks\, artefacts\, and an append-only evidence log) carries composable profiles for review\, structured override\, operating modes\, handoff\, deliberation\, identity\, and signed audit. It composes with MCP and A2A rather than replacing them: MCP connects agents to tools\, A2A connects agents to agents\, CHAP lets humans and agents do accountable work together.\n \n The talk covers the protocol gap\, the Core primitives\, a worked 'override as evidence' flow\, and lessons from building the open reference implementations and conformance harness. Spec\, code\, and examples are public.\n \n Paper: https://arxiv.org/abs/2606.09751\n Repo: https://github.com/BrightbeamAI/chap
+CATEGORIES:HUMAN-AGENT COLLABORATION
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:2d29d0fef15d58a45879b1b1323352fb
+URL:http://agntconmcpconeu26.sched.com/event/2d29d0fef15d58a45879b1b1323352fb
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T092500Z
+DTEND:20260917T095000Z
+SUMMARY:Call Now\, Fetch Later: Durable MCP Tasks on an Event Log - Jeremy Frenay\, Lenses
+DESCRIPTION:MCP's new Tasks primitive makes tool calls asynchronous: a request returns a durable handle now\, and the result arrives later. That's the right model for work that runs for minutes or hours\, like ETL jobs\, deep research\, or batch reasoning\, but the spec leaves the hard parts to implementers. \n Where does in-flight work live? How does a task survive a restart? How do you deliver a result exactly once and let multiple clients subscribe to it?\n \n This talk argues that an append-only event log is a natural backend\, because a Task is a state machine and a state machine's history is just an ordered log of its transitions. We walk a concrete\, vendor-neutral implementation: creation\, status\, and completion become events\, recovery becomes replay\, and the server can go stateless\, lining up with MCP's roadmap. We dig into the failure modes that bite in production: orphaned tasks\, duplicate side effects\, and at-least-once versus exactly-once delivery\, plus the gaps the 2026 roadmap is still closing around retry and expiry.\n \n You'll leave with a reference architecture you can build on any log or queue\, and an honest view of what Tasks gives you today and what it doesn't yet.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:7e47fcddb7c291d6319a253a780dd577
+URL:http://agntconmcpconeu26.sched.com/event/7e47fcddb7c291d6319a253a780dd577
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T100000Z
+DTEND:20260917T102500Z
+SUMMARY:Delegated Authorization for AI Agents: How to Build an Agent with Fine-Grained Permissions - Sohan Maheshwar\, AuthZed
+DESCRIPTION:DevOps and Platform teams now work with hundreds of AI Agents in their internal systems. These Agents usually run with credentials that can touch everything\, including your production servers. This could lead to prod incidents\, unless you have deterministic permission checking to ensure the agents perform only actions that it's authorized to. \n\nThis talk will teach you how to add delegated authorization to your AI Agents\, at scale.\n\nThe presentation covers how the AI Agents have changed&nbsp\;the mental model around permissions and why Relationship-Based Access Control (ReBAC) is well suited for this paradigm. You'll learn about the Google Zanzibar model of fine-grained authorization and why it is well-suited for commons Agent-permission&nbsp\;patterns such as:Scoped delegationExpiring grantsInstant revocation\, and&nbsp\;Hierarchical permissionsThe talk includes a live demo of a DevOps Agent powered by goose & SpiceDB where you will see how revoking the Agent's staging access automatically suspends production access too\, something traditional role-based systems can't express cleanly.\n\n\n
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:bd3e4922efb433a48dbf756124ad7a8f
+URL:http://agntconmcpconeu26.sched.com/event/bd3e4922efb433a48dbf756124ad7a8f
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T100000Z
+DTEND:20260917T102500Z
+SUMMARY:Sponsored Session: Building a Sovereign AI Governance Stack with Open Source - Roman Swoszowski\, Grape Up
+DESCRIPTION:AI orchestration and governance have become a core operational requirement for enterprises deploying LLMs and agents at scale - yet most organizations underestimate how many moving parts are involved: knowing which team is calling which model with what data\, keeping guardrails consistent across the board\, containing the security exposure each new integration brings\, and tracking what it's all costing. And regulatory regimes like the EU AI Act only raise the stakes further\, adding a compliance dimension to the equation. This talk walks through building such a governance stack from open-source components into a coherent\, sovereign platform you fully control. We'll cover the architecture\, the integration pain points nobody talks about\, and when it makes sense to build vs. adopt a ready-made enterprise platform.\n\nIn order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:9de888c443acf63122c93d738006c74a
+URL:http://agntconmcpconeu26.sched.com/event/9de888c443acf63122c93d738006c74a
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T100000Z
+DTEND:20260917T102500Z
+SUMMARY:MCP Conformance Testing V1.0\, Testing the 2026-07-28 Spec in SDK's and Online - Paul Carleton & Felix Weinberger\, Anthropic
+DESCRIPTION:MCP Conformance testing is a set of tools for ensuring SDK's implement the spec in a way that's compatible with each other.\n \n The most recent spec revision 2026-07-28 is the first release that requires conformance testing as a part of the Specification Enhancement Proposal (SEP) process. This talk will go over lessons learned from the rollout of that specification\, and also introduce hosted conformance testing that clients and servers can use to test their deployed implementations.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:8648b45cda74cfa4f5d95ef0db40ab7d
+URL:http://agntconmcpconeu26.sched.com/event/8648b45cda74cfa4f5d95ef0db40ab7d
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T100000Z
+DTEND:20260917T102500Z
+SUMMARY:From Opaque To Observable: Tracing Multi-Agent OpenClaw Workflows With OpenTelemetry - Jordan Augé\, Cisco Systems
+DESCRIPTION:Agent systems are getting more capable\, but they are still hard to operate when a single user request fans out across multiple agents\, tools\, model calls\, queues\, and outbound messages. In this session\, we will walk through how we built an open observability plugin for OpenClaw (InsightClaw) that turns that opaque execution path into a connected telemetry story using OpenTelemetry.\n \n The talk covers a practical design that combines three signal paths: typed lifecycle hooks for request\, agent\, tool\, and response flow\; diagnostics events for model usage\, cost\, queue\, webhook\, and stuck-session signals\; and optional provider SDK auto-instrumentation for GenAI calls. Together\, these produce connected traces\, useful operational metrics\, and cross-session lineage for handoffs\, spawned subagents\, and parallel branches.\n \n We will show the trace model we used\, the session semantics we had to define for real workflows\, and the engineering tradeoffs around payload capture\, runtime patching\, and correlating control-plane events with agent execution.
+CATEGORIES:OPEN SOURCE TOOLS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:83f37169e46203cae13266651a163234
+URL:http://agntconmcpconeu26.sched.com/event/83f37169e46203cae13266651a163234
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T100000Z
+DTEND:20260917T113500Z
+SUMMARY:Sponsored Workshop: The Buzz-Word Is Collaboration - Morgan Martin\, Tyler Longwell\, Wes Billman & Bradley Axen\, Block
+DESCRIPTION:Most teams made a person the API between their agents and everyone else: copying the output into chat and pasting the reply back into the harness. This hands-on workshop shows the alternative: put the agents where the work is. We use Buzz\, Block's open source\, channel-driven workspace where people and AI agents share conversations\, repositories\, and reviews.\nWe begin in the middle of a live project\, with four people and a swarm of agents working across shared channels and code. Then we rewind and bring the room in. Attendees will join a shared Buzz community\, work with an agent\, form channels with other participants\, and practice delegating\, steering\, reviewing\, and coordinating work as it happens. Along the way\, we examine how Buzz approaches portable identity\, scoped capabilities\, signed work\, and collaboration across different agent runtimes and models.\n\nBy the end\, the room itself becomes part of the workflow: everyone contributes code\, assets\, and reviews to one shared project in a Buzz-hosted Git repository. Bring a laptop. Leave with practical experience running many agents in one shared workspace\, where the whole team can see\, steer\, and use them.\n\nPre-work: Please download: &nbsp\;https://buzz.xyz/
+CATEGORIES:WORKSHOPS
+LOCATION:G106 + G107 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:00f406e2e624124e75ebda56dce6b639
+URL:http://agntconmcpconeu26.sched.com/event/00f406e2e624124e75ebda56dce6b639
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T103500Z
+DTEND:20260917T110000Z
+SUMMARY:Sponsored Session: Breaking the Governance Bottleneck: Why Scaling Control Gets Agents to Production - Dr. Rania Khalaf\, WSO2
+DESCRIPTION:Teams move fast to ship an agent pilot\, then crash into company policy the moment it needs real access. It works in a sandbox. It stalls the moment it needs an MCP server\, a real credential\, or a scope wider than a demo account. Governance hasn't kept pace\, and shipping on top of that gap isn't speed\, it's debt that comes due in production.This talk makes the case for an agent control plane: guardrails\, agent identity\, MCP authorization\, and access\, built to catch up. Control only holds up if it works across any model\, framework\, or deployment - both for the agent estate you have today and the one you'll have in a year. We'll cover what agent control needs the moment something breaks: live identity\, real-time enforcement\, an audit trail that survives the incident\, and the ability to isolate one agent without disrupting others.Takeaways:&nbsp\;How controls accelerate agent production\, not block itWhy real control has to travel with the agent\, not bolted to the stack when it was builtHow framework-agnostic governance at the org level eliminates silos and future-proofs your agents\n\n\nIn order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:5e6ef71fa08f4af6da64c85786485f59
+URL:http://agntconmcpconeu26.sched.com/event/5e6ef71fa08f4af6da64c85786485f59
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T103500Z
+DTEND:20260917T110000Z
+SUMMARY:We Built AI Agents To Fix Security Findings in Production — Here's What Developers Actually Merged - Amine Boudraa\, Ruchita Kshirsagar\, Nihit Gupta & Gianfranco Romani\, Thomson Reuters
+DESCRIPTION:AI is accelerating vulnerability discovery\, finding more security issues than any team can fix by hand. The obvious next step is letting AI fix them too\, but pushing automated changes into production is difficult\, and the trust bar is super high.\n \n Over the past year\, we built and shipped two autonomous remediation agents raising PRs against hundreds of production repositories: one for SAST findings in first-party code\, and one for SCA findings in third-party libraries. While developers can already fix vulnerabilities by going back and forth with a general-purpose AI assistant\, our goal is to make that loop faster and more trustworthy.\n \n That trust came from unglamorous engineering: teaching our agents how to build and test an application\, trace data flows to reject risky fixes\, and resolve breaking changes when modernizing legacy code. Along the way\, we’ll share common patterns we’ve seen across rejected PRs\, and what we had to iterate on to get hundreds of them merged.\n \n We are open sourcing both agents for the community. The volume of CVEs keeps growing\, automated remediation will become a must\, and existing solutions don't yet solve this problem at the level we need.
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:2747326638cb2d4adbf1773fffdfbfe1
+URL:http://agntconmcpconeu26.sched.com/event/2747326638cb2d4adbf1773fffdfbfe1
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T103500Z
+DTEND:20260917T110000Z
+SUMMARY:A2A Goes Stable: What Changed\, Why\, and What's Next - Sam Betts\, Cisco Systems & Kuba Herczyński\, Google
+DESCRIPTION:A2A Protocol v1.0 is the first stable\, production-ready release of the open standard for agent-to-agent communication — marking the transition from a protocol you could experiment with to a foundation organisations can commit to with confidence.\n \n This talk is delivered by two maintainers who helped shape the release. We cover what changed from v0.3 and why: the deliberate choice to prioritise maturity over reinvention\, new enterprise capabilities — signed Agent Cards\, multi-tenancy\, modern OAuth flows\, and a web-aligned architecture — and the breaking changes that were unavoidable on the path to a durable standard.\n \n We also cover the SDK story: how official SDKs support v1.0 while maintaining backward compatibility with v0.3\, and a per-interface versioning strategy that makes progressive migration practical rather than a forced cutover.\n \n Finally\, we look at extensibility: how extensions add capabilities while keeping a stable core\, and how custom protocol bindings let implementations replace the default transport while preserving A2A semantics.\n \n If you are building on A2A today or evaluating it\, this talk gives you a clear picture of what changed\, why\, and how to migrate.
+CATEGORIES:INTEROPERABILITY & STANDARDS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:c705cc6b88f10076b19b6b29c22b4471
+URL:http://agntconmcpconeu26.sched.com/event/c705cc6b88f10076b19b6b29c22b4471
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T103500Z
+DTEND:20260917T110000Z
+SUMMARY:MCP Doesn't Have a Context Problem - Sam Morrow\, GitHub
+DESCRIPTION:People frequently assume MCP requires tools to be dumped straight into the system prompt\, and responses to be returned straight to the model. Critics say the protocol has a context problem\, that CLIs and agent skills are more efficient and composable. They're right about the symptoms\, but wrong about the diagnosis. The problem isn't MCP - it's for a long time few had applied serious context engineering to it.\n \n Through a self-built agent harness (mcpi)\, I will demonstrate three complementary strategies for progressive tool discovery over MCP - each paying only the context tokens it needs.\n \n This talk focuses on the most transformative of the three: skills over MCP that describe the tool surface\, and progressively enable tools upon skill invocation. I will also look at MCP CLIs and Code Mode approaches\, and show how they can complement each other with their different strengths.\n \n Attendees will leave with practical patterns they can implement in their own MCP servers and agent harnesses today.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:8f016a545ccf11a82b80612d0b35cd2d
+URL:http://agntconmcpconeu26.sched.com/event/8f016a545ccf11a82b80612d0b35cd2d
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T111000Z
+DTEND:20260917T113500Z
+SUMMARY:What *IS* an Agent's Identity? - Christian Posta\, Solo.io
+DESCRIPTION:Enterprises understand human identity fairly well. You could argue they are decent at service accounts. But what about an AI agent? Is it either of these?\n \n Agents are driven by intent\, discover/invoke tools\, make decisions\, and interact with other resources (APIs\, databases\, other agents\, etc). Enterprises will care about "Who is this agent?"\, "What is it allowed to do?"\, "What has it done?" and of course "Can we revoke its authority?"\n \n In this talk we'll break down what actually makes up an agent's identity. We'll look at authentication\, delegated authority\, provenance\, trust establishment\, and accountability. We'll also examine where technologies like OAuth\, OpenID Connect\, SPIFFE\, and emerging efforts such as AAuth fit into the picture.\n \n You'll leave with a practical framework for thinking about agent identity\, which problems have already been solved\, and which ones we're still figuring out.
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:c1be08166f7bd5326366168c39e58fe7
+URL:http://agntconmcpconeu26.sched.com/event/c1be08166f7bd5326366168c39e58fe7
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T111000Z
+DTEND:20260917T113500Z
+SUMMARY:Exploring WebMCP: What Happens When AI Agents Start Using Websites? - Sylwia Laskowska\, Atos
+DESCRIPTION:AI agents are getting better at using websites\, but today's web was built for humans. To complete a task\, agents often have to inspect pages\, click buttons\, and guess which actions are available.\n\nWhat if websites could simply tell agents what they can do?\n\nIn this session\, we'll explore WebMCP\, an experimental approach being explored in Chrome that helps websites expose actions and tools in a way that agents can understand directly.\n\nUsing a live demo\, we'll see how agents can interact with websites without relying entirely on browser automation. We'll also discuss why this matters\, what problems WebMCP is trying to solve\, and whether building websites for AI agents could become a normal part of web development in the future.
+CATEGORIES:INTEROPERABILITY & STANDARDS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:6cf70cb5ef0b682423a7ce434964a160
+URL:http://agntconmcpconeu26.sched.com/event/6cf70cb5ef0b682423a7ce434964a160
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T111000Z
+DTEND:20260917T113500Z
+SUMMARY:Two Users\, One App: Designing MCP Apps for Humans and Agents - Florian Bauer\, OpenAI
+DESCRIPTION:An agent prepares a change. The user edits it in an interactive interface. Then the agent continues—but which version of the world is it acting on?\n\nMCP Apps bring people and agents into the same workflow. Making that collaboration work requires deliberate choices about shared state\, context\, approvals\, and who acts next.\n\nThrough one worked example\, this talk examines how to keep tool responses and interfaces consistent\, handle human edits while an agent is working\, make approvals refer to concrete changes\, and return useful context when control passes back. Attendees will leave with practical interaction patterns and failure scenarios for building MCP apps that people and agents can use together.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:b7271a5f69a1eb58a9f232320c9e5cbb
+URL:http://agntconmcpconeu26.sched.com/event/b7271a5f69a1eb58a9f232320c9e5cbb
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T111000Z
+DTEND:20260917T113500Z
+SUMMARY:Your Agents Need a Router: One Integration for Every Model and Tool - Ignasi Barrera\, Tetrate.io
+DESCRIPTION:Every agent starts simple: one model\, one SDK\, a demo that works. Then comes the second provider\, the MCP tools\, the fallback logic\, the rate-limit backoff — and suddenly half your codebase is integration glue that has nothing to do with what your agent actually does.\nAgent Router — newly donated to the Agentic AI Foundation\, with a 1.0 GA release and production deployments at scale — collapses all of it into a single&nbsp\;integration: every model\, every tool\, one declarative API.\nWe'll walk through a live agent workload end-to-end: routing across model providers with automatic failover\; understanding exactly what each agent and team spends — and capping it before it surprises you\;&nbsp\;and choosing which MCP tools each agent can see and call. All declared in one place\, none of it in your application code. You'll leave knowing exactly where a router fits in your agent stack\, what it takes to run one in production\, and how to get involved in the Agent Router project.\n\n
+CATEGORIES:OPEN SOURCE TOOLS
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:15124b3891679d146d3a2aece8ece935
+URL:http://agntconmcpconeu26.sched.com/event/15124b3891679d146d3a2aece8ece935
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T113500Z
+DTEND:20260917T124500Z
+SUMMARY:Lunch (Provided Onsite for Attendees)
+DESCRIPTION:\n
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Solutions Showcase - Diamond Lounge\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:ca6b256b7b8f71b363b78548b6db236a
+URL:http://agntconmcpconeu26.sched.com/event/ca6b256b7b8f71b363b78548b6db236a
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T113500Z
+DTEND:20260917T124500Z
+SUMMARY:Women + Non-Binary Community Gathering
+DESCRIPTION:Join us during lunch for a dedicated space to connect\, collaborate\, and share knowledge. This gathering is designed to amplify voices\, celebrate achievements\, and foster peer mentorship among women and non-binary leaders in the agentic AI community.
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Emerald Lounge (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:b058fb7886e7f72167fab90b0337c5c8
+URL:http://agntconmcpconeu26.sched.com/event/b058fb7886e7f72167fab90b0337c5c8
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T120000Z
+DTEND:20260917T124000Z
+SUMMARY:Prompt à la Carte - Table Topics
+DESCRIPTION:\nGrab your lunch in the Sponsor Showcase\, then join us for impromptu topic discussions during lunch! These informal gatherings are open to anyone. Whether you are looking to share your insights\, hear diverse perspectives\, or network with fellow participants\, these discussions are a great way to connect and collaborate. Choose a table topic that interests you and dive into conversations.\n\nTopic 1: Agentic CommerceTopic 2: Agent IdentityTopic 3: MCPTopic 4: Agentic WebTopic 5: EU AI Act\n
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Topaz Lounge (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:a12ca6a5e355b78f8cd693695265f946
+URL:http://agntconmcpconeu26.sched.com/event/a12ca6a5e355b78f8cd693695265f946
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T124500Z
+DTEND:20260917T125000Z
+SUMMARY:Welcome Back - Angie Jones\, Vice President\, Agentic AI Foundation
+DESCRIPTION:\n
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:4352718f5d0edbfb486946752b594e77
+URL:http://agntconmcpconeu26.sched.com/event/4352718f5d0edbfb486946752b594e77
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T125200Z
+DTEND:20260917T130200Z
+SUMMARY:Keynote: A New Way To Build Software: How GitHub Is Evolving For a Human\, Agent Future - Marlene Mhangami\, Senior Developer Advocate\, Microsoft
+DESCRIPTION:AI Agents are contributing a growing amount of code to GitHub. Some developers are leaning into this\, creating automated development pipelines\, assigning issues from Slack or changing their review process to be agent first. Other developers\, particularly in open source\, are being overwhelmed by agent generated PR's and issues and are not sure what this means for the future of their project. GitHub is a tool at the center of the software development process and has been evolving quickly for the agentic era. In this talk we'll look at some of the key changes that are here in GitHub and what's to come in the future.
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:4c6e214e5b3874b7b3c16e12295d160f
+URL:http://agntconmcpconeu26.sched.com/event/4c6e214e5b3874b7b3c16e12295d160f
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T130400Z
+DTEND:20260917T131400Z
+SUMMARY:Keynote: Inside AI Agents -- Offloading Human Tasks - Maarten Grootendorst\, Creator of BERTopic\, KeyBERT & PolyFuzz\, Member of Technical Staff - Google DeepMind
+DESCRIPTION:This keynote will cover the foundation of what makes an AI Agents (a reasoning LLM\, memory\, tooling\, and planning) and how the transition into an era of Agentic AI is reflected in the development of LLMs.\nUsing Gemma 3 and Gemma 4\, Maarten will explore how Agentic capabilities in LLMs needed to be prompted in earlier generations (Gemma 3) but became part of the core behavior in later generations (Gemma 4).\n
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:9863191944bad057ff0377ffbf2051ca
+URL:http://agntconmcpconeu26.sched.com/event/9863191944bad057ff0377ffbf2051ca
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T131600Z
+DTEND:20260917T132600Z
+SUMMARY:Keynote: Why Organizations Need an AI Control Plane for Security and Governance - Sheng Liang\, Co-Founder & CEO\, Obot AI
+DESCRIPTION:How can organizations secure and govern AI agents they do not fully trust? MCP gateways can intercept and filter tool calls\, but that alone is not enough. Organizations also need complete visibility into agent activity\, consistent policy enforcement\, and centralized control. In this talk\, we explain how to move beyond MCP gateways and build an AI control plane for enterprise-wide security and governance.
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:153562e35e20f47bf2acb1a157ec089a
+URL:http://agntconmcpconeu26.sched.com/event/153562e35e20f47bf2acb1a157ec089a
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T132800Z
+DTEND:20260917T133800Z
+SUMMARY:Keynote: The Browser Isn't Dead Yet - Rachel-Lee Nabors\, Founder\, Mima.social
+DESCRIPTION:Two years ago\, RL Nabors declared the browser dead. It's still here\, but it's transforming. Crawler traffic now rivals human visits\, AI answers are replacing the clicks that fed the open web\, and browsers are evolving to be used by agents as well as humans.\n\nMeanwhile\, a US federal appeals court just ruled that when an AI assistant acts on a website at your direction\, it's you visiting that site. Your agent is you.\n\nThe browser is transforming beyond a document reader and becoming an advocate that adapts to the user and acts on their behalf. Ads\, commerce\, search\, and social will all be retooled accordingly\, the biggest change to the web since the browser itself.\n\nThis keynote maps the shift and what to do about it today: expose your site's capabilities with WebMCP\, host an MCP server\, ship UI as MCP Apps. Then go home and recruit your frontend team\, your API team\, and your design system team. You're all allies now\, building the agentic web.
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:62fd1975975b275115e7552ba6d5c26f
+URL:http://agntconmcpconeu26.sched.com/event/62fd1975975b275115e7552ba6d5c26f
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T134500Z
+DTEND:20260917T141000Z
+SUMMARY:Scaling Agents: From AI Experimentation to an Engineering Operating Model - Marat Kenzhebulatov\, Booking.com
+DESCRIPTION:Most enterprise AI stories focus exclusively on the tools. This talk focuses on the missing piece: what has to change around the tools to make agent adoption a reality in production.\nIn our engineering organization\, the biggest productivity gains did not come from access to stronger models or clever prompt engineering. They came from completely redesigning how our teams work. We found that ad hoc AI usage does not scale\, onboarding friction compounds fast\, and validation quickly becomes the real bottleneck.\nTo move forward\, we had to treat agent adoption as an operating model problem\, not just a tooling rollout.\nIn this session\, we will share practical lessons and architectural shifts from our transition\, including:Standardizing the Setup: Moving from manual\, fragmented environments to standardized team profiles\, reusable skills\, and MCP-backed tooling.\nThe New SDLC: Building a structured path from early exploration to planning\, implementation\, verification\, and review using agentic workflows.\nUpskilling for Judgment: Why developer training must shift away from "prompt tricks" toward architectural oversight\, tool interoperability\, and responsible use.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:G106 + G107 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:ab0c12e127aa40b2e9cb6b5fe8664b31
+URL:http://agntconmcpconeu26.sched.com/event/ab0c12e127aa40b2e9cb6b5fe8664b31
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T134500Z
+DTEND:20260917T141000Z
+SUMMARY:Six Months of Proof: Independently-Verifiable Records for Agent Actions Under the EU AI Act - Steven Mih\, Action State Group\, Inc.
+DESCRIPTION:The EU AI Act makes "what did the agent actually do?" a legal obligation: high-risk AI must support automatic record-keeping over its lifetime (Article 12) — for traceability\, human oversight\, and post-market monitoring — with logs retained at least six months (Article 19). But the Act can only require the logs to exist\, not to be trustworthy: a log is only as good as the party that keeps it\, and the operator who ran the action is not a disinterested witness — even an immutable one can be incomplete\, cherry-picked\, or built after the fact. The fix is simple and old: anchoring. Commit each record to a hash\, write that hash to an independent\, append-only transparency log\, and any party can verify what the agent did — without trusting the operator. This session shows how the Agent Action Capsule project uses open transparency-log standards (SCITT/COSE) to produce anchored\, independently-verifiable records of agent actions to the letter of the Act\, plus the trust it can't legislate. \n \n Live demo of the Agent Action Capsule project: emit a record at an action boundary\, anchor it\, verify it with an open verifier\, then tamper and watch verification fail. You'll leave with an open\, framework-agnostic pattern mapped to Article 12/19 — and a running verifier to try.
+CATEGORIES:INTEROPERABILITY & STANDARDS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:adfb289902647c8485080a968335fcc3
+URL:http://agntconmcpconeu26.sched.com/event/adfb289902647c8485080a968335fcc3
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T134500Z
+DTEND:20260917T141000Z
+SUMMARY:Smart Legal Agreements for the Agentic Economy Using Accord Project - Niall Roche\, The Building Blocks
+DESCRIPTION:This talk is&nbsp\;an overview of the tools available in the open source Accord Project for working with legal agreements to facilitate agentic agreements and payments.&nbsp\;This will include an overview and demo of use cases involving MCP\, A2A and a range of agentic payment standards such as Ap2\, UCP and x402.
+CATEGORIES:INTEROPERABILITY & STANDARDS
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:66dee63adbe497d36fcfe33e5f9c2847
+URL:http://agntconmcpconeu26.sched.com/event/66dee63adbe497d36fcfe33e5f9c2847
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T134500Z
+DTEND:20260917T141000Z
+SUMMARY:MCP Borrowed LSP's Design. It Skipped LSP's Lesson - Gorkem Ercan\, Jozu
+DESCRIPTION:MCP borrowed its design from the Language Server Protocol. It skipped LSP’s hardest lesson\, the one about packaging and trust\, and a decade later that lesson is still unlearned.\n \n LSP never standardized how servers were packaged or verified. Each editor invented its own channel\, the VS Code extension format won by default\, and signing was bolted on much later\, marketplace by marketplace. It still has not closed the gap.\n \n MCP repeats this with a larger blast radius. An MCP server runs arbitrary code that reaches into credentials\, data\, and local systems. Today’s packaging work falls short: the official registry delegates trust to npm and PyPI\, the MCPB format repeats the VS Code extension model\, and the provenance that exists is locked inside vendor silos.\n \n What is missing is open\, registry-neutral provenance verified before an agent loads a server. That standard does not need inventing. Packaging MCP servers as OCI artifacts inherits the signing\, attestation\, and policy tooling the container ecosystem already proved. This talk traces that history firsthand\, then shows how to reuse it rather than rebuild it registry by registry.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:8b497744cd3b147b8c047713bf1d904c
+URL:http://agntconmcpconeu26.sched.com/event/8b497744cd3b147b8c047713bf1d904c
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T134500Z
+DTEND:20260917T141500Z
+SUMMARY:Coffee Break
+DESCRIPTION:\n
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Solutions Showcase - Diamond Lounge\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:f273a5b4ecd674dc72a2cf751a00013c
+URL:http://agntconmcpconeu26.sched.com/event/f273a5b4ecd674dc72a2cf751a00013c
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T134500Z
+DTEND:20260917T141000Z
+SUMMARY:Sandboxing My AI Agent\, One Layer at a Time - Juan Antonio Osorio\, Stacklok Inc.
+DESCRIPTION:We hand coding agents our workspace\, our keys\, and a shell\, then walk away while they run code generated at runtime from untrusted input: files in the repo\, docs fetched off the web\, output from MCP servers nobody audited. The obvious fix is isolation: give every agent its own kernel. So we start there\, running Claude Code\, Codex\, and others inside sub-second\, hardware-isolated microVMs (libkrun/KVM)\, where even root in the guest is stuck behind the hypervisor's MMU boundary\, not just a shared-kernel namespace.\n \n But isolation on its own isn't enough. An isolated agent can still read the .env beside your code\, exfiltrate it\, wreck your workspace\, or abuse a tool you never vetted. So we add defenses\, live\, one layer at a time: copy-on-write workspace snapshots with a per-file review gate\, non-overridable secret exclusions\, a DNS-aware egress firewall\, a hardened Wolfi guest (custom Go PID 1\, dropped capabilities\, seccomp\, no-new-privs)\, and an MCP proxy with Cedar authorization profiles. We finish on the attack surface most tools forget: the security tool's own config.\n \n It's all Apache-2.0. The lesson carries to any agent you run: isolation is the floor\, not the ceiling.
+CATEGORIES:OPEN SOURCE TOOLS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:fafe8a807af18ab835c8d7ba5ea212f8
+URL:http://agntconmcpconeu26.sched.com/event/fafe8a807af18ab835c8d7ba5ea212f8
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T142000Z
+DTEND:20260917T144500Z
+SUMMARY:90 Days To Agentic Engineering - Thomas Schöne\, Project Lions Development GmbH
+DESCRIPTION:Most software companies are experimenting with AI\, yet many struggle to move beyond isolated chat interactions and proof-of-concepts.\n \n This session presents a practical case study of how a traditional software development organization with little prior AI experience adopted agentic engineering practices within 90 days. Guided by an engineer with hands-on experience in AI agents\, MCP\, RAG systems\, and AI-native development workflows\, the organization moved from sporadic experimentation to productive use of agentic systems in everyday engineering work.\n \n Attendees will learn how high-value use cases were identified\, how MCP-based tools\, agent skills\, and RAG-powered knowledge systems were introduced\, and how trust in agent-driven workflows was established across development teams.\n \n Not every experiment succeeded. Some assumptions proved wrong\, some tools disappointed\, and several approaches had to be reworked. This session shares the lessons learned\, the mistakes made\, and the strategies that ultimately accelerated adoption.\n \n The result was a measurable shift from AI curiosity to AI-enabled engineering\, establishing the foundations for long-term AI-native development.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:570eef4043281bc527c2f99d51311ddf
+URL:http://agntconmcpconeu26.sched.com/event/570eef4043281bc527c2f99d51311ddf
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T142000Z
+DTEND:20260917T144500Z
+SUMMARY:Agentic AI for Enterprise Mainframes: From Dead Code Elimination To Business Knowledge - Thamarai Selvi Ravi Kumar\, Legal and General
+DESCRIPTION:Enterprise mainframe systems often contain large amounts of unused and unreachable code\, increasing complexity and risk. Safely removing this logic is difficult due to deeply interconnected execution paths.\n \n In this session\, I present a real-world case study where we delivered large-scale dead code remediation into production with zero incidents using an MCP-powered agentic AI approach.\n \n We developed specialised AI agents\, backed by Python tooling\, to analyse code\, detect unused logic\, and support safe\, auditable remediation with human validation. This reduced analysis time from days to under an hour per program.\n \n The same approach was extended to business knowledge enablement using a reverse engineering agent\, generating structured context integrated into Copilot Spaces\, enabling finance teams to query system behaviour using natural language.\n \n Learn how agentic AI can safely modernise legacy systems and bridge developer and business understanding.
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:230aa54bc7e263963b314433a6a9c116
+URL:http://agntconmcpconeu26.sched.com/event/230aa54bc7e263963b314433a6a9c116
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T142000Z
+DTEND:20260917T144500Z
+SUMMARY:What Networking Got Right That Agentic AI Risks Getting Wrong: The Case for an Agent Control Plane - Parisa Foroughi\, Nokia
+DESCRIPTION:Every major agent orchestration framework today conflates task execution with the control layer that should govern authority and policy. This talk argues for a cross-domain agent control plane: a runtime layer external to the agent that performs authority checks and policy enforcement at defined boundaries\, independent of the agent’s internal logic. Grounded in inter-domain routing\, it proposes a semantic model built on five invariants: domain boundary as the control unit\, boundary-crossing capability classes as the permission unit\, scope-narrowing delegation with bounded elevation\, unbroken provenance to a registered trust anchor\, and boundary enforcement without inspecting internal behavior or payload content. The model introduces two runtime artifacts: the Agent Control Envelope (ACE) for authorization and the Agent Activity Envelope (AAE) for behavioral constraint. Attendees will leave with a precise mental model\, two concrete artifacts\, and a clear argument for why agent interoperability needs explicit boundary semantics before wire formats harden around the wrong primitives.
+CATEGORIES:INTEROPERABILITY & STANDARDS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:1bd9df43550978a59ef9d7aec72959c1
+URL:http://agntconmcpconeu26.sched.com/event/1bd9df43550978a59ef9d7aec72959c1
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T142000Z
+DTEND:20260917T144500Z
+SUMMARY:What a Year of Breaking MCP Tells Builders: Protocol Gaps and What Ships Next - Amine Raji\, Molntek AB
+DESCRIPTION:The session opens with the pre-deployment checklist\, seven controls\, no preamble\, then walks through the evidence for why each one exists. This audience deploys MCP in production and needs to leave knowing what to do.\n \n The empirical baseline: 30+ CVEs in 60 days. 24\,008 secrets in public MCP configs. 85% attack success rate against major hosts (MCPSecBench\, ICLR 2026). Reported as lower bounds with stated provenance.\n \n Three attack classes\, demonstrated with lab code. Tool description poisoning: exfiltrates an SSH key simultaneously. Cross-server shadowing: a trusted WhatsApp server weaponised by a malicious daily-facts server\, end-to-end encryption intact. The rug pull: postmark-mcp\, reconstructed.\n \n The protocol gap analysis is the content specific to this audience. I show the SDK code implementing the flat namespace\, the spec text that acknowledges the trust boundary but enforces nothing\, then four protocol changes with concrete JSON-RPC schema diffs: today's schema\, the addition\, the attack class it closes. The finding that changes model selection: more capable models follow poisoned instructions more reliably.\n \n No vendor tools. Source: github.com/aminrj-labs/mcp-attack-labs.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:5b86373ff4058776789792f7056efdfe
+URL:http://agntconmcpconeu26.sched.com/event/5b86373ff4058776789792f7056efdfe
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T142000Z
+DTEND:20260917T155500Z
+SUMMARY:Workshop: Governing AI Agent Actions: MCP and Beyond - Shannon Williams & Chris Urwin\, Obot AI
+DESCRIPTION:Enterprise adoption of the Model Context Protocol is accelerating\, and MCP has become the primary way agents connect to enterprise tools and data. But MCP is only part of how agents act. Agents also run CLIs\, execute Skills\, and generate code that calls APIs directly. Governing MCP well matters. Governing everything else agents can do matters just as much.\nBuilding MCP servers and writing Skills isn't particularly hard. The real challenges are deciding which actions agents are allowed to take\, controlling who can take them\, and proving it all later. These are architectural questions\, and they need answers before agents scale across an organization.\nIn this workshop\, we will:\n1.⁠ ⁠Show how to control agent actions with policies that apply across MCP servers\, CLIs\, Skills\, and agent-generated code — including allowlists\, access control by users and groups\, and human-in-the-loop approvals.\n2.⁠ ⁠Explain why enterprises need managed registries for MCP servers and Skills\, and how admin review and approval change the trust model.\n3.⁠ ⁠Work through audit and compliance requirements: capturing complete logs of agent and tool activity\, exporting to enterprise storage\, and generating reports.\n4.⁠ ⁠Demonstrate how to discover shadow AI — unmanaged agents\, MCPs\, and Skills already running in your organization — and how to block them or bring them under management.\n5.⁠ ⁠Look at token usage and spend visibility by agent\, user\, and group.\nYou'll leave with a clear picture of the architectural decisions ahead of you\, and a better sense of what your security team will require before signing off on scaling AI agents across your organization.\n
+CATEGORIES:WORKSHOPS
+LOCATION:G106 + G107 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:e5a5b1efda4bf7473be2fc9719ab9954
+URL:http://agntconmcpconeu26.sched.com/event/e5a5b1efda4bf7473be2fc9719ab9954
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T145500Z
+DTEND:20260917T152000Z
+SUMMARY:We Built an Agent\, We Shipped a Compiler. Here's Why - Joel Verezhak\, Grafana Labs
+DESCRIPTION:We promised our CX team an agent that would write customer success plans. Six months and four architectures later\, we shipped a compiler that calls LLMs in four places.\n \n Each architecture was the right fix for the previous one's failure. The single skill could not enforce quality. The subagents drifted across stages. The scripted prompts hit determinism walls. Only when we accepted that "agentic" was the wrong frame did the output become reviewable\, replay-able\, and trustworthy enough to ship to real customers.\n \n The talk is a tour of the architectural moments where we learned what LLM-driven systems can and cannot own. Specific failures: a real customer plan shipped with the wrong rows\, a quality firewall the LLM kept violating until we made it structural\, and "temperature=0" arriving as a footnote rather than a solution.\n \n You leave with three things. A maturity curve from skill to engine. A working distinction between pipeline work and agent work. And a vocabulary for the conversation with stakeholders who keep asking when the agent will be ready\, when what they actually want is a compiler with an agentic UI.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:a163cdaa47c9dbb24c6a3615aea9a1a7
+URL:http://agntconmcpconeu26.sched.com/event/a163cdaa47c9dbb24c6a3615aea9a1a7
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T145500Z
+DTEND:20260917T152000Z
+SUMMARY:Skills Need SemVer Too - Pedro Rodrigues\, Supabase
+DESCRIPTION:The agent ecosystem is converging on a common way to discover skills\, making it easier for agents to find and load domain-specific knowledge. But discovery only solves the first problem.\n \n Once skills become part of production workflows\, they need to evolve. Instructions change\, best practices improve\, and capabilities grow. Without a way to version and manage those changes\, agents risk relying on outdated or incompatible knowledge.\n \n In this talk\, I’ll explore lessons learned from publishing and distributing skills at scale\, discuss the emerging standards around skill discovery\, and propose a framework for skill versioning\, compatibility\, and evolution. If skills are becoming the package ecosystem for agents\, it’s time to start thinking about dependency management too
+CATEGORIES:INTEROPERABILITY & STANDARDS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:7843a525c6c9a3310e57e52edd01a581
+URL:http://agntconmcpconeu26.sched.com/event/7843a525c6c9a3310e57e52edd01a581
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T145500Z
+DTEND:20260917T152000Z
+SUMMARY:Distributed Mess: A Production Guide To Multi-Agent Failures - Huong Vu\, Databricks
+DESCRIPTION:Most agent failures don't happen in a model. They happen in the handoff. When a supervisor agent passes a flawed context downstream (wrong tool output\, misrouted state\, a hallucination that looked plausible)\, the receiving agent has no way to know. It continues confidently on a corrupted foundation. In MCP-based systems\, this is structural: tool call responses become shared context across agents that never directly communicate. A bad result upstream poisons every agent that touches it downstream. Traditional end-to-end testing misses this because the final output can still look reasonable.\n \n This session is a technical walkthrough of what that failure mode looks like in production and what you need to catch it: tracing context across agent boundaries (not just individual inference calls)\, distinguishing model errors from routing errors from context corruption\, and evaluating the coordination layer — not just outputs. \n \n This session is not about the future of AI\, but about the unglamorous work of building agentic systems you can actually trust.
+CATEGORIES:MULTI-AGENT & DISTRIBUTED SYSTEMS
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:67f7198a5458e7c96354ad1670278017
+URL:http://agntconmcpconeu26.sched.com/event/67f7198a5458e7c96354ad1670278017
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T153000Z
+DTEND:20260917T155500Z
+SUMMARY:The Unix Philosophy for AI Agents: Filesystems as the Context Primitive - Cannis Chan & Daniel Temesgen\, Bloomberg
+DESCRIPTION:Every agent framework reinvents context management differently: scratchpads\, artifacts\, or memory stores. This creates distinct storage problems (system config\, user memory\, thread scratch\, task state\, shared workspaces\, external data\, and inter-agent messaging) collapsed under "agent context"\, with no shared vocabulary and a lack of interoperability.\n \n In an attempt to close this gap for the industry at large\, we present a production architecture that models agent context as scoped virtual filesystems. Agents interact through standard filesystem tool calls (read\, write\, and list)\, while the agentic AI platform enforces scope\, lifecycle\, and access control per mount.\n \n The talk covers three layers. First\, scoped state: how four filesystem scopes (system\, user\, thread\, and task) compose across collaborating agents\, using file modes and mount isolation to prevent cross-scope leakage. Second\, external data as mountpoints: turning retrieval into navigable directory trees with ls/cd/cat semantics instead of opaque vector search. Third\, protocol implications: how this maps to the MCP spec today and the case for filesystem operations as a first-class agent interoperability primitive.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:59ee9a087b20cf90d79d790545d38125
+URL:http://agntconmcpconeu26.sched.com/event/59ee9a087b20cf90d79d790545d38125
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T153000Z
+DTEND:20260917T155500Z
+SUMMARY:Verify\, Abstain\, or Amplify: A Field Guide To Confidently-Wrong Agents - Michal Orzechowski\, Sano – Centre for Computational Personalised Medicine
+DESCRIPTION:Your coding agent earns trust because it has an oracle: a compiler and tests catch its mistakes. Most agents don't. They pass their evals and still ship confident\, wrong answers\, because for many tasks\, there's nothing to check against.\n \n Two failures hide under "confidently wrong": the model doesn't know (retrieve it)\, or it knows wrong\, a priori it reasserts even against a correct context\, which RAG won't fix.\n \n A field guide\, three honest moves. Verify\, when you can check: deterministic checks on the answer\, not the tool calls\, run in the harness. Abstain\, when you can't: make the agent say "I can't verify this\," gated on an external check\, not its own confidence. Amplify\, when there's no right answer\, only judgment: the model collapses toward the average exactly when you want the opposite\, so you push it off and amplify the novelty you put in\, judged by a human.\n \n We ground all three in our own builds where the model is reliably wrong: a finance agent\, a genomics agent that invents false-but-plausible mechanisms\, and a microtonal-music agent that keeps dragging toward Western tonality. The move comes down to two questions: can you check the answer\, and is there a right one?
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:43b5f61a55a17e1550497bb821025b04
+URL:http://agntconmcpconeu26.sched.com/event/43b5f61a55a17e1550497bb821025b04
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T153000Z
+DTEND:20260917T155500Z
+SUMMARY:MAS-Lab: An Open Framework for Spec-Driven\, Interoperable Multi-Agent Systems - Jordan Augé\, Cisco Systems
+DESCRIPTION:Building multi-agent systems for production remains challenging\, not only due to integration complexity\, but because validating that systems behave as intended is still largely unsystematic. Teams hand-wire LLMs\, tools\, and memory\, add observability late\, and lack clear ways to ensure agent interactions remain reliable and aligned as systems evolve.\n \n This session introduces MAS-Lab\, an open\, spec-driven framework that makes agent systems composable and verifiable. It extends the integration discipline of protocols like MCP and A2A to all components -- models\, tools\, memory\, messaging\, governance\, and observability -- through declarative specifications. The result is systematic integration\, built-in observability\, and reusable best practices.\n \n During the session\, we demonstrate a multi-agent trip planner and show how a single spec enables teams to compose agents\, apply governance controls such as budgets and guardrails without modifying logic\, and validate behavior by exploring alternative designs through reproducible experiments.\n \n Attendees will leave with practical patterns to ensure agent systems behave predictably\, remain aligned with intent\, and can be trusted in production.
+CATEGORIES:MULTI-AGENT & DISTRIBUTED SYSTEMS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:ac4428f4ab50e36d489c0b57995466cb
+URL:http://agntconmcpconeu26.sched.com/event/ac4428f4ab50e36d489c0b57995466cb
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260917T160000Z
+DTEND:20260917T173000Z
+SUMMARY:Attendee Reception
+DESCRIPTION:\n
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Solutions Showcase\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:6e203dd89ccc059287a8feb2dfd30f83
+URL:http://agntconmcpconeu26.sched.com/event/6e203dd89ccc059287a8feb2dfd30f83
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T060000Z
+DTEND:20260918T160000Z
+SUMMARY:Cloak Room
+DESCRIPTION:\n
+CATEGORIES:REGISTRATION
+LOCATION:Cloak Room (-1 Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:5b387c084d0dd13e88e7109dc43b94d3
+URL:http://agntconmcpconeu26.sched.com/event/5b387c084d0dd13e88e7109dc43b94d3
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T060000Z
+DTEND:20260918T152000Z
+SUMMARY:Registration & Badge Pick-Up
+DESCRIPTION:\n
+CATEGORIES:REGISTRATION
+LOCATION:Onyx Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:b045517d82472f529ac26239df68f8e5
+URL:http://agntconmcpconeu26.sched.com/event/b045517d82472f529ac26239df68f8e5
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T070000Z
+DTEND:20260918T070500Z
+SUMMARY:Keynote: Welcome - Angie Jones\, Vice President\, Agentic AI Foundation
+DESCRIPTION:\n
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:3b0f3cf662d2862ed5813e1ac95f6b7e
+URL:http://agntconmcpconeu26.sched.com/event/3b0f3cf662d2862ed5813e1ac95f6b7e
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T070700Z
+DTEND:20260918T071700Z
+SUMMARY:Keynote: Catch Them Early - Manik Surtani\, CTO\, Agentic AI Foundation
+DESCRIPTION:The Agentic AI Foundation was built to be the neutral referee for the agentic layer. Then we discovered we'd inherited CNCF's entry bar without CNCF's conditions: a bar designed for a mature industry\, applied to a field just over a year old. Our only door admitted work that had already won - while the projects most in need of a neutral home were turned away at exactly the moment governance is cheap to install and expensive to retrofit. This is the story of how we changed the doors: a Sandbox phase\, an exit clock\, and working groups opened to everyone.
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:8aa35b674d30dc00950253805bdb7e04
+URL:http://agntconmcpconeu26.sched.com/event/8aa35b674d30dc00950253805bdb7e04
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T071900Z
+DTEND:20260918T072900Z
+SUMMARY:Keynote: Getting to Stateless MCP: In Production - Shaun Smith\, MCP and Transport Working Group Maintainer\, Hugging Face
+DESCRIPTION:The latest MCP Specification introduces one of the largest changes to the protocol since launch: a stateless transport.At Hugging Face we use MCP as infrastructure for Agents\, Interactive and Inference workloads.&nbsp\;In this session we will:- Summarize the MCP Transport story to date&nbsp\;- Use production analytics from Hugging Face's MCP infrastructure to track migration metrics and success- Explore new opportunities for Client\, Server and Gateway implementations offered by the new transport features.- Share lessons learned from implementing the stateless transport for Clients and Servers
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:c1f445360eeb9275ef5515e19fc8f313
+URL:http://agntconmcpconeu26.sched.com/event/c1f445360eeb9275ef5515e19fc8f313
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T072900Z
+DTEND:20260918T073900Z
+SUMMARY:Keynote: Three Doors to One Tool: MCP vs WebMCP vs CLI - Frédéric Barthelet\, CTO & Co-founder\, Alpic & Dominic Farolino\, Editor of the WebMCP Specification & Software Engineer\, Google
+DESCRIPTION:Agents can reach a tool through at least three doors today: an MCP server\, a WebMCP browser page\, or a plain CLI. They overlap\, they compete\, and the discourse around them runs hot. This talk cuts through it.We map the three surfaces along the axes that actually matter: where the code runs (backend\, browser\, model context\, shell)\, who holds state and auth\, latency and trust boundaries\, and how much UI context survives the handoff. Then we get practical: a decision framework for picking the right surface per use case\, the cases where you genuinely want two stacked together\, and the anti-patterns that appear when you pick wrong.
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:20c12a9f47e6cac34f450f5d9985ae47
+URL:http://agntconmcpconeu26.sched.com/event/20c12a9f47e6cac34f450f5d9985ae47
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T074100Z
+DTEND:20260918T075100Z
+SUMMARY:Keynote: State of the Software Factory - Dexter Horthy\, CEO and Co-Founder\, HumanLayer
+DESCRIPTION:\n
+CATEGORIES:KEYNOTE SESSIONS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:e6f2202aa16c70c2798e835e9a1c7b66
+URL:http://agntconmcpconeu26.sched.com/event/e6f2202aa16c70c2798e835e9a1c7b66
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T080000Z
+DTEND:20260918T082000Z
+SUMMARY:Coffee Break
+DESCRIPTION:\n
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Solutions Showcase - Diamond Lounge\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:71937b97ab8b31ceda08f723a5c319d2
+URL:http://agntconmcpconeu26.sched.com/event/71937b97ab8b31ceda08f723a5c319d2
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T080000Z
+DTEND:20260918T133000Z
+SUMMARY:Solutions Showcase
+DESCRIPTION:\n
+CATEGORIES:SOLUTIONS SHOWCASE
+LOCATION:Diamond Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:6ebbf7a7b6a12bf8ef4a6f15826e920d
+URL:http://agntconmcpconeu26.sched.com/event/6ebbf7a7b6a12bf8ef4a6f15826e920d
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T080000Z
+DTEND:20260918T081000Z
+SUMMARY:Sponsor Activity - Build and Explore Agentic Infrastructure Hands-On
+DESCRIPTION:Get hands-on with agentic infrastructure through interactive labs covering agentgateway\, kagent\, Agent Substrate\, agentregistry\, and more. Explore how these open source projects help you build\, run\, and connect AI agents\, then leave with practical experience you can apply to your own agentic workloads.\n\nSponsor: Solo.io&nbsp\;Location: Solutions Showcase in Diamond Lounge (Ground Level)&nbsp\;In order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:SOLUTIONS SHOWCASE
+LOCATION:Diamond Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:52e61fae1ab12cdc0a037bc216efaca6
+URL:http://agntconmcpconeu26.sched.com/event/52e61fae1ab12cdc0a037bc216efaca6
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T081000Z
+DTEND:20260918T082000Z
+SUMMARY:Sponsor Activity - Aiboostr Live Demo: Governing Every Model and Agent - Product Architecture & Walkthrough
+DESCRIPTION:Walk through Aiboostr with the people who built it: the architecture\, how every model and agent call is routed\, authorised and logged\, and how it runs in practice. Bring your questions. Everyone who sits through a demo leaves with a product discount voucher.\nSponsor: Grape UpLocation: Solutions Showcase in Diamond Lounge (Ground Level)&nbsp\;In order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:SOLUTIONS SHOWCASE
+LOCATION:Diamond Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:70b8b53c739a5c261d1c35614d149dac
+URL:http://agntconmcpconeu26.sched.com/event/70b8b53c739a5c261d1c35614d149dac
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T081000Z
+DTEND:20260918T082000Z
+SUMMARY:Sponsor Activity - Get More From Buzz: Five-minute Tips for Better Agent Teamwork
+DESCRIPTION:Bring a real problem\, or choose one of ours: build a feature\, turn feedback into issues\, plan a launch\, or investigate a bug. The Buzz team will show how people and agents can work through it together in Buzz. Try it live\, take home practical tips\, and pick up swag.\nSponsor: BuzzLocation: Solutions Showcase in Diamond Lounge (Ground Level)&nbsp\;In order to facilitate networking and business relationships at the event\, you may choose to visit a third party's booth or access sponsored content. You are never required to visit third party booths or to access sponsored content. When visiting a booth or participating in sponsored activities\, the third party will receive some of your registration data. This data includes your first name\, last name\, title\, company\, address\, email\, standard demographics questions (i.e. job function\, industry)\, consenting to receipt and use of such data by the third-party recipients\, which will be subject to their own privacy policies.&nbsp\;
+CATEGORIES:SOLUTIONS SHOWCASE
+LOCATION:Diamond Lounge (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:849a97892da7d0882e0514bfed3b889b
+URL:http://agntconmcpconeu26.sched.com/event/849a97892da7d0882e0514bfed3b889b
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T082000Z
+DTEND:20260918T084500Z
+SUMMARY:Self-Healing Agents Need Observability - Marcelo Trylesinski\, Pydantic
+DESCRIPTION:Self-healing agents sound inevitable: an agent fails\, understands what went wrong\, proposes a fix\, validates it\, and improves the system. But without observability\, self-healing is just guessing.This talk explains why reliable agent improvement needs a feedback loop built on traces\, evaluations\, approvals\, and rollback. We will follow an agent run across prompts\, model calls\, tool selection\, MCP servers\, validation\, policy checks\, downstream APIs\, and final responses\, then show what evidence is needed to reconstruct what happened.The core idea is simple: agents can only improve safely when they can observe their own behavior. We will discuss what kinds of failures can be detected from telemetry\, what changes an agent might propose\, where evaluations fit\, and which actions should require human or policy approval. The goal is to make “self-healing” concrete\, bounded\, and useful for production agent systems.
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:fb55ab1168375b69b61bb4c1c3ce88bd
+URL:http://agntconmcpconeu26.sched.com/event/fb55ab1168375b69b61bb4c1c3ce88bd
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T082000Z
+DTEND:20260918T084500Z
+SUMMARY:How we Reclaimed Significant Engineering Capacity at Salesforce with AI Agents - Axel Uhlig\, Salesforce
+DESCRIPTION:We built and deployed an AI Agent at Salesforce designed to triage production alerts using service logs. After months of iteration\, we achieved an accuracy level that earned the trust of our DevOps personnel. Today\, the agent reclaims approximately 20% of weekly engineering capacity for the teams using it.\n \n Here are our top 5 takeaways for building agents that perform consistently at high accuracy:\n 1. Specialization beats generalization: For high-accuracy tasks\, purpose-built solutions outperform generic models every time.\n 2. Provide "Proof of Work": Make it effortless for humans to verify the agent's logic. Transparency builds trust.\n 3. Minimize friction: We used Slack as the primary interface. Don't require local setups to boost adoption and usage\n 4. Build in public: Operating in shared channels allows for seamless human-agent cooperation (and agent-to-agent orchestration).\n 5. Hosted &gt\; Local: Local scripts are great for individuals\, but standardized\, team-wide automation requires a hosted environment to scale.
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:6d0f47ae9bfc9b8d8ee9954b27dafa45
+URL:http://agntconmcpconeu26.sched.com/event/6d0f47ae9bfc9b8d8ee9954b27dafa45
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T082000Z
+DTEND:20260918T084500Z
+SUMMARY:Pull Requests Are Dead\, Long Live Peer Review - Dylan Ratcliffe\, Overmind
+DESCRIPTION:When AI writes 80–90% of the code on a team\, peer review breaks. The pull request is produced by a machine you can't argue with\, and the reviewer is auditing a diff instead of talking to a peer. Review has stopped feeling like collaboration\, and most of us have started hating it.\n \n We rebuilt how we deploy AI-assisted development in production. Human review moved off the diff and onto the plan: the intent written before any code gets generated. Engineers review the thinking they care about and let the agent fill in the gaps. When the PR lands\, CI runs the usual checks plus an automated comparison against the approved plan. Only deviations route back to the original reviewer.\n \n This is a case study in integrating AI into a real SDLC without breaking accountability\, quality\, or culture. I'll walk through what broke\, what we automated\, and what stayed human: an in-house MCP server for plan review in the IDE\, deviation-checking on every PR\, and cultural bets (everyone operates as a team lead\; no questions until working code\; customer context radiated to the whole team).\n \n We massively improved our velocity and our lead time\, and our engineers love the job again.
+CATEGORIES:HUMAN-AGENT COLLABORATION
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:3cc6e8d9193ef68045614f9ebd1d5233
+URL:http://agntconmcpconeu26.sched.com/event/3cc6e8d9193ef68045614f9ebd1d5233
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T082000Z
+DTEND:20260918T084500Z
+SUMMARY:Potential Issues for Cross-domain Multi-hop API Calls and Their Solution Proposal - Takashi Norimatsu\, Hitachi\, Ltd.
+DESCRIPTION:When an MCP server calls an API server requiring an access token in a different domain\, elicitation in URL mode is defined by the MCP. Furthermore\, token exchange is also used in real-world use cases. We describes the security and operational issues associated with these two methods and proposes solutions.\n \n Elicitation in URL mode may cause user swapping. Moreover\, even if an authorization server performing the initial authorization securely perform it by following MCP spec\, the well-known attacks may succeed if the other authorization server performing the external authorization does not care about security.\n \n Token exchange may cause information leaks\, fraudulent access token use\, and availability problems.\n \n In both methods\, there are two access tokens: for accessing the MCP server\, for accessing the API server. To detect user swapping\, it is needed to ensure that both users bound with the first and second token are the same. However\, even if the same user registered in both different domains\, their user identifiers are usually different. Therefore\, simply matching them exactly is not effective.\n \n We describe these issues and propose their solutions.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:0770cc90e78433d82a1db81ad49c7ffb
+URL:http://agntconmcpconeu26.sched.com/event/0770cc90e78433d82a1db81ad49c7ffb
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T082000Z
+DTEND:20260918T095500Z
+SUMMARY:Workshop: Keep Infrastructure Out of Your AI Agents: The Agent Gateway Pattern - Lin Sun\, Solo.io
+DESCRIPTION:As AI agents move into production\, engineering teams face a growing set of challenges. How do you secure and govern MCP servers without modifying them? Route and fail over across multiple LLM providers? Enforce rate limits\, access controls\, and governance policies? Observe agent traffic\, and scale operations across environments?\n \n Rather than embedding these capabilities into every agent\, MCP server\, and application\, organizations can adopt a single architectural pattern: the agent gateway.\n \n An agent gateway acts as a unified control plane for AI systems. It can function as an MCP gateway\, LLM gateway\, inference gateway\, and traditional API gateway\, centralizing security\, observability\, routing\, resilience\, and policy enforcement across agents\, tools\, models\, and services.\n \n In this hands-on workshop\, you'll learn how to secure and federate MCP servers without code changes\, route and fail over LLM traffic across providers\, enforce authentication and usage policies\, and gain end-to-end visibility into agent interactions. Through practical exercises\, you'll see how a single gateway layer simplifies operations while enabling secure\, scalable\, and governable AI systems.\n\nPrerequisitesPython 3.11 or abovejq — https://jqlang.org/DockerOllama — pull the Qwen 3 8B model:\nollama pull qwen3:8bJaeger Docker image:\njaegertracing/all-in-one:latest\n
+CATEGORIES:WORKSHOPS
+LOCATION:G106 + G107 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:f02f2421e61934028560c59c1e1599fa
+URL:http://agntconmcpconeu26.sched.com/event/f02f2421e61934028560c59c1e1599fa
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T085500Z
+DTEND:20260918T092000Z
+SUMMARY:From "Works on My Prompt" To Production SLOs: Building Agent Observability - Manik Khandelwal\, Microsoft
+DESCRIPTION:hen we shipped an AI agent powered by Cosmos DB's MCP server internally at Microsoft\, it passed every test we threw at it—until real users found creative ways to break it. The agent would silently degrade: returning plausible-but-wrong query results\, calling tools in inefficient loops\, or burning through token budgets without completing tasks. Traditional monitoring showed green dashboards while users filed complaints. We needed observability designed for agents.\n \n This talk presents the observability and evaluation stack I built to make agent failures visible\, measurable\, and catchable before users notice—combining OpenTelemetry instrumentation\, LLM-as-judge evaluation\, and automated regression gates in CI/CD.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:a02c01c8ef268dcbe45fb87ef06303be
+URL:http://agntconmcpconeu26.sched.com/event/a02c01c8ef268dcbe45fb87ef06303be
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T085500Z
+DTEND:20260918T092000Z
+SUMMARY:From MCP Playground To Org-Wide Infrastructure: Lessons From Building Booking.com's Agent Foundry - Anushka Bhandari\, Booking.com
+DESCRIPTION:Most MCP talks stop at the gateway. This one starts there.\n The barrier to contributing has never been lower — agents write code\, PMs ship tools\, designers prototype integrations. But newcomers don't carry the institutional knowledge from a 2am production incident: the performance edge cases\, the security gotchas\, the failure modes that only show up under real load.\n Most MCP projects die between proof of concept and production. The gap isn't technical\, it's organizational. Who owns the servers? Who reviews contributions? How does a UX designer\, PM\, and autonomous agent share the same infrastructure without ten different logins?\n Booking.com's Agent Foundry closed that gap. A two-tier MCP gateway with 20+ org-wide servers (Grafana\, Honeycomb\, Atlassian\, Slack\, GitLab). One OAuth flow for humans and agents alike. A skills registry with AI-reviewed contributions. Composable profiles that bundle MCPs and skills into workflow-specific harnesses.\n Every skill one team contributes compounds value for every team that follows.\n We'll share what the architecture got right\, what broke\, and what a small team can realistically own at this scale.
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:0f9752d63e73d41c5686b1a693cc9f85
+URL:http://agntconmcpconeu26.sched.com/event/0f9752d63e73d41c5686b1a693cc9f85
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T085500Z
+DTEND:20260918T092000Z
+SUMMARY:Outcome Engineering: Why Your Agentic Architecture Doesn't Matter (Yet) - Kierra Dotson\, Further
+DESCRIPTION:The open agentic ecosystem is technically brilliant and strategically incomplete. Engineers across the enterprise are deploying multi-agent systems\, integrating MCP\, and building sophisticated context infrastructure — and yet the majority of it never reaches production at scale\, fails to earn sustained organizational investment\, or generates no measurable competitive value. This stems from looking at model and tool selection as the outcome instead of business value produced.\nOutcome Engineering is the discipline of designing agentic systems backward from competitive strategy\, instead of forward from technical capability. It is the difference between building impressive infrastructure and building systems that are indispensable. It is the difference between an agent that gets demoed and an agent that gets shipped. And it is the difference between an engineer who just builds things and an engineer who changes what a business is capable of.\nThis session challenges a widely held belief in the engineering community: that deploying the most advanced agentic architecture is the end goal. It is not. The end goal is winning disproportionately because your AI systems are connected to proprietary data\, embedded in proprietary workflows\, and architected around prioritized business goals and competitive positions that cannot be replicated by any organization running the same off-the-shelf stack.\nThis session will expose the critical disconnect between how engineers build agentic systems and how those systems actually survive contact with business reality. We will cover how to map technical architecture directly to strategic outcomes — why proprietary data and institutional knowledge are the most defensible moats in the agentic era\, and what it actually takes to build systems the business cannot afford to turn off.\nAttendees will leave with a clear framework for reverse-engineering their agent architecture from the outcome back to the infrastructure. Ultimately\, the engineers who define this era will be the ones who build systems so embedded in how the business wins that replacing them becomes a risk no one is willing to take.\n
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:b3bd2b0999b7bf7a13dc033713015553
+URL:http://agntconmcpconeu26.sched.com/event/b3bd2b0999b7bf7a13dc033713015553
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T085500Z
+DTEND:20260918T092000Z
+SUMMARY:ID-JAG: Solving OAuth Sprawl for Enterprise AI Agents - Joey Orlando\, Archestra.AI; Aaron Parecki\, Okta & Paul Carleton\, Anthropic
+DESCRIPTION:Enterprise AI agents are moving from demos into production\, and auth is becoming a blocker. Demo agents can connect to tools with OAuth\, but real enterprise agents may need SaaS services for thousands of employees. Per-user\, per-service consent does not scale.\n \n This session explains ID-JAG\, the Identity Assertion JWT Authorization Grant pattern behind MCP's Enterprise-Managed Authorization extension. ID-JAG turns an existing SSO login into centrally governed\, auditable access to approved MCP servers\, without repeated OAuth prompts.\n \n We'll cover the production problem\, protocol flow\, and lessons from implementing ID-JAG support in Archestra\, one of the first MCP clients to support it. We'll also discuss what identity provider support enables.\n \n Attendees will leave with a model for production agent auth: one SSO login\, centralized policy\, scoped MCP-native access tokens\, fewer consent screens\, and a cleaner security review story.\n \n We'll close with the missing piece: SaaS provider adoption. To unlock enterprise deployments\, authorization servers need to support this flow so agents can access approved business systems without key-sharing\, manual credentials\, or one-off integrations.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:844a5bec76e451edb714493aba75801f
+URL:http://agntconmcpconeu26.sched.com/event/844a5bec76e451edb714493aba75801f
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T093000Z
+DTEND:20260918T095500Z
+SUMMARY:Agents Can Pay. Can They Prove It? - Diego Zuluaga\, Open Mobile Hub
+DESCRIPTION:This is the EUDI Wallet architecture\, running inside an agent\, 18 months before the Dec-2026 mandate.\n \n Every "agent that verifies you" or "agent that pays" demo skips the hard part: how does an AI agent request a real\, government- or bank-grade credential from your device\, on any phone\, any wallet\, Android or iOS\, and prove who authorized it?\n \n We'll run the full chain live. An MCP server renders a verifier inside Claude and ChatGPT\; the W3C Digital Credentials API requests a credential over OpenID4VP\; FIDO caBLE carries it cross-device to your phone\; the wallet returns an mdoc or SD-JWT credential held in hardware (StrongBox\, TEE\, Secure Enclave)\; an AP2 mandate binds your intent.\n \n Identity is the headline\, age\, membership\, passport\, healthcare\, with payments as one example. And it's not a stage trick: it's an open-source Digital Credential MCP server\, soon to be released and donated\, that you can clone\, point at your own credential\, and ship. Built on open standards\, across every platform\, with UCP & ACP conformance on the roadmap.\n \n Here are some examples of the demos we're planning to showcase: https://github.com/dzuluaga/mcp-apps-shopping-demo
+CATEGORIES:AGENTIC COMMERCE
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:d64f761d0ed3fdcf9533ec5c55aa6aab
+URL:http://agntconmcpconeu26.sched.com/event/d64f761d0ed3fdcf9533ec5c55aa6aab
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T093000Z
+DTEND:20260918T095500Z
+SUMMARY:I Was the Bottleneck\, Not the Agent - Vincent Ysmal\, Datadog
+DESCRIPTION:Running 4 to 8 parallel agent coding sessions sounds like a superpower. It nearly broke me.\n \n I was spending more time switching context to check what each agent had done than I would have spent writing the code myself. \n \n Manual testing\, staging deployments\, code reviews just to understand what the agent had built: I had become the bottleneck. \n The agents were fast. I wasn't.\n \n This talk is about how our team redesigned the workflow around one principle: the agent should be able to prove its own work. That means agents that deploy themselves\, run their own test suites\, watch CI and fix failures\, and produce PRs with enough evidence that a reviewer can approve with confidence\, without reading every line.\n I'll share what it concretely took to get there\, and where humans still need to stay in the loop and why.
+CATEGORIES:AGENTIC ENGINEERING
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:5c333228cfbd2e521cd8abc590ec1651
+URL:http://agntconmcpconeu26.sched.com/event/5c333228cfbd2e521cd8abc590ec1651
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T093000Z
+DTEND:20260918T095500Z
+SUMMARY:Governance You Can Run: Checkable Properties for Production Agents - Seshu Tolety\, Siemens
+DESCRIPTION:Most agent governance lives in documents nobody can enforce. The agent ships\, the policy sits in a wiki\, and no one can answer the question that matters in production: is this running system compliant right now?\n This talk presents governance built the other way around\, as properties you can check on a live agent system rather than promises on a slide. We decompose any agentic system into a small three-object model\, define properties that are individually testable against a running deployment\, and rank failure modes into the handful of Tier-1 risks that actually cause incidents. Regulatory mappings (EU AI Act\, ISO/IEC 42001\, GDPR) fall out as a consequence of satisfying those properties\, not as the starting point.\n You leave with a vendor-neutral framework you can apply to your own agents the same week\, independent of stack or model provider.
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:f08fe743a891f35332ef7dc3438bf6ef
+URL:http://agntconmcpconeu26.sched.com/event/f08fe743a891f35332ef7dc3438bf6ef
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T093000Z
+DTEND:20260918T095500Z
+SUMMARY:Economies of Scale for MCP and Agents: Why You Need an Identity Broker - Magnus Jungsbluth & Jan Brennenstuhl\, Zalando SE
+DESCRIPTION:Drawing from lessons of how to scale an enterprise to thousands of microservices\, we make the case that pushing concerns to the infrastructure for agentic systems should be a no-brainer when planning to scale agentic systems. \n This talk explores how Zalando tackled this challenge by building and open-sourcing our own agentic identity broker as part of our broader agentic platform initiative. We will share how it supports delegation chains across third-party and in-house applications\, integrates with the CNCF project agentgateway and how it allows us to keep these pesky authentication / authorization concerns on the infrastructure and keep MCP servers and agents simple. \n We will dive into the technical mechanics\, how it integrates into a larger enterprise and allows us to apply just enough governance to stay ahead of the game. We will cover practical applications and limitations of dynamic client registration. \n A closing outlook will illustrate how tool approvals and human-in-the-loop can be enforced centrally without agent authors or MCP authors having to build anything. Practical examples of CIBA and intent-based access will complete the session.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:2b03f52f8aba6b86adbc4b03f16628b2
+URL:http://agntconmcpconeu26.sched.com/event/2b03f52f8aba6b86adbc4b03f16628b2
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T100000Z
+DTEND:20260918T111500Z
+SUMMARY:Lunch (Provided Onsite for Attendees)
+DESCRIPTION:\n
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Solutions Showcase - Diamond Lounge\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:eff203d119416838e208e000af346f9b
+URL:http://agntconmcpconeu26.sched.com/event/eff203d119416838e208e000af346f9b
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T103500Z
+DTEND:20260918T110500Z
+SUMMARY:Prompt à la Carte - Table Topics
+DESCRIPTION:Grab your lunch in the Sponsor Showcase\, then join us for impromptu topic discussions during lunch! These informal gatherings are open to anyone. Whether you are looking to share your insights\, hear diverse perspectives\, or network with fellow participants\, these discussions are a great way to connect and collaborate. Choose a table topic that interests you and dive into conversations.\n\nTopic 1: Human-Agent CollaborationTopic 2: Agentic EngineeringTopic 3: Security and GovernanceTopic 4: Agentic Memory\n
+CATEGORIES:MEALS / BREAKS / SPECIAL EVENTS
+LOCATION:Topaz Lounge (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:adb64d2e9e7666de9fcedb3006994a7f
+URL:http://agntconmcpconeu26.sched.com/event/adb64d2e9e7666de9fcedb3006994a7f
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T111500Z
+DTEND:20260918T114000Z
+SUMMARY:Governed Agent Autonomy: Building a Control Plane for Agentic Systems - Nnenna Ndukwe\, Qodo AI
+DESCRIPTION:We see how quickly AI coding tools and agent harnesses are improving. But how can the surrounding system keep that autonomy governable once an agent starts planning\, executing tools\, changing files\, and consuming budget on a team’s behalf?\n \n In this talk\, I break down a technical case study based on a real AI coding control-plane architecture and show how serious systems structure autonomy through explicit boundaries: plan gates\, permission controls\, trust review\, independent verification\, and runtime observability. I will walk through the patterns and production-grade examples\, explain why telemetry and quota tracing are integral to code governance\, and show why integrity failures can still happen even with strong coding workflows.\n \n This session gives engineering leaders and practitioners a framework for evaluating AI coding tools. The goal is to achieve agent governance that teams can trust\, audit\, and scale.
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:d6a87bbca849484e30fbdbcaa1b81499
+URL:http://agntconmcpconeu26.sched.com/event/d6a87bbca849484e30fbdbcaa1b81499
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T111500Z
+DTEND:20260918T114000Z
+SUMMARY:When Agents Run Healthcare: Building Reliable Agentic Systems in Highly Regulated Environments - Janosch Woschitz\, BARMER
+DESCRIPTION:The public statutory health insurance system in Germany faces a dual challenge: demographic change is creating a shortage of skilled professionals while operational pressure continues to rise due to an aging population. Healthcare organisations must therefore automate high-volume processes without compromising reliability\, governance\, or trust.\n \n This session presents BARMER’s journey from governed data and analytics platforms to production-oriented agentic systems supporting real operational workflows. Rather than focusing on isolated chatbots or copilots\, it explores how agentic systems can be embedded into core enterprise processes in highly regulated environments.\n \n The talk highlights key design patterns including workflow orchestration\, agent runtime separation\, observability\, and human-in-the-loop escalation. It also demonstrates why many early agent architectures fail under regulatory constraints and what changes are required to meet enterprise standards for compliance\, auditability\, and resilience.
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:7d087d5cd9f8906ff25ef09f52e3bad2
+URL:http://agntconmcpconeu26.sched.com/event/7d087d5cd9f8906ff25ef09f52e3bad2
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T111500Z
+DTEND:20260918T114000Z
+SUMMARY:Testing Agents and Their Tools: Offline Evaluation\, Synthetic Tasks\, and A/B Experiments - Ksenia Bobrova\, GitHub
+DESCRIPTION:A three-layer evaluation strategy for AI agents and their tools\, from experience operating across multiple LLM providers and runtimes.\n \n Offline evaluation: designing benchmark suites with curated requests\, expected tool selections\, and arguments. Computing precision\, recall\, F1 scores\, confusion matrices for tool mix-ups\, and argument hallucination rates to pinpoint description problems.\n \n End-to-end benchmarks: multi-tool flows where the agent chains several calls to complete a task\, catching integration regressions that single-tool evaluation misses.\n \n Production A/B experiments: a case study of tool search experiments across OpenAI and Anthropic through staged rollouts. Challenges we hit: caching bugs under real traffic\, tool discovery failures\, and data skew making early results inconclusive. How we decided whether to advance\, pause\, or roll back.\n \n These layers compensate for each other's blind spots\, forming a testing pyramid that enabled us to safely ship changes to MCP and agent across model providers. Attendees leave with a reusable playbook for testing MCP servers\, agents\, and running A/B experiments.
+CATEGORIES:EVALS & TESTING
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:4511e26b5b7d543477af76bfcc8f685d
+URL:http://agntconmcpconeu26.sched.com/event/4511e26b5b7d543477af76bfcc8f685d
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T111500Z
+DTEND:20260918T114000Z
+SUMMARY:MCP Challenges & Opportunities - Sam Morrow\, GitHub; Angie Jones\, Agentic AI Foundation; Shaun Smith\, Hugging Face; Shub Argha\, Arcade
+DESCRIPTION:Join Shub Argha (Arcade) Shaun Smith (fast-agent) and Sam Morrow (GitHub MCP) for a panel on the challenges and opportunities of shipping MCP\, hosted by Angie Jones\, VP of Developer Experience at the AAIF.\n \n By bringing perspectives from server\, SDK and agent harness developers together in the same panel\, you’ll see where their experiences align\, l where they diverge\, where they see the protocol heading and what they’re excited about.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:307f39bf0e2950072d4dbd0eacf8719f
+URL:http://agntconmcpconeu26.sched.com/event/307f39bf0e2950072d4dbd0eacf8719f
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T111500Z
+DTEND:20260918T125000Z
+SUMMARY:Workshop: Harness Engineering: Building the System Around Your AI Coding Agent - Ji Darwish\, Xomnia
+DESCRIPTION:AI coding agents feel like magic. It is easy to assume there is something exotic inside\, some secret sauce that makes agents reliable. Well\, there isn't\, the core of every AI coding agent is dead simple: send a message to a model\, parse tool calls\, execute them\, feed the results back\, repeat. Everything else (context management\, permissions\, observability\, safety guardrails) is engineering layered on top of it that we should be building.\n \n In this deep dive\, we build that engine from scratch (in Java!)\, live on stage. Not to build the best agent\, but to understand how the pieces fit together. We point it at a real codebase\, and watch what happens. It compiles. Tests pass. And it violates every convention the team agreed on. So we iterate. We add context\, constraints\, and feedback\, and at each step we examine what changed\, why it helped\, and what it maps to in the tools you already use.\n \n The goal is a mental model. By the end\, you will understand the components inside the AI coding tools you use every day\, what you can layer on top to get smoother results and safer expectations\, and where the honest limits still are\, the gap no amount of engineering has closed yet.\n\nPrerequisites:&nbsp\;\nPlease have the following software available during the workshop:- Claude code or Codex- Java 25- jbang- git\n
+CATEGORIES:WORKSHOPS
+LOCATION:G106 + G107 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:500a575f16f790892fe1e991bd0195c7
+URL:http://agntconmcpconeu26.sched.com/event/500a575f16f790892fe1e991bd0195c7
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T115000Z
+DTEND:20260918T121500Z
+SUMMARY:Shipping a Production App in 10 Days: A Real Measurement of AI-Assisted Development - Julien Dubois\, GitHub
+DESCRIPTION:We've all seen the AI coding demos. But what does it really cost to ship a production application with an AI agent\, and how much time does it actually save?\n \n This talk answers that with hard numbers from a real\, open-source project: BootUI ( https://github.com/jdubois/boot-ui )\, a multi-module Java project with roughly 40 deeply-integrated feature panels\, an embedded Vue 3 console\, ~83\,000 lines of code\, ~116 test suites\, and a full release pipeline. It was built through a tagged 1.0.0 release in about 10 calendar days by a single developer driving the GitHub Copilot coding agent\, at a sustained pace of ~20 merged pull requests per day.\n \n Using git history\, PR metadata\, and code metrics\, we reconstruct two timelines: what the project actually took with AI (~80-110 hours of human effort)\, and a grounded estimate of what the same scope would take a senior developer by hand (~6.5-8.5 months).\n \n You'll leave with a realistic mental model of where AI coding delivers 10x-plus leverage on Java projects\, where it doesn't\, and the practices that let you safely accept high agent throughput.
+CATEGORIES:ENTERPRISE ADOPTION IN PRACTICE
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:f1a95c1d795bd1a5dec2e7932e3a77d5
+URL:http://agntconmcpconeu26.sched.com/event/f1a95c1d795bd1a5dec2e7932e3a77d5
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T115000Z
+DTEND:20260918T121500Z
+SUMMARY:From API Catalogs To Agent Catalogs: Solving MCP Server Discovery With Open Resource Discovery - Vyshnavi Gadamsetti & Sebastian Wennemers\, SAP SE
+DESCRIPTION:As MCP servers multiply\, the ecosystem is hitting the fragmentation problem APIs hit a decade ago: every server is a point-to-point integration with no shared way to discover or describe it. Live introspection over a connected session does not scale to the catalogs\, registries\, and gateways that need to reason about thousands of servers without starting each one up. Open Resource Discovery (ORD) solved this for APIs\, events\, and data products. Each resource publishes a static\, machine-readable description at a well-known endpoint. Aggregators crawl those descriptions and build catalogs that registries and gateways can query without connecting to the resource. Recent ORD work applies the same shape to agents and the MCP servers they depend on\, scoping the dependency to the tools and prompts an agent uses. The same pattern fits MCP. The talk walks through a Server Card design that serves tools\, prompts\, and resources alongside metadata from a well-known endpoint\, so registries and gateways can reason about a server before any agent connects. The design has been contributed into the open MCP community via SEP-2127\, with a public renderer and playground demonstrating it end-to-end.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:81bfe9fe9764e0fcdd1faa03ecc53790
+URL:http://agntconmcpconeu26.sched.com/event/81bfe9fe9764e0fcdd1faa03ecc53790
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T115000Z
+DTEND:20260918T121500Z
+SUMMARY:MCP Apps and The Agentic Web - Liad Yosef\, MCP Apps
+DESCRIPTION:MCP Apps are the last piece in moving toward a new web - one that's "nearly" headless. Autonomous agents\, not humans\, will interact with most websites through MCP\, APIs\, and other data channels. Websites and browsers become obsolete\, replaced by personal assistants that orchestrate tasks on our behalf. In rare cases\, agents will fall back to browser capabilities to navigate sites that aren't yet agent-ready.\n \nBut we'll still need the last mile.\n\n Some moments still require human eyes and human input: choosing a seat at a venue\, completing a check-in\, reviewing a 3D model\, verifying intent on important decisions. This is where MCP Apps come in - letting tools\, websites\, and services send composable\, interactive chunks of UI directly to agents\, exactly when needed\, maintaining brand and identity.\n\n We'll explore the full cycle of this nearly headless web: the infrastructure required to support autonomy and trust\, the new UI layer\, and how assistants are becoming the new browsers.\n \nMCP Apps redefine the web's interface. Headless\, but with a human eye at the end.
+CATEGORIES:MCPCON
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:0ce2cfec5a226a96deab5d3bf77d33e4
+URL:http://agntconmcpconeu26.sched.com/event/0ce2cfec5a226a96deab5d3bf77d33e4
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T115000Z
+DTEND:20260918T121500Z
+SUMMARY:Agents Talking To Agents: MCP\, A2A\, and the Reality of Multi-Agent Orchestration in Production - Willem Berroubache\, Orange
+DESCRIPTION:Building a multi-agent system in a notebook is straightforward\n Running one on production infrastructure\, where a wrong handoff triggers a real incident\, is a different problem entirely.\n \n This talk shares hard-won lessons from deploying autonomous agents using both MCP and A2A protocols in a large-scale\, regulated environment. \n We move past the happy path and focus on what actually breaks: agents that lose task context mid-chain\, trust boundaries that collapse during agent-to-agent delegation\, tool conflicts between concurrent agents\, and orchestration failures that only surface under real load.\n We walk through three patterns that emerged from this work. How to split responsibilities between MCP and A2A so each protocol does what it is actually good at. How to scope agent authority using MCP server boundaries without creating coordination bottlenecks. And how to design agent-to-agent handoffs that degrade gracefully when part of the chain fails mid-task.\n \n No toy examples. No vendor pitches. Concrete decisions\, the tradeoffs behind them\, and what we would change today. Attendees leave with patterns they can apply the next day\, regardless of their agent framework.
+CATEGORIES:MULTI-AGENT & DISTRIBUTED SYSTEMS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:07026965f649ece584f3dbb80cfc8cc9
+URL:http://agntconmcpconeu26.sched.com/event/07026965f649ece584f3dbb80cfc8cc9
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T122500Z
+DTEND:20260918T125000Z
+SUMMARY:Agent-Smith: Never Send a Human To Do a Machine’s Job - Glenn ten Cate\, The Linux Foundation & Jorge Carvalho\, Nedap
+DESCRIPTION:Most AI security agents are wrappers around fixed scripts. Agent-Smith takes a different approach: reusable skills encode security methodology\, while the model determines how to investigate\, chain tools\, validate findings\, and select its next action.\n \n This session presents the architecture and lessons behind Agent-Smith\, an open-source\, MCP-enabled autonomous penetration-testing agent spanning web\, cloud\, Active Directory\, source-code review\, threat modeling\, and AI red teaming and more. We will examine MCP tool exposure\, methodology-as-code\, autonomous skill chaining\, model portability\, ephemeral Docker sandboxes\, and server-side controls for cost\, execution time\, and tool calls.\n \n A practical demonstration will show Agent-Smith progressing from reconnaissance to a verified finding\, reproducible proof of concept\, remediation guidance\, and code patch. Attendees will leave with concrete patterns for building capable agents without sacrificing isolation\, observability\, human oversight\, or control.\n \n “Never send a human to do a machine’s job.”
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:02d6108bab3c8392031b60f69a5548b1
+URL:http://agntconmcpconeu26.sched.com/event/02d6108bab3c8392031b60f69a5548b1
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T122500Z
+DTEND:20260918T125000Z
+SUMMARY:From Vibes To Data: Evaluating Agents on Your Real Work - Ville Hellman\, Datadog
+DESCRIPTION:Frontier labs are spending billions making agents better at SWE-Bench. But how much of your engineering work actually looks like SWE-Bench? At Datadog we kept seeing agents that crushed public benchmarks fail on our codebase: missing our conventions\, reaching for the wrong internal libraries\, technically correct but doing the work the wrong way.\n \n To get past demos and gut feel\, we built an evaluation platform that measures agents on tasks drawn from our real work\, and gave our platform teams a way to encode best practices as evals. Teams shipping skills\, steering docs\, agent harnesses\, and MCP servers can now see whether their changes actually moved the needle.\n \n In this talk I'll share how SOTA and open-weight models actually compare on real work\, what their cost-performance profiles look like\, tooling decisions that can shift token usage by 10% or more\, and how a surprisingly small eval suite can produce stable signal.\n \n You'll leave with a clearer way to think about model choice as a tradeoff between performance you actually need and tokens you're willing to spend\, and a sharper sense of what makes an eval keep paying off over time instead of becoming a one-off exercise.
+CATEGORIES:EVALS & TESTING
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:5afb0b4976e22b92d7979a974d8ffbb6
+URL:http://agntconmcpconeu26.sched.com/event/5afb0b4976e22b92d7979a974d8ffbb6
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T122500Z
+DTEND:20260918T125000Z
+SUMMARY:Beyond Chatbots: Agentic UI With Open Standards - Manfred Steyer\, ANGULARarchitects
+DESCRIPTION:Integrating agentic AI into the UI easily leads to ad hoc integrations\, tight coupling to backend technologies\, and vendor lock-in. So how do we design scalable\, maintainable interactions between agents and users?\n \n This session shows how open standards like AG-UI\, A2UI\, and MCP Apps enable a protocol-driven approach to Agentic UI\, establishing clear\, message-based boundaries that decouple UI\, agent logic\, and tools. You’ll learn how to apply these standards\, leveraging dynamic UI generation\, tool integration\, and Human-in-the-Loop patterns.\n \n By the end\, you’ll understand how to design Agentic UI using open standards and integrate them through clear\, protocol-based boundaries.
+CATEGORIES:HUMAN-AGENT COLLABORATION
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:db32aa8283d37bb218713f49b6353143
+URL:http://agntconmcpconeu26.sched.com/event/db32aa8283d37bb218713f49b6353143
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T122500Z
+DTEND:20260918T125000Z
+SUMMARY:Spotify’s Bet on MCP and Investment in Open Source - Reinoud Kruithof & Yannick Epstein\, Spotify
+DESCRIPTION:Spotify’s workforce went from zero to near universal use of MCP servers in breakneck time. It was only possible due to the MCP gateway - custom code written in a weekend to support the urgent need to expose Spotify’s extensive internal API ecosystem to AI agents.\n \n The MCP gateway rapidly became a victim of its own success\; multiple teams were committing significant changes to the codebase\, and domain ownership and on-call support for the gateway were somewhat uncertain. From a sustainability perspective\, the MCP gateway was becoming a big risk.\n \n In this talk you’ll learn how Spotify successfully rebased its highly custom MCP gateway use case onto OSS technologies\, while retaining deep integration into Spotify’s infrastructure management plane\, service discovery\, and microservice ecosystem. Hear how kgateway\, the Envoy proxy\, kro\, and the Gateway API were used to build the new MCP gateway\, enabling it to be better sustained by the right teams contributing their specific expertise.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:8129b2e34ca83d8b31453ad4a25af594
+URL:http://agntconmcpconeu26.sched.com/event/8129b2e34ca83d8b31453ad4a25af594
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T130000Z
+DTEND:20260918T132500Z
+SUMMARY:Gating High-Risk Agentic Actions at the Relying Party With Exogenous (Out-of-Band) Inputs - Andrew Bud\, iProov
+DESCRIPTION:A Confused Deputy arises when a trusted system with legitimate authority is induced to use that authority for a high-risk or irreversible action that the Agent's principal did not intend\, creating a relying-party (RP) risk of repudiation. The Agent may arrive with valid Tokens\, passkeys\, inherited session\, or tool credentials\, even if instructions have been shaped by prompt injection or model miscomprehension. Whilst the request is authenticated\, human consent to the means taken is not.\n \n This session develops how RPs can deploy a gatekeeper to distinguish authorised access from authorised actions and produce a legally auditable record. When proving the principal is present and consenting\, it assumes that any signal produced by the agent or its device remains endogenous to the compromised context. This requires an exogenous proof that the agent cannot generate\, evaluated by the RP before execution.\n \n The talk presents a decentralised\, open-source\, relying-party pattern that does not require the agent or its operator to have onboarded to or used the scheme. It composes with OAuth\, MCP\, and passkeys\, adding the missing intent boundary for agent-mediated workflows.
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:Auditorium (Ground Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:f2b8e059699ca51e4395c0f27a521a5c
+URL:http://agntconmcpconeu26.sched.com/event/f2b8e059699ca51e4395c0f27a521a5c
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T130000Z
+DTEND:20260918T132500Z
+SUMMARY:Giving Your Agentic Coding AI a Security Brain - Liran Tal\, Snyk
+DESCRIPTION:AI can generate a week’s worth of code before lunch and just as quickly ship SSRF\, RCE\, and path traversal vulnerabilities into prod. Rules and “/security-review” prompts aren’t enough: they’re costly\, brittle\, and non-deterministic. Run them three times\, get three answers. Meanwhile\, who vets hallucinated npm packages as the agent installs them? Oh you’re running the agent with “--dangerously-skip-permissions”? Color me surprised\, sigh.\n \n Well the good news is you don’t have to trade speed for security\, let me show you how. This talk shows a concrete\, developer-first pattern: learn how to use MCPs & Hooks to give agents real security superpowers. We’ll wire in just-in-time package health checks and deterministic code reviews via pluggable AI components\, with clear contextually engineered details for your agent. You’ll leave with a better understanding of the security dangers relying on agentic coding tools alone and a reliable and deterministic agentic workflow to make AI coding fast and safely shippable.
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:d54fa540c8bb137f2d946e8ef40e847d
+URL:http://agntconmcpconeu26.sched.com/event/d54fa540c8bb137f2d946e8ef40e847d
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T130000Z
+DTEND:20260918T132500Z
+SUMMARY:No Central Brain - Fausto Albers\, WonderWhy
+DESCRIPTION:Who decides what an agent treats as true? Nothing does\, and that is the point. In every system that stays reliable\, from a cell to an immune system to a market\, correctness isn't assigned by a designer\; it's selected. The parts hold competing variants\, and an external pressure culls the wrong ones. A more capable part doesn't escape this. It just gets better at exploiting whatever pressure you actually applied.\n \n You can't make the pressure random the way nature does\, but you can design it: the goal\, the loss\, the verifier\, the loop the agent runs inside. So stop dictating answers and start shaping the environment that selects them. \n \n We introduce five design laws\, each learned by building real-world agents and memory systems that had to stay honest under a pressure they couldn't game.
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:f5511d725b5025f549b7fe6e88af1dff
+URL:http://agntconmcpconeu26.sched.com/event/f5511d725b5025f549b7fe6e88af1dff
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T130000Z
+DTEND:20260918T132500Z
+SUMMARY:Evaluating Agents at Scale: From 50 Examples to a Production Flywheel - Bauke Brenninkmeijer\, Orq.ai
+DESCRIPTION:LLM agents are reaching production faster than teams can evaluate them. A data-analysis agent that runs the right query but reports the wrong number\, or returns the right number via a trajectory full of fabricated tool calls\, passes superficial testing and fails in production.This talk walks through evaluating such an agent end-to-end. Our running example: a data-analysis agent answering questions over a business dataset. We show how to grade three dimensions that agent evaluation requires and single-shot LLM evaluation ignores: final response\, trajectory\, and state changes.We cover the full lifecycle:1. Bootstrapping evaluation from 50 hand-reviewed examples when you have no labels.2. Aligning an LLM-as-a-judge to human judgment with the same rigor you'd apply to outsourced annotators: dev/test splits\, inter-rater agreement\, Cohen's kappa.3. Scaling to continuous online evaluation with CI integration\, error analysis\, and prompt optimization driven by natural-language feedback.We also cover what we got wrong in earlier iterations and what we'd do differently today.
+CATEGORIES:EVALS & TESTING
+LOCATION:G106 + G107 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:6f906e2801734a53e9afa7990e5b4702
+URL:http://agntconmcpconeu26.sched.com/event/6f906e2801734a53e9afa7990e5b4702
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T130000Z
+DTEND:20260918T132500Z
+SUMMARY:Attribution by Design: Skills\, MCP\, and Where Provenance Gets Built In - Ola Hungerford\, Model Context Protocol
+DESCRIPTION:Agents increasingly draw on specialized human knowledge at inference time\, and the infrastructure delivering it is converging around Skills\, MCP\, and very often a mix of the two. That makes these standards a decision point: provenance either travels with the knowledge or its absence becomes the default.\n \n The MCP community is standardizing two complementary efforts: Interceptors (deterministic hooks in clients\, servers\, and gateways) and how\, why\, and when to serve Skills over MCP. This talk shows how the two fit together to standardize attribution for human expertise and other content encoded as Skills and related inference-time formats.\n \n The talk showcases two examples:\n - An attribution gateway that validates and records authorship in a centralized control plane\n - A standardized client-side hook to log and credit authors when Skills are invoked
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:1968b6a3a0ea04871766fb34cc3b678d
+URL:http://agntconmcpconeu26.sched.com/event/1968b6a3a0ea04871766fb34cc3b678d
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T133500Z
+DTEND:20260918T140000Z
+SUMMARY:Autonomous Organisations: Starting Small - Floris Fok\, Prosus
+DESCRIPTION:What does it take to let AI agents run a real business? Before handing over an entire restaurant\, our team started with something much smaller: a network of vending machines.In this session\, we'll share what we've learned by giving AI agents responsibility for real world operational decisions\, including pricing\, inventory management\, and marketing. The vending machine serves as a practical testbed for exploring how autonomous organizations behave under real customer demand\, where mistakes have real consequences but the risks remain manageable.We'll discuss how this work evolved from simulated restaurant environments into live deployments\, what worked\, what failed\, and why small scale experiments are the fastest path toward larger autonomous operations. We'll also look ahead to the next phase\, including autonomous restaurants and the role robotics may play.Attendees will leave with a practical framework for experimenting with autonomous organizations\, along with lessons learned from taking AI agents out of the lab and into the real world.
+CATEGORIES:BUILDING RELIABLE AGENT SYSTEMS
+LOCATION:G104 + G105 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:476e50508e46770ac755d6c59b3c7153
+URL:http://agntconmcpconeu26.sched.com/event/476e50508e46770ac755d6c59b3c7153
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T133500Z
+DTEND:20260918T140000Z
+SUMMARY:Infrastructure Red Teaming With Abliterated Models: What Actually Stops Agent Attacks - Roy Belio\, Red Hat
+DESCRIPTION:Safety-aligned models refuse adversarial prompts\, so you can't test whether your infrastructure controls actually work\, but the models are all still susceptible to jail-breaking.\n I removed that variable with an abliterated Qwen3.5 model to get zero refusals and 100% cooperation. Ran full suite of prompts with custom garak probes across three hardening tiers on an OpenClaw agent running in OpenShift.\n \n I found out what worked and what gave false sense of security.\n Sandbox isolation dropped credential exfiltration entirely in one step. NetworkPolicy killed cluster escalation. The prompt injection classifier caught encoding-based attacks. Three of four attack categories were fully stopped by Tier 2 (injection classification+isolation).\n \n Memory poisoning was the exception. Probes that instruct the agent to write attacker content into its own memory continued to succeed across all tiers. OWASP added this as ASI06 to its 2026 Agentic Top 10. No deployed control addresses it today.\n \n I'll present the full probe results\, the defense configurations\, and the open problem current agent architectures don't solve.
+CATEGORIES:EVALS & TESTING
+LOCATION:G102 + G103 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:63ddbdb4ddd5f0405c976d1d829516d8
+URL:http://agntconmcpconeu26.sched.com/event/63ddbdb4ddd5f0405c976d1d829516d8
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T133500Z
+DTEND:20260918T140000Z
+SUMMARY:From Advisory to Autonomous: A Staged Model for Agent Adoption - Milos Mandic\, FDE Hub
+DESCRIPTION:Most teams shipping agents into production hit the same wall. The build is fast. The adoption is not. A solution that works in three weeks can take three months before operators trust it enough to actually use.This talk is about closing that gap. Drawing on production deployments across fifteen-plus enterprise clients in logistics\, wholesale\, manufacturing\, insurance\, and finance\, I'll walk through a four-stage model for moving agents from advisory to full autonomy without breaking trust along the way.The talk goes deep on a single use case deployed across multiple clients: sales order processing. I'll cover what changed when we moved too quickly between stages and lost trust we had already earned\, how we rebuilt it\, and the operator-side patterns we now look for before progressing a stage.The framework is protocol-agnostic. Whether teams are integrating agents through MCP\, APIs\, or a mix\, the trust progression is the same. The talk should be useful for anyone building or deploying agent systems where humans remain in the loop and where adoption\, not capability\, is the binding constraint on impact.
+CATEGORIES:HUMAN-AGENT COLLABORATION
+LOCATION:G106 + G107 (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:22ac6e1508fb4cbe2c66b4d0c27bdc87
+URL:http://agntconmcpconeu26.sched.com/event/22ac6e1508fb4cbe2c66b4d0c27bdc87
+END:VEVENT
+BEGIN:VEVENT
+DTSTAMP:20260924T215840Z
+DTSTART:20260918T133500Z
+DTEND:20260918T140000Z
+SUMMARY:Most MCP Servers are Empty - David Golverdingen\, Warmtebouw
+DESCRIPTION:An analysis of 856 tools across 103 MCP servers found 97% of tool descriptions carry a critical smell. But smells aren't the real problem: the data is fine\, what's broken is meaning. MCP isn't dead\, most servers are empty\, calling every endpoint and understanding nothing.I run nine production MCP servers (50+ tools) at a 300-400 person Dutch HVAC company\, used daily by non-developers. A maturity ladder emerged: most just wrap an API\; a rare few teach the agent the domain\, with the knowledge inside the tool description itself. The same data behind a wrapper versus a self-teaching tool is a different product.To climb the ladder as you build: scaffold from the API docs\, ship something simple\, then run Introspective Context Engineering\, a loop of Examine\, Flag\, Validate\, Encode\, Iterate. An AI explores the data and flags patterns by confidence\; a domain expert confirms or kills the uncertain ones in an afternoon. Then telemetry takes over: every call carries a queryIntent\, so the logs reveal what the agent thought it was doing\, exposing the gap. Fixes take hours\, not design cycles.You'll leave with the maturity model\, the discovery method\, and a runnable open-source example.
+CATEGORIES:MCPCON
+LOCATION:Emerald Room (1st Floor)\, Amsterdam\, Netherlands
+SEQUENCE:0
+UID:306d9853ef4ecdc37894424a9b86ca9c
+URL:http://agntconmcpconeu26.sched.com/event/306d9853ef4ecdc37894424a9b86ca9c
+END:VEVENT
+END:VCALENDAR
