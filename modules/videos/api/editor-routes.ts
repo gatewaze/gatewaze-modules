@@ -122,24 +122,128 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     return false;
   }
 
+  /**
+   * May the caller touch THIS video?
+   *
+   * The distinction that matters, and the one the first version of this file
+   * got wrong: denyUnlessAnyGrant answers "do they hold a grant somewhere",
+   * which is right for showing the module and wrong for a route that takes an
+   * id. Without this, an editor granted event A could read or publish event
+   * B's video by passing its uuid. The subject is resolved from the video
+   * itself rather than from the request body, because the body is the
+   * attacker's half of the conversation.
+   */
+  async function denyUnlessVideo(req: Request, res: Response, videoId: string): Promise<boolean> {
+    if (!UUID_RE.test(videoId)) {
+      res.status(400).json({ error: 'invalid video id' });
+      return true;
+    }
+    const asUser = userClient(req);
+    if (!asUser) {
+      res.status(401).json({ error: 'session required' });
+      return true;
+    }
+    const { data, error } = await asUser.rpc('can_edit_video', { p_video_id: videoId });
+    if (error) {
+      logger.warn('can_edit_video failed', { videoId, error: error.message });
+      res.status(403).json({ error: 'not permitted for this video' });
+      return true;
+    }
+    if (data !== true) {
+      res.status(403).json({ error: 'not permitted for this video' });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Does the unit (agenda entry or episode) belong to a subject the caller
+   * holds?
+   *
+   * Checking the subject id from the body is not enough: the unit id is a
+   * second, independent identifier, so an editor could pass their own event
+   * and somebody else's talk and attach an upload to it.
+   */
+  async function denyUnlessUnit(
+    req: Request,
+    res: Response,
+    subjectType: string,
+    unitId: string,
+  ): Promise<boolean> {
+    if (!UUID_RE.test(unitId)) {
+      res.status(400).json({ error: 'invalid unit id' });
+      return true;
+    }
+    const asUser = userClient(req);
+    if (!asUser) {
+      res.status(401).json({ error: 'session required' });
+      return true;
+    }
+    const { data, error } = await asUser.rpc('can_edit_videos_for_unit', {
+      p_subject_type: subjectType,
+      p_unit_id: unitId,
+    });
+    if (error || data !== true) {
+      if (error) logger.warn('can_edit_videos_for_unit failed', { unitId, error: error.message });
+      res.status(403).json({ error: 'that talk or episode is not in your scope' });
+      return true;
+    }
+    return false;
+  }
+
   /** Does the caller hold can_schedule anywhere relevant? (spec §18.1) */
-  async function canSchedule(req: Request, subjectType: string, subjectId: string): Promise<boolean> {
+  async function canSchedule(req: Request, videoId: string): Promise<boolean> {
     const uid = await callerId(req);
     if (!uid) return false;
-    // Admins always may. Checked via the caller's own client so is_admin()
-    // sees their session.
     const asUser = userClient(req);
     const { data: isAdmin } = await asUser.rpc('is_admin');
     if (isAdmin === true) return true;
-    const { data } = await supabase
+
+    // Resolve the subject from the VIDEO. An earlier version took it from the
+    // request body, which meant an editor could name a subject they held while
+    // acting on a video belonging to another one.
+    const owners = await videoOwners(videoId);
+    const { data: grants } = await supabase
       .from('video_editor_grants')
       .select('can_schedule, subject_type, subject_id')
       .eq('user_id', uid);
-    return (data ?? []).some(
+    return (grants ?? []).some(
       (g) =>
         g.can_schedule === true &&
-        (g.subject_type === 'all' || (g.subject_type === subjectType && g.subject_id === subjectId)),
+        (g.subject_type === 'all'
+          || owners.some((o) => o.type === g.subject_type && o.id === g.subject_id)),
     );
+  }
+
+  /**
+   * The events or podcasts a video belongs to, resolved through its subjects.
+   *
+   * Mirrors can_edit_video()'s mapping in SQL: an agenda entry belongs to an
+   * event, an episode to a podcast. Service-role reads, because this is used
+   * to make an authorisation decision about rows the caller may not see yet.
+   */
+  async function videoOwners(videoId: string): Promise<Array<{ type: string; id: string }>> {
+    const out: Array<{ type: string; id: string }> = [];
+    const { data: subs } = await supabase
+      .from('video_subjects')
+      .select('subject_type, subject_id')
+      .eq('video_id', videoId);
+    for (const sub of subs ?? []) {
+      const t = String(sub.subject_type);
+      const id = String(sub.subject_id);
+      if (t === 'event') {
+        out.push({ type: 'event', id });
+      } else if (t === 'agenda_entry' || t === 'talk') {
+        const { data } = await supabase
+          .from('events_agenda_entries').select('event_uuid').eq('id', id).maybeSingle();
+        if (data?.event_uuid) out.push({ type: 'event', id: String(data.event_uuid) });
+      } else if (t === 'podcast_episode') {
+        const { data } = await supabase
+          .from('podcast_episodes').select('podcast_id').eq('id', id).maybeSingle();
+        if (data?.podcast_id) out.push({ type: 'podcast', id: String(data.podcast_id) });
+      }
+    }
+    return out;
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -325,7 +429,9 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     }
 
     const unitId = String(body.unit_id ?? '');
-    if (!UUID_RE.test(unitId)) return res.status(400).json({ error: 'invalid unit_id' });
+    // The unit is a SECOND identifier. Holding the subject does not imply
+    // holding this talk, so it is checked on its own.
+    if (await denyUnlessUnit(req, res, subjectType, unitId)) return;
 
     const files = Array.isArray(body.files) ? body.files : [];
     if (files.length === 0) return res.status(400).json({ error: 'files is required' });
@@ -602,7 +708,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     const subjectId = String(req.params.subjectId ?? '');
     if (await denyUnlessSubject(req, res, subjectType, subjectId)) return;
     const unitId = String(req.params.unitId ?? '');
-    if (!UUID_RE.test(unitId)) return res.status(400).json({ error: 'invalid unit id' });
+    if (await denyUnlessUnit(req, res, subjectType, unitId)) return;
 
     const unitSubjectType = subjectType === 'event' ? 'agenda_entry' : 'podcast_episode';
     const { data: subs, error } = await supabase
@@ -645,9 +751,8 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
    * than stored, so the editor sees a fresh draft until they save an edit.
    */
   router.get('/videos/:videoId/copy', async (req: Request, res: Response) => {
-    if (await denyUnlessAnyGrant(req, res)) return;
     const videoId = String(req.params.videoId ?? '');
-    if (!UUID_RE.test(videoId)) return res.status(400).json({ error: 'invalid video id' });
+    if (await denyUnlessVideo(req, res, videoId)) return;
 
     const { data: video } = await supabase
       .from('videos')
@@ -678,15 +783,14 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
   router.post('/videos/:videoId/publications', async (req: Request, res: Response) => {
     if (await denyUnlessAnyGrant(req, res)) return;
     const videoId = String(req.params.videoId ?? '');
-    if (!UUID_RE.test(videoId)) return res.status(400).json({ error: 'invalid video id' });
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const subjectType = String(body.subject_type ?? '');
-    const subjectId = String(body.subject_id ?? '');
-    if (await denyUnlessSubject(req, res, subjectType, subjectId)) return;
-    if (!(await canSchedule(req, subjectType, subjectId))) {
+    // Scoped by the video, NOT by the subject in the body: naming a subject
+    // you hold while acting on another one's video is the attack this closes.
+    if (await denyUnlessVideo(req, res, videoId)) return;
+    if (!(await canSchedule(req, videoId))) {
       return res.status(403).json({ error: 'your access allows uploading but not scheduling' });
     }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
 
     const platform = String(body.platform ?? '').trim().toLowerCase();
     if (!/^[a-z0-9_]{2,32}$/.test(platform)) {
@@ -758,6 +862,9 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
       .eq('id', id)
       .maybeSingle();
     if (!pub) return res.status(404).json({ error: 'publication not found' });
+    // Scope by the publication's own video. Without this, one grant anywhere
+    // let an editor reschedule or cancel any publication in the system.
+    if (await denyUnlessVideo(req, res, String(pub.video_id))) return;
 
     // After queued the bytes are in flight and the platform decides.
     if (!['draft', 'scheduled'].includes(pub.state)) {
@@ -802,10 +909,13 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
 
     const { data: asset } = await supabase
       .from('video_assets')
-      .select('storage_bucket, storage_path, state')
+      .select('video_id, storage_bucket, storage_path, state')
       .eq('id', assetId)
       .maybeSingle();
     if (!asset || asset.state !== 'ready') return res.status(404).json({ error: 'no playable asset' });
+    // This hands out an hour-long signed URL to an unpublished master, so it
+    // is the single most important place to scope by the owning subject.
+    if (await denyUnlessVideo(req, res, String(asset.video_id))) return;
 
     const signed = await supabase.storage
       .from(asset.storage_bucket)

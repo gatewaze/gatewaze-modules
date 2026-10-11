@@ -18,6 +18,8 @@
  * file is there and the right outcome is to finish the job, not bin it.
  */
 
+import { MAX_BYTES, type UploadKind } from '../lib/upload-rules.js';
+
 const BATCH = 50;
 
 export interface ReapResult {
@@ -54,7 +56,16 @@ export async function reapUploadSessions(
 
     // The bytes made it but `complete` never ran. Finish the job rather than
     // throwing away a successful upload over a timing race.
-    if (head.ok && head.bytes > 0 && mimeMatches(head.contentType, s.expected_mime)) {
+    //
+    // The size cap is re-checked here, not just in `complete`. A security
+    // review found the bypass: request a mint, PUT an oversized file to the
+    // signed URL, never call `complete`, and this adoption path would mark it
+    // ready at whatever size actually landed, bounded only by the bucket's
+    // 5 GiB limit. A `short` is meant to cap at 500MB.
+    const cap = await capForAsset(supabase, s.asset_id, s.expected_bytes);
+    const withinCap = cap === null || head.bytes <= cap * 1.1;
+
+    if (head.ok && head.bytes > 0 && withinCap && mimeMatches(head.contentType, s.expected_mime)) {
       await supabase
         .from('video_assets')
         .update({ state: 'ready', bytes: head.bytes, mime_type: head.contentType, error: null })
@@ -82,7 +93,12 @@ export async function reapUploadSessions(
     }
     await supabase
       .from('video_assets')
-      .update({ state: 'failed', error: 'upload session expired before the file arrived' })
+      .update({
+        state: 'failed',
+        error: head.ok && head.bytes > 0 && !withinCap
+          ? `uploaded file is ${(head.bytes / 1048576).toFixed(0)}MB, over the limit for its kind`
+          : 'upload session expired before the file arrived',
+      })
       .eq('id', s.asset_id)
       .eq('state', 'uploading');
     await supabase
@@ -98,6 +114,25 @@ export async function reapUploadSessions(
     `${bytesRemoved ? `, ${(bytesRemoved / 1048576).toFixed(1)}MB removed` : ''}`,
   );
   return { completed, failed, bytes_removed: bytesRemoved };
+}
+
+/**
+ * The byte ceiling for an asset, from its kind.
+ *
+ * Falls back to the session's own `expected_bytes` when the asset row has
+ * gone, and returns null only when neither is knowable, in which case the
+ * bucket's 5 GiB limit is the backstop.
+ */
+async function capForAsset(
+  supabase,
+  assetId: string,
+  expectedBytes: number | null | undefined,
+): Promise<number | null> {
+  const { data } = await supabase.from('video_assets').select('kind').eq('id', assetId).maybeSingle();
+  const kind = String(data?.kind ?? '') as UploadKind;
+  if (kind && MAX_BYTES[kind]) return MAX_BYTES[kind];
+  const expected = Number(expectedBytes);
+  return Number.isFinite(expected) && expected > 0 ? expected : null;
 }
 
 /** Tolerant comparison: storage may normalise or omit parameters. */

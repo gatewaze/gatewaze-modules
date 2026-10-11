@@ -300,6 +300,128 @@ $$;
 REVOKE ALL ON FUNCTION public.can_edit_any_videos() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.can_edit_any_videos() TO authenticated;
 
+-- ── The predicate that actually protects a video ────────────────────────────
+--
+-- can_edit_any_videos() answers "does this person hold any grant at all". That
+-- is the right question for "should the module appear in the nav" and the
+-- WRONG question for "may they touch this row". A security review of the first
+-- version of this migration found the difference exploitable without going
+-- through the application at all: with `USING (can_edit_any_videos())` on
+-- video_assets, an editor granted one event could read every master's
+-- storage_path in the system straight through PostgREST, then ask the API for
+-- a signed URL for any of them.
+--
+-- So this resolves a video to the subject that OWNS it and checks the grant
+-- against that. The mapping is the awkward part: grants are held on an
+-- 'event' or a 'podcast', while video_subjects records the finer grain the
+-- editor actually works at, an 'agenda_entry' or a 'podcast_episode'. Those
+-- belong to other modules, so the lookups are dynamic and guarded with
+-- to_regclass: `videos` must install on a brand that has neither module, and
+-- a missing table means "cannot establish ownership", which denies.
+CREATE OR REPLACE FUNCTION public.can_edit_video(p_video_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  r record;
+  owner_id uuid;
+BEGIN
+  IF public.is_admin() THEN
+    RETURN true;
+  END IF;
+  IF p_video_id IS NULL THEN
+    RETURN false;
+  END IF;
+
+  -- An 'all' grant covers everything, and is checked first so the common
+  -- admin-ish case does no joins.
+  IF EXISTS (
+    SELECT 1 FROM public.video_editor_grants g
+    WHERE g.user_id = auth.uid() AND g.subject_type = 'all'
+  ) THEN
+    RETURN true;
+  END IF;
+
+  FOR r IN
+    SELECT subject_type, subject_id
+    FROM public.video_subjects
+    WHERE video_id = p_video_id
+  LOOP
+    IF r.subject_type = 'event' THEN
+      IF public.can_edit_videos_for('event', r.subject_id) THEN RETURN true; END IF;
+
+    ELSIF r.subject_type IN ('agenda_entry', 'talk') THEN
+      IF to_regclass('public.events_agenda_entries') IS NOT NULL THEN
+        EXECUTE 'SELECT event_uuid FROM public.events_agenda_entries WHERE id = $1'
+          INTO owner_id USING r.subject_id;
+        IF owner_id IS NOT NULL AND public.can_edit_videos_for('event', owner_id) THEN
+          RETURN true;
+        END IF;
+      END IF;
+
+    ELSIF r.subject_type = 'podcast_episode' THEN
+      IF to_regclass('public.podcast_episodes') IS NOT NULL THEN
+        EXECUTE 'SELECT podcast_id FROM public.podcast_episodes WHERE id = $1'
+          INTO owner_id USING r.subject_id;
+        IF owner_id IS NOT NULL AND public.can_edit_videos_for('podcast', owner_id) THEN
+          RETURN true;
+        END IF;
+      END IF;
+    END IF;
+  END LOOP;
+
+  -- A video with no subject at all belongs to nobody, so nobody but an admin
+  -- may touch it. That is deliberate: an orphan is not a free-for-all.
+  RETURN false;
+END;
+$$;
+
+COMMENT ON FUNCTION public.can_edit_video(uuid) IS
+  'True when the caller may edit this specific video, resolved through its subject to the event or podcast the grant is held on.';
+
+REVOKE ALL ON FUNCTION public.can_edit_video(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.can_edit_video(uuid) TO authenticated;
+
+/** Does the caller hold a grant covering the subject that owns this unit? */
+CREATE OR REPLACE FUNCTION public.can_edit_videos_for_unit(
+  p_subject_type text,
+  p_unit_id uuid
+) RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  owner_id uuid;
+BEGIN
+  IF public.is_admin() THEN RETURN true; END IF;
+  IF p_unit_id IS NULL THEN RETURN false; END IF;
+
+  IF p_subject_type = 'event' THEN
+    IF to_regclass('public.events_agenda_entries') IS NULL THEN RETURN false; END IF;
+    EXECUTE 'SELECT event_uuid FROM public.events_agenda_entries WHERE id = $1'
+      INTO owner_id USING p_unit_id;
+    RETURN owner_id IS NOT NULL AND public.can_edit_videos_for('event', owner_id);
+  ELSIF p_subject_type = 'podcast' THEN
+    IF to_regclass('public.podcast_episodes') IS NULL THEN RETURN false; END IF;
+    EXECUTE 'SELECT podcast_id FROM public.podcast_episodes WHERE id = $1'
+      INTO owner_id USING p_unit_id;
+    RETURN owner_id IS NOT NULL AND public.can_edit_videos_for('podcast', owner_id);
+  END IF;
+  RETURN false;
+END;
+$$;
+
+COMMENT ON FUNCTION public.can_edit_videos_for_unit(text, uuid) IS
+  'True when the caller may edit videos for the event or podcast that owns this agenda entry or episode. Stops an editor attaching an upload to another subject''s talk.';
+
+REVOKE ALL ON FUNCTION public.can_edit_videos_for_unit(text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.can_edit_videos_for_unit(text, uuid) TO authenticated;
+
 -- ── RLS ─────────────────────────────────────────────────────────────────────
 --
 -- Every writer here is the worker or an admin route running as the service
@@ -316,37 +438,40 @@ ALTER TABLE public.video_upload_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.video_publications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.video_editor_grants ENABLE ROW LEVEL SECURITY;
 
+-- Every read policy here is scoped to the video's OWNING subject via
+-- can_edit_video(), not to "holds any grant". The first version of this
+-- migration used can_edit_any_videos() and a security review showed the
+-- difference was exploitable straight through PostgREST: one grant anywhere
+-- returned every master's storage_path in the system.
 DO $$
 BEGIN
-  -- video_subjects: readable by anyone who may edit videos for that subject.
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='video_subjects' AND policyname='video_subjects_select') THEN
     CREATE POLICY video_subjects_select ON public.video_subjects
       FOR SELECT TO authenticated
-      USING (
-        public.is_admin()
-        OR (subject_type = 'agenda_entry' AND public.can_edit_any_videos())
-        OR (subject_type = 'podcast_episode' AND public.can_edit_any_videos())
-        OR (subject_type = 'event' AND public.can_edit_videos_for('event', subject_id))
-      );
+      USING (public.can_edit_video(video_id));
   END IF;
 
   -- Assets and sessions carry a storage path, which is not public data.
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='video_assets' AND policyname='video_assets_select') THEN
     CREATE POLICY video_assets_select ON public.video_assets
       FOR SELECT TO authenticated
-      USING (public.can_edit_any_videos());
+      USING (public.can_edit_video(video_id));
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='video_upload_sessions' AND policyname='video_upload_sessions_select') THEN
     CREATE POLICY video_upload_sessions_select ON public.video_upload_sessions
       FOR SELECT TO authenticated
-      USING (public.can_edit_any_videos());
+      USING (EXISTS (
+        SELECT 1 FROM public.video_assets a
+        WHERE a.id = video_upload_sessions.asset_id
+          AND public.can_edit_video(a.video_id)
+      ));
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='video_publications' AND policyname='video_publications_select') THEN
     CREATE POLICY video_publications_select ON public.video_publications
       FOR SELECT TO authenticated
-      USING (public.can_edit_any_videos());
+      USING (public.can_edit_video(video_id));
   END IF;
 
   -- A grant row names a person and what they may touch. Admins only, plus
@@ -423,9 +548,21 @@ BEGIN
     WHERE schemaname = 'storage' AND tablename = 'objects'
       AND policyname = 'storage_select_video_masters'
   ) THEN
+    -- Scoped by joining the object's path back to its asset row. The path is
+    -- the only link storage has to a video, which is why buildStoragePath
+    -- puts the asset id in it. `can_edit_any_videos()` here would have let any
+    -- grant holder read every unpublished master in the bucket.
     CREATE POLICY storage_select_video_masters
       ON storage.objects FOR SELECT TO authenticated
-      USING (bucket_id = 'video-masters' AND public.can_edit_any_videos());
+      USING (
+        bucket_id = 'video-masters'
+        AND EXISTS (
+          SELECT 1 FROM public.video_assets a
+          WHERE a.storage_bucket = 'video-masters'
+            AND a.storage_path = storage.objects.name
+            AND public.can_edit_video(a.video_id)
+        )
+      );
   END IF;
 
   IF NOT EXISTS (
