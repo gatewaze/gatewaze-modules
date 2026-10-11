@@ -57,4 +57,31 @@ describe('avatar URLs are host-allowlisted, not merely https', () => {
     expect(AVATAR_HOST_ALLOWLIST).not.toContain('*');
     expect(AVATAR_HOST_ALLOWLIST.length).toBeGreaterThan(0);
   });
+
+  it('accepts the protocol-relative URL sched actually writes', () => {
+    // The real value from the AGNTcon EU programme. All 111 avatars looked
+    // like this and all 111 were discarded, because new URL() cannot parse a
+    // protocol-relative URL without a base.
+    expect(safeAvatarUrl('//avatars.sched.co/c/9d/19223528/avatar.jpg?73e'))
+      .toBe('https://avatars.sched.co/c/9d/19223528/avatar.jpg?73e');
+  });
+
+  it('allows sched.co, which is a different domain from sched.com', () => {
+    expect(safeAvatarUrl('https://avatars.sched.co/a.jpg')).toBe('https://avatars.sched.co/a.jpg');
+    expect(safeAvatarUrl('https://sched.co/a.jpg')).toBe('https://sched.co/a.jpg');
+    // The suffix match must not let a lookalike through.
+    expect(safeAvatarUrl('https://evilsched.co/a.jpg')).toBeNull();
+    expect(safeAvatarUrl('https://sched.co.evil.com/a.jpg')).toBeNull();
+  });
+
+  it('does not guess an origin for a scheme-less path', () => {
+    // A leading single slash is a path, not a host. Inventing an origin for
+    // it would mean letting the page choose which host we call.
+    expect(safeAvatarUrl('/img/avatar.jpg')).toBeNull();
+    expect(safeAvatarUrl('///evil.example.com/a.jpg')).toBeNull();
+  });
+
+  it('does not let the protocol-relative form reach a non-allowlisted host', () => {
+    expect(safeAvatarUrl('//tracker.example.com/pixel.gif')).toBeNull();
+  });
 });

@@ -15,7 +15,8 @@
 
 import { createHash } from 'node:crypto';
 import { detectSource } from '../lib/schedule-sources/index.js';
-import { guardedFetch, clean, safeAvatarUrl, LIMITS, FetchRefused, DEFAULT_HOST_ALLOWLIST } from '../lib/import-safety.js';
+import { guardedFetch, clean, LIMITS, FetchRefused, DEFAULT_HOST_ALLOWLIST } from '../lib/import-safety.js';
+import { listMirroredAvatars, mirrorAvatar } from '../lib/avatar-mirror.js';
 import { normalizeTitle } from '../lib/normalize-title.js';
 
 const STALE_CLAIM_MS = 15 * 60 * 1000;
@@ -188,6 +189,10 @@ export async function importSchedule(
     const stats: Record<string, unknown> = {
       sessions: 0, breaks: 0, tracks: 0, speakers: 0,
       speakers_created: 0, speakers_adopted: 0, preserved_edits: 0,
+      // How many avatars landed in our bucket, and how many fell back to the
+      // conference's own URL. A rising hotlinked count is the signal that the
+      // source CDN or the allowlist needs looking at.
+      avatars_mirrored: 0, avatars_hotlinked: 0,
       skeleton_mismatch: parsed.diagnostics.skeletonMismatch, unchanged: false,
     };
 
@@ -241,6 +246,10 @@ export async function importSchedule(
       if (p?.name) attachedByName.set(normName(p.name), r.speaker_id);
     }
 
+    // Avatars we already hold, read once. Without this the mirror costs four
+    // storage list calls per speaker before it even considers downloading.
+    const mirrored = await listMirroredAvatars({ supabase });
+
     for (const [ref, k] of allSpeakers) {
       const name = clean(k.name, LIMITS.name);
       if (!name) continue;
@@ -248,9 +257,21 @@ export async function importSchedule(
       const role = clean(k.role, LIMITS.role);
       const company = clean(k.company, LIMITS.company);
       const bio = clean(k.bio, LIMITS.bio);
-      // Avatars are hot-linked, so the stored URL is the request every viewer's
-      // browser makes — it is host-allowlisted, not merely https (§11.2).
-      const avatar = safeAvatarUrl(k.avatarUrl);
+
+      // Copy the avatar into our own bucket rather than hot-linking the
+      // conference's CDN. This is the default, not an option: the old
+      // behaviour sent every agenda visitor's browser to sched, and the image
+      // vanished when the conference took its site down. mirrorAvatar falls
+      // back to the validated remote URL when the copy fails, so a bad CDN
+      // day degrades rather than losing the avatar.
+      const copied = await mirrorAvatar({ supabase, log, existing: mirrored }, k.avatarUrl);
+      const avatar = copied?.url ?? null;
+      if (copied?.storagePath && !copied.reused) {
+        mirrored.add(copied.storagePath.slice(copied.storagePath.lastIndexOf('/') + 1));
+        stats.avatars_mirrored = ((stats.avatars_mirrored as number) ?? 0) + 1;
+      } else if (copied && !copied.storagePath) {
+        stats.avatars_hotlinked = ((stats.avatars_hotlinked as number) ?? 0) + 1;
+      }
 
       const existing = await refs.get(ref, 'speaker_profile');
       if (existing?.entity_id) {

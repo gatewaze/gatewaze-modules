@@ -82,11 +82,33 @@ export class FetchRefused extends Error {
 /**
  * Fetch with the allowlist, a DNS-resolution check against private ranges, a
  * manual redirect walk that re-checks every hop, a timeout and a size cap.
+ *
+ * Returns the decoded text. Use guardedFetchBytes for a binary body; both go
+ * through the same guard, which is the point of having only one of them.
  */
 export async function guardedFetch(
   rawUrl: string,
   allowlist: string[] = DEFAULT_HOST_ALLOWLIST,
 ): Promise<{ ok: boolean; status: number; text: string }> {
+  const r = await guardedFetchBytes(rawUrl, allowlist, MAX_BYTES);
+  if (!r.ok) return { ok: false, status: r.status, text: '' };
+  return { ok: true, status: r.status, text: new TextDecoder().decode(r.bytes) };
+}
+
+/**
+ * The same guard, returning the raw bytes and the content type.
+ *
+ * Avatars are images, so there is nothing to decode, and a TextDecoder run
+ * over a JPEG would quietly produce replacement characters instead of
+ * failing. The caller supplies its own cap because an avatar has no business
+ * being as large as a programme page.
+ */
+export async function guardedFetchBytes(
+  rawUrl: string,
+  allowlist: string[] = DEFAULT_HOST_ALLOWLIST,
+  maxBytes: number = MAX_BYTES,
+): Promise<{ ok: boolean; status: number; bytes: Uint8Array; contentType: string; finalUrl: string }> {
+  const empty = new Uint8Array(0);
   let url = String(rawUrl ?? '');
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     let u: URL;
@@ -122,37 +144,39 @@ export async function guardedFetch(
 
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location');
-      if (!loc) return { ok: false, status: res.status, text: '' };
+      if (!loc) return { ok: false, status: res.status, bytes: empty, contentType: '', finalUrl: u.toString() };
       url = new URL(loc, u).toString(); // re-checked at the top of the loop
       continue;
     }
 
-    if (!res.ok) return { ok: false, status: res.status, text: '' };
+    const contentType = String(res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+    if (!res.ok) return { ok: false, status: res.status, bytes: empty, contentType, finalUrl: u.toString() };
 
     const len = Number(res.headers.get('content-length') ?? 0);
-    if (len > MAX_BYTES) throw new FetchRefused(`response exceeds ${MAX_BYTES} bytes`);
+    if (len > maxBytes) throw new FetchRefused(`response exceeds ${maxBytes} bytes`);
 
     // Stream and abort once over the cap, rather than buffering the whole
     // body and checking afterwards: content-length can be absent (chunked) or
     // simply untrue, which would make the cap advisory against exactly the
     // response it exists to stop.
-    if (!res.body) return { ok: true, status: res.status, text: '' };
+    if (!res.body) return { ok: true, status: res.status, bytes: empty, contentType, finalUrl: u.toString() };
     const reader = res.body.getReader();
-    const decoder = new TextDecoder();
+    const chunks: Uint8Array[] = [];
     let total = 0;
-    let text = '';
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_BYTES) {
+      if (total > maxBytes) {
         await reader.cancel().catch(() => {});
-        throw new FetchRefused(`response exceeds ${MAX_BYTES} bytes`);
+        throw new FetchRefused(`response exceeds ${maxBytes} bytes`);
       }
-      text += decoder.decode(value, { stream: true });
+      chunks.push(value);
     }
-    text += decoder.decode();
-    return { ok: true, status: res.status, text };
+    const bytes = new Uint8Array(total);
+    let at = 0;
+    for (const c of chunks) { bytes.set(c, at); at += c.byteLength; }
+    return { ok: true, status: res.status, bytes, contentType, finalUrl: u.toString() };
   }
   throw new FetchRefused('too many redirects');
 }
@@ -171,18 +195,34 @@ export const LIMITS = {
   url: 500,
 } as const;
 
-/** Hosts a speaker avatar may be hot-linked from. */
-export const AVATAR_HOST_ALLOWLIST = ['*.sched.com', 'sched.com', '*.amazonaws.com', '*.cloudfront.net'];
+/**
+ * Hosts a speaker avatar may be fetched from.
+ *
+ * `sched.co` is the one that matters in practice and it was missing. Sched
+ * serves its programme pages from `<event>.sched.com` but its avatars from
+ * `avatars.sched.co`, a different registrable domain. All 111 avatars on the
+ * AGNTcon EU programme were rejected because of that, and the rejection was
+ * silent: the field just came back null and every speaker imported without a
+ * face.
+ */
+export const AVATAR_HOST_ALLOWLIST = [
+  '*.sched.com', 'sched.com',
+  '*.sched.co', 'sched.co',
+  '*.amazonaws.com', '*.cloudfront.net',
+];
 
 /**
- * Validate an avatar URL before it is stored and later loaded by every
- * viewer's browser.
+ * Validate an avatar URL before anything is done with it.
  *
- * Imported avatars are hot-linked, not copied (§11.2), so the stored URL IS
- * the request a visitor's browser will make. "Any https URL" is therefore not
- * good enough: it would let whoever controls the programme page choose a host
- * that sees every viewer of the agenda. Cleaned, length-capped, https-only and
- * host-allowlisted; anything else becomes null.
+ * The importer copies avatars into our own storage bucket rather than
+ * hot-linking them (see workers/mirror-avatars.ts), but this gate still runs
+ * first and still matters for two reasons. It is the allowlist that decides
+ * which host we will make a server-side request to, and when the copy fails
+ * the remote URL is what gets stored, so it is also the URL a visitor's
+ * browser may end up requesting.
+ *
+ * Cleaned, length-capped, https-only and host-allowlisted; anything else
+ * becomes null.
  */
 export function safeAvatarUrl(value: unknown, allowlist: string[] = AVATAR_HOST_ALLOWLIST): string | null {
   // Reject over-length rather than letting clean() truncate: a truncated URL
@@ -192,10 +232,24 @@ export function safeAvatarUrl(value: unknown, allowlist: string[] = AVATAR_HOST_
   const s = clean(value, LIMITS.url);
   if (!s) return null;
   let u: URL;
-  try { u = new URL(s); } catch { return null; }
+  try { u = new URL(normaliseScheme(s)); } catch { return null; }
   if (u.protocol !== 'https:') return null;
   if (!hostAllowed(u.hostname, allowlist)) return null;
   return u.toString();
+}
+
+/**
+ * Give a protocol-relative URL the https scheme it is missing.
+ *
+ * Sched writes its avatars into the page as `//avatars.sched.co/c/9d/…`, which
+ * `new URL()` cannot parse without a base, so every one of them was discarded
+ * before the allowlist was even consulted. Only a leading `//` is treated this
+ * way. A scheme-less path like `/img/x.jpg` stays unparseable on purpose,
+ * because guessing an origin for it would mean trusting the page to tell us
+ * which host to call.
+ */
+function normaliseScheme(value: string): string {
+  return value.startsWith('//') && !value.startsWith('///') ? `https:${value}` : value;
 }
 
 /**

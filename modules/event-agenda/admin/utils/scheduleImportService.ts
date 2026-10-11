@@ -21,6 +21,9 @@ export interface ScheduleImportStats {
   speakers_adopted?: number;
   preserved_edits?: number;
   skeleton_mismatch?: number;
+  /** Avatars copied into our bucket, and how many stayed hot-linked. */
+  avatars_mirrored?: number;
+  avatars_hotlinked?: number;
   unchanged?: boolean;
   stale?: string[];
 }
@@ -94,6 +97,21 @@ export async function runScheduleImport(eventUuid: string, force = false): Promi
   return jsonOrThrow<{ job_id?: string }>(res);
 }
 
+/**
+ * Copy this event's hot-linked speaker avatars into our own storage bucket.
+ *
+ * Only needed for events imported before the importer started doing this
+ * itself. Safe to run twice: an avatar already in the bucket is recognised
+ * and nothing is re-downloaded.
+ */
+export async function mirrorEventAvatars(eventUuid: string): Promise<{ job_id?: string }> {
+  const res = await authedFetch(`${BASE}/admin/events/${eventUuid}/mirror-avatars`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  return jsonOrThrow<{ job_id?: string }>(res);
+}
+
 /** Human summary of a finished import, for the card's one-line result. */
 export function describeStats(stats: ScheduleImportStats | undefined): string {
   if (!stats) return '';
@@ -104,5 +122,7 @@ export function describeStats(stats: ScheduleImportStats | undefined): string {
   if (stats.speakers != null) bits.push(`${stats.speakers} speaker${stats.speakers === 1 ? '' : 's'}`);
   if (stats.speakers_created) bits.push(`${stats.speakers_created} new`);
   if (stats.preserved_edits) bits.push(`${stats.preserved_edits} edit${stats.preserved_edits === 1 ? '' : 's'} kept`);
+  if (stats.avatars_mirrored) bits.push(`${stats.avatars_mirrored} avatar${stats.avatars_mirrored === 1 ? '' : 's'} stored`);
+  if (stats.avatars_hotlinked) bits.push(`${stats.avatars_hotlinked} avatar${stats.avatars_hotlinked === 1 ? '' : 's'} still remote`);
   return bits.join(' · ');
 }
