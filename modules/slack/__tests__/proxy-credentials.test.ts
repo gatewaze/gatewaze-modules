@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createCipheriv, randomBytes } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 // @ts-expect-error — plain ESM lib, no type declarations
 import { unsealSecret, checkProxy } from '../lib/proxy-credentials.js';
 
@@ -72,32 +73,76 @@ describe('unsealSecret', () => {
 describe('checkProxy', () => {
   const URL_ = 'http://user%40x:pa%3Ass@gw.example.com:823';
 
-  it('reports a usable proxy', async () => {
-    const fake = async () => ({ status: 200, statusText: 'OK' }) as Response;
-    await expect(checkProxy(URL_, fake)).resolves.toEqual({ ok: true, detail: 'proxy reachable (200)' });
-  });
-
-  it('surfaces the provider reason on 407 so the queue is left alone', async () => {
-    const fake = async () => ({ status: 407, statusText: 'TRAFFIC_EXHAUSTED' }) as Response;
-    const res = await checkProxy(URL_, fake);
-    expect(res.ok).toBe(false);
-    expect(res.detail).toContain('TRAFFIC_EXHAUSTED');
-  });
-
-  it('treats a network failure as unusable', async () => {
-    const fake = async () => { throw new Error('ECONNREFUSED'); };
-    const res = await checkProxy(URL_, fake);
-    expect(res.ok).toBe(false);
-    expect(res.detail).toContain('ECONNREFUSED');
-  });
-
-  it('sends percent-decoded credentials in the Basic header', async () => {
-    let seen = '';
-    const fake = async (_u: string, init: RequestInit) => {
-      seen = String((init.headers as Record<string, string>)['Proxy-Authorization']);
-      return { status: 200, statusText: 'OK' } as Response;
+  /** Minimal stand-in for http.request: emits the event the test asks for. */
+  function fakeRequest(emit: (req: EventEmitter) => void) {
+    return () => {
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
+      req.end = () => setImmediate(() => emit(req));
+      req.destroy = () => {};
+      return req;
     };
-    await checkProxy(URL_, fake as unknown as typeof fetch);
-    expect(Buffer.from(seen.replace('Basic ', ''), 'base64').toString()).toBe('user@x:pa:ss');
+  }
+  const res = (statusCode: number, statusMessage = '') =>
+    Object.assign(new EventEmitter(), { statusCode, statusMessage, destroy() {} });
+
+  it('accepts an established tunnel', async () => {
+    const impl = fakeRequest((req) => req.emit('connect', res(200, 'Connection established'), { destroy() {} }));
+    await expect(checkProxy(URL_, 'example.com:443', impl)).resolves.toEqual({ ok: true, detail: 'tunnel established (200)' });
+  });
+
+  // The 2026-10-11 outage: the plan was out of traffic, and the provider says
+  // so in the CONNECT status line.
+  it('surfaces the provider reason when the tunnel is refused', async () => {
+    const impl = fakeRequest((req) => req.emit('response', res(407, 'TRAFFIC_EXHAUSTED')));
+    const out = await checkProxy(URL_, 'example.com:443', impl);
+    expect(out.ok).toBe(false);
+    expect(out.detail).toContain('407');
+    expect(out.detail).toContain('TRAFFIC_EXHAUSTED');
+  });
+
+  it('rejects a non-200 tunnel status', async () => {
+    const impl = fakeRequest((req) => req.emit('connect', res(403, 'Forbidden'), { destroy() {} }));
+    const out = await checkProxy(URL_, 'example.com:443', impl);
+    expect(out.ok).toBe(false);
+    expect(out.detail).toContain('403');
+  });
+
+  it('treats a socket error as unusable', async () => {
+    const impl = fakeRequest((req) => req.emit('error', new Error('ECONNREFUSED')));
+    const out = await checkProxy(URL_, 'example.com:443', impl);
+    expect(out.ok).toBe(false);
+    expect(out.detail).toContain('ECONNREFUSED');
+  });
+
+  it('treats a timeout as unusable', async () => {
+    const impl = fakeRequest((req) => req.emit('timeout'));
+    await expect(checkProxy(URL_, 'example.com:443', impl)).resolves.toEqual({ ok: false, detail: 'proxy timed out' });
+  });
+
+  it('resolves once even if several events fire', async () => {
+    const impl = fakeRequest((req) => { req.emit('response', res(407, 'NOPE')); req.emit('error', new Error('late')); });
+    const out = await checkProxy(URL_, 'example.com:443', impl);
+    expect(out.detail).toContain('407');
+  });
+
+  it('sends percent-decoded credentials and targets the requested host', async () => {
+    let opts: Record<string, any> = {};
+    const impl = (o: Record<string, any>) => {
+      opts = o;
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
+      req.end = () => setImmediate(() => req.emit('connect', res(200), { destroy() {} }));
+      req.destroy = () => {};
+      return req;
+    };
+    await checkProxy(URL_, 'slack.example:443', impl as never);
+    expect(opts.method).toBe('CONNECT');
+    expect(opts.path).toBe('slack.example:443');
+    expect(opts.host).toBe('gw.example.com');
+    expect(opts.port).toBe(823);
+    expect(Buffer.from(String(opts.headers['Proxy-Authorization']).replace('Basic ', ''), 'base64').toString()).toBe('user@x:pa:ss');
+  });
+
+  it('reports an unparseable proxy URL instead of throwing', async () => {
+    await expect(checkProxy('not a url')).resolves.toEqual({ ok: false, detail: 'proxy URL is not parseable' });
   });
 });
