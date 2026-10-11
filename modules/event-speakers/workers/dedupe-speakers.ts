@@ -130,7 +130,33 @@ export async function dedupeSpeakers(
       if (decision.action === 'review') {
         const gk = groupKey(pass.name, key, members.map((m) => m.id));
         if (!dryRun) {
-          const { error } = await supabase.from('speaker_merge_candidates').upsert({
+          // Read then insert, NOT an upsert.
+          //
+          // Two reasons, and the first one is why the queue silently stayed
+          // empty on the first real run. The unique index on group_key is
+          // PARTIAL (WHERE state = 'open'), and `ON CONFLICT (group_key)`
+          // cannot match a partial index without repeating its predicate,
+          // which PostgREST has no way to express. Every upsert failed with
+          // "no unique or exclusion constraint matching the ON CONFLICT
+          // specification", and 351 candidates went nowhere.
+          //
+          // The second reason is behavioural and is why this is the right
+          // shape rather than a workaround: an upsert that sets state:'open'
+          // would reopen a group a human had already marked as different
+          // people, every single sweep. A group that has been decided stays
+          // decided.
+          const { data: already, error: readErr } = await supabase
+            .from('speaker_merge_candidates')
+            .select('id, state')
+            .eq('group_key', gk)
+            .maybeSingle();
+          if (readErr) {
+            out.errors.push(`queue read ${gk}: ${readErr.message}`);
+            continue;
+          }
+          if (already) { out.skipped += 1; continue; }
+
+          const { error } = await supabase.from('speaker_merge_candidates').insert({
             profile_ids: [...members.map((m) => m.id)].sort(),
             group_key: gk,
             canonical_id: decision.canonicalId,
@@ -139,11 +165,12 @@ export async function dedupeSpeakers(
             score: decision.score,
             signals: decision.signals,
             state: 'open',
-            updated_at: new Date().toISOString(),
-          }, { onConflict: 'group_key', ignoreDuplicates: false });
-          // A unique violation here means the same group is already queued,
-          // which is the desired end state, so it is not an error.
-          if (error && !/duplicate key|unique/i.test(error.message)) {
+          });
+          // ONLY a genuine duplicate-key violation is benign — another worker
+          // queued the same group between the read and the insert. Matching
+          // on the loose word "unique" is what let the real failure above
+          // pass as routine.
+          if (error && error.code !== '23505') {
             out.errors.push(`queue ${gk}: ${error.message}`);
             continue;
           }
