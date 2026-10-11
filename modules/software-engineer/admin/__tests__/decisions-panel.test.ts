@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groupDecisions, shouldShowArchitectureLink, KIND_ORDER } from '../components/decisionsPanelUtils';
+import { groupDecisions, shouldShowArchitectureLink, KIND_ORDER, KIND_TITLES, KIND_ICON } from '../components/decisionsPanelUtils';
 
 // This module's vitest env is 'node' (no jsdom), so <DecisionsPanel> itself can't be rendered here —
 // see admin/__tests__/project-avatar.test.ts for the same constraint. Instead we pin the pure
@@ -36,6 +36,24 @@ describe('groupDecisions', () => {
     const decisions = KIND_ORDER.map((kind, i) => ({ id: String(i), kind }));
     const grouped = groupDecisions(decisions);
     expect(grouped.map(([kind]) => kind)).toEqual([...KIND_ORDER]);
+  });
+});
+
+// Regression guard for issue #66: every kind that can be grouped must have both a title and an
+// icon defined, or the panel would render a blank header / missing icon for that kind's rows.
+describe('KIND_TITLES / KIND_ICON completeness', () => {
+  it('defines a non-empty title and icon spec for every kind in KIND_ORDER', () => {
+    for (const kind of KIND_ORDER) {
+      expect(typeof KIND_TITLES[kind]).toBe('string');
+      expect(KIND_TITLES[kind].length).toBeGreaterThan(0);
+
+      const iconSpec = KIND_ICON[kind];
+      expect(iconSpec).toBeDefined();
+      expect(typeof iconSpec.icon).toBe('string');
+      expect(iconSpec.icon.length).toBeGreaterThan(0);
+      expect(typeof iconSpec.className).toBe('string');
+      expect(iconSpec.className.length).toBeGreaterThan(0);
+    }
   });
 });
 
