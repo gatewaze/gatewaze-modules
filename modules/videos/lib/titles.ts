@@ -29,6 +29,19 @@ export const TITLE_LIMITS: Record<string, number> = {
   default: 100,
 };
 
+/**
+ * The platforms a per-platform title is drafted for.
+ *
+ * This is not a constraint on what can be published. `video_publications.platform`
+ * is free text on purpose, because a new platform is a new module. This is only
+ * the set whose documented title limit we know, and it exists as a literal array
+ * so that `generateCopy` builds its result keys from constants rather than from
+ * the request. The platform list arrives on the query string, and using those
+ * strings as object keys let a caller write `__proto__` or `constructor` on the
+ * response object (CodeQL js/remote-property-injection, alert 261).
+ */
+export const COPY_PLATFORMS = ['youtube', 'tiktok', 'linkedin', 'instagram', 'x', 'vimeo'] as const;
+
 /** YouTube's description maximum, the tightest of the long-form fields. */
 export const DESCRIPTION_LIMIT = 5000;
 
@@ -253,14 +266,25 @@ export interface GeneratedCopy {
   title: string;
   description: string;
   posts: PostVariant[];
-  /** Per-platform titles, so the UI can show what each one will actually get. */
+  /**
+   * Per-platform titles, so the UI can show what each one will actually get.
+   *
+   * Only the platforms in COPY_PLATFORMS appear. An unrecognised platform gets
+   * no entry here, and the caller uses `title`, which is drafted at the default
+   * 100-character limit.
+   */
   titlesByPlatform: Record<string, string>;
 }
 
 /** Everything a publication needs, in one call. */
 export function generateCopy(input: TitleInput, platforms: string[] = ['youtube']): GeneratedCopy {
-  const titlesByPlatform: Record<string, string> = {};
-  for (const p of platforms) titlesByPlatform[p] = buildTitle(input, p);
+  // Null prototype, and iterate the constant list rather than the caller's.
+  // `platforms` is request data, so it is only ever read, never used as a key.
+  const wanted = new Set((platforms ?? []).map((p) => String(p).trim().toLowerCase()));
+  const titlesByPlatform: Record<string, string> = Object.create(null);
+  for (const p of COPY_PLATFORMS) {
+    if (wanted.has(p)) titlesByPlatform[p] = buildTitle(input, p);
+  }
   return {
     title: buildTitle(input),
     description: buildDescription(input),

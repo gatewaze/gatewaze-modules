@@ -39,6 +39,7 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
 
 import { Router, json, type Express } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import { rateLimit } from 'express-rate-limit';
 import { createPublicVideoRoutes, mountPublicVideoRoutes } from './public-routes.js';
 import { mountEditorRoutes } from './editor-routes.js';
 
@@ -65,6 +66,16 @@ export function registerRoutes(app: Express, ctx?: RegisterCtx): void {
   };
 
   const publicRouter = Router();
+  // Unauthenticated reads, so the only thing bounding a caller is this. The
+  // ceiling is generous because a single portal page can fan out to several
+  // video lookups; it exists to stop a scripted sweep of the whole table.
+  publicRouter.use(rateLimit({
+    windowMs: 60_000,
+    limit: 600,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'rate_limited', message: 'too many requests' },
+  }));
   mountPublicVideoRoutes(publicRouter, createPublicVideoRoutes({ supabase }));
   app.use('/api', publicRouter);
 
@@ -95,6 +106,27 @@ export function registerRoutes(app: Express, ctx?: RegisterCtx): void {
   };
 
   const editorRouter = Router();
+
+  // Rate limiter FIRST, body parser and auth after it.
+  //
+  // Two reasons for that order. The throttle has to cover the token
+  // verification in `requireUser` below, which is a round trip to Supabase on
+  // every request and is therefore the expensive part an unauthenticated
+  // caller can make us do. And this prefix has no platform middleware in front
+  // of it at all, so if the limiter sat behind the auth check, a flood of
+  // bad tokens would never reach it.
+  //
+  // 240 a minute per IP is the same ceiling event-media's admin router uses. An
+  // editor minting twenty files at once spends one request, so a real session
+  // is nowhere near it.
+  editorRouter.use(rateLimit({
+    windowMs: 60_000,
+    limit: 240,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'rate_limited', message: 'too many requests' },
+  }));
+
   // The editor endpoints exchange small JSON only: the file bytes go straight
   // to storage on a signed URL. 256kb is plenty for a 20-file mint and keeps
   // this router far below the server's global 50mb limit.
