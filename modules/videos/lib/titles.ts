@@ -122,43 +122,46 @@ export function speakerCredit(speaker: TitleSpeaker | undefined): string {
 }
 
 /**
- * The platform title.
+ * The fallback title, used when the AI copy recipe is unavailable.
  *
- * Shape: "<talk title> | <speakers>" for a full recording, because that is
- * what a viewer scanning a channel needs, in that order. The event name is
- * NOT in the title: it is in the playlist and the description, and spending
- * 25 of YouTube's 100 characters on it pushes the speaker out.
+ * Measured against the two real AAIF channels on 2026-10-11 (30 recent
+ * videos), because the shape this used to emit appears on NONE of them:
  *
- * A short leads with the hook instead, since it is consumed in a feed with no
- * surrounding context.
+ *   - 0 of 30 titles use a "Talk title | Speaker" separator.
+ *   - Median length is 40 characters on @AgenticAI-Foundation and 42 on
+ *     @AAIFLive, against a 100-character budget. Short, not truncated-long.
+ *   - The speaker's name is never in the title on either channel.
+ *   - The event name is never in the title either.
+ *
+ * The published titles are hooks: "We had to delete 40,000 lines of AI code",
+ * "AI Agents Can Delete Everything". A template cannot invent a hook, which
+ * is exactly why the AI recipe exists. What a template CAN do is stop making
+ * the title worse, so this emits the cleanest honest thing available and
+ * never appends a speaker.
+ *
+ * Order of preference:
+ *   1. a short's pull quote or takeaway, which is already hook-shaped
+ *   2. the programme's talk title
+ *   3. the speaker name, when there is no title at all
  */
 export function buildTitle(input: TitleInput, platform = 'default'): string {
   const limit = TITLE_LIMITS[platform] ?? TITLE_LIMITS.default;
   const talk = cleanLine(input.talkTitle, 300);
-  const names = speakerNames(input.speakers);
   const isShort = String(input.kind ?? '').toLowerCase() === 'short';
 
-  if (!talk) {
-    // No programme title. Fall back to the speaker, then to something honest.
-    return truncateWords(names || 'Conference talk', limit);
-  }
-
+  // A short leads with the hook when one exists: it is consumed in a feed
+  // with no surrounding page to explain it.
   if (isShort) {
     const hook = cleanLine(input.quote || input.worthNoting, 300);
-    const lead = hook ? truncateWords(hook, Math.floor(limit * 0.7)) : talk;
-    return truncateWords(names ? `${lead} — ${names}` : lead, limit);
+    if (hook) return truncateWords(hook, limit);
   }
 
-  if (!names) return truncateWords(talk, limit);
+  if (talk) return truncateWords(talk, limit);
 
-  // Give the talk title at least two thirds of the budget; it is the part
-  // somebody searched for.
-  const suffix = ` | ${names}`;
-  if (talk.length + suffix.length <= limit) return `${talk}${suffix}`;
-  const room = limit - suffix.length;
-  if (room >= Math.floor(limit * 0.5)) return `${truncateWords(talk, room)}${suffix}`;
-  // The names alone would eat the title. Drop them.
-  return truncateWords(talk, limit);
+  // No programme title at all. The speaker is better than nothing here, and
+  // this is the ONLY branch that uses a name.
+  const names = speakerNames(input.speakers);
+  return truncateWords(names || 'Conference talk', limit);
 }
 
 /**

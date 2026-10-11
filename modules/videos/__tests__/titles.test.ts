@@ -24,9 +24,19 @@ const liran = { name: 'Liran Tal', role: 'Director of Developer Relations', comp
 const jake = { name: 'Jake Moghtader', role: 'Founding ML Engineer', company: 'Runlayer' };
 
 describe('buildTitle', () => {
-  it('puts the talk first and the speaker after, which is what a viewer scans', () => {
+  it('NEVER appends the speaker, because neither real channel does', () => {
+    // Measured on 2026-10-11 across the 30 most recent videos on
+    // @AgenticAI-Foundation (40.8k subs) and @AAIFLive: 0 of 30 titles carry
+    // a "Talk | Speaker" separator, and no title names the speaker at all.
+    // This template used to emit exactly that shape.
     expect(buildTitle({ talkTitle: 'Most MCP Servers are Empty', speakers: [liran] }))
-      .toBe('Most MCP Servers are Empty | Liran Tal');
+      .toBe('Most MCP Servers are Empty');
+    expect(buildTitle({ talkTitle: 'Most MCP Servers are Empty', speakers: [liran, jake] }))
+      .not.toContain('|');
+  });
+
+  it('names the speaker ONLY when there is no title to use instead', () => {
+    expect(buildTitle({ talkTitle: '', speakers: [liran] })).toBe('Liran Tal');
   });
 
   it('keeps every platform title inside that platform\'s own limit', () => {
@@ -67,7 +77,22 @@ describe('buildTitle', () => {
       speakers: [liran],
     });
     expect(t).toContain('Most MCP servers ship with no tools');
-    expect(t).toContain('Liran Tal');
+    // The hook replaces the title; it does not get a speaker bolted on.
+    expect(t).not.toContain('Liran Tal');
+  });
+
+  it('falls back to the talk title for a short with no hook', () => {
+    expect(buildTitle({ talkTitle: 'Most MCP Servers are Empty', kind: 'short', speakers: [liran] }))
+      .toBe('Most MCP Servers are Empty');
+  });
+
+  it('stays near the length the real channels publish at', () => {
+    // Median 40 characters on @AgenticAI-Foundation, 42 on @AAIFLive, against
+    // a 100-character budget. A programme title that is already short should
+    // come through untouched rather than padded.
+    const t = buildTitle({ talkTitle: 'AI Agents Can Delete Everything', speakers: [liran, jake] });
+    expect(t).toBe('AI Agents Can Delete Everything');
+    expect(t.length).toBeLessThan(60);
   });
 
   it('stays honest when there is no programme data', () => {
