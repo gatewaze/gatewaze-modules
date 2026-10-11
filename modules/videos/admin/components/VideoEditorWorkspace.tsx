@@ -27,7 +27,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 
-import { Badge, Button, Card, Select, WorkspaceLayout } from '@/components/ui';
+import { Badge, Button, Card, Input, Select, WorkspaceLayout } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 import {
@@ -85,6 +85,8 @@ export default function VideoEditorWorkspace() {
 
   const [subjectType, setSubjectType] = useState<SubjectType>('event');
   const [subjects, setSubjects] = useState<SubjectOption[]>([]);
+  const [subjectSearch, setSubjectSearch] = useState('');
+  const [subjectsTruncated, setSubjectsTruncated] = useState(false);
   const [subjectId, setSubjectId] = useState('');
   const [loadingSubjects, setLoadingSubjects] = useState(false);
 
@@ -134,22 +136,29 @@ export default function VideoEditorWorkspace() {
   }, []);
 
   // ── Step 5: subjects for the chosen kind ───────────────────────────────────
+  //
+  // Searched on the SERVER, debounced. The endpoint caps at 200 rows, so
+  // filtering the arrived list in the browser would quietly hide any match
+  // past the cap — which, with nearly a thousand events, is most of them.
   useEffect(() => {
     if (step !== 1) return;
     let cancelled = false;
     setLoadingSubjects(true);
-    void (async () => {
-      try {
-        const list = await listSubjects(subjectType);
-        if (!cancelled) setSubjects(list);
-      } catch (err) {
-        if (!cancelled) toast.error(err instanceof Error ? err.message : 'Could not load the list');
-      } finally {
-        if (!cancelled) setLoadingSubjects(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [step, subjectType]);
+    const handle = setTimeout(() => {
+      void (async () => {
+        try {
+          const { subjects: list, truncated } = await listSubjects(subjectType, subjectSearch);
+          if (!cancelled) { setSubjects(list); setSubjectsTruncated(truncated); }
+        } catch (err) {
+          if (!cancelled) toast.error(err instanceof Error ? err.message : 'Could not load the list');
+        } finally {
+          if (!cancelled) setLoadingSubjects(false);
+        }
+      })();
+    // No delay on the first load, so the list is not empty for a beat.
+    }, subjectSearch ? 250 : 0);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [step, subjectType, subjectSearch]);
 
   // ── Step 6: units within the subject ───────────────────────────────────────
   useEffect(() => {
@@ -459,27 +468,64 @@ export default function VideoEditorWorkspace() {
                   ? 'You can work on any of these.'
                   : 'These are the ones you have been given access to.'}
               </p>
+              <Input
+                label={subjectType === 'event' ? 'Search events' : 'Search podcasts'}
+                placeholder={subjectType === 'event' ? 'Type part of the event name…' : 'Type part of the name…'}
+                value={subjectSearch}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSubjectSearch(e.target.value)}
+              />
+
               {loadingSubjects ? (
-                <LoadingSpinner />
+                <div className="mt-4"><LoadingSpinner /></div>
               ) : subjects.length === 0 ? (
-                <p className="text-sm text-[var(--gray-11)]">
-                  Nothing available. {scope.unrestricted
-                    ? `No ${subjectType}s exist yet.`
-                    : `You have no ${subjectType} access.`}
+                <p className="mt-4 text-sm text-[var(--gray-11)]">
+                  {subjectSearch
+                    ? `Nothing matches “${subjectSearch}”.`
+                    : subjectType === 'event'
+                      ? scope.unrestricted
+                        // Being specific here matters: the usual cause is not
+                        // "no events" but "no event has had its programme
+                        // imported", and those need very different fixes.
+                        ? 'No past event has both an agenda and speakers yet. Import a conference programme on the event’s Agenda tab and it will appear here.'
+                        : 'None of the events you have access to has an agenda and speakers yet.'
+                      : scope.unrestricted
+                        ? 'No podcasts exist yet.'
+                        : 'You have no podcast access.'}
                 </p>
               ) : (
-                <Select
-                  label={subjectType === 'event' ? 'Event' : 'Podcast'}
-                  value={subjectId}
-                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => { setSubjectId(e.target.value); setUnitId(''); }}
-                  data={[
-                    { label: `Choose a ${subjectType}…`, value: '' },
-                    ...subjects.map((s) => ({
-                      label: s.starts_at ? `${s.label} (${String(s.starts_at).slice(0, 10)})` : s.label,
-                      value: s.id,
-                    })),
-                  ]}
-                />
+                <>
+                  <ul className="mt-4 max-h-80 overflow-y-auto rounded-md border border-[var(--gray-6)] divide-y divide-[var(--gray-5)]">
+                    {subjects.map((s) => {
+                      const selected = s.id === subjectId;
+                      return (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            onClick={() => { setSubjectId(s.id); setUnitId(''); }}
+                            aria-pressed={selected}
+                            className={`w-full text-left px-3 py-2.5 text-sm transition-colors ${
+                              selected
+                                ? 'bg-[var(--accent-3)] text-[var(--accent-11)] font-medium'
+                                : 'hover:bg-[var(--gray-3)]'
+                            }`}
+                          >
+                            <span className="block truncate">{s.label}</span>
+                            <span className="block text-xs text-[var(--gray-11)]">
+                              {[s.starts_at ? String(s.starts_at).slice(0, 10) : null, s.reference]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {subjectsTruncated && (
+                    <p className="mt-2 text-xs text-[var(--gray-11)]">
+                      Showing the first {subjects.length}. Search to narrow it down.
+                    </p>
+                  )}
+                </>
               )}
             </div>
           )}
