@@ -24,7 +24,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 function isTokenEndpoint(url: unknown): boolean {
   try { return new URL(String(url)).hostname === 'oauth2.googleapis.com'; } catch { return false; }
 }
-import { collectMetrics, statusBody, type PublishInput } from '../lib/adapter';
+import { collectMetrics, parseIsoDuration, statusBody, type PublishInput } from '../lib/adapter';
 import { authorizeUrl, isAuthFailure, redirectUri, SCOPES } from '../lib/oauth';
 
 const client = { clientId: '1-abc.apps.googleusercontent.com', clientSecret: 's3cret' };
@@ -165,5 +165,33 @@ describe('oauth', () => {
     expect(isAuthFailure(403, '{"reason":"quotaExceeded"}')).toBe(false);
     expect(isAuthFailure(500, '')).toBe(false);
     expect(isAuthFailure(429, '')).toBe(false);
+  });
+});
+
+describe('parseIsoDuration — how a Short is told from a talk', () => {
+  it('parses the shapes YouTube returns', () => {
+    expect(parseIsoDuration('PT42S')).toBe(42);
+    expect(parseIsoDuration('PT3M')).toBe(180);
+    expect(parseIsoDuration('PT1H2M3S')).toBe(3723);
+    expect(parseIsoDuration('PT25M11S')).toBe(1511);
+  });
+
+  it('handles a duration with no hours or minutes', () => {
+    expect(parseIsoDuration('PT0S')).toBe(0);
+  });
+
+  it('returns null rather than 0 for something it cannot read', () => {
+    // 0 would classify an unparseable duration as a Short.
+    expect(parseIsoDuration('')).toBeNull();
+    expect(parseIsoDuration(null)).toBeNull();
+    expect(parseIsoDuration('nonsense')).toBeNull();
+    expect(parseIsoDuration('P1Y')).toBeNull();
+  });
+
+  it('puts the Shorts boundary at 3 minutes, which is YouTube’s own rule', () => {
+    // 180 is a Short, 181 is not. There is no isShort field on the API, so
+    // length is the only signal available.
+    expect(parseIsoDuration('PT3M')).toBe(180);
+    expect(parseIsoDuration('PT3M1S')).toBe(181);
   });
 });
