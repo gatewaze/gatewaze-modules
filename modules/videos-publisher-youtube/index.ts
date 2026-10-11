@@ -74,6 +74,14 @@ const youtubePublisherModule: GatewazeModule = {
       handler: './workers/collect-metrics.ts',
       concurrency: 1,
     },
+    {
+      // Adopts everything already on a connected channel. Concurrency 1 is
+      // load-bearing: two runs would race on the same (provider, video id)
+      // upsert and spend double the quota to reach the same place.
+      name: 'videos-publisher-youtube:discover-videos',
+      handler: './workers/discover-videos.ts',
+      concurrency: 1,
+    },
   ],
 
   crons: [
@@ -85,6 +93,14 @@ const youtubePublisherModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '15 4 * * *' },
       data: { kind: 'videos-publisher-youtube:collect-metrics' },
+    },
+    {
+      // 03:40 UTC, before the metrics run at 04:15, so a video uploaded
+      // yesterday is adopted in time to be measured the same morning.
+      name: 'videos-publisher-youtube:discover-videos',
+      queue: 'jobs',
+      schedule: { pattern: '40 3 * * *' },
+      data: { kind: 'videos-publisher-youtube:discover-videos' },
     },
   ],
 

@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.4.0',
+  version: '1.5.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -42,6 +42,10 @@ const videosModule: GatewazeModule = {
     // state, and the metrics they produce. Closes the FK that
     // video_publications.connection_id had pointed at nothing since 007.
     'migrations/009_platform_connections.sql',
+    // 010 adopts a connected account's whole back catalogue, not only what
+    // Gatewaze published, and gives videos belonging to no event or podcast
+    // somewhere to wait. Unassigned is the ABSENCE of a video_subjects row.
+    'migrations/010_video_discovery.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
