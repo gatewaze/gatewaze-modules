@@ -169,7 +169,18 @@ export function parseDescriptionsHtml(html: string): HtmlSession[] {
       const bgMatch = avatarStyle.match(/url\((['"]?)(.*?)\1\)/);
       const avatarUrl = (avatarImg || (bgMatch ? bgMatch[2] : '')).trim() || null;
 
-      speakers.push({ ref, name, role, company, bio, avatarUrl });
+      // The numeric id in a sched avatar URL is the person's global sched
+      // account, served from sched's own avatar CDN rather than this event's
+      // subdomain. On the AGNTcon EU programme it covered all 112 avatars and
+      // resolved to 104 distinct people, and it is the only identifier on the
+      // page that survives a name change or a second slug.
+      //
+      // Note the first path segment can be a digit: //avatars.sched.co/0/64/...
+      const sourceUserId = avatarUrl
+        ? (avatarUrl.match(/avatars\.sched\.co\/[0-9a-z]+\/[0-9a-f]{2}\/(\d{3,})\//i)?.[1] ?? null)
+        : null;
+
+      speakers.push({ ref, name, role, company, bio, avatarUrl, sourceUserId });
     });
 
     out.push({

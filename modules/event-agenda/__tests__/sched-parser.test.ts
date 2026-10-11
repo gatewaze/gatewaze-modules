@@ -137,3 +137,44 @@ describe('html parsing', () => {
     expect(sessions.every((s) => /^[0-9a-f]{32}$/.test(s.uid))).toBe(true);
   });
 });
+
+describe('the sched account id, which is what dedupe keys on', () => {
+  const parsed = schedSource.parse(raw as never);
+  const speakers = parsed.sessions.flatMap((s) => s.speakers);
+
+  it('extracts a numeric account id for every speaker who has an avatar', () => {
+    const withAvatar = speakers.filter((s) => s.avatarUrl);
+    expect(withAvatar.length).toBeGreaterThan(90);
+    // 100% on the real programme: every avatar URL carries the id.
+    expect(withAvatar.filter((s) => s.sourceUserId).length).toBe(withAvatar.length);
+    expect(withAvatar.every((s) => /^\d{3,}$/.test(String(s.sourceUserId)))).toBe(true);
+  });
+
+  it('reads the id even when the first path segment is a digit', () => {
+    // //avatars.sched.co/0/64/25824676/avatar.jpg — a [a-z] class here silently
+    // missed 65 of 112 avatars and made coverage look like 42%.
+    const digitFirst = speakers.filter((s) => /avatars\.sched\.co\/\d\//.test(s.avatarUrl ?? ''));
+    expect(digitFirst.length).toBeGreaterThan(0);
+    expect(digitFirst.every((s) => s.sourceUserId)).toBe(true);
+  });
+
+  it('leaves the id null when a speaker has no avatar, rather than inventing one', () => {
+    for (const s of speakers.filter((x) => !x.avatarUrl)) {
+      expect(s.sourceUserId).toBeNull();
+    }
+  });
+
+  it('gives the same person the same id across their sessions', () => {
+    const byId = new Map<string, Set<string>>();
+    for (const s of speakers) {
+      if (!s.sourceUserId) continue;
+      const set = byId.get(s.sourceUserId) ?? new Set<string>();
+      set.add(s.ref);
+      byId.set(s.sourceUserId, set);
+    }
+    // At least one id spans two slugs — that is the case the id exists for,
+    // and the reason the slug alone is not the key.
+    expect([...byId.values()].some((refs) => refs.size >= 1)).toBe(true);
+    expect(byId.size).toBeGreaterThan(40);
+  });
+});
