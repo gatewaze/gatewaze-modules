@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer-core';
 import fs from 'fs';
 import path from 'path';
+import { policeUrl } from './devEventsHttp.js';
 
 /**
  * Base class for all scrapers providing common functionality
@@ -130,18 +131,21 @@ export class BaseScraper {
       });
     });
 
-    // Set realistic user agent and headers
+    // Set realistic user agent and headers.
+    //
+    // Only headers that are genuinely identical on every request belong in
+    // setExtraHTTPHeaders: it applies them to the page's stylesheet, font,
+    // image and XHR requests too, not just the navigation. This list used to
+    // carry `Sec-Fetch-Dest: document`, `Sec-Fetch-Mode: navigate`,
+    // `Sec-Fetch-Site: none` and an HTML-only `Accept`, so every subresource
+    // request claimed to be a top-level navigation. Servers refuse those or
+    // serve the wrong body, and the page renders without its CSS. The same
+    // bug in the core screenshot job was storing unstyled captures for every
+    // event (gatewaze#155); Chrome varies all of these per destination, so we
+    // must not pin them.
     await this.page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36');
     await this.page.setExtraHTTPHeaders({
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
-      'Upgrade-Insecure-Requests': '1'
+      'Accept-Language': 'en-US,en;q=0.9'
     });
 
     // Set up error logging with filtering for known non-critical errors
@@ -181,14 +185,44 @@ export class BaseScraper {
       return true;
     }
 
+    // `fetch` has no `timeout` option; the old call passed one and so had no
+    // bound at all. One event site that accepts the connection and never
+    // answers froze a whole dev.events run for 37 minutes on 9 Oct 2026.
+    const timeoutMs = Number(this.globalConfig.urlValidation.timeout) > 0
+      ? Number(this.globalConfig.urlValidation.timeout)
+      : 10000;
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (compatible; EventsBot/1.0; +https://example.com/bot)'
+    };
+
     try {
-      const response = await fetch(url, {
+      let response = await fetch(url, {
         method: 'HEAD',
-        timeout: this.globalConfig.urlValidation.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; EventsBot/1.0; +https://example.com/bot)'
-        }
+        headers,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(timeoutMs),
       });
+
+      // Plenty of event sites refuse HEAD (405) or bot-gate it (403) while
+      // serving GET normally. Retry once with GET before calling it dead;
+      // the body is discarded.
+      if (response.status === 403 || response.status === 405 || response.status === 501) {
+        response = await fetch(url, {
+          method: 'GET',
+          headers,
+          redirect: 'follow',
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        await response.body?.cancel().catch(() => {});
+      }
+
+      // A redirect chain must not land somewhere we would never have fetched
+      // directly (private hosts, odd schemes).
+      if (response.url && !policeUrl(response.url, { schemes: ['https:', 'http:'] })) {
+        console.warn(`⚠️  URL validation failed: ${url} redirected to a disallowed target (${response.url})`);
+        this.stats.urlValidationFailed++;
+        return false;
+      }
 
       // Consider 2xx and 3xx status codes as valid
       const isValid = response.status >= 200 && response.status < 400;

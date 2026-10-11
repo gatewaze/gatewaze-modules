@@ -180,6 +180,12 @@ export function stripHtmlText(html: string): string {
 
 type Schema = Record<string, any>;
 
+/** localhost, *.localhost, 127.0.0.1, ::1 — the hosts http is tolerated for. */
+export function isLoopbackHost(hostname: string): boolean {
+  const h = String(hostname ?? '').toLowerCase();
+  return h === 'localhost' || h.endsWith('.localhost') || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+}
+
 function checkSchema(schema: Schema, value: unknown, path: string, issues: ValidationIssue[]): void {
   const t = schema.type;
   if (t === 'object') {
@@ -219,7 +225,24 @@ function checkSchema(schema: Schema, value: unknown, path: string, issues: Valid
     }
     if (schema.format === 'https-url') {
       let ok = false;
-      try { ok = new URL(value).protocol === 'https:'; } catch { ok = false; }
+      try {
+        // Parseable is not the same as safe to interpolate. `new URL()`
+        // accepts a literal double quote in a path, and does not encode a
+        // single quote at all — so a value that parses can still carry the
+        // characters that break out of an HTML attribute. Renderers escape at
+        // the sink, but refusing to STORE such a value closes the gate for
+        // every writer of an https-url field at once.
+        if (/["'`<>\s\\]/.test(value)) throw new Error('unsafe characters');
+        const u = new URL(value);
+        // https only — except, OUTSIDE production, plain http to a
+        // *.localhost / loopback host, so local dev stacks
+        // (http://supabase.aaif.localhost storage URLs) can bake and render
+        // galleries. The NODE_ENV gate makes "never in prod" enforced, not
+        // aspirational; every other scheme (javascript:, data:, …) and
+        // non-loopback http stay rejected everywhere.
+        ok = u.protocol === 'https:' ||
+          (u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && isLoopbackHost(u.hostname));
+      } catch { ok = false; }
       if (!ok) issues.push({ path, keyword: 'format', message: 'must be a valid https:// URL' });
     }
   } else if (t === 'integer') {
@@ -300,6 +323,14 @@ const talkKind: BlockKindDef = {
         properties: {
           name: { type: 'string', minLength: 1, maxLength: 120 },
           company: { type: 'string', maxLength: 120 },
+          // Additive beyond the base spec schema: the job title, kept
+          // separate from `company` so a card can render "Director of
+          // Developer Relations, Snyk" without the two being one opaque
+          // string. conference-recap populates it from the event programme,
+          // which is where the conference itself split the two. Declared
+          // rather than relying on additionalProperties so the length is
+          // bounded like every other rendered field.
+          role: { type: 'string', maxLength: 120 },
           linkedin: { type: 'string', format: 'https-url' },
         },
         additionalProperties: true,
@@ -337,13 +368,31 @@ const talkKind: BlockKindDef = {
       // Additive: per-theme accent color for the card chrome (hex like
       // #a78bfa). Presentation metadata, not content.
       accent: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' },
+      // Additive: photos taken AT this session (conference-recap album
+      // matching). Small strip — the full album lives in the page's Photos
+      // section, which photos_album names.
+      photos: {
+        type: 'array',
+        maxItems: 8,
+        items: {
+          type: 'object',
+          required: ['src'],
+          properties: {
+            src: { type: 'string', format: 'https-url' },
+            thumb: { type: 'string', format: 'https-url' },
+            alt: { type: 'string', maxLength: 300 },
+          },
+          additionalProperties: false,
+        },
+      },
+      photos_album: { type: 'string', maxLength: 120 },
     },
     additionalProperties: true,
   },
   searchText: (data) => {
     const speaker = (data.speaker ?? {}) as Record<string, unknown>;
     const parts = [
-      data.title, speaker.name, speaker.company, data.worth_noting, data.quote,
+      data.title, speaker.name, speaker.role, speaker.company, data.worth_noting, data.quote,
       ...(Array.isArray(data.topics) ? data.topics : []),
     ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
     return normalizeSearchText(parts.join(' · '));
@@ -370,7 +419,63 @@ const videoKind: BlockKindDef = {
   searchText: talkKind.searchText,
 };
 
+// A baked photo gallery (event-portal style: album chips → thumbnail grid →
+// lightbox). Written by pipeline modules (first consumer: conference-recap's
+// photos stage) with PUBLIC storage/CDN URLs captured at bake time. Data is
+// display-ready — the renderer adds no fetching. NOTE for bakers: non-html
+// blocks are capped at TYPED_DATA_MAX_BYTES (256KB) by validateBlock, so cap
+// total items well below the schema maxima and keep alt text short.
+const mediaGalleryKind: BlockKindDef = {
+  kind: 'media_gallery',
+  requireSlug: false,
+  jsonSchema: {
+    type: 'object',
+    required: ['albums'],
+    properties: {
+      heading: { type: 'string', maxLength: 200 },
+      albums: {
+        type: 'array',
+        maxItems: 40,
+        items: {
+          type: 'object',
+          required: ['name', 'items'],
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 120 },
+            items: {
+              type: 'array',
+              maxItems: 500,
+              items: {
+                type: 'object',
+                required: ['src'],
+                properties: {
+                  src: { type: 'string', format: 'https-url' },
+                  thumb: { type: 'string', format: 'https-url' },
+                  alt: { type: 'string', maxLength: 300 },
+                  w: { type: 'integer' },
+                  h: { type: 'integer' },
+                },
+                additionalProperties: true,
+              },
+            },
+          },
+          additionalProperties: true,
+        },
+      },
+    },
+    additionalProperties: true,
+  },
+  searchText: (data) => {
+    const albums = Array.isArray(data.albums) ? data.albums : [];
+    const parts = [
+      data.heading,
+      ...albums.map((a) => (a && typeof (a as Record<string, unknown>).name === 'string' ? (a as Record<string, unknown>).name : null)),
+    ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+    return parts.length > 0 ? normalizeSearchText(parts.join(' · ')) : null;
+  },
+};
+
 export const BLOCK_KINDS: Record<string, BlockKindDef> = {
+  media_gallery: mediaGalleryKind,
   html: htmlKind,
   talk: talkKind,
   video: videoKind,
