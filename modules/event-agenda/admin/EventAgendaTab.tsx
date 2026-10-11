@@ -37,6 +37,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { Button, Card, Input, Modal, ConfirmModal } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { ModuleDependencyNotice } from '@/components/shared/ModuleDependencyNotice';
+import { ScheduleImportCard } from './ScheduleImportCard';
 import { AgendaService, AgendaTrack, AgendaEntry, AgendaEntryType, TimelineConfig, AgendaEntryPosition } from '@/utils/agendaService';
 import { SpeakerService, EventSpeakerWithDetails } from '../../event-speakers/admin/utils/speakerService';
 import { TalkService, EventTalkWithSpeakers, SessionType, TalkStatus, SpeakerRole } from './utils/talkService';
@@ -1468,6 +1469,9 @@ export function EventAgendaTab({ eventUuid, eventStart, eventEnd, talkDurationOp
         moduleName="Event Speakers"
         featureDescription="speaker assignments, talks, and talk duration tracking"
       />
+      {/* Programme import — renders nothing when the module's routes are not
+          mounted, so a hand-built agenda is unaffected. */}
+      <ScheduleImportCard eventUuid={eventUuid} onImported={() => { void loadData(); }} />
       {/* Talk Duration Options Section */}
       <Card className="p-4">
         <div className="flex items-center justify-between mb-3">

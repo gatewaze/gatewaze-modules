@@ -22,7 +22,7 @@ const residentialEgressModule: GatewazeModule = {
   name: 'Residential Egress',
   description:
     'Route IP-gated fetches (e.g. YouTube captions) through a residential proxy provider. Pick a provider, add your credentials, and consumers opt in per target.',
-  version: '1.0.0',
+  version: '1.1.0',
   features: ['residential-egress'],
 
   // Operator-facing settings form. The provider dropdown selects the auth
@@ -50,6 +50,9 @@ const residentialEgressModule: GatewazeModule = {
     proxy_username: {
       key: 'proxy_username',
       type: 'secret',
+      // Stored sealed (AES-256-GCM `v1:` envelope) by the platform config
+      // save route; lib/egress.ts unseals on read. See lib/secret-envelope.ts.
+      encrypted: true,
       required: false,
       label: 'Proxy username / login',
       description: 'The proxy login from your provider (Bright Data: your customer id).',
@@ -57,6 +60,7 @@ const residentialEgressModule: GatewazeModule = {
     proxy_password: {
       key: 'proxy_password',
       type: 'secret',
+      encrypted: true,
       required: false,
       label: 'Proxy password',
       description: 'The proxy password from your provider.',

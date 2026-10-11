@@ -1,18 +1,27 @@
 {
   "name": "@gatewaze-modules/event-agenda",
-  "version": "1.0.0",
+  "version": "1.2.1",
   "license": "Apache-2.0",
   "main": "index.ts",
   "types": "index.ts",
   "description": "Event agenda sessions, time slots, and track management",
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./lib/normalize-title": "./lib/normalize-title.ts",
+    "./lib/schedule-sources": "./lib/schedule-sources/index.ts",
+    "./api/register-routes": "./api/register-routes.ts"
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@gatewaze/shared": "*"
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "express": "*",
+    "react": "*"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0"
   }
 }

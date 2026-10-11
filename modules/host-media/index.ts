@@ -19,7 +19,7 @@ const hostMediaModule: GatewazeModule = {
   name: 'Host Media',
   description:
     'Shared media management — table, API, admin tab, upload pipeline (Sharp variants, YouTube delegation, ZIP unpack, chunked upload), reference tracking, quotas. Consumed by sites/events/newsletters/blog/podcasts via the hostMediaConsumer registry block.',
-  version: '0.3.1',
+  version: '0.4.0',
 
   features: [
     'host-media',
@@ -50,16 +50,18 @@ const hostMediaModule: GatewazeModule = {
     'migrations/015_host_media_read_without_templates.sql',
   ],
 
-  // edgeFunctions: deferred to Phase 2 (per spec-host-media-module §11.2).
-  // The 5 fns currently live at gatewaze/supabase/functions/media-* and
-  // are still owned by event-media in v0.1. Phase 2 refactors them to be
-  // polymorphic (host_kind/host_id rather than event_id), moves them
-  // into host-media/functions/, and drops the event-media copies.
+  // edgeFunctions: deferred (per spec-host-media-module §11.2). The image
+  // and chunk fns still live in event-media and are still owned by it.
+  //
+  // The two YouTube ones are not coming back here. media-upload-youtube was
+  // deleted (it authenticated nobody), and media-process-youtube-uploads was
+  // never written at all, which is why the youtube-poll cron that waited for
+  // it only ever flipped rows to 'processing' and logged a TODO. Publishing
+  // belongs to `videos-publisher-youtube` instead, per
+  // spec-videos-publishing-and-platform-metrics.
   // edgeFunctions: [
   //   'media-process-image',
   //   'media-process-zip',
-  //   'media-upload-youtube',
-  //   'media-process-youtube-uploads',
   //   'media-combine-chunks',
   // ],
 
@@ -67,10 +69,6 @@ const hostMediaModule: GatewazeModule = {
     {
       name: 'host-media:used-in-rebuild',
       handler: './workers/used-in-rebuild-cron.ts',
-    },
-    {
-      name: 'host-media:youtube-poll',
-      handler: './workers/youtube-poll.ts',
     },
     {
       name: 'host-media:chunked-cleanup',
@@ -85,12 +83,6 @@ const hostMediaModule: GatewazeModule = {
       name: 'host-media:used-in-rebuild',
       cron: '0 3 * * *',
       data: { kind: 'host-media:used-in-rebuild' },
-    },
-    // YouTube reconcile every 5 minutes when YouTube is enabled.
-    {
-      name: 'host-media:youtube-poll',
-      cron: '*/5 * * * *',
-      data: { kind: 'host-media:youtube-poll' },
     },
     // Reap expired chunked-upload sessions every hour.
     {
