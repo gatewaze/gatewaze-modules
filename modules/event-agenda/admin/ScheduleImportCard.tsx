@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { Button, Card, Input } from '@/components/ui';
 import {
   getScheduleImport,
+  mirrorEventAvatars,
   runScheduleImport,
   setScheduleSource,
   describeStats,
@@ -94,6 +95,20 @@ export function ScheduleImportCard({ eventUuid, onImported }: Props) {
       if (next?.import?.status === 'complete') onImported?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not start the import');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleMirrorAvatars() {
+    setBusy(true);
+    try {
+      await mirrorEventAvatars(eventUuid);
+      // No status row to poll for this one, so say what will happen rather
+      // than pretending the work is already done.
+      toast.success('Queued. Speaker photos will move into our own storage in the background.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not queue the avatar copy');
     } finally {
       setBusy(false);
     }
@@ -184,6 +199,16 @@ export function ScheduleImportCard({ eventUuid, onImported }: Props) {
             <Button variant="outline" onClick={() => void handleRun(true)} disabled={busy || running}
               title="Re-read the programme even if it has not changed">
               Force
+            </Button>
+          )}
+          {state.has_run && (
+            <Button
+              variant="outline"
+              onClick={() => void handleMirrorAvatars()}
+              disabled={busy || running}
+              title="Copy speaker photos off the conference's site into our own storage"
+            >
+              Store avatars
             </Button>
           )}
           <Button variant="outline" onClick={() => setEditingSource((v) => !v)} disabled={busy}>

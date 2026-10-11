@@ -20,7 +20,15 @@ export interface AdminScheduleDeps {
   /** A client scoped to the caller's own JWT, for the permission check. */
   userClient: (req: Request) => any | null;
   logger: { info: (m: string, x?: Record<string, unknown>) => void; warn: (m: string, x?: Record<string, unknown>) => void };
-  enqueueJob?: (queue: string, name: string, data: Record<string, unknown>) => Promise<{ id: string | undefined }>;
+  enqueueJob?: (
+    queue: string,
+    name: string,
+    data: Record<string, unknown>,
+    // The platform forwards these to BullMQ's queue.add(). A deterministic
+    // jobId makes a re-enqueue idempotent, which is how the avatar route
+    // survives a double-click without needing a status row of its own.
+    opts?: Record<string, unknown>,
+  ) => Promise<{ id: string | undefined }>;
 }
 
 export function mountAdminScheduleRoutes(router: Router, deps: AdminScheduleDeps): void {
@@ -142,6 +150,49 @@ export function mountAdminScheduleRoutes(router: Router, deps: AdminScheduleDeps
       force: (req.body as Record<string, unknown> | undefined)?.force === true,
     });
     logger.info('schedule import queued', { eventUuid, job: job.id });
+    res.status(202).json({ job_id: job.id, status: 'queued' });
+  });
+
+  /**
+   * Copy this event's hot-linked speaker avatars into our own bucket.
+   *
+   * The importer does this as it goes now, so this is for the events imported
+   * before that. It is a separate button rather than part of the import
+   * because it spends egress and storage, and because it overwrites a stored
+   * avatar_url, which nothing else in the importer does.
+   */
+  router.post('/admin/events/:eventUuid/mirror-avatars', async (req: Request, res: Response) => {
+    const eventUuid = String(req.params.eventUuid ?? '');
+    if (!UUID_RE.test(eventUuid)) return res.status(400).json({ error: 'invalid event id' });
+    if (await denyUnlessEventAdmin(req, res, eventUuid)) return;
+    if (!enqueueJob) return res.status(503).json({ error: 'job queue unavailable' });
+
+    const { data: ev } = await supabase.from('events').select('id').eq('id', eventUuid).maybeSingle();
+    if (!ev) return res.status(404).json({ error: 'event not found' });
+
+    // Read from an allowlist, not from req.body. `limit` is clamped again in
+    // the worker, so a crafted body cannot widen the run.
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const limit = Number(body.limit);
+
+    // The sibling import route has a 409 "already running" guard because it
+    // has a status row to read. This has none, so instead the job id is
+    // deterministic per event per minute: a double-click collapses into one
+    // job, and a deliberate re-run a minute later still works. The worker's
+    // concurrency of 1 and its byte budget are the other two bounds.
+    const bucket = Math.floor(Date.now() / 60_000);
+    const job = await enqueueJob(
+      'jobs',
+      'event-agenda:mirror-avatars',
+      {
+        kind: 'event-agenda:mirror-avatars',
+        event_uuid: eventUuid,
+        ...(Number.isFinite(limit) && limit > 0 ? { limit: Math.min(2000, Math.floor(limit)) } : {}),
+        dry_run: body.dry_run === true,
+      },
+      { jobId: `mirror-avatars:${eventUuid}:${bucket}` },
+    );
+    logger.info('avatar mirror queued', { eventUuid, job: job.id });
     res.status(202).json({ job_id: job.id, status: 'queued' });
   });
 }

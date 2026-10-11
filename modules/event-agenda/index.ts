@@ -7,7 +7,7 @@ const eventAgendaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Agenda',
   description: 'Schedule and manage event agenda sessions, time slots, and tracks',
-  version: '1.3.0',
+  version: '1.4.0',
   features: [
     'event-agenda',
     'event-agenda.manage',
@@ -56,6 +56,14 @@ const eventAgendaModule: GatewazeModule = {
       // twice.
       name: 'event-agenda:backfill-schedules',
       handler: './workers/backfill-schedules.ts',
+      concurrency: 1,
+    },
+    {
+      // Copies already-imported avatars off the conference's CDN into our own
+      // bucket. Operator-triggered per event, because it spends egress and
+      // storage and overwrites a stored value.
+      name: 'event-agenda:mirror-avatars',
+      handler: './workers/mirror-avatars.ts',
       concurrency: 1,
     },
   ],
