@@ -261,7 +261,28 @@ export const eventsListingSchema: ListingSchema = {
     admin: null,
     publicApi: () => (q) => q.eq('is_live_in_production', true),
     mcp: () => (q) => q.eq('is_live_in_production', true),
-    portal: () => (q) => q.eq('is_live_in_production', true),
+    /**
+     * The portal shows events as image-led cards, so an event with no card
+     * image is not listed. A card with no image reads as broken, and the
+     * screenshot is what the card is built around.
+     *
+     * Two deliberate additions beyond `is_live_in_production`:
+     *
+     *   - `is_listed`: `packages/portal/lib/events.ts` already required this
+     *     for the homepage, calendar, map and search, but this scope did not,
+     *     so an unlisted event stayed visible on /events/upcoming while being
+     *     hidden everywhere else. Every live upcoming event on both brands is
+     *     currently `is_listed = true`, so closing the gap changes nothing
+     *     today; it stops the two paths drifting apart again.
+     *   - `screenshot_url`: the new rule. NOTE this makes the capture job a
+     *     publishing dependency. Nothing schedules `screenshot:generate`, so a
+     *     newly scraped event stays unlisted until a capture runs for it.
+     */
+    portal: () => (q) =>
+      q
+        .eq('is_live_in_production', true)
+        .eq('is_listed', true)
+        .not('screenshot_url', 'is', null),
   },
 
   /**

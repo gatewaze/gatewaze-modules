@@ -83,6 +83,41 @@ const EVENT_SELECT_FIELDS = `
   event_topics
 `
 
+/**
+ * Browser-facing public URL for a storage path in the `media` bucket.
+ * host_media rows store paths, not URLs (the legacy events_media `url`
+ * column retired with that table — event-media migration 027). Public
+ * base first: server-side SUPABASE_URL can be an internal hostname that
+ * means nothing to a visitor's browser.
+ */
+function mediaPublicUrl(storagePath: string): string {
+  const base = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || ''
+  return `${base.replace(/\/+$/, '')}/storage/v1/object/public/media/${storagePath}`
+}
+
+/**
+ * The host_media filters every calendar media read applies: the event's
+ * own media, publicly readable and approved. These helpers run on the
+ * anon client, whose RLS policy (host_media_public_read) serves exactly
+ * public+approved rows — the explicit filters keep counts honest under
+ * any client. The `.or()` filters are constant strings (no request input
+ * reaches them): booth pictures a guest never posted, and photos an
+ * operator has hidden, stay off the calendar pages as they do off the
+ * event's own gallery.
+ */
+function publicEventMedia(supabase: any, eventUuids: string[]) {
+  return (columns: string, opts?: { count: 'exact'; head: true }) =>
+    supabase
+      .from('host_media')
+      .select(columns, opts as never)
+      .eq('host_kind', 'event')
+      .in('host_id', eventUuids)
+      .eq('access_level', 'public')
+      .eq('is_approved', true)
+      .or('metadata->>posted.is.null,metadata->>posted.neq.false')
+      .or('metadata->>hidden.is.null,metadata->>hidden.neq.true')
+}
+
 function getSupabase() {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
@@ -382,12 +417,9 @@ export async function getCalendarEventTimeline(calendarId: string): Promise<Cale
     } catch {}
 
     try {
-      const { data: mediaRows } = await supabase
-        .from('events_media')
-        .select('event_id')
-        .in('event_id', uuids)
+      const { data: mediaRows } = await publicEventMedia(supabase, uuids)('host_id')
       for (const r of (mediaRows || []) as any[]) {
-        const t = eventByUuid.get(r.event_id)
+        const t = eventByUuid.get(r.host_id)
         if (t) t.media_count += 1
       }
     } catch {}
@@ -466,10 +498,7 @@ export async function getCalendarRollupStats(calendarId: string): Promise<Calend
     } catch {}
 
     try {
-      const { count } = await supabase
-        .from('events_media')
-        .select('id', { count: 'exact', head: true })
-        .in('event_id', eventUuids)
+      const { count } = await publicEventMedia(supabase, eventUuids)('id', { count: 'exact', head: true })
       totalMediaItems = count || 0
     } catch {}
   }
@@ -529,21 +558,18 @@ export async function getCalendarMediaHighlights(
 
   if (eventUuids.length === 0) return []
 
-  // events_media schema (from event-media module 001):
-  //   id, event_id (uuid FK to events.id), url, file_type ∈ {photo,video},
-  //   caption, created_at. No thumbnail_url column.
-  let query = supabase
-    .from('events_media')
-    .select('id, url, file_type, caption, event_id, created_at')
-    .in('event_id', eventUuids)
+  // host_media schema (host-media module 001): id, host_kind, host_id,
+  // storage_path (a path in the media bucket, not a URL), mime_type,
+  // caption, created_at. Photo vs video is the mime type's family.
+  let query = publicEventMedia(supabase, eventUuids)('id, storage_path, mime_type, caption, host_id, created_at')
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
   if (opts.type && opts.type !== 'all') {
     if (opts.type === 'photo') {
-      query = query.eq('file_type', 'photo')
+      query = query.like('mime_type', 'image/%')
     } else {
-      query = query.eq('file_type', 'video')
+      query = query.like('mime_type', 'video/%')
     }
   }
 
@@ -554,13 +580,15 @@ export async function getCalendarMediaHighlights(
   }
 
   return (mediaRows || []).map((row: any) => {
-    const ev = eventByUuid.get(row.event_id)
-    const type: 'photo' | 'video' | 'image' = row.file_type === 'video' ? 'video' : 'photo'
+    const ev = eventByUuid.get(row.host_id)
+    const type: 'photo' | 'video' | 'image' = String(row.mime_type || '').startsWith('video/') ? 'video' : 'photo'
+    const url = mediaPublicUrl(row.storage_path)
     return {
       id: row.id,
-      url: row.url,
-      // events_media has no thumbnail column — fall back to the main url
-      thumbnail_url: row.url,
+      url,
+      // No stored thumbnail is read — fall back to the main url, as the
+      // events_media version of this did.
+      thumbnail_url: url,
       type,
       caption: row.caption,
       event_id: ev?.event_id || '',
@@ -625,10 +653,7 @@ export async function getCalendarSubNavVisibility(
         .limit(10000)
       const uuids = (linkRows || []).map((r: any) => r.events.id).filter(Boolean)
       if (uuids.length > 0) {
-        const { count } = await supabase
-          .from('events_media')
-          .select('id', { count: 'exact', head: true })
-          .in('event_id', uuids)
+        const { count } = await publicEventMedia(supabase, uuids)('id', { count: 'exact', head: true })
         totalMedia = count || 0
       }
     } catch {}

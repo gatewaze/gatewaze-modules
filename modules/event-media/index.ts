@@ -7,7 +7,7 @@ const eventMediaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Media',
   description: 'Photo and video galleries, media uploads, and album management for events',
-  version: '1.104.0',
+  version: '1.106.1',
   features: [
     'event-media',
     'event-media.upload',
@@ -42,6 +42,8 @@ const eventMediaModule: GatewazeModule = {
     'migrations/023_album_enhance_source.sql',
     'migrations/024_album_framing.sql',
     'migrations/025_album_focus.sql',
+    'migrations/026_open_view_albums.sql',
+    'migrations/027_retire_events_media.sql',
   ],
 
   apiRoutes: async (app: unknown, context?: unknown) => {
@@ -49,13 +51,16 @@ const eventMediaModule: GatewazeModule = {
     await registerRoutes(app as never, context as never);
   },
 
+  // media-get-youtube-upload-url and media-upload-youtube were removed here.
+  // Both authenticated nobody and one returned a live OAuth access token to
+  // its caller. Publishing returns in `videos-publisher-youtube`.
+  //
+  // Removing them from this list stops them being redeployed, but it does NOT
+  // undeploy the copies already live in a Supabase project. Those must be
+  // deleted per project with `supabase functions delete <name>`.
   edgeFunctions: [
     'media-combine-chunks',
-    'media-get-youtube-upload-url',
     'media-process-image',
-    'media-process-youtube-uploads',
-    'media-process-zip',
-    'media-upload-youtube',
   ],
 
   adminSlots: [
@@ -65,14 +70,6 @@ const eventMediaModule: GatewazeModule = {
       order: 140,
       requiredFeature: 'event-media',
       meta: { tabId: 'media', label: 'Media', icon: 'PhotoIcon' },
-    },
-  ],
-
-  workers: [
-    {
-      name: 'media:process-zip',
-      handler: './workers/process-zip.ts',
-      concurrency: 1, // Process one zip at a time to manage memory
     },
   ],
 
