@@ -162,7 +162,7 @@ export async function getCodeRepos(sb: unknown, projectId: string): Promise<Code
     repoName: r.repo_name,
     writeMode: r.write_mode ?? 'writable',
     baseBranch: r.base_branch ?? null,
-    checkoutRef: (r.repo_owner === 'danthebaker' && r.repo_name === 'gatewaze-modules' && /^staging\/helf-preview\/[0-9a-f]{40}$/.test(r.preview_ref ?? '')) ? r.preview_ref : undefined,
+    checkoutRef: ((r.repo_owner === 'danthebaker' && r.repo_name === 'gatewaze-modules' && /^staging\/helf-preview\/[0-9a-f]{40}$/.test(r.preview_ref ?? '')) || (r.repo_owner === 'gatewaze' && r.repo_name === 'gatewaze' && /^staging\/helf-app-shell\/[0-9a-f]{40}$/.test(r.preview_ref ?? ''))) ? r.preview_ref : undefined,
     enabled: r.enabled,
     mergeEligible: r.merge_eligible,
     contractOk: r.contract_ok,
