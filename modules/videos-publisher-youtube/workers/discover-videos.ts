@@ -30,8 +30,20 @@
  */
 
 import { fetchVideoDetails, listChannelVideos } from '../lib/adapter.js';
+
 import { serviceClient } from '../lib/service-client.js';
 import { unsealSecret } from '../lib/secret-envelope.js';
+
+/**
+ * The adapter speaks the ASSET vocabulary, where a full recording is a
+ * 'master'. `videos.kind` speaks a different one and its CHECK allows only
+ * full | short | clip | trailer | livestream. Writing 'master' there violates
+ * the constraint and fails EVERY discovered video, which is how this was
+ * found.
+ */
+function videoKind(k: 'master' | 'short' | undefined): 'full' | 'short' {
+  return k === 'short' ? 'short' : 'full';
+}
 
 const PROVIDER = 'youtube';
 
@@ -143,7 +155,7 @@ export async function discoverAll(
             published_at: v.publishedAt,
             channel_id: conn.external_account_id,
             channel_title: conn.label,
-            kind: detail?.kind ?? 'master',
+            kind: videoKind(detail?.kind),
             source: 'platform_discovery',
             is_external: true,
             discovered_via_connection_id: conn.id,
