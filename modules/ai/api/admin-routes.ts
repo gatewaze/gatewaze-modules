@@ -51,6 +51,7 @@ const USE_CASE_WRITE_FIELDS = new Set([
   'allowed_web_tools',
   'max_output_tokens',
   'daily_cost_cap_micro_usd',
+  'daily_call_cap',
   // Phase-1 skill resolution (008_ai_use_cases_skill_ref).
   'system_prompt',
   'kickoff_message',
@@ -651,6 +652,57 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     }
   }
 
+  async function deleteUseCase(req: Request, res: Response): Promise<void> {
+    // Hard-disables every caller of the use case (runChat refuses
+    // unregistered ids) — the intended kill switch for unwanted automations
+    // (spec-ai-subscription-tokens.md §5). Usage history is retained.
+    const id = paramAs(req.params.id);
+    if (!id || !USE_CASE_ID_RE.test(id)) {
+      sendError(res, 400, 'bad_request', 'id (slug) required');
+      return;
+    }
+    const existing = await supabase
+      .from('ai_use_cases').select('id').eq('id', id).maybeSingle();
+    if (!existing.data) {
+      sendError(res, 404, 'not_found', `use_case '${id}' not registered`);
+      return;
+    }
+    const lastUsed = await supabase
+      .from('ai_usage_events')
+      .select('occurred_at')
+      .eq('use_case', id)
+      .order('occurred_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastUsed.error) {
+      // Fail CLOSED: an errored lookup must not read as "never invoked" and
+      // wave the delete through (security review).
+      sendError(res, 500, 'internal', `last-invocation lookup failed: ${lastUsed.error.message}`);
+      return;
+    }
+    const lastInvokedAt: string | null = lastUsed.data?.occurred_at ?? null;
+    const force = req.query.force === '1' || req.query.force === 'true';
+    if (!force && lastInvokedAt
+        && Date.now() - new Date(lastInvokedAt).getTime() < 10 * 60 * 1000) {
+      res.status(409).json({
+        error: {
+          code: 'recently_active',
+          message: `use_case '${id}' was invoked in the last 10 minutes — something still calls it; pass ?force=1 to delete anyway`,
+        },
+        last_invoked_at: lastInvokedAt,
+      });
+      return;
+    }
+    await supabase.from('ai_use_case_credentials').delete().eq('use_case', id);
+    await supabase.from('ai_use_case_mcp_allowlist').delete().eq('use_case', id);
+    const del = await supabase.from('ai_use_cases').delete().eq('id', id);
+    if (del.error) {
+      sendError(res, 500, 'internal', del.error.message);
+      return;
+    }
+    res.status(200).json({ deleted: true, id, last_invoked_at: lastInvokedAt });
+  }
+
   async function listUseCaseModels(req: Request, res: Response): Promise<void> {
     const id = paramAs(req.params.id);
     if (!id || !USE_CASE_ID_RE.test(id)) {
@@ -878,10 +930,10 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     // Cleartext is NEVER returned. Only metadata.
     const userRes = await supabase
       .from('ai_user_credentials')
-      .select('id, user_id, provider, status, last_4, failure_count, last_used_at, created_at, rotated_at');
+      .select('id, user_id, provider, kind, label, status, last_4, failure_count, last_used_at, created_at, rotated_at');
     const useCaseRes = await supabase
       .from('ai_use_case_credentials')
-      .select('id, use_case, provider, status, last_4, failure_count, last_used_at, created_at, rotated_at');
+      .select('id, use_case, provider, kind, label, status, last_4, failure_count, last_used_at, created_at, rotated_at');
     res.status(200).json({
       user_credentials: userRes.data ?? [],
       use_case_credentials: useCaseRes.data ?? [],
@@ -928,14 +980,81 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     res.status(204).end();
   }
 
+  // Sliding-window throttle for live claude_subscription token validation.
+  let probeTimes: number[] = [];
+
+  /**
+   * Goose authenticates with the env ANTHROPIC_API_KEY and cannot use Claude
+   * subscription tokens (Anthropic only honours those inside Claude Code), so
+   * a subscription credential on a goose-configured use case would be
+   * silently ignored while the env key foots the bill. Reject at save time
+   * when the use case is explicitly goose-configured; runChat enforces the
+   * same rule at call time for the executor-flag cases this can't see.
+   */
+  async function gooseBlocksSubscription(useCase: string): Promise<boolean> {
+    const row = await supabase
+      .from('ai_use_cases')
+      .select('goose_runtime_overrides')
+      .eq('id', useCase)
+      .maybeSingle();
+    const overrides = row.data?.goose_runtime_overrides;
+    return !!overrides && typeof overrides === 'object' && Object.keys(overrides).length > 0;
+  }
+
+  /** Live-validate a subscription token through the sanctioned harness path. */
+  async function probeSubscriptionToken(apiKey: string): Promise<void> {
+    const { ClaudeAgentProviderClient } = await import('../lib/providers/claude-agent-client.js');
+    const probe = new ClaudeAgentProviderClient(apiKey);
+    await probe.runConversation({
+      model: 'claude-haiku-4-5',
+      systemPrompt: 'ping',
+      messages: [{ role: 'user', content: 'ping' }],
+      maxOutputTokens: 32,
+      timeoutMs: 45_000,
+    });
+  }
+
   async function createUseCaseCredential(req: Request, res: Response): Promise<void> {
     const body = (req.body as Record<string, unknown> | undefined) ?? {};
     const useCase = typeof body.use_case === 'string' ? body.use_case : '';
     const provider = typeof body.provider === 'string' ? (body.provider as KnownProvider) : '' as KnownProvider;
     const apiKey = typeof body.api_key === 'string' ? body.api_key : '';
+    const kind = body.kind === 'claude_subscription' ? 'claude_subscription' : 'api_key';
+    const label = typeof body.label === 'string' ? body.label.trim().slice(0, 80) || null : null;
     if (!USE_CASE_ID_RE.test(useCase) || !PROVIDERS.includes(provider) || !apiKey) {
       sendError(res, 400, 'bad_request', 'use_case (slug), provider, api_key required');
       return;
+    }
+    if (kind === 'claude_subscription') {
+      // This is the one admin route that makes a live third-party auth call
+      // with caller-supplied input — throttle it so a compromised admin
+      // session can't use it as a token-testing oracle (security review).
+      const now = Date.now();
+      probeTimes = probeTimes.filter((t) => now - t < 60_000);
+      if (probeTimes.length >= 5) {
+        sendError(res, 429, 'rate_limited', 'too many token validations — wait a minute');
+        return;
+      }
+      probeTimes.push(now);
+      // Subscription tokens are anthropic-only and validated LIVE at write
+      // time — a dead token must fail here, not at 3am in a cron
+      // (spec-ai-subscription-tokens.md §3).
+      if (provider !== 'anthropic') {
+        sendError(res, 400, 'bad_request', 'claude_subscription credentials are anthropic-only');
+        return;
+      }
+      if (await gooseBlocksSubscription(useCase)) {
+        sendError(res, 400, 'bad_request',
+          `use_case '${useCase}' runs through Goose, which cannot use claude_subscription credentials — use an api_key credential`);
+        return;
+      }
+      try {
+        await probeSubscriptionToken(apiKey);
+      } catch (err) {
+        sendError(res, 400, 'invalid_token',
+          `token failed live validation: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
     }
     const encrypted = await encryptKey(supabase, apiKey);
     const last4 = apiKey.slice(-4);
@@ -943,6 +1062,8 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       .from('ai_use_case_credentials')
       .insert({
         use_case: useCase,
+        kind,
+        label,
         provider,
         api_key_ciphertext: encrypted.ciphertext,
         api_key_nonce: encrypted.nonce,
@@ -960,6 +1081,126 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
       return;
     }
     res.status(201).json({ credential: result.data });
+  }
+
+  async function patchUseCaseCredential(req: Request, res: Response): Promise<void> {
+    // Edit a pinned credential in place: rename it, and/or replace the secret
+    // (rotation). A replaced claude_subscription token is live-validated the
+    // same way creation is (spec-ai-subscription-tokens.md §3/§8).
+    const id = paramAs(req.params.id);
+    if (!id || !UUID_RE.test(id)) {
+      sendError(res, 400, 'bad_request', 'id (uuid) required');
+      return;
+    }
+    const existing = await supabase
+      .from('ai_use_case_credentials')
+      .select('id, use_case, provider, kind')
+      .eq('id', id)
+      .maybeSingle();
+    if (!existing.data) {
+      sendError(res, 404, 'not_found', 'credential not found');
+      return;
+    }
+    const body = (req.body as Record<string, unknown> | undefined) ?? {};
+    const patch: Record<string, unknown> = {};
+    if (typeof body.label === 'string') patch.label = body.label.trim().slice(0, 80) || null;
+    if (typeof body.api_key === 'string' && body.api_key) {
+      const apiKey = body.api_key;
+      if (existing.data.kind === 'claude_subscription') {
+        const now = Date.now();
+        probeTimes = probeTimes.filter((t) => now - t < 60_000);
+        if (probeTimes.length >= 5) {
+          sendError(res, 429, 'rate_limited', 'too many token validations — wait a minute');
+          return;
+        }
+        probeTimes.push(now);
+        if (await gooseBlocksSubscription(String(existing.data.use_case ?? ''))) {
+          sendError(res, 400, 'bad_request',
+            `use_case '${existing.data.use_case}' runs through Goose, which cannot use claude_subscription credentials — use an api_key credential`);
+          return;
+        }
+        try {
+          await probeSubscriptionToken(apiKey);
+        } catch (err) {
+          sendError(res, 400, 'invalid_token',
+            `token failed live validation: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        }
+      }
+      const encrypted = await encryptKey(supabase, apiKey);
+      patch.api_key_ciphertext = encrypted.ciphertext;
+      patch.api_key_nonce = encrypted.nonce;
+      patch.last_4 = apiKey.slice(-4);
+      patch.status = 'active';
+      patch.failure_count = 0;
+      patch.rotated_at = new Date().toISOString();
+    }
+    if (Object.keys(patch).length === 0) {
+      sendError(res, 400, 'bad_request', 'nothing to update (label or api_key)');
+      return;
+    }
+    const result = await supabase
+      .from('ai_use_case_credentials')
+      .update(patch)
+      .eq('id', id)
+      .select('id, use_case, provider, kind, label, status, last_4')
+      .maybeSingle();
+    if (result.error || !result.data) {
+      sendError(res, 500, 'internal', result.error?.message ?? 'update failed');
+      return;
+    }
+    res.status(200).json({ credential: result.data });
+  }
+
+  async function usageByCredential(req: Request, res: Response): Promise<void> {
+    // Spend breakdown per credential (spec §8): which token/key paid for what.
+    const days = Math.min(365, Math.max(1, parseInt(String(req.query.days ?? '30'), 10) || 30));
+    const since = new Date(Date.now() - days * 86_400_000).toISOString();
+    const events = await supabase
+      .from('ai_usage_events')
+      .select('use_case, provider, credential_kind, credential_id, credential_last4, cost_micro_usd')
+      .gte('occurred_at', since)
+      .limit(50000);
+    if (events.error) {
+      sendError(res, 500, 'internal', events.error.message);
+      return;
+    }
+    const labels = await supabase.from('ai_use_case_credentials').select('id, label');
+    const labelById = new Map<string, string | null>(
+      ((labels.data ?? []) as Array<{ id: string; label: string | null }>).map((r) => [r.id, r.label]),
+    );
+    type Agg = {
+      credential_kind: string; credential_last4: string | null; label: string | null;
+      provider: string | null; calls: number; cost_micro_usd: number;
+      by_use_case: Record<string, { calls: number; cost_micro_usd: number }>;
+    };
+    const byKey = new Map<string, Agg>();
+    for (const e of (events.data ?? []) as Array<Record<string, unknown>>) {
+      const kind = (e.credential_kind as string) ?? 'api_key';
+      const last4 = (e.credential_last4 as string) ?? null;
+      const credId = (e.credential_id as string) ?? null;
+      const key = `${kind}|${credId ?? last4 ?? 'env'}`;
+      let agg = byKey.get(key);
+      if (!agg) {
+        agg = {
+          credential_kind: kind, credential_last4: last4,
+          label: credId ? (labelById.get(credId) ?? null) : null,
+          provider: (e.provider as string) ?? null,
+          calls: 0, cost_micro_usd: 0, by_use_case: {},
+        };
+        byKey.set(key, agg);
+      }
+      agg.calls += 1;
+      agg.cost_micro_usd += Number(e.cost_micro_usd ?? 0);
+      const uc = (e.use_case as string) ?? 'unknown';
+      agg.by_use_case[uc] = agg.by_use_case[uc] ?? { calls: 0, cost_micro_usd: 0 };
+      agg.by_use_case[uc].calls += 1;
+      agg.by_use_case[uc].cost_micro_usd += Number(e.cost_micro_usd ?? 0);
+    }
+    res.status(200).json({
+      days,
+      credentials: Array.from(byKey.values()).sort((a, b) => b.cost_micro_usd - a.cost_micro_usd),
+    });
   }
 
   async function deleteUseCaseCredential(req: Request, res: Response): Promise<void> {
@@ -1277,6 +1518,9 @@ export function createAdminAiRoutes(deps: AdminAiRoutesDeps) {
     cancelMessage,
     listUseCases,
     patchUseCase,
+    deleteUseCase,
+    patchUseCaseCredential,
+    usageByCredential,
     listUseCaseModels,
     getUseCasePromptSource,
     listModels,
@@ -1314,6 +1558,9 @@ export function mountAdminAiRoutes(
 
   router.get('/admin/use-cases', routes.listUseCases);
   router.patch('/admin/use-cases/:id', routes.patchUseCase);
+  router.delete('/admin/use-cases/:id', routes.deleteUseCase);
+  router.patch('/admin/credentials/use-case/:id', routes.patchUseCaseCredential);
+  router.get('/admin/usage/by-credential', routes.usageByCredential);
   router.get('/admin/use-cases/:id/models', routes.listUseCaseModels);
   router.get('/admin/use-cases/:id/prompt-source', routes.getUseCasePromptSource);
 

@@ -36,6 +36,7 @@ import { execFileSync, type ExecFileSyncOptions } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { parse } from '../parser/parse.js';
 import { applySource, type ApplyResult, type ApplySupabaseClient } from './apply.js';
+import { readEditionSkeleton, persistEditionSkeleton, unknownSkeletonKeys } from './edition-skeleton.js';
 
 // ---------------------------------------------------------------------------
 // Validation helpers
@@ -397,6 +398,39 @@ export interface IngestGitResult {
   installed_git_sha: string;
 }
 
+/**
+ * The templates_sources row for a git source, shared by both ingestGit
+ * outcomes so they cannot drift apart again.
+ *
+ * Local-dev stop-gap: `token_secret_ref` carries the RAW token so the check
+ * / apply endpoints and the drift monitor (its own container, its own clone
+ * cache) can re-authenticate against private repos. The proper path is a
+ * secrets-store dereference (a tenant-scoped pgsodium / KMS pointer rather
+ * than the plaintext PAT) — pending. Responses MUST strip the column before
+ * sending to the client. The success path once wrote a '<redacted>'
+ * placeholder here instead, which left every private repo connected through
+ * it with no credential after the first clone: the API's cached remote URL
+ * (token embedded by buildAuthUrl) masked it until the worker's fresh clone
+ * failed with "could not read Username".
+ */
+export function gitSourceRow(
+  input: IngestGitInput,
+  outcome: { status: 'active'; installed_git_sha: string } | { status: 'error'; last_check_error: string },
+): Record<string, unknown> {
+  return {
+    library_id: input.library_id,
+    kind: 'git',
+    label: input.label,
+    url: input.url,
+    branch: input.branch ?? null,
+    manifest_path: input.manifest_path ?? null,
+    token_secret_ref: input.token ?? null,
+    auto_apply: input.auto_apply ?? false,
+    created_by: input.created_by ?? null,
+    ...outcome,
+  };
+}
+
 export async function ingestGit(
   supabase: IngestGitSupabaseClient,
   input: IngestGitInput,
@@ -420,32 +454,17 @@ export async function ingestGit(
   const files = walkSourceFiles(repoDir, input.manifest_path);
   const concatenated = autoMarkRepoFiles(files);
   const parsed = parse(concatenated, { sourcePath: `git:${input.url}#${headSha.slice(0, 8)}` });
+  // The repo's optional edition.json (blocks a new edition starts with).
+  // A malformed file throws here, before any row is written, so the
+  // operator sees "edition.json: …" rather than a half-connected source.
+  const skeleton = readEditionSkeleton(repoDir, input.manifest_path);
 
   // 3. If parse produced errors, persist a source row with status='error' so
   //    the admin sees it in the UI, but don't apply the (broken) artifacts.
   if (parsed.errors.length > 0) {
     const insertRes = await supabase
       .from('templates_sources')
-      .insert({
-        library_id: input.library_id,
-        kind: 'git',
-        label: input.label,
-        url: input.url,
-        branch: input.branch ?? null,
-        manifest_path: input.manifest_path ?? null,
-        // Local-dev stop-gap: store the raw token in token_secret_ref
-        // so the check / apply endpoints can re-authenticate against
-        // private repos. The proper path is a secrets-store dereference
-        // (a tenant-scoped pgsodium / KMS pointer rather than the
-        // plaintext PAT) — that's pending. For now the column carries
-        // the actual token; responses MUST strip it before sending
-        // to the client.
-        token_secret_ref: input.token ?? null,
-        auto_apply: input.auto_apply ?? false,
-        status: 'error',
-        last_check_error: `parse failed: ${parsed.errors[0]?.message ?? 'unknown'}`,
-        created_by: input.created_by ?? null,
-      })
+      .insert(gitSourceRow(input, { status: 'error', last_check_error: `parse failed: ${parsed.errors[0]?.message ?? 'unknown'}` }))
       .select('id')
       .single();
     return {
@@ -458,19 +477,7 @@ export async function ingestGit(
   // 4. Persist the source row first so applySource has a target FK.
   const insertRes = await supabase
     .from('templates_sources')
-    .insert({
-      library_id: input.library_id,
-      kind: 'git',
-      label: input.label,
-      url: input.url,
-      branch: input.branch ?? null,
-      manifest_path: input.manifest_path ?? null,
-      token_secret_ref: input.token ? '<redacted>' : null,
-      auto_apply: input.auto_apply ?? false,
-      status: 'active',
-      installed_git_sha: headSha,
-      created_by: input.created_by ?? null,
-    })
+    .insert(gitSourceRow(input, { status: 'active', installed_git_sha: headSha }))
     .select('id')
     .single();
   if (insertRes.error || !insertRes.data) {
@@ -482,6 +489,21 @@ export async function ingestGit(
   //    definitions rows under this source.
   const sha = createHash('sha256').update(concatenated).digest('hex');
   const apply = await applySource(supabase, sourceId, parsed, { sourceSha: sha, dryRun: false });
+
+  // 6. The skeleton lives on the library, not the source: the consumer's
+  //    "New edition" flow reads it per library. Only after a clean apply,
+  //    so a broken template never leaves a skeleton pointing at blocks that
+  //    were not installed.
+  if (apply.errors.length === 0) {
+    await persistEditionSkeleton(supabase, input.library_id, skeleton);
+    if (skeleton) {
+      const unknown = unknownSkeletonKeys(skeleton, apply.artifacts.filter((a) => a.artifact_kind === 'block_def').map((a) => a.key));
+      if (unknown.length > 0) {
+        // eslint-disable-next-line no-console
+        console.warn(`[templates] edition.json names blocks the repo does not define (skipped at seed time): ${unknown.join(', ')}`);
+      }
+    }
+  }
 
   return { source_id: sourceId, apply, installed_git_sha: headSha };
 }

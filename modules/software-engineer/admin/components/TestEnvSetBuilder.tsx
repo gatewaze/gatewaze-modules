@@ -148,7 +148,7 @@ export default function TestEnvSetBuilder({
                   {deploySet.map((x, i) => x.repo === repo && (
                     <span key={`${x.repo}#${x.number}`} className="inline-flex items-center gap-0.5 rounded border border-neutral-700 px-1.5 py-0.5">
                       {prUrlOf?.(x.repo, x.number)
-                        ? <a href={prUrlOf(x.repo, x.number)} target="_blank" rel="noreferrer" className="text-blue-500">#{x.number}</a>
+                        ? <a href={prUrlOf(x.repo, x.number)} target="_blank" rel="noreferrer" className="text-[#7C93B0]">#{x.number}</a>
                         : <span>#{x.number}</span>}
                       {groupCount > 1 && (
                         <>

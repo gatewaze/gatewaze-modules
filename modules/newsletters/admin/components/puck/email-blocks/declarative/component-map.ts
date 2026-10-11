@@ -53,6 +53,11 @@ export const SPECIAL_TAGS = new Set(['richtext', 'slot']);
  */
 export const INTRINSIC_TAGS = new Set([
   'div', 'span', 'p', 'strong', 'em', 'b', 'i', 'u', 'br', 'ul', 'ol', 'li', 'small',
+  // A plain anchor. Reached only in the plain email shell (render.tsx skips
+  // the `a: Link` mapping there, because Link stamps its own colour and that
+  // shell leaves link colour to the reader's client so it follows dark mode).
+  // href/target pass through.
+  'a',
   // <style> is allowed so authors can target structural CSS that inline
   // styles can't express (`:first-of-type`, `+ sibling`, `:hover` etc.).
   // Without this the renderer dropped the <style> wrapper but kept its CSS

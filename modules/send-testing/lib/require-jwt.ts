@@ -102,8 +102,10 @@ function verifyHs256(signingInput: string, signatureB64url: string, secret: stri
 }
 
 export function requireJwt() {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') {
+  const gate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    // Test-only bypass. Guarded on NODE_ENV so a stray env var in a real
+    // deployment cannot disable authentication.
+    if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1' && process.env.NODE_ENV !== 'production') {
       (req as Request & { userId?: string }).userId = '00000000-0000-0000-0000-000000000001';
       next();
       return;
@@ -127,7 +129,19 @@ export function requireJwt() {
     }
 
     if (header.alg === 'HS256') {
-      if (!verifyHs256(`${headerB64}.${payloadB64}`, signatureB64, getJwtSecret())) {
+      // `alg` is attacker-controlled and is read before any verification, so on
+      // an ES256-only deployment (no JWT secret set — e.g. Supabase cloud) any
+      // unauthenticated caller can drive execution down this branch.
+      // getJwtSecret() throws there, so it must not be called bare: treat
+      // "cannot verify" as "not verified", matching the ES256 branch below.
+      let secret: string;
+      try {
+        secret = getJwtSecret();
+      } catch {
+        errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
+        return;
+      }
+      if (!verifyHs256(`${headerB64}.${payloadB64}`, signatureB64, secret)) {
         errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
         return;
       }
@@ -165,5 +179,24 @@ export function requireJwt() {
     (req as Request & { userId?: string; jwtClaims?: SupabaseJwtClaims }).userId = claims.sub;
     (req as Request & { userId?: string; jwtClaims?: SupabaseJwtClaims }).jwtClaims = claims;
     next();
+  };
+
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await gate(req, res, next);
+    } catch (err) {
+      // Never silent: the gate throwing at all is a bug worth a signal.
+      console.error('[send-testing requireJwt] auth gate threw; denying request', err);
+      // Absolute backstop. This is the module's SOLE auth gate and Express 4
+      // does not catch rejections from async middleware, so an uncaught throw
+      // becomes an unhandledRejection — which the platform api's Sentry hook
+      // turns into process.exit(1). A bug on this path must degrade to
+      // "denied", never to a dead api process.
+      try {
+        errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
+      } catch {
+        // response already sent — nothing further to do
+      }
+    }
   };
 }

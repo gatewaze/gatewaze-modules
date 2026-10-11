@@ -874,7 +874,7 @@ export class SlackInvitationManager {
                      content.includes('invalid email') ||
                      content.includes('not a valid') ||
                      content.includes('error') ||
-                     content.includes('couldn\'t invite');
+                     /couldn.t invite|unable to send/i.test(content);
             },
             { timeout: 10000 }
           )
@@ -929,10 +929,33 @@ export class SlackInvitationManager {
           message: 'User already invited or is a member'
         };
       }
+      // Slack's "Unable to send" dialog: the address is shown with
+      // "Couldn't invite" and an info icon whose tooltip carries the reason.
+      // Matched case-insensitively — the UI uses a capital C and a curly
+      // apostrophe, which the old literal never hit.
+      else if (/couldn.t invite|unable to send/i.test(pageText)) {
+        const reason = await this.readRefusalReason();
+        if (reason && /already in your workspace|already a member|already been invited/i.test(reason)) {
+          // Not a failure: the person is in Slack already.
+          console.log(`⚠️  User already in the workspace: ${reason}`);
+          result = {
+            success: false,
+            alreadyInvited: true,
+            message: `User already invited or is a member: ${reason}`
+          };
+        } else {
+          console.log(`❌ Slack refused the invite${reason ? `: ${reason}` : ''}`);
+          await this.takeScreenshot(`after-invite-refused-${email.replace(/[^a-z0-9]/gi, '-')}`);
+          result = {
+            success: false,
+            refused: true,
+            message: `Slack refused the invite (Couldn't invite)${reason ? `: ${reason}` : ''}`
+          };
+        }
+      }
       else if (
         pageText.includes('invalid email') ||
-        pageText.includes('not a valid') ||
-        pageText.includes('couldn\'t invite')
+        pageText.includes('not a valid')
       ) {
         console.log(`❌ Invalid email address or invitation failed`);
         await this.takeScreenshot(`after-invite-invalid-${email.replace(/[^a-z0-9]/gi, '-')}`);
@@ -1005,6 +1028,48 @@ export class SlackInvitationManager {
     }
 
     return results;
+  }
+
+  /**
+   * Read why Slack refused an invite from the "Unable to send" dialog.
+   * The row reads "Couldn't invite" followed by an info icon; the reason is in
+   * the icon's accessible label or in the tooltip that opens on hover.
+   * @returns {Promise<string|null>} Reason text, or null if none was found
+   */
+  async readRefusalReason() {
+    try {
+      const handle = await this.page.evaluateHandle(() => {
+        const leaf = [...document.querySelectorAll('span, div, p, button')]
+          .filter((n) => n.children.length <= 3 && /couldn.t invite/i.test(n.textContent || '') && (n.textContent || '').trim().length < 80)
+          .pop();
+        if (!leaf) return null;
+        return leaf.querySelector('svg, [aria-label], button') || leaf.nextElementSibling || leaf;
+      });
+      const el = handle.asElement();
+      if (!el) return null;
+
+      const label = await el.evaluate((n) => {
+        const own = n.getAttribute('aria-label') || n.getAttribute('title') || '';
+        const near = n.closest('[aria-label]')?.getAttribute('aria-label') || '';
+        return [own, near].filter(Boolean).find((t) => !/couldn.t invite/i.test(t) || t.length > 20) || '';
+      });
+
+      await el.hover().catch(() => {});
+      await this.wait(1200);
+      const tooltips = await this.page.evaluate(() =>
+        [...document.querySelectorAll('[role="tooltip"], .c-tooltip__tip, [data-qa="tooltip"]')]
+          .map((t) => (t.textContent || '').trim())
+          .filter(Boolean)
+      );
+
+      // The label and the tooltip usually carry the same sentence; keep each once.
+      const parts = [...new Set([label, ...tooltips].map((t) => t.replace(/\s+/g, ' ').trim()).filter(Boolean))];
+      const reason = parts.join(' — ');
+      return reason ? reason.slice(0, 300) : null;
+    } catch (error) {
+      console.log(`⚠️  Could not read refusal reason: ${error.message}`);
+      return null;
+    }
   }
 
   /**

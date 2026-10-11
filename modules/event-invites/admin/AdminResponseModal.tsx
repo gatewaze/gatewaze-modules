@@ -2,12 +2,16 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Button, Modal, Badge } from '@/components/ui';
 import { toast } from 'sonner';
-import DOMPurify from 'isomorphic-dompurify';
+// Named import, not the default: bundling this module into the admin app
+// puts an extra `.default` hop on the default export, so `DOMPurify.sanitize`
+// resolved to undefined at runtime ("y.default.sanitize is not a function").
+// `sanitize` is exported already bound to DOMPurify.
+import { sanitize } from 'isomorphic-dompurify';
 import { normalizeOptions } from './utils/inviteQuestionOptions';
 
 function safeHtml(html: string | null | undefined): string {
   if (!html) return '';
-  return DOMPurify.sanitize(html, {
+  return sanitize(html, {
     ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'b', 'i', 'u', 's', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'code', 'pre', 'span'],
     ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
   });

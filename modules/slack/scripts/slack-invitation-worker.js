@@ -1,7 +1,51 @@
+import fs from 'fs';
+import path from 'path';
 import { SlackInvitationManager } from './SlackInvitationManager.js';
 
 // Injected by caller (job-worker.js)
 let supabase = null;
+
+/**
+ * Materialise the captured Slack session (cookie file) from the environment.
+ *
+ * On k8s the worker's filesystem is ephemeral and the chart has no file-mount
+ * hook, so the session travels as a base64 env var (SLACK_SESSION_SECRET_B64,
+ * sops-encrypted at rest in the brand values) and is written to
+ * SLACK_SESSION_PATH on first use. An existing file is never overwritten: the
+ * manager re-saves refreshed cookies there after each run, and those must win
+ * for the life of the pod. Returns true when a file was written.
+ */
+export function seedSessionFromEnv(env = process.env) {
+  const b64 = env.SLACK_SESSION_SECRET_B64;
+  const target = env.SLACK_SESSION_PATH;
+  if (!b64 || !target) return false;
+
+  let raw;
+  try {
+    raw = Buffer.from(b64, 'base64').toString('utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.cookies) || typeof parsed.workspaceUrl !== 'string') {
+      throw new Error('missing cookies[] or workspaceUrl');
+    }
+  } catch {
+    // Static message on purpose: JSON.parse errors echo a slice of the input,
+    // which here is cookie material.
+    console.error('❌ SLACK_SESSION_SECRET_B64 is not a valid session file (expected JSON with workspaceUrl and cookies[]); not seeding');
+    return false;
+  }
+
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  // 'wx' creates the file only if it does not exist, so the check and the
+  // write are one operation: an existing file (refreshed cookies) wins.
+  try {
+    fs.writeFileSync(target, raw, { mode: 0o600, flag: 'wx' });
+  } catch (e) {
+    if (e && e.code === 'EEXIST') return false;
+    throw e;
+  }
+  console.log(`🔑 Seeded Slack session file from SLACK_SESSION_SECRET_B64 -> ${target}`);
+  return true;
+}
 
 /**
  * Initialize the worker with external dependencies.
@@ -56,6 +100,7 @@ export async function processQueue() {
 
   try {
     // Initialize invitation manager once
+    seedSessionFromEnv();
     const proxyUrl = await resolveProxyUrl(getSupabase());
     if (proxyUrl) console.log('🌐 Slack worker egress via residential proxy');
     invitationManager = new SlackInvitationManager({

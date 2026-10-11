@@ -40,6 +40,7 @@ function mockSupabase(overrides: Record<string, unknown> = {}) {
       or: () => fns,
       order: () => fns,
       limit: () => fns,
+      range: () => fns,
       maybeSingle: () => Promise.resolve({ data, error }),
       single: () => Promise.resolve({ data, error }),
       then: (cb: (r: { data: unknown; error: unknown }) => unknown) => cb({ data, error }),
@@ -209,7 +210,7 @@ describe('host-media routes', () => {
       const routes = createMediaRoutes(makeDeps());
       const req = {
         params: { hostKind: 'site', hostId: SITE_ID, id: MEDIA_ID },
-        body: { host_id: 'evil', secret: 'leak', is_approved: true },
+        body: { host_id: 'evil', secret: 'leak', uploaded_by: 'someone-else' },
         userId: USER_ID,
       } as never;
       const res = mockRes();

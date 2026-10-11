@@ -73,6 +73,13 @@ const INTERACTIVE_NAMES = ['Ada', 'Max', 'Iris', 'Reed', 'Nova', 'Cleo', 'Rex', 
 // a merely-authenticated user must not reach them. This mirrors the is_admin() SQL predicate RLS uses:
 // an active admin_profiles row with an elevated role. Service-role client can read admin_profiles.
 const ADMIN_ROLES = new Set(['super_admin', 'admin', 'editor']);
+
+// Test-only auth bypass, mirroring the platform's requireJwt. Guarded on NODE_ENV so a stray env
+// var cannot disable the admin gate — or the approver allow-list that gates token spend, pushes
+// and merges — on a real deployment.
+const testAuthBypass = () =>
+  process.env.GATEWAZE_TEST_DISABLE_AUTH === '1' && process.env.NODE_ENV !== 'production';
+
 export function mountAdminRoutes(router, deps) {
   const { supabase, getRedis, logger, enqueueJob } = deps;
 
@@ -81,7 +88,7 @@ export function mountAdminRoutes(router, deps) {
     if (!rateLimit(`se-admin:${clientIp(req)}`, 240, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     }
-    if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') return next(); // parity with platform requireJwt test bypass
+    if (testAuthBypass()) return next(); // parity with platform requireJwt test bypass
     const userId = req.userId ?? req.auth?.userId ?? req.user?.id ?? null;
     if (!userId) return res.status(401).json({ error: { code: 'unauthenticated', message: 'Missing user context' } });
     try {
@@ -111,7 +118,7 @@ export function mountAdminRoutes(router, deps) {
   // unrestricted (any admin), which preserves the behavior of projects that never configure gating.
   // Returns true when the request was DENIED (a 403 has been sent); the caller returns immediately.
   const denyIfNotApprover = async (req, res, run) => {
-    if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1') return false;
+    if (testAuthBypass()) return false;
     const { data: proj } = await supabase.from('se_projects').select('approvers').eq('id', run.project_id).maybeSingle();
     const list = Array.isArray(proj?.approvers) ? proj.approvers.map(String) : [];
     const userId = authorOf(req);

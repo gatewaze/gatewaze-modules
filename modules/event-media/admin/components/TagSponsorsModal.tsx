@@ -1,114 +1,78 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { XMarkIcon, TagIcon } from '@heroicons/react/24/outline';
-import { Button } from '@/components/ui';
-import { EventSponsor, tagMediaWithSponsor, untagMediaFromSponsor } from '../utils/eventMediaService';
-import { supabase } from '@/lib/supabase';
+import { Button, Modal } from '@/components/ui';
+import { tagMediaWithSponsors, type EventSponsorOption } from '../utils/mediaOrganizerService';
 
 interface TagSponsorsModalProps {
-  isOpen: boolean;
+  sponsors: EventSponsorOption[];
+  selectedMediaIds: string[];
   onClose: () => void;
   onSuccess: () => void;
-  sponsors: EventSponsor[];
-  selectedMediaIds: string[];
 }
 
-export function TagSponsorsModal({
-  isOpen,
-  onClose,
-  onSuccess,
-  sponsors,
-  selectedMediaIds,
-}: TagSponsorsModalProps) {
-  const [selectedSponsorId, setSelectedSponsorId] = useState<string | null>(null);
+export function TagSponsorsModal({ sponsors, selectedMediaIds, onClose, onSuccess }: TagSponsorsModalProps) {
+  const [chosen, setChosen] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
-  if (!isOpen) return null;
+  const toggle = (id: string) =>
+    setChosen((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
-  const handleTag = async () => {
-    if (!selectedSponsorId) {
-      toast.error('Please select a sponsor');
-      return;
-    }
-
+  const submit = async () => {
+    if (chosen.length === 0) return;
     setSaving(true);
     try {
-      // Tag each selected media with the sponsor
-      const promises = selectedMediaIds.map(mediaId =>
-        supabase
-          .from('events_media_sponsor_tags')
-          .upsert(
-            { media_id: mediaId, event_sponsor_id: selectedSponsorId },
-            { onConflict: 'media_id,event_sponsor_id' }
-          )
-      );
-
-      await Promise.all(promises);
-      toast.success(`Tagged ${selectedMediaIds.length} item(s) with sponsor`);
+      await tagMediaWithSponsors(selectedMediaIds, chosen);
+      toast.success(`Tagged ${selectedMediaIds.length} item(s) with ${chosen.length} sponsor(s)`);
       onSuccess();
-    } catch (error) {
-      console.error('Error tagging media:', error);
-      toast.error('Failed to tag media');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to tag sponsors');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            Tag with Sponsor
-          </h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
-            <XMarkIcon className="h-5 w-5" />
-          </button>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Tag sponsors"
+      size="md"
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || chosen.length === 0}>{saving ? 'Tagging…' : 'Tag sponsors'}</Button>
         </div>
-
-        <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
-          Tag {selectedMediaIds.length} selected item(s) with a sponsor.
+      }
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-[var(--gray-a11)]">
+          Choose the sponsors that appear in the {selectedMediaIds.length} selected item(s):
         </p>
-
         {sponsors.length === 0 ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400">No sponsors available for this event.</p>
+          <p className="py-8 text-center text-sm text-[var(--gray-a10)]">
+            This event has no active sponsors. Add them on the Sponsors tab first.
+          </p>
         ) : (
-          <div className="mb-6 space-y-2">
+          <div className="max-h-96 space-y-2 overflow-y-auto">
             {sponsors.map((s) => (
-              <button
+              <label
                 key={s.id}
-                onClick={() => setSelectedSponsorId(s.id)}
-                className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition ${
-                  selectedSponsorId === s.id
-                    ? 'border-primary-500 bg-primary-50 dark:border-primary-400 dark:bg-primary-900/20'
-                    : 'border-gray-200 hover:border-gray-300 dark:border-gray-600 dark:hover:border-gray-500'
-                }`}
+                className="flex cursor-pointer items-center gap-3 rounded-lg border border-[var(--gray-a5)] p-3 hover:bg-[var(--gray-a2)]"
               >
-                {s.sponsor?.logo_url ? (
-                  <img src={s.sponsor.logo_url} alt={s.sponsor.name} className="h-8 w-8 rounded object-contain" />
-                ) : (
-                  <TagIcon className="h-8 w-8 text-gray-400" />
-                )}
-                <span className="text-sm font-medium text-gray-900 dark:text-white">
-                  {s.sponsor?.name || 'Unknown Sponsor'}
-                </span>
-              </button>
+                <input type="checkbox" checked={chosen.includes(s.id)} onChange={() => toggle(s.id)} className="h-4 w-4" />
+                {s.logoUrl && <img src={s.logoUrl} alt="" className="h-10 w-10 rounded object-contain" />}
+                <div className="flex-1">
+                  <div className="font-medium">{s.name}</div>
+                  <div className="flex items-center gap-2 text-xs text-[var(--gray-a10)]">
+                    {s.tier && <span className="capitalize">{s.tier}</span>}
+                    {s.boothNumber && <span>Booth {s.boothNumber}</span>}
+                  </div>
+                </div>
+              </label>
             ))}
           </div>
         )}
-
-        <div className="flex justify-end gap-3">
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            onClick={handleTag}
-            disabled={!selectedSponsorId || saving}
-          >
-            {saving ? 'Tagging...' : 'Tag Selected'}
-          </Button>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }

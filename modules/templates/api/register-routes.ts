@@ -60,9 +60,32 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     error: () => undefined,
   };
 
+  // Authorization for library writes is answered by the database as the
+  // CALLER: a client carrying the request's bearer token asks for the
+  // library row, and the templates RLS dispatch decides (see
+  // SourcesRoutesDeps.canAdminLibrary). No anon key configured → nobody
+  // administers anything, which fails closed rather than open.
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+  const canAdminLibrary = async (req: Request, libraryId: string): Promise<boolean> => {
+    if (!supabaseUrl || !supabaseAnonKey) return false;
+    const header = req.headers.authorization ?? '';
+    const token = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim();
+    if (!token) return false;
+    const asCaller = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const { data, error } = await asCaller.from('templates_libraries').select('id').eq('id', libraryId).maybeSingle();
+    if (error) {
+      logger.warn('templates.can_admin_library_query_failed', { library_id: libraryId, error: error.message });
+      return false;
+    }
+    return !!data;
+  };
   const sourcesRoutes = createSourcesRoutes({
     supabase,
     logger,
+    canAdminLibrary,
     getUserId: (req: Request) => {
       // requireJwt() sets req.userId (no `user` object). Fall back to
       // the older shape just in case the platform middleware ever

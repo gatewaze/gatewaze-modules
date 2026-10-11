@@ -19,6 +19,7 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
 import { Router, type Express } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { requireJwt } from '../lib/require-jwt.js';
+import { clientIp, rateLimit } from '../lib/rate-limit.js';
 import { AirbyteClient } from '../lib/airbyte-client.js';
 import { planTiers } from '../lib/sync-planner.js';
 
@@ -72,6 +73,17 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
   // admin/editor role, mirroring vehicle-video. The service-role `supabase`
   // client below bypasses RLS, so without this any caller reaching the network
   // prefix could enumerate connections and drive sync spend.
+  // Rate limit ahead of auth so an unauthenticated flood is cheap to reject.
+  // requireJwt makes a Supabase Auth call per request for cloud tokens and
+  // requireAdmin then queries admin_profiles, so without this an anonymous
+  // caller drives unbounded outbound auth calls and DB reads.
+  r.use((req, res, next) => {
+    if (!rateLimit(`warehouse-sync:${clientIp(req)}`, 240, 60_000)) {
+      res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
+      return;
+    }
+    next();
+  });
   r.use(requireJwt());
   const requireAdmin = async (req, res, next): Promise<void> => {
     const userId = (req as { userId?: string }).userId;

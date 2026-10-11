@@ -80,3 +80,32 @@ describe('paramAsString', () => {
     expect(paramAsString(undefined)).toBeNull();
   });
 });
+
+import { parseUuidList, validateMediaPatch } from '../sanitisers.js';
+
+describe('parseUuidList', () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  it('dedupes valid ids', () => {
+    expect(parseUuidList([A, A.toUpperCase()])).toEqual([A]);
+  });
+  it('rejects empty, oversized, non-array and non-uuid input', () => {
+    expect(parseUuidList([])).toBeNull();
+    expect(parseUuidList('x')).toBeNull();
+    expect(parseUuidList([A, 'nope'])).toBeNull();
+    expect(parseUuidList([A, A], 1)).toBeNull();
+  });
+});
+
+describe('validateMediaPatch', () => {
+  it('accepts well-typed fields and truncates long text', () => {
+    const r = validateMediaPatch({ caption: 'x'.repeat(3000), is_approved: true, access_level: 'public', sponsor_id: null });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect((r.value.caption as string).length).toBe(2000);
+  });
+  it('rejects wrong types and bad enums', () => {
+    expect(validateMediaPatch({ is_featured: 'true' }).ok).toBe(false);
+    expect(validateMediaPatch({ access_level: 'everyone' }).ok).toBe(false);
+    expect(validateMediaPatch({ album_id: 'not-a-uuid' }).ok).toBe(false);
+    expect(validateMediaPatch({ caption: 42 }).ok).toBe(false);
+  });
+});

@@ -1,5 +1,19 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import type { EmailProviderModule } from './email-provider.ts';
+// Static import of every provider this registry knows about. A dynamic
+// template-literal import (`import(`./providers/${name}.ts`)`) silently fails to
+// resolve inside the Supabase Edge eszip bundle even when the deploy step copies
+// the file into _shared/providers/ — the CLI's import follower only sees literal
+// paths, so the provider ships missing and the function 503s "Module not found:
+// providers/sendgrid.ts" at first call (hit 2026-06-05, and again 2026-09-04
+// after a manual CLI redeploy). Static imports unambiguously land in the bundle.
+// To add a provider: add its functionFiles entry, then a static import + a
+// byName line here (mirrors _shared/bot-detector-registry.ts).
+import sendgridProvider from './providers/sendgrid.ts';
+
+const PROVIDERS_BY_NAME: Record<string, EmailProviderModule> = {
+  sendgrid: sendgridProvider as EmailProviderModule,
+};
 
 let cachedProvider: EmailProviderModule | null = null;
 
@@ -34,14 +48,15 @@ export async function getEmailProvider(
     );
   }
 
-  // Dynamic import of the provider module. The deploy step (see
-  // packages/shared/src/modules/deploy-edge-functions.ts) copies the
-  // module's `provider.ts` into `_shared/providers/<name>.ts` per
-  // the module's `functionFiles: ['provider.ts:<name>.ts']` entry —
-  // each Supabase edge function only bundles its own directory plus
-  // `_shared/`, so sibling function directories (which the previous
-  // `../../email-provider-<name>/provider.ts` path assumed) are
-  // never visible at runtime.
+  // Prefer the statically-bundled provider (the only form that reliably lands
+  // in the eszip). Fall back to a dynamic import for any provider not yet wired
+  // into PROVIDERS_BY_NAME above — works in local/Docker deploys, but such a
+  // provider must be added to the static map before it can ship to the cloud.
+  const staticProvider = PROVIDERS_BY_NAME[providerName];
+  if (staticProvider) {
+    cachedProvider = staticProvider;
+    return cachedProvider;
+  }
   const provider = await import(`./providers/${providerName}.ts`);
   cachedProvider = provider.default as EmailProviderModule;
   return cachedProvider;

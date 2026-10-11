@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { BUILTIN_WRAPPER_META_KEY } from '../../lib/plain-email/wrapper.js';
 import { useNavigate } from 'react-router';
 import {
   CheckIcon,
@@ -113,6 +114,9 @@ export default function NewsletterSetupWizard({ isOpen = true, onClose }: Wizard
           reply_to: data.reply_to || null,
           list_id: data.list_id || null,
           setup_complete: true,
+          // New publications read like a hand-written email until an operator
+          // picks the repo wrapper on the Template tab (lib/plain-email).
+          metadata: { [BUILTIN_WRAPPER_META_KEY]: 'plain' },
         })
         .select()
         .single();

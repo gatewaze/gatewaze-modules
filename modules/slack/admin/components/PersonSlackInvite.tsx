@@ -83,7 +83,7 @@ export default function PersonSlackInvite({ person }: PersonSlackInviteProps) {
     if (!email) return;
     setSending(true);
     try {
-      const { error } = await supabase.rpc('integrations_request_slack_invitation', {
+      const { error } = await supabase.rpc('integrations_admin_request_slack_invitation', {
         p_email: email.toLowerCase(),
         p_account: 'default',
         p_metadata: { source: 'admin' },

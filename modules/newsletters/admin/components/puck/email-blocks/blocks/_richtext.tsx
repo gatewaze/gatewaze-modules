@@ -14,10 +14,11 @@
 
 import type { CSSProperties, ReactNode } from 'react';
 import { normalizeRichText } from '../rich-text.js';
+import { getEmailShell } from '../shell-context.js';
 
 export function RichText({ value, style, className }: { value: unknown; style?: CSSProperties; className?: string }): ReactNode {
   if (typeof value === 'string') {
-    return <div className={className} style={style} dangerouslySetInnerHTML={{ __html: normalizeRichText(value) }} />;
+    return <div className={className} style={style} dangerouslySetInnerHTML={{ __html: normalizeRichText(value, { plainLinks: getEmailShell() === 'plain' }) }} />;
   }
   return <div className={className} style={style}>{value as ReactNode}</div>;
 }

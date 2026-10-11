@@ -1,0 +1,16 @@
+-- ============================================================================
+-- Module: newsletters
+-- Migration: 088_drop_snapshot_finder_overload
+-- Description: migration 086 added p_stale_days to
+-- newsletter_find_editions_needing_snapshot with CREATE OR REPLACE, which in
+-- Postgres creates a NEW function (different signature) beside 084's
+-- two-argument one instead of replacing it. PostgREST then cannot resolve the
+-- worker's named-argument call between the two overloads and fails every run
+-- with PGRST203 ("Could not choose the best candidate function"), so no edition
+-- has been snapshotted since 086 shipped: every recent send stays on the ~30s
+-- live engagement path and the dashboard crawls.
+--
+-- Drop the two-argument overload. The three-argument function defaults
+-- p_stale_days, so existing callers resolve to it unchanged.
+-- ============================================================================
+DROP FUNCTION IF EXISTS public.newsletter_find_editions_needing_snapshot(integer, integer);

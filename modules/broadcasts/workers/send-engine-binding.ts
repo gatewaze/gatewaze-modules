@@ -105,7 +105,7 @@ export const broadcastBinding: SendEngineBinding = {
     // the tokens (SendGrid substitutes per recipient).
     if (!/\{\{unsubscribe_url\}\}/.test(html)) {
       const footer =
-        `<div style="text-align:center;padding:20px;font-size:12px;color:#999;">` +
+        `<div style="padding:20px 0;font-size:12px;color:#999;">` +
         `<a href="{{unsubscribe_url}}" style="color:#999;">Unsubscribe</a> &middot; ` +
         `<a href="{{manage_subscriptions_url}}" style="color:#999;">Manage your email preferences</a></div>`;
       html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${footer}</body>`) : html + footer;

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { toast } from 'sonner';
+import { useAdminScope } from '@/hooks/usePermissions';
 import { Card, Button, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import { supabase } from '@/lib/supabase';
@@ -15,15 +16,19 @@ import { PersonLocationMap } from '@/components/charts/PersonLocationMap';
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
 import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
+import { BroadcastTemplateTab } from '../components/BroadcastTemplateTab';
 import { BroadcastContentEditor } from '../components/BroadcastContentEditor';
 import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
 
 const STEPS = [
-  { id: 'audience', label: '1. Audience' },
-  { id: 'content', label: '2. Content' },
-  { id: 'sending', label: '3. Sending' },
+  { id: 'audience', label: 'Audience' },
+  { id: 'content', label: 'Content' },
+  { id: 'sending', label: 'Sending' },
   { id: 'replies', label: 'Replies' },
 ];
+// Super admins also get the Template tab: the wrapper this broadcast sends
+// in, and the shared broadcast template repo.
+const SUPER_ADMIN_STEPS = [...STEPS, { id: 'template', label: 'Template' }];
 
 const inputCls = 'w-full rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm disabled:opacity-60';
 
@@ -34,7 +39,9 @@ const isValidEmail = (v: string | null | undefined): boolean => !!v && /^[^\s@]+
 export default function BroadcastDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
   const navigate = useNavigate();
-  const step = tab && STEPS.some((s) => s.id === tab) ? tab : 'audience';
+  const { isSuperAdmin } = useAdminScope();
+  const visibleSteps = isSuperAdmin ? SUPER_ADMIN_STEPS : STEPS;
+  const step = tab && visibleSteps.some((s) => s.id === tab) ? tab : 'audience';
 
   const [b, setB] = useState<Broadcast | null>(null);
   const [loading, setLoading] = useState(true);
@@ -219,7 +226,7 @@ export default function BroadcastDetailPage() {
     <Page title={`Broadcast: ${b.name}`}>
       <WorkspaceLayout
         title={`Broadcasts: ${b.name}`}
-        tabs={STEPS}
+        tabs={visibleSteps}
         activeTabId={step}
         onTabChange={goTo}
         actions={<div className="flex items-center gap-3">{headerActions}</div>}
@@ -233,6 +240,7 @@ export default function BroadcastDetailPage() {
           </div>
         )}
         {step === 'replies' && <BroadcastRepliesTab broadcastId={b.id} />}
+        {step === 'template' && isSuperAdmin && <BroadcastTemplateTab b={b} editable={editable} onSaved={setB} />}
       </WorkspaceLayout>
     </Page>
   );
@@ -547,6 +555,48 @@ function OutreachToggle({ b, editable, onChanged }: { b: Broadcast; editable: bo
   );
 }
 
+// --- Content: inline broadcast rename ----------------------------------------
+// Local, small edit control (input + Save), mirroring OutreachToggle's plain
+// controls rather than importing the events module's table-cell InlineEditCell.
+function BroadcastNameEditor({ b, editable, onSaved }: { b: Broadcast; editable: boolean; onSaved: (b: Broadcast) => void }) {
+  const [draft, setDraft] = useState(b.name);
+  const [saving, setSaving] = useState(false);
+
+  // Resync when the broadcast reloads elsewhere (e.g. after the linked-event save).
+  useEffect(() => { setDraft(b.name); }, [b.name]);
+
+  const trimmed = draft.trim();
+  const canSave = editable && !saving && trimmed.length > 0 && trimmed !== b.name;
+
+  async function save() {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      const nb = await updateBroadcast(b.id, { name: trimmed } as Partial<Broadcast>);
+      onSaved(nb);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to rename broadcast');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <label className="text-sm font-medium text-[var(--gray-12)] shrink-0">Name</label>
+      <input
+        className={`${inputCls} max-w-md`}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        // Saves on its own (Enter or leaving the field); the header Save is for content.
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        onBlur={save}
+        disabled={!editable || saving}
+      />
+    </div>
+  );
+}
+
 // --- Step 2: Content (block-based body) -------------------------------------
 // The body is a list of blocks (spec-broadcasts-blocks), edited in the reused
 // newsletters Puck canvas (palette + drag/drop + live email preview). A `text`
@@ -577,17 +627,20 @@ function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSendin
     // lines up with the config row's left edge and the page's right margin, so
     // it reads as a bordered editor within the page rather than edge-to-edge.
     <div className="space-y-2">
-      {/* Slim config row (no card): optional event link + merge-field hint. */}
-      <div className="flex flex-wrap items-center gap-2 max-w-3xl">
-        <label className="text-sm font-medium text-[var(--gray-12)] shrink-0">Linked event</label>
-        <select className={`${inputCls} max-w-md`} value={eventId} onChange={(e) => linkEvent(e.target.value)} disabled={!editable}>
-          <option value="">No linked event (optional — for CFP / event promotion)</option>
-          {events.map((ev) => (
-            <option key={ev.id} value={ev.id}>
-              {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
-            </option>
-          ))}
-        </select>
+      {/* Slim config row (no card): optional event link + rename control + merge-field hint. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-sm font-medium text-[var(--gray-12)] shrink-0">Linked event</label>
+          <select className={`${inputCls} max-w-md`} value={eventId} onChange={(e) => linkEvent(e.target.value)} disabled={!editable}>
+            <option value="">No linked event (optional — for CFP / event promotion)</option>
+            {events.map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.event_title || '(untitled event)'}{ev.event_start ? ` — ${new Date(ev.event_start).toLocaleDateString()}` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        <BroadcastNameEditor b={b} editable={editable} onSaved={onSaved} />
       </div>
       <p className="text-xs text-[var(--gray-10)]">Recipient merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.{eventId ? ` Event variables: ${EVENT_VARIABLES.map((v) => v.token).join(' ')}.` : ''}</p>
 

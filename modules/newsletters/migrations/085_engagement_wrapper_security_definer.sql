@@ -1,0 +1,11 @@
+-- ============================================================================
+-- Module: newsletters
+-- Migration: 085_engagement_wrapper_security_definer
+-- Description: newsletter_edition_engagement (the cached wrapper the admin
+-- table calls) was SECURITY INVOKER, so under the authenticated role its cache
+-- lookup (reads newsletter_edition_stats_snapshots + newsletter_edition_data_
+-- version over newsletter_sends) hit per-row RLS, failed to match, and fell
+-- through to the 25s+ live path -> 8s PostgREST timeout. Make it SECURITY
+-- DEFINER so the cache lookup bypasses RLS and serves the snapshot (~200ms).
+-- ============================================================================
+ALTER FUNCTION public.newsletter_edition_engagement(uuid[]) SECURITY DEFINER SET search_path = public;
