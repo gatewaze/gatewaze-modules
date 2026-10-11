@@ -20,6 +20,7 @@ import { createRequire } from 'module';
 import { join } from 'path';
 import { Readable } from 'stream';
 import { eventsListingSchema } from './listing-schema';
+import { requireJwt, type VerifyClient } from './lib/require-jwt';
 
 let _supabase: SupabaseClient | null = null;
 
@@ -364,8 +365,120 @@ function buildAdminCtx(req: Request): HandlerContext {
   });
 }
 
+/**
+ * Client used ONLY to verify untrusted bearer tokens, kept separate from the
+ * `initSupabase()` singleton that every privileged read and write in this file
+ * shares. Sessions are never persisted or refreshed on it, so the path that
+ * handles attacker-supplied tokens can't touch the client-wide session state of
+ * the one doing service-role writes. Mirrors vehicle-video's verifyClient().
+ *
+ * Prefers the anon key: `auth.getUser(token)` needs no more than that, and the
+ * token being checked is untrusted. Falls back to the service-role key so a
+ * deployment without an anon key configured still verifies rather than failing
+ * shut.
+ */
+let _verifySupabase: SupabaseClient | null = null;
+function initVerifySupabase(projectRoot: string) {
+  if (_verifySupabase) return _verifySupabase;
+
+  const url = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
+  const key =
+    process.env.SUPABASE_ANON_KEY ??
+    process.env.VITE_SUPABASE_ANON_KEY ??
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('Missing SUPABASE_URL or a Supabase key for token verification');
+
+  const require = createRequire(join(projectRoot, 'packages', 'api', 'package.json'));
+  const { createClient } = require('@supabase/supabase-js');
+  _verifySupabase = createClient(url, key, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  return _verifySupabase;
+}
+
+/**
+ * Auth gate for this module's `/api/admin/events/*` routes. The platform does
+ * not gate module routes, so without this the only thing standing in front of
+ * them is whichever OTHER module happens to mount a blanket-gated router at
+ * `/api/admin` (newsletters and host-media both do) — an accident of module
+ * load order, absent entirely on a brand that installs neither.
+ *
+ * Authentication only. `requireAdmin` below is what says the caller may act.
+ */
+function adminGate(projectRoot: string) {
+  // Boundary cast: supabase-js's getUser() return type is wider than the
+  // `{ data?, error? }` slice the gate reads. See .claude/rules/typescript-patterns.md.
+  return requireJwt(() => initVerifySupabase(projectRoot) as unknown as VerifyClient);
+}
+
+/**
+ * Authorization. A valid Supabase session proves only that the caller is one of
+ * this brand's signed-up accounts, and portal members share the auth project
+ * with admins — on AAIF that is ~164k accounts against 15 admin profiles. The
+ * handlers below run as service_role and so bypass RLS entirely, which means
+ * without this check any signed-in portal member could list unpublished events,
+ * flip publish state, or bulk-delete.
+ *
+ * The role set matches the other admin modules (vehicle-video, send-testing,
+ * send-testing-glockapps, warehouse-sync, editor-ai-copilot). Reads the
+ * caller's own role with the service-role client because `admin_profiles` is
+ * RLS-protected; see the platform's requireSuperAdmin() for why passing the
+ * user's JWT to `.rpc(..., { headers })` does not work. Fails closed.
+ */
+const ADMIN_ROLES = ['super_admin', 'admin', 'editor'];
+
+function requireAdmin(projectRoot: string) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (process.env.GATEWAZE_TEST_DISABLE_AUTH === '1' && process.env.NODE_ENV !== 'production') {
+        next();
+        return;
+      }
+      const userId = (req as Request & { userId?: string }).userId;
+      if (!userId) {
+        // adminGate() runs first and should have rejected. Reaching here means a
+        // route was wired with this middleware alone, so fail closed.
+        res.status(401).json({ error: { code: 'unauthenticated', message: 'Authentication required' } });
+        return;
+      }
+      const { data, error } = await initSupabase(projectRoot)
+        .from('admin_profiles')
+        .select('role, is_active')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error) {
+        res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Could not verify permissions' } });
+        return;
+      }
+      const row = data as { role?: string; is_active?: boolean } | null;
+      if (!row || row.is_active === false || !ADMIN_ROLES.includes(row.role ?? '')) {
+        res.status(403).json({ error: { code: 'forbidden', message: 'Admin access required' } });
+        return;
+      }
+      next();
+    } catch (err) {
+      // Same reasoning as the gate's catch-all: Express 4 does not catch
+      // rejections from async middleware, and an unhandledRejection here would
+      // take the api process down. Degrade to denied.
+      console.error('[events requireAdmin] authorization check threw; denying request', err);
+      try {
+        res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Could not verify permissions' } });
+      } catch {
+        // response already sent — nothing further to do
+      }
+    }
+  };
+}
+
 function registerEventsAdminListing(app: Express, projectRoot: string) {
-  app.get('/api/admin/events/list', async (req: Request, res: Response) => {
+  // One gate for every /api/admin/events/* route below: authenticate, then
+  // authorize. Callers are the admin SPA (Supabase session bearer token) and
+  // the internal events-mcp service (GATEWAZE_ADMIN_JWT, sent as a bearer by
+  // packages/api-mcp), whose identity needs an admin_profiles row like any
+  // other. Kept as one array so a new route cannot pick up half the pair.
+  const gate = [adminGate(projectRoot), requireAdmin(projectRoot)];
+
+  app.get('/api/admin/events/list', gate, async (req: Request, res: Response) => {
     try {
       const supabase = initSupabase(projectRoot);
       const { status, body } = await eventsAdminListingHandler.handle(
@@ -379,7 +492,7 @@ function registerEventsAdminListing(app: Express, projectRoot: string) {
     }
   });
 
-  app.get('/api/admin/events/distinct/:column', async (req: Request, res: Response) => {
+  app.get('/api/admin/events/distinct/:column', gate, async (req: Request, res: Response) => {
     try {
       const supabase = initSupabase(projectRoot);
       const { status, body } = await eventsAdminDistinctHandler.handle(
@@ -399,7 +512,7 @@ function registerEventsAdminListing(app: Express, projectRoot: string) {
   // cannot see (or edit) events we merely scraped. Each row carries its
   // target luma_calendar_id. A row is included only when it has a Luma
   // counterpart and has changed since its last successful push.
-  app.get('/api/admin/events/luma-syncable', async (_req: Request, res: Response) => {
+  app.get('/api/admin/events/luma-syncable', gate, async (_req: Request, res: Response) => {
     try {
       const supabase = initSupabase(projectRoot);
       const { data, error } = await supabase
@@ -440,7 +553,7 @@ function registerEventsAdminListing(app: Express, projectRoot: string) {
 
   // Bulk-delete by ids (admin-only). Pass-through to EventService-style
   // delete; the EventsPage wires this to the selection state.
-  app.post('/api/admin/events/bulk-delete', async (req: Request, res: Response) => {
+  app.post('/api/admin/events/bulk-delete', gate, async (req: Request, res: Response) => {
     try {
       const supabase = initSupabase(projectRoot);
       const body = req.body as { ids?: string[]; matchingFilter?: Record<string, unknown> };
@@ -504,7 +617,7 @@ function registerEventsAdminListing(app: Express, projectRoot: string) {
   // which is GRANTed to service_role only — hence this server-side route rather
   // than a browser rpc() call. The RPC validates the transition and writes an
   // audit row. Mirrors the inbox's set_state action for a single event.
-  app.post('/api/admin/events/:id/publish-state', async (req: Request, res: Response) => {
+  app.post('/api/admin/events/:id/publish-state', gate, async (req: Request, res: Response) => {
     try {
       const supabase = initSupabase(projectRoot);
       const { to, reason } = (req.body ?? {}) as { to?: string; reason?: string };

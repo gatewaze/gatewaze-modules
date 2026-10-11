@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 
 import { Modal, Button, Badge } from '@/components/ui';
@@ -22,6 +22,9 @@ import type { AdminUser } from '@/lib/supabase';
 
 import {
   createUseCaseCredential,
+  patchUseCaseCredential,
+  getUsageByCredential,
+  type CredentialSpendRow,
   createUserCredential,
   deleteUseCaseCredential,
   deleteUserCredential,
@@ -45,6 +48,10 @@ interface NewUseCaseCredentialDraft {
   useCase: string;
   provider: AiProvider;
   apiKey: string;
+  credKind?: 'api_key' | 'claude_subscription';
+  label?: string;
+  /** Set when editing an existing credential (label rename / secret rotation). */
+  editingId?: string;
 }
 
 type NewCredentialDraft = NewUserCredentialDraft | NewUseCaseCredentialDraft;
@@ -58,6 +65,7 @@ export default function AiCredentialsAdmin() {
   const [useCases, setUseCases] = useState<AiUseCase[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<NewCredentialDraft | null>(null);
+  const [spend, setSpend] = useState<CredentialSpendRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<{ kind: 'user' | 'use-case'; id: string } | null>(null);
 
@@ -67,6 +75,7 @@ export default function AiCredentialsAdmin() {
 
   async function load() {
     setLoading(true);
+    getUsageByCredential(30).then((r) => setSpend(r.credentials)).catch(() => {});
     try {
       const [credResult, userResult, useCaseRows] = await Promise.all([
         listCredentials(),
@@ -112,11 +121,18 @@ export default function AiCredentialsAdmin() {
           apiKey: draft.apiKey.trim(),
         });
         toast.success(`Credential created (ending …${result.last_4})`);
+      } else if (draft.editingId) {
+        const patch: { label?: string; api_key?: string } = { label: draft.label ?? '' };
+        if (draft.apiKey.trim()) patch.api_key = draft.apiKey.trim();
+        const result = await patchUseCaseCredential(draft.editingId, patch);
+        toast.success(`Credential updated (ending …${result.last_4})`);
       } else {
         const result = await createUseCaseCredential({
           useCase: draft.useCase.trim(),
           provider: draft.provider,
           apiKey: draft.apiKey.trim(),
+          credKind: draft.credKind ?? 'api_key',
+          label: draft.label,
         });
         toast.success(`Credential created (ending …${result.last_4})`);
       }
@@ -262,8 +278,11 @@ export default function AiCredentialsAdmin() {
               <thead className="bg-neutral-50">
                 <tr className="text-left">
                   <th className="px-3 py-2">Use-case</th>
+                  <th className="px-3 py-2">Label</th>
+                  <th className="px-3 py-2">Kind</th>
                   <th className="px-3 py-2">Provider</th>
                   <th className="px-3 py-2">Key ending</th>
+                  <th className="px-3 py-2">Spend (30d)</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Last used</th>
                   <th className="px-3 py-2 w-12"></th>
@@ -273,15 +292,42 @@ export default function AiCredentialsAdmin() {
                 {useCaseCreds.map((c) => (
                   <tr key={c.id} className="border-t hover:bg-neutral-50">
                     <td className="px-3 py-2 font-mono text-xs">{c.use_case}</td>
+                    <td className="px-3 py-2 text-xs">{c.label ?? <span className="text-neutral-400">—</span>}</td>
+                    <td className="px-3 py-2 text-xs">
+                      {c.kind === 'claude_subscription'
+                        ? <Badge variant="info">Claude Code token</Badge>
+                        : <Badge>API key</Badge>}
+                    </td>
                     <td className="px-3 py-2 text-xs">{c.provider}</td>
                     <td className="px-3 py-2 font-mono text-xs">…{c.last_4}</td>
+                    <td className="px-3 py-2 text-xs font-mono">
+                      {(() => {
+                        const row = spend.find((sp) => sp.credential_last4 === c.last_4 && sp.credential_kind === (c.kind ?? 'api_key'));
+                        if (!row) return <span className="text-neutral-400">—</span>;
+                        const usd = row.cost_micro_usd / 1_000_000;
+                        return `$${usd.toFixed(2)}${c.kind === 'claude_subscription' ? ' (nominal)' : ''}`;
+                      })()}
+                    </td>
                     <td className="px-3 py-2">
                       <Badge>{c.status}</Badge>
                     </td>
                     <td className="px-3 py-2 text-xs text-neutral-500">
                       {c.last_used_at ? new Date(c.last_used_at).toLocaleString() : '—'}
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        title="Edit label / rotate secret"
+                        onClick={() => setDraft({
+                          kind: 'use-case', editingId: c.id, useCase: c.use_case,
+                          provider: c.provider as AiProvider, apiKey: '',
+                          credKind: (c.kind ?? 'api_key') as 'api_key' | 'claude_subscription',
+                          label: c.label ?? '',
+                        })}
+                        className="text-neutral-500 hover:text-neutral-900 mr-2"
+                      >
+                        <PencilIcon className="size-4" />
+                      </button>
                       <button
                         type="button"
                         onClick={() => setDeleting({ kind: 'use-case', id: c.id })}
@@ -302,7 +348,7 @@ export default function AiCredentialsAdmin() {
         <Modal
           isOpen
           onClose={() => setDraft(null)}
-          title={draft.kind === 'user' ? 'New user credential' : 'New use-case credential'}
+          title={draft.kind === 'user' ? 'New user credential' : (draft as NewUseCaseCredentialDraft).editingId ? 'Edit use-case credential' : 'New use-case credential'}
           size="md"
           footer={
             <div className="flex justify-end gap-2">
@@ -362,7 +408,34 @@ export default function AiCredentialsAdmin() {
                 ))}
               </select>
             </Field>
-            <Field label="API key">
+            {draft.kind === 'use-case' && (
+              <>
+                <Field label="Credential kind">
+                  <select
+                    className="form-input w-full"
+                    value={draft.credKind ?? 'api_key'}
+                    disabled={Boolean(draft.editingId)}
+                    onChange={(e) => setDraft({
+                      ...draft,
+                      credKind: e.target.value as 'api_key' | 'claude_subscription',
+                      provider: e.target.value === 'claude_subscription' ? 'anthropic' : draft.provider,
+                    })}
+                  >
+                    <option value="api_key">API key (pay per token)</option>
+                    <option value="claude_subscription">Claude Code token (subscription — anthropic only)</option>
+                  </select>
+                </Field>
+                <Field label="Label (name this credential)">
+                  <input
+                    className="form-input w-full"
+                    value={draft.label ?? ''}
+                    onChange={(e) => setDraft({ ...draft, label: e.target.value })}
+                    placeholder="e.g. Dan's Claude Max plan"
+                  />
+                </Field>
+              </>
+            )}
+            <Field label={draft.kind === 'use-case' && draft.editingId ? 'Replace secret (leave blank to keep current)' : 'API key / token'}>
               <input
                 type="password"
                 className="form-input w-full font-mono text-xs"

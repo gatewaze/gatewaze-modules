@@ -22,6 +22,8 @@ import {
   pickFields,
   paramAsUuid,
   paramAsString,
+  parseUuidList,
+  validateMediaPatch,
 } from '../lib/sanitisers.js';
 import { buildRateLimitKey, UPLOAD_RATE_LIMIT, SIGNED_URL_RATE_LIMIT } from '../lib/rate-limit-keys.js';
 import { MEDIA_PATCH_FIELDS } from '../types/index.js';
@@ -71,6 +73,11 @@ export interface MediaAdapter {
   getPublicUrl(storagePath: string): string;
   /** Issue a 1 h signed URL for a stored object (for access_level='signed'). */
   createSignedUrl(storagePath: string, ttlSeconds: number): Promise<string>;
+  /**
+   * Optional on-the-fly resized image URL (Supabase image transformation).
+   * Used for grid/viewer previews of images that have no stored variant.
+   */
+  getRenderUrl?(storagePath: string, width: number): string;
 }
 
 export interface RoutesDeps {
@@ -86,6 +93,37 @@ function sendError(res: Response, status: number, code: string, message: string,
   const body: ErrorEnvelope = { error: code, message };
   if (details) body.details = details;
   res.status(status).json(body);
+}
+
+const LIST_COLUMNS = 'id, host_kind, host_id, storage_path, filename, mime_type, bytes, width, height, duration, variants, in_repo, used_in, uploaded_by, access_level, youtube_video_id, youtube_url, youtube_embed_url, youtube_thumbnail_url, youtube_upload_status, album_id, metadata, caption, alt_text, sponsor_id, is_featured, is_approved, display_order, created_at, updated_at';
+
+/** Storage paths a media row owns: the original plus any stored variants. */
+function ownedStoragePaths(row: { storage_path: string; variants?: unknown }): string[] {
+  const paths = [row.storage_path];
+  if (row.variants && typeof row.variants === 'object') {
+    for (const v of Object.values(row.variants as Record<string, unknown>)) {
+      if (typeof v === 'string' && v && !/^https?:/i.test(v)) paths.push(v);
+    }
+  }
+  return paths;
+}
+
+/**
+ * A PATCH may point album_id only at an album of the same host; the FK
+ * alone would accept any host's album. Returns false when it does not.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function albumIdIsValid(supabase: any, fields: Record<string, unknown>, hostKind: string, hostId: string): Promise<boolean> {
+  const albumId = fields['album_id'];
+  if (albumId === undefined || albumId === null) return true;
+  const { data } = await supabase
+    .from('host_media_albums')
+    .select('id')
+    .eq('id', albumId)
+    .eq('host_kind', hostKind)
+    .eq('host_id', hostId)
+    .maybeSingle();
+  return !!data;
 }
 
 function validateHostKindParam(req: Request, res: Response): { hostKind: string; hostId: string } | null {
@@ -120,15 +158,19 @@ export function createMediaRoutes(deps: RoutesDeps) {
     const filter = paramAsString(req.query['filter']) ?? 'all';
     const albumId = paramAsUuid(req.query['album_id']);
     const search = sanitisePostgrestSearch(req.query['search'] ?? '');
-    const limit = Math.max(1, Math.min(Number(req.query['limit'] ?? 100), 500));
+    const limit = Math.max(1, Math.min(Number(req.query['limit']) || 100, 500));
+    const offset = Math.max(0, Math.floor(Number(req.query['offset']) || 0));
 
+    // Stable order (created_at, id) so offset paging never skips or
+    // repeats a row when two uploads share a timestamp.
     let query = supabase
       .from('host_media')
-      .select('id, host_kind, host_id, storage_path, filename, mime_type, bytes, width, height, duration, variants, in_repo, used_in, uploaded_by, access_level, youtube_video_id, youtube_url, youtube_embed_url, youtube_thumbnail_url, youtube_upload_status, album_id, metadata, caption, alt_text, sponsor_id, is_featured, is_approved, created_at, updated_at')
+      .select(LIST_COLUMNS)
       .eq('host_kind', hostKind)
       .eq('host_id', hostId)
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .order('id', { ascending: false })
+      .range(offset, offset + limit - 1);
 
     if (filter === 'photo') query = query.like('mime_type', 'image/%');
     else if (filter === 'video') query = query.like('mime_type', 'video/%');
@@ -146,12 +188,27 @@ export function createMediaRoutes(deps: RoutesDeps) {
 
     interface Row { id: string; storage_path: string; [key: string]: unknown }
     const rows = (result.data ?? []) as Row[];
-    const items = rows.map((r) => ({
+    const items = rows.map(withUrls);
+
+    // next_cursor is the next offset while a full page came back.
+    res.status(200).json({ items, next_cursor: rows.length === limit ? String(offset + limit) : null });
+  }
+
+  function withUrls<T extends { storage_path: string; mime_type?: unknown; variants?: unknown }>(r: T) {
+    const variants = (r.variants && typeof r.variants === 'object' ? r.variants : {}) as Record<string, unknown>;
+    const isImage = typeof r.mime_type === 'string' && r.mime_type.startsWith('image/');
+    const preview = (key: string, width: number): string | null => {
+      const v = variants[key];
+      if (typeof v === 'string' && v) return /^https?:/i.test(v) ? v : mediaAdapter.getPublicUrl(v);
+      if (isImage && mediaAdapter.getRenderUrl) return mediaAdapter.getRenderUrl(r.storage_path, width);
+      return null;
+    };
+    return {
       ...r,
       cdn_url: mediaAdapter.getPublicUrl(r.storage_path),
-    }));
-
-    res.status(200).json({ items, next_cursor: null });
+      thumb_url: preview('thumb', 350),
+      medium_url: preview('medium', 800),
+    };
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -182,7 +239,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
       sendError(res, 404, 'media_not_found', 'media not found');
       return;
     }
-    res.status(200).json({ ...data, cdn_url: mediaAdapter.getPublicUrl(data.storage_path) });
+    res.status(200).json(withUrls(data));
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -266,56 +323,29 @@ export function createMediaRoutes(deps: RoutesDeps) {
       const mediaId = (globalThis.crypto?.randomUUID?.() ?? require('crypto').randomUUID()) as string;
 
       try {
-        // Branch: video + YouTube delegation.
-        // Instead of uploading to Storage and storing as a regular file,
-        // hand the bytes to the media-upload-youtube edge fn which uploads
-        // to YouTube via the Google API and returns the video metadata.
-        // The host_media row's storage_path points to a synthetic path
-        // (no actual storage object) and the youtube_* columns carry the
-        // playable URL. If the YouTube call fails we fall back to native
-        // storage so the user doesn't lose the bytes.
-        let storagePath: string;
-        let cdnUrl: string;
-        let youtubeMeta: {
-          video_id: string; url: string; embed_url: string; thumbnail_url: string;
-        } | null = null;
-
-        if (isVideo && consumer.enableYouTube) {
-          try {
-            const formData = new FormData();
-            formData.append('video', new Blob([file.buffer], { type: file.mimeType }), file.filename);
-            formData.append('title', file.filename.replace(/\.[^.]+$/, ''));
-            formData.append('description', caption ?? '');
-            formData.append('privacy', 'unlisted');
-            const { data: ytRes, error: ytErr } = await supabase.functions.invoke('media-upload-youtube', { body: formData });
-            if (ytErr || !ytRes?.video_id) {
-              throw new Error(`youtube upload failed: ${ytErr?.message ?? 'no video_id returned'}`);
-            }
-            youtubeMeta = ytRes as { video_id: string; url: string; embed_url: string; thumbnail_url: string };
-            // Synthesize a storage_path that records the YouTube provenance.
-            // We don't actually upload to Storage for YouTube videos.
-            storagePath = `${hostKind}/${hostId}/${mediaId}/youtube:${youtubeMeta.video_id}`;
-            cdnUrl = youtubeMeta.url;
-          } catch (ytErr) {
-            logger.warn('YouTube delegation failed; falling back to native storage', {
-              error: ytErr instanceof Error ? ytErr.message : String(ytErr),
-              filename: file.filename,
-            });
-            const out = await mediaAdapter.upload({
-              hostKind, hostId, mediaId,
-              filename: file.filename, mimeType: file.mimeType, buffer: file.buffer,
-            });
-            storagePath = out.storagePath;
-            cdnUrl = out.cdnUrl;
-          }
-        } else {
-          const out = await mediaAdapter.upload({
-            hostKind, hostId, mediaId,
-            filename: file.filename, mimeType: file.mimeType, buffer: file.buffer,
-          });
-          storagePath = out.storagePath;
-          cdnUrl = out.cdnUrl;
-        }
+        // Every upload goes to Storage, videos included.
+        //
+        // This used to hand video bytes to the `media-upload-youtube` edge
+        // function, which uploaded to the channel and returned its metadata.
+        // That function is gone, for two reasons. It authenticated nobody:
+        // module edge functions deploy with verify_jwt false (see
+        // deploy-strategies/cloud-api.ts), it had no auth check of its own and
+        // CORS `*`, so anyone with the URL could upload to the foundation's
+        // channel. And this branch had been dead at runtime regardless: it
+        // required `ytRes.video_id` while the function returned `videoId`, so
+        // it always threw "no video_id returned" and fell through to the
+        // storage fallback below.
+        //
+        // Publishing comes back properly in the `videos-publisher-youtube`
+        // module (spec-videos-publishing-and-platform-metrics), where it is an
+        // authorised, queued job that streams from a worker rather than an
+        // open endpoint that hands out an OAuth token.
+        const out = await mediaAdapter.upload({
+          hostKind, hostId, mediaId,
+          filename: file.filename, mimeType: file.mimeType, buffer: file.buffer,
+        });
+        const storagePath: string = out.storagePath;
+        const cdnUrl: string = out.cdnUrl;
 
         const insertRow: Record<string, unknown> = {
           id: mediaId,
@@ -331,18 +361,12 @@ export function createMediaRoutes(deps: RoutesDeps) {
         if (albumId && consumer.enableAlbums) insertRow['album_id'] = albumId;
         if (caption) insertRow['caption'] = caption;
 
-        if (youtubeMeta) {
-          insertRow['youtube_video_id']      = youtubeMeta.video_id;
-          insertRow['youtube_url']           = youtubeMeta.url;
-          insertRow['youtube_embed_url']     = youtubeMeta.embed_url;
-          insertRow['youtube_thumbnail_url'] = youtubeMeta.thumbnail_url;
-          insertRow['youtube_upload_status'] = 'completed';
-          insertRow['youtube_uploaded_at']   = new Date().toISOString();
-        } else if (isVideo && consumer.enableYouTube) {
-          // Fallback path — native storage, mark as failed so a retry
-          // worker can pick it up later.
-          insertRow['youtube_upload_status'] = 'failed';
-          insertRow['youtube_error_message'] = 'YouTube delegation failed at upload time; stored natively';
+        if (isVideo && consumer.enableYouTube) {
+          // 'pending', not 'failed'. Nothing was attempted, so nothing
+          // failed, and a publisher that looks for work should find these.
+          // Marking them failed is what the old fallback did, and it made
+          // every video on a YouTube-enabled host look like a broken upload.
+          insertRow['youtube_upload_status'] = 'pending';
         }
 
         const inserted = await supabase
@@ -407,15 +431,24 @@ export function createMediaRoutes(deps: RoutesDeps) {
       return;
     }
 
-    const writeFields = pickFields(req.body, MEDIA_PATCH_FIELDS);
-    if (Object.keys(writeFields).length === 0) {
+    const picked = pickFields(req.body, MEDIA_PATCH_FIELDS);
+    if (Object.keys(picked).length === 0) {
       sendError(res, 400, 'no_fields', 'at least one allowlisted field required');
+      return;
+    }
+    const checked = validateMediaPatch(picked);
+    if (!checked.ok) {
+      sendError(res, 400, 'invalid_field', checked.error);
+      return;
+    }
+    if (!(await albumIdIsValid(supabase, checked.value, params.hostKind, params.hostId))) {
+      sendError(res, 400, 'invalid_album', 'album_id must be an album of this host');
       return;
     }
 
     const { data, error } = await supabase
       .from('host_media')
-      .update(writeFields)
+      .update(checked.value)
       .eq('id', mediaId)
       .eq('host_kind', params.hostKind)
       .eq('host_id', params.hostId)
@@ -430,7 +463,132 @@ export function createMediaRoutes(deps: RoutesDeps) {
       sendError(res, 404, 'media_not_found', 'media not found');
       return;
     }
-    res.status(200).json({ ...data, cdn_url: mediaAdapter.getPublicUrl(data.storage_path) });
+    res.status(200).json(withUrls(data));
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // PATCH /admin/<hostKind>/:hostId/media  { media_ids, fields }
+  // Bulk edit (approve, hide, caption…) — same allowlist + validation as
+  // the single PATCH, scoped to the host so foreign ids are ignored.
+  // ────────────────────────────────────────────────────────────────────
+  async function bulkPatchMedia(req: RequestWithUser, res: Response): Promise<void> {
+    const params = validateHostKindParam(req, res);
+    if (!params) return;
+    const ids = parseUuidList(req.body?.media_ids);
+    if (!ids) {
+      sendError(res, 400, 'invalid_media_ids', 'media_ids must be 1-500 UUIDs');
+      return;
+    }
+    const picked = pickFields(req.body?.fields, MEDIA_PATCH_FIELDS);
+    if (Object.keys(picked).length === 0) {
+      sendError(res, 400, 'no_fields', 'at least one allowlisted field required');
+      return;
+    }
+    const checked = validateMediaPatch(picked);
+    if (!checked.ok) {
+      sendError(res, 400, 'invalid_field', checked.error);
+      return;
+    }
+    if (!(await albumIdIsValid(supabase, checked.value, params.hostKind, params.hostId))) {
+      sendError(res, 400, 'invalid_album', 'album_id must be an album of this host');
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('host_media')
+      .update(checked.value)
+      .in('id', ids)
+      .eq('host_kind', params.hostKind)
+      .eq('host_id', params.hostId)
+      .select('id');
+    if (error) {
+      sendError(res, 500, 'update_failed', error.message);
+      return;
+    }
+    res.status(200).json({ updated: (data ?? []).map((r: { id: string }) => r.id) });
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // POST /admin/<hostKind>/:hostId/media/bulk-delete  { media_ids }
+  // Deletes every id that belongs to the host and is not referenced;
+  // referenced rows are reported back, never deleted.
+  // ────────────────────────────────────────────────────────────────────
+  async function bulkDeleteMedia(req: RequestWithUser, res: Response): Promise<void> {
+    const params = validateHostKindParam(req, res);
+    if (!params) return;
+    const ids = parseUuidList(req.body?.media_ids);
+    if (!ids) {
+      sendError(res, 400, 'invalid_media_ids', 'media_ids must be 1-500 UUIDs');
+      return;
+    }
+
+    const { data: rows, error: fetchErr } = await supabase
+      .from('host_media')
+      .select('id, storage_path, variants, bytes, used_in')
+      .in('id', ids)
+      .eq('host_kind', params.hostKind)
+      .eq('host_id', params.hostId);
+    if (fetchErr) { sendError(res, 500, 'fetch_failed', fetchErr.message); return; }
+
+    interface DelRow { id: string; storage_path: string; variants: unknown; bytes: number; used_in: unknown }
+    const found = (rows ?? []) as DelRow[];
+    const inUse = found.filter((r) => Array.isArray(r.used_in) && r.used_in.length > 0);
+    const deletable = found.filter((r) => !inUse.includes(r));
+
+    if (deletable.length > 0) {
+      const { error: delErr } = await supabase
+        .from('host_media')
+        .delete()
+        .in('id', deletable.map((r) => r.id))
+        .eq('host_kind', params.hostKind)
+        .eq('host_id', params.hostId);
+      if (delErr) { sendError(res, 500, 'delete_failed', delErr.message); return; }
+
+      for (const r of deletable) {
+        for (const path of ownedStoragePaths(r)) {
+          try { await mediaAdapter.delete(path); } catch (err) {
+            logger.warn('host_media storage delete failed (row already deleted)', {
+              mediaId: r.id,
+              storagePath: path,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        await supabase.rpc('host_media_quota_decrement', {
+          p_host_kind: params.hostKind,
+          p_host_id: params.hostId,
+          p_bytes: r.bytes,
+        });
+      }
+    }
+
+    const foundIds = new Set(found.map((r) => r.id));
+    res.status(200).json({
+      deleted: deletable.map((r) => r.id),
+      in_use: inUse.map((r) => r.id),
+      not_found: ids.filter((id) => !foundIds.has(id)),
+    });
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // PUT /admin/<hostKind>/:hostId/media/order  { media_ids }
+  // Rewrites the host-wide custom order from an ordered id list.
+  // ────────────────────────────────────────────────────────────────────
+  async function setMediaOrder(req: RequestWithUser, res: Response): Promise<void> {
+    const params = validateHostKindParam(req, res);
+    if (!params) return;
+    const ids = parseUuidList(req.body?.media_ids, 5000);
+    if (!ids) {
+      sendError(res, 400, 'invalid_media_ids', 'media_ids must be 1-5000 UUIDs');
+      return;
+    }
+    const { data, error } = await supabase.rpc('host_media_set_display_order', {
+      p_host_kind: params.hostKind,
+      p_host_id: params.hostId,
+      p_ids: ids,
+    });
+    if (error) { sendError(res, 500, 'order_failed', error.message); return; }
+    res.status(200).json({ updated: typeof data === 'number' ? data : 0 });
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -449,7 +607,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
     // storage object after the row.
     const { data: item, error: fetchErr } = await supabase
       .from('host_media')
-      .select('id, storage_path, bytes, used_in')
+      .select('id, storage_path, variants, bytes, used_in')
       .eq('id', mediaId)
       .eq('host_kind', params.hostKind)
       .eq('host_id', params.hostId)
@@ -466,12 +624,14 @@ export function createMediaRoutes(deps: RoutesDeps) {
     const { error: delErr } = await supabase.from('host_media').delete().eq('id', mediaId);
     if (delErr) { sendError(res, 500, 'delete_failed', delErr.message); return; }
 
-    try { await mediaAdapter.delete(item.storage_path); } catch (err) {
-      logger.warn('host_media storage delete failed (row already deleted)', {
-        mediaId,
-        storagePath: item.storage_path,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    for (const path of ownedStoragePaths(item)) {
+      try { await mediaAdapter.delete(path); } catch (err) {
+        logger.warn('host_media storage delete failed (row already deleted)', {
+          mediaId,
+          storagePath: path,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     await supabase.rpc('host_media_quota_decrement', {
@@ -584,26 +744,39 @@ export function createMediaRoutes(deps: RoutesDeps) {
     getMedia,
     uploadMedia,
     patchMedia,
+    bulkPatchMedia,
+    bulkDeleteMedia,
+    setMediaOrder,
     deleteMedia,
     streamMediaContents,
     issueSignedUrl,
   };
 }
 
+/**
+ * `authorize` runs before every handler (and before multer on upload, so
+ * an unauthorized caller never gets to stream bytes into memory). The
+ * static `/media/order` + `/media/bulk-delete` paths are registered
+ * before `/media/:id` so they are not captured as an id.
+ */
 export function mountMediaRoutes(
   router: Router,
   routes: ReturnType<typeof createMediaRoutes>,
-  uploadMiddleware?: import('express').RequestHandler,
+  uploadMiddleware: import('express').RequestHandler | undefined,
+  authorize: import('express').RequestHandler,
 ): void {
-  router.get('/:hostKind/:hostId/media', routes.listMedia);
+  router.get('/:hostKind/:hostId/media', authorize, routes.listMedia);
   if (uploadMiddleware) {
-    router.post('/:hostKind/:hostId/media', uploadMiddleware, routes.uploadMedia);
+    router.post('/:hostKind/:hostId/media', authorize, uploadMiddleware, routes.uploadMedia);
   } else {
-    router.post('/:hostKind/:hostId/media', routes.uploadMedia);
+    router.post('/:hostKind/:hostId/media', authorize, routes.uploadMedia);
   }
-  router.get('/:hostKind/:hostId/media/:id', routes.getMedia);
-  router.get('/:hostKind/:hostId/media/:id/contents', routes.streamMediaContents);
-  router.patch('/:hostKind/:hostId/media/:id', routes.patchMedia);
-  router.delete('/:hostKind/:hostId/media/:id', routes.deleteMedia);
-  router.post('/:hostKind/:hostId/media/:id/signed-url', routes.issueSignedUrl);
+  router.patch('/:hostKind/:hostId/media', authorize, routes.bulkPatchMedia);
+  router.put('/:hostKind/:hostId/media/order', authorize, routes.setMediaOrder);
+  router.post('/:hostKind/:hostId/media/bulk-delete', authorize, routes.bulkDeleteMedia);
+  router.get('/:hostKind/:hostId/media/:id', authorize, routes.getMedia);
+  router.get('/:hostKind/:hostId/media/:id/contents', authorize, routes.streamMediaContents);
+  router.patch('/:hostKind/:hostId/media/:id', authorize, routes.patchMedia);
+  router.delete('/:hostKind/:hostId/media/:id', authorize, routes.deleteMedia);
+  router.post('/:hostKind/:hostId/media/:id/signed-url', authorize, routes.issueSignedUrl);
 }

@@ -230,7 +230,7 @@ async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx:
         .replace(/\{\{manage_subscriptions_url\}\}/g, manageUrl)
       if (!hadPlaceholder) {
         const footer =
-          `<div style="text-align:center;padding:20px;font-size:12px;color:#999;">` +
+          `<div style="padding:20px 0;font-size:12px;color:#999;">` +
           `<a href="${unsubUrl}" style="color:#999;">Unsubscribe</a> &middot; ` +
           `<a href="${manageUrl}" style="color:#999;">Manage your email preferences</a></div>`
         personalizedHtml = /<\/body>/i.test(personalizedHtml)

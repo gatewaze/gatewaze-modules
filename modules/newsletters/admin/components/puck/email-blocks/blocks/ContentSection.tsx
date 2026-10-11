@@ -18,10 +18,35 @@
 
 import { Heading, Section } from '@react-email/components';
 import type { EmailBlockEntry } from '../registry-types.js';
+import { getEmailShell } from '../shell-context.js';
 
 interface ContentSectionProps extends Record<string, unknown> {
   title: string;
   body: string;
+}
+
+function ContentSectionBody({ title, body }: Pick<ContentSectionProps, 'title' | 'body'>) {
+  const html = typeof body === 'string' ? body : '';
+  // Plain shell: a bare heading and the body as-is; no padding box, no
+  // colours, no sizes.
+  if (getEmailShell() === 'plain') {
+    return (
+      <div style={{ margin: '0 0 16px' }}>
+        {title ? <h2 style={{ margin: '0 0 16px' }}>{title}</h2> : null}
+        <div dangerouslySetInnerHTML={{ __html: html }} />
+      </div>
+    );
+  }
+  return (
+    <Section style={{ padding: '20px 40px' }}>
+      {title ? (
+        <Heading as="h2" style={{ fontSize: '22px', fontWeight: 'bold', color: '#1a1a2e', margin: '0 0 16px' }}>
+          {title}
+        </Heading>
+      ) : null}
+      <div style={{ fontSize: '16px', lineHeight: 1.6, color: '#333' }} dangerouslySetInnerHTML={{ __html: html }} />
+    </Section>
+  );
 }
 
 export const ContentSectionBlock: EmailBlockEntry<ContentSectionProps> = {
@@ -39,19 +64,7 @@ export const ContentSectionBlock: EmailBlockEntry<ContentSectionProps> = {
     title: '',
     body: '<p>Write your content here.</p>',
   },
-  Component: ({ title, body }) => (
-    <Section style={{ padding: '20px 40px' }}>
-      {title ? (
-        <Heading as="h2" style={{ fontSize: '22px', fontWeight: 'bold', color: '#1a1a2e', margin: '0 0 16px' }}>
-          {title}
-        </Heading>
-      ) : null}
-      <div
-        style={{ fontSize: '16px', lineHeight: 1.6, color: '#333' }}
-        dangerouslySetInnerHTML={{ __html: typeof body === 'string' ? body : '' }}
-      />
-    </Section>
-  ),
+  Component: ({ title, body }) => <ContentSectionBody title={title} body={body} />,
   formats: {
     substack: ({ title, body }) => (
       <>

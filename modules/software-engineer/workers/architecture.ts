@@ -1,3 +1,4 @@
+import { getRunCodeRepos } from '../lib/run-code-repos.js';
 // @ts-nocheck
 /**
  * architecture phase (§7.6) — the architecture-review GATE. Runs after the spec is skeptic-approved,
@@ -80,7 +81,7 @@ export default async function architecture(job, ctx) {
   let ws;
   try {
     const { data: art } = await supabase.from('se_artifacts').select('content').eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
-    const codeRepos = (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun);
+    const codeRepos = (await getRunCodeRepos(supabase, run)).slice(0, project.maxCodeReposPerRun);
     // Arch repo + code repos BOTH read-only (reference only). The proposal is written to a scratch file at
     // the workspace root, not into any repo — the human commits it to the arch repo later on finalize.
     const repos = [

@@ -16,7 +16,12 @@
  * Idempotent-ish: elements that already declare a `style` are left alone.
  * Shared across all native react-email blocks that render an HTML field.
  */
-export function normalizeRichText(html: unknown): string {
+/**
+ * @param opts.plainLinks  Leave anchors unstyled (the plain email shell lets
+ *                         the reader's client colour links so they follow
+ *                         dark mode); default applies the brand-blue rule.
+ */
+export function normalizeRichText(html: unknown, opts: { plainLinks?: boolean } = {}): string {
   if (typeof html !== 'string' || html.length === 0) return '';
   return html
     // Unwrap a single <p> directly inside an <li> (TipTap wraps list text
@@ -46,7 +51,7 @@ export function normalizeRichText(html: unknown): string {
     // <Link href> elements (e.g. "Read the blog"). Inject the same colour
     // + underline if no inline style is present. Skip anchors that already
     // declare a `style=` so operator-set overrides win.
-    .replace(/<a(?![^>]*\sstyle=)\b([^>]*)>/gi, '<a style="color:#4086c6;text-decoration:underline"$1>')
+    .replace(/<a(?![^>]*\sstyle=)\b([^>]*)>/gi, opts.plainLinks ? '<a$1>' : '<a style="color:#4086c6;text-decoration:underline"$1>')
     // Images: constrain to the email column and apply the toolbar's optional
     // alignment (data-align) + width (data-width, % of column). `max-width:100%`
     // caps a wide image to the container even if it carries a larger fixed

@@ -18,6 +18,7 @@ import { Fragment, createElement, isValidElement, type CSSProperties, type React
 import type { TemplateNode } from './parse-template.js';
 import { TAG_COMPONENTS, INTRINSIC_TAGS, classStyle, parseInlineStyle, PASSTHROUGH_ATTRS } from './component-map.js';
 import { RichText } from '../blocks/_richtext.js';
+import { getEmailShell } from '../shell-context.js';
 import { renderSlot } from '../render-slot.js';
 
 export type Content = Record<string, unknown>;
@@ -290,7 +291,11 @@ function renderNode(node: TemplateNode, ctx: RenderCtx, key: string): ReactNode 
     return <RichText key={key} value={value} style={nodeStyle(node)} className={rtClass || undefined} />;
   }
 
-  const Comp = TAG_COMPONENTS[tag];
+  // In the plain shell a bare <a> stays a bare <a>: react-email's Link would
+  // stamp its own colour on it, and the whole point of that shell is that the
+  // reader's client decides link colour (and follows dark mode). Every other
+  // shell keeps the Link mapping for the header-image-in-an-anchor case.
+  const Comp = tag === 'a' && getEmailShell() === 'plain' ? undefined : TAG_COMPONENTS[tag];
   const isIntrinsic = !Comp && INTRINSIC_TAGS.has(tag);
   if (!Comp && !isIntrinsic) {
     // Not allowlisted — drop the element but keep its (possibly bound) children

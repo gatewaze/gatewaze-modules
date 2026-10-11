@@ -1,16 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   createColumnHelper, getCoreRowModel, getExpandedRowModel, useReactTable,
   type ExpandedState, type Row,
 } from '@tanstack/react-table';
-import { ChevronDownIcon, ChevronRightIcon, TrashIcon } from '@heroicons/react/24/outline';
+import {
+  ChevronDownIcon, ChevronRightIcon, TrashIcon, PencilSquareIcon,
+  DocumentDuplicateIcon, FolderArrowDownIcon,
+} from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Badge, Button } from '@/components/ui';
 import { DataTable } from '@/components/shared/table/DataTable';
+import { RowActions } from '@/components/shared/table/RowActions';
+import { MoveToFolderModal } from './MoveToFolderModal';
 import {
-  broadcastSummary, broadcastEngagement, deleteBroadcast,
-  type Broadcast, type BroadcastEngagement, type BroadcastStatus,
+  broadcastSummary, broadcastEngagement, deleteBroadcast, duplicateBroadcast, moveBroadcastToFolder,
+  type Broadcast, type BroadcastEngagement, type BroadcastStatus, type BroadcastFolder,
 } from '../lib/broadcastService';
 
 interface BroadcastRow {
@@ -20,6 +25,13 @@ interface BroadcastRow {
   date: string;
   status: BroadcastStatus;
   sentCount: number;              // total emails sent across this broadcast's sends
+  folder_id: string | null;
+  // latest send instance's fields, for the status detail line
+  scheduledAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  totalRecipients: number;
+  sendSentCount: number;
   engagement?: BroadcastEngagement | null;
 }
 
@@ -33,6 +45,32 @@ function fmtNum(n: number): string { return n.toLocaleString(); }
 function pct(n: number, d: number): string { return d > 0 ? `${((n / d) * 100).toFixed(1)}%` : '—'; }
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function formatDateTime(dateString: string): string {
+  return new Date(dateString).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+// A short line shown under the status badge: when a scheduled send fires, how far
+// a sending one has got, and when a completed one went out.
+function statusDetail(r: BroadcastRow): string | null {
+  switch (r.status) {
+    case 'scheduled':
+      return r.scheduledAt ? formatDateTime(r.scheduledAt) : null;
+    case 'sending':
+    case 'cancelling':
+    case 'paused':
+      return r.totalRecipients > 0
+        ? `${Math.min(100, Math.round((r.sendSentCount / r.totalRecipients) * 100))}% · ${fmtNum(r.sendSentCount)}/${fmtNum(r.totalRecipients)}`
+        : (r.sendSentCount > 0 ? `${fmtNum(r.sendSentCount)} sent` : null);
+    case 'sent': {
+      const when = r.completedAt || r.startedAt;
+      return when ? formatDateTime(when) : null;
+    }
+    default:
+      return null;
+  }
 }
 
 const CellSpin = () => (
@@ -110,11 +148,19 @@ function EngagementDetail({ engagement }: { engagement?: BroadcastEngagement | n
 
 const columnHelper = createColumnHelper<BroadcastRow>();
 
-export function BroadcastsTable({ broadcasts, onDeleted }: { broadcasts: Broadcast[]; onDeleted?: () => void }) {
+interface BroadcastsTableProps {
+  broadcasts: Broadcast[];
+  folders?: BroadcastFolder[];
+  organizeMode?: boolean;
+  onChanged?: () => void;
+}
+
+export function BroadcastsTable({ broadcasts, folders = [], organizeMode = false, onChanged }: BroadcastsTableProps) {
   const navigate = useNavigate();
   const [rows, setRows] = useState<BroadcastRow[]>([]);
   const [expanded, setExpanded] = useState<ExpandedState>({});
   const [pendingDelete, setPendingDelete] = useState<BroadcastRow | null>(null);
+  const [pendingMove, setPendingMove] = useState<BroadcastRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
@@ -122,7 +168,14 @@ export function BroadcastsTable({ broadcasts, onDeleted }: { broadcasts: Broadca
       const { status, latest } = broadcastSummary(b);
       const date = latest?.completed_at || latest?.started_at || latest?.scheduled_at || b.created_at;
       const sentCount = (b.sends || []).reduce((n, s) => n + (s.sent_count || 0), 0);
-      return { id: b.id, name: b.name, subject: b.subject, date, status, sentCount };
+      return {
+        id: b.id, name: b.name, subject: b.subject, date, status, sentCount, folder_id: b.folder_id,
+        scheduledAt: latest?.scheduled_at ?? null,
+        startedAt: latest?.started_at ?? null,
+        completedAt: latest?.completed_at ?? null,
+        totalRecipients: latest?.total_recipients ?? 0,
+        sendSentCount: latest?.sent_count ?? 0,
+      };
     });
     setRows(base);
 
@@ -148,13 +201,23 @@ export function BroadcastsTable({ broadcasts, onDeleted }: { broadcasts: Broadca
       setRows((prev) => prev.filter((r) => r.id !== pendingDelete.id));
       toast.success('Broadcast deleted');
       setPendingDelete(null);
-      onDeleted?.();
+      onChanged?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete broadcast');
     } finally {
       setDeleting(false);
     }
   };
+
+  const handleDuplicate = useCallback(async (id: string) => {
+    try {
+      await duplicateBroadcast(id);
+      toast.success('Broadcast duplicated');
+      onChanged?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to duplicate broadcast');
+    }
+  }, [onChanged]);
 
   const columns = useMemo(() => [
     columnHelper.display({
@@ -175,20 +238,30 @@ export function BroadcastsTable({ broadcasts, onDeleted }: { broadcasts: Broadca
       size: 130,
       cell: (info) => <span className="text-sm text-[var(--gray-12)] whitespace-nowrap">{formatDate(info.getValue())}</span>,
     }),
+    columnHelper.accessor('name', {
+      header: 'Name',
+      size: 160,
+      cell: (info) => <span className="text-sm text-[var(--gray-12)] truncate max-w-xs block">{info.getValue()}</span>,
+    }),
     columnHelper.accessor('subject', {
       header: 'Subject',
       cell: (info) => {
-        const row = info.row.original;
-        const text = info.getValue() || row.name;
+        const text = info.getValue();
         return <span className="text-sm text-[var(--gray-12)] truncate max-w-md block">{text || <span className="italic text-[var(--gray-9)]">No subject</span>}</span>;
       },
     }),
     columnHelper.accessor('status', {
       header: 'Status',
-      size: 110,
+      size: 150,
       cell: (info) => {
         const v = info.getValue();
-        return <Badge color={STATUS_TONE[v]}>{v.charAt(0).toUpperCase() + v.slice(1)}</Badge>;
+        const detail = statusDetail(info.row.original);
+        return (
+          <div className="flex flex-col items-start gap-0.5">
+            <Badge color={STATUS_TONE[v]}>{v.charAt(0).toUpperCase() + v.slice(1)}</Badge>
+            {detail && <span className="text-[11px] text-[var(--gray-10)] whitespace-nowrap">{detail}</span>}
+          </div>
+        );
       },
     }),
     columnHelper.accessor((r) => r.engagement?.sent ?? -1, {
@@ -229,18 +302,19 @@ export function BroadcastsTable({ broadcasts, onDeleted }: { broadcasts: Broadca
       id: 'actions',
       size: 44,
       cell: ({ row }) => (
-        <div className="flex justify-end">
-          <button
-            onClick={(e) => { e.stopPropagation(); setPendingDelete(row.original); }}
-            className="p-1 text-[var(--gray-9)] hover:text-[var(--red-9)]"
-            title="Delete broadcast"
-          >
-            <TrashIcon className="w-4 h-4" />
-          </button>
+        <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+          <RowActions
+            actions={[
+              { label: 'Edit', icon: <PencilSquareIcon className="size-4" />, onClick: () => navigate(`/broadcasts/${row.original.id}`) },
+              { label: 'Duplicate', icon: <DocumentDuplicateIcon className="size-4" />, onClick: () => handleDuplicate(row.original.id) },
+              { label: 'Move to folder', icon: <FolderArrowDownIcon className="size-4" />, onClick: () => setPendingMove(row.original) },
+              { label: 'Delete', icon: <TrashIcon className="size-4" />, onClick: () => setPendingDelete(row.original), color: 'red' },
+            ]}
+          />
         </div>
       ),
     }),
-  ], []);
+  ], [navigate, handleDuplicate]);
 
   const table = useReactTable({
     data: rows,
@@ -263,9 +337,30 @@ export function BroadcastsTable({ broadcasts, onDeleted }: { broadcasts: Broadca
     <>
       <DataTable
         table={table}
-        onRowDoubleClick={(r) => navigate(`/broadcasts/${r.id}`)}
+        onRowDoubleClick={organizeMode ? undefined : (r) => navigate(`/broadcasts/${r.id}`)}
         renderSubComponent={(row: Row<BroadcastRow>) => <EngagementDetail engagement={row.original.engagement} />}
+        getRowProps={organizeMode ? (row) => ({
+          draggable: true,
+          onDragStart: (e) => {
+            e.dataTransfer.setData('text/broadcast-id', row.original.id);
+            e.dataTransfer.effectAllowed = 'move';
+          },
+          style: { cursor: 'grab' },
+          title: 'Drag onto a folder to move',
+        }) : undefined}
       />
+
+      {pendingMove && (
+        <MoveToFolderModal
+          isOpen
+          onClose={() => setPendingMove(null)}
+          broadcastName={pendingMove.subject || pendingMove.name || 'this broadcast'}
+          currentFolderId={pendingMove.folder_id}
+          folders={folders}
+          onMove={async (folderId) => { await moveBroadcastToFolder(pendingMove.id, folderId); toast.success('Broadcast moved'); onChanged?.(); }}
+          onFoldersChanged={() => onChanged?.()}
+        />
+      )}
 
       {pendingDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { builtinWrapperFor } from '../../../lib/plain-email/wrapper.js';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   Cog6ToothIcon,
@@ -29,6 +30,7 @@ import {
 import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
 import { getViewOnlineUrl } from '../../utils/view-online-url';
 import { buildEmailRegistry } from '../../components/puck/email-blocks/declarative/registry';
+import { asEditionSkeleton, buildSkeletonBlocks, type SkeletonBlockDef } from '../../lib/editionSkeleton';
 import { emailBlockRegistry } from '../../components/puck/email-blocks';
 import type { BlockRenderMeta } from '../../components/puck/email-blocks/EditionEmail';
 import {
@@ -272,17 +274,24 @@ export default function EditionEditorPage() {
       // key='default', is_current=true) for this newsletter's library. Single
       // source of truth for header/footer chrome across editor preview, email
       // send, and git publish.
-      try {
-        const { data: wr } = await supabase
-          .from('templates_wrappers')
-          .select('html')
-          .eq('library_id', cId)
-          .eq('key', 'default')
-          .eq('is_current', true)
-          .maybeSingle();
-        collInfo.wrapperTemplate = (wr?.html as string | undefined) ?? null;
-      } catch {
-        collInfo.wrapperTemplate = null;
+      // A built-in wrapper chosen in the publication's metadata takes
+      // precedence over the repo's wrappers/default.html (lib/plain-email).
+      const builtin = builtinWrapperFor(data.metadata as Record<string, unknown> | null);
+      if (builtin) {
+        collInfo.wrapperTemplate = builtin;
+      } else {
+        try {
+          const { data: wr } = await supabase
+            .from('templates_wrappers')
+            .select('html')
+            .eq('library_id', cId)
+            .eq('key', 'default')
+            .eq('is_current', true)
+            .maybeSingle();
+          collInfo.wrapperTemplate = (wr?.html as string | undefined) ?? null;
+        } catch {
+          collInfo.wrapperTemplate = null;
+        }
       }
 
       setCollection(collInfo);
@@ -365,7 +374,17 @@ export default function EditionEditorPage() {
       // anything per-edition.
       const slug = (meta && typeof meta === 'object' ? (meta as Record<string, unknown>).default_edition_template_slug : undefined);
       let initialBlocks: NewsletterEdition['blocks'] = [];
-      if (typeof slug === 'string' && slug.length > 0) {
+      // The template repo's edition.json (stored on the library by the
+      // templates ingest) wins over the platform starter: it names the
+      // publication's own blocks in the running order its editor uses
+      // every week.
+      try {
+        initialBlocks = await seedFromTemplateSkeleton(collParam);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[edition-new] failed to seed from the template repo skeleton:', e);
+      }
+      if (initialBlocks.length === 0 && typeof slug === 'string' && slug.length > 0) {
         try {
           const { ALL_STARTERS } = await import('../../components/puck/starter-templates/index.js');
           const starter = ALL_STARTERS.find((s) => s.slug === slug);
@@ -1059,6 +1078,47 @@ export default function EditionEditorPage() {
       </WorkspaceLayout>
     </Page>
   );
+}
+
+/**
+ * Blocks a new edition starts with, per the template repo's edition.json
+ * (`templates_libraries.new_edition_blocks`, written by the templates
+ * ingest). Resolves each key against the library's current block defs and
+ * gives every block the content dragging it from the palette would — the
+ * declarative registry's schema defaults — with the skeleton's own
+ * `content` merged over. Empty when the library declares nothing.
+ */
+async function seedFromTemplateSkeleton(libraryId: string): Promise<NewsletterEdition['blocks']> {
+  const { data: lib } = await supabase
+    .from('templates_libraries')
+    .select('new_edition_blocks')
+    .eq('id', libraryId)
+    .maybeSingle<{ new_edition_blocks: unknown }>();
+  const skeleton = asEditionSkeleton(lib?.new_edition_blocks);
+  if (!skeleton) return [];
+
+  const { data: defs, error } = await supabase
+    .from('templates_block_defs')
+    .select('id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key')
+    .eq('library_id', libraryId)
+    .eq('is_current', true);
+  if (error) throw error;
+  const rows = (defs ?? []) as unknown as Array<SkeletonBlockDef & { block_type: string }>;
+  const registry = buildEmailRegistry(
+    rows.map((r) => ({ ...r, content: { html_template: r.html ?? '', rich_text_template: r.rich_text_template ?? null, has_bricks: r.has_bricks ?? false, schema: r.schema ?? {} } })) as never,
+    [],
+  );
+  const { blocks, missing } = buildSkeletonBlocks({
+    skeleton,
+    defs: rows,
+    defaultsFor: (key) => ({ ...((registry.get(key)?.defaultProps as Record<string, unknown> | undefined) ?? {}) }),
+    newId: freshUuid,
+  });
+  if (missing.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn('[edition-new] edition.json names blocks this library does not have:', missing.join(', '));
+  }
+  return blocks as unknown as NewsletterEdition['blocks'];
 }
 
 function freshUuid(): string {

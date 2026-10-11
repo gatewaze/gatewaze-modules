@@ -16,12 +16,20 @@ import type { KnownProvider } from './providers/types.js';
 type SupabaseClient = { from(table: string): any; rpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }> };
 
 export interface UsageEventInput {
+  /** 'api_key' | 'claude_subscription' — which credential kind served the
+   *  call; lets cost views separate real API spend from nominal
+   *  subscription burn (spec-ai-subscription-tokens.md §4). */
+  credentialKind?: string;
+  /** Row id + last4 of the credential that served the call — per-key cost
+   *  attribution (env-tier calls have last4 but no id). */
+  credentialId?: string | null;
+  credentialLast4?: string | null;
   occurredAt?: Date;
   userId: string | null;
   useCase: string;
   threadId: string | null;
   messageId: string | null;
-  kind: 'llm' | 'tool' | 'embedding' | 'image' | 'mcp_tool';
+  kind: 'llm' | 'tool' | 'embedding' | 'image' | 'mcp_tool' | 'transcription';
   // 'scrapling' attributes fetch_url tool calls; 'serper' attributes
   // gatewaze_search invocations that hit the Serper.dev backend.
   provider: KnownProvider | 'scrapling' | 'serper';
@@ -42,6 +50,8 @@ export interface UsageEventInput {
   bytesIn?: number;
   bytesOut?: number;
   browserSeconds?: number;
+  /** Transcribed audio seconds (kind 'transcription' only). */
+  mediaSeconds?: number | null;
   latencyMs?: number;
   status: 'ok' | 'error' | 'rate_limited' | 'timeout' | 'budget_blocked' | 'cancelled';
   error?: string | null;
@@ -134,6 +144,9 @@ export async function recordUsage(
       occurred_at: occurredAt.toISOString(),
       user_id: event.userId,
       use_case: event.useCase,
+      credential_kind: event.credentialKind ?? null,
+      credential_id: event.credentialId ?? null,
+      credential_last4: event.credentialLast4 ?? null,
       thread_id: event.threadId,
       message_id: event.messageId,
       kind: event.kind,
@@ -147,6 +160,7 @@ export async function recordUsage(
       bytes_in: event.bytesIn ?? 0,
       bytes_out: event.bytesOut ?? 0,
       browser_seconds: event.browserSeconds ?? 0,
+      media_seconds: event.mediaSeconds ?? null,
       cost_micro_usd: costMicroUsd,
       latency_ms: event.latencyMs ?? 0,
       status: event.status,

@@ -31,6 +31,8 @@ import {
   ProviderTimeoutError,
   type RunConversationOpts,
   type RunConversationResult,
+  type TranscribeAudioOpts,
+  type TranscribeAudioResult,
 } from './types.js';
 
 const MAX_LOOP_ITERATIONS = 12;
@@ -351,6 +353,47 @@ export class OpenAIProviderClient implements ProviderClient {
       );
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  async transcribeAudio(opts: TranscribeAudioOpts): Promise<TranscribeAudioResult> {
+    // gpt-4o-*-transcribe only speak json/text; whisper-1 and the
+    // whisper-local shims speak verbose_json (duration + per-segment
+    // no_speech_prob, which the silence gate needs).
+    const verbose = !opts.model.startsWith('gpt-4o');
+    const ext = opts.mimeType.includes('mp4') || opts.mimeType.includes('m4a') ? 'mp4'
+      : opts.mimeType.includes('mpeg') ? 'mp3'
+        : opts.mimeType.includes('wav') ? 'wav'
+          : opts.mimeType.includes('ogg') ? 'ogg' : 'webm';
+    try {
+      const { toFile } = await import('openai');
+      // toFile carries the filename the endpoint requires; the SDK builds the
+      // multipart form with the mandatory `file` + `model` fields.
+      const file = await toFile(opts.audio, `audio.${ext}`, { type: opts.mimeType });
+      const response = await this.client.audio.transcriptions.create(
+        {
+          file,
+          model: opts.model,
+          ...(opts.language ? { language: opts.language } : {}),
+          ...(verbose ? { response_format: 'verbose_json' as const } : {}),
+          temperature: 0,
+        },
+        { timeout: opts.timeoutMs, ...(opts.signal ? { signal: opts.signal } : {}) },
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r = response as any;
+      return {
+        text: typeof r.text === 'string' ? r.text : '',
+        durationSeconds: typeof r.duration === 'number' && Number.isFinite(r.duration)
+          ? r.duration : null,
+        noSpeechProbs: Array.isArray(r.segments)
+          ? r.segments
+              .map((s: { no_speech_prob?: unknown }) => Number(s?.no_speech_prob))
+              .filter((n: number) => Number.isFinite(n))
+          : [],
+      };
+    } catch (err) {
+      throw mapOpenAIError(err);
     }
   }
 

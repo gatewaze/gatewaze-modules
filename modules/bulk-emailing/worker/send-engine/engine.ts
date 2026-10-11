@@ -106,6 +106,9 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
   if (sweepErr) logger.warn('[send-engine] sweeper failed', sweepErr);
   // 2. Crash recovery for 'posting' batches (202-but-commit-failed window).
   await recoverPostingBatches(deps, binding).catch((e: unknown) => logger.warn('[send-engine] recovery failed', e));
+  // 2b. Self-heal any send just flipped to 'sent' while recipients are still
+  // pending (fan-out race). Recency-guarded so stale sends are never re-mailed.
+  await reopenPrematurelyCompleted(deps, binding).catch((e: unknown) => logger.warn('[send-engine] self-heal failed', e));
 
   const ctxCache = new Map<string, SendContext | null>();
   const touched = new Set<string>();
@@ -349,12 +352,52 @@ async function finalizeSend(deps: EngineDeps, binding: SendEngineBinding, sendId
     const { count } = await supabase.from(binding.recipientsTable).select('id', { count: 'exact', head: true }).eq('send_id', sendId).in('status', statuses);
     return count ?? 0;
   };
-  const [remaining, sent, failed] = await Promise.all([head(['pending', 'sending']), head(['sent']), head(['failed'])]);
+  const [remaining, sent, failed, skipped] = await Promise.all([
+    head(['pending', 'sending']), head(['sent']), head(['failed']), head(['skipped']),
+  ]);
   const patch: Record<string, unknown> = { sent_count: sent, failed_count: failed, updated_at: new Date().toISOString() };
-  if (remaining === 0) {
-    const { data: send } = await supabase.from(binding.sendsTable).select('status').eq('id', sendId).single();
-    patch.status = send?.status === 'cancelling' ? 'cancelled' : (sent === 0 && failed > 0 ? 'failed' : 'sent');
+  const { data: send } = await supabase.from(binding.sendsTable).select('status, total_recipients').eq('id', sendId).single();
+  // Finalise only when nothing is left to send AND every planned recipient has
+  // reached a terminal state. total_recipients is set to the real fanned-out
+  // count when dispatch flips the send to 'sending'; without this guard a
+  // momentary remaining===0 during fan-out (batched inserts, tz-local
+  // roll-forward) marked the send 'sent' with recipients still pending — and the
+  // claim RPC only serves 'sending' parents, so those recipients were stranded
+  // forever (incident: edition bedb4f11 finalised at 14211/58855). A 'cancelling'
+  // send bypasses the count gate: its outstanding rows are swept to 'skipped'
+  // deliberately and it must be allowed to settle.
+  const planned = (send?.total_recipients as number | null) ?? 0;
+  const terminal = sent + failed + skipped;
+  const isCancelling = send?.status === 'cancelling';
+  const allAccountedFor = planned <= 0 || terminal >= planned;
+  if (remaining === 0 && (allAccountedFor || isCancelling)) {
+    patch.status = isCancelling ? 'cancelled' : (sent === 0 && failed > 0 ? 'failed' : 'sent');
     patch.completed_at = new Date().toISOString();
   }
   await supabase.from(binding.sendsTable).update(patch).eq('id', sendId);
+}
+
+// Self-heal a fan-out race: a send wrongly flipped to 'sent' while recipients are
+// still pending. Reopen it so the drip resumes — but ONLY when it completed very
+// recently, so a stale send is never silently re-mailed days later (that is a
+// deliberate, human-authorised action). The finalizeSend guard above should stop
+// this happening at all; this is the belt-and-suspenders for any other path that
+// might complete a send early.
+const REOPEN_WINDOW_MS = 20 * 60 * 1000;
+async function reopenPrematurelyCompleted(deps: EngineDeps, binding: SendEngineBinding): Promise<void> {
+  const { supabase, logger } = deps;
+  const since = new Date(Date.now() - REOPEN_WINDOW_MS).toISOString();
+  const { data: recent } = await supabase.from(binding.sendsTable)
+    .select('id').eq('status', 'sent').gt('completed_at', since).limit(50);
+  for (const s of (recent ?? []) as Array<{ id: string }>) {
+    const { count } = await supabase.from(binding.recipientsTable)
+      .select('id', { count: 'exact', head: true }).eq('send_id', s.id).in('status', ['pending', 'sending']);
+    if ((count ?? 0) > 0) {
+      // compare-and-swap on status so a concurrent legitimate change wins.
+      await supabase.from(binding.sendsTable)
+        .update({ status: 'sending', completed_at: null, updated_at: new Date().toISOString() })
+        .eq('id', s.id).eq('status', 'sent');
+      logger.warn('[send-engine] reopened prematurely-completed send', { sendId: s.id, stillPending: count });
+    }
+  }
 }

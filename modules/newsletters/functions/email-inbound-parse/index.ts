@@ -132,6 +132,16 @@ function normSubject(s: string | null | undefined): string {
   return t.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+// Extract the provider message id from an In-Reply-To / Message-ID header so it
+// matches what we stored in email_send_log.provider_message_id. SendGrid ids
+// arrive as `<{sg_message_id}@geopod-ismtpd-NN.us-east-1.aws...>` — the id is
+// the part BEFORE the '@'. The old code split on '.', which kept the '@server'
+// suffix and so never matched any stored id (every reply ended up edition_id
+// NULL, defeating the per-edition routing below).
+function messageIdBase(header: string): string {
+  return header.replace(/[<>]/g, '').trim().split('@')[0];
+}
+
 async function handler(req: Request) {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -314,7 +324,7 @@ async function handler(req: Request) {
     // newsletters (which also match by the recipient address).
     let bLog: { id: string; broadcast_send_id: string | null } | null = null;
     if (inReplyTo) {
-      const baseId = inReplyTo.split('.')[0].replace(/[<>]/g, '');
+      const baseId = messageIdBase(inReplyTo);
       const { data } = await supabase
         .from('email_send_log')
         .select('id, broadcast_send_id')
@@ -475,7 +485,7 @@ async function handler(req: Request) {
     // =========================================================================
     let evLog: { id: string; batch_job_id: string | null } | null = null;
     if (inReplyTo) {
-      const baseId = inReplyTo.split('.')[0].replace(/[<>]/g, '');
+      const baseId = messageIdBase(inReplyTo);
       const { data } = await supabase
         .from('email_send_log')
         .select('id, batch_job_id')
@@ -601,39 +611,108 @@ async function handler(req: Request) {
       );
     }
 
+    // Resolve the originating send ONCE, independent of which collections matched
+    // by address: In-Reply-To → email_send_log → newsletter_send → edition →
+    // collection. When this resolves we know the EXACT collection this reply
+    // belongs to and file it there only. This is what stops a reply bleeding into
+    // every collection that shares this Reply-To (usercommunity and
+    // mlopscommunity both collect at demetrios@aaif.live, so without this each
+    // reply was stored once per collection and the admin tab then couldn't tell
+    // them apart). Falls back to all address-matched collections only when the
+    // reply can't be pinned to a send (auto-replies with no usable In-Reply-To).
+    let resolvedSendLogId: string | null = null;
+    let resolvedEditionId: string | null = null;
+    let resolvedCollectionId: string | null = null;
+    if (inReplyTo) {
+      const baseId = messageIdBase(inReplyTo);
+      const { data: logEntry } = await supabase
+        .from('email_send_log')
+        .select('id, newsletter_send_id')
+        .eq('provider_message_id', baseId)
+        .eq('recipient_email', fromEmail)
+        .not('newsletter_send_id', 'is', null)
+        .limit(1)
+        .maybeSingle();
+      if (logEntry?.newsletter_send_id) {
+        resolvedSendLogId = logEntry.id;
+        const { data: send } = await supabase
+          .from('newsletter_sends')
+          .select('edition_id')
+          .eq('id', logEntry.newsletter_send_id)
+          .maybeSingle();
+        resolvedEditionId = send?.edition_id || null;
+        if (resolvedEditionId) {
+          const { data: ed } = await supabase
+            .from('newsletters_editions')
+            .select('collection_id')
+            .eq('id', resolvedEditionId)
+            .maybeSingle();
+          resolvedCollectionId = ed?.collection_id || null;
+        }
+      }
+    }
+
+    // Fallback: match on the SUBJECT LINE. A reply keeps the original subject,
+    // just prepended with Re:/Fwd:/"Automatic reply:" (all stripped by
+    // normSubject), so a send whose subject equals the reply's — scoped to the
+    // collections that matched by address — pins the collection + edition even
+    // when In-Reply-To is missing or unmatchable. This is what routes the
+    // out-of-office auto-replies (which rarely carry a usable In-Reply-To but do
+    // echo the subject) to the right newsletter instead of bleeding into every
+    // collection sharing the Reply-To. Newest matching send wins.
+    if (!resolvedCollectionId && subject) {
+      const nsub = normSubject(subject);
+      if (nsub) {
+        const candidateIds = (collections as Array<{ id: string }>).map((c) => c.id);
+        const { data: sends } = await supabase
+          .from('newsletter_sends')
+          .select('edition_id, collection_id, subject, created_at')
+          .in('collection_id', candidateIds)
+          .not('subject', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(300);
+        type SendMatch = { edition_id: string | null; collection_id: string | null; n: string };
+        const norm: SendMatch[] = (sends ?? []).map((s: { edition_id: string | null; collection_id: string | null; subject: string | null }) => ({
+          edition_id: s.edition_id, collection_id: s.collection_id, n: normSubject(s.subject),
+        }));
+        // Exact first (newest wins), then "reply subject contains the send subject"
+        // for mail whose client prepended a tag the prefix-stripper doesn't remove
+        // (e.g. "[EXTERNAL]", "[Commercial]"). The length guard avoids a very short
+        // subject matching spuriously.
+        const hit = norm.find((s) => s.n && s.n === nsub)
+          ?? norm.find((s) => s.n.length >= 8 && nsub.includes(s.n));
+        if (hit?.collection_id) {
+          resolvedCollectionId = hit.collection_id;
+          resolvedEditionId = hit.edition_id ?? null;
+        }
+      }
+    }
+
+    type CollectionRow = {
+      id: string; name: string; from_email: string; reply_to: string | null;
+      forward_replies_to: string | null; list_id?: string | null;
+    };
+    let targetCollections = (collections as CollectionRow[]);
+    if (resolvedCollectionId) {
+      const pinned = targetCollections.find((c) => c.id === resolvedCollectionId);
+      if (pinned) {
+        targetCollections = [pinned];
+      } else {
+        // The edition's collection sends from a different from/reply address than
+        // the one this reply arrived on — fetch it so we still file it correctly.
+        const { data: rc } = await supabase
+          .from('newsletters_template_collections')
+          .select('id, name, from_email, reply_to, forward_replies_to, list_id')
+          .eq('id', resolvedCollectionId)
+          .maybeSingle();
+        if (rc) targetCollections = [rc as CollectionRow];
+      }
+    }
+
     let stored = 0;
     let forwarded = 0;
 
-    for (const collection of collections) {
-      // Try to find the original send log entry from In-Reply-To header
-      let sendLogId: string | null = null;
-      let editionId: string | null = null;
-
-      if (inReplyTo) {
-        // Extract the base message ID (before the first dot)
-        const baseId = inReplyTo.split('.')[0].replace(/[<>]/g, '');
-        const { data: logEntry } = await supabase
-          .from('email_send_log')
-          .select('id, newsletter_send_id')
-          .eq('provider_message_id', baseId)
-          .eq('recipient_email', fromEmail)
-          .limit(1)
-          .maybeSingle();
-
-        if (logEntry) {
-          sendLogId = logEntry.id;
-          // Look up the edition from the send
-          if (logEntry.newsletter_send_id) {
-            const { data: send } = await supabase
-              .from('newsletter_sends')
-              .select('edition_id')
-              .eq('id', logEntry.newsletter_send_id)
-              .maybeSingle();
-            editionId = send?.edition_id || null;
-          }
-        }
-      }
-
+    for (const collection of targetCollections) {
       // Store the reply
       const { error: insertError } = await supabase
         .from('newsletter_replies')
@@ -645,8 +724,8 @@ async function handler(req: Request) {
           body_text: text || null,
           body_html: html || null,
           in_reply_to: inReplyTo,
-          send_log_id: sendLogId,
-          edition_id: editionId,
+          send_log_id: resolvedSendLogId,
+          edition_id: resolvedEditionId,
           forwarded_to: collection.forward_replies_to || null,
           is_auto_reply: isAuto,
           auto_reply_reason: autoReason,
