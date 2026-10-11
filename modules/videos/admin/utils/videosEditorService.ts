@@ -143,9 +143,26 @@ export async function getScope(): Promise<EditorScope> {
   return jsonOrThrow<EditorScope>(await authedFetch(`${BASE}/scope`));
 }
 
-export async function listSubjects(type: SubjectType): Promise<SubjectOption[]> {
-  const res = await authedFetch(`${BASE}/subjects?type=${encodeURIComponent(type)}`);
-  return (await jsonOrThrow<{ subjects: SubjectOption[] }>(res)).subjects;
+/**
+ * Subjects to pick from.
+ *
+ * Events are filtered to PAST ones server-side, because an editor uploads a
+ * recording of something that has already happened and the brand has nearly a
+ * thousand events. Podcasts are not filtered: a podcast is ongoing, so "past"
+ * means nothing for one.
+ *
+ * `search` is passed to the server rather than filtering in the browser. The
+ * list is capped at 200 rows, so filtering what arrived would silently hide
+ * any match past the cap.
+ */
+export async function listSubjects(
+  type: SubjectType,
+  search = '',
+): Promise<{ subjects: SubjectOption[]; truncated: boolean }> {
+  const q = search.trim() ? `&q=${encodeURIComponent(search.trim())}` : '';
+  const res = await authedFetch(`${BASE}/subjects?type=${encodeURIComponent(type)}${q}`);
+  const body = await jsonOrThrow<{ subjects: SubjectOption[]; truncated?: boolean }>(res);
+  return { subjects: body.subjects ?? [], truncated: body.truncated === true };
 }
 
 export async function listUnits(type: SubjectType, subjectId: string): Promise<UnitOption[]> {
