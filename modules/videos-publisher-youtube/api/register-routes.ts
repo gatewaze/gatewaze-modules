@@ -15,6 +15,7 @@
  */
 
 import { Router, type Express, type Request, type Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
 import { authorizeUrl, exchangeCode, fetchChannel, SCOPES } from '../lib/oauth.js';
@@ -37,13 +38,26 @@ function nonceMatches(given: string, known: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** A tiny HTML page, because the callback is seen by a human in a browser. */
-function page(title: string, body: string): string {
-  const esc = (s: string) => String(s).replace(/[&<>"']/g, (c) =>
+/** HTML-escape. Every value that reaches the page goes through this. */
+function esc(v: unknown): string {
+  return String(v ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+}
+
+/**
+ * The callback's response page, seen by a human in a browser.
+ *
+ * Takes PARAGRAPHS rather than an HTML string on purpose. The first version
+ * of this took a `body: string` and interpolated `req.query.error` and the
+ * channel title into it unescaped — a reflected XSS on a route that, by
+ * design, anyone can reach with any query string. Making the only way in a
+ * list of plain-text paragraphs means a caller cannot forget to escape.
+ */
+function page(title: string, paragraphs: string[]): string {
+  const body = paragraphs.map((p) => `<p>${esc(p)}</p>`).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>` +
     `<style>body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:4rem auto;padding:0 1rem}` +
-    `code{background:#f3f3f5;padding:.1rem .3rem;border-radius:3px}</style></head>` +
+    `</style></head>` +
     `<body><h1>${esc(title)}</h1>${body}<p>You can close this tab and return to Gatewaze.</p></body></html>`;
 }
 
@@ -79,6 +93,19 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
 
   const router = Router();
 
+  // Limiter first, before any handler. /oauth/start performs an authorization
+  // check and mints a nonce, and /oauth/callback is reachable by anyone who
+  // has the URL, so both need a ceiling that does not depend on the caller
+  // being who they say they are. A real operator connects a channel perhaps
+  // twice in a session.
+  router.use(rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'rate_limited', message: 'too many requests' },
+  }));
+
   /** Where to send the operator's browser to authorise a channel. */
   router.get('/oauth/start', async (_req: Request, res: Response) => {
     const client = await clientCredentials();
@@ -111,28 +138,28 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
    * super_admin-gated endpoint moments ago and is single-use.
    */
   router.get('/oauth/callback', async (req: Request, res: Response) => {
-    const send = (code: number, title: string, body: string) =>
-      res.status(code).type('html').send(page(title, body));
+    const send = (code: number, title: string, ...paragraphs: string[]) =>
+      res.status(code).type('html').send(page(title, paragraphs));
 
     const googleError = typeof req.query.error === 'string' ? req.query.error : null;
     if (googleError) {
-      return send(400, 'Not connected', `<p>Google reported: <code>${googleError}</code></p>`);
+      return send(400, 'Not connected', `Google reported: ${googleError}`);
     }
 
     const state = typeof req.query.state === 'string' ? req.query.state : '';
     const code = typeof req.query.code === 'string' ? req.query.code : '';
-    if (!state || !code) return send(400, 'Not connected', '<p>The callback was missing its code or state.</p>');
+    if (!state || !code) return send(400, 'Not connected', 'The callback was missing its code or state.');
 
     sweepPending();
     const known = [...PENDING.keys()].find((k) => nonceMatches(state, k));
     if (!known) {
-      return send(403, 'Not connected', '<p>That authorisation link has expired or was not issued by this server. Start again from Gatewaze.</p>');
+      return send(403, 'Not connected', 'That authorisation link has expired or was not issued by this server. Start again from Gatewaze.');
     }
     // Single use, whatever happens next.
     PENDING.delete(known);
 
     const client = await clientCredentials();
-    if (!client) return send(503, 'Not connected', '<p>The OAuth client is no longer configured.</p>');
+    if (!client) return send(503, 'Not connected', 'The OAuth client is no longer configured.');
 
     let tokens;
     try {
@@ -140,7 +167,7 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'the code could not be exchanged';
       log('code exchange failed', { error: msg });
-      return send(400, 'Not connected', `<p>${msg}</p>`);
+      return send(400, 'Not connected', msg);
     }
 
     // Which channel did they actually pick? Google's account chooser is the
@@ -148,14 +175,14 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
     // the wrong one publishes talks to the wrong audience.
     const channel = await fetchChannel(tokens.accessToken);
     if (!channel) {
-      return send(400, 'Not connected', '<p>Authorised, but the channel could not be read. Does this Google account manage a YouTube channel?</p>');
+      return send(400, 'Not connected', 'Authorised, but the channel could not be read. Does this Google account manage a YouTube channel?');
     }
 
     const sealed = sealSecret(String(tokens.refreshToken));
     if (!sealed) {
       // Refusing to store a token in the clear is the right failure here.
       log('GATEWAZE_SECRETS_KEY is unavailable — refusing to store the refresh token');
-      return send(503, 'Not connected', '<p>The server cannot seal credentials at the moment, so nothing was stored.</p>');
+      return send(503, 'Not connected', 'The server cannot seal credentials at the moment, so nothing was stored.');
     }
 
     // Link to the seeded house-style profile on the same key, so the copy
@@ -184,12 +211,16 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
 
     if (error) {
       log('could not store the connection', { error: error.message });
-      return send(500, 'Not connected', '<p>Authorised, but the connection could not be saved.</p>');
+      return send(500, 'Not connected', 'Authorised, but the connection could not be saved.');
     }
 
     log('channel connected', { channel: channel.id, title: channel.title });
-    return send(200, 'Connected', `<p><strong>${channel.title}</strong> is connected.</p>` +
-      `<p>Channel <code>${channel.id}</code>${profile ? '' : '. No house-style profile matched this channel, so it will use the default voice.'}</p>`);
+    return send(
+      200,
+      'Connected',
+      `${channel.title} is connected.`,
+      `Channel ${channel.id}${profile ? '' : '. No house-style profile matched this channel, so it will use the default voice.'}`,
+    );
   });
 
   /** The connections, without ever selecting the sealed column. */

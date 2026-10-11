@@ -5,8 +5,15 @@
   "description": "Connects YouTube channels, publishes to them on a schedule, and collects their statistics back",
   "main": "index.ts",
   "types": "index.ts",
-  "exports": { ".": "./index.ts", "./lib/*": "./lib/*" },
-  "scripts": { "build": "tsc", "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "exports": {
+    ".": "./index.ts",
+    "./lib/*": "./lib/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
   "peerDependencies": {
     "@gatewaze/shared": "*",
     "@supabase/supabase-js": "*",
@@ -17,5 +24,8 @@
     "@types/node": "^22.19.19",
     "typescript": "^5.9.3",
     "vitest": "^4.0.0"
+  },
+  "dependencies": {
+    "express-rate-limit": "^8.5.2"
   }
 }
