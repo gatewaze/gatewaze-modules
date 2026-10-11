@@ -12,6 +12,18 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+
+/**
+ * Route a mocked fetch by HOSTNAME, not by substring.
+ *
+ * `url.includes('oauth2.googleapis.com')` matches
+ * https://evil.test/?x=oauth2.googleapis.com too. It is only a test here, but
+ * it is also the shape somebody copies into production code, so it is worth
+ * getting right in both places.
+ */
+function isTokenEndpoint(url: unknown): boolean {
+  try { return new URL(String(url)).hostname === 'oauth2.googleapis.com'; } catch { return false; }
+}
 import { collectMetrics, statusBody, type PublishInput } from '../lib/adapter';
 import { authorizeUrl, isAuthFailure, redirectUri, SCOPES } from '../lib/oauth';
 
@@ -57,7 +69,7 @@ describe('statusBody — scheduling is a privacy status, not a flag', () => {
 describe('collectMetrics', () => {
   function mockApi(items: Array<{ id: string; statistics: Record<string, string> }>, ok = true, status = 200) {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (String(url).includes('oauth2.googleapis.com')) {
+      if (isTokenEndpoint(url)) {
         return { ok: true, json: async () => ({ access_token: 'at', expires_in: 3600, scope: '' }) } as never;
       }
       return { ok, status, text: async () => JSON.stringify({ items }) } as never;
@@ -81,7 +93,7 @@ describe('collectMetrics', () => {
 
   it('marks an auth failure as auth, so the caller stops instead of retrying', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (String(url).includes('oauth2.googleapis.com')) {
+      if (isTokenEndpoint(url)) {
         return { ok: true, json: async () => ({ access_token: 'at', expires_in: 3600 }) } as never;
       }
       return { ok: false, status: 401, text: async () => 'invalid credentials' } as never;
@@ -92,7 +104,7 @@ describe('collectMetrics', () => {
 
   it('treats a quota 403 as a retryable error, not a dead credential', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (String(url).includes('oauth2.googleapis.com')) {
+      if (isTokenEndpoint(url)) {
         return { ok: true, json: async () => ({ access_token: 'at', expires_in: 3600 }) } as never;
       }
       return { ok: false, status: 403, text: async () => '{"error":{"reason":"quotaExceeded"}}' } as never;
@@ -104,7 +116,7 @@ describe('collectMetrics', () => {
   it('batches in 50s, because the API costs a unit per call not per id', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (String(url).includes('oauth2.googleapis.com')) {
+      if (isTokenEndpoint(url)) {
         return { ok: true, json: async () => ({ access_token: 'at', expires_in: 3600 }) } as never;
       }
       calls.push(String(url));
