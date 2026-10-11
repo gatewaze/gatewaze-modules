@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.5.0',
+  version: '1.6.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -46,6 +46,9 @@ const videosModule: GatewazeModule = {
     // Gatewaze published, and gives videos belonging to no event or podcast
     // somewhere to wait. Unassigned is the ABSENCE of a video_subjects row.
     'migrations/010_video_discovery.sql',
+    // 011 adds followers per account over time, and the cross-platform
+    // rollups: one video across platforms, one episode or talk, one event.
+    'migrations/011_audience_and_rollups.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
