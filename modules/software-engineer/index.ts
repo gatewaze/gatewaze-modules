@@ -24,7 +24,7 @@ const softwareEngineerModule: GatewazeModule = {
   name: 'Software Engineer',
   description:
     'Autonomous engineering agent: labelled GitHub issues → spec → adversarial review → implement → verify → PR/merge, driven by in-process Claude Code sessions. Per-brand repos + credentials; live agent monitoring.',
-  version: '0.1.3',
+  version: '0.2.3',
 
   features: ['software-engineer'],
 
@@ -65,6 +65,10 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/026_env_events_paging_retention.sql',
     'migrations/027_clarity_insights.sql',
     'migrations/028_decisions_origin_kind.sql',
+    'migrations/029_reporter_feedback.sql',
+    // Renumbered from 029. This branch was cut before 029_reporter_feedback.sql
+    // landed on main with the feedback inbox, and the two would have collided.
+    'migrations/030_workspace_base.sql',
   ],
   // This array is the ONLY thing the platform runner reads. It does not glob
   // migrations/ — applyModuleMigrations() iterates these entries, so a .sql on

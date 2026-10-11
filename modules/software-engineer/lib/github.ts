@@ -147,10 +147,10 @@ export function githubClient(token: string) {
     },
     /** Merge a PR. Fails (throws) if branch-protection required checks aren't satisfied — which is
      * exactly the desired backstop: a non-bypass token cannot force a red merge. */
-    mergePullRequest(owner: string, name: string, number: number, method: 'merge' | 'squash' | 'rebase' = 'squash') {
+    mergePullRequest(owner: string, name: string, number: number, method: 'merge' | 'squash' | 'rebase' = 'squash', expectedSha?: string) {
       return j(`/repos/${owner}/${name}/pulls/${number}/merge`, {
         method: 'PUT',
-        body: JSON.stringify({ merge_method: method }),
+        body: JSON.stringify({ merge_method: method, ...(expectedSha ? { sha: expectedSha } : {}) }),
       });
     },
     /** Update a PR branch by merging its base into it (the "Update branch" button). Clears a PR held
