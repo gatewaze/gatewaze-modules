@@ -7,7 +7,7 @@ const eventAgendaModule: GatewazeModule = {
   group: 'events',
   name: 'Event Agenda',
   description: 'Schedule and manage event agenda sessions, time slots, and tracks',
-  version: '1.0.0',
+  version: '1.5.0',
   features: [
     'event-agenda',
     'event-agenda.manage',
@@ -15,6 +15,8 @@ const eventAgendaModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_event_agenda_tables.sql',
+    'migrations/002_schedule_import.sql',
+    'migrations/003_schedule_backfill.sql',
   ],
 
   adminSlots: [
@@ -29,7 +31,65 @@ const eventAgendaModule: GatewazeModule = {
 
   dependencies: ['events', 'event-speakers'],
 
-  configSchema: {},
+  apiRoutes: async (app: unknown, ctx?: unknown) => {
+    const { registerRoutes } = await import('./api/register-routes.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- express/ctx shapes are host-provided
+    await registerRoutes(app as any, ctx as any);
+  },
+
+  workers: [
+    {
+      // File stem must equal the job-name suffix: the prod worker derives the
+      // job name from the handler filename as `${moduleId}:${stem}`.
+      name: 'event-agenda:import-schedule',
+      handler: './workers/import-schedule.ts',
+      concurrency: 1,
+    },
+    {
+      name: 'event-agenda:sweep-schedules',
+      handler: './workers/sweep-schedules.ts',
+      concurrency: 1,
+    },
+    {
+      // The §6.5 backfill drain. Concurrency 1 is load-bearing, not tidy: two
+      // of these on one run would share a cursor and import the same events
+      // twice.
+      name: 'event-agenda:backfill-schedules',
+      handler: './workers/backfill-schedules.ts',
+      concurrency: 1,
+    },
+    {
+      // Copies already-imported avatars off the conference's CDN into our own
+      // bucket. Operator-triggered per event, because it spends egress and
+      // storage and overwrites a stored value.
+      name: 'event-agenda:mirror-avatars',
+      handler: './workers/mirror-avatars.ts',
+      concurrency: 1,
+    },
+  ],
+
+  crons: [
+    {
+      // 03:30 UTC. The sweep is a no-op unless auto_import_schedules is on,
+      // so registering the cron costs nothing for brands that have not opted in.
+      name: 'event-agenda:sweep-schedules',
+      queue: 'jobs',
+      schedule: { pattern: '30 3 * * *' },
+      data: { kind: 'event-agenda:sweep-schedules' },
+    },
+  ],
+
+  configSchema: {
+    auto_import_schedules: {
+      key: 'auto_import_schedules',
+      type: 'boolean',
+      required: false,
+      default: 'false',
+      label: 'Refresh conference programmes nightly',
+      description:
+        'Re-read each conference\'s published schedule every night and update its agenda. Imports are skipped when the source has not changed, and operator edits are never overwritten.',
+    },
+  },
 
   onInstall: async () => {
     console.log('[event-agenda] Module installed');
