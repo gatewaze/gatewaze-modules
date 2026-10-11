@@ -1,0 +1,89 @@
+// @ts-nocheck — supabase-js + express are resolved at module-host install time.
+
+/**
+ * event-agenda module — apiRoutes entry.
+ *
+ * Mounts the schedule-import admin endpoints under
+ * /api/modules/event-agenda/admin/* (the platform's /api/modules/<id> prefix
+ * is labelled 'jwt', so the upstream JWT middleware runs first). The agenda
+ * itself is still read and written through the core agenda service; only the
+ * importer needs module-owned routes.
+ */
+
+import { Router, type Express } from 'express';
+import { createClient } from '@supabase/supabase-js';
+import { mountAdminScheduleRoutes } from './admin-routes.js';
+import { mountAdminBackfillRoutes } from './backfill-routes.js';
+
+interface RegisterCtx {
+  enqueueJob?: (
+    queue: string,
+    name: string,
+    data: Record<string, unknown>,
+  ) => Promise<{ id: string | undefined }>;
+}
+
+export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<void> {
+  const logger = {
+    info: (msg: string, meta?: Record<string, unknown>) => console.log(`[event-agenda] ${msg}`, meta ?? ''),
+    warn: (msg: string, meta?: Record<string, unknown>) => console.warn(`[event-agenda] ${msg}`, meta ?? ''),
+  };
+
+  const supabaseUrl = process.env.SUPABASE_URL ?? '';
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+  if (!supabaseUrl || !supabaseServiceKey) {
+    logger.warn('SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — schedule-import endpoints will fail');
+  }
+  if (!supabaseAnonKey) {
+    logger.warn('SUPABASE_ANON_KEY not set — schedule-import endpoints will refuse every request');
+  }
+  const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  // Parsed without a regex on purpose. `/^Bearer\s+(.+)$/` backtracks
+  // polynomially on a header of "bearer " followed by many spaces, and this
+  // value comes straight off an attacker-controlled request header.
+  const BEARER = 'bearer ';
+  const extractBearer = (req: { headers?: Record<string, unknown> }): string | null => {
+    const raw = req?.headers?.authorization ?? req?.headers?.Authorization;
+    if (typeof raw !== 'string' || raw.length <= BEARER.length) return null;
+    if (raw.slice(0, BEARER.length).toLowerCase() !== BEARER) return null;
+    const token = raw.slice(BEARER.length).trim();
+    return token || null;
+  };
+
+  const adminRouter = Router();
+
+  // Both route sets need a client scoped to the caller's own JWT, because the
+  // permission check must run as the caller, not as the service role. Built
+  // once and shared: the per-event routes check can_admin_event, the backfill
+  // routes check is_admin.
+  const userClient = (req) => {
+    if (!supabaseAnonKey) return null;
+    const token = extractBearer(req as never);
+    if (!token) return null;
+    return createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+  };
+
+  mountAdminScheduleRoutes(adminRouter, {
+    supabase,
+    userClient,
+    logger,
+    ...(ctx?.enqueueJob && { enqueueJob: ctx.enqueueJob }),
+  });
+
+  mountAdminBackfillRoutes(adminRouter, {
+    supabase,
+    userClient,
+    logger,
+    ...(ctx?.enqueueJob && { enqueueJob: ctx.enqueueJob }),
+  });
+
+  app.use('/api/modules/event-agenda', adminRouter);
+  logger.info('routes mounted at /api/modules/event-agenda');
+}
