@@ -11,7 +11,7 @@ const eventSpeakersModule: GatewazeModule = {
   // top-level Speakers admin nav, calendar submit-talk portal page.
   // v2.1.0 — speaker speaker kits: auto-generated umami tracking link, AI post
   // variants, rendered social cards + zip for confirmed talks (see guide.md).
-  version: '2.2.0',
+  version: '2.3.0',
   features: [
     'event-speakers',
     'event-speakers.manage',
@@ -97,7 +97,15 @@ const eventSpeakersModule: GatewazeModule = {
     // photo uploaded from the portal sets only that column, so the admin talk
     // cards showed a placeholder while the Speakers list showed the photo.
     'migrations/024_talks_view_avatar_storage_path.sql',
+    'migrations/025_speaker_source_identity.sql',
+    'migrations/026_speaker_merge_and_review.sql',
   ],
+
+  apiRoutes: async (app: unknown, ctx?: unknown) => {
+    const { registerDedupeRoutes } = await import('./api/dedupe-routes.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- express/ctx shapes are host-provided
+    registerDedupeRoutes(app as any, ctx as any);
+  },
 
   workers: [
     {
@@ -117,6 +125,22 @@ const eventSpeakersModule: GatewazeModule = {
     {
       name: 'event-speakers:talk-edit-review-sweep',
       handler: './workers/talk-edit-review-sweep.ts',
+    },
+    {
+      // Merges duplicate speaker profiles. Concurrency 1 is load-bearing, not
+      // tidy: two of these would read the same groups and race to pick a
+      // canonical. Defaults to a dry run — writing needs dry_run: false.
+      name: 'event-speakers:dedupe-speakers',
+      handler: './workers/dedupe-speakers.ts',
+      concurrency: 1,
+    },
+    {
+      // Fills in missing LinkedIn URLs so the sweep has an identifier to work
+      // with. Writes that one field and never merges, and the URLs it writes
+      // are tagged as a fuzzy source so the sweep refuses to merge on them.
+      name: 'event-speakers:enrich-speaker-linkedin',
+      handler: './workers/enrich-speaker-linkedin.ts',
+      concurrency: 1,
     },
   ],
 
@@ -172,6 +196,13 @@ const eventSpeakersModule: GatewazeModule = {
     {
       path: 'speakers/talks',
       component: () => import('./admin/pages/talks-index'),
+      requiredFeature: 'event-speakers.platform-rollup',
+      guard: 'none',
+    },
+    {
+      // Before 'speakers/:id', or the router matches 'duplicates' as an id.
+      path: 'speakers/duplicates',
+      component: () => import('./admin/pages/speaker-duplicates'),
       requiredFeature: 'event-speakers.platform-rollup',
       guard: 'none',
     },
