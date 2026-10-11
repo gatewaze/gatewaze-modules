@@ -232,6 +232,11 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
 
   return (
     <div className="space-y-6">
+      {/* Every run parked waiting on a human, disambiguated + plain-language, with a deep link to
+          act (issue #49; moved to top of page per issue #66 so the panel an admin opens this page
+          FOR is the first thing they see). Renders nothing when nothing is gated. */}
+      <DecisionsPanel projectFilter={projectFilter} onOpenRun={onOpenRun} />
+
       {/* One panel per env profile — each with its own status + full PR-set
           builder; each hides itself when its control channel is absent. The
           lfx panel is the Environments section: primary card + one card per
@@ -259,10 +264,6 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
       {/* Human approvals (pending reflect memory + unmerged-run specs) — surfaced here because this
           is the page operators watch; renders nothing when there is nothing to review. */}
       <PendingApprovals projects={projects} />
-
-      {/* Every run parked waiting on a human, disambiguated + plain-language, with a deep link to
-          act (issue #49). Renders nothing when nothing is gated. */}
-      <DecisionsPanel projectFilter={projectFilter} onOpenRun={onOpenRun} />
 
       {loading && !data ? (
         <div className="flex justify-center p-12"><LoadingSpinner /></div>
