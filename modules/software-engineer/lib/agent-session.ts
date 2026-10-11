@@ -1,9 +1,8 @@
 // @ts-nocheck — @anthropic-ai/claude-agent-sdk is resolved in the runner image at runtime.
 /**
- * The Runner seam (spec §7.5). Runs the Claude Agent SDK in-process. Uses a plain STRING prompt
- * for the task (proven to run to completion + stream events), and injects live admin steering via
- * q.streamInput()/q.interrupt() best-effort — NOT an async-generator prompt (that deadlocks: the
- * session waits on the generator and never starts the first turn).
+ * The Runner seam (spec §7.5). Uses streaming input and keeps stdin open until the
+ * phase result, so subagent results cannot close the permission/hook channel early.
+ * Phase tools run in the foreground; admin steering remains best-effort.
  *
  * Secret isolation: the session env is process.env minus sensitive keys, plus exactly one model
  * credential — the agent's tools never see GATEWAZE_SECRETS_KEY, DB creds, or other brands' secrets.
@@ -215,10 +214,17 @@ export class InProcessRunner implements Runner {
       return out;
     }
 
+    let finishInput!: () => void;
+    const inputFinished = new Promise<void>((resolve) => { finishInput = resolve; });
     let q: any;
     try {
       q = query({
-        prompt: input.prompt, // plain string — runs the task to completion, then the iterator ends
+        // Streaming input keeps permission/hook replies usable after subagent results.
+        prompt: (async function* () {
+          yield { type: 'user' as const, session_id: '', parent_tool_use_id: null,
+            message: { role: 'user' as const, content: input.prompt } };
+          await inputFinished;
+        })(),
         options: {
           cwd: input.cwd,
           model: input.model,
@@ -247,11 +253,16 @@ export class InProcessRunner implements Runner {
           // through availability, approval denies it). maxTurns bounds the session to a single
           // response so a timed-out caller can't leave an unbounded subprocess behind.
           ...(input.noTools ? { tools: [], maxTurns: 1 } : {}),
+          // A phase must finish its work before reporting its result. Detached tools can
+          // outlive that result and lose their permission channel in the SDK.
+          disallowedTools: ['ScheduleWakeup'],
           permissionMode: 'default',
           canUseTool: async (_name: string, toolInput: Record<string, unknown>) =>
             input.noTools
               ? { behavior: 'deny' as const, message: 'tools are disabled for this session' }
-              : { behavior: 'allow' as const, updatedInput: toolInput },
+              : { behavior: 'allow' as const, updatedInput:
+                  (_name === 'Agent' || _name === 'Task' || _name === 'Bash')
+                    ? { ...toolInput, run_in_background: false } : toolInput },
           // Route tool permission decisions through the host callback consistently.
           // Bare auto-approval rules bypass it, including on SDK versions with automatic mode.
           allowedTools: [],
@@ -321,6 +332,7 @@ export class InProcessRunner implements Runner {
             }
           }
         } else if (msg?.type === 'result') {
+          if (!msg.parent_tool_use_id) finishInput();
           out.costUSD = msg.total_cost_usd ?? out.costUSD;
           if (msg.modelUsage) out.modelUsage = normalizeModelUsage(msg.modelUsage);
           out.tokensInput += msg.usage?.input_tokens ?? 0;
@@ -333,6 +345,7 @@ export class InProcessRunner implements Runner {
     } catch (e: any) {
       out.error = e?.message || String(e);
     }
+    finishInput();
     void controller;
     // Prefer the subprocess's real stderr over the SDK's opaque "Operation aborted".
     if (out.error && stderrBuf.trim()) {

@@ -61,6 +61,16 @@ describe('agent-session PreToolUse guards (issue #58 + Bash forbidden-flag)', ()
     expect(await capturedOptions.canUseTool('Read',input)).toEqual({behavior:'allow',updatedInput:input});
   });
 
+  it('keeps phase tools in the foreground without weakening permission mode', async () => {
+    await new InProcessRunner().runPhase({ cwd: dir, prompt: 'spec', model: 'claude-sonnet-5', credential: CRED });
+    for (const name of ['Agent', 'Task', 'Bash']) {
+      const result = await capturedOptions.canUseTool(name, { run_in_background: true, command: 'pwd' });
+      expect(result.updatedInput.run_in_background).toBe(false);
+    }
+    expect(capturedOptions.permissionMode).toBe('default');
+    expect(capturedOptions.disallowedTools).toContain('ScheduleWakeup');
+  });
+
   it('denies a Bash command with --no-verify', async () => {
     const hook = await bashHook();
     const res = await hook({ tool_input: { command: 'git push --no-verify' } });
