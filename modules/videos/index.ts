@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.2.0',
+  version: '1.3.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -34,6 +34,10 @@ const videosModule: GatewazeModule = {
     'migrations/005_rls.sql',
     'migrations/006_event_link_rpcs.sql',
     'migrations/007_assets_editor_workflow.sql',
+    // 008 moves generated copy onto the PUBLICATION and binds the four
+    // lf-agents recipes. The two AAIF YouTube channels publish measurably
+    // different copy, so one set of words per video is the wrong unit.
+    'migrations/008_publication_copy.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
